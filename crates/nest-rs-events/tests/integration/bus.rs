@@ -117,6 +117,117 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
     bus.emit(Unobserved).await;
 }
 
+/// A boundary's transaction as the bus meets it — through the data layer's
+/// port, with no ORM behind it: it keeps the work [`after_commit`] hands it
+/// until the test settles the boundary one way or the other.
+///
+/// [`after_commit`]: nest_rs_database::after_commit
+#[derive(Default)]
+struct OpenTransaction(std::sync::Mutex<Vec<nest_rs_database::Deferred>>);
+
+impl nest_rs_database::Executor for OpenTransaction {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn after_commit(&self, work: nest_rs_database::Deferred) -> Option<nest_rs_database::Deferred> {
+        self.held().push(work);
+        None
+    }
+}
+
+impl OpenTransaction {
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<nest_rs_database::Deferred>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// What a boundary does once its transaction has committed.
+    async fn commit(&self) {
+        let held = std::mem::take(&mut *self.held());
+        for work in held {
+            work.await;
+        }
+    }
+
+    /// What a boundary does once its transaction has rolled back.
+    fn roll_back(&self) {
+        self.held().clear();
+    }
+}
+
+async fn booted() -> (App, Arc<Awarder>, Arc<Ledger>) {
+    let app = App::new::<EventsTestModule>().expect("boots");
+    app.init().await.expect("bootstrap wiring succeeds");
+    let awarder = app
+        .container()
+        .get::<Awarder>()
+        .expect("Awarder is provided");
+    let ledger = app.container().get::<Ledger>().expect("Ledger is provided");
+    (app, awarder, ledger)
+}
+
+/// The demo's publish shape, reduced: a service emits a fact inside the
+/// transaction that writes it. The listener must not see the fact before the
+/// write lands — before this, `emit` dispatched inline, and a listener pushing a
+/// job or notifying a subscriber did so about a row nothing had committed yet.
+#[tokio::test]
+async fn an_event_emitted_inside_a_transaction_is_dispatched_once_it_commits() {
+    let (_app, awarder, ledger) = booted().await;
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_database::with_request_executor(transaction.clone(), awarder.award(7)).await;
+    assert_eq!(
+        ledger.credited.load(Ordering::SeqCst),
+        0,
+        "no listener runs while the emitter's transaction is open",
+    );
+
+    transaction.commit().await;
+    assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
+}
+
+/// A fact the transaction rolled back never happened, so nothing reacts to it —
+/// and nothing files a unit of work for a listener that never started.
+#[tokio::test]
+async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
+    let (_app, awarder, ledger) = booted().await;
+    let transaction = Arc::new(OpenTransaction::default());
+    let logs = nest_rs_testing::LogCapture::install();
+
+    nest_rs_database::with_request_executor(transaction.clone(), awarder.award(7)).await;
+    transaction.roll_back();
+
+    assert_eq!(ledger.credited.load(Ordering::SeqCst), 0);
+    assert!(
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_events::unit::DISPATCH
+        )
+        .is_empty(),
+        "a dispatch that never ran files no unit: {:#?}",
+        logs.events(),
+    );
+}
+
+/// An executor with no transaction to wait for — a pool, a transaction its
+/// caller commits — hands the work back, and the listeners run before `emit`
+/// returns, exactly as they do with no data layer at all.
+#[tokio::test]
+async fn an_event_with_no_transaction_to_wait_for_is_dispatched_before_emit_returns() {
+    struct Pool;
+    impl nest_rs_database::Executor for Pool {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    let (_app, awarder, ledger) = booted().await;
+    nest_rs_database::with_request_executor(Arc::new(Pool), awarder.award(7)).await;
+    assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
+}
+
 /// A provider whose listeners are declared and reachable, in an app that never
 /// imported `EventsModule`. Nothing in the `#[listeners]` expansion makes the
 /// host depend on `EventBus`, so this composition boots clean and reacts to

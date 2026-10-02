@@ -12,9 +12,10 @@ from the fully-assembled container at bootstrap.
 
 An event is any `Clone + Send + 'static` type. Dispatch is in-process and
 awaited: `bus.emit(event)` clones the event for each listener registered
-on that type, runs them in registration order, and returns once they all
-complete. There is no broker, no retries — for cross-process or durable
-work, push a job on the [Queue](/queue/) instead.
+on that type and runs them in registration order — **once the emitter's
+transaction has committed** when it emits inside one, and never for a write
+that rolled back. There is no broker, no retries — for cross-process or
+durable work, push a job on the [Queue](/queue/) instead.
 
 ## Install
 
@@ -175,9 +176,16 @@ impl PostsService {
 }
 ```
 
-`emit` is awaited — when it returns, every listener has run. Emitting an
-event with no subscriber is a no-op (not an error), so adding a listener
-later does not require touching the emitter.
+`publish` writes the post and its publication row inside the request's
+transaction, so the listeners wait for it: `emit` hands the dispatch to the
+unit of work, which runs it once the transaction has committed and drops it
+if the transaction rolls back. The notification job is pushed about a post
+that is published, never about one a failed request un-published — and the
+service did not have to say so. Where nothing is waiting to commit — a safe
+request, a job running on the pool, an app with no database — `emit` returns
+once every listener has run. Emitting an event with no subscriber is a no-op
+(not an error), so adding a listener later does not require touching the
+emitter.
 
 ## Wire it in
 
@@ -230,8 +238,9 @@ At bootstrap each wired listener logs one line at `debug`, target
 DEBUG nest_rs::events: wired event listener listener="NotificationsListener::on_post_published"
 ```
 
-Dispatch is inline — `emit` awaits each listener in turn — and each listener
-call is still a unit of work of its own, `events.dispatch`: a **child** of
+Dispatch is inline — each listener is awaited in turn, by `emit` or, after a
+commit, by the boundary that settled it — and each listener call is a unit of
+work of its own, `events.dispatch`: a **child** of
 whatever emitted the event, so its lines carry that request's `trace_id` and
 `actor_id` under a `span_id` of their own, and it files one
 [operation line](/opentelemetry/logs/#every-unit-of-work-files-one-line) naming
@@ -266,11 +275,19 @@ with its own clone of the event. Three consequences worth naming:
   unit of work, so it is dropped with it — a request the shutdown window cut,
   an operation its client cancelled — and its `events.dispatch` line says so,
   `cancelled`.
-- **No bridge to a transaction** — `emit` does not enroll itself in the
-  ambient executor's transaction. If a listener must write to the same
-  transaction as the emitter, call it directly from the service instead
-  of going through the bus; emit once the transaction commits for the
-  fire-and-forget cases.
+- **Dispatch follows the commit** — an event is a fact, and a fact the
+  transaction rolls back never happened. Emitted inside a transaction (a
+  mutating request, a WebSocket message, an MCP operation, a queue attempt,
+  a scheduled tick), the dispatch waits for the commit and is dropped when
+  the unit of work rolls back, fails to commit, or writes nothing. A
+  listener runs *outside* that transaction — on the pool, with the scope and
+  the ability its emitter had — so its own writes stand on their own and a
+  statement it fails cannot take the emitter's down with it. A write that
+  must be atomic with the emitter's is not a reaction: call it from the
+  service. A transaction you open yourself — `db.begin()` inside
+  `retry_on_conflict`, an `Executor::Txn` you install — is committed by you,
+  out of the framework's sight, so nothing waits for it: emit after your own
+  `commit`.
 
 ## Module-gated, even when the crate is shared
 

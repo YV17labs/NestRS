@@ -16,10 +16,13 @@
 
 use std::any::Any;
 use std::future::Future;
-use std::sync::Arc;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use futures_util::FutureExt;
+use nest_rs_database::Deferred;
 
 use crate::error::CommitError;
 use sea_orm::{
@@ -56,6 +59,12 @@ pub enum Executor {
     /// through `with_executor` and gets the whole `Repo` surface running inside
     /// it. Being *given* a transaction is also why `create_from_active`
     /// SAVEPOINTs on it rather than opening one.
+    ///
+    /// Its commit is the caller's, and no boundary of the framework sees it, so
+    /// work handed to [`after_commit`](nest_rs_database::after_commit) inside it
+    /// runs at once rather than waiting for a commit nothing would report. A
+    /// caller that owns the commit owns the order of what follows it: it emits
+    /// after its own `commit`.
     Txn(Arc<DatabaseTransaction>),
     /// A transaction opened on **first data-layer touch**. Installed by the
     /// HTTP `DbContext` for mutating methods, so a request a guard denies (or
@@ -97,6 +106,15 @@ pub struct LazyTransaction {
     /// end differently, and that answer is one bit every query path can record
     /// without allocating or locking.
     poisoned: AtomicU8,
+    /// The work [`after_commit`](nest_rs_database::after_commit) handed this
+    /// boundary: run by [`finalize`](Self::finalize) once the transaction has
+    /// committed, dropped unrun when it has not.
+    ///
+    /// `None` from the moment settling begins, and that is what makes a late
+    /// registration visible. Only an escaped handle can still reach this
+    /// boundary then, and work it registers is refused in the open — a list
+    /// nobody would read again is where it would otherwise have gone.
+    after_commit: Mutex<Option<Vec<Deferred>>>,
 }
 
 /// No statement on this transaction has failed.
@@ -121,7 +139,65 @@ impl LazyTransaction {
             cell: tokio::sync::OnceCell::new(),
             settled: std::sync::atomic::AtomicBool::new(false),
             poisoned: AtomicU8::new(POISON_CLEAN),
+            after_commit: Mutex::new(Some(Vec::new())),
         }
+    }
+
+    /// Keep `work` for after the commit, with what it was registered under
+    /// installed around it again: the boundary's scope and the caller's
+    /// ability, on the **pool**. The transaction it waited for is over by the
+    /// time it runs, so it runs outside it, with the authority its emitter had
+    /// — a request's work stays scoped to the caller, a job's stays unscoped.
+    ///
+    /// Captures the pool, never this `LazyTransaction`: a held `Arc` to the
+    /// boundary would make every boundary that held work read as escaped.
+    fn hold(&self, work: Deferred) {
+        let scope = nest_rs_database::current_executor_scope();
+        let ability = nest_rs_authz::current_ability();
+        let pool = Executor::Pool(self.pool.clone());
+        let work: Deferred = Box::pin(async move {
+            let work: Deferred = match ability {
+                Some(ability) => Box::pin(nest_rs_authz::with_ability(ability, work)),
+                None => work,
+            };
+            match scope {
+                Some(ExecutorScope::Request) => with_request_executor(pool, work).await,
+                Some(ExecutorScope::Job) => with_job_executor(pool, work).await,
+                None => with_executor(pool, work).await,
+            }
+        });
+        let refused = {
+            let mut held = self
+                .after_commit
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match held.as_mut() {
+                Some(held) => {
+                    held.push(work);
+                    None
+                }
+                None => Some(work),
+            }
+        };
+        if let Some(work) = refused {
+            drop(work);
+            tracing::warn!(
+                target: crate::TARGET,
+                transport = self.transport,
+                outcome = "discarded",
+                "after-commit work registered on a boundary that has already settled; \
+                 it will not run",
+            );
+        }
+    }
+
+    /// The held work, taken for settling — after which nothing more is held.
+    fn take_after_commit(&self) -> Vec<Deferred> {
+        self.after_commit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .unwrap_or_default()
     }
 
     /// Run one statement on the request's transaction, poisoning the boundary
@@ -221,7 +297,13 @@ impl LazyTransaction {
 
     /// Settle the boundary's lazily opened transaction: commit on `success`,
     /// roll back otherwise, do nothing when no data-layer touch ever opened
-    /// one. This is the **single home** of the escape invariant — a lingering
+    /// one — then run the work held for after the commit, or drop it. It runs
+    /// on [`Committed`](FinalizeOutcome::Committed), and on
+    /// [`NoTransaction`](FinalizeOutcome::NoTransaction) when the boundary
+    /// succeeded, since then nothing could roll back; every other outcome wrote
+    /// nothing, and announcing it would report what never happened.
+    ///
+    /// This is the **single home** of the escape invariant — a lingering
     /// executor clone in a spawned task cannot be committed, so it is logged
     /// at `error` and reported as [`FinalizeOutcome::Escaped`]; the caller
     /// must fail an otherwise-successful response loudly rather than lose the
@@ -245,8 +327,15 @@ impl LazyTransaction {
         // Before anything can return early: `Drop` reports an *abandoned*
         // boundary, and every path from here on is a settled one.
         self.settled.store(true, Ordering::Relaxed);
+        let after_commit = self.take_after_commit();
         let outcome = Self::settle(self, success).await;
         abandoned.armed = false;
+        let committed = match outcome {
+            FinalizeOutcome::Committed => true,
+            FinalizeOutcome::NoTransaction => success,
+            _ => false,
+        };
+        settle_after_commit(transport, after_commit, committed).await;
         outcome
     }
 
@@ -375,10 +464,55 @@ impl Drop for LazyTransaction {
     /// Silent when nothing was opened (there is nothing to hold) and when
     /// `finalize` ran (it has already said what happened, in more detail).
     fn drop(&mut self) {
+        let held = self
+            .after_commit
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, Vec::len);
+        report_discarded(self.transport, held);
         if self.settled.load(Ordering::Relaxed) || self.cell.get().is_none() {
             return;
         }
         report_abandoned(self.transport);
+    }
+}
+
+/// Run the boundary's after-commit work when it `committed`, or drop it.
+///
+/// Each piece runs once the transaction has landed, so a panic in one can no
+/// longer change what the boundary did: it is contained and reported here, and
+/// the rest still run. Letting it unwind would turn a committed attempt into a
+/// failed one — a request answered `500`, a queue job retried — over work that
+/// already stood.
+async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, committed: bool) {
+    if !committed {
+        report_discarded(transport, held.len());
+        return;
+    }
+    for work in held {
+        if let Err(payload) = AssertUnwindSafe(work).catch_unwind().await {
+            tracing::error!(
+                target: crate::TARGET,
+                transport,
+                panic = nest_rs_core::panic_message(payload.as_ref()),
+                "after-commit work panicked; the transaction had already committed",
+            );
+        }
+    }
+}
+
+/// The one wording for work dropped unrun: the boundary committed nothing, so
+/// what waited for its commit never happens. `debug`, because it is the
+/// expected consequence of a rollback the edge already reports.
+fn report_discarded(transport: &'static str, discarded: usize) {
+    if discarded > 0 {
+        tracing::debug!(
+            target: crate::TARGET,
+            transport,
+            discarded,
+            "after-commit work discarded: the boundary committed nothing",
+        );
     }
 }
 
@@ -543,6 +677,20 @@ impl nest_rs_database::Executor for Executor {
                 Some(Arc::new(Executor::Pool(lazy.pool.clone())))
             }
             _ => None,
+        }
+    }
+
+    /// A lazy transaction holds the work for its boundary to settle. A pool has
+    /// nothing to wait for, and a [`Txn`](Executor::Txn) is committed by
+    /// whoever opened it, out of every boundary's sight — both hand the work
+    /// back to run at once.
+    fn after_commit(&self, work: Deferred) -> Option<Deferred> {
+        match self {
+            Executor::Lazy(lazy) => {
+                lazy.hold(work);
+                None
+            }
+            Executor::Pool(_) | Executor::Txn(_) => Some(work),
         }
     }
 }
@@ -796,5 +944,203 @@ mod ambient_tests {
             event.field("reason").as_deref(),
             Some("executor_downcast_miss"),
         );
+    }
+}
+
+#[cfg(test)]
+mod after_commit_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use nest_rs_authz::{AbilityBuilder, current_ability, with_ability};
+    use nest_rs_testing::LogCapture;
+    use sea_orm::DatabaseConnection;
+
+    use super::*;
+
+    fn boundary() -> Arc<LazyTransaction> {
+        Arc::new(LazyTransaction::new(DatabaseConnection::default(), "test"))
+    }
+
+    fn flag() -> (Arc<AtomicBool>, impl Future<Output = ()> + Send + 'static) {
+        let flag = Arc::new(AtomicBool::new(false));
+        let set = flag.clone();
+        (flag, async move { set.store(true, Ordering::SeqCst) })
+    }
+
+    /// What the held work saw when it ran: the executor variant, the scope and
+    /// the ability around it.
+    #[derive(Default)]
+    struct Seen {
+        on_pool: bool,
+        scope: Option<ExecutorScope>,
+        ability: Option<Arc<nest_rs_authz::Ability>>,
+    }
+
+    /// A boundary that succeeded without opening a transaction has nothing that
+    /// could roll back, so what it held runs — on the pool, under the scope and
+    /// the ability it was registered under, the authority its emitter had.
+    #[tokio::test]
+    async fn held_work_runs_once_the_boundary_succeeds_with_the_emitters_scope_and_ability() {
+        let lazy = boundary();
+        let ability = Arc::new(AbilityBuilder::new().build().expect("an empty ability"));
+        let seen = Arc::new(Mutex::new(None::<Seen>));
+        let record = seen.clone();
+        let work = async move {
+            *record.lock().unwrap_or_else(PoisonError::into_inner) = Some(Seen {
+                on_pool: matches!(current_executor(), Some(Executor::Pool(_))),
+                scope: current_executor_scope(),
+                ability: current_ability(),
+            });
+        };
+
+        with_request_executor(
+            Executor::Lazy(lazy.clone()),
+            with_ability(ability.clone(), nest_rs_database::after_commit(work)),
+        )
+        .await;
+        assert!(
+            seen.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_none(),
+            "nothing runs while the boundary is open",
+        );
+
+        assert!(matches!(
+            lazy.finalize(true).await,
+            FinalizeOutcome::NoTransaction
+        ));
+        let seen = seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .expect("the held work ran once the boundary settled");
+        assert!(
+            seen.on_pool,
+            "it runs outside the transaction it waited for"
+        );
+        assert_eq!(seen.scope, Some(ExecutorScope::Request));
+        assert!(
+            seen.ability
+                .is_some_and(|seen| Arc::ptr_eq(&seen, &ability)),
+            "it runs with the ability it was registered under",
+        );
+    }
+
+    /// A failed boundary wrote nothing, so what waited for its commit never
+    /// happens — and the drop is said, once, naming how much was dropped.
+    #[tokio::test]
+    async fn held_work_is_dropped_unrun_when_the_boundary_fails() {
+        let logs = LogCapture::install();
+        let lazy = boundary();
+        let (ran, work) = flag();
+
+        with_job_executor(
+            Executor::Lazy(lazy.clone()),
+            nest_rs_database::after_commit(work),
+        )
+        .await;
+        assert!(matches!(
+            lazy.finalize(false).await,
+            FinalizeOutcome::NoTransaction
+        ));
+
+        assert!(!ran.load(Ordering::SeqCst));
+        let line = logs.expect_one(
+            crate::TARGET,
+            "after-commit work discarded: the boundary committed nothing",
+        );
+        assert_eq!(line.level, "debug");
+        assert_eq!(line.field("discarded").as_deref(), Some("1"));
+        assert_eq!(line.field("transport").as_deref(), Some("test"));
+    }
+
+    /// Only an escaped handle can reach a boundary that has settled. Its work is
+    /// refused in the open, never pushed onto a list nobody reads again — and
+    /// what it held before the escape was detected is dropped with the writes.
+    #[tokio::test]
+    async fn work_reaching_a_boundary_that_already_settled_is_refused_and_said() {
+        let logs = LogCapture::install();
+        let lazy = boundary();
+        let escaped = Executor::Lazy(lazy.clone());
+        let (before, held) = flag();
+        with_request_executor(escaped.clone(), nest_rs_database::after_commit(held)).await;
+
+        assert!(matches!(
+            lazy.finalize(true).await,
+            FinalizeOutcome::Escaped
+        ));
+        let (after, late) = flag();
+        assert!(
+            nest_rs_database::Executor::after_commit(&escaped, Box::pin(late)).is_none(),
+            "a refused piece of work is not handed back to run at once either",
+        );
+
+        assert!(!before.load(Ordering::SeqCst));
+        assert!(!after.load(Ordering::SeqCst));
+        let refused = logs.expect_one(
+            crate::TARGET,
+            "after-commit work registered on a boundary that has already settled; it will not run",
+        );
+        assert_eq!(refused.level, "warn");
+        assert_eq!(refused.field("outcome").as_deref(), Some("discarded"));
+    }
+
+    /// Held work runs after the commit, so a panic in one piece cannot change
+    /// what the boundary did: it is contained and reported, the rest still run,
+    /// and the boundary's outcome stands.
+    #[tokio::test]
+    async fn a_panicking_piece_of_held_work_is_contained_and_the_rest_run() {
+        let logs = LogCapture::install();
+        let lazy = boundary();
+        let (ran, after) = flag();
+        with_request_executor(Executor::Lazy(lazy.clone()), async {
+            nest_rs_database::after_commit(async { panic!("after-commit boom") }).await;
+            nest_rs_database::after_commit(after).await;
+        })
+        .await;
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = lazy.finalize(true).await;
+        std::panic::set_hook(previous);
+
+        assert!(matches!(outcome, FinalizeOutcome::NoTransaction));
+        assert!(ran.load(Ordering::SeqCst), "the work after the panic ran");
+        let line = logs.expect_one(
+            crate::TARGET,
+            "after-commit work panicked; the transaction had already committed",
+        );
+        assert_eq!(line.level, "error");
+        assert_eq!(line.field("panic").as_deref(), Some("after-commit boom"));
+    }
+
+    /// A boundary dropped before it settled — the shutdown window closing on it
+    /// — never commits, so its held work goes with it, and that is said.
+    #[tokio::test]
+    async fn held_work_is_dropped_with_an_abandoned_boundary() {
+        let logs = LogCapture::install();
+        let lazy = boundary();
+        let (ran, work) = flag();
+        with_request_executor(
+            Executor::Lazy(lazy.clone()),
+            nest_rs_database::after_commit(work),
+        )
+        .await;
+        drop(lazy);
+
+        assert!(!ran.load(Ordering::SeqCst));
+        let line = logs.expect_one(
+            crate::TARGET,
+            "after-commit work discarded: the boundary committed nothing",
+        );
+        assert_eq!(line.field("discarded").as_deref(), Some("1"));
+    }
+
+    /// A pool has nothing to wait for, so it hands the work back to run at once.
+    #[test]
+    fn a_pool_hands_the_work_back_to_run_at_once() {
+        let pool = Executor::Pool(DatabaseConnection::default());
+        assert!(nest_rs_database::Executor::after_commit(&pool, Box::pin(async {})).is_some());
     }
 }

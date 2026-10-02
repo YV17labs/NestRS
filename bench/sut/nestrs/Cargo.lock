@@ -1816,6 +1816,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures-util",
  "inventory",
  "nest-rs-authz",
  "nest-rs-config",

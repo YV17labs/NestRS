@@ -1,10 +1,11 @@
 //! ORM-agnostic seam for the request/job data layer.
 //!
 //! `nest-rs-database` ships **only the seam**: the [`Executor`] trait, the
-//! [`ExecutorScope`] tag, and the `tokio::task_local!` plumbing
+//! [`ExecutorScope`] tag, the `tokio::task_local!` plumbing
 //! ([`with_request_executor`], [`with_job_executor`], [`current_executor`],
 //! [`current_executor_scope`]) that carries "the request's current handle
-//! on a unit of work" across the framework. It is what every ORM
+//! on a unit of work" across the framework, and [`after_commit`] — the one
+//! way an effect waits for that unit of work to commit. It is what every ORM
 //! integration plugs into — not an ORM itself. The non-HTTP side is wired
 //! through `nest_rs_worker::JobContext`, which a worker transport
 //! (`#[scheduled]`, `#[processor]`) resolves before each job.
@@ -30,6 +31,11 @@
 //!    `nest_rs_worker::JobContext`.
 //! 3. Provide your own `Repo`-equivalent query API that calls
 //!    [`current_executor`] and downcasts to your concrete type.
+//! 4. Override [`Executor::after_commit`] on every handle a boundary settles a
+//!    transaction for: hold the work, run it after the commit, drop it when the
+//!    boundary writes nothing. The default runs it at once, which is right for a
+//!    pool and wrong for a transaction — an event emitted inside one would be
+//!    dispatched before the transaction it reports had landed.
 //!
 //! The SeaORM-specific pieces (`Repo`, `condition_for`, the mask shaper,
 //! `Bind<S, A>`, `CrudService`) are unreachable from your implementation —
@@ -41,6 +47,6 @@
 mod executor;
 
 pub use executor::{
-    Executor, ExecutorScope, current_executor, current_executor_scope, with_executor,
-    with_job_executor, with_request_executor,
+    Deferred, Executor, ExecutorScope, after_commit, current_executor, current_executor_scope,
+    with_executor, with_job_executor, with_request_executor,
 };

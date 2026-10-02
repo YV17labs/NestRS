@@ -48,6 +48,29 @@ a typed 4xx body from a `thiserror`-derived error. See
 [Repo and executor](/database/repo-and-executor/) for the full sequence,
 including the escape-on-spawn case.
 
+## What waits for the commit
+
+An [event](/events/) emitted inside the transaction is dispatched **after**
+the commit, and dropped when the request rolls back, fails to commit, or
+writes nothing — an event announces a fact, and a write that did not land is
+not one. The same holds at every boundary that settles a transaction: a
+WebSocket message, an MCP operation, a queue attempt, a scheduled tick. The
+listeners run outside the transaction they waited for, on the pool, with the
+caller's scope and ability; the response leaves once they have.
+
+A `push`, a WebSocket broadcast and a storage write do **not** wait, and
+cannot: each answers its caller — a receipt, `UniqueKeyHeld`, a send failure,
+an object key — and that answer only exists once the backend has been asked.
+Inside a transaction they happen where they are written. A push that fails
+fails the request, so its writes roll back and nothing is lost; the price is
+a job a later rollback leaves behind. When the work must follow the commit,
+emit an event and push from its listener — the demo's publish does exactly
+that.
+
+The primitive underneath is `nest_rs::database::after_commit`, which the bus
+calls; a [database driver](/database/writing-a-driver/) implements it for its
+own transactions.
+
 ## Why retrying belongs to the service, not the interceptor
 
 A poem `Request` is consumed by `next.run` — the body bytes are gone past
@@ -57,8 +80,9 @@ the time a conflict surfaces. Two consequences:
 
 1. **The interceptor observes the conflict, it does not retry it.** The
    failed commit has already consumed its handle, and the handler's
-   non-transactional side effects — a queued job, an emitted event, an
-   object written to storage — would replay with it.
+   non-transactional side effects — a queued job, an object written to
+   storage — would replay with it. (An emitted event is not among them: it
+   waits for the commit, and a failed one drops it.)
 2. **Retrying is the service's job.** Only the service knows which
    boundary is replayable, so the replayable closure owns that boundary
    itself.
@@ -86,9 +110,9 @@ distinctly from a generic commit error.
 <Aside type="note">
 **The flag observes; it never retries** — which is why it is named for what
 it does. Replaying a commit-time conflict means re-running the whole handler,
-and a handler may already have pushed a job, emitted an event, or written an
-object. None of those roll back with the transaction, so a transparent retry
-would duplicate them silently. The framework will not make that call on your
+and a handler may already have pushed a job or written an object. Neither
+rolls back with the transaction, so a transparent retry would duplicate them
+silently. The framework will not make that call on your
 behalf; the response fails closed with a `500` after the `warn` line, and
 retrying is the service's decision at a boundary it knows is replayable.
 </Aside>
@@ -124,6 +148,10 @@ impl PostsService {
     }
 }
 ```
+
+The closure's transaction is yours, committed out of the framework's sight,
+so an event emitted inside it would not wait for it: emit once
+`retry_on_conflict` has returned `Ok`, after the commit that stood.
 
 `retry_on_conflict` runs the closure up to `attempts` times, sleeping
 `initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the

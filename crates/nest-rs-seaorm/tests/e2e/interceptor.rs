@@ -549,3 +549,64 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         logs.events(),
     );
 }
+
+/// Work held for the commit of a mutating request runs after it — on the pool,
+/// seeing the row the request committed — and before the response leaves.
+#[tokio::test]
+async fn work_held_for_the_commit_runs_once_the_request_committed() {
+    use crate::harness::{Sighting, Sightings, after_commit_table, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_http_commit";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = DbContext::new(conn.clone(), config());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let endpoint = make(move |_req: Request| {
+        let (observer, record) = (observer.clone(), record.clone());
+        async move {
+            write_and_hold(TABLE, observer, record).await;
+            StatusCode::CREATED.into_response()
+        }
+    });
+
+    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        sighted(&sightings),
+        [Sighting {
+            committed: 1,
+            on_pool: true
+        }],
+        "the work ran once, after the commit, outside the transaction",
+    );
+}
+
+/// A request that fails rolls its writes back, and the work that waited for
+/// their commit never runs.
+#[tokio::test]
+async fn work_held_by_a_request_that_rolled_back_never_runs() {
+    use crate::harness::{Sightings, after_commit_table, committed_rows, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_http_rollback";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = DbContext::new(conn.clone(), config());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let endpoint = make(move |_req: Request| {
+        let (observer, record) = (observer.clone(), record.clone());
+        async move {
+            write_and_hold(TABLE, observer, record).await;
+            StatusCode::UNPROCESSABLE_ENTITY.into_response()
+        }
+    });
+
+    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(committed_rows(&conn, TABLE).await, 0);
+    assert!(
+        sighted(&sightings).is_empty(),
+        "nothing reacts to a write that never landed",
+    );
+}

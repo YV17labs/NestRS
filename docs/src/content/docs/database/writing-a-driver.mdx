@@ -65,6 +65,23 @@ pub enum Executor {
 
 impl nest_rs::database::Executor for Executor {
     fn as_any(&self) -> &dyn Any { self }
+
+    /// Work that must wait for the commit — every event emitted inside the
+    /// transaction. Keep it beside the transaction; the boundary that
+    /// settles it runs it after a commit and drops it otherwise.
+    fn after_commit(
+        &self,
+        work: nest_rs::database::Deferred,
+    ) -> Option<nest_rs::database::Deferred> {
+        match self {
+            Executor::Transactional(/* … */) => {
+                // Your code: push `work` onto a list your boundary drains.
+                None
+            }
+            // Nothing to wait for: hand it back, it runs at once.
+            Executor::Default(/* … */) => Some(work),
+        }
+    }
 }
 ```
 
@@ -72,6 +89,15 @@ The `Arc<Mutex<_>>` around the transactional variant is the common pattern
 because most stores' transaction handles take `&mut` on their query
 methods, and the interceptor needs to keep one reference while the handler
 holds another.
+
+`after_commit` is what makes an event wait for the write it announces. The
+trait's default hands the work back to run at once — right for a handle with
+no transaction, and wrong for one with: a driver that leaves it out dispatches
+every event emitted inside a transaction before that transaction has landed,
+and announces writes a rollback then undoes. Run the held work on your
+non-transactional handle, under the scope and the ability it was registered
+under (`current_executor_scope()`, and your authorization context), and
+contain a panic in it — the commit already stood.
 
 ## Step 2 — The request interceptor
 
@@ -134,15 +160,16 @@ impl Interceptor for YourDbContext {
             Err(_) => return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)),
         };
 
-        // (5) Commit on 2xx/3xx, roll back otherwise.
+        // (5) Commit on 2xx/3xx, roll back otherwise — then run the work
+        //     `after_commit` held, or drop it.
         //     Your code: tx.commit().await? / tx.rollback().await?
         //     (or commit_transaction / abort_transaction, etc.)
         match &result {
             Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
-                // commit using your store's API
+                // commit using your store's API; once it landed, run the held work
             }
             _ => {
-                // roll back using your store's API
+                // roll back using your store's API; drop the held work unrun
             }
         }
         result
@@ -227,13 +254,16 @@ impl JobContext for YourWorkerContext {
 }
 ```
 
-Three things your impl owes:
+What your impl owes:
 
 - **Drive `inner` to completion.** It *is* the job. Returning without
   awaiting it fails that one job loudly rather than silently skipping it.
 - **Honour `JobTransaction::Pool`.** It is the developer's
   `transactional = false`, and ignoring it silently gives up the
   atomicity the default promises.
+- **Settle what `after_commit` held, as the interceptor does.** Run it once
+  the attempt's commit landed; drop it when the attempt failed or could not
+  be committed. A retry then announces only the attempt that stood.
 - **Classify an `Unhonoured` from what your backend said, not from a
   guess.** A retry replays the whole job body, side effects included, so
   `Unhonoured::retryable` is for a failure that could genuinely end

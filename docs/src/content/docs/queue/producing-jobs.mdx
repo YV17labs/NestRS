@@ -151,6 +151,23 @@ and `source` is the failure that stopped the push. The failing call's own jobs
 may be queued too, and no receipt says which, so retrying those can queue one
 twice. A push failing at its first call returns that failure alone.
 
+## A push inside a transaction
+
+A push happens where it is written, so one written inside a transaction — a
+mutating request, a WebSocket message, a job attempt — reaches the backend
+before that transaction commits. It cannot wait for the commit: its answer
+(the receipt, `UniqueKeyHeld`, a refusal) only exists once the backend has been
+asked, and a push held for the commit would answer `Ok` for a job that might
+never be filed. The order is therefore push-then-commit. A push that fails
+fails the unit of work, so its writes roll back and nothing it meant to report
+is lost; the price is a job a later rollback leaves behind, which a worker may
+also pick up before the commit lands.
+
+When the job must follow the commit — it reports what the transaction wrote —
+emit an [event](/events/) and push from its listener: the bus dispatches once
+the transaction has committed, and never for a write that rolled back. The
+demo's publish notification is that shape.
+
 ## Holding a job back
 
 The third argument carries what a push declares besides its queue and its

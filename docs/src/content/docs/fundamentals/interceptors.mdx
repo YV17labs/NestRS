@@ -141,6 +141,8 @@ registration order — no `#[use_interceptors]` needed anywhere.
 pub struct DbContext {
     #[inject]
     db: Arc<DatabaseConnection>,
+    #[inject]
+    config: Arc<SeaOrmConfig>,
 }
 
 impl Layer for DbContext {}
@@ -149,20 +151,27 @@ impl Layer for DbContext {}
 impl Interceptor for DbContext {
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
         if is_safe(req.method()) {
-            return with_request_executor(Executor::Pool(self.db.clone()), next.run(req)).await;
+            return with_request_executor(Executor::Pool((*self.db).clone()), next.run(req)).await;
         }
-        let txn = Arc::new(self.db.begin().await?);
-        let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
-        commit_or_rollback(txn, &result).await?;
-        result
+        let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), "http"));
+        let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
+        match lazy.finalize(should_commit(&result)).await {
+            FinalizeOutcome::NoTransaction
+            | FinalizeOutcome::Committed
+            | FinalizeOutcome::RolledBack => result,
+            // An escaped handle, a poisoned transaction, a failed commit: a
+            // success that lost its writes answers 500.
+            // …
+        }
     }
 }
 ```
 
 That's the entire transactional boundary. Import `SeaOrmDatabaseModule`, the
 interceptor is auto-mounted, and every handler runs inside a transaction
-on a mutating verb, on the pool on a safe verb. No `#[use_interceptors]`
-on any controller.
+on a mutating verb — opened on its first query — and on the pool on a safe
+verb; `finalize` commits or rolls back, then dispatches the events the
+handler emitted, or drops them. No `#[use_interceptors]` on any controller.
 
 ## Where interceptors run in the chain
 

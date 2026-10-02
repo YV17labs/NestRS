@@ -331,3 +331,59 @@ async fn a_message_whose_commit_the_database_refuses_is_not_replied_to_as_a_succ
         event.fields,
     );
 }
+
+/// The data context WS and MCP share settles held work the same way: a success
+/// reply commits and the work runs after it, an error reply rolls back and the
+/// work never runs.
+#[tokio::test]
+async fn a_messages_held_work_runs_after_a_success_reply_and_never_after_an_error() {
+    use crate::harness::{
+        Sighting, Sightings, after_commit_table, committed_rows, sighted, write_and_hold,
+    };
+    const COMMITTED: &str = "after_commit_ws_commit";
+    const ROLLED_BACK: &str = "after_commit_ws_rollback";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, COMMITTED).await;
+    after_commit_table(&conn, ROLLED_BACK).await;
+    let container = Container::builder().provide_arc(conn.clone()).build();
+    let ctx = WsDataContext::from_container(&container);
+    let captured = ctx.capture(&Request::default());
+
+    let sightings = Sightings::default();
+    let reply = ctx
+        .around(
+            &captured,
+            Box::pin({
+                let (observer, record) = (conn.clone(), sightings.clone());
+                async move {
+                    write_and_hold(COMMITTED, observer, record).await;
+                    WsReply::None
+                }
+            }),
+        )
+        .await;
+    assert!(matches!(reply, WsReply::None));
+    assert_eq!(
+        sighted(&sightings),
+        [Sighting {
+            committed: 1,
+            on_pool: true
+        }],
+    );
+
+    let reply = ctx
+        .around(
+            &captured,
+            Box::pin({
+                let (observer, record) = (conn.clone(), sightings.clone());
+                async move {
+                    write_and_hold(ROLLED_BACK, observer, record).await;
+                    WsReply::error("handler failed mid-way")
+                }
+            }),
+        )
+        .await;
+    assert!(matches!(reply, WsReply::Error(_)));
+    assert_eq!(committed_rows(&conn, ROLLED_BACK).await, 0);
+    assert!(sighted(&sightings).is_empty());
+}

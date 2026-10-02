@@ -5,6 +5,7 @@ paths:
   - "**/entities/**/*.rs"
   - "crates/nest-rs-seaorm/**/*.rs"
   - "crates/nest-rs-database/**/*.rs"
+  - "crates/nest-rs-events/**/*.rs"
   - "crates/nest-rs-resource/**/*.rs"
   - "crates/nest-rs-resource-macros/**/*.rs"
   - "demo/crates/migrations/**/*.rs"
@@ -87,6 +88,43 @@ transaction at all — fail-secure holds at zero `BEGIN`/`ROLLBACK` cost.
 *Ability* installs inside per-route guards via the `#[routes]` shaper —
 the only seam that runs after `AbilityGuard` and still wraps the handler,
 keeping `nest-rs-http` unaware of authz/ORM.
+
+## What waits for the commit — the event, and nothing else
+
+A unit of work that holds a transaction is the only place that knows whether its
+writes landed, so an effect that must not be seen before they land waits for
+**it**. `nest_rs_database::after_commit(work)` hands the work to the ambient
+executor; a boundary's transaction holds it, and `LazyTransaction::finalize` —
+the single home every edge settles through — runs it once the transaction
+reports `Committed`, or `NoTransaction` on a boundary that succeeded (nothing
+could roll back), and drops it on every other outcome with one `debug` line
+naming how much it dropped. Held work runs on the **pool**, under the scope and
+the ability it was registered under: outside the transaction it waited for, with
+the authority its emitter had. A panic in it is contained and reported at
+`error`, because the commit already stood and an unwind would turn a committed
+attempt into a failed one that a queue replays. Work reaching a boundary that has
+already settled — only an escaped handle can — is refused at `warn`.
+
+**The event is the effect that waits, and it waits without being asked.** An
+event announces a fact, and a fact its transaction rolls back never happened. So
+`EventBus::emit` dispatches through `after_commit`: a listener never pushes a
+job, notifies a subscriber or calls out about a write that did not land, never
+reads one that has not landed yet, and the developer writes nothing to get that.
+With nothing to wait for it dispatches before `emit` returns, as it always did.
+This is also what makes the events page's *failure is local* true: a listener
+used to run on its emitter's transaction, so a statement it failed poisoned the
+emitter's writes.
+
+Every member, stated:
+
+| Member | State |
+|---|---|
+| A mutating HTTP request (and the GraphQL mutation riding it), a WS message, an MCP operation, a queue attempt, a scheduled tick | **built** — each settles through `finalize` |
+| A pool: a safe request, a read-only GraphQL batch, a subscription, `transactional = false` | **at once** — there is nothing to wait for |
+| A transaction the caller opened itself — installed as `Executor::Txn`, or held privately like `retry_on_conflict`'s | **not waited for, stated** — its commit is the caller's and no boundary sees it: under `Txn` the dispatch runs at once, and under a private one it waits for whatever boundary is ambient, so an attempt the caller rolled back would still be announced. The caller emits after its own `commit` |
+| `EventBus::emit` | **built**, transparently |
+| `JobProducer::push`, a WS broadcast, a storage write | **refused**: each is a call whose answer its caller reads — a receipt, `UniqueKeyHeld`, a send failure, an object key — and an answer cannot exist before the backend is asked, so a deferred one would report `Ok` for work that may never be filed. Inside a transaction it happens where it is written: a push that fails fails the unit, so nothing it meant to announce is lost, and the price is a job a later rollback leaves behind. Work that must follow the commit is an event whose listener pushes. |
+| Another ORM's driver | owes `Executor::after_commit` on every handle its boundaries settle; the trait's default runs the work at once, which is right for a pool only |
 
 ## Write capability is segregated, never a placeholder
 

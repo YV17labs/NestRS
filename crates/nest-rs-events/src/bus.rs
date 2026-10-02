@@ -84,14 +84,28 @@ impl EventBus {
         self.subscribe_named(ANONYMOUS_LISTENER, listener);
     }
 
-    /// Runs each listener in registration order, awaited in turn. No-op when
+    /// Runs each listener in registration order, awaited in turn — once the
+    /// emitter's transaction has committed, when it emits inside one. No-op when
     /// nothing is registered for `E`.
     ///
-    /// **Contract — in-process, sequential, failure is local.** The emitter
-    /// awaits every listener, so a *slow* listener delays the ones after it and
-    /// the emitter itself: the bus is for lightweight same-process reactions,
-    /// and work that must not block its emitter belongs on the queue (which
-    /// buys isolation and retries).
+    /// **An event is a fact, and a fact is not one until it commits.** Emitted
+    /// inside a unit of work that holds a transaction — a mutating request, a
+    /// WS message, an MCP operation, a job attempt — the dispatch waits for that
+    /// transaction through [`nest_rs_database::after_commit`]: it runs when the
+    /// boundary commits, and is dropped unrun when it rolls back, fails to
+    /// commit, or writes nothing. A listener therefore never pushes a job,
+    /// notifies a subscriber or calls out about a write that did not land, and
+    /// never sees one that has not landed yet. It runs outside that
+    /// transaction, on the pool, under the emitter's scope and ability. With no
+    /// transaction to wait for — a safe request, a job on the pool, no data
+    /// layer at all — it runs right here, before `emit` returns, as it always
+    /// did.
+    ///
+    /// **Contract — in-process, sequential, failure is local.** Whoever settles
+    /// the dispatch awaits every listener, so a *slow* listener delays the ones
+    /// after it and the unit of work that emitted: the bus is for lightweight
+    /// same-process reactions, and work that must not block its emitter belongs
+    /// on the queue (which buys isolation and retries).
     ///
     /// A **panicking** listener is contained to that listener. It is caught,
     /// logged at `error` on `nest_rs::events`, and the chain continues — the
@@ -113,9 +127,12 @@ impl EventBus {
         // each listener a trace of its own whenever nothing ambient carried
         // one, and two reactions to one fact are not two traces.
         let cause = nest_rs_core::Correlation::inherited();
-        for Listener { name, run } in listeners {
-            dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
-        }
+        nest_rs_database::after_commit(async move {
+            for Listener { name, run } in listeners {
+                dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
+            }
+        })
+        .await;
     }
 }
 

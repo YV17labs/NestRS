@@ -7,7 +7,9 @@
 //! listener from the fully-assembled container at bootstrap.
 //!
 //! Dispatch is in-process and awaited: every listener registered for the
-//! event type runs in registration order, each with its own clone.
+//! event type runs in registration order, each with its own clone — once the
+//! emitter's transaction has committed when it emits inside one, and never when
+//! that transaction rolls back (see [`EventBus::emit`]).
 
 #![warn(missing_docs)]
 

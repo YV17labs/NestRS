@@ -356,3 +356,56 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
         event.fields,
     );
 }
+
+/// Work held for the commit of a job attempt runs after it, on the pool, and
+/// sees what the attempt committed.
+#[tokio::test]
+async fn work_held_for_the_commit_runs_once_the_attempt_committed() {
+    use crate::harness::{Sighting, Sightings, after_commit_table, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_worker_commit";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = context(conn.clone());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async move {
+        write_and_hold(TABLE, observer, record).await;
+        true
+    });
+    assert_eq!(
+        ctx.scope(JobTransaction::PerAttempt, job).await,
+        JobSettlement::Settled
+    );
+    assert_eq!(
+        sighted(&sightings),
+        [Sighting {
+            committed: 1,
+            on_pool: true
+        }],
+    );
+}
+
+/// A failed attempt rolls back, and what waited for its commit never runs — so
+/// the retry that follows is the only one that announces anything.
+#[tokio::test]
+async fn work_held_by_an_attempt_that_failed_never_runs() {
+    use crate::harness::{Sightings, after_commit_table, committed_rows, sighted, write_and_hold};
+    const TABLE: &str = "after_commit_worker_rollback";
+    let conn = crate::harness::connect_arc().await;
+    after_commit_table(&conn, TABLE).await;
+    let sightings = Sightings::default();
+    let ctx = context(conn.clone());
+
+    let (observer, record) = (conn.clone(), sightings.clone());
+    let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async move {
+        write_and_hold(TABLE, observer, record).await;
+        false
+    });
+    assert_eq!(
+        ctx.scope(JobTransaction::PerAttempt, job).await,
+        JobSettlement::Settled
+    );
+    assert_eq!(committed_rows(&conn, TABLE).await, 0);
+    assert!(sighted(&sightings).is_empty());
+}

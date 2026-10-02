@@ -139,3 +139,84 @@ pub(crate) async fn terminate_backend(killer: &DatabaseConnection, pid: i32) {
         .await
         .expect("terminate the probe's backend");
 }
+
+/// What a piece of after-commit work saw when it ran.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Sighting {
+    /// The probe table's rows, counted on a connection **outside** the
+    /// boundary — so only what had committed.
+    pub(crate) committed: i64,
+    /// Whether the work's own ambient executor was the pool, outside the
+    /// transaction it waited for.
+    pub(crate) on_pool: bool,
+}
+
+/// Where the probe's work records what it saw — empty while it has not run.
+pub(crate) type Sightings = Arc<std::sync::Mutex<Vec<Sighting>>>;
+
+/// A fresh one-column table for one test, so a row count is that test's alone.
+pub(crate) async fn after_commit_table(conn: &DatabaseConnection, table: &str) {
+    for sql in [
+        format!("DROP TABLE IF EXISTS {table}"),
+        format!("CREATE TABLE {table} (id INT PRIMARY KEY)"),
+    ] {
+        conn.execute_unprepared(&sql)
+            .await
+            .unwrap_or_else(|err| panic!("set up the probe table `{table}`: {err}"));
+    }
+}
+
+/// `table`'s rows on `conn`.
+pub(crate) async fn committed_rows(conn: &DatabaseConnection, table: &str) -> i64 {
+    conn.query_one_raw(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Postgres,
+        format!("SELECT count(*)::bigint AS n FROM {table}"),
+    ))
+    .await
+    .expect("the count runs")
+    .expect("a count returns a row")
+    .try_get::<i64>("", "n")
+    .expect("the count is an integer")
+}
+
+/// Run from inside a boundary's body: write one row on the ambient executor,
+/// then hand the boundary work for after its commit that records what it sees.
+///
+/// Shared by every settle site — the HTTP boundary, the worker's attempt, the
+/// WS/MCP data context — because the probe *is* the assertion. The work counts
+/// on `observer`, a connection outside the boundary, so a sighting of `1`
+/// proves the row had committed when it ran: work run at once would have counted
+/// `0` there, while counting on the boundary's own executor would have seen its
+/// uncommitted row and passed either way.
+pub(crate) async fn write_and_hold(
+    table: &'static str,
+    observer: Arc<DatabaseConnection>,
+    sightings: Sightings,
+) {
+    nest_rs_seaorm::current_executor()
+        .expect("the body runs with an ambient executor")
+        .execute_unprepared(&format!("INSERT INTO {table} (id) VALUES (1)"))
+        .await
+        .expect("the write lands in the boundary's transaction");
+    nest_rs_database::after_commit(async move {
+        let committed = committed_rows(&observer, table).await;
+        let on_pool = matches!(
+            nest_rs_seaorm::current_executor(),
+            Some(nest_rs_seaorm::Executor::Pool(_))
+        );
+        sightings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(Sighting { committed, on_pool });
+    })
+    .await;
+}
+
+/// What the probe's work recorded.
+pub(crate) fn sighted(sightings: &Sightings) -> Vec<Sighting> {
+    std::mem::take(
+        &mut *sightings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+}

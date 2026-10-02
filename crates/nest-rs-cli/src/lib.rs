@@ -8,9 +8,10 @@
 //! the two come to disagree without anyone noticing.
 //!
 //! The same holds for a mirror: `nestrs doctor` answers what an app makes of a
-//! variable and of the `.env` cascade without linking the loader, and the suite
-//! runs [`resolve_variable`] and [`cascade_refusals`] beside the loader they
-//! mirror, so the two cannot drift apart unseen.
+//! variable and of the `.env` cascade without linking the loader, and this
+//! crate's own suite runs [`resolve_variable`] and [`cascade_refusals`] beside
+//! the loader they mirror — a dev-dependency, which `cargo install` never
+//! builds — so the two cannot drift apart unseen.
 //!
 //! Nothing here is an install surface: `nestrs` is reached with
 //! `cargo install --locked nest-rs-cli`, never with `cargo add`. So the seam is

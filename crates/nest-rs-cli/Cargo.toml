@@ -33,6 +33,16 @@ toml_edit.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The doctor's parity tests run the loader it mirrors beside it. Path-only
+# dev-dependencies: they never reach `cargo install`, so the command still links
+# no framework crate, and publishing strips them.
+nest-rs-config = { path = "../nest-rs-config" }
+# The selector and the prefix a cascade may not name, from the kernel's own
+# constants rather than a literal.
+nest-rs-core = { path = "../nest-rs-core" }
+# `figment::Jail` sets and restores the working directory and the environment
+# the loader reads, as `nest-rs-config`'s own suite does.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

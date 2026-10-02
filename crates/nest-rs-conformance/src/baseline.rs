@@ -36,11 +36,10 @@ impl Verdict {
             // **`line_is` again, and that is the fix.** This sentence was
             // hardcoded as "covered by no test … Cover them where the behaviour
             // is tested", which is right for a coverage join and backwards for a
-            // forbidden-pattern one: `env_names` reports a variable spelled as a
-            // literal, and the remedy is to delete the literal, not to write a
-            // test for it. Every caller already words what one of its lines
-            // *is*, and it was printed only on the first landing — the one run
-            // nobody ever sees again.
+            // forbidden-pattern one, whose remedy is to delete the offending
+            // line, not to write a test for it. Every caller already words what
+            // one of its lines *is*, and it was printed only on the first
+            // landing — the one run nobody ever sees again.
             out.push_str(&format!(
                 "{} new line(s) — {family} — each one {line_is}:\n  {}\n\nThe \
                  baseline records what was already there when this join landed; \

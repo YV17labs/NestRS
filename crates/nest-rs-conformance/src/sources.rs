@@ -1,10 +1,7 @@
-//! Where a join reads its population from.
-//!
-//! Every member list here is walked from the tree, never listed: a family that
-//! grows a member the day someone writes it is the whole point, and a literal
-//! list is the defect the rule names.
+//! Where a check reads its population from: the two workspaces' crate
+//! directories, their files, and the constants they declare — walked from the
+//! tree, never listed.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -91,7 +88,7 @@ fn collect(dir: &Path, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>) {
 /// outside it is a join reading the wrong tree. The fallback `relative` used to
 /// take — the absolute path, whole — is exactly the reading this function exists
 /// to refuse, so it is not offered as a quiet alternative.
-pub fn below<'p>(path: &'p Path, base: &Path) -> &'p Path {
+fn below<'p>(path: &'p Path, base: &Path) -> &'p Path {
     path.strip_prefix(base).unwrap_or_else(|_| {
         panic!(
             "{} is not below {} — a join read a path from outside the tree it walks",
@@ -145,7 +142,7 @@ pub fn read(path: &Path) -> io::Result<String> {
 /// constants, and a text scan reads two of them wrong: a `\`-continued literal
 /// and a `#[cfg(test)]` fixture spelling the same name. [`parsed`] exists for
 /// exactly that, and the alternative — linking the crate that declares it — is
-/// the 400-crate relink [`operation_log_target`] records measuring.
+/// a relink of most of the workspace to read one string.
 pub fn declared_str(path: &Path, name: &str) -> Option<String> {
     let ast = parsed(path)?;
     // Top level first, so a free constant always wins a name an `impl` also
@@ -342,17 +339,6 @@ pub fn exported_decorators(dir: &Path) -> Vec<String> {
     out
 }
 
-/// A pair as its own declaration spells it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Pair {
-    /// The `*-macros` crate that declares it, e.g. `nest-rs-http-macros`.
-    pub krate: String,
-    /// The struct half — `#[injectable]` for a provider-hosted pair.
-    pub host: String,
-    /// The impl half.
-    pub operations: String,
-}
-
 fn as_str_lit(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Lit(lit) => match &lit.lit {
@@ -360,100 +346,6 @@ fn as_str_lit(expr: &Expr) -> Option<String> {
             _ => None,
         },
         _ => None,
-    }
-}
-
-/// Both spellings of a declaration, and only these two: a third would be a
-/// second way to declare a pair, which the rule forbids before this join has
-/// to care.
-fn pair_from(expr: &Expr) -> Option<(String, String)> {
-    match expr {
-        // `DecoratorPair { host: "#[controller]", operations: "#[routes]", .. }`
-        Expr::Struct(lit) if lit.path.segments.last()?.ident == "DecoratorPair" => {
-            let field = |name: &str| {
-                lit.fields
-                    .iter()
-                    .find(|f| matches!(&f.member, syn::Member::Named(i) if i == name))
-                    .and_then(|f| as_str_lit(&f.expr))
-            };
-            Some((field("host")?, field("operations")?))
-        }
-        // `DecoratorPair::on_provider("#[processor]", "#[process]")` — the host
-        // is the generic `#[injectable]`, which is why five pairs share one
-        // host cell rather than owing five.
-        Expr::Call(call) => {
-            let Expr::Path(path) = &*call.func else {
-                return None;
-            };
-            if path.path.segments.last()?.ident != "on_provider" {
-                return None;
-            }
-            let operations = as_str_lit(call.args.first()?)?;
-            Some(("#[injectable]".to_owned(), operations))
-        }
-        _ => None,
-    }
-}
-
-/// Every `const` initialised with one, at any depth outside `#[cfg(test)]` —
-/// an inline `mod` or an `impl` included. It read top-level items only, which
-/// left a pair declared one `mod` down unjoined while every cell it owed stayed
-/// unasked; a pair a `macro_rules!` writes, or one under a renamed
-/// `DecoratorPair`, is refused by the `blinds` join.
-pub fn declared_pairs() -> Vec<Pair> {
-    let root = repo_root();
-    let mut out = Vec::new();
-    for dir in std::fs::read_dir(root.join("crates"))
-        .expect("crates/ is readable")
-        .flatten()
-    {
-        let path = dir.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        if !name.ends_with("-macros") {
-            continue;
-        }
-        for file in rust_files(&path.join("src")) {
-            let Some(ast) = parsed(&file) else {
-                continue;
-            };
-            let mut consts = PairConsts(Vec::new());
-            consts.visit_file(&ast);
-            out.extend(consts.0.into_iter().map(|(host, operations)| Pair {
-                krate: name.to_owned(),
-                host,
-                operations,
-            }));
-        }
-    }
-    out
-}
-
-/// Every pair a file's constants declare, outside `#[cfg(test)]`.
-struct PairConsts(Vec<(String, String)>);
-
-impl<'ast> Visit<'ast> for PairConsts {
-    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
-        if !is_cfg_test(&node.attrs) {
-            syn::visit::visit_item_mod(self, node);
-        }
-    }
-
-    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
-        if !is_cfg_test(&node.attrs)
-            && let Some(pair) = pair_from(&node.expr)
-        {
-            self.0.push(pair);
-        }
-    }
-
-    fn visit_impl_item_const(&mut self, node: &'ast syn::ImplItemConst) {
-        if !is_cfg_test(&node.attrs)
-            && let Some(pair) = pair_from(&node.expr)
-        {
-            self.0.push(pair);
-        }
     }
 }
 
@@ -468,20 +360,15 @@ impl<'ast> Visit<'ast> for PairConsts {
 /// The convention the framework now follows is what makes this mechanical: a
 /// crate owning one concern writes `pub const TARGET` at its root, a crate
 /// owning several writes a `pub mod target` of them. Both are `Item::Const`
-/// with a string literal, so both are read the same way — the same shape
-/// [`declared_pairs`] reads for decorator pairs.
+/// with a string literal, so both are read the same way.
 ///
 /// Returns `(target, declaring crate directory, constant name)`. The name is
 /// what disambiguates: `nest_rs_core` declares seven, so the crate alone cannot
 /// say which of them `…::operation_log::TARGET` is.
 ///
-/// **Walked once per test process**, because three callers want the same table:
-/// [`resolve_target`] resolves every emission site against it, `filters` merges
-/// the declarations into its population, and `edges` asks it one question per
-/// edge. Answering each by re-walking every `crates/*/src` file was four passes
-/// over the same tree inside one join — the cost the same rule is stated
-/// against in `edges`'s `framework_idents`. Leaked, deliberately: the table is
-/// the process's, and every caller compares against a borrowed `&'static str`.
+/// **Walked once per test process**, because several checks read the same
+/// table. Leaked, deliberately: the table is the process's, and every caller
+/// compares against a borrowed `&'static str`.
 pub fn declared_targets() -> &'static [(&'static str, &'static str, &'static str)] {
     static TABLE: std::sync::OnceLock<Vec<(&'static str, &'static str, &'static str)>> =
         std::sync::OnceLock::new();
@@ -643,378 +530,6 @@ fn collect_target_consts(items: &[Item], krate: &str, out: &mut Vec<(String, Str
     }
 }
 
-/// How a site spelled a value the framework interprets — a `target:`, a unit
-/// name, a span kind.
-///
-/// One enum rather than one per join: the three that read these token streams
-/// asked the same question and answered it in three shapes, and the shapes had
-/// already drifted (one held the identifier, another the resolved value).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Named {
-    /// A path. The payload is the last segment — the constant's name.
-    Path(String),
-    /// A string literal.
-    Literal(String),
-}
-
-/// A macro invocation's tokens, flattened at the **top level only**.
-///
-/// Deliberately not [`flatten`], which descends into groups: a `target:` inside
-/// a nested group is not the macro's target, and reading one as if it were is
-/// how a join comes to believe a fixture is an emission.
-pub fn top_level(tokens: &TokenStream) -> Vec<TokenTree> {
-    tokens.clone().into_iter().collect()
-}
-
-/// The index just past `key <punct>` at the top level, if present.
-pub fn value_after(tokens: &[TokenTree], key: &str, punct: char) -> Option<usize> {
-    tokens
-        .windows(2)
-        .position(|w| match (&w[0], &w[1]) {
-            (TokenTree::Ident(i), TokenTree::Punct(p)) => i == key && p.as_char() == punct,
-            _ => false,
-        })
-        .map(|at| at + 2)
-}
-
-/// The index just past the value at `at`, and the comma after it.
-///
-/// A value is one literal or a `::`-joined path, so this **walks** it rather
-/// than assuming a width — assuming one is how a fixed offset came to read the
-/// middle of `operation_log::kind::SERVER`.
-pub fn past_value(tokens: &[TokenTree], at: usize) -> usize {
-    let mut i = at;
-    while let Some(t) = tokens.get(i) {
-        match t {
-            TokenTree::Ident(_) => i += 1,
-            TokenTree::Punct(p) if p.as_char() == ':' => i += 1,
-            TokenTree::Literal(_) if i == at => i += 1,
-            _ => break,
-        }
-    }
-    match tokens.get(i) {
-        Some(TokenTree::Punct(p)) if p.as_char() == ',' => i + 1,
-        _ => i,
-    }
-}
-
-/// Read the token at `at` as a literal or a path, with the path's segments.
-pub fn named_at(tokens: &[TokenTree], at: usize) -> Option<(Named, Vec<String>)> {
-    // A rooted path (`::nest_rs_queue::unit::JOB`) opens with punctuation, and
-    // the match below saw the punct and answered `None` — so a site spelled the
-    // one way `framework.md` mandates for macro emissions was invisible to
-    // every join built on this reader. Step over the leading `::` first.
-    let mut at = at;
-    while matches!(tokens.get(at), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
-        at += 1;
-    }
-    match tokens.get(at)? {
-        TokenTree::Literal(lit) => syn::parse_str::<syn::LitStr>(&lit.to_string())
-            .ok()
-            .map(|s| (Named::Literal(s.value()), Vec::new())),
-        TokenTree::Ident(_) => {
-            let segments: Vec<String> = tokens[at..]
-                .iter()
-                .take_while(|t| {
-                    matches!(t, TokenTree::Ident(_))
-                        || matches!(t, TokenTree::Punct(p) if p.as_char() == ':')
-                })
-                .filter_map(|t| match t {
-                    TokenTree::Ident(i) => Some(i.to_string()),
-                    _ => None,
-                })
-                .collect();
-            let last = segments.last()?.clone();
-            Some((Named::Path(last), segments))
-        }
-        _ => None,
-    }
-}
-
-/// The `target:` a macro call declares, whether spelled as a literal or — as
-/// every framework site now does — as a constant.
-///
-/// Worded once because it was worded three times: `filters`, `units` and
-/// `events` each walked this grammar, differing only in what they returned, and
-/// a correction to one left the others answering the old way in silence.
-pub fn declared_target(tokens: &TokenStream, file: &str) -> Option<Named> {
-    let flat = top_level(tokens);
-    let at = value_after(&flat, "target", ':')?;
-    match named_at(&flat, at)? {
-        (Named::Literal(text), _) => Some(Named::Literal(text)),
-        (Named::Path(_), segments) => Some(match resolve_target(&segments, file) {
-            Some(value) => Named::Literal(value.to_owned()),
-            None => Named::Path(segments.join("::")),
-        }),
-    }
-}
-
-/// Resolve a constant path to the target string it names.
-///
-/// The key is **(declaring crate, constant name)**, which is unique:
-/// `nest-rs-core` declares seven targets, so the crate alone cannot say which
-/// of them `…::operation_log::TARGET` is, and `TARGET` alone cannot say which
-/// crate's it is now that every crate has one. A product file resolves through
-/// [`resolve_product_const`] instead, where the module is a level of the key.
-pub fn resolve_target(segments: &[String], file: &str) -> Option<&'static str> {
-    if file.starts_with("demo/") {
-        return resolve_product_const(segments, file);
-    }
-    let name = segments.last()?;
-    let owner = declaring_crate(segments, file);
-    declared_targets()
-        .iter()
-        .find(|(_, krate, konst)| *krate == owner && konst == name)
-        .map(|(target, _, _)| *target)
-}
-
-/// Which crate a constant belongs to: the one its path names, or — for
-/// `crate::…` and a bare name — the one the file lives in.
-fn declaring_crate(segments: &[String], file: &str) -> String {
-    for segment in segments.iter().rev().skip(1) {
-        if let Some(krate) = segment.strip_prefix("nest_rs_") {
-            return format!("nest-rs-{}", krate.replace('_', "-"));
-        }
-    }
-    file.strip_prefix("crates/")
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or_default()
-        .to_owned()
-}
-
-/// Resolve a constant path written in a **product** file — one under `demo/` —
-/// to the string it names.
-///
-/// A product crate is a container: `features` declares one `TARGET` per
-/// feature (`features::posts::TARGET`, `features::users::TARGET`), so the
-/// framework's key — the crate and the constant's name — names several
-/// declarations there, and the module is the third level of it. The path is read
-/// through the crate's own imports ([`crate::imports::CrateImports`]) from the
-/// module the file is, so `crate::posts::TARGET`, `super::TARGET` and an imported
-/// `TARGET` all land on the one declaration; a path that roots anywhere but the
-/// crate itself resolves to nothing, and its site is reported unresolved.
-fn resolve_product_const(segments: &[String], file: &str) -> Option<&'static str> {
-    let (krate, _) = file.split_once("/src/")?;
-    let root = repo_root();
-    let src = root.join(krate).join("src");
-    let module = crate::imports::module_of(&root.join(file), &src)?;
-    let canonical = product_imports(&src, &module)?.resolve(&module, segments);
-    let (first, rest) = canonical.split_first()?;
-    if first != "crate" {
-        return None;
-    }
-    let (name, declared_in) = rest.split_last()?;
-    product_consts()
-        .iter()
-        .find(|konst| konst.krate == krate && konst.module == declared_in && konst.name == *name)
-        .map(|konst| konst.value)
-}
-
-/// One string constant a product crate declares, where it declares it.
-struct ProductConst {
-    /// The crate's directory, repository-relative: `demo/crates/features`.
-    krate: String,
-    /// The module that declares it, below the crate root.
-    module: Vec<String>,
-    name: String,
-    value: &'static str,
-}
-
-/// Every `const NAME: &str = "…"` the product crates declare outside test code,
-/// by crate, module and name. Walked once per test process, as
-/// [`declared_targets`] is.
-fn product_consts() -> &'static [ProductConst] {
-    static TABLE: std::sync::OnceLock<Vec<ProductConst>> = std::sync::OnceLock::new();
-    TABLE.get_or_init(|| {
-        let root = repo_root();
-        let mut out = Vec::new();
-        for dir in crate_dirs() {
-            let krate = relative(&dir, &root);
-            if !krate.starts_with("demo/") {
-                continue;
-            }
-            let src = dir.join("src");
-            for file in rust_files(&src) {
-                let (Some(module), Some(ast)) =
-                    (crate::imports::module_of(&file, &src), parsed(&file))
-                else {
-                    continue;
-                };
-                collect_str_consts(&ast.items, &krate, module, &mut out);
-            }
-        }
-        out
-    })
-}
-
-fn collect_str_consts(
-    items: &[Item],
-    krate: &str,
-    module: Vec<String>,
-    out: &mut Vec<ProductConst>,
-) {
-    for item in items {
-        match item {
-            Item::Const(konst) if !is_cfg_test(&konst.attrs) => {
-                if let Expr::Lit(lit) = &*konst.expr
-                    && let Lit::Str(text) = &lit.lit
-                {
-                    out.push(ProductConst {
-                        krate: krate.to_owned(),
-                        module: module.clone(),
-                        name: konst.ident.to_string(),
-                        value: Box::leak(text.value().into_boxed_str()),
-                    });
-                }
-            }
-            Item::Mod(inner) if !is_cfg_test(&inner.attrs) => {
-                if let Some((_, items)) = &inner.content {
-                    let mut nested = module.clone();
-                    nested.push(inner.ident.to_string());
-                    collect_str_consts(items, krate, nested, out);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-thread_local! {
-    /// Each product crate root's imports, read once per thread: `CrateImports`
-    /// holds `syn` attributes, which no `static` may.
-    static PRODUCT_IMPORTS: std::cell::RefCell<
-        std::collections::BTreeMap<PathBuf, std::rc::Rc<crate::imports::CrateImports>>,
-    > = Default::default();
-}
-
-/// The imports of the crate root whose tree holds `module` — a package's
-/// `lib.rs`, or its `main.rs` for a module only the binary declares.
-fn product_imports(
-    src: &Path,
-    module: &[String],
-) -> Option<std::rc::Rc<crate::imports::CrateImports>> {
-    let root = repo_root();
-    ["lib.rs", "main.rs"]
-        .into_iter()
-        .map(|entry| src.join(entry))
-        .filter(|entry| entry.is_file())
-        .map(|entry| {
-            PRODUCT_IMPORTS.with(|cache| {
-                std::rc::Rc::clone(cache.borrow_mut().entry(entry.clone()).or_insert_with(|| {
-                    std::rc::Rc::new(crate::imports::CrateImports::read(&entry, &root))
-                }))
-            })
-        })
-        .find(|imports| imports.has_module(module))
-}
-
-/// The operation log's own target, read from its declaration.
-///
-/// Read rather than linked: this crate proves things *about* the framework and
-/// depending on it to learn one string would put the whole tree behind the test
-/// binary — 400 crates and a 100 MB relink, measured, to compare a `&str`.
-///
-/// Resolved once: it is one `&'static str` for the whole process, and the
-/// `units` join asks for it once per `info!` in both workspaces.
-pub fn operation_log_target() -> Option<&'static str> {
-    static TARGET: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-    *TARGET.get_or_init(|| {
-        resolve_target(
-            &["operation_log".to_owned(), "TARGET".to_owned()],
-            "crates/nest-rs-core/src/operation_log.rs",
-        )
-    })
-}
-
-/// Every `.rs` file both workspaces own, parsed, with the CLI's templates left
-/// out — their targets carry handlebars placeholders and become real ones under
-/// a scaffolded tree's own root.
-///
-/// The skip is the load-bearing half and it was written three times in three
-/// wordings; a fourth join would have copied whichever it sat next to.
-pub fn each_source(root: &Path, mut visit: impl FnMut(&str, &syn::File)) {
-    let mut sources = rust_files(&root.join("crates"));
-    sources.extend(rust_files(&root.join("demo")));
-    for path in sources {
-        let rel = relative(&path, root);
-        if rel.contains("cli/src/templates/") {
-            continue;
-        }
-        if let Some(ast) = parsed(&path) {
-            visit(&rel, &ast);
-        }
-    }
-}
-
-/// Every fenced code block in this file's doc comments, parsed as Rust.
-///
-/// **A join that reads only items is blind exactly where a developer copies
-/// from.** `syn` lowers `///` to `#[doc = "…"]`, so a macro invocation inside a
-/// doctest is one string literal and `visit_macro` never descends into it: the
-/// canonical `operation_span!` example taught all three of the literal forms the
-/// `units` join forbids, for as long as that was true, and nothing failed. An
-/// example is code the compiler runs and the reader imitates, so it is scanned
-/// as code.
-///
-/// Rustdoc's hidden lines (`# …`) are code and are kept. A block that does not
-/// parse is **dropped, never reported**: the same fences hold `text`, JSON and
-/// shell, and this is a reader for what an example *does*, not a linter for what
-/// it says. The converse is the known looseness — prose that happens to parse as
-/// an expression is walked as if it were code, which costs nothing to a join
-/// keyed on a macro name and would matter to one keyed on an identifier.
-pub fn doctests(ast: &syn::File) -> Vec<syn::File> {
-    let mut text = DocText::default();
-    text.visit_file(ast);
-
-    let mut out = Vec::new();
-    let mut open: Option<String> = None;
-    for line in text.0.lines() {
-        // `syn` hands back the comment's text with the space after `///` intact.
-        let body = line.strip_prefix(' ').unwrap_or(line);
-        if body.trim_start().starts_with("```") {
-            match open.take() {
-                Some(block) => out.extend(parse_doctest(&block)),
-                None => open = Some(String::new()),
-            }
-            continue;
-        }
-        if let Some(block) = open.as_mut() {
-            let code = match body {
-                "#" => "",
-                _ if body.starts_with("##") => &body[1..],
-                _ => body.strip_prefix("# ").unwrap_or(body),
-            };
-            block.push_str(code);
-            block.push('\n');
-        }
-    }
-    out
-}
-
-/// A doctest is items or statements, and which one is the author's business.
-fn parse_doctest(code: &str) -> Option<syn::File> {
-    syn::parse_file(code)
-        .ok()
-        .or_else(|| syn::parse_file(&format!("fn __doctest() {{\n{code}\n}}")).ok())
-}
-
-/// Every `#[doc]` string in a file, in source order.
-#[derive(Default)]
-struct DocText(String);
-
-impl<'ast> Visit<'ast> for DocText {
-    fn visit_attribute(&mut self, node: &'ast Attribute) {
-        if let Meta::NameValue(pair) = &node.meta
-            && pair.path.is_ident("doc")
-            && let Expr::Lit(literal) = &pair.value
-            && let Lit::Str(text) = &literal.lit
-        {
-            self.0.push_str(&text.value());
-            self.0.push('\n');
-        }
-    }
-}
-
 /// Whether an item is compiled for tests only — a `#[cfg(…)]` whose predicate
 /// implies `test`.
 ///
@@ -1116,7 +631,7 @@ pub fn path_roots(tokens: &TokenStream) -> Vec<String> {
 /// the reason `path_roots` records — the `Spacing::Joint` correction changed
 /// which crates read as reached, and a second copy would have kept the old
 /// answer.
-pub fn flatten(tokens: TokenStream, out: &mut Vec<TokenTree>) {
+fn flatten(tokens: TokenStream, out: &mut Vec<TokenTree>) {
     for tree in tokens {
         match tree {
             TokenTree::Group(group) => {
@@ -1126,150 +641,6 @@ pub fn flatten(tokens: TokenStream, out: &mut Vec<TokenTree>) {
             }
             other => out.push(other),
         }
-    }
-}
-
-/// Every identifier `tokens` spell, at any depth.
-///
-/// The loosest of the three token reads here, and the right one where the
-/// question is whether a name is *written* at all — a fixture naming a
-/// decorator, a hygiene use site naming a macro.
-pub fn idents(tokens: TokenStream) -> BTreeSet<String> {
-    let mut flat = Vec::new();
-    flatten(tokens, &mut flat);
-    flat.iter()
-        .filter_map(|tree| match tree {
-            TokenTree::Ident(ident) => Some(ident.to_string()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The value of every string literal `tokens` spell, at any depth — what a join
-/// reads inside a macro body, where `syn` leaves `format!("…")`'s literal as a
-/// token rather than a `LitStr`. Parsed as a literal, so an escape and a raw
-/// string read as the value the compiler sees.
-pub fn string_literals(tokens: TokenStream) -> Vec<String> {
-    let mut flat = Vec::new();
-    flatten(tokens, &mut flat);
-    flat.iter()
-        .filter_map(|tree| match tree {
-            TokenTree::Literal(lit) => syn::parse_str::<syn::LitStr>(&lit.to_string()).ok(),
-            _ => None,
-        })
-        .map(|lit| lit.value())
-        .collect()
-}
-
-/// Whether a test target rooted at `main_rs` **runs anything**, following its
-/// `mod` tree the way Cargo compiles it.
-///
-/// The tree, not the directory, and that distinction is the finding: a suite's
-/// sibling files are compiled only because `main.rs` declares them, so
-/// truncating `main.rs` to zero bytes leaves a directory full of `#[test]`
-/// functions that Cargo never sees. Asking the directory said "yes" there;
-/// asking the root says "no", which is the true answer.
-///
-/// `testing.md` is what makes the walk cheap and total: "`main.rs` is the suite
-/// *root*, never a test module: `//!` + the `mod` list + the fixtures the
-/// siblings share — **no `#[test]` function lives there**". So a root with no
-/// `mod` is a suite with nothing in it, whatever the folder holds.
-pub fn suite_runs_tests(main_rs: &Path) -> bool {
-    let Some(dir) = main_rs.parent() else {
-        return false;
-    };
-    let mut pending = vec![main_rs.to_path_buf()];
-    let mut seen = BTreeSet::new();
-    while let Some(path) = pending.pop() {
-        if !seen.insert(path.clone()) {
-            continue;
-        }
-        let Some(ast) = parsed(&path) else {
-            continue;
-        };
-        let mut scan = TestFns::default();
-        scan.visit_file(&ast);
-        if scan.found {
-            return true;
-        }
-        // `mod x;` resolves to `x.rs` or `x/mod.rs` beside the declaring file,
-        // which for a suite root is the suite directory. An inline `mod x { … }`
-        // needs no resolution — `visit_file` already descended into it.
-        let here = path.parent().unwrap_or(dir);
-        for item in &ast.items {
-            let Item::Mod(m) = item else {
-                continue;
-            };
-            if m.content.is_some() {
-                continue;
-            }
-            let name = m.ident.to_string();
-            pending.push(here.join(format!("{name}.rs")));
-            pending.push(here.join(&name).join("mod.rs"));
-        }
-    }
-    false
-}
-
-/// Whether a path — a file, or a directory read whole — carries at least one
-/// **test function**.
-///
-/// The answer to "does this suite exist?", where `main.rs.is_file()` was the
-/// answer for a round and truncating that file to zero bytes left every cell
-/// asking it green. A suite that runs nothing is not a suite, and the whole
-/// point of the cells that ask is that something is executed.
-///
-/// `#[test]`, `#[tokio::test]` and any other attribute whose last path segment
-/// is `test` — a list of attribute spellings would be a hand-maintained set
-/// failing in the unsafe direction the day a runner adds one.
-pub fn carries_a_test(path: &Path) -> bool {
-    files_at(path).into_iter().any(|file| {
-        parsed(&file).is_some_and(|ast| {
-            let mut scan = TestFns::default();
-            scan.visit_file(&ast);
-            scan.found
-        })
-    })
-}
-
-/// Whether a path — a file, or a directory read whole — declares any **shipped
-/// item at all**: a `struct`, `enum`, `fn`, `impl`, `trait`, `const` or `type`.
-///
-/// The answer to "does this module exist?", where `is_dir()` was the answer and
-/// emptying every file inside left the cell green. A `mod`, a `use` and a doc
-/// comment are deliberately not items here: a module that only re-exports or
-/// only describes carries no implementation, which is what a cell asking for
-/// one means.
-pub fn declares_an_item(path: &Path) -> bool {
-    files_at(path).into_iter().any(|file| {
-        parsed(&file).is_some_and(|ast| {
-            ast.items.iter().any(|item| {
-                !is_cfg_test(item_attrs(item))
-                    && matches!(
-                        item,
-                        Item::Struct(_)
-                            | Item::Enum(_)
-                            | Item::Fn(_)
-                            | Item::Impl(_)
-                            | Item::Trait(_)
-                            | Item::Const(_)
-                            | Item::Type(_)
-                    )
-            })
-        })
-    })
-}
-
-/// A path taken either way: one `.rs` file, or every `.rs` file under a
-/// directory. Both callers are written as a path, and which shape it is is a
-/// fact about the layout rather than about the obligation.
-fn files_at(path: &Path) -> Vec<PathBuf> {
-    if path.is_dir() {
-        rust_files(path)
-    } else if path.is_file() {
-        vec![path.to_owned()]
-    } else {
-        Vec::new()
     }
 }
 
@@ -1294,47 +665,6 @@ pub fn item_attrs(item: &Item) -> &[Attribute] {
         Item::Union(i) => &i.attrs,
         Item::Use(i) => &i.attrs,
         _ => &[],
-    }
-}
-
-/// An `impl` member's attributes — [`item_attrs`] one level in, for the same
-/// question.
-pub fn impl_item_attrs(item: &syn::ImplItem) -> &[Attribute] {
-    match item {
-        syn::ImplItem::Const(i) => &i.attrs,
-        syn::ImplItem::Fn(i) => &i.attrs,
-        syn::ImplItem::Type(i) => &i.attrs,
-        syn::ImplItem::Macro(i) => &i.attrs,
-        _ => &[],
-    }
-}
-
-/// A trait member's attributes — [`item_attrs`] one level in, for the same
-/// question.
-pub fn trait_item_attrs(item: &syn::TraitItem) -> &[Attribute] {
-    match item {
-        syn::TraitItem::Const(i) => &i.attrs,
-        syn::TraitItem::Fn(i) => &i.attrs,
-        syn::TraitItem::Type(i) => &i.attrs,
-        syn::TraitItem::Macro(i) => &i.attrs,
-        _ => &[],
-    }
-}
-
-#[derive(Default)]
-struct TestFns {
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for TestFns {
-    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
-        self.found |= node.attrs.iter().any(|attr| {
-            attr.path()
-                .segments
-                .last()
-                .is_some_and(|s| s.ident == "test")
-        });
-        syn::visit::visit_item_fn(self, node);
     }
 }
 
@@ -1392,39 +722,7 @@ impl<'ast> Visit<'ast> for UnderCfgTest {
 
 #[cfg(test)]
 mod tests {
-    use proc_macro2::Delimiter;
-
     use super::*;
-
-    /// A pair one `mod` down or on an `impl` is declared all the same; a test's
-    /// is not.
-    #[test]
-    fn a_pair_is_read_at_any_depth() {
-        let file: syn::File = syn::parse_quote! {
-            const TOP: DecoratorPair = DecoratorPair { host: "#[a]", operations: "#[b]" };
-            mod inner {
-                const NESTED: DecoratorPair = DecoratorPair::on_provider("#[c]", "#[d]");
-            }
-            impl Holder { const HELD: DecoratorPair = DecoratorPair { host: "#[e]", operations: "#[f]" }; }
-            #[cfg(test)]
-            mod tests { const FIXTURE: DecoratorPair = DecoratorPair { host: "#[x]", operations: "#[y]" }; }
-        };
-        let mut consts = PairConsts(Vec::new());
-        consts.visit_file(&file);
-        let read: Vec<(&str, &str)> = consts
-            .0
-            .iter()
-            .map(|(host, operations)| (host.as_str(), operations.as_str()))
-            .collect();
-        assert_eq!(
-            read,
-            [
-                ("#[a]", "#[b]"),
-                ("#[injectable]", "#[c]"),
-                ("#[e]", "#[f]")
-            ]
-        );
-    }
 
     /// A predicate that names `test` without implying it is shipped code — the
     /// two spellings every join used to skip as fixtures.
@@ -1487,107 +785,6 @@ mod tests {
         let _ = segments(
             Path::new("/elsewhere/src/http/guard.rs"),
             Path::new("/repo"),
-        );
-    }
-
-    /// The one door stays the only one: no join calls `.components()` or
-    /// `.ancestors()` itself, which is the spelling four joins read the absolute
-    /// path with before [`segments`] existed.
-    ///
-    /// What this cannot see, stated rather than implied: `Path::iter()` walks
-    /// the same components under a name every iterator shares, and a whole path
-    /// read as a string (`to_string_lossy()`, `display()`) is also how a message
-    /// prints one. Both stay a reviewer's — the fifth instance, in `shapes`, was
-    /// the string form.
-    #[test]
-    fn no_join_reads_a_paths_components_but_through_segments() {
-        let joins = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/integration");
-        let files = rust_files(&joins);
-        crate::baseline::floor(files.len(), 10, "join sources");
-        let mut around = Vec::new();
-        for file in &files {
-            let text = read(file).expect("a join's source is readable");
-            let tokens: TokenStream = text.parse().expect("a join's source lexes");
-            let mut flat = Vec::new();
-            flatten(tokens, &mut flat);
-            for window in flat.windows(3) {
-                if let (TokenTree::Punct(dot), TokenTree::Ident(method), TokenTree::Group(args)) =
-                    (&window[0], &window[1], &window[2])
-                    && dot.as_char() == '.'
-                    && (method == "components" || method == "ancestors")
-                    && args.delimiter() == Delimiter::Parenthesis
-                {
-                    around.push(format!("{} calls `.{method}()`", relative(file, &joins)));
-                }
-            }
-        }
-        assert!(
-            around.is_empty(),
-            "a join reads a path's components through `sources::segments`, below \
-             the root it walked — read off the absolute path, the answer depends \
-             on where the checkout sits: {around:#?}",
-        );
-    }
-
-    /// A product crate declares one `TARGET` per module, so the module is part
-    /// of the key: the same name resolves to the declaration its path reaches,
-    /// however the path is spelled, and to nothing when it reaches none.
-    #[test]
-    fn a_product_target_resolves_through_the_module_its_path_reaches() {
-        let path = |p: &[&str]| p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-        let service = "demo/crates/features/src/posts/service.rs";
-        let adapter = "demo/crates/features/src/posts/http/interceptor.rs";
-        assert_eq!(
-            resolve_target(&path(&["crate", "posts", "TARGET"]), service),
-            Some("features::posts"),
-        );
-        assert_eq!(
-            resolve_target(&path(&["super", "TARGET"]), service),
-            Some("features::posts"),
-        );
-        assert_eq!(
-            resolve_target(&path(&["crate", "users", "TARGET"]), adapter),
-            Some("features::users"),
-            "the module the path names, not the one the file sits in",
-        );
-        assert_eq!(
-            resolve_target(&path(&["crate", "posts", "NOT_DECLARED"]), service),
-            None,
-        );
-    }
-
-    /// `item_attrs` is the crate's one answer to "what attributes does this item
-    /// carry", and `impl_item_attrs` / `trait_item_attrs` one level in. They were
-    /// written seven more times, in `edges`, `dependencies`, `blinds` and
-    /// `naming`, each listing its own subset of `syn`'s shapes — so one join read
-    /// a `#[cfg(test)]` on a `use` as shipped while its sibling did not. An arm of
-    /// those matches anywhere else in this crate is that copy again — the
-    /// `Item::Fn` arm reads `ImplItem::Fn` and `TraitItem::Fn` too.
-    #[test]
-    fn item_attrs_is_the_only_copy_of_its_match() {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut copies: Vec<String> = [manifest.join("src"), manifest.join("tests")]
-            .iter()
-            .flat_map(|dir| rust_files(dir))
-            .filter(|path| !path.ends_with("src/sources.rs"))
-            .filter(|path| {
-                read(path).is_ok_and(|text| {
-                    let squeezed: String = text.split_whitespace().collect();
-                    [
-                        "Item::Mod(i)=>&i.attrs",
-                        "Item::Fn(i)=>&i.attrs",
-                        "Item::Use(i)=>&i.attrs",
-                    ]
-                    .iter()
-                    .any(|arm| squeezed.contains(arm))
-                })
-            })
-            .map(|path| relative(&path, manifest))
-            .collect();
-        copies.sort();
-        assert!(
-            copies.is_empty(),
-            "a second copy of `item_attrs`'s match: call `sources::item_attrs` instead — {copies:?}",
         );
     }
 }

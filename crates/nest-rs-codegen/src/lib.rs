@@ -40,8 +40,8 @@ mod ungrouped;
 pub mod versioning;
 
 pub use args::{
-    duplicate_argument, key_as_written, missing_argument, needs_a_value, one_role_per_method,
-    reject_duplicate_argument, require_str_lit, site, takes_value, unknown_argument, unknown_value,
+    WrittenKeys, duplicate_argument, key_as_written, missing_argument, needs_a_value,
+    one_role_per_method, require_str_lit, site, takes_value, unknown_argument, unknown_value,
     unmatched_meta,
 };
 pub use attrs::{

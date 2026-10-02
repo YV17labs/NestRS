@@ -14,11 +14,10 @@
 //! umbrella, so the call site declares nothing but `nest-rs`.
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, JobDecorator, JobKey, PipeWrapper, await_if_async, cfg_attrs,
-    duplicate_argument, duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value,
-    job_key, job_returns_a_result, job_transaction, missing_argument, payload_arg_type,
-    pipe_wrapper, reject_duplicate_argument, returns_unit, snake_case, takes_value,
-    transactional_value, ungrouped_expr, unknown_argument, unread_job_key,
+    DecoratorPair, Edge, JobDecorator, JobKey, PipeWrapper, WrittenKeys, await_if_async, cfg_attrs,
+    duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value, job_key,
+    job_returns_a_result, job_transaction, missing_argument, payload_arg_type, pipe_wrapper,
+    returns_unit, snake_case, takes_value, transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -543,6 +542,7 @@ impl Parse for ProcessArgs {
         let mut concurrency: Option<u32> = None;
         let mut throttle: Option<ThrottleArgs> = None;
         let mut transactional: Option<bool> = None;
+        let mut written = WrittenKeys::default();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -552,14 +552,12 @@ impl Parse for ProcessArgs {
             // key no member takes is unknown. Every arm below is one this
             // decorator's column holds, and a key the table gains is a variant
             // this match must place before it compiles.
-            match job_key(PROCESS, &name, &key)? {
+            match job_key(PROCESS, &mut written, &name, &key)? {
                 JobKey::Queue => {
-                    reject_duplicate_argument(queue.is_some(), &key, "process", &name)?;
                     equals(input, &key, &name)?;
                     queue = Some(input.parse()?);
                 }
                 JobKey::Retries => {
-                    reject_duplicate_argument(retries.is_some(), &key, "process", &name)?;
                     equals(input, &key, &name)?;
                     retries = Some(whole_number(
                         &input.parse()?,
@@ -570,7 +568,6 @@ impl Parse for ProcessArgs {
                     )?);
                 }
                 JobKey::Concurrency => {
-                    reject_duplicate_argument(concurrency.is_some(), &key, "process", &name)?;
                     equals(input, &key, &name)?;
                     concurrency = Some(at_least_one(
                         &input.parse()?,
@@ -581,7 +578,6 @@ impl Parse for ProcessArgs {
                     )?);
                 }
                 JobKey::Throttle => {
-                    reject_duplicate_argument(throttle.is_some(), &key, "process", &name)?;
                     if !input.peek(syn::token::Paren) {
                         return Err(syn::Error::new(
                             key.span(),
@@ -597,7 +593,6 @@ impl Parse for ProcessArgs {
                     throttle = Some(parse_throttle(&content, key.span())?);
                 }
                 JobKey::Transactional => {
-                    reject_duplicate_argument(transactional.is_some(), &key, "process", &name)?;
                     equals(input, &key, &name)?;
                     transactional = Some(transactional_value(PROCESS, &input.parse()?)?);
                 }
@@ -639,25 +634,11 @@ fn equals(input: ParseStream, key: &Ident, name: &str) -> syn::Result<()> {
 fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
     let mut limit: Option<u32> = None;
     let mut window_ms: Option<u64> = None;
+    let mut written = WrittenKeys::under("throttle");
     while !content.is_empty() {
         let key: Ident = content.parse()?;
         let name = key.to_string();
-        if !THROTTLE_KEYS.contains(&name.as_str()) {
-            return Err(syn::Error::new(
-                key.span(),
-                unknown_argument("process", &format!("throttle({name})"), &THROTTLE_KEYS),
-            ));
-        }
-        let taken = match name.as_str() {
-            "limit" => limit.is_some(),
-            _ => window_ms.is_some(),
-        };
-        if taken {
-            return Err(syn::Error::new(
-                key.span(),
-                duplicate_argument("process", &format!("throttle({name})")),
-            ));
-        }
+        written.take_key("process", &THROTTLE_KEYS, &key, &name)?;
         if !content.peek(Token![=]) {
             return Err(syn::Error::new(
                 key.span(),

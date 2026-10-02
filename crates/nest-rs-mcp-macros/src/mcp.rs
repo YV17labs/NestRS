@@ -266,39 +266,38 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
     Edge::Mcp.reject_version(&args)?;
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut parsed = McpArgs::default();
+    // Accepting a repeat drops one of two declarations and source order decides
+    // which — here that is the path a host joins, i.e. which peers share its
+    // endpoint, and the identity a client is told it reached.
+    let mut written = nest_rs_codegen::WrittenKeys::default();
     for meta in metas {
-        // Accepting a repeat drops one of two declarations and source order
-        // decides which — here that is the path a host joins, i.e. which peers
-        // share its endpoint, and the identity a client is told it reached.
-        let reject_duplicate = |taken: bool, meta: &Meta, key: &str| -> syn::Result<()> {
-            nest_rs_codegen::reject_duplicate_argument(taken, meta, "mcp", key)
-        };
+        // Two different answers, and telling them apart is the point. A key
+        // naming a field of the server's identity is a key that *exists* — it is
+        // declared by the app, and the sentence says where — so it is answered
+        // before the grammar takes the key. Anything else is nobody's, and gets
+        // the list of what remains.
+        if let Some(field) = server_field(&meta) {
+            return Err(syn::Error::new_spanned(&meta, field.refusal()));
+        }
+        written.take_key(
+            "mcp",
+            &ACCEPTED_KEYS,
+            meta.path(),
+            &nest_rs_codegen::key_as_written(meta.path()),
+        )?;
         match meta {
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                reject_duplicate(parsed.path.is_some(), &Meta::NameValue(nv.clone()), "path")?;
                 parsed.path = Some(require_str_lit(&nv.value, "mcp", "path", "/mcp")?)
             }
-            Meta::NameValue(nv) if nv.path.is_ident("name") => {
-                reject_duplicate(parsed.name.is_some(), &Meta::NameValue(nv.clone()), "name")?;
-                parsed.name = Some(nv.value)
-            }
-            Meta::NameValue(nv) if nv.path.is_ident("title") => {
-                reject_duplicate(
-                    parsed.title.is_some(),
-                    &Meta::NameValue(nv.clone()),
-                    "title",
-                )?;
-                parsed.title = Some(nv.value)
-            }
-            // Two different answers, and telling them apart is the point. A key
-            // naming a field of the server's identity is a key that *exists* —
-            // it is declared by the app, and the sentence says where. Anything
-            // else is nobody's, and gets the list of what remains.
+            Meta::NameValue(nv) if nv.path.is_ident("name") => parsed.name = Some(nv.value),
+            Meta::NameValue(nv) if nv.path.is_ident("title") => parsed.title = Some(nv.value),
+            // A key of the grammar written bare.
             other => {
-                return Err(match server_field(&other) {
-                    Some(field) => syn::Error::new_spanned(&other, field.refusal()),
-                    None => nest_rs_codegen::unmatched_meta("mcp", &other, &ACCEPTED_KEYS),
-                });
+                return Err(nest_rs_codegen::unmatched_meta(
+                    "mcp",
+                    &other,
+                    &ACCEPTED_KEYS,
+                ));
             }
         }
     }

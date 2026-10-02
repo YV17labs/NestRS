@@ -237,17 +237,14 @@ impl Parse for CrudDeclaration {
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
         let mut paginate_written = None;
+        let mut written = crate::WrittenKeys::default();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
-            match key.to_string().as_str() {
+            let name = key.to_string();
+            written.take_key("crud", &KEYS, &key, &name)?;
+            match name.as_str() {
                 "service" => {
-                    crate::reject_duplicate_argument(
-                        service.is_some(),
-                        &key,
-                        "crud",
-                        &key.to_string(),
-                    )?;
                     value_for(input, &key)?;
                     service = Some(value_of(
                         input,
@@ -256,12 +253,6 @@ impl Parse for CrudDeclaration {
                     )?);
                 }
                 "entity" => {
-                    crate::reject_duplicate_argument(
-                        entity.is_some(),
-                        &key,
-                        "crud",
-                        &key.to_string(),
-                    )?;
                     value_for(input, &key)?;
                     entity = Some(value_of(
                         input,
@@ -270,12 +261,6 @@ impl Parse for CrudDeclaration {
                     )?);
                 }
                 "output" => {
-                    crate::reject_duplicate_argument(
-                        output.is_some(),
-                        &key,
-                        "crud",
-                        &key.to_string(),
-                    )?;
                     value_for(input, &key)?;
                     output = Some(value_of(
                         input,
@@ -284,12 +269,6 @@ impl Parse for CrudDeclaration {
                     )?);
                 }
                 "create" => {
-                    crate::reject_duplicate_argument(
-                        create.is_some(),
-                        &key,
-                        "crud",
-                        &key.to_string(),
-                    )?;
                     value_for(input, &key)?;
                     create = Some(value_of(
                         input,
@@ -298,12 +277,6 @@ impl Parse for CrudDeclaration {
                     )?);
                 }
                 "update" => {
-                    crate::reject_duplicate_argument(
-                        update.is_some(),
-                        &key,
-                        "crud",
-                        &key.to_string(),
-                    )?;
                     value_for(input, &key)?;
                     update = Some(value_of(
                         input,
@@ -312,12 +285,6 @@ impl Parse for CrudDeclaration {
                     )?);
                 }
                 "ops" => {
-                    if !matches!(ops, OpsSelection::Default) {
-                        return Err(syn::Error::new(
-                            key.span(),
-                            crate::duplicate_argument("crud", "ops"),
-                        ));
-                    }
                     let ops_span = key.span();
                     value_for(input, &key)?;
                     if !input.peek(syn::token::Bracket) {
@@ -372,16 +339,6 @@ impl Parse for CrudDeclaration {
                     ops = OpsSelection::Explicit(selected, ops_span);
                 }
                 "paginate" => {
-                    // The one arm whose slot is not an `Option`, which is why it
-                    // was the one with no refusal. A dropped second declaration
-                    // here reverses `paginate = none` — the explicit opt-out
-                    // into an unbounded list — in either direction.
-                    if paginate_written.is_some() {
-                        return Err(syn::Error::new(
-                            key.span(),
-                            crate::duplicate_argument("crud", "paginate"),
-                        ));
-                    }
                     paginate_written = Some(key.span());
                     value_for(input, &key)?;
                     let mode: Ident = input.parse().map_err(|error| {
@@ -401,12 +358,8 @@ impl Parse for CrudDeclaration {
                         }
                     };
                 }
-                other => {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        crate::unknown_argument("crud", other, &KEYS),
-                    ));
-                }
+                // `take_key` refused every name outside `KEYS`.
+                _ => {}
             }
             if input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;

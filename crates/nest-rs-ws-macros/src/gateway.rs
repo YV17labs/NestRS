@@ -252,14 +252,22 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let mut path = None;
     let mut version = None;
     let mut namespace = None;
+    // Each key once, every key — `namespace` decides which `WsServer<N>` the
+    // gateway fans out on, so a dropped second declaration is which sockets a
+    // broadcast reaches, decided by source order.
+    let mut written = nest_rs_codegen::WrittenKeys::default().with_remedy(
+        "version",
+        "a gateway owns one mount, so it carries one version",
+    );
     for meta in metas {
+        written.take_key(
+            "gateway",
+            &["path", "version", "namespace"],
+            meta.path(),
+            &nest_rs_codegen::key_as_written(meta.path()),
+        )?;
         match meta {
-            // The shared sentence. This decorator had three keys and two
-            // wordings for one question: `namespace` went through
-            // `nest_rs_codegen::reject_duplicate_argument` and the other two
-            // around it.
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                nest_rs_codegen::reject_duplicate_argument(path.is_some(), &nv, "gateway", "path")?;
                 path = Some(require_str_lit(&nv.value, "gateway", "path", "/ws")?);
             }
             // Through `#[controller]`'s own parser, which is what the doc
@@ -269,15 +277,6 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
             // `/va/b/ws`, and no list form, so the spelling learned next door
             // failed here with a bare "expected a string literal".
             Meta::NameValue(nv) if nv.path.is_ident("version") => {
-                if version.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        format!(
-                            "{} — a gateway owns one mount, so it carries one version",
-                            nest_rs_codegen::duplicate_argument("gateway", "version"),
-                        ),
-                    ));
-                }
                 let declared =
                     nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[gateway]")?;
                 if declared.len() > 1 {
@@ -295,16 +294,6 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
                 version = declared.into_iter().next();
             }
             Meta::NameValue(nv) if nv.path.is_ident("namespace") => {
-                // The third key, and the one that had no refusal: a gateway's
-                // namespace decides which `WsServer<N>` it fans out on, so a
-                // dropped second declaration is which sockets a broadcast
-                // reaches — decided by source order.
-                nest_rs_codegen::reject_duplicate_argument(
-                    namespace.is_some(),
-                    &nv,
-                    "gateway",
-                    "namespace",
-                )?;
                 namespace = Some(expr_path(&nv.value)?)
             }
             other => {

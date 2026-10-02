@@ -359,7 +359,7 @@ impl Parse for ProviderBinding {
 impl Parse for ModuleArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut args = ModuleArgs::default();
-        let mut seen: Vec<String> = Vec::new();
+        let mut written = nest_rs_codegen::WrittenKeys::default();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             // Judged **before** the value shape is parsed. Reading `= [` first
@@ -369,14 +369,8 @@ impl Parse for ModuleArgs {
             // `expected square brackets` — and the snapshot pinned the reachable
             // half, so the join read green over a refusal that fired on one
             // value shape.
-            let name = key.to_string();
-            if !matches!(name.as_str(), "imports" | "providers") {
-                return Err(syn::Error::new(
-                    key.span(),
-                    nest_rs_codegen::unknown_argument("module", &name, &["imports", "providers"]),
-                ));
-            }
-            // Refused rather than merged. The repeat is legible here — two
+            //
+            // A repeat is refused rather than merged. It is legible here — two
             // `providers = [...]` lists concatenate — so nothing is *dropped*,
             // which is why `duplicate_argument`'s own reasoning does not apply
             // verbatim. What applies is that every other member of the
@@ -384,13 +378,8 @@ impl Parse for ModuleArgs {
             // interprets accepting a spelling its siblings reject is the
             // asymmetry a shared sentence exists to remove: one list is what a
             // reader can see whole.
-            nest_rs_codegen::reject_duplicate_argument(
-                seen.contains(&name),
-                &key,
-                "module",
-                &name,
-            )?;
-            seen.push(name.clone());
+            let name = key.to_string();
+            written.take_key("module", &["imports", "providers"], &key, &name)?;
             if input.parse::<Token![=]>().is_err() {
                 return Err(syn::Error::new(
                     key.span(),

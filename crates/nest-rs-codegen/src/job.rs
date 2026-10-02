@@ -20,7 +20,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{Expr, ExprLit, Lit};
 
-use crate::args::{site, takes_one_of, unknown_argument};
+use crate::args::{WrittenKeys, site, takes_one_of};
 use crate::replicas::REPLICAS;
 use crate::ungrouped::ungrouped_expr;
 
@@ -189,28 +189,30 @@ pub fn job_keys(member: JobDecorator) -> impl Iterator<Item = JobKey> {
         .filter(move |key| matches!(cell(*key, member), Cell::Takes))
 }
 
-/// Read a key written at `#[member]` against the table, spanned at `at`.
+/// Read a key written at `#[member]` against the table, spanned at `at`, taking
+/// it through `written` — the declaration's [`WrittenKeys`].
 ///
-/// The key when the member takes it; otherwise one of two refusals, and the
+/// The key when the member takes it; otherwise one of three refusals, and the
 /// order is the point. A key **another member** takes is not misspelled here, it
 /// is meaningless, so it is refused naming why (`job_argument_refused`) —
 /// checked first and whatever the value, so a developer carrying `retries` from a
 /// `#[process]` to an `#[every]` learns what a tick does instead. A key **no
-/// member** takes keeps the unknown-key sentence, listing the member's column.
-pub fn job_key(member: JobDecorator, name: &str, at: &impl ToTokens) -> syn::Result<JobKey> {
+/// member** takes keeps the unknown-key sentence, listing the member's column,
+/// and a key written twice the repeat sentence — both through [`WrittenKeys`],
+/// so the whole family refuses a repeat for every key of its column.
+pub fn job_key(
+    member: JobDecorator,
+    written: &mut WrittenKeys,
+    name: &str,
+    at: &impl ToTokens,
+) -> syn::Result<JobKey> {
     if let Some(refusal) = job_argument_refused(member, name) {
         return Err(syn::Error::new_spanned(at, refusal));
     }
-    match JobKey::ALL.into_iter().find(|key| key.name() == name) {
-        Some(key) => Ok(key),
-        None => {
-            let column: Vec<&str> = job_keys(member).map(JobKey::name).collect();
-            Err(syn::Error::new_spanned(
-                at,
-                unknown_argument(member.name(), name, &column),
-            ))
-        }
-    }
+    let column: Vec<JobKey> = job_keys(member).collect();
+    let names: Vec<&str> = column.iter().map(|key| key.name()).collect();
+    let position = written.take_key(member.name(), &names, at, name)?;
+    Ok(column[position])
 }
 
 /// The refusal of `key` at `#[member]` when the table refuses it there, naming
@@ -348,7 +350,8 @@ mod tests {
 
     fn read(member: JobDecorator, name: &str) -> Result<JobKey, String> {
         let at = syn::Ident::new("at", Span::call_site());
-        job_key(member, name, &at).map_err(|refusal| refusal.to_string())
+        job_key(member, &mut WrittenKeys::default(), name, &at)
+            .map_err(|refusal| refusal.to_string())
     }
 
     /// A key no member takes is dead vocabulary rather than a family key: it

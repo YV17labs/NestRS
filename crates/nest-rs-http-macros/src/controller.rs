@@ -215,37 +215,26 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
     let mut versions = Vec::new();
+    // Each key answered once. These were plain assignments, so `version = "1",
+    // version = "2"` silently kept the last and mounted the controller at an
+    // address the developer never wrote — while `version = ["1", "1"]` was
+    // already refused, which is the same question asked in the other spelling.
+    let mut written = nest_rs_codegen::WrittenKeys::default().with_remedy(
+        "version",
+        "to serve several, write one `version = [\"1\", \"2\"]`",
+    );
     for meta in metas {
+        written.take_key(
+            "controller",
+            &["path", "version"],
+            meta.path(),
+            &nest_rs_codegen::key_as_written(meta.path()),
+        )?;
         match meta {
-            // Each key answered once. These were plain assignments, so
-            // `version = "1", version = "2"` silently kept the last and mounted
-            // the controller at an address the developer never wrote — while
-            // `version = ["1", "1"]` was already refused, which is the same
-            // question asked in the other spelling.
-            // The shared sentence, with the remedy appended where there is one
-            // — never a second base wording. Both keys asked "declared twice?"
-            // in this decorator's own words while `namespace` next door asked it
-            // in `nest_rs_codegen::reject_duplicate_argument`'s, so one grammar
-            // had two answers.
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                nest_rs_codegen::reject_duplicate_argument(
-                    path.is_some(),
-                    &nv,
-                    "controller",
-                    "path",
-                )?;
                 path = Some(require_str_lit(&nv.value, "controller", "path", "/users")?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("version") => {
-                if !versions.is_empty() {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        format!(
-                            "{} — to serve several, write one `version = [\"1\", \"2\"]`",
-                            nest_rs_codegen::duplicate_argument("controller", "version"),
-                        ),
-                    ));
-                }
                 versions =
                     nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[controller]")?;
             }

@@ -209,28 +209,26 @@ fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
         return Ok(None);
     }
     let mut key: Option<syn::LitStr> = None;
+    let mut written = crate::WrittenKeys::default();
     attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("key") {
-            crate::reject_duplicate_argument(key.is_some(), &meta.path, "inject", "key")?;
-            // `meta.value()` on a bare `#[inject(key)]` is syn's `` expected `=` ``,
-            // which names the grammar and not the key — the silence
-            // `needs_a_value` exists to end.
-            if !meta.input.peek(syn::Token![=]) {
-                return Err(meta.error(crate::needs_a_value("inject", "key")));
-            }
-            // Read as any expression, so a value of the wrong kind earns the
-            // shared sentence naming the decorator and the key rather than
-            // syn's `expected string literal`, which names neither.
-            let value: syn::Expr = meta.value()?.parse()?;
-            key = Some(crate::require_str_lit(&value, "inject", "key", "github")?);
-            Ok(())
-        } else {
-            Err(meta.error(crate::unknown_argument(
-                "inject",
-                &crate::key_as_written(&meta.path),
-                &["key"],
-            )))
+        written.take_key(
+            "inject",
+            &["key"],
+            &meta.path,
+            &crate::key_as_written(&meta.path),
+        )?;
+        // `meta.value()` on a bare `#[inject(key)]` is syn's `` expected `=` ``,
+        // which names the grammar and not the key — the silence `needs_a_value`
+        // exists to end.
+        if !meta.input.peek(syn::Token![=]) {
+            return Err(meta.error(crate::needs_a_value("inject", "key")));
         }
+        // Read as any expression, so a value of the wrong kind earns the shared
+        // sentence naming the decorator and the key rather than syn's `expected
+        // string literal`, which names neither.
+        let value: syn::Expr = meta.value()?.parse()?;
+        key = Some(crate::require_str_lit(&value, "inject", "key", "github")?);
+        Ok(())
     })?;
     Ok(key)
 }

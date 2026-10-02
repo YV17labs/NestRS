@@ -11,7 +11,6 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
 use syn::{ItemStruct, Meta, Token, parse_macro_input};
 
 use nest_rs_codegen::{
@@ -31,11 +30,18 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     // wrote, and never named the misspelling.
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(TokenStream2::from(args))?;
     let mut priority: Option<syn::MetaNameValue> = None;
+    let mut written = nest_rs_codegen::WrittenKeys::default();
     for meta in metas {
-        // Both questions through the shared helper that answers them together: a
-        // bare `#[interceptor(priority)]` is a `Meta::Path`, and so is a bare
-        // *unknown* key — one wording said "expected `priority = <integer>`" to
-        // both, which is right for the first and false for the second.
+        // Read for what it *is* — known, unknown, or written again — before
+        // anything is counted.
+        written.take_key(
+            "interceptor",
+            &["priority"],
+            meta.path(),
+            &nest_rs_codegen::key_as_written(meta.path()),
+        )?;
+        // A bare `#[interceptor(priority)]` is a `Meta::Path`, and the shared
+        // helper answers it with the needs-a-value sentence.
         let Meta::NameValue(nv) = meta else {
             return Err(nest_rs_codegen::unmatched_meta(
                 "interceptor",
@@ -43,19 +49,6 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
                 &["priority"],
             ));
         };
-        if !nv.path.is_ident("priority") {
-            let name = nest_rs_codegen::key_as_written(&nv.path);
-            return Err(syn::Error::new(
-                nv.path.span(),
-                nest_rs_codegen::unknown_argument("interceptor", &name, &["priority"]),
-            ));
-        }
-        nest_rs_codegen::reject_duplicate_argument(
-            priority.is_some(),
-            &nv.path,
-            "interceptor",
-            "priority",
-        )?;
         priority = Some(nv);
     }
     let Some(nv) = priority else {

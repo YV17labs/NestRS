@@ -102,24 +102,16 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
 /// every sibling crate.
 fn parse_args(args: TokenStream2) -> syn::Result<bool> {
     let mut graphql = false;
+    let mut written = nest_rs_codegen::WrittenKeys::default();
     let parser = syn::meta::parser(|meta| {
-        if meta.path.is_ident("graphql") {
-            nest_rs_codegen::reject_duplicate_argument(
-                graphql,
-                &meta.path,
-                "wire_enum",
-                "graphql",
-            )?;
-            graphql = true;
-            Ok(())
-        } else {
-            let name = nest_rs_codegen::key_as_written(&meta.path);
-            Err(meta.error(nest_rs_codegen::unknown_argument(
-                "wire_enum",
-                &name,
-                &["graphql"],
-            )))
-        }
+        written.take_key(
+            "wire_enum",
+            &["graphql"],
+            &meta.path,
+            &nest_rs_codegen::key_as_written(&meta.path),
+        )?;
+        graphql = true;
+        Ok(())
     });
     syn::parse::Parser::parse2(parser, args)?;
     Ok(graphql)

@@ -1,6 +1,4 @@
-use nest_rs_codegen::{
-    key_as_written, reject_duplicate_argument, require_str_lit, unknown_argument, unmatched_meta,
-};
+use nest_rs_codegen::{WrittenKeys, key_as_written, require_str_lit, unmatched_meta};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -75,6 +73,9 @@ struct Args {
     manual_validate: bool,
 }
 
+/// Every key `#[config]` takes, in the order its refusals list them.
+const KEYS: [&str; 2] = ["namespace", "validate"];
+
 fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     // `Meta`, not `MetaNameValue`: a bare `#[config(namespace)]` is a
     // `Meta::Path`, so parsing the narrower shape died on syn's `` expected `=` ``
@@ -84,14 +85,15 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
 
     let mut namespace: Option<LitStr> = None;
     let mut manual_validate = false;
+    let mut written = WrittenKeys::default();
     for meta in metas {
+        let key = key_as_written(meta.path());
+        written.take_key("config", &KEYS, meta.path(), &key)?;
         let Meta::NameValue(meta) = &meta else {
-            return Err(unmatched_meta("config", &meta, &["namespace", "validate"]));
+            return Err(unmatched_meta("config", &meta, &KEYS));
         };
-        let key = key_as_written(&meta.path);
         match key.as_str() {
             "namespace" => {
-                reject_duplicate_argument(namespace.is_some(), &meta.path, "config", "namespace")?;
                 namespace = Some(require_str_lit(
                     &meta.value,
                     "config",
@@ -100,7 +102,6 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
                 )?)
             }
             "validate" => {
-                reject_duplicate_argument(manual_validate, &meta.path, "config", "validate")?;
                 let lit = require_str_lit(&meta.value, "config", "validate", "manual")?;
                 if lit.value() != "manual" {
                     return Err(syn::Error::new_spanned(
@@ -111,12 +112,8 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
                 }
                 manual_validate = true;
             }
-            other => {
-                return Err(syn::Error::new_spanned(
-                    &meta.path,
-                    unknown_argument("config", other, &["namespace", "validate"]),
-                ));
-            }
+            // `take_key` refused every name outside `KEYS`.
+            _ => {}
         }
     }
 

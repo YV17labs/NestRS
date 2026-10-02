@@ -155,7 +155,14 @@ fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
     }
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut scope: Option<InjectableScope> = None;
+    let mut written = nest_rs_codegen::WrittenKeys::default();
     for meta in &metas {
+        written.take_key(
+            "injectable",
+            &["scope"],
+            meta.path(),
+            &nest_rs_codegen::key_as_written(meta.path()),
+        )?;
         let Meta::NameValue(nv) = meta else {
             return Err(nest_rs_codegen::unmatched_meta(
                 "injectable",
@@ -163,14 +170,6 @@ fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
                 &["scope"],
             ));
         };
-        if !nv.path.is_ident("scope") {
-            return Err(nest_rs_codegen::unmatched_meta(
-                "injectable",
-                meta,
-                &["scope"],
-            ));
-        }
-        nest_rs_codegen::reject_duplicate_argument(scope.is_some(), meta, "injectable", "scope")?;
         let value_text = quote!(#nv).to_string();
         let Expr::Path(path) = &nv.value else {
             return Err(syn::Error::new_spanned(

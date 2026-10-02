@@ -1512,37 +1512,41 @@ struct ApiMeta {
     response_content_type: Option<LitStr>,
 }
 
-/// Every key `#[api]` takes, in the order it declares them, beside the way each
-/// is written — the one list both refusals below read, so the keys an unknown
-/// one is told about and the keys the shape sentence offers cannot differ.
+/// Every key `#[api]` takes, in the order it declares them — the grammar every
+/// key is taken through, so the keys an unknown one is told about are the keys
+/// a repeat is refused for.
 ///
 /// The match in [`parse_api_attr`] is the other half, and a key listed here
-/// that the match does not read would be refused as unknown while the sentence
-/// lists it; `every_api_key_is_read_as_the_table_writes_it` reads every row.
-const API_KEYS: [(&str, &str); 6] = [
-    ("summary", "summary = \"...\""),
-    ("description", "description = \"...\""),
-    ("tags", "tags(\"a\", \"b\")"),
-    ("response", "response = Type"),
-    ("multipart", "multipart = Type"),
-    (
-        "response_content_type",
-        "response_content_type = \"type/subtype\"",
-    ),
+/// that the match does not read would be accepted and dropped;
+/// `every_api_key_is_read_as_the_table_writes_it` reads every key in the form
+/// [`API_KEYS_WRITTEN`] gives it.
+const API_KEYS: [&str; 6] = [
+    "summary",
+    "description",
+    "tags",
+    "response",
+    "multipart",
+    "response_content_type",
 ];
 
-/// The keys alone, for the family's unknown-key sentence.
-fn api_key_names() -> Vec<&'static str> {
-    API_KEYS.iter().map(|(key, _)| *key).collect()
-}
+/// How each of [`API_KEYS`] is written, position for position — what the shape
+/// sentence offers.
+const API_KEYS_WRITTEN: [&str; 6] = [
+    "summary = \"...\"",
+    "description = \"...\"",
+    "tags(\"a\", \"b\")",
+    "response = Type",
+    "multipart = Type",
+    "response_content_type = \"type/subtype\"",
+];
 
 /// The refusal of an argument that is not a key at all — `#[api("List
 /// users")]` — which has no name for the unknown-key sentence to quote, so it
 /// is told the whole grammar instead, each key the way it is written.
 fn api_takes_keys() -> String {
-    let written: Vec<String> = API_KEYS
+    let written: Vec<String> = API_KEYS_WRITTEN
         .iter()
-        .map(|(_, written)| format!("`{written}`"))
+        .map(|written| format!("`{written}`"))
         .collect();
     format!("#[api] takes named arguments: {}", written.join(", "))
 }
@@ -1584,18 +1588,15 @@ fn api_equals(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Resu
 fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
     attr.parse_args_with(|input: syn::parse::ParseStream<'_>| {
         let mut out = ApiMeta::default();
+        let mut written = nest_rs_codegen::WrittenKeys::default();
         while !input.is_empty() {
             let key: syn::Ident = input
                 .parse()
                 .map_err(|_| syn::Error::new(input.span(), api_takes_keys()))?;
-            match key.to_string().as_str() {
+            let name = key.to_string();
+            written.take_key("api", &API_KEYS, &key, &name)?;
+            match name.as_str() {
                 "summary" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        out.summary.is_some(),
-                        &key,
-                        "api",
-                        "summary",
-                    )?;
                     api_equals(input, &key)?;
                     out.summary = Some(require_str_lit(
                         &input.parse::<Expr>()?,
@@ -1605,12 +1606,6 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     )?);
                 }
                 "description" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        out.description.is_some(),
-                        &key,
-                        "api",
-                        "description",
-                    )?;
                     api_equals(input, &key)?;
                     out.description = Some(require_str_lit(
                         &input.parse::<Expr>()?,
@@ -1620,32 +1615,14 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     )?);
                 }
                 "response" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        out.response.is_some(),
-                        &key,
-                        "api",
-                        "response",
-                    )?;
                     api_equals(input, &key)?;
                     out.response = Some(api_type(input, "response", "Vec<Post>")?);
                 }
                 "multipart" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        out.multipart.is_some(),
-                        &key,
-                        "api",
-                        "multipart",
-                    )?;
                     api_equals(input, &key)?;
                     out.multipart = Some(api_type(input, "multipart", "UploadForm")?);
                 }
                 "response_content_type" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        out.response_content_type.is_some(),
-                        &key,
-                        "api",
-                        "response_content_type",
-                    )?;
                     api_equals(input, &key)?;
                     let lit = require_str_lit(
                         &input.parse::<Expr>()?,
@@ -1657,20 +1634,10 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     out.response_content_type = Some(lit);
                 }
                 "tags" => {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        !out.tags.is_empty(),
-                        &key,
-                        "api",
-                        "tags",
-                    )?;
                     out.tags = api_tags(input, &key)?;
                 }
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        &key,
-                        nest_rs_codegen::unknown_argument("api", other, &api_key_names()),
-                    ));
-                }
+                // `take_key` refused every name outside `API_KEYS`.
+                _ => {}
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
@@ -2032,7 +1999,7 @@ mod tests {
     /// syn's `expected =`; `tags` is told the list it takes.
     #[test]
     fn a_bare_api_key_is_told_what_it_is_missing() {
-        for (key, written) in API_KEYS {
+        for (key, written) in API_KEYS.into_iter().zip(API_KEYS_WRITTEN) {
             let bare: TokenStream2 = key.parse().expect("a key is an identifier");
             let refusal = api_refusal(bare);
             if written.starts_with(&format!("{key} =")) {
@@ -2054,7 +2021,11 @@ mod tests {
     /// unknown by a sentence that lists it.
     #[test]
     fn every_api_key_is_read_as_the_table_writes_it() {
-        for (_, written) in API_KEYS {
+        for (key, written) in API_KEYS.into_iter().zip(API_KEYS_WRITTEN) {
+            assert!(
+                written.starts_with(key),
+                "`{written}` is the written form of `{key}`, position for position",
+            );
             let tokens: TokenStream2 = written.parse().expect("the written form tokenizes");
             if let Err(err) = api_attr(tokens) {
                 panic!("`{written}` must parse: {err}");

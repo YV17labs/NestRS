@@ -138,14 +138,15 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     // is source order." On this decorator that is the **wire**:
     // `#[expose(name = "User", name = "Account")]` compiled, and the DTO and the
     // OpenAPI schema took whichever came last.
+    let mut written_keys = nest_rs_codegen::WrittenKeys::default();
     let parser = syn::meta::parser(|meta| {
+        written_keys.take_key(
+            "expose",
+            &MODEL_KEYS,
+            &meta.path,
+            &nest_rs_codegen::key_as_written(&meta.path),
+        )?;
         if meta.path.is_ident("name") {
-            nest_rs_codegen::reject_duplicate_argument(
-                name.is_some(),
-                &meta.path,
-                "expose",
-                "name",
-            )?;
             // A bare `#[expose(name)]` reaches `meta.value()` as syn's
             // `` expected `=` ``, which names the grammar and not the key.
             if !meta.input.peek(syn::Token![=]) {
@@ -155,12 +156,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             name = Some(type_name(&written)?);
             Ok(())
         } else if meta.path.is_ident("service") {
-            nest_rs_codegen::reject_duplicate_argument(
-                service.is_some(),
-                &meta.path,
-                "expose",
-                "service",
-            )?;
             if !meta.input.peek(syn::Token![=]) {
                 return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "service")));
             }
@@ -176,44 +171,20 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             })?);
             Ok(())
         } else if meta.path.is_ident("complex") {
-            nest_rs_codegen::reject_duplicate_argument(complex, &meta.path, "expose", "complex")?;
             complex = true;
             Ok(())
         } else if meta.path.is_ident("graphql") {
-            nest_rs_codegen::reject_duplicate_argument(graphql, &meta.path, "expose", "graphql")?;
             graphql = true;
             Ok(())
         } else if meta.path.is_ident("soft_delete") {
-            nest_rs_codegen::reject_duplicate_argument(
-                soft_delete,
-                &meta.path,
-                "expose",
-                "soft_delete",
-            )?;
             soft_delete = true;
             Ok(())
         } else if meta.path.is_ident("timestamps") {
-            nest_rs_codegen::reject_duplicate_argument(
-                timestamps,
-                &meta.path,
-                "expose",
-                "timestamps",
-            )?;
             timestamps = true;
             Ok(())
         } else {
-            Err(meta.error(nest_rs_codegen::unknown_argument(
-                "expose",
-                &nest_rs_codegen::key_as_written(&meta.path),
-                &[
-                    "name",
-                    "service",
-                    "graphql",
-                    "soft_delete",
-                    "timestamps",
-                    "complex",
-                ],
-            )))
+            // `take_key` refused every name outside `MODEL_KEYS`.
+            Ok(())
         }
     });
     syn::parse::Parser::parse2(parser, args)?;
@@ -250,8 +221,9 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         // A repeated key is refused across every `#[expose]` on the field, as
         // the struct half's are: a repeat is one declaration dropped by source
         // order — `via` decides which foreign key a `HasMany` follows,
-        // `complexity` the query-cost limit.
-        let mut input_written = false;
+        // `complexity` the query-cost limit. One guard per field, so a key
+        // written in two of its `#[expose]`s is written twice.
+        let mut written_keys = nest_rs_codegen::WrittenKeys::default();
 
         // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
         // the same pass. The attrs stay on the field so SeaORM still owns them
@@ -305,14 +277,13 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                 continue;
             }
             attr.parse_nested_meta(|m| {
+                written_keys.take_key(
+                    "expose",
+                    &FIELD_KEYS,
+                    &m.path,
+                    &nest_rs_codegen::key_as_written(&m.path),
+                )?;
                 if m.path.is_ident("input") {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        input_written,
-                        &m.path,
-                        "expose",
-                        "input",
-                    )?;
-                    input_written = true;
                     for kind in listed(
                         &m,
                         "input",
@@ -336,12 +307,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                         }
                     }
                 } else if m.path.is_ident("validate") {
-                    nest_rs_codegen::reject_duplicate_argument(
-                        !validate.is_empty(),
-                        &m.path,
-                        "expose",
-                        "validate",
-                    )?;
                     if !m.input.peek(syn::token::Paren) {
                         return Err(m.error(nest_rs_codegen::takes_value(
                             "expose",
@@ -360,24 +325,12 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     // `HasMany` resolver takes `first`/`after`, so the
                     // expression may name them; every other field has no
                     // arguments to name.
-                    nest_rs_codegen::reject_duplicate_argument(
-                        complexity.is_some(),
-                        &m.path,
-                        "expose",
-                        "complexity",
-                    )?;
                     equals(&m, "complexity")?;
                     complexity = Some(m.value()?.parse::<Expr>()?);
                 } else if m.path.is_ident("via") {
                     // Which of the child's foreign keys a `HasMany` follows.
                     // A column name, not a path: the marker type the parent
                     // resolves it to is the framework's business.
-                    nest_rs_codegen::reject_duplicate_argument(
-                        via.is_some(),
-                        &m.path,
-                        "expose",
-                        "via",
-                    )?;
                     equals(&m, "via")?;
                     let written: Expr = m.value()?.parse()?;
                     let lit =
@@ -394,13 +347,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                         ));
                     }
                     via = Some(lit);
-                } else {
-                    return Err(m.error(nest_rs_codegen::unknown_argument(
-                        "expose",
-                        &nest_rs_codegen::key_as_written(&m.path),
-                        &FIELD_KEYS,
-                    )));
                 }
+                // `take_key` refused every name outside `FIELD_KEYS`.
                 Ok(())
             })?;
         }
@@ -613,6 +561,17 @@ fn foreign_key(written: &Expr) -> syn::Result<Ident> {
     }
     Ok(Ident::new(&column, lit.span()))
 }
+
+/// The struct half's key set — the `#[expose]` written on the `Model` — in the
+/// order its refusals list them.
+const MODEL_KEYS: [&str; 6] = [
+    "name",
+    "service",
+    "graphql",
+    "soft_delete",
+    "timestamps",
+    "complex",
+];
 
 /// The field half's key set — the `#[expose]` written on a column, as opposed
 /// to the one on the `Model`.

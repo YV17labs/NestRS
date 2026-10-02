@@ -2,4 +2,4 @@ error: unknown #[gateway] argument `prefix`; expected `path`, `version` or `name
  --> tests/integration/diagnostics/gateway_unknown_key.rs:9:25
   |
 9 | #[gateway(path = "/ws", prefix = "/v1")]
-  |                         ^^^^^^^^^^^^^^
+  |                         ^^^^^^

@@ -97,36 +97,90 @@ pub(crate) fn takes_one_of(attr: &str, key: &str, values: &[&str]) -> String {
 /// Accepting the repeat means dropping one of two declarations, and which one
 /// it drops is source order — the shape every unified grammar here exists to
 /// remove. So the refusal is worded once, for every decorator whose arguments
-/// are a list of `key = value` pairs, rather than per key: a refusal that
-/// multiplies with the argument matrix is a refusal that gets skipped.
-///
-/// The caller supplies the span, because the two shapes that need this parse
-/// their arguments differently — an `Ident` in a hand-rolled loop, a
-/// `MetaNameValue`'s path in a `Punctuated` — and the span is what puts the
-/// error under the *second* spelling rather than the whole attribute.
+/// are a list of `key = value` pairs, and issued once, by [`WrittenKeys`], for
+/// every key a grammar takes: a refusal that multiplies with the argument
+/// matrix is a refusal that gets skipped.
 pub fn duplicate_argument(attr: &str, name: &str) -> String {
     format!("#[{attr}] takes at most one `{name}`")
 }
 
-/// Refuse an argument written twice, spanned at the second spelling.
+/// The keys one declaration has written — what every `key = value` grammar
+/// takes each key through, at the head of the loop reading its arguments and
+/// before it reads the key's value.
 ///
-/// The guard half of [`duplicate_argument`], worded here because the sentence
-/// alone was not enough: six decorators wrapped it in their own guard, and the
-/// four written for this change had already drifted apart — a `&Option<T>`, a
-/// `bool`, a closure over a `&Meta`, and an inline field test — so the span the
-/// caret lands on was decided six times. `at` is anything that carries tokens,
-/// which is the one axis that genuinely differs: the `Ident` a hand-rolled
-/// `ParseStream` loop holds, and the `Meta` or path a `Punctuated` one does.
-pub fn reject_duplicate_argument<T: ToTokens>(
-    taken: bool,
-    at: &T,
-    attr: &str,
-    name: &str,
-) -> syn::Result<()> {
-    if taken {
-        return Err(syn::Error::new_spanned(at, duplicate_argument(attr, name)));
+/// **A repeat is refused for every key, by construction.** The refusal used to
+/// be one guard per branch — `reject_duplicate_argument(field.is_some(), …)`
+/// written once per key — and a refusal that multiplies with the key matrix is
+/// one a branch can leave out: the grammars join could only ask whether *some*
+/// key of a grammar refused a repeat, so deleting `#[expose]`'s `via` refusal,
+/// the key that loads the wrong foreign key's rows when its second spelling
+/// wins, left it green. Taken here, a key is refused when it is not one of the
+/// grammar's keys ([`unknown_argument`]) or when it was written before
+/// ([`duplicate_argument`]) — one call, every key, whatever key is added later.
+///
+/// The span is `at` — the `Ident` a hand-rolled `ParseStream` loop holds, the
+/// path a `Meta` or a `ParseNestedMeta` carries — so the caret lands on the
+/// spelling that is refused, the second one for a repeat.
+#[derive(Default)]
+pub struct WrittenKeys {
+    /// The key whose own list these keys are written in — `throttle` for
+    /// `throttle(limit = …, window = …)` — or `None` at the attribute's top.
+    parent: Option<&'static str>,
+    /// What a repeat of a key is told beside the shared sentence, where the
+    /// grammar has a remedy for it.
+    remedies: Vec<(&'static str, &'static str)>,
+    written: Vec<String>,
+}
+
+impl WrittenKeys {
+    /// The keys written inside one key's own list, which every sentence names
+    /// as `parent(key)` — the way the developer wrote it.
+    pub fn under(parent: &'static str) -> Self {
+        Self {
+            parent: Some(parent),
+            ..Self::default()
+        }
     }
-    Ok(())
+
+    /// Append `remedy` to the repeat sentence of `key` — `version`'s "write one
+    /// `version = [\"1\", \"2\"]`" — so the refusal stays the shared one and
+    /// the grammar's own advice follows it.
+    pub fn with_remedy(mut self, key: &'static str, remedy: &'static str) -> Self {
+        self.remedies.push((key, remedy));
+        self
+    }
+
+    /// Take `name`, written at `at`, as a key of `#[attr]`, whose keys are
+    /// `keys` — answering the key's position in `keys`, or refusing it as
+    /// unknown or as written twice.
+    pub fn take_key<T: ToTokens>(
+        &mut self,
+        attr: &str,
+        keys: &[&str],
+        at: &T,
+        name: &str,
+    ) -> syn::Result<usize> {
+        let spelled = match self.parent {
+            Some(parent) => format!("{parent}({name})"),
+            None => name.to_owned(),
+        };
+        let Some(position) = keys.iter().position(|key| *key == name) else {
+            return Err(syn::Error::new_spanned(
+                at,
+                unknown_argument(attr, &spelled, keys),
+            ));
+        };
+        if self.written.iter().any(|written| written == name) {
+            let sentence = duplicate_argument(attr, &spelled);
+            let sentence = match self.remedies.iter().find(|(key, _)| *key == name) {
+                Some((_, remedy)) => format!("{sentence} — {remedy}"),
+                None => sentence,
+            };
+            return Err(syn::Error::new_spanned(at, sentence));
+        }
+        self.written.push(name.to_owned());
+        Ok(position)
+    }
 }
 
 /// The sentence a decorator prints for an argument written **bare**, with no
@@ -601,6 +655,55 @@ mod tests {
         assert!(
             unknown.starts_with("unknown #[every] replicas `all`"),
             "{unknown}"
+        );
+    }
+
+    /// Every key of a grammar is refused when written twice, a key outside it
+    /// as unknown — one call, whatever the key — and a nested list names its
+    /// keys inside their parent.
+    #[test]
+    fn a_grammar_takes_each_key_once() {
+        let at = proc_macro2::Ident::new("probe", proc_macro2::Span::call_site());
+        let keys = ["path", "version", "via"];
+        let mut written = WrittenKeys::default().with_remedy("version", "write one list");
+        for (position, key) in keys.iter().enumerate() {
+            assert_eq!(
+                written.take_key("probe", &keys, &at, key).ok(),
+                Some(position)
+            );
+        }
+        for key in keys {
+            let refusal = written
+                .take_key("probe", &keys, &at, key)
+                .expect_err("a key written twice")
+                .to_string();
+            assert!(
+                refusal.starts_with(&duplicate_argument("probe", key)),
+                "{refusal}"
+            );
+        }
+        assert_eq!(
+            written
+                .take_key("probe", &keys, &at, "version")
+                .expect_err("a repeat")
+                .to_string(),
+            "#[probe] takes at most one `version` — write one list",
+        );
+        assert_eq!(
+            written
+                .take_key("probe", &keys, &at, "vai")
+                .expect_err("an unknown key")
+                .to_string(),
+            unknown_argument("probe", "vai", &keys),
+        );
+        let mut nested = WrittenKeys::under("throttle");
+        assert!(nested.take_key("process", &["limit"], &at, "limit").is_ok());
+        assert_eq!(
+            nested
+                .take_key("process", &["limit"], &at, "limit")
+                .expect_err("a repeat")
+                .to_string(),
+            "#[process] takes at most one `throttle(limit)`",
         );
     }
 

@@ -14,9 +14,9 @@ use std::str::FromStr;
 use nest_rs_codegen::{
     DecoratorPair, Edge, HostBorrow, JobDecorator, JobKey, await_if_async, cfg_attrs,
     duration_millis, impl_self_ident, job_argument_needs_a_value, job_key, job_keys,
-    job_returns_a_result, job_transaction, reject_duplicate_argument, replicas_default,
-    replicas_value, require_str_lit, returns_unit, shared_receiver, site, takes_value,
-    transactional_value, ungrouped_expr, unread_job_key,
+    job_returns_a_result, job_transaction, replicas_default, replicas_value, require_str_lit,
+    returns_unit, shared_receiver, site, takes_value, transactional_value, ungrouped_expr,
+    unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -288,7 +288,6 @@ fn parse_trailing_keys(
     stream: syn::parse::ParseStream<'_>,
     member: JobDecorator,
 ) -> syn::Result<TrailingKeys> {
-    let attr = member.name();
     let mut keys = TrailingKeys {
         transactional: None,
         replicas: None,
@@ -308,12 +307,13 @@ fn parse_trailing_keys(
     // `expected `=`` against the enclosing `#[scheduled]` — the *other* half of
     // the pair, and a decorator the developer had not touched.
     let metas: Punctuated<Meta, Token![,]> = Punctuated::parse_terminated(stream)?;
+    let mut written = nest_rs_codegen::WrittenKeys::default();
     for meta in metas {
         let path = meta.path().clone();
         let name = nest_rs_codegen::key_as_written(&path);
-        // Before the value is looked at: a key refused here is refused whatever
-        // it was given.
-        let key = job_key(member, &name, &path)?;
+        // Before the value is looked at: a key refused here — unknown, another
+        // member's, or written twice — is refused whatever it was given.
+        let key = job_key(member, &mut written, &name, &path)?;
         let Meta::NameValue(meta) = meta else {
             return Err(syn::Error::new_spanned(
                 &path,
@@ -322,11 +322,9 @@ fn parse_trailing_keys(
         };
         match key {
             JobKey::Transactional => {
-                reject_duplicate_argument(keys.transactional.is_some(), &meta.path, attr, &name)?;
                 keys.transactional = Some(transactional_value(member, &meta.value)?);
             }
             JobKey::Replicas => {
-                reject_duplicate_argument(keys.replicas.is_some(), &meta.path, attr, &name)?;
                 keys.replicas = Some(replicas_value(
                     member,
                     &meta.value,
@@ -334,7 +332,6 @@ fn parse_trailing_keys(
                 )?);
             }
             JobKey::Tz => {
-                reject_duplicate_argument(keys.tz.is_some(), &meta.path, attr, &name)?;
                 keys.tz = Some(meta);
             }
             unread @ (JobKey::Queue | JobKey::Retries | JobKey::Concurrency | JobKey::Throttle) => {

@@ -4,8 +4,8 @@
 //! on its surface crate.
 
 use nest_rs_codegen::{
-    invalid_queue_name, is_valid_queue_name, missing_argument, needs_a_value,
-    reject_duplicate_argument, require_str_lit, takes_value, unknown_argument,
+    WrittenKeys, invalid_queue_name, is_valid_queue_name, missing_argument, needs_a_value,
+    require_str_lit, takes_value,
 };
 use proc_macro::TokenStream;
 use quote::quote;
@@ -103,6 +103,7 @@ impl Parse for QueueArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name: Option<LitStr> = None;
         let mut job: Option<Type> = None;
+        let mut written = WrittenKeys::default();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -110,12 +111,7 @@ impl Parse for QueueArgs {
             // the key rather than dying on syn's `` expected `=` `` — and a bare
             // *unknown* key still reads as unknown rather than as missing a value.
             let spelled = key.to_string();
-            if !KEYS.contains(&spelled.as_str()) {
-                return Err(syn::Error::new(
-                    key.span(),
-                    unknown_argument("queue", &spelled, &KEYS),
-                ));
-            }
+            written.take_key("queue", &KEYS, &key, &spelled)?;
             if !input.peek(Token![=]) {
                 return Err(syn::Error::new(
                     key.span(),
@@ -124,7 +120,6 @@ impl Parse for QueueArgs {
             }
             input.parse::<Token![=]>()?;
             if spelled == "job" {
-                reject_duplicate_argument(job.is_some(), &key, "queue", &spelled)?;
                 job = Some(input.parse::<Type>().map_err(|stopped| {
                     syn::Error::new(
                         stopped.span(),
@@ -136,7 +131,6 @@ impl Parse for QueueArgs {
                     )
                 })?);
             } else {
-                reject_duplicate_argument(name.is_some(), &key, "queue", &spelled)?;
                 let literal = require_str_lit(&input.parse::<Expr>()?, "queue", "name", "emails")?;
                 // The rule `QueueName` states, refused at the literal.
                 if !is_valid_queue_name(&literal.value()) {

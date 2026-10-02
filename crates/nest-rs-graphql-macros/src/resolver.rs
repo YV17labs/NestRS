@@ -280,9 +280,14 @@ struct AuthorizeSpec {
 /// `id_arg = ident`).
 enum AuthorizeArg {
     Positional(Path),
-    Bind(Path),
-    IdArg(Ident),
+    /// `bind = Service`, with the key as written — what a repeat is spanned at.
+    Bind(Ident, Path),
+    /// `id_arg = ident`, with the key as written.
+    IdArg(Ident, Ident),
 }
+
+/// The keys `#[authorize]` takes beside its positionals.
+const AUTHORIZE_KEYS: [&str; 2] = ["bind", "id_arg"];
 
 impl syn::parse::Parse for AuthorizeArg {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -293,13 +298,16 @@ impl syn::parse::Parse for AuthorizeArg {
             let name: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
             if name == "bind" {
-                input.parse().map(AuthorizeArg::Bind).map_err(refused(
-                    "bind",
-                    "the path of the service that loads the subject, e.g. \
+                input
+                    .parse()
+                    .map(|p| AuthorizeArg::Bind(name, p))
+                    .map_err(refused(
+                        "bind",
+                        "the path of the service that loads the subject, e.g. \
                      `bind = FilesService`",
-                ))
+                    ))
             } else if name == "id_arg" {
-                input.parse().map(AuthorizeArg::IdArg).map_err(refused(
+                input.parse().map(|i| AuthorizeArg::IdArg(name, i)).map_err(refused(
                     "id_arg",
                     "the id argument's name as a snake_case identifier, e.g. `id_arg = file_id`",
                 ))
@@ -307,7 +315,7 @@ impl syn::parse::Parse for AuthorizeArg {
                 let spelled = name.to_string();
                 Err(syn::Error::new_spanned(
                     name,
-                    nest_rs_codegen::unknown_argument("authorize", &spelled, &["bind", "id_arg"]),
+                    nest_rs_codegen::unknown_argument("authorize", &spelled, &AUTHORIZE_KEYS),
                 ))
             }
         } else {
@@ -359,28 +367,19 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     let mut positional: Vec<Path> = Vec::new();
     let mut bind: Option<Path> = None;
     let mut id_arg: Option<Ident> = None;
+    // Refused rather than last-write-wins: `bind` decides **which service loads
+    // the authorized subject**, so dropping one of two by source order is the
+    // posture silently deciding itself.
+    let mut written = nest_rs_codegen::WrittenKeys::default();
     for arg in args {
         match arg {
             AuthorizeArg::Positional(p) => positional.push(p),
-            // Refused rather than last-write-wins: `bind` decides **which
-            // service loads the authorized subject**, so dropping one of two by
-            // source order is the posture silently deciding itself.
-            AuthorizeArg::Bind(p) => {
-                nest_rs_codegen::reject_duplicate_argument(
-                    bind.is_some(),
-                    &p,
-                    "authorize",
-                    "bind",
-                )?;
+            AuthorizeArg::Bind(key, p) => {
+                written.take_key("authorize", &AUTHORIZE_KEYS, &key, &key.to_string())?;
                 bind = Some(p);
             }
-            AuthorizeArg::IdArg(i) => {
-                nest_rs_codegen::reject_duplicate_argument(
-                    id_arg.is_some(),
-                    &i,
-                    "authorize",
-                    "id_arg",
-                )?;
+            AuthorizeArg::IdArg(key, i) => {
+                written.take_key("authorize", &AUTHORIZE_KEYS, &key, &key.to_string())?;
                 id_arg = Some(i);
             }
         }

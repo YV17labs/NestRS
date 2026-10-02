@@ -9,6 +9,13 @@
 //! diagnostics suites — macro hygiene is proven by compiling a consumer, not
 //! by reading emissions.
 //!
+//! **Each witness compiles under its capability's feature alone** — the
+//! crate's features mirror the umbrella's, one per capability that owns a
+//! decorator — so the union proves no decorator needs a second manifest line,
+//! and each feature on its own proves its capability pulls everything its
+//! decorators emit. The kernel's decorators (`#[module]`, `#[injectable]`,
+//! `#[hooks]`, `#[nest_rs::main]`) are witnessed under no feature at all.
+//!
 //! Extend this crate whenever a decorator is added. Decorators excluded by
 //! the documented contract (see `framework.md`) are deliberately not
 //! exercised: emitted derives and the entity-site trio
@@ -73,19 +80,31 @@
 )]
 
 pub mod canary;
+#[cfg(feature = "config")]
 pub mod config;
+#[cfg(feature = "http")]
 pub mod controller;
+#[cfg(feature = "graphql")]
 pub mod dataloader;
 pub mod entry;
+#[cfg(feature = "ws")]
 pub mod gateway;
+#[cfg(feature = "health")]
 pub mod indicators;
+#[cfg(feature = "http")]
 pub mod interceptor;
 pub mod lifecycle;
+#[cfg(feature = "events")]
 pub mod listener;
 pub mod module;
 pub mod prelude;
+#[cfg(feature = "queue")]
 pub mod processor;
+#[cfg(feature = "graphql")]
 pub mod resolver;
+#[cfg(feature = "schedule")]
 pub mod tasks;
+#[cfg(feature = "mcp")]
 pub mod tool;
+#[cfg(feature = "seaorm")]
 pub mod wire_enum;

@@ -27,7 +27,9 @@ pub enum HygieneWireTier {
 /// The GraphQL form. `async_graphql::Enum` is the derive with no `crate = `
 /// story of its own — async-graphql roots it at whatever the call site's
 /// manifest declares — so this is the arm that fails here the day the override
-/// is dropped.
+/// is dropped. Under `graphql` as well as `seaorm`: alone, `seaorm` leaves the
+/// GraphQL arm off, and the decorator says so naming the feature.
+#[cfg(feature = "graphql")]
 #[wire_enum(graphql)]
 pub enum HygieneStage {
     /// A variant.

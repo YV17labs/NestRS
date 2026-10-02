@@ -16,33 +16,31 @@ publish = false
 # ever needs a second line here — a sibling `nest-rs-*` or any third-party
 # crate — the rule is broken and this crate stops compiling. That failure is
 # the point.
-#
-# The features are exactly the capabilities exercised below.
-#
-# **What this proves and what it does not.** It proves that the decorators in
-# `src/` need no dependency but the umbrella — a bare third-party path in any
-# expansion fails to resolve here, because nothing third-party is in this
-# crate's extern prelude. It does **not** prove each capability pulls its own
-# satellites: all ten features build as one union, so a satellite `queue`
-# forgot is still supplied by `http` and nothing fails. Splitting the witness
-# per feature is what would close that, and it is an owner question rather than
-# an edit — `nest-rs-conformance`'s umbrella join records the same limit beside
-# the column it fills.
-nest-rs = { path = "../nest-rs", default-features = false, features = [
-    "config",
-    "events",
-    "graphql",
-    "health",
-    "http",
-    "mcp",
-    "queue",
-    "schedule",
-    # `#[wire_enum]` — the one decorator of `nest-rs-resource` this crate can
-    # exercise (`#[expose]` needs a real entity, which a zero-dep crate cannot
-    # hold). It rides `seaorm`, the single feature that activates both halves.
-    "seaorm",
-    "ws",
-] }
+nest-rs = { path = "../nest-rs", default-features = false }
+
+# One feature per umbrella capability that owns a decorator, each forwarding to
+# the umbrella's feature of the same name, and each witness module compiled
+# under its capability's feature alone. Built as the default union, the crate
+# proves no decorator needs a second manifest line; built one feature at a time
+# (`scripts/check-features.sh`), it proves each capability pulls what its own
+# decorators emit — a satellite a feature forgot, or a re-export gated on the
+# wrong one, fails under that feature even when a sibling supplies it in the
+# union.
+[features]
+default = ["config", "events", "graphql", "health", "http", "mcp", "queue", "schedule", "seaorm", "ws"]
+config = ["nest-rs/config"]
+events = ["nest-rs/events"]
+graphql = ["nest-rs/graphql"]
+health = ["nest-rs/health"]
+http = ["nest-rs/http"]
+mcp = ["nest-rs/mcp"]
+queue = ["nest-rs/queue"]
+schedule = ["nest-rs/schedule"]
+# `#[wire_enum]` — the one decorator of `nest-rs-resource` this crate can
+# exercise (`#[expose]` needs a real entity, which a zero-dep crate cannot
+# hold). It rides `seaorm`, the single feature that activates both halves.
+seaorm = ["nest-rs/seaorm"]
+ws = ["nest-rs/ws"]
 
 # The `tokio::main` canary in `src/canary.rs` — the unit-test build only, so the
 # witness above still compiles against the umbrella alone.

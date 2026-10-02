@@ -6,8 +6,7 @@
 //! pull `worker` and `pipes` too — this module is what proves it does, rather
 //! than a manifest line anyone can read as correct without testing it.
 
-use nest_rs::core::injectable;
-use nest_rs::http::input;
+use nest_rs::core::{injectable, input};
 use nest_rs::pipes::Valid;
 use nest_rs::queue::{Checkpoint, processor, queue};
 

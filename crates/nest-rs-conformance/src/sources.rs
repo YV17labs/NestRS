@@ -1121,21 +1121,26 @@ fn files_at(path: &Path) -> Vec<PathBuf> {
     }
 }
 
-/// A top-level item's attributes. `syn` gives no uniform accessor, and the
-/// shapes a `#[cfg(test)]` legitimately sits on are few.
-fn item_attrs(item: &Item) -> &[Attribute] {
+/// An item's attributes, for the `#[cfg(test)]` question. `syn` gives no
+/// uniform accessor, so every shape that carries attributes is listed — one
+/// left out would read as shipped whatever gates it.
+pub fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
-        Item::Mod(i) => &i.attrs,
-        Item::Fn(i) => &i.attrs,
-        Item::Impl(i) => &i.attrs,
-        Item::Use(i) => &i.attrs,
-        Item::Struct(i) => &i.attrs,
-        Item::Enum(i) => &i.attrs,
         Item::Const(i) => &i.attrs,
-        Item::Static(i) => &i.attrs,
-        Item::Trait(i) => &i.attrs,
-        Item::Type(i) => &i.attrs,
+        Item::Enum(i) => &i.attrs,
+        Item::ExternCrate(i) => &i.attrs,
+        Item::Fn(i) => &i.attrs,
+        Item::ForeignMod(i) => &i.attrs,
+        Item::Impl(i) => &i.attrs,
         Item::Macro(i) => &i.attrs,
+        Item::Mod(i) => &i.attrs,
+        Item::Static(i) => &i.attrs,
+        Item::Struct(i) => &i.attrs,
+        Item::Trait(i) => &i.attrs,
+        Item::TraitAlias(i) => &i.attrs,
+        Item::Type(i) => &i.attrs,
+        Item::Union(i) => &i.attrs,
+        Item::Use(i) => &i.attrs,
         _ => &[],
     }
 }

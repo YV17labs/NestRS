@@ -35,9 +35,12 @@ pub(crate) fn followed() -> Vec<Followed> {
     vec![Followed::call("panic_message").read_in_transcribers()]
 }
 
-/// Three seams contain a panic today — the scheduler, the event bus and the
-/// queue consumer. Below that the scan is reading the wrong tree.
-const FLOOR: usize = 3;
+/// Eight files contain a panic today — the lifecycle hooks, the scheduler, the
+/// event bus, the queue consumer and the Redis worker's delivery, and the three
+/// edges whose developer code runs off a request the HTTP edge can unwind: the
+/// MCP dispatch, the WebSocket gateway and the graphql-ws socket. Below that the
+/// scan is reading the wrong tree.
+const FLOOR: usize = 8;
 
 #[test]
 fn every_contained_panic_is_logged_under_the_declared_field() {

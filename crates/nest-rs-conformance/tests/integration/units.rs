@@ -33,9 +33,10 @@
 //!
 //! **What it reads by its spelling**: `operation_span!` and `info!` calls, at a
 //! call site and inside a `macro_rules!` transcriber alike — a slot the
-//! transcriber's caller fills is a binding, which only the shared emitter may
-//! spell — and calls to `record_outcome` and `record_error`. The `blinds` join
-//! refuses a rename of any of them.
+//! transcriber's caller fills is a binding, which no site may spell — calls to
+//! `record_outcome` and `record_error`, and the `CANCELLED` and `PANIC`
+//! constants of `operation_log`, by name, in each edge's shipped source. The
+//! `blinds` join refuses a rename of any of them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -43,8 +44,9 @@ use std::path::Path;
 use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    Named, declared_units, doctests, each_source, is_cfg_test, named_at, operation_log_target,
-    past_value, repo_root, resolve_target, top_level, value_after,
+    Named, crate_dirs, declared_units, doctests, each_source, flatten, is_cfg_test, item_attrs,
+    named_at, operation_log_target, parsed, past_value, repo_root, resolve_target, rust_files,
+    top_level, value_after,
 };
 use proc_macro2::{TokenStream, TokenTree};
 use syn::Macro;
@@ -59,6 +61,12 @@ pub(crate) fn followed() -> Vec<Followed> {
             .read_in_transcribers(),
         Followed::call(RECORD_OUTCOME),
         Followed::call(RECORD_ERROR),
+        Followed::type_(BUILT_ENDS[0])
+            .through(&["operation_log"])
+            .read_in_transcribers(),
+        Followed::type_(BUILT_ENDS[1])
+            .through(&["operation_log"])
+            .read_in_transcribers(),
     ]
 }
 
@@ -90,8 +98,8 @@ const TARGET_MODULE: &str = "target";
 /// What a slot that named nothing at all is recorded as.
 ///
 /// A [`Spelled::Binding`] like any other, so the refusal it lands in is the one
-/// worded for a name the join cannot follow — the case a shared emitter is
-/// waived for, and the case an edge that forgot the slot fails on.
+/// worded for a name the join cannot follow — the case an edge that forgot the
+/// slot fails on.
 const ABSENT: &str = "<absent>";
 
 /// What a slot a `macro_rules!` caller fills is recorded as.
@@ -107,7 +115,9 @@ enum Spelled {
     Elsewhere(String),
     /// A string literal: a second spelling of a name that already exists.
     Literal(String),
-    /// A local binding, or nothing at all. Legal only at the shared emitter.
+    /// A local binding, or nothing at all. Never conformant: a line's `name:` is
+    /// baked into its callsite, so a site taking the name as an argument cannot
+    /// fill it — which is why each unit files from a callsite of its own.
     Binding(String),
 }
 
@@ -300,7 +310,7 @@ impl Scan {
         let tokens = top_level(args);
         // A value a `macro_rules!` caller supplies is no constant this join can
         // read at the definition — and its call site is no `operation_span!`.
-        // Recorded as a binding, which only the shared emitter may spell.
+        // Recorded as a binding, which no site may spell.
         if tokens
             .iter()
             .any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '$'))
@@ -352,7 +362,6 @@ impl Scan {
             }
             // Both slots carry the same value under the same rule, so they are
             // read by one loop: a third one is a row, not a third spelling.
-            // Absent is legal only at a shared emitter — see below.
             for (site, key, punct) in [("message", "message", '='), ("name:", "name", ':')] {
                 let named = value_after(&tokens, key, punct)
                     .and_then(|at| spelled_at(&tokens, at, UNIT_MODULE))
@@ -504,20 +513,6 @@ fn owner_of(prefix: &str) -> Option<String> {
     }
 }
 
-/// The one emitter that may name its unit from a binding, and the reason.
-///
-/// `under_connection` serves `ws.connect` and `ws.disconnect` from one body, and
-/// a line's `name:` is baked into the callsite's `static` metadata — it cannot
-/// read a parameter. So that site takes the canonical name as an argument and
-/// spends it on `message` alone. Stated here rather than waived silently,
-/// because "a site that could not follow" is exactly the shape a real hole
-/// hides in.
-fn is_shared_emitter(files: &BTreeSet<String>) -> bool {
-    files
-        .iter()
-        .all(|f| f.ends_with("nest-rs-ws/src/gateway.rs"))
-}
-
 #[test]
 fn every_unit_of_work_is_named_by_the_shared_constant() {
     let root = repo_root();
@@ -537,7 +532,6 @@ fn every_unit_of_work_is_named_by_the_shared_constant() {
                 "{site} names `{path}` ({where_}), which is not a constant in a \
                  `{module}` module",
             )),
-            Spelled::Binding(_) if is_shared_emitter(files) => {}
             Spelled::Binding(text) => wrong.push(format!(
                 "{site} reads `{text}` ({where_}), which this join cannot trace \
                  back to a `{module}` module",
@@ -592,18 +586,7 @@ fn every_unit_of_work_is_named_by_the_shared_constant() {
     // carry the declaring crate too, which `spelled_at` does not resolve, so it
     // is stated here rather than half-built.
     //
-    // A unit whose span is opened at the shared emitter files its line through
-    // that emitter's binding, so it never reaches `message` under its own name.
-    // Derived from the same predicate as the waiver above rather than re-typed
-    // as a list of constant names: two encodings of one fact drift apart, and
-    // the name list would have blessed any future unit that happened to be
-    // called `WS_CONNECT` — in the join that forbids literals.
-    let waived = |unit: &String| {
-        found
-            .get(&("operation_span!", UNIT_MODULE, Spelled::Unit(unit.clone())))
-            .is_some_and(is_shared_emitter)
-    };
-    let anonymous: Vec<String> = unfiled.into_iter().filter(|u| !waived(u)).collect();
+    let anonymous = unfiled;
     assert!(
         anonymous.is_empty(),
         "unit(s) opened as a span that file no operation line, so their work is \
@@ -750,4 +733,127 @@ fn a_recorded_outcome_is_read_off_the_call() {
     assert_eq!(scan.recorded, BTreeSet::from(["records.rs".to_owned()]));
     let opening: BTreeSet<&String> = scan.opened.values().flatten().collect();
     assert_eq!(opening.len(), 2, "{:?}", scan.opened);
+}
+
+/// The two ends of a unit an edge has to build, by the `operation_log` constant
+/// each is filed under.
+const BUILT_ENDS: [&str; 2] = ["CANCELLED", "PANIC"];
+
+/// Every edge can file a unit stopped before it settled, and a unit that
+/// unwound.
+///
+/// `ok` and `error` come with a handler's return; `cancelled` and `panic` do
+/// not — one is a guard dropped with the unit's future, the other a containment
+/// at the dispatch — so they are the two ends an edge leaves out, and leaving
+/// them out is silent: the unit a shutdown or a panic ended files nothing, and
+/// the family still reads as whole. Three edges had neither for a round.
+///
+/// **Per edge, not per unit**, and that is this cell's stated limit: what makes
+/// a member is a crate declaring a `unit` module, and what it owes is both
+/// constants named in its shipped source — outside `#[cfg(test)]`, so a test
+/// asserting the word does not fill the cell. Which of an edge's units files
+/// each end is that edge's own suite to prove.
+#[test]
+fn every_edge_can_file_a_unit_stopped_and_a_unit_unwound() {
+    let edges: BTreeSet<String> = declared_units()
+        .into_iter()
+        .map(|(_, krate, _)| krate)
+        .collect();
+    baseline::floor(edges.len(), EDGES_FLOOR, "edge(s) declaring a unit");
+    let mut holes = BTreeSet::new();
+    for dir in crate_dirs() {
+        let Some(edge) = dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !edges.contains(edge) {
+            continue;
+        }
+        let named = shipped_idents(&dir.join("src"));
+        for end in BUILT_ENDS {
+            if !named.contains(end) {
+                holes.insert(format!("{edge} {}", end.to_ascii_lowercase()));
+            }
+        }
+    }
+    baseline::gate(
+        "units-ends-baseline.txt",
+        &holes,
+        edges.len(),
+        "edge(s)",
+        "edge × built end",
+        "an edge whose shipped source cannot file that end — build it (a guard dropped with \
+         the unit for `cancelled`, a containment at the dispatch for `panic`) or record why the \
+         edge never ends a unit that way",
+    );
+}
+
+/// The six edges that declare a unit today.
+const EDGES_FLOOR: usize = 6;
+
+/// Every identifier the crate's shipped source spells — outside any item, and
+/// any member of an `impl` or a `trait`, that `#[cfg(test)]` gates.
+///
+/// Tokens rather than a visitor, because the constants this cell asks for are
+/// as often spelled inside a `tracing` call as in an expression, and a macro's
+/// arguments are tokens to `syn`.
+fn shipped_idents(src: &Path) -> BTreeSet<String> {
+    fn tokens(tokens: proc_macro2::TokenStream, out: &mut BTreeSet<String>) {
+        let mut flat = Vec::new();
+        flatten(tokens, &mut flat);
+        out.extend(flat.into_iter().filter_map(|tree| match tree {
+            TokenTree::Ident(ident) => Some(ident.to_string()),
+            _ => None,
+        }));
+    }
+    fn walk(items: &[syn::Item], out: &mut BTreeSet<String>) {
+        use quote::ToTokens;
+        for item in items {
+            if is_cfg_test(item_attrs(item)) {
+                continue;
+            }
+            match item {
+                syn::Item::Mod(module) => {
+                    if let Some((_, inner)) = &module.content {
+                        walk(inner, out);
+                    }
+                }
+                syn::Item::Impl(block) => {
+                    for member in &block.items {
+                        let attrs = match member {
+                            syn::ImplItem::Const(m) => &m.attrs,
+                            syn::ImplItem::Fn(m) => &m.attrs,
+                            syn::ImplItem::Type(m) => &m.attrs,
+                            syn::ImplItem::Macro(m) => &m.attrs,
+                            _ => &Vec::new(),
+                        };
+                        if !is_cfg_test(attrs) {
+                            tokens(member.to_token_stream(), out);
+                        }
+                    }
+                }
+                syn::Item::Trait(declared) => {
+                    for member in &declared.items {
+                        let attrs = match member {
+                            syn::TraitItem::Const(m) => &m.attrs,
+                            syn::TraitItem::Fn(m) => &m.attrs,
+                            syn::TraitItem::Type(m) => &m.attrs,
+                            syn::TraitItem::Macro(m) => &m.attrs,
+                            _ => &Vec::new(),
+                        };
+                        if !is_cfg_test(attrs) {
+                            tokens(member.to_token_stream(), out);
+                        }
+                    }
+                }
+                _ => tokens(item.to_token_stream(), out),
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    for file in rust_files(src) {
+        if let Some(ast) = parsed(&file) {
+            walk(&ast.items, &mut out);
+        }
+    }
+    out
 }

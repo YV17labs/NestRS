@@ -139,15 +139,17 @@ pub const ERROR: &str = "error";
 /// Developer code unwound. Distinct from [`ERROR`] because the two are read
 /// differently under incident: one is a handled path, the other is not.
 pub const PANIC: &str = "panic";
-/// It was stopped before it settled — its caller cancelled it, or the transport
-/// carrying it stopped serving — and dropped where it waited. Distinct from
-/// [`ERROR`] because nothing answered: the unit neither completed nor failed,
-/// and what it had not yet done stays undone.
+/// It was stopped before it settled — its caller gave up on it; the server
+/// ended it at the shutdown signal because it has no end of its own, the way
+/// its protocol ends one (a stream ends, a socket closes, a subscription
+/// completes); or the shutdown window closed on it, and it was dropped where it
+/// waited. Distinct from [`ERROR`] because the unit neither completed nor
+/// failed, and what it had not yet done stays undone.
 ///
-/// Filed by an edge that can see its unit stopped. MCP is that edge: an
-/// operation runs on a task of rmcp's rather than on the connection that asked
-/// for it, so the edge stops it itself, and says so here rather than filing an
-/// `ok` for an answer nobody received.
+/// Every edge files it, and every edge has to *build* it, since no handler's
+/// return says it: the line is held by a guard dropped with the unit's future,
+/// so the end is filed whether or not the edge noticed it. The `units` join in
+/// `nest-rs-conformance` holds each edge to naming it, and [`PANIC`] beside it.
 pub const CANCELLED: &str = "cancelled";
 
 /// Record on a unit's span how the unit ended, where OpenTelemetry reads it.

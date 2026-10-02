@@ -1312,6 +1312,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
                 Some(entity) => quote!(#entity),
                 None => {
+                    #[expect(
+                        clippy::expect_used,
+                        reason = "a compile-time invariant of the parse above; a panic in a proc macro is a compile error"
+                    )]
                     let service = spec
                         .bind
                         .as_ref()
@@ -1496,13 +1500,15 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
-        // The developer's method keeps its prose, its `#[allow]`s and its
+        // The developer's method keeps its prose, its lint levels and its
         // conditions: a method compiled out has to be compiled out here too,
-        // where its body is, and a lint allowed on it — `non_snake_case` on the
-        // `userID` it is named for — still names that method.
-        method
-            .attrs
-            .retain(|a| a.path().is_ident("doc") || a.path().is_ident("allow"));
+        // where its body is, and a lint allowed or expected on it —
+        // `non_snake_case` on the `userID` it is named for — still names that
+        // method. `expect` is the form the workspace lints demand, so dropping
+        // it fired the very lint the developer had answered.
+        method.attrs.retain(|a| {
+            a.path().is_ident("doc") || a.path().is_ident("allow") || a.path().is_ident("expect")
+        });
         for condition in &cfgs {
             method.attrs.extend(syn::parse::Parser::parse2(
                 Attribute::parse_outer,

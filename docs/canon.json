@@ -173,6 +173,7 @@
       "try_catch"
     ],
     "Executor": [
+      "after_commit",
       "as_any",
       "non_transactional"
     ],
@@ -368,7 +369,7 @@
       "type_key"
     ]
   },
-  "test_count": 2847,
+  "test_count": 2869,
   "version_req": "7.0",
   "otel_binding": "_otel",
   "envelope_keys": [

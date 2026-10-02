@@ -450,6 +450,76 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
     );
 }
 
+/// A reply a tick could not decode, behind a wrapper that hides it from
+/// `source()` — thiserror's `transparent` — and a context line over that.
+fn tick_decode_failure(_: &Container) -> RunFuture<'_> {
+    use nest_rs_core::serde::Deserialize;
+    use nest_rs_core::serde::de::IntoDeserializer;
+    use nest_rs_core::serde::de::value::Error as ValueError;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error(transparent)]
+    struct Reply(ValueError);
+
+    Box::pin(async {
+        let refused = u64::deserialize(IntoDeserializer::<ValueError>::into_deserializer(
+            "sk_live_51HsecretTOKEN",
+        ))
+        .expect_err("a secret is not a number");
+        Err(anyhow::Error::new(Reply(refused)).context("reading the upstream reply"))
+    })
+}
+
+/// A decode failure a tick returns is said without its value, whatever wraps
+/// it: the line an operator reads is no place for the record the tick read.
+#[tokio::test]
+async fn a_failed_tick_says_a_decode_failure_without_its_value() {
+    struct DecodingHost;
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = crate::hermetic()
+        .attach_meta::<DecodingHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "DecodingHost",
+            method: "tick",
+            trigger: Trigger::Interval(Duration::from_millis(50)),
+            run: tick_decode_failure,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::Each,
+        })
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+
+    let event = logs
+        .find("nest_rs::schedule", "scheduled job failed")
+        .into_iter()
+        .find(|event| event.field("provider").as_deref() == Some("DecodingHost"))
+        .expect("a failed tick is reported at error");
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some("reading the upstream reply: invalid type: a string, expected u64"),
+    );
+    assert!(
+        logs.events()
+            .iter()
+            .all(|event| !event.fields.values().any(|value| value.contains("sk_live"))),
+        "no line quotes the value",
+    );
+}
+
 /// The job body returns `Ok` and its writes never landed, so the schedule has
 /// to say so — its only outcome being the event an operator reads. Single-thread
 /// runtime on purpose: `LogCapture` is thread-local, and the scheduler's spawned

@@ -145,6 +145,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     provider: #provider_lit,
                     method: #method_lit,
                     origin: ::core::module_path!(),
+                    provider_type_id: ::std::any::TypeId::of::<#self_ty>,
                     present: |__container| ::std::option::Option::is_some(
                         &::nest_rs_core::Container::get::<#self_ty>(__container),
                     ),

@@ -103,6 +103,8 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     ::nest_rs_core::LifecycleHook {
 ///         phase: ::nest_rs_core::LifecyclePhase::OnModuleInit,
 ///         provider: "Foo", method: "ready",
+///         origin: module_path!(),
+///         provider_type_id: TypeId::of::<Foo>,
 ///         present: |c| Container::get::<Foo>(c).is_some(),
 ///         run: __nestrs_hook_Foo_ready,
 ///     }

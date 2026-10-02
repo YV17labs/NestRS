@@ -31,6 +31,7 @@ nest_rs_core::inventory::submit! {
         provider: "EventsModule",
         method: "wire_listeners",
         origin: module_path!(),
+        provider_type_id: std::any::TypeId::of::<EventsModule>,
         present: |_| true,
         run: wire_listeners,
     }
@@ -100,6 +101,8 @@ fn wire_listeners(
                     target: crate::TARGET,
                     what: "#[on_event] method",
                     origin: entry.origin,
+                    host: (entry.provider_type_id)(),
+                    container: container,
                     listener = entry.name,
                 );
                 continue;

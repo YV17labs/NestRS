@@ -10,6 +10,7 @@
 //! builds. Cross-provider init dependencies are not expressed here — a hook
 //! that needs another service injects it.
 
+use std::any::TypeId;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -117,6 +118,9 @@ pub struct LifecycleHook {
     /// whether an unreachable hook is the developer's problem
     /// ([`is_framework_owned`]).
     pub origin: &'static str,
+    /// The host provider's type — what [`inert_host`](crate::inert_host) reads
+    /// to say why a hook whose host is absent is inert.
+    pub provider_type_id: fn() -> TypeId,
     /// Whether this hook's provider is resolvable in the assembled container.
     /// `#[hooks]` emits a `Container::get::<Provider>().is_some()` probe, so a
     /// hook whose provider was never listed in any reachable module is surfaced
@@ -143,18 +147,21 @@ fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
 ///
 /// **`warn` for the app's own code** — leftover code must stay visible instead
 /// of vanishing silently (the module-gated discovery rule), and the developer
-/// can act: the two ways to get here and their two fixes are
-/// [`INERT_HOST_HINT`], which every discovery site carries verbatim.
+/// can act: the line names the cause and its remedy ([`InertHost`]).
 ///
-/// **`debug` for the framework's** — the developer cannot act on it and it is
-/// not a mistake. A `warn` naming an internal type on a freshly scaffolded app
-/// teaches exactly one thing: that these warnings are noise. Security warnings
-/// share this target.
-fn report_inert_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
+/// **`debug` for what is not the app's** — the framework's capabilities it
+/// never opted into, and another binary's hosts in a shared library crate. A
+/// `warn` naming either teaches exactly one thing: that these warnings are
+/// noise. Security warnings share this target.
+///
+/// [`InertHost`]: crate::InertHost
+fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: LifecyclePhase) {
     crate::report_inert_host!(
         target: crate::target::LIFECYCLE,
         what: "lifecycle hook",
         origin: hook.origin,
+        host: (hook.provider_type_id)(),
+        container: container,
         phase = ::tracing::field::debug(phase),
         provider = hook.provider,
         method = hook.method,
@@ -165,7 +172,7 @@ fn report_inert_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
 pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> anyhow::Result<()> {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
-            report_inert_hook(hook, phase);
+            report_inert_hook(container, hook, phase);
             continue;
         }
         tracing::debug!(
@@ -234,7 +241,7 @@ pub(crate) async fn run_phase_lenient(
 ) {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
-            report_inert_hook(hook, phase);
+            report_inert_hook(container, hook, phase);
             continue;
         }
         way_down.hook(phase, hook.provider, hook.method);
@@ -309,6 +316,7 @@ mod tests {
             provider: "Probe",
             method: "touch",
             origin: module_path!(),
+            provider_type_id: TypeId::of::<Probe>,
             present: |container| container.get::<Probe>().is_some(),
             run: run_touch,
         }
@@ -346,6 +354,8 @@ mod tests {
     // listed in no reachable module: it must be warned-and-skipped, never run.
     // `run_unreachable` panics if invoked, so a regression that drops the
     // `present` gate fails this test loudly.
+    struct Unreachable;
+
     fn run_unreachable(_container: &Container) -> HookFuture<'_> {
         Box::pin(async { panic!("an unreachable hook must be skipped, never run") })
     }
@@ -356,6 +366,7 @@ mod tests {
             provider: "Unreachable",
             method: "never",
             origin: module_path!(),
+            provider_type_id: TypeId::of::<Unreachable>,
             present: |_| false,
             run: run_unreachable,
         }

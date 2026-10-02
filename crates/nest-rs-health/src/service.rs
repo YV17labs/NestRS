@@ -250,24 +250,26 @@ fn report_unreachable_indicators(container: &Container) {
     };
     for entry in inventory::iter::<HealthIndicator>() {
         if !reachable.0.contains(&(entry.provider_type_id)()) {
-            report_inert_indicator(entry);
+            report_inert_indicator(container, entry);
         }
     }
 }
 
 /// Report an inert indicator at the level its owner earns.
 ///
-/// `debug` for a `nest-rs-*` capability the app never opted into — the
-/// developer cannot act on it, and `nest_rs_seaorm`'s `db` / `db_ready` pair
-/// warned twice per boot on two shipped demo apps, telling the reader to go
-/// bind a framework-internal type. `warn` for the app's own leftover code,
-/// which is what the module-gated discovery rule wants seen. Same call the
-/// lifecycle runner makes, from the same place.
-fn report_inert_indicator(entry: &HealthIndicator) {
+/// `debug` for what is not the app's — a `nest-rs-*` capability it never opted
+/// into (`nest_rs_seaorm`'s `db` / `db_ready` pair warned twice per boot on two
+/// shipped demo apps, telling the reader to go bind a framework-internal type),
+/// and another binary's indicator in a shared library crate. `warn` for the
+/// app's own leftover code, which is what the module-gated discovery rule wants
+/// seen. Same call the lifecycle runner makes, from the same place.
+fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
     ::nest_rs_core::report_inert_host!(
         target: crate::TARGET,
         what: "indicator",
         origin: entry.origin,
+        host: (entry.provider_type_id)(),
+        container: container,
         indicator = entry.name,
         kind = ::tracing::field::debug(entry.kind),
     );
@@ -366,21 +368,22 @@ mod tests {
         // Driven directly rather than through a submitted fixture: `inventory`
         // is process-wide, so a second entry would join every other test in
         // this file.
-        report_inert_indicator(&HealthIndicator {
-            origin: "nest_rs_seaorm::health::indicator",
-            name: "db",
-            kind: ProbeKind::Readiness,
-            provider_type_id: || std::any::TypeId::of::<UpHost>(),
-            run: |_| Box::pin(async move { Ok(()) }),
-        });
-
-        let skipped = logs.find(
-            crate::TARGET,
-            "skipped indicator: framework capability not imported by this app",
+        report_inert_indicator(
+            &Container::builder().build(),
+            &HealthIndicator {
+                origin: "nest_rs_seaorm::health::indicator",
+                name: "db",
+                kind: ProbeKind::Readiness,
+                provider_type_id: || std::any::TypeId::of::<UpHost>(),
+                run: |_| Box::pin(async move { Ok(()) }),
+            },
         );
+
+        let skipped = logs.find(crate::TARGET, "skipped indicator: not this app's to run");
         assert_eq!(skipped.len(), 1, "one line: {:#?}", logs.events());
         assert_eq!(skipped[0].level, "debug");
         assert_eq!(skipped[0].field("indicator").as_deref(), Some("db"));
+        assert_eq!(skipped[0].field("cause").as_deref(), Some("framework"));
     }
 
     #[tokio::test]

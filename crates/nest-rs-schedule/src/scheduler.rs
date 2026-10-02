@@ -384,6 +384,8 @@ impl Transport for Scheduler {
                     target: crate::TARGET,
                     what: "scheduled method",
                     origin: entry.origin,
+                    host: (entry.provider_type_id)(),
+                    container: container,
                     provider = entry.provider,
                     method = entry.method,
                 );

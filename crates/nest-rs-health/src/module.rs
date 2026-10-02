@@ -56,6 +56,7 @@ nest_rs_core::inventory::submit! {
         provider: "HealthModule",
         method: "install_container",
         origin: module_path!(),
+        provider_type_id: std::any::TypeId::of::<HealthModule>,
         present: |_| true,
         run: install_container,
     }

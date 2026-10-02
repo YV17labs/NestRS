@@ -101,13 +101,16 @@ mod way_down;
 // bare pass's internal wrapper, discarded before any error leaves the crate, so
 // no public signature could hand a caller one. Why the eight below live in
 // `error` rather than beside the pass is that module's own doc.
-pub use access::{ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders};
+pub use access::{
+    Composition, ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders,
+};
 #[doc(hidden)]
 pub use answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::{
-    Discoverable, INERT_HOST_HINT, ProviderResidency, is_framework_owned, unresolved_host,
+    Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, is_framework_owned,
+    unresolved_host,
 };
 pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;

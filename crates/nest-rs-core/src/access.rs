@@ -48,6 +48,9 @@ pub struct ProviderDescriptor {
     /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
     /// `TypeId::of::<Arc<dyn Trait>>()` for a `Foo as dyn Trait` binding.
     pub provides: fn() -> TypeId,
+    /// The provider's own type, whichever key it registers under — what tells
+    /// a decorated host bound as `dyn Trait` from one no module lists.
+    pub provider: fn() -> TypeId,
     /// Extra container keys this provider registers on its module's behalf,
     /// each with the label a boot error names it by. See
     /// [`Discoverable::also_provides`](crate::Discoverable::also_provides) —
@@ -110,6 +113,62 @@ impl ReachableProviders {
     pub fn reaches(set: Option<&Self>, provider: TypeId) -> bool {
         set.is_none_or(|r| r.0.contains(&provider))
     }
+}
+
+/// What a discovery site reads to say why a host it found is inert: the crates
+/// the app's roots are written in, and the modules those roots reach.
+///
+/// Seeded beside [`ReachableProviders`]. A host the app does not reach is a
+/// mistake only when it is the app's own: in a workspace of several binaries,
+/// one library crate holds the hosts every binary imports some of, so each
+/// binary links the others' — and reporting those at `warn` taught operators to
+/// ignore the target. See [`inert_host`](crate::inert_host).
+pub struct Composition {
+    root_crates: Vec<&'static str>,
+    modules: HashSet<TypeId>,
+}
+
+impl Composition {
+    /// The composition of an app built from `roots`, each with its type's name,
+    /// against the link-time module registry.
+    pub(crate) fn of(roots: &[(TypeId, &'static str)]) -> Self {
+        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+        Self::from_descriptors(&descriptors, roots)
+    }
+
+    /// [`of`](Self::of) over `descriptors`. Pure over its inputs.
+    pub(crate) fn from_descriptors(
+        descriptors: &[&ModuleDescriptor],
+        roots: &[(TypeId, &'static str)],
+    ) -> Self {
+        let by_id: HashMap<TypeId, &ModuleDescriptor> =
+            descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+        let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
+        let mut root_crates: Vec<&'static str> =
+            roots.iter().map(|(_, name)| crate_of(name)).collect();
+        root_crates.sort_unstable();
+        root_crates.dedup();
+        Self {
+            root_crates,
+            modules: reachable(&ids, &by_id),
+        }
+    }
+
+    /// Whether `origin` — a `module_path!()` — is in a crate the app's roots
+    /// are written in.
+    pub fn is_the_apps_own(&self, origin: &str) -> bool {
+        self.root_crates.contains(&crate_of(origin))
+    }
+
+    /// Whether the app reaches the module `module`.
+    pub fn reaches(&self, module: TypeId) -> bool {
+        self.modules.contains(&module)
+    }
+}
+
+/// The crate a `module_path!()` or a `type_name` is rooted in.
+fn crate_of(path: &str) -> &str {
+    path.split("::").next().unwrap_or(path)
 }
 
 /// The reachable providers again, this time **in declaration order** — modules
@@ -469,6 +528,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "UsersService",
                 provides: || TypeId::of::<UsersService>(),
+                provider: || TypeId::of::<UsersService>(),
                 injects: users_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
@@ -511,6 +571,7 @@ mod tests {
                 ProviderDescriptor {
                     name: "AuthzAbility",
                     provides: || TypeId::of::<UsersService>(),
+                    provider: || TypeId::of::<UsersService>(),
                     injects: no_deps,
                     inject_names: no_names,
                     injects_keyed: no_keyed_deps,
@@ -519,6 +580,7 @@ mod tests {
                 ProviderDescriptor {
                     name: "AppGuard",
                     provides: || TypeId::of::<AppGuard>(),
+                    provider: || TypeId::of::<AppGuard>(),
                     injects: billing_deps,
                     inject_names: no_names,
                     injects_keyed: no_keyed_deps,
@@ -546,6 +608,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
+                provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
@@ -578,6 +641,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
+                provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
@@ -624,6 +688,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
+                provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: billing_names,
                 injects_keyed: no_keyed_deps,
@@ -660,6 +725,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "BillingService",
                 provides: || TypeId::of::<BillingService>(),
+                provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
@@ -703,6 +769,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "OrgsResolver",
                 provides: || TypeId::of::<OrgsResolver>(),
+                provider: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
@@ -722,6 +789,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "OrgsResolver",
                 provides: || TypeId::of::<OrgsResolver>(),
+                provider: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
                 inject_names: no_names,
                 injects_keyed: no_keyed_deps,
@@ -773,6 +841,7 @@ mod tests {
             providers: &[ProviderDescriptor {
                 name: "SocialLoginService",
                 provides: || TypeId::of::<UsersService>(),
+                provider: || TypeId::of::<UsersService>(),
                 injects: no_deps,
                 inject_names: no_names,
                 injects_keyed: github_dep,

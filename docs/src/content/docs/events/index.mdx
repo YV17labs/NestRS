@@ -276,9 +276,11 @@ with its own clone of the event. Three consequences worth naming:
 
 A worker app that links `features` for the data layer but only imports
 `PostsModule` keeps `NotificationsListener` inert: the inventory entry is
-present in the binary but skipped at boot (a `warn` on `nest_rs::events`)
-because the provider is not reachable from the worker's module tree. Same
-property as queue processors and scheduled jobs.
+present in the binary but skipped at boot because the provider is not reachable
+from the worker's module tree. The skip is said once on `nest_rs::events` — at
+`debug`, since a listener in a shared crate whose module this app does not import
+is another binary's, and at `warn` with a `hint` naming the remedy when it is the
+app's own code. Same property as queue processors and scheduled jobs.
 
 ## Reference
 

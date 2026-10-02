@@ -300,6 +300,13 @@ impl Container {
             .map(|outer| (*outer).clone())
     }
 
+    /// Whether a singleton is registered under the type `id` itself — without
+    /// building or downcasting anything, for a diagnostic that knows the type
+    /// only by its id.
+    pub(crate) fn holds(&self, id: TypeId) -> bool {
+        self.providers.contains_key(&ProviderKey::of(id))
+    }
+
     pub(crate) fn metadata_entries(&self, key: TypeId) -> Option<&Vec<MetaEntry>> {
         self.metadata.get(&key)
     }

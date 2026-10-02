@@ -141,8 +141,9 @@ the access graph never marks those providers as reachable. Every
 transport — `HttpTransport`, `RedisWorker`, `GraphqlTransport` — filters
 its inventory through the `ReachableProviders` set the access graph
 computes from the running app's root. Linked but unreachable ⇒ inert,
-with a boot `tracing::warn` if the discovery layer expected them to
-appear.
+said once at boot — at `debug` for these, which live in a shared crate and
+are another binary's to serve, and at `warn` for a host in the app's own
+crate, whose module it forgot to import.
 
 The same property cuts the other way: the API binary's
 `AudioQueueModule` is **not imported**, so its `#[process]` methods

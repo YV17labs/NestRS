@@ -40,6 +40,7 @@ nest_rs_core::inventory::submit! {
         provider: "SocialModule",
         method: "install",
         origin: module_path!(),
+        provider_type_id: std::any::TypeId::of::<SocialModule>,
         present: |_| true,
         run: install,
     }

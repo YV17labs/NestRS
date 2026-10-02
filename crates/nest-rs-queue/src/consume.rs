@@ -87,6 +87,8 @@ pub fn discover(
                 target: TARGET,
                 what: "#[process] method",
                 origin: entry.origin(),
+                host: entry.provider_type_id(),
+                container: container,
                 processor = entry.name(),
                 queue = entry.queue(),
             );

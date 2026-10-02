@@ -12,7 +12,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    ProviderOrder, ReachableProviders, provider_order_from_inventory,
+    Composition, ProviderOrder, ReachableProviders, provider_order_from_inventory,
     reachable_provider_ids_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
 };
 use crate::container::ProviderKey;
@@ -101,6 +101,7 @@ impl App {
         let global: HashSet<TypeId> = HashSet::from([
             TypeId::of::<ReachableProviders>(),
             TypeId::of::<ProviderOrder>(),
+            TypeId::of::<Composition>(),
         ]);
         check_duplicate_providers(&builder)?;
         // Before the queue check, and for the same reason the async path runs it
@@ -128,7 +129,8 @@ impl App {
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder
             .provide(ReachableProviders(reachable))
-            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)));
+            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)))
+            .provide(Composition::of(&[(TypeId::of::<M>(), root)]));
         Ok(Self {
             container: builder.build(),
         })
@@ -481,6 +483,7 @@ impl AppBuilder {
         let mut global = builder.provider_ids();
         global.insert(TypeId::of::<ReachableProviders>());
         global.insert(TypeId::of::<ProviderOrder>());
+        global.insert(TypeId::of::<Composition>());
         // The keyed global set: keyed seeds + keyed factory outputs, snapshotted
         // before modules register (same timing as the bare global set).
         let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
@@ -503,9 +506,12 @@ impl AppBuilder {
             .map_err(AccessError::into_anyhow)?;
         validate_keyed_from_inventory(&roots, &global_keyed)?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
+        let composition: Vec<(TypeId, &'static str)> =
+            modules.iter().map(|h| (h.type_id, h.name)).collect();
         let builder = builder
             .provide(ReachableProviders(reachable))
-            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)));
+            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)))
+            .provide(Composition::of(&composition));
         Ok(App {
             container: builder.build(),
         })

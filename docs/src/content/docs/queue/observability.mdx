@@ -148,24 +148,28 @@ Each active processor logs one `attached` line (from the transport) and one
 `registered queue processor` line carrying what it declared — its `retries`,
 its `concurrency`, and its throttle when it has one. A `#[process]` method that
 compiled in but whose provider isn't reachable from this app's module tree is
-skipped with a `warn`:
+skipped, and said once, at the level its cause earns. Your app's own code is a
+`warn`, with the `cause` and a `hint` naming its remedy:
 
 ```text frame="terminal"
  INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
       this app's container processor=ReportJobs::weekly queue=reports
-      origin="features::reports::queue::processor"
-      hint="nothing is registered under that exact type. Common causes: its module
-      is not imported by this app (import it, or delete the methods); it is bound
-      only as `dyn Trait`; it is imported through a `for_root`; it is registered by
-      hand under a key or a trait"
+      origin="worker::reports::queue::processor" cause="module_not_imported"
+      hint="its module `ReportsQueueModule` is not imported by this app: import it,
+      or delete the methods"
 ```
 
-The skip line is `warn` — a linked-but-unimported handler is usually a
-wiring mistake worth surfacing, and it confirms a shared `features`
-crate isn't accidentally activating handlers this binary doesn't want.
-See [Wiring the worker](/queue/wiring/) for the module-gating rule.
+A handler in a shared library crate — a `features` crate several binaries link —
+whose module this app does not import is another binary's, and is said at
+`debug`: `skipped #[process] method: not this app's to run`, with
+`cause="another_app"` and the module it belongs to. In a workspace of several
+apps each binary links every other one's handlers, and a `warn` for each on every
+boot of a correct deployment would teach the reader to ignore the target. So when
+a handler in a shared crate does not run, read that target at `debug`
+(`NESTRS_LOG=info,nest_rs::queue=debug`). See [Wiring the worker](/queue/wiring/) for
+the module-gating rule.
 
 <Aside type="caution">
 A legacy payload with no wire envelope logs `processed an unversioned

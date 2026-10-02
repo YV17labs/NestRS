@@ -27,8 +27,9 @@ type) refused at four different sites:
 |---|---|---|
 | the host's own decorator (scope is right there) | `scope = request`, `scope = transient` | compile error, reading `ProviderResidency::SINGLETON` |
 | the impl half's expansion | an edge host — metadata only, no instance | the same compile error |
-| the boot, from this app's composition | held under another key — `dyn Trait`, a `for_root`, a hand-written `Module` | `warn` + `INERT_HOST_HINT` |
-| the boot, from this app's imports | module not imported | the same `warn` |
+| the boot, from this app's composition | bound only as `dyn Trait`; listed in no `#[module]`; registered by a `for_root` or a hand-written `Module` | `warn` naming the cause and its remedy (`InertHost`) |
+| the boot, from this app's imports | its module not imported — the app's own host | the same `warn`, naming the module |
+| the boot, from this app's imports | its module not imported — a library's host, another binary's | `debug` |
 
 **Stated, never merely absent.** A refusal that reads a *missing* marker is
 fillable: `ProviderResidency` was a bare `Singleton` trait for one audit round,
@@ -76,17 +77,21 @@ front, so the two give the same reason; and a `pub mod` in `nest_rs_codegen` onl
 when the runtime needs a *name* from it, as `versioning` does — a function the
 test calls is re-exported flat.
 
-**A `warn` may name causes; it may not prescribe an edit the framework cannot
-verify.** The same hint offered "list it in `providers` under its own type as
+**A `warn` may prescribe only the edit its cause has, and only once it knows the
+cause.** An earlier hint offered "list it in `providers` under its own type as
 well" — and `providers = [Foo, Foo as dyn Trait]` runs the constructor twice,
 so the decorators fire on one instance while every `Arc<dyn Trait>` consumer
 holds another, with nothing to notice; on a hand-written `impl Module` the same
-edit fails the boot. Five causes reach that one skip line and the container
-cannot tell which, so it names them and stops.
+edit fails the boot. The boot now reads which cause it is looking at
+(`InertHost`, from the module descriptors and the app's composition), so each
+gets its own remedy, and the dyn case's is to move the methods to a provider
+listed under its own type — its hint names the double listing as the edit not to
+make. Where the cause cannot be read, `INERT_HOST_HINT` names them all and
+prescribes none.
 
-**Escalate no further than the fact supports.** The last two rows are correct
-in another composition, so they warn — a boot error there would refuse working
-code. And **a `warn` whose sentence is wrong is worse than none**: that line
+**Escalate no further than the fact supports.** The last three rows are correct
+in another composition, so they warn or say less — a boot error there would refuse
+working code. And **a `warn` whose sentence is wrong is worse than none**: that line
 claimed *unreachable from app's module tree* about a provider written in
 `providers`, sending the reader to check the one thing already true. One shared
 sentence, every site, or the wording drifts per crate — `INERT_HOST_HINT` is
@@ -646,22 +651,31 @@ the same `#[inject]` deps. Otherwise stay struct-level.
 **Discovery is module-gated.** Every transport integrates only items
 whose provider is *reachable* from the running app's root — a
 `ReachableProviders` set from the access graph; each transport filters
-its `inventory` against it. Linked but unreachable ⇒ inert, with a boot
-`tracing::warn` so leftover code doesn't vanish silently. This is what
-makes per-app subsets work.
+its `inventory` against it. Linked but unreachable ⇒ inert, said once at boot
+by `report_inert_host!` at the level its cause earns. This is what makes
+per-app subsets work.
 
-**In a workspace of several apps that `warn` misreads one case, and which way
-to settle it is an owner question.** Two binaries linking one feature library
-each import the hosts they serve, so each warns about every host its sibling
-imports — the demo's api about the worker's `NotificationsTasks`, the worker
-about the api's `AudioTasks`, the assistant about two listeners — with
-`INERT_HOST_HINT`'s "import it, or delete the methods", which is wrong advice
-when another binary hosts them. The config report settled the same shape the
-other way: a namespace this binary does not link is another binary's, never a
-mistake. Possible and unbuilt: a host from a library crate the binary links but
-never imports the module of reported at `debug`, with `warn` kept for the
-binary's own crate — or, on the product's side, every host of one edge kept in
-one app.
+**Whose inert host it is decides whether it is a warning**, and the boot knows:
+`nest_rs_core::inert_host` reads the module descriptors and the app's
+`Composition` (its roots' crates, the modules they reach) and names the cause
+(`InertHost`). The app's own code — a host in a crate its roots are written in
+whose module it does not import or that no `#[module]` lists, a host a module it
+imports binds only as `dyn Trait`, and a host its container holds under its own
+type outside every module it imports, whichever crate holds it, since the app
+registered it — is a `warn` carrying `cause` and a `hint` naming that cause's
+remedy, the module to import included. Where one cause has two remedies the boot
+cannot choose between — a host nothing lists may be registered by nothing, or by
+a hand-written module under a trait, where listing it would build it twice — the
+hint names both, each with its condition. A `nest-rs-*` capability the app never
+opted into, and **a library crate's host this app neither imports the module of
+nor registers**, are another's — the framework's, or another binary's in a
+workspace of several — and said at `debug`. The second was a `warn`
+telling the demo's worker to import the api's `AudioTasks` on every boot of a
+correct workspace, which taught the reader to ignore the target; the config
+report settled the same shape the same way (a namespace this binary does not
+read is another binary's). `INERT_HOST_HINT`, the sentence naming every cause
+and prescribing none, is left to the two sites that cannot tell them apart: a
+container built without a composition, and the run-time `unresolved_host`.
 
 **The gate is always the entry's owner** — what differs is who the owner
 *is*, and that follows from what the entry is:

@@ -144,7 +144,7 @@ rolls out (step 7).
    | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
    | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
-   | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()` |
+   | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
    | an `HttpConfig { … }` or `RedisWorkerConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout`, `RedisWorkerConfig` gains `orphan_after`, `lease` and `poll_interval` |
 
    `.opaque()` now takes an owned error that converts into `Box<dyn Error +

@@ -29,6 +29,7 @@ mod snapshots;
 mod targets;
 mod umbrella;
 mod units;
+mod upgrading;
 
 /// The closed edge vocabulary (`architecture.md`), the only set a canonical
 /// name may take its namespace from.

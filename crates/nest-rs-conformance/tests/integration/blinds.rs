@@ -107,6 +107,7 @@ const JOINS: &[(&str, Declares)] = &[
     ("targets", crate::targets::followed),
     ("umbrella", crate::umbrella::followed),
     ("units", crate::units::followed),
+    ("upgrading", crate::upgrading::followed),
 ];
 
 /// Below this the walk is reading the wrong tree.

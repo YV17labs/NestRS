@@ -12,6 +12,7 @@ mod canon;
 mod decodes;
 mod dependencies;
 mod docs;
+mod durations;
 mod edges;
 mod entries;
 mod env_names;

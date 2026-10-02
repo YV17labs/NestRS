@@ -563,7 +563,9 @@ declaration, `nest_rs_http::MAX_CONNECTION_FLOOR` / `_CEILING`, because a
 connection authenticates once whichever transport carries it —,
 `HTTP__SSE_KEEP_ALIVE_SECS` and `MCP__SSE_KEEP_ALIVE_SECS` 1 s to an hour (one
 declaration again), `MCP__SSE_RETRY_SECS` 1 s to an hour and
-`HTTP__TLS_RELOAD_SECS` 1 s to a day. A throttle
+`HTTP__TLS_RELOAD_SECS` 1 s to a day. The `durations` join in
+`nest-rs-conformance` refuses a `_SECS` or `_MS` key read through any other
+reader, and a `DurationBounds` whose key's suffix contradicts its unit. A throttle
 written in code — `Throttle::new` — refuses a window under a millisecond, the
 Redis store's resolution: a zero window reset every bucket on every hit and let
 every request through at any limit.

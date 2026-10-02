@@ -24,6 +24,7 @@ mod grammar;
 mod identity;
 mod inject;
 mod job;
+mod mcp;
 mod mount;
 pub mod pair;
 mod posture;
@@ -71,6 +72,7 @@ pub use job::{
     JobDecorator, JobKey, TRANSACTIONAL, job_argument_needs_a_value, job_key, job_keys,
     job_returns_a_result, job_transaction, transactional_value, unread_job_key,
 };
+pub use mcp::{MCP_GRAMMAR, mcp_answers};
 pub use mount::reject_path;
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{

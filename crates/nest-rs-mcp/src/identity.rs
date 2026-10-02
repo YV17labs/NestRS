@@ -374,4 +374,40 @@ mod tests {
         assert!(McpIdentity::declared(None, None).is_empty());
         assert!(!McpIdentity::new("a", "1").is_empty());
     }
+
+    /// Every field's name, read off a pattern that binds each one, so a field
+    /// added to [`McpIdentity`] does not compile here until it is listed. Inside
+    /// a macro rustc words that as "pattern requires `..` due to inaccessible
+    /// fields": the field is missing, not inaccessible — list it, and never
+    /// write the `..` that would switch the check off.
+    macro_rules! every_field {
+        ($($field:ident),+ $(,)?) => {{
+            let McpIdentity { $($field: _),+ } = McpIdentity::default();
+            [$(stringify!($field)),+]
+        }};
+    }
+
+    /// A host reaches for `#[mcp(<field> = …)]` for every field an app can set,
+    /// so each one owes an answer there — taken, or refused naming the seam that
+    /// takes it — and never the bare unknown-key sentence, which sends the
+    /// developer looking for a spelling that does not exist.
+    #[test]
+    fn every_identity_field_has_an_answer_at_the_host() {
+        let fields = every_field!(
+            name,
+            version,
+            title,
+            description,
+            website_url,
+            icons,
+            instructions,
+        );
+        for field in fields {
+            assert!(
+                nest_rs_codegen::mcp_answers(field),
+                "`McpIdentity::{field}` has no answer in `#[mcp]`'s grammar — give it a \
+                 row in nest_rs_codegen's SERVER_FIELDS naming the seam that takes it",
+            );
+        }
+    }
 }

@@ -5,8 +5,8 @@
 //! app sets, and one endpoint reports one of each however many features share
 //! it. So a host reaching for one has not made a typo — the key exists, it is
 //! declared where the whole surface is visible — and the answer names that seam
-//! rather than listing spellings. This is the snapshot that fails when a field
-//! is added to the identity and its answer is not.
+//! rather than listing spellings. `identity.rs`'s unit suite fails when a field
+//! is added to the identity without an answer; this pins the sentences.
 //!
 //! The host structs carry nothing but `#[mcp]`: the argument is refused before
 //! anything is emitted, so nothing else can bury the sentence.

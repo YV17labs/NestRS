@@ -57,6 +57,10 @@ poem = { workspace = true, features = ["test"] }
 # `Transport::serve` takes the token that asks it to stop — what the shutdown
 # suite drives a real transport with.
 tokio-util.workspace = true
+# Holds `McpIdentity`'s fields against the answers `#[mcp]`'s grammar gives
+# (`identity.rs`): the grammar lives here because a proc-macro crate exports
+# nothing a test can call.
+nest-rs-codegen = { path = "../nest-rs-codegen" }
 
 [lints]
 workspace = true

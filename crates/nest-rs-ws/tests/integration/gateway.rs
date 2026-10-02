@@ -1072,9 +1072,9 @@ async fn a_message_round_trips_over_a_real_upgrade() {
     assert_eq!(server.connection_count(), 0, "the entry did not outlive it");
 
     for unit in [
-        nest_rs_ws::unit::CONNECT,
-        nest_rs_ws::unit::MESSAGE,
-        nest_rs_ws::unit::DISCONNECT,
+        nest_rs_ws::unit::CONNECT.name(),
+        nest_rs_ws::unit::MESSAGE.name(),
+        nest_rs_ws::unit::DISCONNECT.name(),
     ] {
         let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit);
         assert_eq!(line.message, unit);
@@ -1091,7 +1091,7 @@ async fn a_message_round_trips_over_a_real_upgrade() {
     }
     let message = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_ws::unit::MESSAGE,
+        nest_rs_ws::unit::MESSAGE.name(),
     );
     assert_eq!(message.field("event").as_deref(), Some("echo"));
     assert_eq!(
@@ -1474,7 +1474,7 @@ async fn an_idle_socket_is_closed_going_away_at_the_signal() {
     );
     let left = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_ws::unit::DISCONNECT,
+        nest_rs_ws::unit::DISCONNECT.name(),
     );
     assert_eq!(
         left.field("outcome").as_deref(),
@@ -1530,7 +1530,7 @@ async fn a_message_still_running_at_the_window_is_dropped_and_files_cancelled() 
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_ws::unit::MESSAGE,
+        nest_rs_ws::unit::MESSAGE.name(),
     );
     assert_eq!(line.field("event").as_deref(), Some("stuck"));
     assert_eq!(
@@ -1576,7 +1576,7 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
     let exploded: Vec<_> = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_ws::unit::MESSAGE,
+            nest_rs_ws::unit::MESSAGE.name(),
         )
         .into_iter()
         .filter(|line| line.field("event").as_deref() == Some("explode"))
@@ -1591,7 +1591,7 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_ws::unit::MESSAGE
+            span.name == nest_rs_ws::unit::MESSAGE.name()
                 && span.field("ws.event").as_deref() == Some("explode")
         })
         .expect("the message's span");
@@ -1671,7 +1671,7 @@ async fn a_connect_hook_that_panics_files_panic_and_closes_with_internal_error()
     assert_eq!(code, CloseCode::Error, "§7.4.1 1011");
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_ws::unit::CONNECT,
+        nest_rs_ws::unit::CONNECT.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),
@@ -1712,7 +1712,7 @@ async fn a_disconnect_hook_that_panics_files_panic_and_the_close_still_completes
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_ws::unit::DISCONNECT,
+        nest_rs_ws::unit::DISCONNECT.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),

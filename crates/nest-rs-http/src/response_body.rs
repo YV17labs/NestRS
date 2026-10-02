@@ -101,7 +101,7 @@ pub(crate) fn carry(
         span.record("http.response.body.size", 0);
         if let Some(log) = log {
             // Inside the context, outside the span — see `Carried::file`.
-            continuation.enter(|| log.emit(status, 0, None));
+            continuation.enter(|| log.emit(&span, status, 0, None));
         }
         return Response::from_parts(parts, body);
     }
@@ -171,20 +171,25 @@ impl Carried {
         let outcome = self
             .stopped_unsettled()
             .then_some(nest_rs_core::operation_log::CANCELLED);
-        // The span says how the unit ended in the line's word, whatever the
-        // access log is set to — it is the span a backend counts failures on.
-        if let Some(outcome) = outcome {
-            nest_rs_core::operation_log::record_outcome(&self.span, outcome);
-        }
-        if let Some(pending) = self.pending.take() {
+        match self.pending.take() {
             // **The context, not the span.** The line is still nobody's child
             // event — entering the span would file it under the request it
             // reports on — but its `trace_id` / `span_id` / `actor_id` come off
             // the ambient correlation like every other line's, rather than being
             // spelled a second time as event fields. One source, one position in
-            // the JSON envelope.
-            self.continuation
-                .enter(|| pending.log.emit(pending.status, counted, outcome));
+            // the JSON envelope. The line records the outcome on the span.
+            Some(pending) => self.continuation.enter(|| {
+                pending
+                    .log
+                    .emit(&self.span, pending.status, counted, outcome)
+            }),
+            // The span says how the unit ended in the line's word whatever the
+            // access log is set to — it is the span a backend counts failures on.
+            None => {
+                if let Some(outcome) = outcome {
+                    nest_rs_core::operation_log::record_outcome(&self.span, outcome);
+                }
+            }
         }
     }
 

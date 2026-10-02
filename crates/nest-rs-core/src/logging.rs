@@ -956,9 +956,9 @@ mod tests {
     /// closed edge vocabulary, deliberately, because copying a real one
     /// (`schedule.tick`) is not standing in for it — it is the same string,
     /// asserted from a file that cannot see the constant, which is the copied
-    /// literal `CLAUDE.md` forbids wearing a fixture's name. The `units` join
-    /// reads no `#[cfg(test)]` emission, so nothing here joins the vocabulary
-    /// either way.
+    /// literal `CLAUDE.md` forbids wearing a fixture's name. It is filed by hand
+    /// rather than through `operation_line!`, which only the crate that
+    /// declared a unit may call.
     const FIXTURE_UNIT: &str = "fixture.line";
 
     /// The fixture target, for the two assertions that take it as a value.

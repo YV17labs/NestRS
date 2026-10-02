@@ -667,7 +667,7 @@ fn dead_letters(logs: &LogCapture, id: &JobId) -> bool {
     let last_failed = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_queue::unit::JOB,
+            nest_rs_queue::unit::JOB.name(),
         )
         .iter()
         .any(|line| {

@@ -548,7 +548,7 @@ async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace(
 
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_queue::unit::JOB,
+        nest_rs_queue::unit::JOB.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),
@@ -558,7 +558,7 @@ async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace(
     assert_eq!(line.field("attempt").as_deref(), Some("1"));
     assert_eq!(line.field("queue").as_deref(), Some("transcode"));
     assert!(line.field("duration_ms").is_some(), "{line:#?}");
-    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
     assert!(
         line.trace_id.is_some(),
         "the line carries the job's trace: {line:#?}"
@@ -586,7 +586,7 @@ fn job_spans(logs: &nest_rs_testing::LogCapture) -> Vec<nest_rs_testing::Capture
     logs.spans()
         .into_iter()
         .filter(|span| {
-            span.target == nest_rs_queue::TARGET && span.name == nest_rs_queue::unit::JOB
+            span.target == nest_rs_queue::TARGET && span.name == nest_rs_queue::unit::JOB.name()
         })
         .collect()
 }
@@ -1092,7 +1092,7 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_queue::unit::JOB,
+        nest_rs_queue::unit::JOB.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),
@@ -1340,7 +1340,7 @@ async fn an_attempt_is_named_for_its_queue() {
     )
     .await;
 
-    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
     assert_eq!(
         span.field("otel.name").as_deref(),
         Some("process transcode")
@@ -1385,14 +1385,14 @@ async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_queue::unit::JOB,
+        nest_rs_queue::unit::JOB.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::ERROR)
     );
     assert!(line.trace_id.is_some(), "the line carries its unit's trace");
-    logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
+    logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
 }
 
 /// A record that could be read as far as its envelope continues the trace the
@@ -1476,12 +1476,12 @@ async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
     .await;
     assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
 
-    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
     assert_eq!(span.field("messaging.message.id").as_deref(), Some(JOB_ID));
     assert_eq!(span.field("backend_id").as_deref(), Some("apalis-7"));
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_queue::unit::JOB,
+        nest_rs_queue::unit::JOB.name(),
     );
     assert_eq!(line.field("job_id").as_deref(), Some(JOB_ID));
     assert_eq!(line.field("backend_id").as_deref(), Some("apalis-7"));
@@ -1576,7 +1576,7 @@ async fn an_envelope_re_filed_for_a_later_attempt_spends_the_budget_from_there()
         "job dead-lettered: retry budget spent",
     );
     assert_eq!(spent.field("attempts").as_deref(), Some("3"));
-    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
     assert_eq!(span.field("attempt").as_deref(), Some("3"));
 }
 

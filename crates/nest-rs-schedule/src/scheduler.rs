@@ -1187,17 +1187,15 @@ impl TickLine {
     }
 
     fn emit(&self, outcome: &'static str) {
-        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
-        tracing::info!(
-            name: crate::unit::TICK,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::TICK,
+        nest_rs_core::operation_line!(
+            crate::unit::TICK,
+            span: &self.span,
+            outcome: outcome,
+            started: self.started,
             provider = self.id.provider,
             method = self.id.method,
             replicas = self.replicas.as_str(),
             occurrence = self.occurrence,
-            outcome,
-            duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
         );
     }
 }
@@ -1532,9 +1530,6 @@ impl Runner {
     /// firing on every replica claims nothing and carries none.
     async fn fire(&self, id: JobId, task: Task, correlation: Correlation, occurrence: Option<u64>) {
         let span = nest_rs_core::operation_span!(
-            target: crate::TARGET,
-            // No caller and no wire: the clock is not a producer.
-            kind: nest_rs_core::operation_log::kind::INTERNAL,
             crate::unit::TICK,
             &correlation,
             provider = id.provider,

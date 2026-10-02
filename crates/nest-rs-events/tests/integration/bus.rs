@@ -203,7 +203,7 @@ async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
     assert!(
         logs.find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_events::unit::DISPATCH
+            nest_rs_events::unit::DISPATCH.name()
         )
         .is_empty(),
         "a dispatch that never ran files no unit: {:#?}",

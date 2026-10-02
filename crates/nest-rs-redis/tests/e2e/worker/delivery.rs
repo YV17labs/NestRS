@@ -63,7 +63,7 @@ struct RetryCommand {
 /// order they ran: each one's `attempt` and `outcome`.
 fn lines_of(logs: &LogCapture, receipt: &PushReceipt) -> Vec<(String, String)> {
     let id = receipt.id().to_string();
-    logs.find(operation_log::TARGET, unit::JOB)
+    logs.find(operation_log::TARGET, unit::JOB.name())
         .into_iter()
         .filter(|line| line.field("job_id").as_deref() == Some(id.as_str()))
         .map(|line| {
@@ -1189,7 +1189,7 @@ async fn a_dead_letter_record_says_a_decode_failure_as_its_line_does() {
     // line carries as `backend_id`; read that record and no other.
     let id = receipt.id().to_string();
     let backend_id = || {
-        logs.find(operation_log::TARGET, unit::JOB)
+        logs.find(operation_log::TARGET, unit::JOB.name())
             .into_iter()
             .find(|line| line.field("job_id").as_deref() == Some(id.as_str()))
             .and_then(|line| line.field("backend_id"))

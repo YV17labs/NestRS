@@ -168,9 +168,6 @@ async fn dispatch_one(
     // span id names one unit of work; that is the whole property the ids buy.
     let correlation = cause.child();
     let span = nest_rs_core::operation_span!(
-        target: crate::TARGET,
-        // In-process and same-task: nothing crossed a wire to get here.
-        kind: nest_rs_core::operation_log::kind::INTERNAL,
         crate::unit::DISPATCH,
         &correlation,
         event = event,
@@ -237,16 +234,14 @@ impl DispatchLine<'_> {
 
     fn emit(&mut self, outcome: &'static str) {
         self.filed = true;
-        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
         self.continuation.enter(|| {
-            tracing::info!(
-                name: crate::unit::DISPATCH,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::DISPATCH,
+            nest_rs_core::operation_line!(
+                crate::unit::DISPATCH,
+                span: &self.span,
+                outcome: outcome,
+                started: self.started,
                 event = self.event,
                 listener = self.listener,
-                outcome,
-                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
             );
         });
     }
@@ -498,7 +493,10 @@ mod panic_containment {
             logs.events(),
         );
 
-        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::DISPATCH.name(),
+        );
         assert_eq!(line.level, "info");
         assert_eq!(
             line.field("listener").as_deref(),
@@ -529,7 +527,10 @@ mod panic_containment {
         let logs = LogCapture::install();
         bus.emit(NotifyRequested { id: "two" }).await;
 
-        let lines = logs.find(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        let lines = logs.find(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::DISPATCH.name(),
+        );
         assert_eq!(
             lines.len(),
             2,
@@ -543,7 +544,7 @@ mod panic_containment {
         let units: Vec<_> = logs
             .spans()
             .into_iter()
-            .filter(|span| span.name == crate::unit::DISPATCH)
+            .filter(|span| span.name == crate::unit::DISPATCH.name())
             .collect();
         assert_eq!(units.len(), 2, "one unit per listener: {units:#?}");
 
@@ -579,7 +580,10 @@ mod panic_containment {
         bus.emit(NotifyRequested { id: "boom" }).await;
         std::panic::set_hook(previous);
 
-        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::DISPATCH.name(),
+        );
         assert_eq!(
             line.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::PANIC),
@@ -607,7 +611,10 @@ mod panic_containment {
         .await;
         assert!(emitted.is_err(), "the emitter was dropped mid-listener");
 
-        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::DISPATCH.name(),
+        );
         assert_eq!(
             line.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::CANCELLED),
@@ -618,7 +625,7 @@ mod panic_containment {
             "in the listener's trace: {line:#?}"
         );
         // The listener's span fails with the line's word.
-        let span = logs.expect_span(crate::TARGET, crate::unit::DISPATCH);
+        let span = logs.expect_span(crate::TARGET, crate::unit::DISPATCH.name());
         assert_eq!(
             span.field("error.type").as_deref(),
             Some(nest_rs_core::operation_log::CANCELLED),

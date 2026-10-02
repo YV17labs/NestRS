@@ -207,8 +207,6 @@ pub(crate) fn request_span(
     user_agent: Option<&str>,
 ) -> tracing::Span {
     let span = nest_rs_core::operation_span!(
-        target: crate::target::HTTP,
-        kind: nest_rs_core::operation_log::kind::SERVER,
         crate::unit::REQUEST,
         correlation,
         // The exported span's name. OpenTelemetry's HTTP conventions want

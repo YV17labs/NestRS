@@ -146,7 +146,7 @@ async fn post(app: &TestApp, query: &str) {
 fn lines(logs: &LogCapture) -> Vec<nest_rs_testing::CapturedEvent> {
     logs.find(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_graphql::unit::OPERATION,
+        nest_rs_graphql::unit::OPERATION.name(),
     )
 }
 
@@ -225,7 +225,7 @@ async fn a_failing_operation_says_so() {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_graphql::unit::OPERATION
+            span.name == nest_rs_graphql::unit::OPERATION.name()
                 && span.field("graphql.field.name").as_deref() == Some("refused")
         })
         .expect("the failing operation's span");
@@ -256,7 +256,7 @@ async fn a_dropped_graphql_request_exports_its_http_span_under_its_route() {
         () = WAITING.notified() => {}
     }
 
-    let span = logs.expect_span("nest_rs::http", nest_rs_http::unit::REQUEST);
+    let span = logs.expect_span("nest_rs::http", nest_rs_http::unit::REQUEST.name());
     assert_eq!(
         span.field("http.route").as_deref(),
         Some("/graphql"),
@@ -342,7 +342,8 @@ async fn the_unit_is_a_child_of_the_request_that_carried_the_document() {
         .spans()
         .into_iter()
         .filter(|span| {
-            span.target == nest_rs_graphql::TARGET && span.name == nest_rs_graphql::unit::OPERATION
+            span.target == nest_rs_graphql::TARGET
+                && span.name == nest_rs_graphql::unit::OPERATION.name()
         })
         .collect();
     assert!(!spans.is_empty(), "the unit opens a span of its own");
@@ -443,7 +444,7 @@ fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_graphql::unit::OPERATION
+            span.name == nest_rs_graphql::unit::OPERATION.name()
                 && span.field("graphql.field.name").as_deref() == Some(field)
         })
         .unwrap_or_else(|| panic!("the span of `{field}`"));

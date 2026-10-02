@@ -202,8 +202,6 @@ impl<H> PropagatingHandler<H> {
         // is one seam over every method: which of the three it was is
         // `mcp.method.name`, right beside it.
         let operation = nest_rs_core::operation_span!(
-            target: crate::TARGET,
-            kind: nest_rs_core::operation_log::kind::SERVER,
             crate::unit::OPERATION,
             &correlation,
             mcp.method.name = method,
@@ -213,12 +211,7 @@ impl<H> PropagatingHandler<H> {
         // guard's verdict and the whole duration are known — so it holds the
         // correlation it reports under rather than reading an ambient one, and
         // the span it records the same outcome on.
-        let line = OperationLine::open(
-            method,
-            addressed,
-            correlation.clone(),
-            Some(operation.clone()),
-        );
+        let line = OperationLine::open(method, addressed, correlation.clone(), operation.clone());
 
         // One box, not two: the type erasure the guard's `around` needs and the
         // scope installation are the same future, and this runs on every MCP
@@ -332,10 +325,10 @@ struct OperationLine<'a> {
     /// gap.
     correlation: Correlation,
     /// The operation's own span, which records the outcome the line files.
-    /// `None` for a notification, which opens no span of its own: the span it
-    /// runs under is the HTTP request's, whose outcome is the request's to
-    /// record.
-    span: Option<tracing::Span>,
+    /// [`Span::none`](tracing::Span::none) for a notification, which opens no
+    /// span of its own: the span it runs under is the HTTP request's, whose
+    /// outcome is the request's to record.
+    span: tracing::Span,
     started: std::time::Instant,
     filed: bool,
 }
@@ -345,7 +338,7 @@ impl<'a> OperationLine<'a> {
         method: &'a str,
         addressed: Option<&'a str>,
         correlation: Correlation,
-        span: Option<tracing::Span>,
+        span: tracing::Span,
     ) -> Self {
         Self {
             method,
@@ -378,14 +371,12 @@ impl<'a> OperationLine<'a> {
 
     fn emit(&mut self, outcome: &'static str) {
         self.filed = true;
-        if let Some(span) = &self.span {
-            operation_log::record_outcome(span, outcome);
-        }
         RequestContinuation::new(None, self.correlation.clone()).enter(|| {
-            tracing::info!(
-                name: crate::unit::OPERATION,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::OPERATION,
+            nest_rs_core::operation_line!(
+                crate::unit::OPERATION,
+                span: &self.span,
+                outcome: outcome,
+                started: self.started,
                 // The JSON-RPC method this operation was, and the tool,
                 // prompt or resource it named. Flat, never dotted: a dotted
                 // field name is ambiguous to `tracing`'s parser beside a
@@ -393,8 +384,6 @@ impl<'a> OperationLine<'a> {
                 // addressed nothing — a notification included.
                 method = self.method,
                 operation = self.addressed,
-                outcome,
-                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
             );
         });
     }
@@ -483,7 +472,7 @@ macro_rules! notification_method {
                 // Not recorded on a span: a notification opens none of its own,
                 // and the span it runs under is the HTTP request's, whose outcome
                 // is the request's to record.
-                let line = OperationLine::open(&method, None, correlation.clone(), None);
+                let line = OperationLine::open(&method, None, correlation.clone(), tracing::Span::none());
                 let handled =
                     AssertUnwindSafe(self.inner.$name($($arg,)* context)).catch_unwind();
                 nest_rs_core::with_request_scope(scope, correlation, async move {

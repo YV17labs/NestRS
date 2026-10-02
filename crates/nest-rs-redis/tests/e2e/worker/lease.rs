@@ -849,7 +849,7 @@ async fn a_throttle_caps_attempt_starts_per_window_across_replicas_and_defers_th
         started[5] - started[0],
     );
     let lines: Vec<_> = logs
-        .find(operation_log::TARGET, unit::JOB)
+        .find(operation_log::TARGET, unit::JOB.name())
         .into_iter()
         .filter(|line| {
             receipts

@@ -130,17 +130,22 @@ impl AccessLog {
     /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED), for a body the
     /// transport stopped before it ended — the status says how the head went,
     /// and nothing else says the body never finished.
-    pub(crate) fn emit(self, status: u16, bytes: u64, outcome: Option<&'static str>) {
-        tracing::info!(
-            name: crate::unit::REQUEST,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::REQUEST,
+    pub(crate) fn emit(
+        self,
+        span: &tracing::Span,
+        status: u16,
+        bytes: u64,
+        outcome: Option<&'static str>,
+    ) {
+        nest_rs_core::operation_line!(
+            crate::unit::REQUEST,
+            span: span,
+            outcome: outcome,
+            started: self.start,
             method = %self.method,
             path = self.uri.path(),
             status,
             bytes,
-            outcome,
-            duration_ms = nest_rs_core::operation_log::duration_ms(self.start),
             client_ip = %self.client.ip,
             // Whether the address came from a proxy header or from the peer.
             // Two very different confidences, and an incident query that cannot
@@ -154,8 +159,8 @@ impl AccessLog {
     /// its way to a layer outside, which will render it. No body passed through
     /// here, so there is nothing to count; the status is what that error will
     /// answer with.
-    pub(crate) fn abandoned(self, status: u16) {
-        self.emit(status, 0, None);
+    pub(crate) fn abandoned(self, span: &tracing::Span, status: u16) {
+        self.emit(span, status, 0, None);
     }
 
     /// File a request that ended before it answered — dropped
@@ -163,15 +168,14 @@ impl AccessLog {
     /// ([`PANIC`](nest_rs_core::operation_log::PANIC)), see the module doc. No
     /// `status` and no `bytes`: neither exists, and a `0` in either would be a
     /// claim about a response nobody sent.
-    fn unanswered(self, outcome: &'static str) {
-        tracing::info!(
-            name: crate::unit::REQUEST,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::REQUEST,
+    fn unanswered(self, span: &tracing::Span, outcome: &'static str) {
+        nest_rs_core::operation_line!(
+            crate::unit::REQUEST,
+            span: span,
+            outcome: outcome,
+            started: self.start,
             method = %self.method,
             path = self.uri.path(),
-            outcome,
-            duration_ms = nest_rs_core::operation_log::duration_ms(self.start),
             client_ip = %self.client.ip,
             forwarded = self.client.forwarded,
             user_agent = self.user_agent.as_deref(),
@@ -236,9 +240,13 @@ impl Drop for Unanswered<'_> {
             nest_rs_core::operation_log::CANCELLED
         };
         crate::trace_context::name_route(self.span, self.method, self.matched.route().as_deref());
-        nest_rs_core::operation_log::record_outcome(self.span, outcome);
-        if let Some(log) = self.log.take() {
-            self.continuation.enter(|| log.unanswered(outcome));
+        // The span says how the unit ended whatever the access log is set to:
+        // the line records it when there is one, and the span alone when not.
+        match self.log.take() {
+            Some(log) => self
+                .continuation
+                .enter(|| log.unanswered(self.span, outcome)),
+            None => nest_rs_core::operation_log::record_outcome(self.span, outcome),
         }
     }
 }
@@ -258,7 +266,10 @@ mod tests {
     }
 
     fn the_line(logs: &LogCapture) -> nest_rs_testing::CapturedEvent {
-        logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST)
+        logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        )
     }
 
     /// A request dropped before it answered files its line once, `cancelled`,
@@ -297,6 +308,9 @@ mod tests {
         let answered =
             Unanswered::hold(Some(log), &continuation, &span, &Method::GET, &matched).answered();
         assert!(answered.is_some());
-        logs.expect_none(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST);
+        logs.expect_none(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        );
     }
 }

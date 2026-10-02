@@ -569,7 +569,7 @@ async fn operation_line(logs: &LogCapture, operation: &str) -> nest_rs_testing::
         let filed: Vec<_> = logs
             .find(
                 nest_rs_core::operation_log::TARGET,
-                nest_rs_mcp::unit::OPERATION,
+                nest_rs_mcp::unit::OPERATION.name(),
             )
             .into_iter()
             .filter(|line| line.field("operation").as_deref() == Some(operation))
@@ -750,7 +750,7 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_mcp::unit::OPERATION
+            span.name == nest_rs_mcp::unit::OPERATION.name()
                 && span.field("mcp.operation.name").as_deref() == Some("boom")
         })
         .expect("the operation's span");
@@ -839,7 +839,7 @@ async fn a_subscription_is_answered_its_final_result_at_the_shutdown_signal() {
     let line = |logs: &LogCapture| {
         logs.find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_mcp::unit::OPERATION,
+            nest_rs_mcp::unit::OPERATION.name(),
         )
         .into_iter()
         .filter(|line| line.field("method").as_deref() == Some("subscriptions/listen"))

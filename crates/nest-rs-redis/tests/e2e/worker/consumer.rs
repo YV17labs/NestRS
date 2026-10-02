@@ -657,7 +657,7 @@ async fn an_attempt_outlasting_the_shutdown_window_is_handed_back_within_it() {
     // says it was stopped rather than that it failed.
     let lines = logs.find(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_queue::unit::JOB,
+        nest_rs_queue::unit::JOB.name(),
     );
     let lines: Vec<_> = lines
         .iter()

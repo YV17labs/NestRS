@@ -1,8 +1,8 @@
 //! The canonical names of the units of work this edge opens.
 //!
-//! Declared here rather than in the kernel, and held to the `<edge>.<unit>`
-//! grammar by the `units` join in `nest-rs-conformance`: both are argued once,
-//! in [`nest_rs_core::operation_log`].
+//! Declared here rather than in the kernel, through [`nest_rs_core::unit!`],
+//! whose compile-time evaluation holds the `<edge>.<unit>` grammar: both are
+//! argued once, in [`nest_rs_core::operation_log`].
 //!
 //! **Two units, because this edge dispatches at two granularities and only one
 //! of them is visible from both.** A query, a mutation, an entity reference and
@@ -19,9 +19,13 @@
 //! traffic — which is what it was, since a query's only line was the
 //! `POST /graphql` the HTTP edge filed for the whole document.
 
+use nest_rs_core::operation_log::Unit;
+
 /// One dispatched GraphQL field — a `#[query]`, `#[mutation]`, `#[entity]` or
 /// `#[field_resolver]`.
-pub const OPERATION: &str = "graphql.operation";
+pub const OPERATION: Unit =
+    nest_rs_core::unit!("graphql.operation", target: crate::TARGET, kind: Server);
 
 /// One GraphQL subscription; the connection is the unit of work.
-pub const SUBSCRIPTION: &str = "graphql.subscription";
+pub const SUBSCRIPTION: Unit =
+    nest_rs_core::unit!("graphql.subscription", target: crate::TARGET, kind: Server);

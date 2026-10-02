@@ -552,7 +552,7 @@ where
                 span.record("http.response.status_code", err.status().as_u16());
                 trace_context::record_failure(&span, err.status());
                 if let Some(log) = log {
-                    log.abandoned(err.status().as_u16());
+                    log.abandoned(&span, err.status().as_u16());
                 }
                 Err(err)
             }
@@ -664,7 +664,10 @@ mod tests {
         std::panic::set_hook(previous);
         assert!(unwound.is_err(), "the panic reached the caller");
 
-        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST);
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        );
         assert_eq!(
             line.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::PANIC),

@@ -181,8 +181,6 @@ where
         None => nest_rs_core::Correlation::minted(None),
     };
     let span = nest_rs_core::operation_span!(
-        target: crate::TARGET,
-        kind: nest_rs_core::operation_log::kind::SERVER,
         crate::unit::OPERATION,
         &correlation,
         // Dotted and conventions-shaped on the span, flat on the line — the
@@ -272,16 +270,14 @@ impl OperationLine<'_> {
 
     fn emit(&mut self, outcome: &'static str) {
         self.filed = true;
-        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
-            tracing::info!(
-                name: crate::unit::OPERATION,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::OPERATION,
+            nest_rs_core::operation_line!(
+                crate::unit::OPERATION,
+                span: &self.span,
+                outcome: outcome,
+                started: self.started,
                 role = self.role,
                 operation = self.operation,
-                outcome,
-                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
             );
         });
     }

@@ -909,21 +909,17 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///   them where it files its operation line, the line for a unit dropped
 ///   `cancelled` included.
 ///
-/// `kind` is **required**, and it is OpenTelemetry's span kind (`"server"`,
-/// `"consumer"`, `"internal"`, …). It is an argument rather than a field a call
-/// site may add because the kind is canonical vocabulary: a backend classifies a
-/// span by it, and an edge that forgot one would export as `internal` and be
-/// invisible to every messaging view. Required means a new edge cannot ship
-/// unclassified.
-///
-/// **All three of the caller's slots are constants, and none may be a literal.**
-/// The target is the owning crate's (`nest_rs_http::target::HTTP`), the kind is
-/// one of [`operation_log::kind`](crate::operation_log::kind), and the name is
-/// the owning crate's canonical unit name (`nest_rs_http::unit::REQUEST`) — the
-/// same constant the edge's operation line reads for its `name:` and its
-/// message, which is what stops one unit of work from having two spellings. The
-/// `units` join in `nest-rs-conformance` fails on a literal at any of the three,
-/// and it reads this example too.
+/// **The unit is a path to a [`Unit`](crate::operation_log::Unit), and every
+/// slot is read off it.** The span's name is the unit's canonical name — the
+/// same value the edge's [`operation_line!`](crate::operation_line) files as its
+/// `name:` and its message, which is what stops one unit of work from having
+/// two spellings — its target is the edge's, and `otel.kind` is the unit's
+/// [`Kind`](crate::operation_log::Kind). The kind is canonical vocabulary: a
+/// backend classifies a span by it, and an edge that forgot one would export as
+/// `internal` and be invisible to every messaging view, so it is declared with
+/// the unit rather than passed here. A literal does not match the macro, and a
+/// unit another crate declared is a compile error: only the edge's own crate
+/// opens its units.
 ///
 /// The [`Correlation`] is a **required positional argument** rather than read
 /// from the ambient context, for two reasons that both bite: an edge opens its
@@ -931,39 +927,23 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// record an empty id), and a required argument is the only spelling a caller
 /// cannot forget.
 ///
-/// ```
-/// # use nest_rs_core::{Correlation, operation_span};
-/// use nest_rs_core::operation_log::kind;
-///
-/// // An edge reads its own crate's — `nest_rs_http::target::HTTP` and
-/// // `nest_rs_http::unit::REQUEST` at the real call site. The kernel names
-/// // neither, by the rule `target` and `operation_log` both state, so the two
-/// // declarations stand in here.
-/// const TARGET: &str = "nest_rs::http";
-/// mod unit {
-///     pub const REQUEST: &str = "http.request";
-/// }
-///
-/// let correlation = Correlation::minted(None);
-/// let span = operation_span!(
-///     target: TARGET,
-///     kind: kind::SERVER,
-///     unit::REQUEST,
-///     &correlation,
-///     http.request.method = "GET",
-/// );
-/// ```
+/// The kernel declares no unit, so the worked example is `nest_rs_http::unit`'s,
+/// where it compiles as the crate that owns the edge.
 #[macro_export]
 macro_rules! operation_span {
-    (target: $target:expr, kind: $kind:expr, $name:expr, $correlation:expr $(, $($field:tt)*)?) => {{
+    ($unit:path, $correlation:expr $(, $($field:tt)*)?) => {{
+        const _: () = ::core::assert!(
+            $unit.__opened_by(::core::env!("CARGO_PKG_NAME")),
+            "a unit is opened only by the crate that declares it",
+        );
         let __correlation = &$correlation;
         // Created inside the id scope so an installed SDK adopts these ids
         // rather than minting a second pair nobody can join against.
         let __span = $crate::trace_context::with_pending_ids(__correlation, || {
             $crate::tracing::info_span!(
-                target: $target,
-                $name,
-                otel.kind = $kind,
+                target: $unit.target(),
+                $unit.name(),
+                otel.kind = $unit.kind().as_str(),
                 trace_id = %__correlation.trace_id(),
                 span_id = %__correlation.span_id(),
                 parent_span_id = $crate::tracing::field::Empty,

@@ -312,12 +312,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // open a span at. Where it *does* see one — a WebSocket gateway's
                 // messages — the message is the unit and the connection is a
                 // field. Here the connection is all there is.
-                let span = nest_rs_core::operation_span!(
-                    target: crate::TARGET,
-                    kind: nest_rs_core::operation_log::kind::SERVER,
-                    crate::unit::SUBSCRIPTION,
-                    &correlation,
-                );
+                let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
                 let line = SubscriptionLine::new(correlation.clone(), span.clone());
                 let end = ends_at(sockets.going_away(), max_connection);
                 // The socket answers through a local slot because the guard
@@ -700,16 +695,14 @@ impl Drop for SubscriptionLine {
         } else {
             nest_rs_core::operation_log::CANCELLED
         });
-        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
-            tracing::info!(
-                name: crate::unit::SUBSCRIPTION,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::SUBSCRIPTION,
-                outcome,
-                // How long it stayed open, which on a subscription is the number
-                // an operator actually reads.
-                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+            // Its duration is how long it stayed open, which on a subscription
+            // is the number an operator actually reads.
+            nest_rs_core::operation_line!(
+                crate::unit::SUBSCRIPTION,
+                span: &self.span,
+                outcome: outcome,
+                started: self.started,
             );
         });
     }
@@ -744,7 +737,7 @@ mod tests {
 
         let served = logs.find(
             nest_rs_core::operation_log::TARGET,
-            crate::unit::SUBSCRIPTION,
+            crate::unit::SUBSCRIPTION.name(),
         );
         assert_eq!(
             served.len(),
@@ -776,7 +769,7 @@ mod tests {
             .settle(ended);
             let served = logs.find(
                 nest_rs_core::operation_log::TARGET,
-                crate::unit::SUBSCRIPTION,
+                crate::unit::SUBSCRIPTION.name(),
             );
             assert_eq!(served.len(), 1, "{served:?}");
             assert_eq!(served[0].field("outcome").as_deref(), Some(outcome));
@@ -799,7 +792,7 @@ mod tests {
         assert_eq!(
             logs.find(
                 nest_rs_core::operation_log::TARGET,
-                crate::unit::SUBSCRIPTION
+                crate::unit::SUBSCRIPTION.name()
             )
             .len(),
             1,

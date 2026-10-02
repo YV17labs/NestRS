@@ -271,7 +271,7 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_schedule::unit::TICK,
+        nest_rs_schedule::unit::TICK.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),
@@ -282,7 +282,10 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
         line.trace_id.is_some(),
         "filed in the tick's own trace: {line:#?}"
     );
-    let span = logs.expect_span(nest_rs_schedule::TARGET, nest_rs_schedule::unit::TICK);
+    let span = logs.expect_span(
+        nest_rs_schedule::TARGET,
+        nest_rs_schedule::unit::TICK.name(),
+    );
     assert_eq!(line.trace_id, span.field("trace_id"), "{line:#?}");
     assert_eq!(
         span.field("error.type").as_deref(),
@@ -501,7 +504,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
     let ran = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_schedule::unit::TICK,
+            nest_rs_schedule::unit::TICK.name(),
         )
         .into_iter()
         .next()

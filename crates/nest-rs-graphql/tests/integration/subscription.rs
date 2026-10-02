@@ -479,7 +479,7 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_graphql::unit::SUBSCRIPTION,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),
@@ -487,7 +487,10 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
         "the server ended the socket, not its client",
     );
     // The socket's span fails with the line's word.
-    let span = logs.expect_span(nest_rs_graphql::TARGET, nest_rs_graphql::unit::SUBSCRIPTION);
+    let span = logs.expect_span(
+        nest_rs_graphql::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
     assert_eq!(
         span.field("error.type").as_deref(),
         Some(nest_rs_core::operation_log::CANCELLED),
@@ -557,7 +560,7 @@ async fn a_subscription_that_panics_files_panic_and_closes_with_internal_error()
     assert_eq!(code, CloseCode::Error, "§7.4.1 1011");
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_graphql::unit::SUBSCRIPTION,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
     );
     assert_eq!(
         line.field("outcome").as_deref(),

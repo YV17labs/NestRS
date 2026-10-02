@@ -509,8 +509,6 @@ pub async fn attempt(
     // `messaging.system` on `messaging.destination.name`, named as the
     // conventions name it.
     let span = nest_rs_core::operation_span!(
-        target: TARGET,
-        kind: nest_rs_core::operation_log::kind::CONSUMER,
         unit::JOB,
         &correlation,
         otel.name = %format_args!("{PROCESS} {queue}"),
@@ -701,8 +699,6 @@ pub async fn refuse(
     let destination = named.as_ref().map_or("unknown", QueueName::as_str);
     let job_id = job_id.as_ref().map(ToString::to_string);
     let span = nest_rs_core::operation_span!(
-        target: TARGET,
-        kind: nest_rs_core::operation_log::kind::CONSUMER,
         unit::JOB,
         &correlation,
         otel.name = %format_args!("{PROCESS} {destination}"),
@@ -714,7 +710,7 @@ pub async fn refuse(
         backend_id,
         attempt = 1u32,
     );
-    nest_rs_core::operation_log::record_outcome(&span, nest_rs_core::operation_log::ERROR);
+    let line_span = span.clone();
     with_request_scope(None, correlation, async move {
         tracing::error!(
             target: TARGET,
@@ -724,16 +720,15 @@ pub async fn refuse(
             error = %nest_rs_core::error_message(&error),
             "job dead-lettered: undeliverable",
         );
-        tracing::info!(
-            name: unit::JOB,
-            target: nest_rs_core::operation_log::TARGET,
-            message = unit::JOB,
+        nest_rs_core::operation_line!(
+            unit::JOB,
+            span: &line_span,
+            outcome: nest_rs_core::operation_log::ERROR,
+            started: started,
             queue,
             job_id = job_id.as_deref(),
             backend_id,
             attempt = 1u32,
-            outcome = nest_rs_core::operation_log::ERROR,
-            duration_ms = nest_rs_core::operation_log::duration_ms(started),
         );
         error
     })
@@ -821,19 +816,17 @@ impl JobLine {
     }
 
     fn emit(&self, outcome: &'static str) {
-        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
         let identity = &self.identity;
-        tracing::info!(
-            name: unit::JOB,
-            target: nest_rs_core::operation_log::TARGET,
-            message = unit::JOB,
+        nest_rs_core::operation_line!(
+            unit::JOB,
+            span: &self.span,
+            outcome: outcome,
+            started: self.started,
             queue = %identity.queue,
             processor = identity.processor,
             job_id = %identity.job_id,
             backend_id = identity.backend_id.as_deref(),
             attempt = identity.attempt,
-            outcome,
-            duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
         );
     }
 }
@@ -1076,7 +1069,7 @@ mod tests {
             Some("deliberate panic for panic-2"),
             "the panic message rides on the shared `panic` field: {event:#?}",
         );
-        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB);
+        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB.name());
         assert_eq!(
             ran.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::PANIC),
@@ -1205,7 +1198,7 @@ mod tests {
             "the event carries the cause the retry will hit again, got {:?}",
             event.fields,
         );
-        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB);
+        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB.name());
         assert_eq!(
             ran.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::ERROR),
@@ -1343,7 +1336,7 @@ mod tests {
         assert_eq!(said.level, "error");
         assert_eq!(said.field("unfinished").as_deref(), Some("2"));
         assert_eq!(said.field("attempts").as_deref(), Some("2"));
-        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB);
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB.name());
         assert_eq!(line.field("outcome").as_deref(), Some("error"));
         assert_eq!(line.field("attempt").as_deref(), Some("3"));
     }

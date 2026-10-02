@@ -185,7 +185,7 @@ fn ledger(logs: &LogCapture, providers: &[&str]) -> Ledger {
         fired: logs
             .find(
                 nest_rs_core::operation_log::TARGET,
-                nest_rs_schedule::unit::TICK,
+                nest_rs_schedule::unit::TICK.name(),
             )
             .iter()
             .filter(|line| filed_by(line, providers))
@@ -296,7 +296,7 @@ async fn the_documented_wiring_claims_each_occurrence_it_fires_in_redis() {
     let ticks: Vec<_> = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_schedule::unit::TICK,
+            nest_rs_schedule::unit::TICK.name(),
         )
         .into_iter()
         .filter(|line| filed_by(line, &["WiredTasks"]))

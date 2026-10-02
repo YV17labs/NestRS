@@ -123,7 +123,7 @@ async fn the_standalone_stream_ends_at_the_shutdown_signal() {
     let lines: Vec<_> = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_http::unit::REQUEST,
+            nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
         .filter(|line| line.field("method").as_deref() == Some("GET"))

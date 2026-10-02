@@ -183,7 +183,7 @@ fn operation_line(logs: &LogCapture, path: &str) -> nest_rs_testing::CapturedEve
     let mut lines: Vec<_> = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_http::unit::REQUEST,
+            nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
         .filter(|line| line.field("path").as_deref() == Some(path))
@@ -344,7 +344,7 @@ fn assert_span_cancelled(logs: &LogCapture, path: &str) {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_http::unit::REQUEST
+            span.name == nest_rs_http::unit::REQUEST.name()
                 && span.field("url.path").as_deref() == Some(path)
         })
         .expect("the request's span");
@@ -473,7 +473,7 @@ async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_http::unit::REQUEST
+            span.name == nest_rs_http::unit::REQUEST.name()
                 && span.field("url.path").as_deref() == Some("/shutdown/stuck")
         })
         .expect("the cut request's span");

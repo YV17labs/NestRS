@@ -184,7 +184,7 @@ envelope, continues or mints the trace, opens the `queue.job` span and the
 ambient scope, catches a panic, spends or ends the retry budget, clears a
 checkpoint at the job's end, and files the events and the `nest_rs::operation`
 line. You never restate any of that: an adapter that opens a `queue.job` span of
-its own has taken semantics it does not own, and the conformance suite says so.
+its own has taken semantics it does not own.
 Stopping an attempt is dropping its future — a drain whose window closed on it,
 say — and the port still files its line, with `outcome="cancelled"`; what your
 driver owes is the job, handed back.

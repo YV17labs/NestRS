@@ -107,8 +107,8 @@ use std::time::Instant;
 /// operator lost a startup diagnostic with nothing to show it had gone. Neither
 /// name survives: that warn belongs to `nest_rs::graphql`, filed by the crate
 /// that owns the resolver registry rather than by the kernel. The
-/// `filters` join in `nest-rs-conformance` derives every target both workspaces
-/// emit and fails on the next such pair.
+/// `filters` check in `nest-rs-conformance` reads every target the framework
+/// declares and fails on the next such pair.
 pub const TARGET: &str = "nest_rs::operation";
 
 /// OpenTelemetry's `SpanKind`, which [`operation_span!`](crate::operation_span)

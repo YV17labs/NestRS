@@ -79,9 +79,9 @@ mod tests {
     /// `EnvFilter` matches a directive by `starts_with` on the raw string, so a
     /// target that prefixes another cannot be silenced alone — the defect
     /// `nest_rs::access` / `nest_rs::access_graph` shipped as. This crate's own
-    /// five are checked here; the `filters` join in `nest-rs-conformance` checks
-    /// the same property across every target both workspaces declare or spell,
-    /// which is the population that can actually collide.
+    /// five are checked here; the `filters` check in `nest-rs-conformance` holds
+    /// the same property across every target the framework declares, which is
+    /// the population that can actually collide.
     #[test]
     fn no_target_is_a_prefix_of_another() {
         for outer in ALL {

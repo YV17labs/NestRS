@@ -75,8 +75,7 @@ impl Config for OAuthConfig {
   naming whichever spelling was set, where the value failed, the kind of value
   found and the type expected — never the value, since a mistyped list of
   clients holds their secrets. Decoding it with `serde_json` in the `from_env`
-  would quote it back, which is why a conformance join refuses that in the
-  framework and the demo. The element type is the framework's
+  would quote it back. The element type is the framework's
   `RegisteredClient<P>` (from `nest-rs-authn`); the app fills the generic
   `payload` — here `Uuid`, the org each client acts as — so the framework
   owns the credential shape and the app owns only what it authorizes on.

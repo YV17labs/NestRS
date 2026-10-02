@@ -166,8 +166,8 @@ mod tests {
     /// `CLAUDE.md`: a target is a constant its owner declares, never a literal
     /// at the call site — and a scaffold emits what the rules mandate. A feature
     /// declares `TARGET` at its root and its files log on `crate::<feature>::TARGET`,
-    /// the shape the demo and the conformance join hold the repo to. The
-    /// generated code has no join of its own, so this is it.
+    /// the shape the demo follows. Nothing else reads a template's logs, so
+    /// this is the check.
     #[test]
     fn no_scaffolded_log_spells_its_target_as_a_literal() {
         let scanned = sources();

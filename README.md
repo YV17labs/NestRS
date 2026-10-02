@@ -111,10 +111,11 @@ Claims a clone of this repository lets you check:
 - **1,800+ tests** across the framework workspace, with the end-to-end suites
   running against live Postgres, Redis and S3 rather than mocks — the dev
   container brings all three up before you get a shell.
-- **Conformance joins** — the families the framework declares (decorator pairs,
-  `for_root` seams, the `warn`-level events that record a denial) are derived
-  from the source and joined against the suites covering them, so a member no
-  test names fails the suite ([`crates/nest-rs-conformance/`](crates/nest-rs-conformance/)).
+- **Structural checks** — the naming law (a type and its path say the same
+  thing), the test-target layout, and every datastore key a chart or a page
+  spells are checked against the tree
+  ([`crates/nest-rs-conformance/`](crates/nest-rs-conformance/)); the rules a
+  path cannot carry are held by types, `clippy.toml` and behaviour tests.
 - **Documentation gated against the code** — 120+ pages, and a linter reading
   the framework's own source for config key tables, trait signatures, version
   pins and the imports a snippet needs to compile

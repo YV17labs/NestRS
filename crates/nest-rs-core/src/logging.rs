@@ -963,12 +963,8 @@ mod tests {
 
     /// The fixture target, for the two assertions that take it as a value.
     ///
-    /// `features::posts` stood here and is a **live** product target, so the
-    /// `filters` join — which ingests literals, fixtures included — read a
-    /// product target as one emitted from this file. A fixture stands in for a
-    /// target; it may not be one. The emission site still spells the string
-    /// because that join derives what it checks by *reading* `target:` arguments
-    /// out of the source, so a constant there is a target it cannot see.
+    /// `features::posts` stood here and is a **live** product target. A fixture
+    /// stands in for a target; it may not be one.
     const FIXTURE_TARGET: &str = "fixture::lane";
 
     /// One operation line, the shape every edge files through

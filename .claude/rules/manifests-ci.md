@@ -93,7 +93,7 @@ of this, or it is not shipped:
 1. An umbrella feature pulling everything its decorators emit, and
    `pub use nest_rs_<x> as <x>;`.
 2. `cargo add nest-rs --features <x>` in the crate README and the docs page's
-   `## Install` (held by the docs lint).
+   `## Install` (held by review).
 3. Every derive its decorators emit routed through the surface crate with its
    `crate = ` override, so the use site declares neither the crate nor a
    version.
@@ -150,8 +150,8 @@ what runs, and is not restated here. What CI owes the rules:
   the docs claim, S3 — never a mock (`CLAUDE.md`, hard "no");
 - the non-e2e suites under `NESTRS_ENV_PREFIX=ACME`, which is what holds *no
   env-var name spelled as a literal*;
-- the demo, the docs lint (`docs.yml`, on a change to what the pages quote),
-  and `cargo deny` over every lockfile.
+- the demo, the docs build (`docs.yml`, on a change to `docs/**`), and
+  `cargo deny` over every lockfile.
 
 Nothing runs on a timer. A job runs when a change can break what it tests:
 the Redis/Valkey matrix (`backends.yml`) on a change reaching the Redis

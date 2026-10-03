@@ -21,11 +21,6 @@ quote = { workspace = true }
 # wrong.
 toml_edit = { workspace = true }
 
-# The `canon` binary prints the facts the docs linter checks pages against, so
-# it serializes; a binary's dependencies are the library's.
-serde = { workspace = true }
-serde_json = { workspace = true }
-
 [dev-dependencies]
 # The naming checks run `nestrs lint`'s own code and the CLI's reserved
 # vocabulary rather than a second copy of either.

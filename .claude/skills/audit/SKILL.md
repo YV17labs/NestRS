@@ -111,8 +111,7 @@ Start here, before anything generic.
   added it.
 - Never fix during the audit: a fix invalidates the audit that found it and
   hides which finding was real.
-- Never add a line to the docs lint's baseline, and never weaken an assertion,
-  to make a suite pass.
+- Never weaken an assertion to make a suite pass.
 
 ## When to stop
 

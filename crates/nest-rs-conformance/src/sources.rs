@@ -207,8 +207,7 @@ pub fn crate_dirs() -> Vec<PathBuf> {
 /// So neither reading is left to a call site to re-derive:
 /// [`UmbrellaMatrix::features`] is the developer's set — what the landing counts
 /// and the docs' packages table maps — and [`UmbrellaMatrix::crates`] is the set
-/// of crates whose README owes an install line, which the `canon` binary
-/// publishes for the docs linter.
+/// of crates whose README owes an install line.
 ///
 /// Parsed with a TOML parser rather than scanned: a feature list wraps across
 /// lines as freely as a Rust string does, and the wrapping is what a

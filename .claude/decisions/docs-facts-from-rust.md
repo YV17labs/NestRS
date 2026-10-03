@@ -17,3 +17,10 @@ The lint's baseline once had an `--update-baseline` flag that re-snapshotted
 every violation, code-truth ones included, so the remedy its failure message
 printed turned a proven-false public claim into a permanent exemption. It was
 removed: a baseline line is added by hand, where a reviewer sees it.
+
+**Retired (2026-10-03).** The docs lint, its `canon` generator and their tests
+are gone. The owner's line: use the tools that own a job and take on none that
+is not ours. Astro and Starlight build the site, and that build is the docs
+gate in CI; what a page says about the code is checked by its author, developer
+or agent, against `STYLE.md` § F. A script in JavaScript policing Rust was the
+clearest case of a tool taking a responsibility that is not its own.

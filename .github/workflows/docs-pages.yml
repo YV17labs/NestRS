@@ -1,10 +1,9 @@
 # Build docs/ (Astro + Starlight) and publish to GitHub Pages on every push to main.
 # Repo settings: Settings → Pages → Build and deployment → Source: GitHub Actions.
 #
-# The site is built from docs/ alone. The docs lint — the pages checked against
-# the framework, the demo and the READMEs — is CI's `docs` job, which gates the
-# commit before it reaches main; this workflow only publishes. It restores no
-# cache: what it builds is deployed.
+# The site is built from docs/ alone. CI's `docs` job builds it on every pull
+# request, so a page that breaks the build is stopped before main; this
+# workflow only publishes. It restores no cache: what it builds is deployed.
 
 name: Docs — GitHub Pages
 

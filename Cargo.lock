@@ -2751,8 +2751,6 @@ dependencies = [
  "nest-rs-config",
  "proc-macro2",
  "quote",
- "serde",
- "serde_json",
  "syn 3.0.5",
  "toml_edit 0.25.15+spec-1.1.0",
 ]

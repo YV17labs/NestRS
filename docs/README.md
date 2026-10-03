@@ -16,9 +16,7 @@ Requires **Node.js 22.12 or newer** — Astro 7's own floor, and what
 cd docs
 npm install
 npm run dev        # → http://localhost:4321
-npm run lint:docs  # every page against the code, the demo and its own links — CI runs it before the build
-npm test           # the linter joined against itself
-npm run build      # static site under docs/dist/
+npm run build      # static site under docs/dist/ — CI runs it on every pull request
 ```
 
 `npm run build` produces a fully static tree (HTML, CSS, minimal JS, a static
@@ -31,15 +29,8 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `src/content/docs/` | every page — one directory per section |
 | `STYLE.md` | **the law** for docs prose and structure; read it before editing a page |
 | `templates/` | the five skeletons `STYLE.md` §B names — T-CONCEPT, T-INDEX, T-TUTORIAL, T-RECIPE, T-SINGLE |
-| `scripts/lint-docs.mjs` | the gate: every rule in `STYLE.md` §F |
 | `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
-
-**The linter needs a Rust toolchain.** It checks pages against the framework facts
-`nest-rs-conformance`'s `canon` binary prints, and runs it on every start, so the
-facts are always the tree's own and there is no generated file to keep current
-(`cargo run -p nest-rs-conformance --bin canon` shows them). The `demo/` files a
-fence quotes are read directly.
 
 ## Editorial rules
 
@@ -54,8 +45,8 @@ wrong first.
    `apps/<app>/src/…` for composition. No page mixes in the `--standalone`
    `src/…` shape. A block quoting the demo says so in words —
    `(from the demo)`, `(from the demo, abridged)` — and that marker, not the
-   path, is what makes it an excerpt the linter checks line by line. §F lists
-   what the linter greps for, each rule filed against a shipped release by a
+   path, is what makes it an excerpt, which the author keeps line for line.
+   §F lists what to check, each class filed against a shipped release by a
    reader following a page verbatim.
 3. **A "Why this design" subsection on every non-trivial concept.** NestRS's
    value is in the *decisions* — make them legible.
@@ -102,9 +93,10 @@ that section already is. `tutorial/` is exempt at any size: its pages are steps
 ## Deploying
 
 GitHub Pages, from `.github/workflows/docs-pages.yml`, on every push to `main`
-touching `docs/**`: `npm ci` → `npm run lint:docs` → `npm run build` with
-`ASTRO_SITE=https://nestrs.dev` and `ASTRO_BASE=/` → `deploy-pages`. There is no
-other docs CI, and the lint step gates the deploy.
+touching `docs/**`: `npm ci` → `npm run build` with
+`ASTRO_SITE=https://nestrs.dev` and `ASTRO_BASE=/` → `deploy-pages`. CI's `docs`
+job (`.github/workflows/docs.yml`) runs the same build on every pull request
+touching `docs/**`, so a page that breaks it is stopped before `main`.
 
 The output is a plain static tree, so publishing it anywhere else is
 `npm ci && npm run build` from `docs/` and serving `docs/dist/` — set

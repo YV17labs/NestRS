@@ -126,10 +126,6 @@ Claims a clone of this repository lets you check:
   spells are checked against the tree
   ([`crates/nest-rs-conformance/`](crates/nest-rs-conformance/)); the rules a
   path cannot carry are held by types, `clippy.toml` and behaviour tests.
-- **Documentation gated against the code** — 120+ pages, and a linter reading
-  the framework's own source for config key tables, trait signatures, version
-  pins and the imports a snippet needs to compile
-  ([`docs/scripts/lint-docs.mjs`](docs/scripts/lint-docs.mjs)).
 
 ## Stability
 

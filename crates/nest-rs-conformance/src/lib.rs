@@ -8,10 +8,6 @@
 //!
 //! `src/` carries only what the checks share: where to read, and how a
 //! baseline behaves. A check itself is always a test, so it lives in `tests/`.
-//!
-//! One binary reads the same sources without asserting anything: `canon`
-//! prints the framework facts the docs linter checks pages against
-//! (`docs/scripts/lint-docs.mjs` runs it on start).
 
 #![allow(
     clippy::expect_used,

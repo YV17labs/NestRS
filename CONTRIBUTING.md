@@ -105,7 +105,7 @@ server (see CLAUDE.md).
 The *Definition of done* is a green CI run. `.github/workflows/ci.yml` runs on
 every pull request: formatting, clippy and rustdoc, the test suites (the e2e
 ones against real Postgres, Redis and S3), the Redis/Valkey version matrix, the
-feature matrix, cargo-deny and cargo-machete, the demo and the docs lint. A PR
+feature matrix, cargo-deny and cargo-machete, the demo and the docs build. A PR
 that has not passed it is not ready for review. Before you push, the fast local
 loop catches most of it: `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo nextest run`

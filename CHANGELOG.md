@@ -1705,19 +1705,6 @@ The four source-reading tests left elsewhere are replaced too:
   `#[input]` rustdoc keeps its contract in prose instead of a transcribed
   expansion a test kept in step.
 
-- **The docs lint runs the canon generator.** `docs/canon.json` and
-  `docs/demo-sources.json` are no longer committed: `lint-docs.mjs` runs
-  `cargo run -p nest-rs-conformance --bin canon` for the framework facts it checks
-  pages against and reads `demo/` sources directly, so no derived file can be
-  stale. `npm run lint:docs` needs a Rust toolchain; the docs workflow installs
-  one and also triggers on `crates/**`, `demo/**`, the root manifest, the lockfile
-  and the README. Its failure messages no longer cut a detail at its first `::`.
-- **Two docs-lint rules replace checks `nest-rs-conformance` held.** `family-mention` fails on
-  a unit of work, an operator-facing span target, a queue `Capability` variant,
-  or an umbrella capability's `cargo add nest-rs --features <x>` under an
-  `## Install`, that no page names; `readme-install` fails when a capability
-  crate's README does not install the umbrella with its feature, or when any
-  README installs a capability sub-crate.
 - **`scripts/check-features.sh`** checks every framework crate under its default
   features, under none and under each feature alone, and `nest-rs-macro-hygiene`
   has one feature per decorator-owning capability, so each capability's
@@ -1729,14 +1716,14 @@ The four source-reading tests left elsewhere are replaced too:
   (fmt, workspace clippy, nextest over the touched crates' reverse dependencies,
   their e2e, `cargo mutants` on the diff), and before a merge or a release (the
   full gate, a run under `NESTRS_ENV_PREFIX=ACME`, the feature script, the
-  audits, the docs lint and the demo).
+  audits and the demo).
 - **The rules are rewritten** so they agree with each other and each names how
   it is held: `CLAUDE.md`, the zone rules in `.claude/rules/`, and
   `.claude/decisions/`, one file per decision recording what was tried and what
   retired it. Rustdoc cites the zone rule that holds its decision.
 
 
-### CI is the gate, the docs lint checks facts, and the rules fit their budget
+### CI is the gate, and the rules fit their budget
 
 For a contributor.
 
@@ -1749,8 +1736,8 @@ For a contributor.
   runs when a change reaches the Redis adapter, and the feature matrix when a
   change reaches a manifest. `cargo mutants` runs on a pull request labelled
   `mutants`. Advisories published between changes are GitHub's Dependabot
-  alerts; the scheduled security watch is gone. The docs lint has its own workflow,
-  started by a change to what the pages quote. The local definition of done is
+  alerts; the scheduled security watch is gone. The docs build has its own workflow,
+  started by a change to the pages. The local definition of done is
   the minute-long loop CLAUDE.md states.
 - **cargo-deny replaces cargo-audit.** `deny.toml` replaces `.cargo/audit.toml`.
   It keeps the argued advisory ignores, minus RUSTSEC-2026-0173, whose crate
@@ -1767,13 +1754,11 @@ For a contributor.
   nest-rs-resource, nest-rs-seaorm and nest-rs-testing, so feature-gated items
   and the links to them appear. Broken intra-doc links in eleven crates are
   fixed.
-- **The docs lint keeps the 22 rules that catch a fact**: a snippet that no
-  longer matches `demo/`, an install line, a version, a dead link, frontmatter
-  the build needs, a family member no page names. The 15 house-style rules
-  go, and so does the baseline of tolerated violations: the gate fails on any
-  violation. `fence-drift` now checks every demo file a `(from the demo…)`
-  title names, manifests included. The unrendered `tier:` frontmatter is
-  removed.
+- **The docs lint is retired.** The site's own build (Astro, Starlight) is the
+  docs gate, on every pull request touching `docs/`, and what a page states
+  about the code is checked by its author against `STYLE.md` § F, like the rest
+  of the prose. The `canon` generator that fed the lint is gone with it. The
+  unrendered `tier:` frontmatter is removed.
 - **The pages teach what the code asks for.** Response masking, CRUD, OpenAPI
   and the tutorial declared a route's posture through the
   `Authorize<A, S>` parameter, which the hard rules forbid; they now use
@@ -1867,8 +1852,7 @@ For a contributor.
   queue first, none a twin of another or a prefix inside a level (a unit test
   over `nest-rs-redis`'s key constants); every queue `Capability` is refused
   where a backend lacks it (an exhaustive `match` in `nest-rs-queue`'s tests, so
-  a new variant does not compile until it is) and is named on a page (the docs
-  lint's `family-mention`); a compile-fail fixture parses, and its snapshot pins no
+  a new variant does not compile until it is); a compile-fail fixture parses, and its snapshot pins no
   resolution error the fixture does not declare (the snapshots check); every type
   a `module.rs` declares shares its stem, a module lives nowhere else, an edge
   folder directly under a framework crate's `src/` adapts the crate and takes its

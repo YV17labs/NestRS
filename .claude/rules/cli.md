@@ -40,11 +40,10 @@ rules it ships are identical. Carrying no placeholder is a consequence of that,
 not the reason. **The real file is on the build's side** — under
 `core.symlinks=false` a link checks out as a text file holding its target, and
 the inverse arrangement would embed a filename into every scaffold and still
-compile. **Three readers parse it**: `naming.rs` derives the reserved words from
-the fence under `## Reserved vocabulary`; the canon generator
-(`nest-rs-conformance`'s `canon`) slices every `|` row and that fence; the docs
-lint's `architecture-drift` compares both with `/architecture/`. The scaffold
-test asserts its headings. Change a table, a heading or the fence with them.
+compile. **Two readers parse it**: `naming.rs` derives the reserved words from
+the fence under `## Reserved vocabulary`, and the scaffold test asserts its
+headings; the `/architecture/` page restates its tables and that fence, kept in
+step by review. Change a table, a heading or the fence with them.
 
 **A template is the developer's own repository, so it may teach in a comment**
 — the `// SECURITY:` note above a generated `#[public]` route is the case that

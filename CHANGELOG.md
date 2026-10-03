@@ -1608,9 +1608,8 @@ future handlebars that restores the default flips it back.
 
 ### Each crate builds under each feature alone, and apalis 0.7.4 kept past the freshness bar on the record
 
-- **`scripts/check-features.sh` checks every framework crate under its default
-  features, under none and under each feature alone**, reading crates and
-  features from `cargo metadata`: every other gate builds one feature union, so
+- **CI checks every framework crate under its default features, under none and
+  under each feature alone**, with `cargo hack check --workspace --each-feature`: every other gate builds one feature union, so
   a crate compiling only because a sibling turned a feature on is invisible
   there — which is how `nest-rs-authz`'s 7.0 engine came to name `nest-rs-core`
   while it was optional before this release fixed it. CI runs it when a change
@@ -1701,7 +1700,7 @@ tests left elsewhere are replaced too:
   `#[input]` rustdoc keeps its contract in prose instead of a transcribed
   expansion a test kept in step.
 
-- **`scripts/check-features.sh`** checks every framework crate under its default
+- **`cargo hack --each-feature`** checks every framework crate under its default
   features, under none and under each feature alone, and `nest-rs-macro-hygiene`
   has one feature per decorator-owning capability, so each capability's
   decorators are proved to compile under that capability's feature alone.

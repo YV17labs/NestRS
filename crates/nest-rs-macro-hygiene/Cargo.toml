@@ -22,7 +22,7 @@ nest-rs = { path = "../nest-rs", default-features = false }
 # the umbrella's feature of the same name, and each witness module compiled
 # under its capability's feature alone. Built as the default union, the crate
 # proves no decorator needs a second manifest line; built one feature at a time
-# (`scripts/check-features.sh`), it proves each capability pulls what its own
+# (`cargo hack --each-feature`), it proves each capability pulls what its own
 # decorators emit — a satellite a feature forgot, or a re-export gated on the
 # wrong one, fails under that feature even when a sibling supplies it in the
 # union.

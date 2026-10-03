@@ -1,5 +1,5 @@
 # Every framework crate under its default features, none, and each feature
-# alone (`scripts/check-features.sh`) — only when a change can move what a
+# alone (`cargo hack --each-feature`) — only when a change can move what a
 # feature pulls in: a manifest, the lockfile, the umbrella, the hygiene witness.
 
 name: Features
@@ -12,7 +12,6 @@ on:
       - 'Cargo.lock'
       - 'crates/nest-rs/**'
       - 'crates/nest-rs-macro-hygiene/**'
-      - 'scripts/check-features.sh'
       - '.github/workflows/features.yml'
       - '.github/actions/setup-rust/**'
   pull_request:
@@ -43,7 +42,10 @@ jobs:
       - uses: $/.github/actions/setup-rust
         with:
           cache-key: features
-      - run: scripts/check-features.sh
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-hack@0.6
+      - run: cargo hack check --workspace --each-feature --no-dev-deps
 
   # Advisory until the owner settles how a floor is written: resolving each
   # direct requirement to its lowest release fails today on requirements that

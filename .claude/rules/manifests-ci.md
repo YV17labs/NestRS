@@ -136,9 +136,9 @@ The pin is also what keeps the trybuild snapshots still (`testing.md`).
 **Every local build is one feature union.** `--workspace` unifies every
 member's features and the hygiene witness enables all of them, so a crate that
 compiles only because a sibling turned a feature on passes both.
-`scripts/check-features.sh` is the build that sees it — every crate alone under
-each of its features, then the umbrella with each feature alone — and CI runs
-it.
+`cargo hack check --workspace --each-feature --no-dev-deps` is the build that
+sees it — every crate alone under none of its features, its defaults and each
+feature alone, the umbrella included — and CI's `features` job runs it.
 
 **The supply chain is `cargo deny`**, configured by `deny.toml` at the root
 (`.claude/decisions/ci-is-the-gate.md`). Every ignore there is argued, one

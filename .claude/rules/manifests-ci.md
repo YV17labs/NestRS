@@ -150,16 +150,17 @@ what runs, and is not restated here. What CI owes the rules:
   the docs claim, S3 — never a mock (`CLAUDE.md`, hard "no");
 - the non-e2e suites under `NESTRS_ENV_PREFIX=ACME`, which is what holds *no
   env-var name spelled as a literal*;
-- the feature matrix above, the demo, the docs lint, and `cargo deny` over every
-  lockfile.
+- the demo, the docs lint (`docs.yml`, on a change to what the pages quote),
+  and `cargo deny` over every lockfile.
 
-Advisory lanes (`cargo mutants` on the diff, beta clippy) report and never
-block. The workflows are hardened: actions pinned by SHA,
+The Redis/Valkey matrix and the feature matrix run nightly, on demand and on a
+release branch, not on every pull request — a PR waits only on what its change
+can break. Advisory lanes (beta clippy nightly, `cargo mutants` on a pull
+request labelled `mutants`, minimal versions) report and never block. The workflows are hardened: actions pinned by SHA,
 `persist-credentials: false`, least permissions, `zizmor` clean.
 
-**The security watch is a monitor, not a gate.** It runs daily and on a
-manifest or lockfile change on `main` — the advisory check, a beta-toolchain
-build and the feature matrix — and opens or updates one issue on failure.
+**The security watch is a monitor, not a gate.** It runs daily — the advisory
+check and a beta-toolchain build — and opens or updates one issue on failure.
 Nothing waits on it: it exists because CI runs only when someone pushes, and an
 advisory is published whether or not anyone does.
 

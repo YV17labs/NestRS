@@ -8,15 +8,30 @@
 # and `backends` runs the Redis adapter's suite against every server line the
 # framework supports.
 #
-# `beta`, `mutants` and `minimal-versions` are advisory: they report, and never
-# fail the run.
+# What runs when — the repository is public, so runners cost nothing, but a PR
+# waits on every job it starts:
+#   - every pull request and push: check, supply-chain, workflows, test, e2e, demo;
+#   - nightly, on demand and on release branches: backends (the Redis/Valkey
+#     matrix), features, minimal-versions and beta;
+#   - a pull request labelled `mutants`: mutants.
+# A change to the docs site or the rules alone starts none of them: `docs.yml`
+# lints the pages. `beta`, `mutants` and `minimal-versions` are advisory: they
+# report, and never fail the run.
 
 name: CI
 
 on:
   push:
     branches: [main, 'release/**']
+    paths-ignore: &prose
+      - 'docs/**'
+      - '.claude/**'
+      - 'CLAUDE.md'
+      - 'CHANGELOG.md'
   pull_request:
+    paths-ignore: *prose
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -52,6 +67,9 @@ jobs:
       - name: rustfmt (demo)
         run: cargo fmt --all --check
         working-directory: demo
+      - name: rustfmt (bench)
+        run: cargo fmt --all --check
+        working-directory: bench/sut/nestrs
       - name: clippy (framework)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: clippy (demo)
@@ -115,31 +133,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  docs:
-    name: docs (lint, tests)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      # The lint runs `nest-rs-conformance`'s `canon` binary for the facts it
-      # checks pages against.
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: docs
-      - run: npm ci
-        working-directory: docs
-      - run: npm run lint:docs
-        working-directory: docs
-      - run: npm test
-        working-directory: docs
 
   test:
     name: test (unit, integration, doctests, ACME prefix)
@@ -226,6 +219,7 @@ jobs:
 
   backends:
     name: backends (${{ matrix.server }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -264,6 +258,7 @@ jobs:
 
   features:
     name: features (each crate alone, each feature alone)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -284,6 +279,7 @@ jobs:
   # `jsonwebtoken` refuses), and the `major.minor` rule cannot express one.
   minimal-versions:
     name: minimal versions (advisory)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -348,6 +344,7 @@ jobs:
 
   beta:
     name: clippy on beta (advisory)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -367,7 +364,7 @@ jobs:
 
   mutants:
     name: mutants on the diff (advisory)
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'mutants')
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 60

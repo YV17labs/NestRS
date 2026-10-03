@@ -1,7 +1,8 @@
 # Scheduled watch — a monitor, never a gate.
 #
-# `ci.yml` is the gate: every push and pull request runs cargo-deny, the feature
-# matrix and a beta clippy. What a gate cannot do is notice the world changing
+# `ci.yml` is the gate: every push and pull request runs cargo-deny, and its
+# nightly run adds the feature matrix and a beta clippy. What a gate cannot do
+# is notice the world changing
 # while nobody touches the repo: RUSTSEC-2026-0285 (rustls) was published on
 # 2026-09-14 and sat in all three lockfiles for eleven days. This workflow is
 # the part that notices.

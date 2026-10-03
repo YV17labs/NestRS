@@ -5,7 +5,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
+use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, async_trait, gateway, messages};
@@ -116,6 +116,13 @@ impl TestGateway {
     #[public]
     async fn checked_handler(&self, name: Piped<Reject, String>) -> String {
         name.into_inner()
+    }
+
+    // A list whose items must parse: a refused item is said, never quoted.
+    #[subscribe_message("ids")]
+    #[public]
+    async fn ids_handler(&self, ids: Piped<ParseArray<u64>, String>) -> Vec<u64> {
+        ids.into_inner()
     }
 
     // `Valid<T>`: validates the deserialized payload before the handler runs.
@@ -722,6 +729,37 @@ async fn a_malformed_payload_is_reported_without_its_value() {
         event.field("error").as_deref(),
         Some("invalid type: an integer, expected a string")
     );
+}
+
+/// A list item a pipe refuses is said without its value, in the frame and on the
+/// line. `ParseArray`'s refusal quoted the item, and the frame and the `warn`
+/// both carry a pipe's refusal whole.
+#[tokio::test]
+async fn a_refused_list_item_is_quoted_neither_in_the_frame_nor_on_the_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "ids",
+            serde_json::json!("1,sk_live_51HsecretTOKEN,3"),
+        )
+        .await;
+    let WsReply::Error(error) = reply else {
+        panic!("expected an error frame from the refusing pipe");
+    };
+    let frame = nest_rs_ws::WsEnvelope::encode("ids", &error).expect("encode");
+    assert!(
+        !frame.contains("sk_live"),
+        "the frame quotes the item: {frame}"
+    );
+    logs.expect_one(nest_rs_ws::TARGET, "subscribe_message rejected by a pipe");
+    let quoting: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.fields.values().any(|value| value.contains("sk_live")))
+        .map(|event| format!("{} {:?}", event.message, event.fields))
+        .collect();
+    assert!(quoting.is_empty(), "lines quoting the item: {quoting:#?}");
 }
 
 // ── The mount address: `#[gateway(version = …)]` ────────────────────────────

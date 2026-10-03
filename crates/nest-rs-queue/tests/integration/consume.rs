@@ -394,6 +394,62 @@ async fn a_piped_job_argument_runs_its_pipe_before_the_handler() {
     );
 }
 
+#[queue(name = "id-lists", job = String)]
+struct IdListsQueue;
+
+struct IdListProcessor;
+
+impl nest_rs_core::ProviderResidency for IdListProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl IdListProcessor {
+    #[process(queue = IdListsQueue)]
+    async fn ids(
+        &self,
+        _ids: nest_rs_pipes::Piped<nest_rs_pipes::ParseArray<u64>, String>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// A list a pipe refuses is dead-lettered without the item it refused, in the
+/// record an adapter keeps and on every line. `ParseArray`'s refusal quoted the
+/// item, and the attempt files a refusal as the dead-letter reason, so a secret
+/// sent where an id belongs reached the error-level line and the record.
+#[tokio::test]
+async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new("id-lists").expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": "1,sk_live_51HsecretTOKEN,3" }),
+    );
+
+    let outcome = consume::attempt(
+        method("IdListProcessor::ids"),
+        &mut delivery,
+        Container::builder().provide(IdListProcessor).build(),
+    )
+    .await;
+
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("a refusal repeats on every attempt, so it dead-letters: {outcome:?}");
+    };
+    // The record an adapter keeps, and the details beside it.
+    let recorded = format!("{} {error:?}", nest_rs_core::error_message(&error));
+    assert!(
+        !recorded.contains("sk_live"),
+        "the dead-letter record quotes the item: {recorded}",
+    );
+    logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: non-retryable failure",
+    );
+    assert_never_quoted(&logs, "sk_live");
+}
+
 /// A context that reports it could not honour the attempt, carrying the
 /// classification a `WorkerDbContext` reaches from the database's own error.
 struct Unsettleable(nest_rs_worker::Unhonoured);

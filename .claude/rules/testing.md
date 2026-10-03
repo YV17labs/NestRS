@@ -126,9 +126,8 @@ Structure only: facts read off file paths, manifests and the declarations
 themselves — a constant's value, a type's name beside its file — never a scan
 of how code uses them, so there is nothing to evade
 (`.claude/decisions/conformance-scanner.md`). A check carries no baseline of
-tolerated violations: a violation is fixed, or the check is wrong. The docs
-lint's page baseline is the one exception, and it only shrinks (`docs.md`). The
-CLI and the canon generator reading the shipped `architecture.md` is product
+tolerated violations, the docs lint included: a violation is fixed, or the
+check is wrong. The CLI and the canon generator reading the shipped `architecture.md` is product
 data, not an exception.
 
 ## Compile-fail snapshots

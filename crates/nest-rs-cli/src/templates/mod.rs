@@ -89,7 +89,7 @@ mod tests {
         );
     }
 
-    /// `CLAUDE.md`, *No wait the framework does not bound*: a scaffolded
+    /// `container.md`, *Every wait the framework owns is bounded*: a scaffolded
     /// binary's `main` is `#[nest_rs::main]`, which tears the runtime down within
     /// the shutdown budget, never `#[tokio::main]`, whose runtime drop waits on
     /// whatever an abandoned unit left blocking. The repository's own sources

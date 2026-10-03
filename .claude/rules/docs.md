@@ -20,8 +20,9 @@ only the traps a session hits before it thinks to look.
 
 ## What the linter holds
 
-`npm run lint:docs` holds every page rule a grep can check, and `STYLE.md` words
-each one — § F lists the code-truth checks, as `RULES` in `lint-docs.mjs` does.
+`npm run lint:docs` holds the page rules that catch a fact — a snippet, an
+install line, a version, a link, a family member no page names — and `STYLE.md`
+words each one: § F lists them, as `RULES` in `lint-docs.mjs` does.
 Read `STYLE.md` rather than a summary here; a failing lint names its rule.
 
 ## Facts come from the code
@@ -57,16 +58,17 @@ Every rule in `RULES` has a fixture that makes it fire and a `STYLE.md` § F
 entry, held by `scripts/lint.test.mjs`. A fixture proves the rule triggers,
 never that its judgement is right — that is review.
 
-**The baseline only shrinks.** `npm run lint:docs` fails on a violation not in
-`docs/scripts/lint-baseline.json` and on a baseline line whose violation is
-fixed. Fix the page; a line that genuinely belongs there is added by hand,
-where a reviewer sees it, and never by re-snapshotting.
+**No baseline.** A violation is fixed on the page, or the rule is wrong and
+goes. House style — asides, heading vocabulary and order, banned words — is
+`STYLE.md`'s and held by review, not by the lint.
 
 ## Gotchas no page shows
 
 - **Snippets are hand-written** — there is no extraction from `examples/`. A
-  fence `title=` naming a real repo path matches that file byte for byte or
-  says "(abridged)"; a fictional snippet gets a generic `src/…` title. Titles
+  fence title carrying `(from the demo)`, `(from the demo, abridged)` or
+  `(from the demo — …)` claims an excerpt: `fence-drift` checks the named demo
+  file exists and every line not elided with `// …` appears in it, in order.
+  A title without the marker is an illustration and asserts nothing. Titles
   use the developer's workspace shape (`crates/features/…`); GitHub URLs use
   the real repo path (`demo/crates/features/…`).
 - **A snippet with no counterpart in `demo/` or the owning crate's suite is

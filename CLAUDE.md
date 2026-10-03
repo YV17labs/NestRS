@@ -155,7 +155,7 @@ locked; a finding against it is a question for the owner.
 2. Two suites: `integration` (in process, no database or network) and `e2e`
    (live infra, `binary(e2e)`, never `#[ignore]`).
 3. A suite mirrors `src/`; its `main.rs` holds the `mod`s, shared fixtures and a
-   `//!`, never a `#[test]` (`nest-rs-testing` organizes by concern).
+   framework `//!`, never a `#[test]` (`nest-rs-testing` organizes by concern).
 4. Unit tests are `#[cfg(test)] mod tests` in the file under test, and the
    runner is nextest — bare `cargo test` only for `--doc`.
 

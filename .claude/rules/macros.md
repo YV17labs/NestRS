@@ -6,7 +6,7 @@ paths:
 
 # Decorators — macros and their shared grammar
 
-Decorators are the framework's leverage (`CLAUDE.md`, *Thesis*). The pair rule
+Decorators are the framework's leverage (`CLAUDE.md`, *Identity*). The pair rule
 and the umbrella's front door are stated there, the expansion witness in
 `manifests-ci.md`; this file is how a decorator is written so that they hold.
 
@@ -51,7 +51,7 @@ Two exceptions, neither a licence:
 Held by the compile witness `nest-rs-macro-hygiene` (one dependency, one
 feature per capability — `manifests-ci.md`, *Shipping a capability*), which holds a
 real entity, so `#[expose]`, `#[crud]` and `#[authorize(Action, Entity)]` are
-witnessed there like every other decorator. The CLI's scaffold e2e witnesses
+witnessed there like every other decorator. The CLI's scaffold tests witness
 the generated tree, and **a generated tree witnesses only what it does not also
 supply by accident**: the test strips everything else that would pull a crate
 in, so what compiles rests on the decorator alone.

@@ -121,8 +121,8 @@ The adapter crate is named for the storage a caller touches (`architecture.md`).
   is not blocked. The check reads exactly the names apalis's getters derive —
   never a `SCAN`, a write or a script; a key of another type there is left
   alone and named in one `warn`; `NOPERM` is said, never read as empty. Held by
-  `clippy.toml` and an e2e under a read-only ACL; the move the docs print is one
-  an e2e runs.
+  review and a test under a read-only ACL; the move the docs print is one a
+  test runs.
 - **The fetch is apalis's**, and `buffer_size` and `poll_interval` are its only
   levers short of a fork. The worker sizes the buffer to the method's
   `concurrency`, capped where apalis's scripts stay safe (`MOST_PER_FETCH`), and

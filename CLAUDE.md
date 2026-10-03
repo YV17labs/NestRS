@@ -1,93 +1,103 @@
 # CLAUDE.md — nestrs
 
-What this repository decided, how its work is done, and what holds each rule.
-Public repo: no machine-local paths or private references. `.claude/rules/`
-loads by path (`architecture.md` always); `.claude/decisions/` holds the why,
-never loaded — read the entry a rule cites before re-proposing what it refused.
-How a rule is written, and each file's budget, is `.claude/rules/rules.md`.
+NestRS is a NestJS-style framework for Rust: modules, dependency injection and
+decorators (proc macros) over poem, sea-orm, async-graphql, rmcp and apalis.
+Public repo: no machine-local paths or private references.
 
-## Thesis
+This file is the map. The rules for a part of the tree live in
+`.claude/rules/` and load with the files they cover (`architecture.md` always);
+`.claude/decisions/` holds why a design was chosen and what was refused — read
+the entry a rule cites before re-proposing what it refused.
 
-The developer writes business logic; the framework carries the rest. Authn,
-authz, row filtering, transactions, edge validation, discovery and lifecycle are
-transparent — hand-managing one is a framework defect. Decorators are the lever.
-The framework builds what keeps an app correct; operating it (pausing, retuning,
-dashboards) is the backend's tooling, an issue until an application needs it.
+## Identity — read first, decide with it
 
-## Which rule wins
+nestrs is a backend framework by developers, for developers: the developer
+writes only business logic, and everything else — authn, authz, row filtering,
+transactions, validation at the edge, discovery, lifecycle, observability — is
+already thought through and runs behind a decorator. Where others write
+conditions, a nestrs developer declares `#[authorize]` and moves on; a
+cross-cutting concern the developer must hand-manage is a framework defect.
+Few lines, nothing to wire, elegant to read: that is how we beat the
+competition.
 
-1. Security and data integrity — the first hard "no" list.
-2. Rust correctness, macro output included: `thiserror` in libs, `anyhow` at
-   app entry, `Result` up to the transport boundary, honest APIs
-   (`Type::new(deps)`), enums over string states, newtypes for meaning, parsing
-   at the edge, no `serde_json::Value` passthrough, every wait the framework
-   owns bounded (`container.md`); `unwrap`/`expect` are the workspace lints'.
-3. The naming law, settled before any design question.
-4. Conventions say where, Rust says how; one way to do a thing; doc comments
-   only for a non-obvious why.
-5. Speed and convenience.
+We chose Rust for what it gives, and these values order every trade-off:
+
+1. **Security** — safe by default; an opening is an explicit, visible line.
+   Security standards (RFCs, OWASP) are followed, never improvised. The hard
+   "no" lists below are this value made concrete.
+2. **Correctness** — Rust's guarantees kept, macro output included:
+   `thiserror` in libs, `anyhow` at app entry, `Result` up to the transport
+   boundary, honest APIs (`Type::new(deps)`), enums over string states,
+   newtypes for meaning, parsing at the edge, no `serde_json::Value`
+   passthrough, every wait the framework owns bounded (`container.md`).
+3. **Performance** — raw speed, close to the machine, measured against Node,
+   PHP and Go backends: work moves to compile time (macros) rather than per
+   request, and the hot path pays for nothing it does not use.
+4. **Elegance** — what a human understands at a glance. Standard names
+   (`naming.md`, `architecture.md`); one responsibility per module, service and
+   file, so each thing has exactly one place to be found; one way to do a thing.
+   Standards over invention: an existing specification, even a recent one,
+   beats a homemade scheme.
+5. **Our own speed and convenience** — last, never at the expense of the above.
+
+We stay lean, a startup outpacing heavy incumbents: we support the most-used
+backends and drivers in their latest versions, not every one, and drop the old
+fast — through semver: removing support is a major, and the previous major
+keeps it. We build what keeps an app correct; operating it (dashboards,
+pausing, retuning) is its backend's tooling. No feature for a hypothetical
+user. We aim for excellence, not for done.
+
+**Arbitrate with this before asking.** Most questions answer themselves here:
+decide, and say which value decided. Ask the owner only for what *How we work*
+lists.
+
+## Layout and commands
+
+- `crates/nest-rs-*` — the framework, one workspace. `nest-rs` is the umbrella
+  users install; `*-macros` are proc-macro crates, `nest-rs-codegen` their
+  shared code; `nest-rs-cli` is the `nestrs` binary.
+- `demo/` — the "Publish" product, its own workspace on the framework by path,
+  driven with `nestrs run`. Nothing at the root builds or tests it.
+- `bench/` — a standalone benchmark against NestJS. `docs/` — nestrs.dev.
+
+```bash
+just lint   # fmt check + clippy
+just test   # every test (nextest) + doctests, against Postgres, Redis and S3
+just doc    # rustdoc, warnings denied
+just verify # every check: lint, docs and tests
+```
 
 ## How we work
 
-The session the owner talks to is the **lead**: it writes the production code,
-integrates, and never grades its own work. Two subagents judge from a fresh
-context, each held to its zone by `.claude/hooks/zones.sh`:
-
-- **`qa`** writes the tests that decide done — a failing reproduction before a
-  fix, acceptance tests from a spec — and verifies against them; it never edits
-  production code, and nobody weakens a test it wrote.
-- **`security`** attacks a change that touches authn/authz, data, persistence,
-  concurrency or shutdown, or a value that can reach a reply, a log line or a
-  record (`/audit`). It proves, never fixes.
-
-| Task | Route |
-|---|---|
-| Bug | `qa` reproduces it → the lead fixes the cause and its family → `qa` verifies; `/audit` when it is risky |
-| Feature | a one-page spec — goal, non-goals, public names (`/name`), files, tests, the command that says done; the owner approves it only when it changes or breaks the public API, adds a dependency or touches a locked decision → `qa` writes the acceptance tests → the lead builds, with docs and a changelog entry → `qa` verifies; `/audit` when it is risky |
-| Dependencies, release | `/deps`, `/release` |
-| No behaviour change | the lead, then `just pre-commit` |
-
-**Findings are fixed, not filed.** `/code-review` reads every diff before it
-reaches the owner's branch. P0 and P1 are fixed with the test that proves them,
-then re-checked once — still standing, it is a design question for the owner;
-P2 is fixed when cheap, else reported with its evidence; P3 is dropped unless
-trivial. Code and a rule that drift: the code wins and the prose follows in that
-commit, unless the rule is a security invariant or a hard "no".
-
-**Local first.** Work on `<type>/<slug>` in a worktree under
-`.claude/worktrees/`, from the integration branch; a Conventional Commit subject
-in the log's declarative style, no AI attribution trailer; fast-forward into the
-owner's branch once `just ci` is green. CI runs the same checks on push as the
-safety net. Push, tag, publish and anything posted outside are the owner's.
-
-**Ask the owner only for** a hard "no", a locked decision (test layout,
-workspace split, crate naming), a new third-party dependency, a public API
-break, a migration dropping or rewriting data, or anything leaving the machine.
-Decide every other trade-off on performance, security, solidity for developers
-and the standards, with the evidence. Two rounds that do not shrink the open
-items: stop, and report the blocker with the proposed decision.
-
-**When it breaks**: a red check is the change's that turned it red, reverted
-unless fixed at once; a flaky or weak test is `qa`'s; an advisory is `/deps`'s;
-two rules that disagree are settled in the commit that meets them.
+- A bug starts with a failing test that reproduces it; the fix covers its
+  cause and its family. A feature that changes the public API, adds a
+  dependency or touches a decision here is agreed with the owner first.
+- Branch `<type>/<slug>`, Conventional Commit subjects stating what is now
+  true. `just verify` green before a branch reaches the owner's. Push, tag,
+  publish and anything posted outside are the owner's.
+- **Ask the owner only for** a hard "no", a decision recorded here, a new
+  third-party dependency, a public API break, a migration dropping or rewriting
+  data, or anything leaving the machine. Decide other trade-offs on
+  performance, security and the standards, with the evidence.
+- A red check belongs to the change that turned it red: fixed at once or
+  reverted. Code and a rule that drift: the code wins and the rule is fixed in
+  that commit, unless the rule is a security invariant or a hard "no".
 
 ## How a rule is held
 
-By the first rung that can, named in the rule: types (private constructors,
-`const` assertions, exhaustive `match`); rustc and clippy (`[workspace.lints]`,
-the root `clippy.toml`; an exception is `#[expect(lint, reason = "…")]`, never
-`allow`); behaviour tests; review. No test proves a rule by reading Rust source
-or `.claude/` (`.claude/decisions/conformance-scanner.md`), and a rule a type or
-lint holds is a pointer to it, never prose.
+By the first rung that can: types (private constructors, `const` assertions,
+exhaustive `match`); rustc and clippy (`[workspace.lints]`, the root
+`clippy.toml`; an exception is `#[expect(lint, reason = "…")]`, never
+`allow`); behaviour tests; review. No test proves a rule by reading Rust
+source, manifests or `.claude/`.
 
 ## Naming is the pillar
 
-A name and its path say the same thing — from a path you know the type, from a
-type the file — and a name is judged as the path a caller types, against its
-siblings. The model is `.claude/rules/architecture.md`, a symlink to
-`crates/nest-rs-cli/src/templates/architecture.md`, which every scaffold ships
-as `AGENTS.md` — edit the real file. A name that leaves its crate or reaches an
-operator is designed as a set, with `/name`.
+A name and its path say the same thing, and a name is judged in its set.
+`.claude/rules/naming.md` holds the principles for every name;
+`.claude/rules/architecture.md` applies them to modules, files and types. It
+is a symlink to `crates/nest-rs-cli/src/templates/architecture.md`, which every
+scaffold ships as `AGENTS.md` — edit the real file.
 
 ## Hard "no" — security and data
 
@@ -95,27 +105,26 @@ operator is designed as a set, with `/name`.
   visible `#[authorize]`/`#[public]` declare posture — never a parameter type
   (`Authorized<A, E>`), a service method or a binding helper.
 - **No data access outside a service, and no service reaching the database
-  outside `Repo`**, but for the escapes `.claude/rules/data-layer.md` names.
+  outside `Repo`**, but for the escapes `data-layer.md` names.
 - **No swallowed error.** Propagate it, or handle it visibly: a typed variant,
   or a documented default logged at `warn` with its chain — never `[]`, `None`,
-  `false` or a default in its place, nor a log while the caller hears success
-  (clippy's `let_underscore_must_use` and `map_err_ignore` hold part).
+  `false` or a default in its place, nor a log while the caller hears success.
 - **No exposure outside `#[expose]`**, and no serializer-shaped third place.
 - **No payload value or secret in an error, log line, stored record or reply**:
   a decode failure says where, what kind and what was expected, never the value.
 - **No discovery without module-gating**: what an `inventory` entry mounts or
   exposes serves only through an app importing its module
-  (`.claude/decisions/forward-principal.md`).
+  (`decisions/forward-principal.md`).
 - **No TLS without verification**, in any client the framework opens.
 - **No queue promise stronger than at least once**; a handler is idempotent.
 - **No access to apalis's structures outside its public API**, but the read-only
-  6.x check in `nest-rs-redis/src/legacy_layout.rs` (held by `clippy.toml`).
+  6.x check in `nest-rs-redis/src/legacy_layout.rs`.
 
 ## Hard "no" — the project
 
 - No external DI library; extend ours.
 - No microservice transport split (an app is one binary serving the edges it
-  imports, never RPC: `.claude/decisions/modular-monolith-per-workload.md`), no
+  imports, never RPC: `decisions/modular-monolith-per-workload.md`), no
   `ClassSerializerInterceptor`, no outbound `HttpModule`/`HttpService` (an app
   injects its own `reqwest`), no bundled `Logger` (`tracing` is the contract).
 - No renaming the umbrella (`nest-rs`, `nest-rs-*`, `nest_rs::<concern>`); the
@@ -123,9 +132,8 @@ operator is designed as a set, with `/name`.
 - No env-var name as a literal: `NESTRS_ENV_PREFIX=ACME` on the process renames
   every variable, so a name is built (`nest_rs_config::var_name`,
   `EnvPrefix::var`) and prose writes `<PREFIX>_`. `RUST_LOG`,
-  `NESTRS_NO_BOOTSTRAP` and `NESTRS_ENV_PREFIX` (once per crate) are exempt; the
-  prefix is set on the process, never in `.env`. `just test` and CI run the
-  suites under ACME.
+  `NESTRS_NO_BOOTSTRAP` and `NESTRS_ENV_PREFIX` are exempt; the prefix is set
+  on the process, never in `.env`.
 - No collapsing the workspaces; `demo/apps/`, `demo/crates/features/` are fixed.
 - No decorator forcing a manifest line, none on two item shapes (a struct host
   plus an impl sibling, `#[controller]`/`#[routes]`, held by
@@ -135,25 +143,20 @@ operator is designed as a set, with `/name`.
 - No breaking change inside a major; the API a break replaces goes in that
   major, never kept as an alias. A detector for persisted data is not a shim.
 - No feature flag for a capability not built, no umbrella module re-exporting
-  every edge of a feature, no mocked database in an e2e test.
+  every edge of a feature, no mocked database in a test.
 - No third-party crate without a release in about 12 months, no version
-  requirement but `major.minor` (`.claude/rules/manifests-ci.md`), and no
-  `#[tokio::main]` (held by `clippy.toml`).
+  requirement but `major.minor` (`manifests-ci.md`), and no `#[tokio::main]`
+  (held by `clippy.toml`).
 
 ## Two workspaces, one front door
 
-`crates/nest-rs-*` is the framework: publishable, generic over a `Claims`, an
-entity or a policy and never naming one. `demo/` is the product, the "Publish"
-demo, its own workspace on the framework by path (`nestrs run`). Code goes in `demo/crates/features/` when another app could reuse it,
-in `demo/apps/<x>/` when only this app's exposure decides it. Copy
-`demo/crates/features/src/users/` before inventing (fix the exemplar, never add
-a pattern) and read `demo/apps/api/src/module.rs`, the canonical composition.
-`demo/` Rust carries no comments (`.claude/rules/demo.md`).
-
-A developer installs one crate, `nest-rs` with a capability's feature (a binary:
-`cargo install --locked nest-rs-cli`). A macro's paths are rooted at
-`::nest_rs::<concern>::`, so a manifest names only what its own source names;
-shipping a capability is `.claude/rules/manifests-ci.md`.
+`crates/nest-rs-*` is generic over a `Claims`, an entity or a policy and never
+names one. In `demo/`, code goes in `demo/crates/features/` when another app
+could reuse it, in `demo/apps/<x>/` when only this app's exposure decides it.
+Copy `demo/crates/features/src/users/` before inventing (fix the exemplar,
+never add a pattern) and read `demo/apps/api/src/module.rs`, the canonical
+composition. A developer installs one crate, `nest-rs` with a capability's
+feature; a macro's paths are rooted at `::nest_rs::<concern>::`.
 
 ## Families — design for the family, build for the caller
 
@@ -174,27 +177,40 @@ never a value in the message; an `error` field is the whole chain
 (`nest_rs_core::error_message`). `trace_id`, `span_id` and `actor_id` come from
 context, never as fields; `actor_id` is audit, never authorization.
 
+## Comments
+
+A comment is written only when you can name what it saves a future reader:
+the trap the code cannot show (a dependency's constraint, a security or
+concurrency invariant) or the reference that explains code which would
+otherwise look wrong (an upstream issue, a `.claude/decisions/` entry). Can't
+name it: don't write it. Then one or two lines. History and reasoning go in the
+commit message, never beside the code; never paraphrase the code. A public item
+gets a one-sentence `///` (the crates deny `missing_docs`), plus an example when
+it helps. `demo/` Rust carries none.
+
 ## Testing
 
 Wiring bugs do not surface in unit tests. Postgres, Redis and S3 run in the
 devcontainer: one that does not answer is an environment defect to fix, never a
-reason to skip e2e. The layout is locked; a finding against it is the owner's.
+reason to skip a test. **Prove each behaviour at the cheapest level that can
+prove it** — unit, then in process, then against a live service — and treat a
+slow test as a defect: make it cheaper, or cut what a cheaper test already
+proves (`testing.md`).
 
-1. A test target is a directory, `tests/<suite>/main.rs`, never `tests/<x>.rs`.
-2. Two suites: `integration` (in process, no database or network) and `e2e`
-   (live infra, `binary(e2e)`, never `#[ignore]`).
-3. A suite mirrors `src/`; its `main.rs` holds the `mod`s, shared fixtures and a
-   framework `//!`, never a `#[test]` (`nest-rs-testing` organizes by concern).
-4. Unit tests are `#[cfg(test)] mod tests` in the file under test, the lead's;
-   the suites under `tests/` are `qa`'s. nextest runs them; bare `cargo test`
-   only for `--doc`.
+1. A framework crate has one suite, `tests/integration/main.rs`, never a flat
+   `tests/<x>.rs`. Its tests run in process or against the live services,
+   never `#[ignore]`. The one exception: a fixture that puts a deliberately
+   invalid declaration in the link-time registry (`inventory`) gets its own
+   `tests/<fixture>/main.rs`, since every app booted beside it would read it.
+2. The suite mirrors `src/`; its `main.rs` holds the `mod`s, shared fixtures and
+   a `//!`, never a `#[test]`.
+3. Unit tests are `#[cfg(test)] mod tests` in the file under test. nextest runs
+   everything; bare `cargo test` only for `--doc`.
+4. `demo/` apps keep their own `tests/integration` and `tests/e2e` suites,
+   driven by `nestrs run test`.
 
 ## Definition of done
 
-`just pre-commit` before each commit (formatting, clippy, every in-process suite
-but the compile-fail snapshots, which a `*-macros` or `nest-rs-codegen` change
-adds with `just test`); `just ci`, every check CI runs, before a branch reaches
-the owner's. An app's `main.rs` or wiring outside `TestApp` moved: run the
-binary, `curl` what changed, stop it. fmt is the `.claude/settings.json` hook;
-a file changed another way gets `just fmt`. `cargo mutants` is advisory
-(`.claude/rules/testing.md`). Report each command run with its summary line.
+`just verify` green: formatting, clippy, rustdoc and every test. An app's `main.rs`
+or wiring outside `TestApp` moved: run the binary, `curl` what changed, stop it.
+Report each command run with its summary line.

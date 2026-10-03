@@ -20,7 +20,7 @@ only the traps a session hits before it thinks to look.
 
 No script checks a page against the code: the author does, before it ships,
 with `STYLE.md` § F as the list of what has shipped wrong. A few tests read a
-fact off a page (Redis ACL lines, the toolchain pins); CI's code jobs skip a
+fact off a page (the Redis ACL lines); CI's code jobs skip a
 docs-only change, so editing such a page runs `just test`. The code wins a
 disagreement, and the page is fixed in the same commit as the code it follows.
 

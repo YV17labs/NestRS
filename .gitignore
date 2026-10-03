@@ -20,9 +20,8 @@ lcov.info
 *.swp
 *.swo
 
-# Claude Code local settings + transient worktrees
+# Claude Code local settings
 .claude/settings.local.json
-.claude/worktrees/
 
 # OS noise
 .DS_Store
@@ -40,14 +39,3 @@ docs/.astro/
 /bench/sut/*/dist/
 /bench/results/*
 !/bench/results/.gitkeep
-
-# Working documents — a session's own scratch record, not the repo's. `AUDIT.md`
-# carried a finished campaign; `GAPS.md` is its successor and carries the open
-# one. Both are a working state rather than a decision: what a session proves
-# lands in the code, in a test, or in `.claude/rules/` — never as a file the
-# repo has to keep in sync with itself.
-AUDIT.md
-GAPS.md
-
-# Worktrees Claude Code creates for sessions and isolated agents.
-.claude/worktrees/

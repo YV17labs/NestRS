@@ -58,7 +58,7 @@ naming rule updates the matching template in the same change, and the
 converse. A generator emitting a layout the rules forbid is a defect on a par
 with breaking the exemplar.
 
-**Every generator is compiled, not only read.** The scaffold e2e runs every
+**Every generator is compiled, not only read.** The scaffold suite runs every
 adapter generator — every edge `Transport` carries — over both port shapes,
 from inside an app so the edits it makes to that app's `module.rs` and
 manifest compile too, plus `nestrs new`'s second app and `g migration`, and

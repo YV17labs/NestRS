@@ -62,9 +62,8 @@ and a shared database, never RPC (`CLAUDE.md`, hard "no").
 `just`, whose recipes are `demo/Justfile`, `db.just` and `test.just`. The
 `.env` cascade, the `Dockerfile` — built with the parent directory as context,
 so it reaches `../crates` — and a separate `Cargo.lock` and `target/` all live
-under `demo/`. The root workspace's `Justfile` holds the checks CI runs (`just
-pre-commit`, `just ci`) and nothing else; the framework is otherwise driven with
-bare `cargo`.
+under `demo/`. The root workspace's `Justfile` holds the framework's checks (`just lint`,
+`just test`, `just verify`) and never drives `demo/`.
 
 ## Transports and output
 

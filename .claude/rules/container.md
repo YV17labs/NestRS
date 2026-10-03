@@ -270,7 +270,7 @@ and the teardown in `way_down.rs`'s `//!`:
   providers do not honour theirs.
 - **The runtime is torn down by `#[nest_rs::main]`** within what the hooks left
   of their budget, so blocking work left behind is named and abandoned rather
-  than holding the exit (`CLAUDE.md`: no `#[tokio::main]`, held by `clippy.toml`).
+  than holding the exit (no `#[tokio::main]`, held by `clippy.toml`).
 - **A signal received on the way down exits at once**, after one `error` naming
   what it abandons; the handlers are installed before any transport serves.
 - **The grace period holds the sum.** A test in `nest-rs-testing` sums every

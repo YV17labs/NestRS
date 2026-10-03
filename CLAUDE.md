@@ -79,7 +79,7 @@ reaches an operator is designed as a set, with `/name`.
 
 - No external DI library; extend ours.
 - No microservice transport split (an app is one binary serving the edges it
-  imports; binaries share the features crate and the database, never RPC), no
+  imports, never RPC: `.claude/decisions/modular-monolith-per-workload.md`), no
   `ClassSerializerInterceptor`, no outbound `HttpModule`/`HttpService` (an app
   injects its own `reqwest`), no bundled `Logger` (`tracing` is the contract).
 - No renaming the umbrella (`nest-rs`, `nest-rs-*`, `nest_rs::<concern>`); the

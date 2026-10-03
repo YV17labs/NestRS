@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Docs linter — checks every page against the facts it states.
 //
-//   node scripts/lint-docs.mjs   # fail on any violation not in the baseline, and on any
-//                                # baseline line naming a violation since fixed
+//   node scripts/lint-docs.mjs   # fail on any violation — there is no baseline of tolerated ones
 //
 // A rule earns its place by catching something a reader would act on and get wrong: a snippet
 // that does not compile or no longer matches `demo/`, an install line that installs the wrong
@@ -16,7 +15,7 @@
 // crate READMEs: raw content, never a second derivation of a framework fact.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { REDIRECTS } from '../src/redirects.mjs';
@@ -43,16 +42,6 @@ export const CONTENT_ROOT = join(DOCS_ROOT, 'src', 'content', 'docs');
 /// be committed. The cost is a Rust toolchain wherever the gate runs, which the
 /// docs workflow installs.
 export const CANON = loadCanon();
-
-/// The demo workspaces' Rust sources hold at least this many files; below it
-/// the walk reads the wrong tree and every titled fence goes unchecked.
-const DEMO_FLOOR = 50;
-
-/// Every `.rs` under `demo/apps` and `demo/crates`, with the facts a fence
-/// quoting it is checked against — that it exists, what it contains, and what
-/// port it pins. Read from the files themselves: content is not a derivation,
-/// so there is nothing to drift.
-const DEMO_SOURCES = demoSources();
 
 function loadCanon() {
   let printed;
@@ -81,52 +70,10 @@ function loadCanon() {
   return parsed;
 }
 
-function demoSources() {
-  const out = {};
-  for (const workspace of ['demo/apps', 'demo/crates']) {
-    for (const abs of rustFiles(join(REPO_ROOT, workspace))) {
-      const text = readFileSync(abs, 'utf8');
-      out[relative(REPO_ROOT, abs).split('\\').join('/')] = {
-        port: pinnedPort(text),
-        // Trimmed because an excerpt is routinely re-indented out of its `impl`
-        // block; blanks dropped because their placement is the excerpt's.
-        lines: text.split('\n').map((line) => line.trim()).filter(Boolean),
-      };
-    }
-  }
-  const count = Object.keys(out).length;
-  if (count < DEMO_FLOOR) {
-    throw new Error(`read ${count} demo sources, below ${DEMO_FLOOR} — the walk is reading the `
-      + 'wrong tree, and every fence quoting the demo would go unchecked');
-  }
-  return out;
-}
-
-/// Every `.rs` under `dir`, build output skipped.
-function rustFiles(dir) {
-  const out = [];
-  for (const name of readdirSync(dir)) {
-    if (name === 'target' || name === 'node_modules') continue;
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...rustFiles(p));
-    else if (name.endsWith('.rs')) out.push(p);
-  }
-  return out;
-}
-
-/// The `port:` a demo file pins, or `null`. The word boundary is load-bearing:
-/// without it `export:` matches and a fence is compared against a number from
-/// another line entirely.
-function pinnedPort(text) {
-  const m = text.match(/(?<![A-Za-z0-9_])port:\s*(\d+)/);
-  return m ? Number(m[1]) : null;
-}
-
 // Every page, walked once. Two consumers — the per-file lint pass, and the
 // `N+ pages` floor on `/why/`, which is *checked against this number*: a second
 // walk would be a second answer to the question the claim is gated on.
 const PAGES = walk(CONTENT_ROOT).sort();
-const BASELINE = join(HERE, 'lint-baseline.json');
 
 /// Every rule this linter can file, spelled once.
 ///
@@ -156,7 +103,6 @@ export const RULES = Object.freeze({
   traitSurface: 'trait-surface',
   exceptionResponseError: 'exception-response-error',
   configTable: 'config-table',
-  fenceTitle: 'fence-title',
   fenceDrift: 'fence-drift',
   architectureDrift: 'architecture-drift',
   envelopeDrift: 'envelope-drift',
@@ -424,23 +370,6 @@ const QUEUE_STRING_FORM = /#\[process\(\s*(?:queue\s*=\s*)?"/g;
 /// the upgrade pages spell that in their before column on purpose.
 const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
 
-/// Two facts a fence titled with a real `demo/` file cannot contradict. Titles
-/// cite the *user's* workspace shape, so the prefix is mapped back onto `demo/`;
-/// a title whose file does not exist there is a fictional snippet, which the
-/// rule does not reach.
-///
-/// The full STYLE.md §C rule is byte-for-byte, and it is deliberately **not**
-/// what runs here: most fences are honest excerpts written before the marker
-/// convention, so the strict form reports 134 pages at once and the signal is
-/// gone. These two are exact, and each was a shipped defect:
-///
-/// - **A comment.** `demo/` carries none — owner's rule, no exceptions — so a
-///   page quoting it with a `///` publishes code the repo forbids writing,
-///   under a title asserting the repo contains it. `producing-jobs.mdx` added
-///   two.
-/// - **A port.** `split-deployment.mdx` pinned `3000` in a block
-///   titled `apps/api/src/module.rs` while the app listens on `3002` — and
-///   `curl`ed `3002` forty lines down.
 /// The words a title uses to say it is quoting the demo workspace — and the
 /// whole basis on which this file resolves one.
 ///
@@ -450,10 +379,8 @@ const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
 /// the block is an excerpt of the Publish workspace, and that is what gets
 /// checked. Keying on the prefix instead made one string mean two things — the
 /// reader's layout and our provenance — and a page then showed the same file at
-/// two roots with nothing saying why. Promoting every illustration to the long
-/// prefix reported 135 violations across 47 pages, which is the measurement
-/// that settled it: the prefix was carrying the provenance all along.
-const DEMO_MARKER = /\((from the demo)(?:[,—][^)]*)?\)\s*$/;
+/// two roots with nothing saying why.
+const DEMO_MARKER = /\((from the demo)(?:\s*[,—][^)]*)?\)\s*$/;
 
 /// The one prefix a feature file does not carry is `crates/features/`: it is
 /// the same on every one, so the title drops it and this map puts it back. A
@@ -465,11 +392,9 @@ const DEMO_TITLE_PREFIXES = [
   [/^apps\//, 'demo/apps/'],
 ];
 
-/// The repo-relative demo file a fence title names, or `null` when the title is
-/// not in demo shape. The path is a key into `DEMO_SOURCES`, which carries
-/// every one that exists.
+/// The repo-relative demo file a marked title names, or `null` when its path is
+/// in none of the workspace shapes above.
 function demoPathFor(title) {
-  if (!DEMO_MARKER.test(title)) return null;
   const clean = title.replace(DEMO_MARKER, '').trim();
   for (const [re, prefix] of DEMO_TITLE_PREFIXES) {
     if (re.test(clean)) return clean.replace(re, prefix);
@@ -477,92 +402,64 @@ function demoPathFor(title) {
   return null;
 }
 
-/// The `port:` a demo file pins, `null` when it pins none, `undefined` when the
-/// path is not a file. The artefact holds a key per existing file, so the three
-/// cases fall out of the lookup rather than out of a `statSync`.
-function demoPort(rel) {
-  return DEMO_SOURCES[rel]?.port;
+/// A demo file's lines as an excerpt is compared against them — trimmed,
+/// because an excerpt is routinely re-indented out of its `impl` block, and
+/// blanks dropped, because their placement is the excerpt's — or `null` when no
+/// such file exists. Read from the file itself: content is not a derivation, so
+/// there is nothing to drift.
+const DEMO_LINES = new Map();
+function demoLines(rel) {
+  if (!DEMO_LINES.has(rel)) {
+    const abs = join(REPO_ROOT, rel);
+    DEMO_LINES.set(rel, existsSync(abs) && statSync(abs).isFile()
+      ? readFileSync(abs, 'utf8').split('\n').map((line) => line.trim()).filter(Boolean)
+      : null);
+  }
+  return DEMO_LINES.get(rel);
 }
 
 /// Lines of a fence that claim nothing about the file — an elision mark, and
 /// the fence's own closing brace where an excerpt stops mid-block.
 const ELISION = /^(?:\/\/|#)\s*[….]|^\.{3}$|^…$/;
 
-/// Whether a fence titled with a real demo file is actually an excerpt of it.
+/// Whether a fence marked `(from the demo)` is an excerpt of the file it names.
 ///
-/// **Every non-elided line must appear in the file, in order.** That is the
-/// claim a `title=` makes, and it is weaker than STYLE.md § C's byte-for-byte
-/// rule on purpose: most fences are honest excerpts written before the
-/// `(abridged)` convention, and the strict form reports 134 pages at once, which
-/// is a signal nobody reads. What it does catch is the class byte-for-byte was
-/// written for and nothing enforced — a fence titled `mod.rs` publishing a
-/// `#[module]` that lives in `module.rs`, and one titled `tests/e2e/main.rs`
-/// publishing a `#[tokio::test]` the locked test-layout norm forbids there.
-/// Both shipped, on the pages a reader opens first.
-///
-/// Trimmed on both sides: an excerpt is routinely re-indented out of its `impl`
-/// block, and indentation is not the claim.
+/// **The file exists, and every non-elided line appears in it, in order.** That
+/// is the claim the marker makes, and it is weaker than STYLE.md § C's
+/// byte-for-byte rule on purpose: an excerpt may elide (`// …`) and re-indent.
+/// It catches every way an excerpt goes stale — a line the demo rewrote, a
+/// comment the demo does not carry (it carries none), a port the app does not
+/// listen on, a file that moved or an app the demo never had — and the class it
+/// was written for: a fence titled `mod.rs` publishing a `#[module]` that lives
+/// in `module.rs`, and one titled `tests/e2e/main.rs` publishing a
+/// `#[tokio::test]`. A block that is an illustration rather than an excerpt
+/// drops the marker, and then asserts nothing about `demo/`.
 function fenceDrift(blocks) {
   const out = [];
   for (const block of blocks) {
     const title = block.info.match(/title="([^"]+)"/)?.[1];
-    if (!title) continue;
+    if (!title || !DEMO_MARKER.test(title)) continue;
     const rel = demoPathFor(title);
-    const file = rel && DEMO_SOURCES[rel];
-    if (!file) continue;
+    const lines = rel && demoLines(rel);
+    if (!lines) {
+      out.push(`${title} says it is from the demo, which has no ${rel ?? 'such path'} — either the `
+        + 'file moved and the title did not, or the block is an illustration and the marker is a '
+        + 'claim it cannot keep');
+      continue;
+    }
 
     let at = 0;
     for (const raw of block.body.split('\n')) {
       const line = raw.trim();
       if (!line || ELISION.test(line)) continue;
-      const found = file.lines.indexOf(line, at);
+      const found = lines.indexOf(line, at);
       if (found === -1) {
         out.push(`${title} shows \`${line.slice(0, 60)}\` and ${rel} `
-          + `${file.lines.includes(line) ? 'has it earlier — the excerpt is out of order'
+          + `${lines.includes(line) ? 'has it earlier — the excerpt is out of order'
             : 'does not contain that line'}`);
         break;
       }
       at = found + 1;
-    }
-  }
-  return out;
-}
-
-function fenceTitleDrift(blocks) {
-  const out = [];
-  for (const block of blocks) {
-    const title = block.info.match(/title="([^"]+)"/)?.[1];
-    if (!title) continue;
-    const abs = demoPathFor(title);
-    if (!abs) continue;
-    const real = demoPort(abs);
-    // The claim's own precondition: `DEMO_SOURCES` indexes **every** `.rs` under
-    // `demo/` — 217 of 217 — so a marked title naming one it does not hold names
-    // a file that does not exist. `fence-drift` cannot see this: it skips a path
-    // it cannot look up, which is how `apps/blog/` — an app the demo has never
-    // had — carried the marker on thirteen fences. Non-`.rs` (a manifest, an
-    // `.env`, a compose file) is outside `DEMO_SOURCES` and outside this probe.
-    if (real === undefined) {
-      if (abs.endsWith('.rs')) {
-        out.push(`${title} says it is from the demo, which has no ${abs} — either the file `
-          + 'moved and the title did not, or the block is an illustration and the marker is a '
-          + 'claim it cannot keep');
-      }
-      continue;
-    }
-
-    const comment = block.body.match(/^\s*(\/\/\/?!?[^\n]*)/m);
-    // `// …` is the elision mark an excerpt uses; it claims nothing about the file.
-    if (comment && !/^\s*\/\/\s*[….]/.test(comment[1])) {
-      out.push(`${title} is quoted with a comment (\`${comment[1].trim()}\`) — the demo `
-        + 'workspace carries none, so the file does not contain that line');
-    }
-
-    // `String(real)`: `DEMO_SOURCES` carries a port as a number and a fence carries
-    // digits, so a bare `!==` is always true and every quoting page reports.
-    const shown = block.body.match(/\bport:\s*(\d+)/)?.[1];
-    if (shown && real !== null && shown !== String(real)) {
-      out.push(`${title} pins port ${shown}, the app listens on ${real}`);
     }
   }
   return out;
@@ -650,8 +547,8 @@ function parseCargoAdd(line) {
 
 /// Span targets that instrument the framework's own internals — the DI graph
 /// and the GraphQL dataloader. An operator has no decision to make about
-/// either, so no page owes them a filter directive. Stated, not baselined: a
-/// baseline line says "not yet", and this is "no".
+/// either, so no page owes them a filter directive — "no", not "not yet", which
+/// is why the exception is stated here with its reason.
 const INTERNAL_TARGETS = new Set(['nest_rs::container', 'nest_rs::loader']);
 
 /// The features every `cargo add … nest-rs … --features` under a page's
@@ -1320,8 +1217,7 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     }
   }
 
-  // 13. A fence titled with a real demo file quotes it.
-  for (const detail of fenceTitleDrift(blocks)) add(RULES.fenceTitle, detail);
+  // 13. A fence marked as quoting the demo is an excerpt of the file it names.
   for (const detail of fenceDrift(blocks)) add(RULES.fenceDrift, detail);
 
   // 14. A published trait signature does not invent a method.
@@ -1369,161 +1265,38 @@ export function lint() {
   return current;
 }
 
-/// Below this floor the walk is reading the wrong tree and every violation it
-/// fails to report is an artefact.
-///
-/// **The mirror of `baseline::floor`, and it was the missing half.** A baseline
-/// catches a corpus that grew a violation; nothing caught a corpus that
-/// *shrank*. Rename a section directory and its pages leave `PAGES`, every rule
-/// over them stops running, and the gate reports success — the exact scenario
-/// `baseline.rs` names as "a scan reading the wrong tree reports its whole
-/// family as holes, and a green baseline diff is the worst way to find out".
+/// Below this floor the walk is reading the wrong tree, and a clean run proves
+/// nothing: rename a section directory and its pages leave `PAGES`, every rule
+/// over them stops running, and the gate would report success.
 const PAGE_FLOOR = 100;
-
-/// `--land <rule>`, the one way a baseline ever grows.
-///
-/// **Narrow on purpose, and it is what replaced `--update-baseline`.** That flag
-/// re-snapshotted *everything*, so the remedy the failure message printed could
-/// bury a proven-false claim about the framework along with a stray adverb. This
-/// one names a single rule, refuses a name `RULES` does not hold, writes the
-/// lines and then **fails** — `baseline.rs`'s `land()` shape, for its reason:
-/// "the landing is a reviewed commit rather than a silent green".
-///
-/// It exists because a rule written today lands on a corpus written before it.
-/// `.claude/rules/testing.md`: "A join lands on existing code through a
-/// baseline, never through a sprint."
-function landArgument() {
-  const at = process.argv.indexOf('--land');
-  if (at === -1) return null;
-  const rule = process.argv[at + 1];
-  if (!rule || !Object.values(RULES).includes(rule)) {
-    console.error(`\n✖ --land needs a rule name. \`${rule ?? ''}\` is not one of:\n  `
-      + `${Object.values(RULES).join(', ')}\n`);
-    process.exit(2);
-  }
-  return rule;
-}
-
-function land(rule) {
-  const recorded = readBaseline();
-  const landing = lint().filter((v) => v.split('::')[1] === rule);
-  const added = landing.filter((v) => !recorded.includes(v));
-  const next = [...recorded, ...added].sort();
-  writeFileSync(BASELINE, `${JSON.stringify(next, null, 2)}\n`);
-  console.error(
-    `\n✖ landed ${rule}: ${added.length} pre-existing violation(s) recorded, `
-    + `${next.length} in the baseline.\n\n`
-    + '  Read the diff before committing — every line is a page that contradicts the\n'
-    + '  rule today, and the list only ever shrinks from here.\n',
-  );
-  process.exit(1);
-}
-
-/// Fail closed on an unreadable baseline, for the reason `loadCanon` states
-/// thirty lines up: a missing file would silently disable whichever check reads
-/// it. A `[]` here is loud under the gate — every recorded violation goes fresh
-/// — and silent under `--land`, which writes `[...readBaseline(), ...added]`:
-/// one JSON typo plus one landing discarded every other rule's baseline and
-/// printed a success-shaped message. A genuinely absent file is still the
-/// starting state, so only that case returns empty.
-function readBaseline() {
-  let raw;
-  try {
-    raw = readFileSync(BASELINE, 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') return [];
-    throw err;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`${relative(DOCS_ROOT, BASELINE)} is not valid JSON (${err.message}) — `
-      + 'read as empty it would report every baselined violation as new, and a --land would '
-      + 'overwrite the file with only the rule being landed');
-  }
-  if (!Array.isArray(parsed) || parsed.some((x) => typeof x !== 'string')) {
-    throw new Error(`${relative(DOCS_ROOT, BASELINE)} must be an array of violation strings`);
-  }
-  return parsed;
-}
-
-/// Compare today's violations against the recorded ones.
-///
-/// **Both directions, which is what `baseline.rs` has always done and this side
-/// only claimed.** `STYLE.md` says the baseline "only ever shrinks" and nothing
-/// enforced it: a line naming a violation since fixed sat there forever, and the
-/// baseline could only be read as a promise. A stale line now fails, so removing
-/// it is part of fixing the page rather than a chore nobody is prompted to do.
-function compare(current, recorded) {
-  const recordedSet = new Set(recorded);
-  const currentSet = new Set(current);
-  return {
-    fresh: current.filter((x) => !recordedSet.has(x)),
-    stale: recorded.filter((x) => !currentSet.has(x)),
-  };
-}
 
 /// Run the gate. Only reached when this file is the process entry point, so
 /// `import`ing it costs a canon read and a docs walk — never an `exit`.
+///
+/// **No baseline.** Every rule here is a fact a page contradicts, so a
+/// violation is fixed on the page or the rule is wrong; a list of tolerated
+/// ones would be a list of pages known to mislead their reader.
 function main() {
-  // The floor first, and before `--land` above all. Landing is the only
-  // operation here that *writes*, and it was the one the floor did not guard:
-  // on a shrunken corpus it recorded a rule's violations from the wrong tree
-  // and called that the baseline it inherited.
   if (PAGES.length < PAGE_FLOOR) {
     console.error(`\n✖ the walk found ${PAGES.length} pages — below ${PAGE_FLOOR} it is reading `
       + 'the wrong tree, and a clean run proves nothing.\n');
     process.exit(1);
   }
 
-  const landing = landArgument();
-  if (landing) {
-    land(landing);
-    return;
-  }
-  if (process.argv.includes('--update-baseline')) {
-    // **The switch is gone, and its removal is the point.** It re-snapshotted
-    // every current violation, code-truth ones included — so the remedy the
-    // failure message used to print converted a *proven-false public claim*
-    // into a permanent exemption, in a file nobody re-reads, and turned the
-    // build green. It was offered to whoever held the red build, who is
-    // routinely not the author of the break and cannot see the cause from the
-    // message. `baseline.rs` argues the same removal for the same reason:
-    // "adding a line is an edit a reader sees".
-    console.error(
-      '\n✖ --update-baseline no longer exists.\n\n'
-      + '  It re-snapshotted every violation, including the code-truth ones — so a page\n'
-      + '  proven to contradict the framework could be made permanently tolerated by one\n'
-      + '  flag. Fix the page. If a violation is genuinely intentional, add its line to\n'
-      + `  ${relative(DOCS_ROOT, BASELINE)} by hand, in a commit a reviewer reads.\n`,
-    );
-    process.exit(2);
-  }
-
-  const current = lint();
-  const { fresh, stale } = compare(current, readBaseline());
-
-  if (fresh.length) {
-    console.error(`\n✖ ${fresh.length} new docs-style violation(s) (not in baseline):\n`);
-    for (const x of fresh) {
+  const violations = lint();
+  if (violations.length) {
+    console.error(`\n✖ ${violations.length} docs violation(s):\n`);
+    for (const x of violations) {
       // A detail may quote a path, so only the first two separators are fields.
       const [file, rule, ...detail] = x.split('::');
       console.error(`  ${file}  [${rule}]  ${detail.join('::')}`);
     }
-    console.error('\nFix them on the page. The baseline records what was already there when a '
-      + 'rule landed; it never grows.\n');
+    console.error('\nEach is something the page states that the code, the demo or the site '
+      + 'contradicts (STYLE.md § F). Fix the page, or the rule if it is wrong.\n');
+    process.exit(1);
   }
-  if (stale.length) {
-    console.error(`\n✖ ${stale.length} baseline line(s) name a violation that is now fixed — `
-      + 'delete them, the baseline only shrinks:\n');
-    for (const x of stale) console.error(`  ${x}`);
-    console.error('');
-  }
-  if (fresh.length || stale.length) process.exit(1);
 
-  console.log(`✔ No new violations across ${PAGES.length} pages. `
-    + `(${current.length} pre-existing violation(s) still baselined.)`);
+  console.log(`✔ No violations across ${PAGES.length} pages.`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

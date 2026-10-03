@@ -116,12 +116,12 @@ Skeletons live in `docs/templates/`.
   the same file would say in the standalone layout and what three pages were still showing.
 
   **Provenance is a word, not a prefix: `(from the demo)`.** A title carrying it claims the block
-  is an excerpt of the Publish workspace, and that claim is what `fence-drift` and `fence-title`
-  check — the file exists at all (the linter indexes every `.rs` under `demo/`, so a marker on a
-  path it lacks is provably false), every non-elided line in the real file, in order, no comment
-  the demo does not carry, no port it does not listen on. Add `, abridged` when the excerpt is trimmed:
-  `src/posts/entity.rs (from the demo, abridged)`. Without the marker a title is an illustration
-  the reader adapts, and it asserts nothing about `demo/`.
+  is an excerpt of the Publish workspace, and that claim is what `fence-drift` checks — the file
+  exists, and every non-elided line is in it, in order. Add `, abridged` when the excerpt is
+  trimmed, and mark each cut with `// …`: `src/posts/entity.rs (from the demo, abridged)`.
+  Without the marker a title is an illustration the reader adapts, and it asserts nothing about
+  `demo/` — the right title for a simplified variant, a tutorial step, or a shape the demo does
+  not use.
 
   Recorded because it was decided against the obvious alternative: the prefix used to *be* the
   claim, so one string meant two things — the reader's layout and our provenance — and a page
@@ -326,22 +326,15 @@ files a fence quotes, the READMEs `readme-install` reads — the linter reads di
   `/fundamentals/exception-filters/` published `Filter` and `ExceptionFilter` with three methods
   each — four names that exist nowhere under `crates/` — then spent an Aside explaining why they
   do not work. A reader who wrote one got `E0407`.
-- **`fence-title`** — a fence titled with a real `demo/` file may not contradict it. Two exact
-  probes rather than the byte-for-byte rule of §C: a comment (the demo workspace carries none, so
-  quoting one publishes code the repo forbids writing) and a `port:` disagreeing with the app's.
-  The strict form would report 134 pages at once and the signal would be gone; the narrowing is
-  deliberate and this sentence is where it is stated.
-- **`fence-drift`** — a fence titled with a real `demo/` file is an **excerpt of that file**:
-  every non-elided line appears in it, in order. Weaker than § C's byte-for-byte rule on purpose
-  — most fences are honest excerpts written before the `(abridged)` convention, and the strict
-  form reports 134 pages at once, which is a signal nobody reads. What it catches is the class
-  byte-for-byte was written for and nothing enforced: `/security/authentication/` published a
-  `#[module]` inside a file titled `mod.rs`, which the architecture rules the CLI generates into
-  every scaffolded project forbid, and `/configuration/testing/` published a `#[tokio::test]`
-  inside one titled `tests/e2e/main.rs`, which the locked test-layout norm forbids. Both sat on
-  pages a reader opens first. A snippet that is *not* an excerpt gets a title that does not name
-  a repo file — that is what § C means by a generic title, and it is the escape.
-  **102 pre-existing drifts are baselined**; the list only shrinks, and a 103rd fails the build.
+- **`fence-drift`** — a fence whose title says `(from the demo)` is an **excerpt of the file it
+  names**: the file exists under `demo/` — any file, a manifest as much as a `.rs` — and every
+  non-elided line appears in it, in order. Weaker than § C's byte-for-byte rule on purpose: an
+  excerpt may cut (`// …`) and re-indent. It catches every way an excerpt goes stale — a line the
+  demo rewrote, a comment the demo does not carry (it carries none), a port the app does not listen
+  on, a file that moved, an app the demo never had — and the class it was written for:
+  `/security/authentication/` published a `#[module]` inside a file titled `mod.rs`, and
+  `/configuration/testing/` a `#[tokio::test]` inside one titled `tests/e2e/main.rs`. A block that
+  is not an excerpt drops the marker; that is the escape, and it is § C's generic title.
 - **`link`** — every internal link resolves to a page the site serves (or a declared redirect),
   and every `#anchor` to a heading on the page it lands on. Nothing checked this: a probe page
   linking a route that does not exist builds clean, exits 0, and ships the dead href — the only
@@ -431,39 +424,23 @@ menu and the built breadcrumbs — `dist/**` carries both — and by this sectio
 
 ```
 cd docs
-npm run lint:docs                    # the gate
-npm test                             # the linter joined against itself
-npm run lint:docs -- --land <rule>   # land a new rule on the corpus it inherits
+npm run lint:docs   # the gate
+npm test            # the linter joined against itself
 ```
 
-The linter is **baseline-gated**: `docs/scripts/lint-baseline.json` records the violations a rule
-inherited on the day it landed, so CI fails only on *new* dialect drift. The contract runs **both
-directions**, enforced rather than promised — a violation not in the baseline fails, *and* a
-baseline line naming a violation since fixed fails, so deleting that line is part of fixing the
-page instead of a chore nobody is prompted to do. The list only ever shrinks. Every rule above
-gates the whole corpus at zero except `fence-drift`, whose entry says why it landed on a corpus
-written before it.
-
-**`--update-baseline` is gone, and its removal is the rule.** It re-snapshotted every current
-violation, the code-truth ones of §F included — so the remedy the failure message printed could
-turn a proven-false claim about the framework into a permanent exemption, in a file nobody
-re-reads, and it was offered to whoever held the red build, who is routinely not the author of
-the break. `--land` is the narrow replacement: it names **one** rule, refuses a name `RULES` does
-not hold, writes that rule's current violations and then **fails**, so a landing is a reviewed
-commit rather than a silent green. Anything else is fixed on the page; a line that genuinely
-belongs in the baseline is added by hand, where a reviewer sees it.
+**There is no baseline.** Every rule is a fact a page contradicts, so a violation is fixed on the
+page — or the rule is wrong, and the rule is fixed. A list of tolerated violations would be a list
+of pages known to mislead their reader. A new rule lands with the pages it finds already fixed.
 
 A clean run only means something if the walk read the corpus, so **below 100 pages the gate fails**
-instead of reporting success. That is the mirror of the baseline: a baseline catches a corpus that
-grew a violation, and nothing caught a corpus that *shrank* — rename a section directory and its
-pages leave the walk, every rule over them stops running, and the build goes greener.
+instead of reporting success: rename a section directory and its pages leave the walk, every rule
+over them stops running, and the build would go greener.
 
 `npm test` is the other half. `scripts/lint.test.mjs` joins the rules against themselves: every
 member of `RULES` owes a **fixture that makes it fire** and a **§F entry above**, and no violation
 may name a rule outside the set. A rule added without a fixture fails, a rule weakened until it
-matches nothing fails, and a §F entry for a rule that does not exist fails. Before that join,
-thirty rules had no proof they still fired — neutralise any regex and the gate went greener. A
-fixture proves a rule triggers, never that its judgement is right; that question is `/audit`'s.
+matches nothing fails, and a §F entry for a rule that does not exist fails. A fixture proves a
+rule triggers, never that its judgement is right; that question is `/audit`'s.
 
 CI runs the gate before the build, in `.github/workflows/docs-pages.yml`, on pushes to `main`
 that touch `docs/**` or anything the canon and the quoted sources are read from — `crates/**`,

@@ -32,7 +32,6 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `STYLE.md` | **the law** for docs prose and structure; read it before editing a page |
 | `templates/` | the five skeletons `STYLE.md` §B names — T-CONCEPT, T-INDEX, T-TUTORIAL, T-RECIPE, T-SINGLE |
 | `scripts/lint-docs.mjs` | the gate: every rule in `STYLE.md` §F |
-| `scripts/lint-baseline.json` | violations a rule inherited when it landed — shrinks only |
 | `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
 

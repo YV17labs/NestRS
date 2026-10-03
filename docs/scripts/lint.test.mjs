@@ -12,9 +12,9 @@
 //      working fails rather than going quiet;
 //   2. **it is documented** — a `STYLE.md` § F entry, so a rule cannot ship
 //      unwritten (seven had);
-//   3. **nothing else fires** — every violation the real corpus produces names
-//      a member, so a rule name typo'd at a call site cannot hide as a
-//      violation the baseline can never match.
+//   3. **nothing else fires** — every violation the corpus or a fixture
+//      produces names a member, so a rule name typo'd at a call site cannot
+//      file a violation no document describes.
 //
 // A fixture proves the rule *triggers*, never that its judgement is right; that
 // is `/audit`'s question and the two do not substitute.
@@ -106,15 +106,16 @@ nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
     '    type Exception = MyError;', '}', '```',
   )],
   // Both carry `(from the demo)`: the marker is what makes a title a claim about
-  // `demo/`, so a fixture without it exercises nothing — which is what this join
-  // reported the moment the rules stopped keying on the path prefix.
+  // `demo/`, so a fixture without it exercises nothing.
   [RULES.fenceDrift, 'sample.mdx', page(
     '```rust title="apps/api/src/module.rs (from the demo)"', 'pub struct NotInThatFile;', '```',
   )],
-  [RULES.fenceTitle, 'sample.mdx', page(
-    '```rust title="apps/api/src/module.rs (from the demo)"',
-    '/// a doc comment the demo workspace forbids',
-    'pub struct ApiModule;', '```',
+  [RULES.fenceDrift, 'sample.mdx', page(
+    '```toml title="apps/blog/Cargo.toml (from the demo)"', '[dependencies]', '```',
+  )],
+  [RULES.fenceDrift, 'sample.mdx', page(
+    '```rust title="apps/api/src/module.rs (from the demo — you write this)"',
+    'pub struct NotInThatFile;', '```',
   )],
   [RULES.configTable, 'storage/index.mdx', page('The keys are `ENDPOINT` and nothing else.')],
   [RULES.architectureDrift, 'architecture.mdx', page('No role table, no reserved block.')],
@@ -168,6 +169,26 @@ for (const [rule, rel, src] of FIXTURES) {
   });
 }
 
+test('a fence quoting its demo file, elided, is an excerpt', () => {
+  const rel = 'demo/apps/api/src/module.rs';
+  const lines = readFileSync(join(DOCS_ROOT, '..', rel), 'utf8').split('\n').filter((l) => l.trim());
+  const src = page(
+    '```rust title="apps/api/src/module.rs (from the demo, abridged)"',
+    lines[0], '// …', lines.at(-1), '```',
+    '', 'An illustration asserts nothing:', '',
+    '```rust title="apps/api/src/module.rs"', 'pub struct NotInThatFile;', '```',
+  );
+  const fired = lintFile(join(CONTENT_ROOT, 'sample.mdx'), src);
+  assert.deepEqual(fired, [], fired.join('\n'));
+});
+
+test('a floor is false only once the repo holds fewer', () => {
+  const claims = (tests) => lintFile(join(CONTENT_ROOT, 'why.mdx'),
+    page(`**${tests}+ tests** across **1+ pages**.`)).filter((v) => v.includes('::landing-claim::'));
+  assert.equal(claims(1).length, 0, 'a floor the repo has outgrown is still true');
+  assert.equal(claims(Number.MAX_SAFE_INTEGER).length, 1, 'a floor above the repo is false');
+});
+
 /// The anchor cases that decide `slugify`, pinned because the algorithm is
 /// written out rather than imported — see the `link` rule's note on the
 /// freshness bar.
@@ -213,9 +234,24 @@ test('every rule has a fixture that proves it still fires', () => {
   );
 });
 
-test('every rule is documented in STYLE.md', () => {
+/// The rules `STYLE.md` § F documents, one `- **`name`**` entry each.
+function documentedRules() {
   const style = readFileSync(join(DOCS_ROOT, 'STYLE.md'), 'utf8');
-  const undocumented = Object.values(RULES).filter((rule) => !style.includes(`\`${rule}\``));
+  const start = style.indexOf('\n## F.');
+  const section = style.slice(start, style.indexOf('\n## ', start + 1));
+  return [...section.matchAll(/^- \*\*`([a-z-]+)`\*\*/gm)].map((m) => m[1]);
+}
+
+test('every STYLE.md § F entry names a rule that exists', () => {
+  const documented = documentedRules();
+  assert.ok(documented.length > 0, 'no § F entries found — the section moved or its shape changed');
+  const phantom = documented.filter((rule) => !Object.values(RULES).includes(rule));
+  assert.deepEqual(phantom, [], 'STYLE.md documents rules the linter no longer has');
+});
+
+test('every rule is documented in STYLE.md', () => {
+  const documented = new Set(documentedRules());
+  const undocumented = Object.values(RULES).filter((rule) => !documented.has(rule));
   assert.deepEqual(
     undocumented, [],
     'these rules gate the corpus and STYLE.md § F does not mention them — the linter grows '
@@ -224,12 +260,19 @@ test('every rule is documented in STYLE.md', () => {
 });
 
 test('no violation names a rule outside RULES', () => {
-  const stray = [...new Set(lint().map((v) => v.split('::')[1]))]
+  // The corpus first: `lint()` resets the mirrors it checks were visited, and a
+  // fixture on a mirrored page marks one.
+  const produced = [
+    ...lint(),
+    ...FIXTURES.flatMap(([, rel, src]) => lintFile(join(CONTENT_ROOT, rel), src)),
+    ...CORPUS_FIXTURES.flatMap(([, fires]) => fires()),
+  ];
+  const stray = [...new Set(produced.map((v) => v.split('::')[1]))]
     .filter((rule) => !Object.values(RULES).includes(rule));
   assert.deepEqual(
     stray, [],
     'a rule name reached a violation without going through RULES — a literal at a call site, '
-      + 'which is a name the baseline can never match and no document describes',
+      + 'which is a name no document describes',
   );
 });
 

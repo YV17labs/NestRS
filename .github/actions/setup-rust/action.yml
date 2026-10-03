@@ -17,20 +17,15 @@ inputs:
 runs:
   using: composite
   steps:
-    # No toolchain argument: rustup installs the one rust-toolchain.toml names,
-    # with the components it lists, so CI builds on exactly the pinned release.
     - name: Install the pinned toolchain
       shell: bash
       run: rustup toolchain install --profile minimal
 
-    # `.cargo/config.toml` links with mold on Linux; without it every link
-    # (build scripts and proc macros included) fails with "cannot find 'ld'".
+    # .cargo/config.toml links with mold.
     - name: Install mold
       shell: bash
       run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mold
 
-    # Saved from `main` only: a pull request restores what `main` built and
-    # never writes a cache another branch could restore.
     - name: Cache cargo
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:

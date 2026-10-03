@@ -10,11 +10,6 @@ description = "Reusable Kubernetes-style liveness/readiness probe module for Nes
 keywords = ["framework", "nestrs", "health", "kubernetes", "readiness"]
 categories = ["web-programming"]
 
-# `#[controller]` expands into `::nest_rs_guards` paths that no source line here
-# names, so cargo-machete cannot see the dependency is used.
-[package.metadata.cargo-machete]
-ignored = ["nest-rs-guards"]
-
 [dependencies]
 nest-rs-config.workspace = true
 nest-rs-core.workspace = true

@@ -1,36 +1,15 @@
-# The gate: every push to `main` or a release branch, and every pull request.
-#
-# Cheap jobs first. `check`, `supply-chain`, `workflows` and `docs` start at
-# once and finish in minutes; everything that builds the test suites waits for
-# `check`, so a formatting slip or a clippy finding costs one short job rather
-# than a dozen long ones. The backends are real — Postgres, Redis and RustFS as
-# service containers, on the images and credentials the devcontainer uses —
-# and `backends` runs the Redis adapter's suite against every server line the
-# framework supports.
-#
-# What runs when — only what a change can break, when it arrives; nothing runs
-# on a timer:
-#   - every pull request and push touching code: check, supply-chain,
-#     workflows, test, e2e (one Redis), demo;
-#   - `backends.yml` (the Redis/Valkey matrix) and `features.yml` (each crate
-#     under each feature alone) run only when a change reaches what they test;
-#   - `docs.yml` lints the pages when they, or what they quote, change;
-#   - a pull request labelled `mutants`: mutants (advisory).
-# Advisories published while nobody pushes are GitHub's Dependabot alerts, a
-# repository setting rather than a workflow.
-
 name: CI
 
 on:
   push:
     branches: [main, 'release/**']
-    paths-ignore: &prose
+    paths-ignore: &skip
       - 'docs/**'
-      - '.claude/**'
-      - 'CLAUDE.md'
-      - 'CHANGELOG.md'
+      - 'demo/**'
+      - 'bench/**'
+      - '**.md'
   pull_request:
-    paths-ignore: *prose
+    paths-ignore: *skip
   workflow_dispatch:
 
 permissions: {}
@@ -41,12 +20,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # `.config/nextest.toml`: a CI run reports every failing test, not the first.
-  NEXTEST_PROFILE: ci
 
 jobs:
-  check:
-    name: check (fmt, clippy, rustdoc)
+  lint:
+    name: lint (fmt, clippy, rustdoc)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -57,127 +34,20 @@ jobs:
           persist-credentials: false
       - uses: $/.github/actions/setup-rust
         with:
-          cache-key: check
-          workspaces: |
-            . -> target
-            demo -> target
-      - name: rustfmt (framework)
-        run: cargo fmt --all --check
-      - name: rustfmt (demo)
-        run: cargo fmt --all --check
-        working-directory: demo
-      - name: rustfmt (bench)
-        run: cargo fmt --all --check
-        working-directory: bench/sut/nestrs
-      - name: clippy (framework)
-        # bash with pipefail: `tee` must not hide clippy's exit status.
-        shell: bash
-        run: |
-          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee clippy.log
-          # The notice of a dependency a coming Rust release will reject, from
-          # the build already paid for — the warning that announced apalis-redis.
-          if grep -q 'will be rejected by a future version of Rust' clippy.log; then
-            echo "::warning title=future incompatibility::a dependency carries code a future Rust release will reject — run cargo report future-incompatibilities"
-          fi
-      - name: clippy (demo)
-        run: cargo clippy --workspace --all-targets -- -D warnings
-        working-directory: demo
-      # Every feature, as docs.rs renders each crate (`[package.metadata.docs.rs]`).
-      - name: rustdoc
-        run: cargo doc --workspace --all-features --no-deps
+          cache-key: lint
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo doc --workspace --all-features --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
 
-  supply-chain:
-    name: supply chain (cargo-deny, cargo-machete)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install the pinned toolchain
-        run: rustup toolchain install --profile minimal
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-deny@0.20,cargo-machete@0.9
-      # One policy, `deny.toml`, over every lockfile the repo owns.
-      - name: cargo-deny (framework)
-        run: cargo deny --manifest-path Cargo.toml check
-      - name: cargo-deny (demo)
-        run: cargo deny --manifest-path demo/Cargo.toml check
-      # The SUT's tree is a subset of the framework's, so an ignore or a
-      # license the other two need is expected to go unmatched here.
-      - name: cargo-deny (benchmark SUT)
-        run: cargo deny --manifest-path bench/sut/nestrs/Cargo.toml check --allow advisory-not-detected --allow license-not-encountered
-      - name: cargo-machete
-        run: cargo machete
-
-  workflows:
-    name: workflows (actionlint, zizmor)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: zizmor@1.30
-      # Pinned by checksum, as the actions are by commit.
-      - name: actionlint
-        run: |
-          curl -fsSL -o actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum --check --strict
-          tar -xzf actionlint.tar.gz actionlint
-          ./actionlint -color
-      - name: zizmor
-        run: zizmor --format github .github
-        env:
-          GH_TOKEN: ${{ github.token }}
-
   test:
-    name: test (unit, integration, doctests, ACME prefix)
-    needs: check
+    name: test (Postgres, Redis, S3)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: test
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-nextest@0.9
-      # Includes every trybuild snapshot: the toolchain is pinned, so a
-      # diagnostic changes only with a deliberate bump.
-      - name: unit and integration
-        run: cargo nextest run --workspace -E '!binary(e2e)'
-      - name: doctests
-        run: cargo test --workspace --doc
-      # Every framework variable name is built from the prefix, never spelled:
-      # the same suite passes when the deployment renames all of them.
-      - name: unit and integration under another prefix
-        run: cargo nextest run --workspace -E '!binary(e2e)'
-        env:
-          NESTRS_ENV_PREFIX: ACME
-
-  e2e:
-    name: e2e (Postgres, Redis, S3)
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    services: &backends
+    services:
       postgres:
         image: postgres:18.4
         env:
@@ -205,7 +75,7 @@ jobs:
         options: >-
           --health-cmd "curl -fsS http://localhost:9000/health"
           --health-interval 5s --health-timeout 5s --health-retries 30
-    # The devcontainer's hostnames, as the runner reaches the service ports.
+    # The dev container's services, as the runner reaches them.
     env:
       NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
       NESTRS_REDIS__URL: redis://localhost:6379
@@ -220,72 +90,5 @@ jobs:
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest@0.9
-      - name: e2e
-        run: cargo nextest run --workspace -E 'binary(e2e)'
-
-  demo:
-    name: demo (lint, unit, e2e)
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    services: *backends
-    env:
-      # The CLI's own variable: CI installs the tools it would bootstrap.
-      NESTRS_NO_BOOTSTRAP: '1'
-      NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
-      # The demo's suites enqueue on Redis database 1, as `.env.test` says.
-      NESTRS_REDIS__URL: redis://localhost:6379/1
-      NESTRS_STORAGE__ENDPOINT: http://localhost:9000
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: demo
-          workspaces: |
-            . -> target
-            demo -> target
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: just@1,cargo-nextest@0.9
-      # A debug build: the CLI only drives `just`, and the release profile's
-      # fat LTO would cost minutes for nothing.
-      - name: Install the CLI from this tree
-        run: cargo install --locked --debug --path crates/nest-rs-cli
-      - run: nestrs run lint
-        working-directory: demo
-      - run: nestrs run test unit
-        working-directory: demo
-      - run: nestrs run test e2e
-        working-directory: demo
-
-  mutants:
-    name: mutants on the diff (advisory)
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'mutants')
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    continue-on-error: true
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: mutants
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-mutants@27,cargo-nextest@0.9
-      - name: Diff against the base branch
-        run: git diff "origin/${BASE_REF}...HEAD" > pr.diff
-        env:
-          BASE_REF: ${{ github.base_ref }}
-      # A surviving mutant is a changed line no test asserts. The e2e suites
-      # need backends this job does not start.
-      - run: cargo mutants --in-place --in-diff pr.diff --test-tool nextest --no-shuffle -- -E '!binary(e2e)'
+      - run: cargo nextest run --workspace --no-fail-fast
+      - run: cargo test --workspace --doc

@@ -1,8 +1,0 @@
-# actionlint 1.7.12 predates GitHub's self-repository syntax (`uses: $/…`,
-# 2026-07-30), which resolves a same-repository action at the running commit
-# and is what zizmor's `self-repository` audit asks for. Drop this once
-# actionlint accepts it.
-paths:
-  .github/workflows/**/*.{yml,yaml}:
-    ignore:
-      - 'specifying action "\$/[^"]+" in invalid format because ref is missing'

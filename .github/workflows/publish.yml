@@ -1,43 +1,7 @@
-# Tag-driven crates.io publish — lockstep release of every framework crate in
-# the workspace under the `nest-rs-*` prefix. Apps and product crates carry
-# `publish = false` in their Cargo.toml so they're skipped automatically.
-#
-# Trigger: push a tag matching `v*.*.*` (e.g. `v0.1.1`). The job verifies the
-# tag matches the workspace `version` in `Cargo.toml`, runs `cargo check`, then
-# publishes with `cargo workspaces publish`.
-#
-# Why not the built-in `cargo publish --workspace`? It is all-or-nothing and
-# NOT resumable: it aborts the whole run the moment one selected member already
-# exists on the index (`crate X@<ver> already exists`), so a release interrupted
-# mid-way — e.g. by crates.io index-propagation lag timing out cargo's 60s
-# per-crate confirmation poll — cannot be re-run to completion. See
-# rust-lang/cargo#15006 / #14789.
-#
-# `cargo workspaces publish` fixes both failure modes:
-#   * It queries the registry per crate and SKIPS versions already published
-#     (`info already published <crate> v<ver>`), so a re-run resumes exactly
-#     where a prior run stopped — the release is idempotent.
-#   * `--publish-interval` paces uploads so the index never falls behind and we
-#     never trip the confirmation timeout that deadlocked the native command.
-# It publishes in dependency order; `--from-git` keeps the committed versions
-# (no bump) and bypasses the branch check, so the detached-HEAD tag checkout is
-# fine. `--no-verify` is safe because the `cargo check` step above already
-# compiled the whole workspace.
-#
-# Every intra-workspace *dev*-dependency stays declared path-only (no version):
-# a versioned dev-edge pointing back to a crate that depends on it forms a
-# member cycle that confuses publish ordering, and it falls back to the index
-# where the new version doesn't exist yet. Dev-deps are never published, so
-# dropping the version is free. See rust-lang/cargo#4242 / #16450.
-#
-# Required secret: `CARGO_REGISTRY_TOKEN`, stored on the `crates-io`
-# environment (Settings → Environments → crates-io → Environment secrets).
-# The job declares `environment: crates-io` so the secret is in scope. Generate
-# the token at https://crates.io/me with scope `publish-new` + `publish-update`,
-# scoped to the `nest-rs-*` package prefix.
-#
-# Nothing here restores a cache: a cache another workflow can write is an input
-# to what gets published, so a release builds from the tagged tree alone.
+# Publishes every nest-rs-* crate when a v*.*.* tag is pushed. cargo-workspaces
+# skips versions already on crates.io, so a re-run resumes an interrupted release
+# (cargo publish --workspace cannot: rust-lang/cargo#15006).
+# Secret: CARGO_REGISTRY_TOKEN on the `crates-io` environment.
 
 name: Publish — crates.io
 
@@ -65,12 +29,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # No argument: the toolchain `rust-toolchain.toml` pins.
       - name: Install Rust toolchain
         run: rustup toolchain install --profile minimal
 
-      # .cargo/config.toml selects mold on Linux for faster local/devcontainer
-      # links; install it here too or gcc fails with "cannot find 'ld'".
       - name: Install mold linker
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mold
 
@@ -87,25 +48,13 @@ jobs:
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets
 
-      # cargo-workspaces is the idempotent publisher (see header).
       - name: Install cargo-workspaces
         run: cargo install cargo-workspaces --version 0.4.2 --locked
 
-      # crates.io trusted publishing (OIDC instead of a stored token) is planned
-      # once 7.0.0 is on crates.io; until then the token stays in the
-      # `crates-io` environment.
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }} # zizmor: ignore[use-trusted-publishing]
-        # Idempotent + paced publish: sequential, one crate at a time, waiting
-        # for each to land in the index before the next — so the index never
-        # backlogs (the failure mode that deadlocked `cargo publish --workspace`).
-        #
-        # The retry loop makes a fresh release land in ONE job run without anyone
-        # clicking re-run: cargo-workspaces skips already-published versions, so
-        # if a single crate trips cargo's 60s index-confirmation timeout on a bad
-        # crates.io day, the next iteration resumes past everything already done
-        # and finishes the stragglers. Three attempts; 30s between them.
+        # Retried: a crate that times out on index confirmation is resumed, not lost.
         run: |
           for attempt in 1 2 3; do
             echo "::group::publish attempt $attempt"

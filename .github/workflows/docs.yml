@@ -1,6 +1,3 @@
-# The docs site's build, on a change to the pages: the gate a pull request
-# passes before Pages publishes. Astro and Starlight check what is theirs; what
-# a page says about the code is review's.
 
 name: Docs
 

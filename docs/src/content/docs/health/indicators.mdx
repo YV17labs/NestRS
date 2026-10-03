@@ -55,7 +55,7 @@ use crate::upstream::health::indicator::UpstreamHealthIndicator;
 pub struct UpstreamHealthModule;
 ```
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use features::upstream::UpstreamHealthModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
@@ -97,7 +97,7 @@ indicator. The SeaORM pool ping is the first one to ship.
 both `#[readiness]` and `#[startup]` — exactly what most apps want and
 zero code in the app:
 
-```toml title="apps/api/Cargo.toml (from the demo)"
+```toml title="apps/api/Cargo.toml"
 nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"] }
 ```
 

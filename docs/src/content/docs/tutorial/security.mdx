@@ -107,22 +107,21 @@ Two patterns to read here:
 
 ## Bind the guards on the controller
 
-The controller declaration changes by two attributes — one for the
-guard chain, one for the by-id extractor.
+The controller gains two attributes — the guard chain on the struct, the
+posture on the route — and an extractor for the by-id load.
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)" {3-9, 13, 16-19, 23-29}
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {3, 5, 9-11, 15, 26, 28-33, 38}
 use std::sync::Arc;
 
-use nest_rs::authz::http::Authorize;
 use nest_rs::authz::{Create, Read};
 use nest_rs::http::{Ctx, Valid, controller, crud};
 use nest_rs::seaorm::Bind;
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Json;
+use poem::Result;
+use poem::web::Json;
 
 use crate::Claims;
-use features::authn::AuthnGuard;
-use features::authz::AuthzGuard;
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
@@ -132,20 +131,23 @@ pub struct UsersController {
     svc: Arc<UsersService>,
 }
 
-#[crud(/* same as before */)]
+#[crud(
+    // … same as before
+)]
 impl UsersController {
     #[post("/")]
-    async fn create(
-        &self,
-        _authz: Authorize<Create, UserEntity>,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Json<User>> {
-        let user = self.svc.create_in_org(body.into_inner(), auth.org_id).await?;
+    #[authorize(Create, UserEntity)]
+    // … #[api(…)]
+    async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+        let user = self
+            .svc
+            .create_in_org(body.into_inner(), auth.org_id)
+            .await?;
         Ok(Json(User::from(&user)))
     }
 
     #[get("/:id")]
+    // … #[api(…)]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
@@ -158,7 +160,7 @@ Four things changed:
 |--------|-----|
 | `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
 | `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
-| `_authz: Authorize<Create, UserEntity>` | Check the ability allows `Create` on `UserEntity` before the body runs |
+| `#[authorize(Create, UserEntity)]` | Check the ability allows `Create` on `UserEntity` before the body runs |
 | `user: Bind<Read, UsersService>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
 
 The org id comes from the caller's claims, never from the body — there
@@ -190,7 +192,7 @@ than running silently unprotected.
 The app root — `api`, not `blog` — imports `AuthnModule` and
 `AuthzModule` once:
 
-```rust title="apps/api/src/module.rs (from the demo, abridged)"
+```rust title="apps/api/src/module.rs"
 use features::authn::AuthnModule;
 use features::authz::AuthzModule;
 use features::users::UsersHttpModule;
@@ -275,7 +277,7 @@ Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
 policy, using only the columns `blog` already has (the actor comes first — the
 trait's own order):
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)"
+```rust title="crates/features/src/authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 use crate::authn::Claims;

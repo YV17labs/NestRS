@@ -27,15 +27,19 @@ cargo add nest-rs --features openapi
 Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
+// …
 use nest_rs::openapi::OpenApiModule;
+// …
 
 #[module(
     imports = [
-        UsersHttpModule,
-        // ... the rest of your HTTP modules ...
+        // …
         OpenApiModule::for_root(None),
+        // …
+        UsersHttpModule,
+        // … the rest of the HTTP modules
     ],
 )]
 pub struct ApiModule;
@@ -93,19 +97,19 @@ a longer description, and tags to any handler:
 
 ```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[post("/")]
+#[authorize(Create, UserEntity)]
 #[api(
     summary = "Create a user in the caller's org",
-    description = "Requires a bearer JWT. The user's org is taken from the \
-                   caller's token, never the body.",
+    description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
+                   user's org is taken from the caller's token, never the body.",
     tags("User")
 )]
-async fn create(
-    &self,
-    _authz: Authorize<Create, UserEntity>,
-    auth: Ctx<Claims>,
-    body: Valid<Json<CreateUser>>,
-) -> Result<Json<User>> {
-    Ok(Json(self.svc.create_in_org(body.into_inner(), auth.org_id).await?))
+async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+    let user = self
+        .svc
+        .create_in_org(body.into_inner(), auth.org_id)
+        .await?;
+    Ok(Json(User::from(&user)))
 }
 ```
 
@@ -128,8 +132,9 @@ it can carry `x-next-cursor`, and declares
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[get("/")]
+#[authorize(Read, UserEntity)]
 #[api(summary = "List Users", response = Vec<User>)]
-async fn list(&self, _authz: Authorize<Read, UserEntity>) -> Result<Response> { /* ... */ }
+async fn list(&self) -> Result<Response> { /* ... */ }
 ```
 
 ### Bodies that are not JSON
@@ -191,7 +196,7 @@ travel. A required header also makes the operation advertise its `400`.
 
 ### Ability-shaped responses
 
-A route with an `Authorize<_, _>` parameter masks its response per caller, so
+A route declaring `#[authorize(..)]` masks its response per caller, so
 the fields a given client receives are a **subset** of the published schema.
 The document publishes the full shape anyway and says so in the response
 description — a schema a caller may see less of is far more useful to a

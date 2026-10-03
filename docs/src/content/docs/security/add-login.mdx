@@ -41,28 +41,33 @@ controller from some other module buys nothing.
 The parts underneath the real login are in the box, so the handler stays thin:
 `hash_password` / `verify_password` / `burn_verify` (argon2, constant-time),
 `CredentialError` (one opaque `invalid credentials` for every failure mode),
-and `JwtService::sign`. `LoginDto`, `AccessTokenDto` and the `grant_password`
-service method below are the three things you add.
+and `JwtService::sign` — and so is the response, RFC 6749's
+`nest_rs::oauth::server::AccessTokenResponse`. `LoginDto` and the
+`grant_password` service method below are the two things you add.
 
 The handler validates the body, delegates to the service, returns the token:
 
 ```rust title="crates/features/src/oauth/http/controller.rs (from the demo — you write this)"
 #[post("/login")]
+#[public]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenDto>> {
+// … #[api(…)]
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenResponse>> {
     let input = body.into_inner();
     Ok(Json(
-        self.svc.grant_password(&input.email, &input.password).await?,
+        self.svc
+            .grant_password(&input.email, &input.password)
+            .await?,
     ))
 }
 ```
 
 `grant_password` authenticates the email/password pair and signs the
 claims — invalid credentials come back as one opaque error (no
-"user exists but wrong password" oracle). Note the route binds a
-**throttler**, not an auth guard: login is the one route that must accept
-anonymous callers, and rate-limiting is its protection.
+"user exists but wrong password" oracle). Note the route is `#[public]` and
+binds a **throttler**, not an auth guard: login is the one route that must
+accept anonymous callers, and rate-limiting is its protection.
 
 For signing to work the app needs a key. The simplest single-app setup is
 a symmetric secret (32 bytes minimum):

@@ -26,11 +26,14 @@ there".
 
 ## What it looks like
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)"
-use nest_rs::authz::Read;
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
+use nest_rs::authz::{Create, Read};
+// …
 use nest_rs::seaorm::Bind;
+// …
 
 #[get("/:id")]
+// … #[api(…)]
 async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
 }

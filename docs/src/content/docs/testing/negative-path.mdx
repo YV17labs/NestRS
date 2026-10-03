@@ -34,9 +34,9 @@ catch bugs the happy path can't:
 ## Auth refused
 
 ```rust title="apps/api/tests/e2e/http.rs (from the demo, abridged)"
-use nest_rs::http::poem::http::{StatusCode, header};
-
-use super::harness::*;
+use poem::http::{StatusCode, header};
+// …
+use crate::*;
 
 #[tokio::test]
 async fn protected_route_rejects_a_missing_or_bogus_bearer_token() {
@@ -158,8 +158,7 @@ beside the `200` it contrasts with:
 
 ```text frame="none"
 apps/api/tests/e2e/
-├── main.rs        ← mod harness; mod users; mod orgs; …
-├── harness.rs     ← boot(), token_for(), fixtures
+├── main.rs        ← mod users; mod orgs; …, boot(), token_for(), fixtures
 ├── users.rs       ← scoping, masking, by-id 403/404
 ├── orgs.rs
 └── http.rs        ← 401s, the problem+json envelope, compression

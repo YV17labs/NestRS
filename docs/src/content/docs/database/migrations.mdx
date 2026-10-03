@@ -95,10 +95,13 @@ pub use migrator::{Migrator, migrate};
 `migrator.rs` is **regenerated** from that `mod` list on every
 `g migration`, so the vec can never fall behind the files:
 
-```rust title="crates/migrations/src/migrator.rs (from the demo)"
+```rust title="crates/migrations/src/migrator.rs (from the demo, abridged)"
 use sea_orm_migration::prelude::*;
 
-use super::{m20260526_000000_create_org, m20260526_000001_create_user};
+use super::{
+    m20260526_000000_create_org, m20260526_000001_create_user, m20260609_000000_create_post,
+    // …
+};
 
 pub struct Migrator;
 
@@ -108,6 +111,8 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260526_000000_create_org::Migration),
             Box::new(m20260526_000001_create_user::Migration),
+            Box::new(m20260609_000000_create_post::Migration),
+            // …
         ]
     }
 }

@@ -149,7 +149,7 @@ impl when boot fails.
 The feature root re-exports what other modules import. Keep it small —
 this is the public surface.
 
-```rust title="crates/features/src/posts/mod.rs (from the demo)"
+```rust title="crates/features/src/posts/mod.rs"
 mod entity;
 mod module;
 
@@ -160,7 +160,7 @@ pub use module::PostsModule;
 `PostsService` doesn't exist yet; that's the next page. For now, keep
 `module.rs` and `service.rs` stubbed so the crate compiles.
 
-```rust title="crates/features/src/posts/module.rs (from the demo)"
+```rust title="crates/features/src/posts/module.rs"
 use nest_rs::core::module;
 
 #[module]

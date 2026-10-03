@@ -132,7 +132,7 @@ impl OrgsController {}
 `#[crud]` only generates the operations you did **not** write. Hand-write
 the ones that need custom logic — the rest are filled in:
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)"
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -149,19 +149,18 @@ pub struct UsersController {
 )]
 impl UsersController {
     #[post("/")]
-    #[api(summary = "Create a user in the caller's org", tags("User"))]
-    async fn create(
-        &self,
-        _authz: Authorize<Create, UserEntity>,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Json<User>> {
-        Ok(Json(
-            self.svc.create_in_org(body.into_inner(), auth.org_id).await?,
-        ))
+    #[authorize(Create, UserEntity)]
+    // … #[api(…)]
+    async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+        let user = self
+            .svc
+            .create_in_org(body.into_inner(), auth.org_id)
+            .await?;
+        Ok(Json(User::from(&user)))
     }
 
     #[get("/:id")]
+    // … #[api(…)]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
@@ -229,7 +228,7 @@ other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
 the row in the body with `bind_required`, which returns the
 `Authorized<A, E>` proof to hand straight to the service:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[crud(service = svc, entity = PostEntity, output = Post, /* … */)]
 impl PostsResolver {
     #[mutation]
@@ -272,7 +271,7 @@ the container-resolved service, so the body never calls `bind_required` itself.
 It also **synthesises the `id: String!` SDL argument** — so the method must not
 declare an `id` parameter of its own:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::seaorm::Authorized;
 
 #[mutation]

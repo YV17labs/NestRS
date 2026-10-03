@@ -207,7 +207,7 @@ controller with the transport's authz module, and write a
 - [By-id binding](/security/authorization/by-id-binding/) —
   `Bind<A, S>` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
-  declare `Authorize<A, S>` and masking is automatic; the
+  declare `#[authorize(Action, Entity)]` and masking is automatic; the
   `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
   as internals (skip on a first pass).
 - [Public reads](/security/authorization/public-reads/) —

@@ -88,7 +88,7 @@ impl OAuthController {
     // would fail on the missing principal instead.
     #[get("/callback")]
     #[use_guards(OAuthGuard)]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
+    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenResponse>> {
         Ok(Json(self.issuer.issue(
             Some(caller.user_id),
             caller.org_id,

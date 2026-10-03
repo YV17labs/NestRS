@@ -13,9 +13,10 @@ decorator, `#[sse]`.
 
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {6-8}
 #[get("/download")]
+// … #[meta(…)], #[api(…)]
 async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
     let file = query.into_inner().file;
-    match self.svc.open_result(&file).await.map_err(internal)? {
+    match self.svc.open_result(&file).await? {
         Some(stream) => Ok(Response::builder()
             .content_type("audio/mpeg")
             .body(Body::from_bytes_stream(stream))),
@@ -43,11 +44,30 @@ decorator owns the response, the keep-alive and the connection ceiling.
 
 ```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 #[sse("/events")]
-async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SseStream {
-    let stream = /* a Stream<Item = SseEvent> polling the job */;
-    SseStream::new(stream)
+// … #[meta(…)], #[api(…)]
+async fn events(
+    &self,
+    query: Valid<Query<TranscodeDto>>,
+    resume: Header<StreamResumeDto>,
+) -> SseStream {
+    let file = query.into_inner().file;
+    let seen = resume.into_inner().last_event_id;
+    let events = self
+        .svc
+        .clone()
+        .transcode_events(file)
+        // … drop the progress ticks `seen` says the browser already showed
+        .map(|payload| {
+            // … `body` is the payload as JSON, `id` its poll attempt
+            SseEvent::message(body).event_type("transcode").id(id)
+        });
+    SseStream::new(events)
 }
 ```
+
+Each event carries an `id`, so a browser that reconnects sends the last one
+back as `Last-Event-ID`; `Header<StreamResumeDto>` reads it, and the stream
+resumes rather than replays.
 
 `SseEvent` and `SseStream` come from `nest_rs::http`, which also re-exports
 `futures_util` — so a controller that streams declares no transport crate of

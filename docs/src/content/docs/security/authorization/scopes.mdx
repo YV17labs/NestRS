@@ -21,7 +21,7 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)" {5,9}
+```rust title="crates/features/src/authz/ability.rs" {5,9}
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
@@ -61,9 +61,10 @@ Scopes reach the ability layer from the principal. Implement
 space-delimited `scope` claim with the `serde` helper the framework
 ships:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo)" {6-11,19-21}
+```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)" {7-13,22-24}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub: Option<Uuid>,
     pub org_id: Uuid,
     pub roles: Vec<Role>,
@@ -76,8 +77,8 @@ pub struct Claims {
     pub scopes: Vec<String>,
     pub exp: u64,
 }
-
-impl PrincipalIdentity for Claims {
+// …
+impl nest_rs::authn::PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|sub| sub.to_string())
     }

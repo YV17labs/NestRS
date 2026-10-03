@@ -68,7 +68,7 @@ point — see [Per-transport bridges](/security/authorization/per-transport-brid
 
 The wiring sketch for an app that serves all three transports:
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         SeaOrmModule::for_root(None),

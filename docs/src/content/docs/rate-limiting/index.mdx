@@ -64,7 +64,7 @@ cargo add nest-rs --features redis-throttler
 
 ## Wire it in
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::throttler::ThrottlerModule;
 
@@ -93,7 +93,7 @@ NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 
 ## Guard a controller
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::controller;
 use nest_rs::throttler::ThrottlerGuard;
 
@@ -107,7 +107,7 @@ default limit applies unless a handler overrides it.
 
 ## Override per route
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 

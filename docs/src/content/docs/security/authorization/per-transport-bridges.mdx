@@ -52,7 +52,7 @@ A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature
 needs.
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         SeaOrmModule::for_root(None),
@@ -184,7 +184,9 @@ its own ambient ability:
 ```rust title="crates/features/src/authz/ws/module.rs (from the demo)"
 #[module(
     imports = [AuthzModule, WsModule],
-    providers = [WsDataContext as dyn SocketContext],
+    providers = [
+        WsDataContext as dyn SocketContext,
+    ],
 )]
 pub struct AuthzWsModule;
 ```

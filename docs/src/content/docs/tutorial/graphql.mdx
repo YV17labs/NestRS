@@ -90,12 +90,12 @@ ungated, unmasked operation can ship.
 </Aside>
 
 Symmetry with the HTTP controller is intentional — the service is the
-same, the inputs are the same, the policy is the same. The bridges
-are different:
+same, the inputs are the same, the policy is the same, and so is the
+posture attribute. The other bridges differ:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
-| `Authorize<Create, users::Entity>` extractor | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
+| `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
 | `Bind<Read, UsersService>` extractor | `bind::<Read, UsersService>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
 
@@ -127,7 +127,7 @@ use crate::users::UsersModule;
 pub struct UsersGraphqlModule;
 ```
 
-```rust title="crates/features/src/users/graphql/mod.rs (from the demo)"
+```rust title="crates/features/src/users/graphql/mod.rs"
 mod module;
 mod resolver;
 
@@ -137,7 +137,7 @@ pub use resolver::UsersResolver;
 
 And the feature root:
 
-```rust title="crates/features/src/users/mod.rs (from the demo)" {7, 12}
+```rust title="crates/features/src/users/mod.rs" {7, 12}
 mod entity;
 mod module;
 mod service;
@@ -158,9 +158,10 @@ pub use http::{UsersController, UsersHttpModule};
 The app root imports `GraphqlModule::for_root(None)` to mount the HTTP
 endpoint, and the feature's GraphQL adapter for the operations.
 
-```rust title="apps/api/src/module.rs (from the demo)" {14-15}
-        UsersGraphqlModule,
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
         GraphqlModule::for_root(None),
+        // …
+        UsersGraphqlModule,
 ```
 
 `GraphqlModule::for_root(...)` mounts `POST /graphql` on the HTTP transport.

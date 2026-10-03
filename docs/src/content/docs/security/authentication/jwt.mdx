@@ -85,7 +85,7 @@ The framework's `JwtStrategy<C>` is generic. `C` is any
 `DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static` type —
 usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo)"
+```rust title="crates/features/src/authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

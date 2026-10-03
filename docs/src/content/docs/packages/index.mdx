@@ -148,10 +148,10 @@ as the exemplar.
 ## Adding a capability to your app
 
 Turn on its **feature**. There is one framework line, and adding a transport
-never adds a second — this is the real `apps/api/Cargo.toml` (REST + GraphQL +
-DB + authz), trimmed to the framework line:
+never adds a second — an app serving REST, GraphQL, the database and authz
+names it once:
 
-```toml title="apps/api/Cargo.toml (from the demo)"
+```toml title="apps/api/Cargo.toml"
 [dependencies]
 nest-rs = { workspace = true, features = [
     "http", "config", "seaorm", "graphql", "openapi", "authn", "authz", "health",

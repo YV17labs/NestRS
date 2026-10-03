@@ -21,22 +21,40 @@ directly — quote them as the model.
 ## Build an ability from claims
 
 The tests reconstruct an `Ability` the way the guard does: an
-`AbilityBuilder`, the app policy's `define`, then `build`. Small
-role-shaped helpers keep each assertion to one line.
+`AbilityBuilder` carrying the scopes the token grants, the app policy's
+`define`, then `build` — which returns a `Result`, refusing a malformed rule
+rather than building it. Small role-shaped helpers keep each assertion to one
+line.
 
 ```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
 use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+// …
 
 fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
-    let claims = Claims { sub: Some(Uuid::nil()), org_id, roles, exp: 0 };
-    let mut b = AbilityBuilder::new();
-    AuthzAbility.define(&claims, &mut b);
-    b.build()
+    ability_scoped(roles, org_id, constants::all())
 }
 
-fn admin(org_id: Uuid) -> Ability { ability_for(vec![Role::Admin], org_id) }
-fn member(org_id: Uuid) -> Ability { ability_for(vec![Role::User], org_id) }
+fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
+    let claims = Claims {
+        sub: Some(Uuid::nil()),
+        org_id,
+        roles,
+        scopes: scopes.clone(),
+        exp: 0,
+    };
+    let mut b = AbilityBuilder::new().with_granted_scopes(Some(scopes.into()));
+    AuthzAbility.define(&claims, &mut b);
+    b.build().expect("valid test ability")
+}
+
+fn admin(org_id: Uuid) -> Ability {
+    ability_for(vec![Role::Admin], org_id)
+}
+
+fn member(org_id: Uuid) -> Ability {
+    ability_for(vec![Role::User], org_id)
+}
 ```
 
 ## Masking — every grant scenario
@@ -71,18 +89,20 @@ action pre-filters to nothing — the fail-closed `1 = 0`, not `TRUE`.
 
 ```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 #[test]
-fn member_read_scopes_to_own_org() {
+fn member_read_users_scopes_to_own_org_and_strips_email() {
     let org = Uuid::now_v7();
     let sql = user::Entity::find()
         .filter(member(org).condition_for::<user::Entity>(Action::Read))
         .build(DatabaseBackend::Postgres)
         .to_string();
-    assert!(sql.contains("org_id"), "member reads scope by org_id: {sql}");
+    assert!(sql.contains("org_id"), "member must scope by org_id: {sql}");
+    // …
 }
 
 #[test]
 fn member_cannot_delete_users() {
     let org = Uuid::now_v7();
+    assert!(!member(org).can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), org)));
     let sql = user::Entity::find()
         .filter(member(org).condition_for::<user::Entity>(Action::Delete))
         .build(DatabaseBackend::Postgres)

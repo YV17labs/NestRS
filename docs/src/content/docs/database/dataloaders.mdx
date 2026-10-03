@@ -43,21 +43,32 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
   matching loader and returns the related object.
 
 ```rust title="crates/features/src/posts/entities/post.rs (from the demo, abridged)"
-#[expose(name = "Post", service = super::super::service::PostsService, graphql)]
+#[expose(
+    name = "Post",
+    service = super::super::service::PostsService,
+    graphql,
+    // …
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(table_name = "post")]
+#[sea_orm(
+    table_name = "post",
+    // …
+)]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
     #[expose]
     pub org_id: Uuid,
+    // …
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
+    // …
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose]
     pub org: HasOne<crate::orgs::Entity>,
+    // …
 }
 ```
 

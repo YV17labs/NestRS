@@ -48,12 +48,30 @@ Rows that depend on others reach for those constants. Demo users also use
 fixed ids — `user::ACME_AUTHOR` is the author of Acme posts — and conflict on
 the unique `email`:
 
-```rust title="crates/seed/src/factories/user.rs (from the demo)"
+```rust title="crates/seed/src/factories/user.rs (from the demo, abridged)"
 pub const ACME_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac01);
+// …
 
-const DEMO: [(Uuid, Uuid, &str, &str, &str, Option<&str>); 7] = [
-    (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test", "user", Some(DEMO_PASSWORD_HASH)),
-    // ...
+type DemoUser = (
+    Uuid,
+    Uuid,
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+);
+
+const DEMO: [DemoUser; 7] = [
+    // …
+    (
+        ACME_AUTHOR,
+        org::ACME,
+        "Acme Author",
+        "acme-user-1@example.test",
+        "user",
+        Some(DEMO_PASSWORD_HASH),
+    ),
+    // …
 ];
 ```
 
@@ -66,8 +84,9 @@ per run — re-hashing would emit a new salt each time and break idempotency.
 Posts hang off the org and author constants. `post::WELCOME` is a stable id
 for the first Acme article:
 
-```rust title="crates/seed/src/factories/post.rs (from the demo)"
+```rust title="crates/seed/src/factories/post.rs (from the demo, abridged)"
 pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_b001);
+// …
 
 const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
     (
@@ -77,11 +96,11 @@ const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
         "Welcome to Publish",
         "Getting started with nestrs and the Publish demo app.",
     ),
-    // ...
+    // …
 ];
-
-// INSERT ... ON CONFLICT (id) DO NOTHING.
 ```
+
+Each row is inserted `ON CONFLICT (id) DO NOTHING`.
 
 ## The runner
 

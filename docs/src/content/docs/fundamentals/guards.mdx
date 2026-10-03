@@ -101,7 +101,7 @@ lives under `posts/http/`. Binding guards on the struct is how you gate
 every route on that controller — and declare the auth modules the access
 graph must reach.
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 use nest_rs::authz::Read;
 use nest_rs::http::{controller, routes};
@@ -147,10 +147,13 @@ the posture — a guard, or `#[public]` — is what makes it intentional.
 The HTTP adapter imports the auth bridges transitively — same pattern as
 `UsersHttpModule` in the repo:
 
-```rust title="crates/features/src/posts/http/module.rs (from the demo)"
+```rust title="crates/features/src/posts/http/module.rs (from the demo, abridged)"
 #[module(
     imports = [PostsModule, AuthzModule],
-    providers = [PostsController],
+    providers = [
+        PostsController,
+        // …
+    ],
 )]
 pub struct PostsHttpModule;
 ```
@@ -297,10 +300,13 @@ App::builder()
     .module::<BlogModule>()
 ```
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
 #[controller(path = "/posts")]
 #[use_guards(AuthnGuard, AuthzGuard)]
-pub struct PostsController { /* ... */ }
+// …
+pub struct PostsController {
+    // …
+}
 ```
 
 `AuthnGuard` and `AuthzGuard` run **exactly once** per request, not twice.

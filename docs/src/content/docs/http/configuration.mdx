@@ -24,7 +24,7 @@ use features::hello::HelloHttpModule;
 pub struct HelloModule;
 ```
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
@@ -155,7 +155,7 @@ NESTRS_HTTP__CORS_CREDENTIALS=true
 NESTRS_HTTP__CORS_MAX_AGE=3600
 ```
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use std::time::Duration;
 
 use nest_rs::core::module;
@@ -194,7 +194,7 @@ NESTRS_HTTP__GLOBAL_PREFIX=/api
 
 or pin it in code with `with_global_prefix`:
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 

@@ -1,6 +1,6 @@
 ---
 title: Response masking
-description: Declare Authorize<A, S> on the handler and every successful response is masked automatically — fail-closed, with an unexposed column unable to leak.
+description: "Declare #[authorize(Action, Entity)] on a route and every successful response is masked automatically — fail-closed, with an unexposed column unable to leak."
 sidebar:
   order: 5
 ---
@@ -8,27 +8,24 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 The third layer of authorization runs after the handler returns — and the
-80% of this page is one sentence: **declare `Authorize<A, S>` as a handler
-parameter and masking runs automatically after every successful
+80% of this page is one sentence: **declare `#[authorize(Action, Entity)]`
+on the route and masking runs automatically after every successful
 response**. Fields the caller cannot read are stripped, rows they cannot
 see are dropped, and a body that cannot be verified fails **closed** (500)
 rather than shipping unmasked. The route never calls `mask` itself.
 
-## Declare it — `Authorize<A, S>`
+## Declare it — `#[authorize]`
 
-`Authorize<A, S>` is the handler-level extractor that arms the shaper.
-Declare it as a parameter; the `#[routes]` orchestrator detects it and
-installs the shaper:
+`#[authorize(Read, user::Entity)]` declares the route's posture, and
+`#[routes]` desugars it to the `Authorize<A, S>` extractor as the handler's
+first parameter — the extractor that arms the shaper:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::authz::{Read, http::Authorize};
-use sea_orm::EntityTrait;
+use nest_rs::authz::Read;
 
 #[get("/")]
-async fn list(
-    &self,
-    _authz: Authorize<Read, user::Entity>,
-) -> Result<Json<Vec<User>>> {
+#[authorize(Read, user::Entity)]
+async fn list(&self) -> Result<Json<Vec<User>>> {
     Ok(Json(self.svc.directory().await?))
 }
 ```
@@ -37,7 +34,8 @@ async fn list(
 the `Model` → `User` conversion lives there, so the handler declares a posture
 and delegates.
 
-`Authorize<Read, user::Entity>` does two things:
+The extractor it desugars to, `Authorize<Read, user::Entity>`, does two
+things:
 
 1. **Class-level gate.** On extraction, refuses with 403 unless the
    ability's `can_class(Read, TypeId::of::<user::Entity>())` is
@@ -48,8 +46,11 @@ and delegates.
    on the way out.
 
 <Aside type="caution">
-The parameter is load-bearing even bound as `_authz` — deleting the
-"unused" parameter disarms masking for that route.
+Write the extractor by hand only where the decorator cannot go: a
+`#[public]` route, whose posture is the opposite one
+([Public reads](/security/authorization/public-reads/)). There the parameter
+is load-bearing even bound as `_authz` — deleting the "unused" parameter
+disarms masking for that route.
 
 How you *spell* it does not matter. `#[routes]` hands each parameter type to
 the compiler and asks whether it is a `RouteResponseShaper`, so an alias

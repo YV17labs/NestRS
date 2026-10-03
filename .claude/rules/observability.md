@@ -17,9 +17,9 @@ paths:
 
 # Observability — trace context, operation spans and lines
 
-`CLAUDE.md`, *Observability*, holds what every crate obeys: the target table,
-level per layer, message plus fields, the error chain, escaping, and one
-operation span and line per unit. This file is the model behind it.
+`CLAUDE.md`, *Observability*, holds what every event obeys — its target, its
+level per layer, a constant message plus fields, the error chain. This file is
+the model behind it, and the target table.
 
 ## Correlation is W3C Trace Context, in the kernel
 
@@ -120,7 +120,9 @@ JsonFormat}`) are the same two whichever subscriber is mounted, and read the
 ambient correlation rather than the span scope: a span's fields belong to the
 span, `tracing` would render a whole scope (one `trace_id` per nested level), and
 the context outlives the span where a streaming body runs. **Never write those
-three as event fields.**
+three as event fields.** **One event, said once**: a line restates nothing a
+field or the enclosing span carries, and no two layers emit the same event.
+**The formatter escapes every value**, so no field can forge a line.
 
 Three deviations from OpenTelemetry's log data model, each deliberate:
 
@@ -172,6 +174,14 @@ a socket whose connect hook or subscription unwound.
 
 ## Targets are constants their concern's crate owns
 
+A target is dotted, lowercase, and rooted at the crate that emits it:
+
+| Emitting crate | Target |
+|---|---|
+| a `nest-rs-*` framework crate | `nest_rs::<concern>` — `nest_rs::http`; a family member roots at its family, `nest_rs::oauth::client` |
+| the shared feature library | `features::<feature>` — each emitting feature declares `pub const TARGET` at its root (`features.md`) |
+| an app crate, or a single-crate project | `<app>::<concern>` |
+
 **Every string the framework interprets is a constant.** A literal target is a
 typo away from an event no filter selects. **The crate that owns the concern
 declares it** (`nest_rs_events::TARGET`, `nest_rs_seaorm::TARGET`): a central
@@ -186,5 +196,8 @@ crate reaches its own surface crate's re-export (`macros.md`).
 `features::…` whatever the binary is called, because a target's one job is to
 say where an event was emitted. **A family member roots at its family**
 (`nest_rs::oauth::client`), so `nest_rs::oauth=off` silences three role crates of
-one standard — prefixing on purpose, a level a reader sees in the path. Every
-other raw-string prefix between targets is forbidden (`CLAUDE.md`).
+one standard — prefixing on purpose, a level a reader sees in the path. **No
+other target is a raw-string prefix of another**: `EnvFilter` matches with
+`starts_with`, so a toggle for one would silence the other
+(`.claude/decisions/operation-target.md`). Held by the `filters` check in
+`nest-rs-conformance`, over the declared target constants.

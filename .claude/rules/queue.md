@@ -61,8 +61,8 @@ second adapter copies nothing.
 
 ## Delivery is at least once
 
-`CLAUDE.md`'s hard "no" states the contract; this is how the Redis backend keeps
-it without promising more.
+`CLAUDE.md`'s hard "no" states the contract, and no rustdoc, line or page
+promises more; this is how the Redis backend keeps it.
 
 - **The worker guards every delivery in keys of its own.** An attempt runs only
   under the job's lease; its terminal outcome writes the settled mark and drops

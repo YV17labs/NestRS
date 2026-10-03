@@ -6,9 +6,9 @@ paths:
 
 # Decorators — macros and their shared grammar
 
-Decorators are the framework's leverage (`CLAUDE.md`, *Thesis*). The pair rule,
-the umbrella's front door and the expansion witness are stated there; this file
-is how a decorator is written so that they hold.
+Decorators are the framework's leverage (`CLAUDE.md`, *Thesis*). The pair rule
+and the umbrella's front door are stated there, the expansion witness in
+`manifests-ci.md`; this file is how a decorator is written so that they hold.
 
 ## Where a decorator lives
 
@@ -49,7 +49,7 @@ Two exceptions, neither a licence:
   design.
 
 Held by the compile witness `nest-rs-macro-hygiene` (one dependency, one
-feature per capability — `CLAUDE.md`, *Shipping a capability*), which holds a
+feature per capability — `manifests-ci.md`, *Shipping a capability*), which holds a
 real entity, so `#[expose]`, `#[crud]` and `#[authorize(Action, Entity)]` are
 witnessed there like every other decorator. The CLI's scaffold e2e witnesses
 the generated tree, and **a generated tree witnesses only what it does not also
@@ -69,10 +69,10 @@ An edge is two decorators (`CLAUDE.md`, hard "no"). The table is closed:
 | queue / schedule / events / health / lifecycle | `#[injectable]` | `#[processor]` / `#[scheduled]` / `#[listeners]` / `#[indicators]` / `#[hooks]` |
 
 The struct half is named for the host role, the impl half for what it collects.
-Every pair is a `DecoratorPair` in `nest_rs_codegen::pair::ALL`, constructible
-only there, and both halves parse through it, so the wrong-shape error names the
-sibling and is worded in one place. Held by the type, a codegen unit test over
-`ALL`, and a trybuild snapshot per wrong shape.
+One attribute on two item shapes would give two grammars one rustdoc page and
+one go-to-definition. Held by `nest_rs_codegen::pair::ALL` — a `DecoratorPair`
+is constructible only there, and both halves parse through it — and a trybuild
+snapshot per wrong shape.
 
 **MCP's struct decorator is the protocol's name, not its role word.** The role
 word went to the impl half, where a host's methods are; `#[mcp]` cannot be
@@ -132,12 +132,11 @@ shows without the source frame. No value is handed to `syn`'s own sentence or to
 `format_ident!`, which names neither the decorator nor the key, or panics.
 
 **The worker-job family answers every key at every member.** `#[process]`,
-`#[every]`, `#[cron]` and `#[after]` are declared once as
-`nest_rs_codegen::job`: members × keys in a `match` with no wildcard arm, so a
-key or member added without a cell at every crossing does not compile. Each cell is built, or refused with the fact that makes it meaningless
-(``#[every] takes no `retries`: a tick's retry is the next occurrence``).
-`transactional` is the one key every member builds. Held by the type, a
-trybuild snapshot per refused cell, and a hygiene use site per built one.
+`#[every]`, `#[cron]` and `#[after]` are one `nest_rs_codegen::job` table (held
+by its exhaustive `match`): each cell is built, or refused with the fact that
+makes it meaningless (``#[every] takes no `retries`: a tick's retry is the next
+occurrence``), with a trybuild snapshot per refused cell and a hygiene use site
+per built one. `transactional` is the one key every member builds.
 
 **A rule both a decorator and the runtime check is written twice and pinned
 once.** A surface crate cannot depend on its own macros, so a queue name or a
@@ -149,11 +148,17 @@ sentence with the site in front.
 
 **A provider-hosted decorator states its residency.** `Container::get::<Host>()`
 answers only for a singleton under its own type, so every decorator that builds
-a provider writes `ProviderResidency`, `true` or `false`, and a contradiction is
-`E0119` — a fact read from a missing marker could be filled by hand. A refusal
-lands at the earliest site that can know it: the host's own decorator, then the
-impl half's expansion, then the boot (*Discovery* in `container.md`). Held by a
-trybuild snapshot per refused shape plus one that tries the escape.
+a provider writes `ProviderResidency` (held by the trait: a contradiction is
+`E0119`). A refusal lands at the earliest site that can know it — the host's
+own decorator, then the impl half's expansion, then the boot (*Discovery* in
+`container.md`) — with a trybuild snapshot per refused shape and one that tries
+the escape.
+
+**`#[tool]` and `#[prompt]` fall back to the doc comment** when no
+`description` is given, so a consumer who writes comments never states the
+sentence twice. The attribute wins; an operation with neither, or a blank one,
+is a compile error; no other decorator falls back — `#[api]` takes its argument
+or nothing. `demo/` and the templates always write the argument (`demo.md`).
 
 ## When (not) to write a decorator
 

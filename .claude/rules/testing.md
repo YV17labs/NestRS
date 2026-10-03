@@ -4,14 +4,16 @@ paths:
   - "crates/nest-rs-testing/**"
   - "demo/crates/features/src/testing.rs"
   - ".config/nextest.toml"
+  - "crates/nest-rs-conformance/**"
 ---
 
 # Writing tests — the toolbox
 
 The test layout, the two suite names, the runner and "e2e infra is always
-reachable" are `CLAUDE.md`'s, and locked. This file is the toolbox and the
-decisions that keep live suites from meeting each other. Reach for
-`nest-rs-testing` before hand-rolling a harness.
+reachable" are `CLAUDE.md`'s, and locked — a flat `tests/<x>.rs` is a binary of
+its own, outside the nextest gates and relinked per file. This file is the
+toolbox and the decisions that keep live suites from meeting each other. Reach
+for `nest-rs-testing` before hand-rolling a harness.
 
 ## `nest-rs-testing`
 
@@ -97,6 +99,9 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
 
 ## Decisions that bite
 
+- **A test asserts against the shared constant, never a copied literal.** One
+  that re-types `"posts:read audio:transcode"` passes while the policy and the
+  deployment drift apart; one that reads the constant fails the day they do.
 - **A procedure the docs hand an operator is run by an e2e test, as printed** —
   a move, a drain, anything that changes data an operator cannot get back.
 - **Runner configuration is `.config/nextest.toml`**, read automatically, so
@@ -114,6 +119,17 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   `cargo clean -p <crate>` recovers.
 - **trybuild and doctests compile the sources on disk when they run**: a file
   edited during a run voids it. Re-run rather than read its failures.
+
+## What `nest-rs-conformance` holds
+
+Structure only: facts read off file paths, manifests and the declarations
+themselves — a constant's value, a type's name beside its file — never a scan
+of how code uses them, so there is nothing to evade
+(`.claude/decisions/conformance-scanner.md`). A check carries no baseline of
+tolerated violations: a violation is fixed, or the check is wrong. The docs
+lint's page baseline is the one exception, and it only shrinks (`docs.md`). The
+CLI and the canon generator reading the shipped `architecture.md` is product
+data, not an exception.
 
 ## Compile-fail snapshots
 

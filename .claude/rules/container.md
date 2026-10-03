@@ -113,11 +113,8 @@ variables or tiers.
   what the library or kernel it reaches accepts** — no value the boot accepts may
   panic or be refused below it. `0` is off only where the declaration says so
   (`Floor::UnitsOrOff`); a pinned `Some(Duration::ZERO)` is refused, since off in
-  code is `None`. Held by types: every duration is a `DurationBounds` (key, unit,
-  both bounds with their reason), whose constructors assert the key's
-  `_SECS`/`_MS` suffix, and `ConfigService`'s other readers refuse such a key. A
-  constructor a hand-built value reaches without a config read holds it to the
-  same range through `DurationBounds::check`.
+  code is `None`. Held by the `DurationBounds` type, whose rustdoc has the
+  mechanics, including the hand-built path through `DurationBounds::check`.
 - **A variable no config claims is reported, never ignored** — at `warn`, once,
   by name and never by value: a key under a namespace this binary read that no
   config read, and a near miss of such a namespace. Everything else is silent by
@@ -234,7 +231,9 @@ fails closed in its own terms: an occurrence claim skips the occurrence at
 store; a push or cancel is an error to its caller and a checkpoint call fails
 the attempt as retryable; `Strategy::authenticate` denies at `warn`; an
 indicator reads down. **An outbound client the framework opens carries its own
-connect and total bounds.**
+connect and total bounds**, and is private to the crate whose protocol needs it
+(OAuth's exchange, storage's presigned upload) — never an outbound HTTP surface
+(`CLAUDE.md`, hard "no").
 
 Known gaps, each owed a line in its crate's `//!` and an issue: a `Repo`
 statement and the `BEGIN` / `COMMIT` / `ROLLBACK` a job context settles through

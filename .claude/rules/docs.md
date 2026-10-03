@@ -20,27 +20,9 @@ only the traps a session hits before it thinks to look.
 
 ## What the linter holds
 
-`npm run lint:docs` greps these; `STYLE.md` words them.
-
-- **At most three Asides per page, and none above the first snippet.** A
-  reference page answers one question in about 250–300 lines; a tutorial ends
-  on a runnable checkpoint. A caution stays beside the snippet it warns about;
-  `Limits` collects only constraints with no single anchor.
-- **The first screen is one working snippet** of about fifteen lines.
-- **Verbatim output is real** — run once, pasted, trimmed to about eight
-  lines.
-- **H2s come from the controlled vocabulary, in canonical order**, with
-  `Reference` above the closing `## Going further`, which is two to four doors
-  wide (utility pages exempt).
-- **Every `<Aside>` declares a `type`.** A tiered section's index draws the
-  split (`## In this section`, `### Basics`, `### All options`), or the
-  `tier:` on its pages renders nowhere.
-- **Banned words** — *blazing(ly), powerful, seamless(ly), simply,
-  effortless(ly), easy, magic(al)* — and no exclamation marks.
-- **Examples come from the Publish universe only** (hello, blog/posts,
-  users/orgs, chat/notify, audio, weather, media). Never invent a feature.
-- **Code-truth checks** are listed once, as `RULES` in `lint-docs.mjs`, and
-  documented in `STYLE.md` § F. Read § F; this file does not restate them.
+`npm run lint:docs` holds every page rule a grep can check, and `STYLE.md` words
+each one — § F lists the code-truth checks, as `RULES` in `lint-docs.mjs` does.
+Read `STYLE.md` rather than a summary here; a failing lint names its rule.
 
 ## Facts come from the code
 
@@ -88,6 +70,6 @@ where a reviewer sees it, and never by re-snapshotting.
   use the developer's workspace shape (`crates/features/…`); GitHub URLs use
   the real repo path (`demo/crates/features/…`).
 - **A snippet with no counterpart in `demo/` or the owning crate's suite is
-  undocumented** (`CLAUDE.md`, *The umbrella is the front door*).
+  undocumented** (`manifests-ci.md`, *Shipping a capability*).
 - **`npm run build` is the check that sees config, components and styles**;
   the lint does not. Deploy is `docs-pages.yml` on push.

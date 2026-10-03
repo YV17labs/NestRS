@@ -51,6 +51,14 @@ protocol, not `tools/call` alone: scope, ability and transaction reach
 `prompts/get`, `resources/read`, completion and the `tasks/*` trio, so a
 `Repo`-backed prompt is row-filtered exactly like a controller.
 
+**The architecture is a modular monolith, deployed per workload.** Your domain
+lives once, in a shared crate, cut into modules whose boundaries are checked at
+boot; each binary — the API, the worker, the WebSocket server — is a thin
+composition root importing only the edges it serves. The binaries share the
+code, the database and the queue, and never call each other: each scales on its
+own signal, with no RPC between the parts.
+[How that compares with microservices and Google's Service Weaver →](https://nestrs.dev/why/#a-modular-monolith-deployed-per-workload)
+
 The numbers behind the tagline — against the same hello-world service in
 NestJS 11, idiomatic on both sides, byte-identical HTTP contract,
 conformance-gated: NestRS runs in **~25× less memory** (single-digit MB

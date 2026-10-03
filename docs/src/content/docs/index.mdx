@@ -155,13 +155,20 @@ HTTP stack.
 
 <Band label="05 — SCALABILITY" alt>
 
-## One domain, several workloads
+## A modular monolith, deployed per workload
 
 Entities, services and policy live once in a shared `features` crate; each app
 under `apps/*` is a thin composition root importing only the transports it
-serves. Microservice scaling without the distributed-systems tax.
+serves. Every workload scales on its own signal, and no binary calls another:
+microservice scaling without the distributed-systems tax.
 
 <Workspace />
+
+<div class="rs-band-foot">
+
+**One domain, one binary per workload**, no RPC between them. [The architecture →](/why/#a-modular-monolith-deployed-per-workload)
+
+</div>
 
 </Band>
 

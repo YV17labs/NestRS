@@ -1,6 +1,6 @@
 ---
 title: Why NestRS
-description: The thesis behind the framework, who it is for, and the six structural properties that follow from it.
+description: The thesis, the architecture — a modular monolith, deployed per workload — who NestRS is for, and the six structural properties that follow.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -36,6 +36,51 @@ written slightly differently in two different files.
   The lineage explains the shape; the guarantees below are what you
   actually get.
 </Aside>
+
+## A modular monolith, deployed per workload
+
+The tagline's two adjectives are one architecture, and it has a name: **you
+write one modular monolith, and you deploy it as one binary per workload.**
+
+**Modular is how the code is written.** Your domain — entities, services,
+policy — lives once, in `crates/features/`, cut into modules whose boundaries
+the framework holds: a module reaches only what it imports, or the
+[access graph](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot)
+fails the boot. A call from one module to another is a Rust method call, in
+every binary.
+
+**Per workload is how it runs.** A workload is one kind of work and the trigger
+that starts it — an HTTP request, a socket message, a job, a tick, an MCP call;
+the [twelve-factor app](https://12factor.net/concurrency) calls it a process
+type. Each app under `apps/` is a thin composition root that imports the edges
+it serves, and nothing it does not import is mounted. A workload scales on its
+own signal, a crash stays in its own binary, and no binary calls another. What
+two of them agree on — a table, a queue payload — is one type in the shared
+crate, compiled into both.
+
+**The split follows the trigger, never the domain.** That is the line
+microservices draw the other way, and the reason NestRS has no RPC to generate,
+version or secure between its parts.
+
+| | Written as | Deployed as | Between deployables |
+|---|---|---|---|
+| Modular monolith | modules | one process | nothing to cross |
+| Microservices | one service per domain | one service per domain | network calls and versioned APIs |
+| Service Weaver | a modular monolith | components, placed by a runtime | RPC the runtime generates |
+| **NestRS** | a modular monolith | one binary per workload | no calls — the crate, the database and the queue are shared |
+
+Google's [Service Weaver](https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html)
+named the problem in 2023: microservices conflate *how code is written* with
+*how it is deployed* ([the HotOS paper](https://sigops.org/s/conferences/hotos/2023/papers/ghemawat.pdf)).
+Its answer was to "write your application as a modular monolith and deploy it
+as a set of microservices", with a runtime turning a method call into an RPC
+whenever two components landed in different processes.
+
+NestRS keeps the diagnosis and the first half of the answer. It never cuts the
+domain, so no call leaves the process, and adding a workload rewrites nothing:
+it is one more composition root over the crate you already have. Service Weaver
+itself [stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)
+in December 2024; the diagnosis outlives it.
 
 ## Who it is for
 
@@ -169,7 +214,8 @@ a `Cannot resolve` at first request. See
 Capabilities ship as separate crates and integrate via discovery gated on
 module reachability. A binary that imports only the queue adapter does not
 mount HTTP routes or GraphQL resolvers — even when those files live in the
-same shared feature crate. One codebase, multiple deployable shapes.
+same shared feature crate. One codebase, one binary per
+[workload](#a-modular-monolith-deployed-per-workload).
 
 On the [benchmarks page](/benchmarks/), the same service — idiomatic on both
 sides, byte-identical contract — measures at **×2.5** the throughput of

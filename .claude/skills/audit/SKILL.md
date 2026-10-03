@@ -13,8 +13,8 @@ attacks the rest, against a written contract, and stops.
 **Once per change** that touches authn/authz, data access, persistence or
 transactions, concurrency or shutdown, or a published API (`CLAUDE.md`,
 *Reviews*). Not for docs, renames, refactors whose tests did not change, or
-demo-only changes — `cargo mutants` on the diff already says what the tests do
-not assert. Run it after `/architecture` and before `/simplify`.
+demo-only changes — CI's advisory `cargo mutants` lane already says what the
+tests do not assert. Run it after `/architecture` and before `/simplify`.
 
 ## The contract a finding is judged against
 
@@ -54,7 +54,7 @@ outranks a loud P0.
    probe and no contract clause; re-rank what was mis-levelled; apply the
    disposition table.
 5. **Fix P0/P1**, each with the regression test that fails without the fix,
-   then the *Definition of done* tier 2.
+   then the *Definition of done*'s local loop.
 6. **Re-audit once, only the lines a P0/P1 fix touched**, with the same
    mandate. Nothing else is audited again.
 7. **Report**: each finding with its level, clause and disposition (fixed with

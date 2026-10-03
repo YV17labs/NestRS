@@ -65,7 +65,7 @@ none:
    what was examined and found conforming versus what was never examined.
 7. **Apply sequentially, in the main thread**, largest blast radius first,
    because a moved type invalidates the findings that merely followed it. After
-   each, the *Definition of done* tier 2 for what it touched; a batch compiled
+   each, the *Definition of done*'s local loop for what it touched; a batch compiled
    together hides which move broke. A fix that turns out to need a decision the
    review did not argue stops and is argued first — the argument is the licence.
    Then report what was applied, what was left as an issue, and what was never

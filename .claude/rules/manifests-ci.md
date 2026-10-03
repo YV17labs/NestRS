@@ -8,6 +8,7 @@ paths:
   - "clippy.toml"
   - "scripts/**"
   - ".cargo/**"
+  - "deny.toml"
   - ".config/**"
   - ".github/**"
   - "CHANGELOG.md"
@@ -115,31 +116,42 @@ floor moves every site in one change. Held by `toolchain_pins_agree` and
 `every_workspace_root_declares_the_floor` in `nest-rs-cli`. A benchmark's
 recorded `rustc` is a measurement, not a pin, and never moves with the floor.
 
-## Feature isolation and advisories
+## Feature isolation and supply chain
 
 **Every local build is one feature union.** `--workspace` unifies every
 member's features and the hygiene witness enables all of them, so a crate that
 compiles only because a sibling turned a feature on passes both.
-`scripts/check-features.sh` is the build that sees it: every crate alone under
-each of its features, then the umbrella with each feature alone. It is a
-tier-3 step in `CLAUDE.md`.
+`scripts/check-features.sh` is the build that sees it — every crate alone under
+each of its features, then the umbrella with each feature alone — and CI runs
+it.
 
-**Every ignore in `.cargo/audit.toml` is argued**, one reason per advisory,
-and revisited on every dependency bump; how `cargo audit` runs is `CLAUDE.md`'s
-tier 3.
+**The supply chain is `cargo deny`**, configured by `deny.toml` at the root
+(`.claude/decisions/ci-is-the-gate.md`). Every ignore there is argued, one
+reason per entry, and revisited on every dependency bump.
 
 ## CI
 
-`.github/workflows/` holds `publish.yml` (a `v*.*.*` tag publishes),
-`docs-pages.yml` (docs lint and deploy) and `security-watch.yml`. **Tier 3 of
-the Definition of done runs locally, by you**: no workflow runs clippy, fmt or
-nextest, so never assume CI catches what you skipped.
+**CI is the gate.** It runs on every push and pull request, cheap checks before
+expensive ones, and a change is done when it is green; the local loop in
+`CLAUDE.md` is its fast subset, never a substitute. The workflow is the list of
+what runs, and is not restated here. What CI owes the rules:
+
+- every suite against real backends — Postgres, the Redis and Valkey versions
+  the docs claim, S3 — never a mock (`CLAUDE.md`, hard "no");
+- the non-e2e suites under `NESTRS_ENV_PREFIX=ACME`, which is what holds *no
+  env-var name spelled as a literal*;
+- the feature matrix above, the demo, the docs lint, and `cargo deny` over every
+  lockfile.
+
+Advisory lanes (`cargo mutants` on the diff, beta clippy) report and never
+block. The workflows are hardened: actions pinned by SHA,
+`persist-credentials: false`, least permissions, `zizmor` clean.
 
 **The security watch is a monitor, not a gate.** It runs daily and on a
-manifest or lockfile change on `main` — the advisory audit, a beta-toolchain
+manifest or lockfile change on `main` — the advisory check, a beta-toolchain
 build and the feature matrix — and opens or updates one issue on failure.
-Nothing waits on it and it is never a required check; it exists because the
-local loop cannot notice an advisory published while nobody touches the repo.
+Nothing waits on it: it exists because CI runs only when someone pushes, and an
+advisory is published whether or not anyone does.
 
 ## Release
 

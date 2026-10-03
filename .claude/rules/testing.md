@@ -38,11 +38,14 @@ decisions that keep live suites from meeting each other. Reach for
 - **`load_project_env`** — the `.env` cascade, so an e2e reaches the
   devcontainer's `postgres`, `redis` and `rustfs`.
 
-## Running `cargo mutants`
+## `cargo mutants` — advisory
 
-Why mutants and not coverage is `CLAUDE.md` (*How a rule is held*): coverage
-answers *did this line run*, a weaker question. Nothing here measures tests by
-name or by count.
+A test is evidence for what it asserts, and a surviving mutant shows what it
+does not — a stronger question than coverage's *did this line run*. Nothing
+here measures tests by name or by count. Mutants are advisory: CI runs them on
+the diff and never blocks, and locally they are on demand for a logic change. A
+missed mutant gets the test that kills it, or the commit body says why it is
+equivalent; an unviable one is noise.
 
 ```
 git diff HEAD > /tmp/c.diff
@@ -58,8 +61,6 @@ CARGO_TARGET_DIR=target/mutants cargo mutants --in-diff /tmp/c.diff \
   builds into it at once. With `CARGO_TARGET_DIR` unset, each job builds in its
   own copy: parallel, slower cold.
 - **`--test-tool nextest`**, because the suites are nextest's.
-- **A missed mutant is handled as `CLAUDE.md`'s tier 2 says; an unviable one
-  is noise.**
 
 ## Live backends are shared — each suite hands out its parts
 
@@ -122,5 +123,14 @@ resolve, stays red whatever the decorator says, so the refusal it promises can
 change or vanish with the suite green. A fixture therefore parses and its
 `.stderr` carries no name-resolution error, unless its `//!` says
 `deliberately does not parse` or `deliberately fails to resolve` — held by the
-`snapshots` check in `nest-rs-conformance`. Anything else a regenerated snapshot pins is review:
-read the `.stderr` `TRYBUILD=overwrite` wrote before committing it.
+`snapshots` check in `nest-rs-conformance`. Anything else a regenerated
+snapshot pins is review: read the `.stderr` `TRYBUILD=overwrite` wrote before
+committing it.
+
+**Snapshots change only on a deliberate toolchain bump.** rustc's wording is
+the toolchain's, and `rust-toolchain.toml` pins it, so a `.stderr` moves in the
+commit that bumps the toolchain and nowhere else; a snapshot diff in any other
+commit is a refusal that changed. The local loop leaves the snapshots out
+(`!test(/_diagnostics$/)`) unless a `*-macros` or `nest-rs-codegen` crate
+moved. The format hook skips `tests/*/diagnostics/`: `cargo fmt` never reaches
+a fixture, and reformatting one moves the line numbers its `.stderr` pins.

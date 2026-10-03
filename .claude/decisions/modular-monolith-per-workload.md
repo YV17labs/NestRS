@@ -66,3 +66,11 @@ The objections, and the answers settled:
 Open (2026-10-03): the `Topology` figure's data is kept by hand, so a demo change
 can make it false silently. A docs lint rule checking it against
 `demo/apps/*/src/module.rs` is the planned fix.
+
+Refused (2026-10-03): a `topology-drift` docs lint rule, fed by a `syn` reading
+of the demo's composition roots in the canon, was built and reverted the same
+day. The owner's line: a rule is fine, a script taking on a responsibility that
+is not its job is not. Keeping a demo illustration exact is not worth a source
+scanner (`conformance-scanner.md`). The figure is hand-kept, and
+`.claude/rules/demo.md` asks the commit changing an app's composition to update
+it, held by review.

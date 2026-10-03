@@ -27,3 +27,11 @@ choose the operation, and `#[api(summary = …, description = …)]` is the
 OpenAPI document. In `demo/` the attribute form is the only form; the
 framework's fallback to a doc comment (`macros.md`) is for consumers who write
 comments.
+
+## The `/why/` figure draws the demo's composition
+
+`docs/src/components/Topology.astro` draws each app's feature modules and
+edges, and the one path two of them share. An app added or gone, a change to an
+app's `module.rs`, or a controller or gateway path moved updates the figure in
+the same commit. Held by review, never by a script
+(`.claude/decisions/modular-monolith-per-workload.md`).

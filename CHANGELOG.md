@@ -27,8 +27,9 @@ A library's lockfile is not published, so **an application built on nest-rs reso
 rustls on its own: `cargo update -p rustls` is the whole fix**, and the
 `rustls = "0.23"` requirement already admits it. `nestrs` does not depend on rustls,
 so `cargo install --locked nest-rs-cli` was never exposed. The advisory sat in the
-tree for eleven days with nothing noticing, which is what the daily advisory watch
-below now exists for.
+tree for eleven days with nothing noticing; every change now runs `cargo deny`
+against the advisory database, and GitHub's Dependabot alerts cover the days
+nobody pushes.
 
 ### A GraphQL operation runs its guards whatever it returns
 
@@ -1607,23 +1608,15 @@ future handlebars that restores the default flips it back.
 - **`cargo-chef` 0.1.78** in `demo/Dockerfile`, still pinned at 0.1.77. It is a
   `cargo install` build tool rather than a requirement, and no test walks it.
 
-### A daily advisory watch, and apalis 0.7.4 kept past the freshness bar on the record
+### Each crate builds under each feature alone, and apalis 0.7.4 kept past the freshness bar on the record
 
-- **`.github/workflows/security-watch.yml` notices what the local loop cannot.**
-  RUSTSEC-2026-0285 sat in every lockfile for eleven days because the Definition of
-  done runs when someone touches the tree. The watch runs daily, on demand and
-  whenever a lockfile, a manifest or the audit policy changes on `main`: cargo-audit over the
-  framework's, the demo's and the benchmark's lockfiles with warnings denied, so an
-  `unsound` or `unmaintained` advisory fails too, and a build of the framework on the
-  beta toolchain, where apalis-redis 0.7.4's never-type-fallback lint turns into a
-  hard error six weeks before stable. A third job runs `scripts/check-features.sh`,
-  which checks every framework crate under its default features, under none and
-  under each feature alone, reading crates and features from `cargo metadata`:
-  every other gate builds one feature union, so a crate compiling only because a
-  sibling turned a feature on is invisible there — which is how `nest-rs-authz`'s
-  7.0 engine came to name `nest-rs-core` while it was optional before this release
-  fixed it. The script runs locally as it does there. A failure opens one issue,
-  or comments on it while it stays open. It is a monitor, not a gate.
+- **`scripts/check-features.sh` checks every framework crate under its default
+  features, under none and under each feature alone**, reading crates and
+  features from `cargo metadata`: every other gate builds one feature union, so
+  a crate compiling only because a sibling turned a feature on is invisible
+  there — which is how `nest-rs-authz`'s 7.0 engine came to name `nest-rs-core`
+  while it was optional before this release fixed it. CI runs it when a change
+  can move what a feature pulls in.
 - **Fixed: `nest-rs-seaorm` compiles with only its `graphql` feature.**
   `cargo add nest-rs-seaorm --no-default-features --features graphql` failed with
   `E0432`: its GraphQL refusals go through `nest-rs-authz`'s GraphQL binding, and
@@ -1751,10 +1744,12 @@ For a contributor.
   jobs first. Each change runs rustfmt, clippy and rustdoc (all features,
   warnings denied); cargo-deny and cargo-machete; actionlint and zizmor; the
   test suites, including under `NESTRS_ENV_PREFIX=ACME`; the e2e against real
-  Postgres, Redis and RustFS; and the demo. The nest-rs-redis suite against
-  Redis 6.2, 7.0 and 8.6 and Valkey 7.2 and 8.1, the feature matrix, minimal
-  versions and beta clippy run nightly and on release branches. `cargo mutants`
-  runs on a pull request labelled `mutants`. The docs lint has its own workflow,
+  Postgres, Redis and RustFS; and the demo. Nothing runs on a timer: the
+  nest-rs-redis suite against Redis 6.2, 7.0 and 8.6 and Valkey 7.2 and 8.1
+  runs when a change reaches the Redis adapter, and the feature matrix when a
+  change reaches a manifest. `cargo mutants` runs on a pull request labelled
+  `mutants`. Advisories published between changes are GitHub's Dependabot
+  alerts; the scheduled security watch is gone. The docs lint has its own workflow,
   started by a change to what the pages quote. The local definition of done is
   the minute-long loop CLAUDE.md states.
 - **cargo-deny replaces cargo-audit.** `deny.toml` replaces `.cargo/audit.toml`.

@@ -8,15 +8,16 @@
 # and `backends` runs the Redis adapter's suite against every server line the
 # framework supports.
 #
-# What runs when — the repository is public, so runners cost nothing, but a PR
-# waits on every job it starts:
-#   - every pull request and push: check, supply-chain, workflows, test, e2e, demo;
-#   - nightly, on demand and on release branches: backends (the Redis/Valkey
-#     matrix), features, minimal-versions and beta;
-#   - a pull request labelled `mutants`: mutants.
-# A change to the docs site or the rules alone starts none of them: `docs.yml`
-# lints the pages. `beta`, `mutants` and `minimal-versions` are advisory: they
-# report, and never fail the run.
+# What runs when — only what a change can break, when it arrives; nothing runs
+# on a timer:
+#   - every pull request and push touching code: check, supply-chain,
+#     workflows, test, e2e (one Redis), demo;
+#   - `backends.yml` (the Redis/Valkey matrix) and `features.yml` (each crate
+#     under each feature alone) run only when a change reaches what they test;
+#   - `docs.yml` lints the pages when they, or what they quote, change;
+#   - a pull request labelled `mutants`: mutants (advisory).
+# Advisories published while nobody pushes are GitHub's Dependabot alerts, a
+# repository setting rather than a workflow.
 
 name: CI
 
@@ -30,8 +31,6 @@ on:
       - 'CHANGELOG.md'
   pull_request:
     paths-ignore: *prose
-  schedule:
-    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -71,7 +70,15 @@ jobs:
         run: cargo fmt --all --check
         working-directory: bench/sut/nestrs
       - name: clippy (framework)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # bash with pipefail: `tee` must not hide clippy's exit status.
+        shell: bash
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee clippy.log
+          # The notice of a dependency a coming Rust release will reject, from
+          # the build already paid for — the warning that announced apalis-redis.
+          if grep -q 'will be rejected by a future version of Rust' clippy.log; then
+            echo "::warning title=future incompatibility::a dependency carries code a future Rust release will reject — run cargo report future-incompatibilities"
+          fi
       - name: clippy (demo)
         run: cargo clippy --workspace --all-targets -- -D warnings
         working-directory: demo
@@ -132,7 +139,6 @@ jobs:
         run: zizmor --format github .github
         env:
           GH_TOKEN: ${{ github.token }}
-
 
   test:
     name: test (unit, integration, doctests, ACME prefix)
@@ -217,92 +223,6 @@ jobs:
       - name: e2e
         run: cargo nextest run --workspace -E 'binary(e2e)'
 
-  backends:
-    name: backends (${{ matrix.server }})
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { server: Redis 6.2, image: 'redis:6.2.20', cli: redis-cli }
-          - { server: Redis 7.0, image: 'redis:7.0.15', cli: redis-cli }
-          - { server: Redis 8.6, image: 'redis:8.6.3', cli: redis-cli }
-          - { server: Valkey 7.2, image: 'valkey/valkey:7.2.11', cli: valkey-cli }
-          - { server: Valkey 8.1, image: 'valkey/valkey:8.1.4', cli: valkey-cli }
-    services:
-      redis:
-        image: ${{ matrix.image }}
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "${{ matrix.cli }} ping"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
-      NESTRS_REDIS__URL: redis://localhost:6379
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: backends
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-nextest@0.9
-      - name: nest-rs-redis e2e
-        run: cargo nextest run -p nest-rs-redis -E 'binary(e2e)'
-
-  features:
-    name: features (each crate alone, each feature alone)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: features
-      - run: scripts/check-features.sh
-
-  # Advisory until the owner settles how a floor is written: resolving each
-  # direct requirement to its lowest release fails today on requirements that
-  # need a patch-level floor (`serde = "1.0"` resolves 1.0.0, which
-  # `jsonwebtoken` refuses), and the `major.minor` rule cannot express one.
-  minimal-versions:
-    name: minimal versions (advisory)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    continue-on-error: true
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: minimal-versions
-      - name: Install nightly (for -Z direct-minimal-versions)
-        run: rustup toolchain install nightly --profile minimal
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-hack@0.6,cargo-minimal-versions@0.1
-      # Each requirement the framework declares at the lowest release it
-      # admits (dependencies of dependencies at their newest), dev-dependencies
-      # removed as on crates.io, then build.
-      - run: cargo minimal-versions check --workspace --all-features --direct
-
   demo:
     name: demo (lint, unit, e2e)
     needs: check
@@ -341,26 +261,6 @@ jobs:
         working-directory: demo
       - run: nestrs run test e2e
         working-directory: demo
-
-  beta:
-    name: clippy on beta (advisory)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
-    needs: check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    continue-on-error: true
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: beta
-      - name: Install beta
-        run: rustup toolchain install beta --profile minimal --component clippy
-      - run: cargo +beta clippy --workspace --all-targets -- -D warnings
 
   mutants:
     name: mutants on the diff (advisory)

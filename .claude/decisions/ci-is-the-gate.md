@@ -25,3 +25,13 @@ real backends (service containers, compose, testcontainers) — none mocks. So:
 - **The trybuild snapshots stay.** Peers that use trybuild pin the toolchain for
   them (axum, actix-web); ours is pinned by `rust-toolchain.toml`, so the
   snapshots change only on a deliberate bump.
+
+**Nothing runs on a timer (2026-10-03).** The first cut ran the Redis/Valkey
+matrix, the feature matrix, minimal versions and beta clippy nightly, and a
+daily advisory watch. The owner refused machines running for days nobody
+changed anything: a job now runs when a change reaches what it tests
+(`backends.yml`, `features.yml` path filters); advisories between changes are
+GitHub's Dependabot alerts, a repository setting; a dependency a coming Rust
+release will reject is read from the clippy build CI already runs. Minimal
+versions and beta clippy were dropped: the first cannot pass under the
+`major.minor` rule, and nobody acts on an advisory lane.

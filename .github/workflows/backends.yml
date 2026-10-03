@@ -1,0 +1,71 @@
+# The Redis adapter's suite against every server line the framework supports —
+# only when a change reaches it: the adapter, the ports it binds, the kernel
+# they share, or the locked dependency graph.
+
+name: Backends
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths: &reach
+      - 'crates/nest-rs-redis/**'
+      - 'crates/nest-rs-queue/**'
+      - 'crates/nest-rs-queue-macros/**'
+      - 'crates/nest-rs-schedule/**'
+      - 'crates/nest-rs-throttler/**'
+      - 'crates/nest-rs-core/**'
+      - 'crates/nest-rs-config/**'
+      - 'Cargo.lock'
+      - '.github/workflows/backends.yml'
+      - '.github/actions/setup-rust/**'
+  pull_request:
+    paths: *reach
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: backends-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  NEXTEST_PROFILE: ci
+
+jobs:
+  backends:
+    name: backends (${{ matrix.server }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { server: Redis 6.2, image: 'redis:6.2.20', cli: redis-cli }
+          - { server: Redis 7.0, image: 'redis:7.0.15', cli: redis-cli }
+          - { server: Redis 8.6, image: 'redis:8.6.3', cli: redis-cli }
+          - { server: Valkey 7.2, image: 'valkey/valkey:7.2.11', cli: valkey-cli }
+          - { server: Valkey 8.1, image: 'valkey/valkey:8.1.4', cli: valkey-cli }
+    services:
+      redis:
+        image: ${{ matrix.image }}
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "${{ matrix.cli }} ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      NESTRS_REDIS__URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: backends
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@0.9
+      - name: nest-rs-redis e2e
+        run: cargo nextest run -p nest-rs-redis -E 'binary(e2e)'

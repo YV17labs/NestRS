@@ -153,16 +153,18 @@ what runs, and is not restated here. What CI owes the rules:
 - the demo, the docs lint (`docs.yml`, on a change to what the pages quote),
   and `cargo deny` over every lockfile.
 
-The Redis/Valkey matrix and the feature matrix run nightly, on demand and on a
-release branch, not on every pull request — a PR waits only on what its change
-can break. Advisory lanes (beta clippy nightly, `cargo mutants` on a pull
-request labelled `mutants`, minimal versions) report and never block. The workflows are hardened: actions pinned by SHA,
-`persist-credentials: false`, least permissions, `zizmor` clean.
+Nothing runs on a timer. A job runs when a change can break what it tests:
+the Redis/Valkey matrix (`backends.yml`) on a change reaching the Redis
+adapter, the ports it binds or the lockfile; the feature matrix
+(`features.yml`) on a manifest, the umbrella or the hygiene witness. `cargo
+mutants` runs on a pull request labelled `mutants` and never blocks. A
+dependency a coming Rust release will reject surfaces as a warning from the
+clippy build CI already runs. The workflows are hardened: actions pinned by
+SHA, `persist-credentials: false`, least permissions, `zizmor` clean.
 
-**The security watch is a monitor, not a gate.** It runs daily — the advisory
-check and a beta-toolchain build — and opens or updates one issue on failure.
-Nothing waits on it: it exists because CI runs only when someone pushes, and an
-advisory is published whether or not anyone does.
+**Advisories published while nobody pushes are GitHub's Dependabot alerts**, a
+repository setting fed by the RustSec database — not a scheduled workflow.
+`cargo deny` checks every change against the same database.
 
 ## Release
 

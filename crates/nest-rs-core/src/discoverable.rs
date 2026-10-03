@@ -165,7 +165,7 @@ pub const INERT_HOST_HINT: &str = concat!(
 
 /// Why a discovered host is inert in this app — which decides whether the boot
 /// says so at all, and what it tells the developer to do. Read by
-/// [`report_inert_host!`], from [`inert_host`].
+/// [`report_inert_host!`](crate::report_inert_host!), from [`inert_host`].
 ///
 /// **A host a library crate holds and this app does not import is another
 /// app's**, and is said at `debug`. In a workspace of several binaries one

@@ -193,7 +193,7 @@ impl GraphqlSocket {
     }
 
     /// The next server message, whatever its type. `None` on silence (after
-    /// [`DEFAULT_TIMEOUT`]) or once the connection is closed.
+    /// `DEFAULT_TIMEOUT`) or once the connection is closed.
     pub async fn next_message(&mut self) -> Option<Value> {
         self.next_message_within(DEFAULT_TIMEOUT).await
     }

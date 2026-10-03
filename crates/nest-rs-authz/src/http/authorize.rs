@@ -26,7 +26,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// ```rust,ignore
 /// #[post("/")]
 /// #[authorize(Create, users::Entity)]
-/// async fn create(&self, body: Valid<Json<CreateUser>>) -> Result<Json<User>> { … }
+/// async fn create(&self, body: Valid<Json<CreateUser>>) -> Result<Json<User>> { todo!() }
 /// ```
 ///
 /// `#[routes]` desugars that to this extractor, fully qualified, as the

@@ -47,7 +47,7 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
 /// Returns `true` when `password` matches `encoded_hash`.
 ///
 /// Verification reads the parameters **out of the stored hash**, not from the
-/// pinned ones — which is what lets [`ARGON2_M_COST`] and its siblings move
+/// pinned ones — which is what lets `ARGON2_M_COST` and its siblings move
 /// without invalidating every credential already in the database.
 ///
 /// Only a mismatch is `Ok(false)`. A hash that parses but cannot be run — an

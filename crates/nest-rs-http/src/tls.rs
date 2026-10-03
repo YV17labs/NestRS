@@ -135,7 +135,7 @@ impl HttpTls {
 
     /// Read TLS material from `NESTRS_HTTP__TLS_CERT` / `NESTRS_HTTP__TLS_KEY`
     /// (PEM inline) or their `_FILE` variants (path the transport loads), read
-    /// through [`ConfigService::pem`] — which refuses a half set both ways.
+    /// through [`ConfigService::material`] — which refuses a half set both ways.
     /// `base` is what the field keeps when the environment configures neither
     /// half.
     ///

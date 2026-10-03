@@ -500,11 +500,11 @@ const TYPO_REACH_MIN_LEN: usize = 6;
 /// namespace half of the rule the misspelled-namespace report applies, exposed
 /// so a suite can hold a tree's own namespaces apart by it: two linked
 /// namespaces that are near misses of each other would each report the other's
-/// variables. The report adds the key half: see [`misspelled_namespaces`].
+/// variables. The report adds the key half: see `misspelled_namespaces`.
 ///
 /// Equal once separators and case are set aside is nearest of all. Otherwise
 /// the two must have as many `__` segments, all equal but one — separators and
-/// case set aside — and that one, at least [`TYPO_REACH_MIN_LEN`] letters as
+/// case set aside — and that one, at least `TYPO_REACH_MIN_LEN` letters as
 /// linked, within a quarter of its longer spelling, at least one edit:
 /// `PORBE_KEYS` for `probe_keys`, `PROBE__MEMBR` for `probe__member`.
 /// **Tighter than a key's reach, deliberately**: a namespace a binary does not

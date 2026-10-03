@@ -19,10 +19,11 @@
 //!   token endpoint, this one checks them at ours.
 //!
 //! **Why not `nest-rs-authn`.** That crate resolves a caller's identity, and an
-//! authenticated machine client has none — [`AuthenticatedClient::actor_id`]
-//! returns `None`, which is the type answering authn's central question with
-//! *nobody*. Keeping the two together also meant every resource server compiled
-//! a token endpoint's error renderer and a credential registry it never serves.
+//! authenticated machine client has none — [`AuthenticatedClient`]'s
+//! [`actor_id`](nest_rs_authn::PrincipalIdentity::actor_id) returns `None`,
+//! which is the type answering authn's central question with *nobody*.
+//! Keeping the two together also meant every resource server compiled a token
+//! endpoint's error renderer and a credential registry it never serves.
 //! `TokenError::UnsupportedGrant` and `TokenError::InvalidScope` are the tell:
 //! neither is a credential verdict at all.
 //!

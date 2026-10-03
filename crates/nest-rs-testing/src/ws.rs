@@ -10,10 +10,11 @@
 //! task poem spawns from `on_upgrade`, and nothing above `Gateway::dispatch`
 //! runs until a client has actually connected.
 //!
-//! So this driver binds a port. [`WsApp`] boots the app's own HTTP transport —
-//! the one its `HttpModule::for_root(cfg)` describes, so the global prefix and
-//! everything else match what ships — on a free local address, and
-//! [`WsSocket`] speaks the gateway's `{ event, data }` envelope over it.
+//! So this driver binds a port. [`WsApp`](crate::ws::WsApp) boots the app's
+//! own HTTP transport — the one its `HttpModule::for_root(cfg)` describes, so
+//! the global prefix and everything else match what ships — on a free local
+//! address, and [`WsSocket`](crate::ws::WsSocket) speaks the gateway's
+//! `{ event, data }` envelope over it.
 //!
 //! ```ignore
 //! let app = TestApp::builder().module::<ChatModule>().build_ws().await?;
@@ -23,10 +24,11 @@
 //! app.shutdown().await?;
 //! ```
 //!
-//! Close frames are read as well as messages: [`WsSocket::expect_close`]
-//! returns the RFC 6455 §7.4.1 code the server ended the socket with, which is
-//! how a suite tells a deliberate close (the lifetime ceiling) from the
-//! **1006 Abnormal Closure** a dropped connection produces.
+//! Close frames are read as well as messages:
+//! [`WsSocket::expect_close`](crate::ws::WsSocket::expect_close) returns the
+//! RFC 6455 §7.4.1 code the server ended the socket with, which is how a suite
+//! tells a deliberate close (the lifetime ceiling) from the **1006 Abnormal
+//! Closure** a dropped connection produces.
 //!
 //! [`WsConfig`]: https://docs.rs/nest-rs-ws
 

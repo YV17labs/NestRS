@@ -53,7 +53,7 @@ impl Replicas {
 /// The [`Replicas`] a `replicas = …` value written at `#[member]` selects.
 ///
 /// Both refusals name the decorator: a value of the wrong kind through
-/// [`crate::args::takes_value`], listing [`VALUES`] as the string literals the
+/// [`crate::args::takes_value`], listing `VALUES` as the string literals the
 /// key takes, and a string outside them through [`unknown_value`].
 pub fn replicas_value(member: JobDecorator, expr: &Expr) -> syn::Result<Replicas> {
     let attr = member.name();

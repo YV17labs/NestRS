@@ -353,7 +353,7 @@ const HTTP_ONLY_LAYERS: [&str; 4] = [
     "use_exception_filters",
 ];
 
-/// Reject the [`HTTP_ONLY_LAYERS`] binding attributes where they are HTTP-only
+/// Reject the `HTTP_ONLY_LAYERS` binding attributes where they are HTTP-only
 /// today: on transports with no per-message/per-operation seam for those traits,
 /// binding one would be a silent no-op, so it is a named compile error instead.
 /// Guards *are* bridged everywhere, so they stay.

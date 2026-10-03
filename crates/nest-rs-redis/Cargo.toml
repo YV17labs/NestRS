@@ -10,6 +10,12 @@ description = "Redis for nest-rs: one shared connection (RedisModule), and one b
 keywords = ["framework", "nestrs", "redis", "queue", "apalis"]
 categories = ["asynchronous", "database"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
 
 [dependencies]
 nest-rs-core.workspace = true

@@ -75,7 +75,8 @@ impl EphemeralDatabase {
     }
 
     /// The live connection to the ephemeral database — seed this into a
-    /// [`TestApp`] to short-circuit `SeaOrmDatabaseModule`'s `for_root` factory.
+    /// [`TestApp`](crate::TestApp) to short-circuit `SeaOrmDatabaseModule`'s
+    /// `for_root` factory.
     pub fn connection(&self) -> Arc<DatabaseConnection> {
         self.connection.clone()
     }

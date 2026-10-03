@@ -41,7 +41,7 @@ const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a fiel
 /// column the mask removed?" and serve the value when it did not; HTTP can drop
 /// the key from a JSON body. An MCP operation returns one fixed Rust type to a
 /// model, so neither escape exists — a mask that takes a key the return type
-/// requires **refuses the operation** ([`refused_fields`]), in the gate's own
+/// requires **refuses the operation** (`refused_fields`), in the gate's own
 /// vocabulary and no more informatively than a gate refusal.
 ///
 /// That is the fail-closed reading, and it has a remedy the host controls: a

@@ -101,7 +101,7 @@ fn below<'p>(path: &'p Path, base: &Path) -> &'p Path {
 /// The folders and file name of `path` below `base`, in order — what a join
 /// matches a layout word against (`src`, an edge, `diagnostics`).
 ///
-/// The one door to a path's components in this crate: [`below`] first, always.
+/// The one door to a path's components in this crate: `below` first, always.
 /// A component that is not UTF-8 is kept in its lossy form rather than dropped,
 /// so every index still names the level it did — and a lossy name can never
 /// equal a layout word, which are all ASCII, so the verdict is the one the real
@@ -114,7 +114,7 @@ pub fn segments<'p>(path: &'p Path, base: &Path) -> Vec<std::borrow::Cow<'p, str
 }
 
 /// The path as the repo spells it, for a message a reader can paste into `rg` —
-/// and for a join that classifies on the spelling. Read through [`below`], so a
+/// and for a join that classifies on the spelling. Read through `below`, so a
 /// message and a verdict can never be taken from two different readings.
 pub fn relative(path: &Path, root: &Path) -> String {
     below(path, root).display().to_string()

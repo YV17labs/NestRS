@@ -12,7 +12,7 @@ use crate::ungrouped::ungrouped_expr;
 /// answered the same one with `"expected a string literal"` at seven call
 /// sites — naming neither the decorator nor the key — while this named both,
 /// and it lived in the module whose own doc says it handles *whole* attributes
-/// "as opposed to [`crate::args`], which parses the values *inside* one". The
+/// "as opposed to `crate::args`, which parses the values *inside* one". The
 /// sharpest instance was `versioning::parse_version_list`, which threads a
 /// `decorator` through every refusal it words itself and delegated this one,
 /// so `#[controller(version = 1)]` answered with no decorator named inside a
@@ -159,7 +159,7 @@ fn with_a_value(name: &str, value: &str) -> String {
 /// shared key on paper.
 ///
 /// `expected` is listed in the order the decorator declares it — see
-/// [`expected_list`].
+/// `expected_list`.
 pub fn unknown_argument(attr: &str, name: &str, expected: &[&str]) -> String {
     format!(
         "unknown #[{attr}] argument `{name}`; expected {}",

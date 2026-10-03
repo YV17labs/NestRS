@@ -455,7 +455,7 @@ mod tests {
 }
 
 /// A commit-time database failure. Opaque over the ORM's `DbErr` so a sea-orm
-/// version bump is not a semver break through [`FinalizeOutcome`] (B-DATA): the
+/// version bump is not a semver break through [`FinalizeOutcome`](crate::FinalizeOutcome) (B-DATA): the
 /// public surface exposes only what a caller needs — a [`Display`] for logging
 /// and [`is_retryable_conflict`](CommitError::is_retryable_conflict) for
 /// classification — never the wrapped `DbErr` itself.

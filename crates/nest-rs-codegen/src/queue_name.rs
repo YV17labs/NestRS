@@ -9,7 +9,7 @@
 /// The longest a queue name may be.
 const MAX_LEN: usize = 128;
 
-/// Whether `value` is 1 to [`MAX_LEN`] of `[A-Za-z0-9_.-]` — the rule a queue
+/// Whether `value` is 1 to `MAX_LEN` of `[A-Za-z0-9_.-]` — the rule a queue
 /// name follows.
 pub fn is_valid_queue_name(value: &str) -> bool {
     !value.is_empty()

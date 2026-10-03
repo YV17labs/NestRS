@@ -10,6 +10,12 @@ description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule:
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
 
 [features]
 default = []

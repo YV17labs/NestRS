@@ -109,7 +109,7 @@ impl TokenError {
 }
 
 /// **Deliberately not a `ResponseError`**, for the reason spelled out on
-/// [`CredentialError`]'s conversion: poem overwrites a response's extensions
+/// [`CredentialError`](nest_rs_authn::CredentialError)'s conversion: poem overwrites a response's extensions
 /// with the error's own on the way out, so the `NoBearerChallenge` marker only
 /// survives when the `poem::Error` carries it. Without this, a
 /// `Basic`-authenticating OAuth client was handed an RFC 9728 discovery pointer

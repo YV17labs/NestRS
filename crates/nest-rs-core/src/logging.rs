@@ -483,7 +483,7 @@ impl JsonFormat {
 
 /// Bound to [`JsonFields`], the field formatter a JSON layer is built with, so a
 /// layer pairing this format with the plain-text one is a compile error. The
-/// event's own fields are written by the format itself ([`write_json_fields`]),
+/// event's own fields are written by the format itself (`write_json_fields`),
 /// so the chain of a `&dyn Error` field reaches the record.
 impl<S> FormatEvent<S, JsonFields> for JsonFormat
 where

@@ -5,87 +5,40 @@ description: Choose a name that leaves its crate or reaches an operator — a pu
 
 # `/name` — a name is a coordinate, never a label
 
-**Scope** (`CLAUDE.md`, *Naming is the pillar*): a public type, module or
-crate; an env var or config key; a span target or unit; a datastore key; a CLI
-command or flag; a public error variant. Every other name follows rustc's naming
-lints and the path law, and does not need this procedure.
-
-**You cannot check a name, only a series.** A name judged alone passes — that is
-the failure mode. So the unit of work is the set the name joins, and the word
-asked for is one line of the answer. The model the answer must fit — naming
-levels, role tables, folder law, reserved vocabulary — is
-`.claude/rules/architecture.md`; this skill is the method for what it does not
-already decide.
+Every other name follows rustc's naming lints and the path law of
+`.claude/rules/architecture.md`, which this procedure never overrides. **You
+cannot check a name, only a series**: a name judged alone passes, which is the
+failure. So the unit of work is the set the name joins.
 
 ## The procedure
 
-Each step has a test that can fail; a failure invalidates the steps below it.
+Each step has a test that can fail; a failure voids the steps below it.
 
-**1. Name the set, not the thing.** Write the name asked for plus **at least
-two siblings that do not exist yet but plausibly will** — the next error
-variant, the next config key, the next adapter. *Test:* if you cannot produce
-two, you have not found the axis; look harder before founding a series badly.
-
-**2. Read the shared segment off something — never invent it.** The part every
-member shares is read off something that exists and that you did not choose: a
-standard's vocabulary, the domain's word, the path, the owning type, the
-protocol's field names. *Test:* can someone who did not write the code answer
-"is this a member?" A word nobody can test is a theme, and a theme admits
-everything.
-
-**3. Most stable on the left, most varying on the right.** Sorting is
-lexicographic on the raw string, so segment order *is* the grouping:
-
-```
-TOKEN_EXPIRED   TOKEN_MALFORMED   TOKEN_REVOKED     ← one block
-EXPIRED_TOKEN   MALFORMED_TOKEN   REVOKED_TOKEN     ← filed under E, M and R
-```
-
-Inside the final segment natural language wins (`max_retries`). Choose a
-representation whose sort is the meaning (`2026-09-16`, `step_02`). **No name is
-a raw-string prefix of an unrelated one** — `EnvFilter` matches targets with
-`starts_with`, so an accidental prefix silences a sibling. *Test:* sort the list
-as the reader meets it (`env | sort`, `--help`, a log filter, an enum listing);
-siblings must sit adjacent.
-
-**4. The next one lands in exactly one place.** Take the most plausible member
-six months out. Zero places means the scheme is closed against a real case; two
-means two axes are crossed — declare the matrix once (vendor then port:
-`RedisQueueModule`, `SeaOrmDatabaseModule`) and apply it to every member.
-
-**5. One scheme, one word per concept.** Every member spells every axis with
-the same word in the same position. One odd member means it or the scheme is
-wrong, and deciding which is the finding. Two words for one concept and one
-word for two concepts are the same defect. A rename that leaves its `*Setup`,
-`*Host`, config type or variable behind is half a rename.
-
-**6. The admission test — what does this name refuse?** If nothing, it names a
-slot or an audience — `utils`, `common`, `shared`, `types`, `manager`, a shrug
-`service` — and it fills forever.
-
-**7. Round-trip.** From the name a reader finds the thing; from the thing they
-reconstruct the name without looking it up. *Test:* give a fresh agent the rule
-from step 4 and none of the members, and ask for a member's name. A set that
-cannot be derived is a lookup table, and lookup tables drift. Derivable beats
-short: a name is declared once and read forever in output nobody can annotate.
+1. **Name the set**: the name asked for plus two siblings that do not exist yet
+   but plausibly will. Cannot find two? The axis is not found yet.
+2. **Read the shared segment off something** — a standard's vocabulary, the
+   domain's word, the path, the owning type — never invent it. Test: can someone
+   who did not write the code say whether a candidate is a member?
+3. **Most stable on the left**: sorting is lexicographic on the raw string, so
+   segment order is the grouping (`TOKEN_EXPIRED`, `TOKEN_REVOKED`, not
+   `EXPIRED_TOKEN`). No name is a raw-string prefix of an unrelated one —
+   `EnvFilter` and `SCAN` match with `starts_with`.
+4. **The next member lands in exactly one place.** Zero is a closed scheme, two
+   are crossed axes: declare the matrix once (vendor, then port).
+5. **One word per concept, one concept per word**, across every member; a rename
+   that leaves its `*Setup`, `*Host`, config type or variable behind is half a
+   rename.
+6. **Say what it refuses.** A name that refuses nothing — `utils`, `common`,
+   `manager`, a shrug `service` — names a slot and fills forever.
+7. **Round-trip**: given the step-4 rule and no member, a fresh reader derives
+   the name. A set that cannot be derived is a lookup table, and drifts.
 
 ## What you hand back
 
-Never a bare word:
-
-1. **The set** — what it is a set of, in one sentence.
-2. **Where the shared segment is read off** — the standard, the path, the domain
-   word. "I chose it" is a finding.
-3. **The members** — those that exist, plus two or more that do not.
-4. **That list, sorted** as the reader meets it.
-5. **The placement rule** — one line a contributor applies to add the next
-   member without asking.
-6. **What it refuses** — at least one thing that does not go here.
-7. **The rung that holds it** (`CLAUDE.md`, *How a rule is held*) — a typed
-   constant or enum, a structural check on paths, `nestrs lint`, or review.
-   Say which, and whether it exists.
-
-## Where each surface is read sorted
+The set in one sentence; where its shared segment is read off; the members,
+existing and coming, **sorted as the reader meets them**; the one-line rule that
+places the next member; what it refuses; and the rung that holds it (a typed
+constant or enum, `nestrs lint`, or review), saying whether that rung exists.
 
 | Surface | The set is… | Read sorted in |
 |---|---|---|
@@ -97,37 +50,8 @@ Never a bare word:
 | CLI command, flag | everything `--help` prints | `--help`, completion |
 | public error variant | every outcome a caller matches on | the `match`, the error docs |
 
-The trap is naming against the wrong set: a type against its file when it will
-be read in a stack trace with no path, a key against its module when an
-operator reads it beside every other key in the store.
-
-## Failure classes
-
-- **The one-off that reads fine alone** — wrong against its location or
-  siblings, invisible from the file that declares it. *What does it look like in
-  output that carries no path?*
-- **The theme prefix** — a shared word chosen for convenience, so membership is
-  arguable (step 2).
-- **The marker that distinguishes nothing** — a prefix added against a
-  collision that mostly does not happen; it buys length, not identification.
-- **The resource word that names neither side** — `DATABASE_URL` names neither
-  the crate that reads it nor the type that parses it.
-- **Two vocabularies for one thing** — the span and the line naming one unit
-  differently. Fixed by sharing a constant, not by choosing better words.
-- **The half rename** (step 5), **the slot** (step 6), **the accidental prefix**
-  (step 3).
-
-## Whose decision
-
-A crate name, a crate family and a new edge in the closed edge vocabulary are
-proposed with the full deliverable and **asked**: crate naming is locked
-(`CLAUDE.md`, *Autonomous work*). Every other name in scope is decided here, by
-the procedure.
-
-## When to stop
-
-Renaming is free before the name is written, cheap before it ships, and
-permanent once an operator greps it, a chart sets it or a registry publishes
-it. If two passes produce two schemes you cannot choose between, you are
-missing a fact about the domain, not a better word: name the fact and go find
-it.
+A crate name, a crate family and a new edge are proposed with this deliverable
+and asked: crate naming is the owner's (`CLAUDE.md`, *How we work*). Renaming is
+free before the name is written and permanent once an operator greps it: two
+passes yielding two schemes mean a missing fact about the domain, not a better
+word.

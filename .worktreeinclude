@@ -1,0 +1,2 @@
+# Gitignored local files every worktree needs, copied when Claude Code creates one.
+.env.local

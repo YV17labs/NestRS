@@ -48,3 +48,6 @@ docs/.astro/
 # repo has to keep in sync with itself.
 AUDIT.md
 GAPS.md
+
+# Worktrees Claude Code creates for sessions and isolated agents.
+.claude/worktrees/

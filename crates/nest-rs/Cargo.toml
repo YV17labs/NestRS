@@ -22,10 +22,10 @@ all-features = true
 ##
 ## Enabling a capability MUST pull everything its decorators' expansions name
 ## unconditionally, or the developer meets `E0433` inside a macro expansion —
-## the defect this matrix exists to prevent (`CLAUDE.md`, *The umbrella is the
-## front door*). Emissions that depend on an attribute the developer writes
-## themselves (`#[authorize]` → authz, `#[crud]` → seaorm) are their own
-## feature: one more feature, never one more dependency line.
+## the defect this matrix exists to prevent. Emissions that depend on an
+## attribute the developer writes themselves (`#[authorize]` → authz,
+## `#[crud]` → seaorm) are their own feature: one more feature, never one more
+## dependency line.
 ##
 ## `dep?/feat` (weak) forwards a binding only when both sides are already on —
 ## an HTTP-only build never compiles the GraphQL stack through those edges.

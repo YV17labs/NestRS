@@ -20,11 +20,11 @@
 //! nothing is claimed — which is precisely the spelling
 //! `docs/configuration/env-cascade` teaches for a borrow. Saying "borrowing is
 //! a boot failure" flatly told a reader the framework refuses something it
-//! waves through, and *"a `warn` whose sentence is wrong is worse than none"*
-//! (`container.md`) is the same rule one level up. Whether the free function
-//! should be covered too is an **owner question**: it is called from places
-//! with no config in flight at all, so covering it means deciding what an
-//! unowned read means, not adding a line.
+//! waves through — the rule that a `warn` whose sentence is wrong is worse
+//! than none, one level up. Whether the free function should be covered too is
+//! an **owner question**: it is called from places with no config in flight at
+//! all, so covering it means deciding what an unowned read means, not adding a
+//! line.
 //!
 //! Nothing in either workspace borrows today by either spelling, and
 //! `nest-rs-throttler` declines to read HTTP's trusted-proxy list with the
@@ -125,8 +125,8 @@ pub(crate) fn claiming<C: 'static, T>(load: impl FnOnce() -> T) -> (T, Result<()
     /// claim and no refusal — the only consequence is unbounded growth on a
     /// thread that panicked mid-read. Nothing public can observe that, and a
     /// test that would stay green through the guard's removal is worse than
-    /// none (`testing.md` clause 3). The guard is hygiene, and it is here
-    /// because the alternative is a leak nobody can see.
+    /// none. The guard is hygiene, and it is here because the alternative is a
+    /// leak nobody can see.
     struct Window(Option<BTreeSet<String>>);
     impl Drop for Window {
         fn drop(&mut self) {

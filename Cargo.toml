@@ -1,8 +1,5 @@
 [workspace]
 resolver = "2"
-# Framework only — the `nest-rs-*` capability crates. The product (the Publish
-# apps + `features`/`migrations`/`seed`) lives in its own consumer workspace at
-# `demo/`, which references these crates by relative path. See `demo/Cargo.toml`.
 members = [
     "crates/*",
 ]
@@ -16,28 +13,14 @@ repository = "https://github.com/YV17labs/NestRS"
 homepage = "https://nestrs.dev"
 
 [workspace.dependencies]
-# Every requirement here is `major.minor` — the floor we build against, patch
-# left to the publisher. Move the minor when `cargo update` does;
-# `versions_are_major_minor` (nest-rs-cli) fails the suite on any other form.
-#
-# Pinned majors: poem, sea-orm, async-graphql, rmcp, inventory, validator and
-# schemars ARE the public surface — their types appear in the signatures the
-# macros emit. A major bump of one breaks downstream code, so it ships in a
-# nestrs major, reviewed, never in a passing `cargo update`.
-#
-# Async runtime
+# poem, sea-orm, async-graphql, rmcp, inventory, validator and schemars appear
+# in the code the macros emit: their majors move only with a nestrs major.
 tokio = { version = "1.53", features = ["full"] }
-# `io` supplies `ReaderStream`, which turns a multipart part's `AsyncRead`
-# into the byte stream an object-store upload consumes.
 tokio-util = { version = "0.7", features = ["rt", "io"] }
 
-# Tracing / logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# OTLP over HTTP/protobuf on reqwest, so the workspace's rustls toolchain is
-# reused (no tonic/openssl). The batch processors export from a dedicated
-# non-Tokio thread, which is why the default blocking reqwest client is right.
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = "0.32"
@@ -45,160 +28,67 @@ opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_ex
 opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
 
-# Errors
 thiserror = "2.0"
 anyhow = "1.0"
 
-# `rust_crypto` picks the pure-Rust backend (no aws-lc-rs C dependency),
-# matching the workspace's rustls posture; jsonwebtoken makes it explicit.
 jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
 oauth2 = "5.0"
-# `Authorization: Basic` decoding for the OAuth2 client credentials.
 base64 = "0.23"
 
-# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Config
 figment = { version = "0.10", features = ["toml", "env"] }
 
-# `anyhow` gives `poem::Error: From<anyhow::Error>` (→ 500), so a handler can
-# `?` a service's `anyhow::Result` with no hand-written error→response mapping.
-# `rustls` terminates TLS with no OpenSSL system dep (single static binary).
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
-# Validating a TLS pair before it is published to the listener. poem parses the
-# same bytes but its parser is private, and it builds with `with_cert_resolver`,
-# which never checks that the certificate and the key correspond — so a
-# mismatched or empty pair reaches the acceptor and every handshake fails. This
-# is the same rustls poem resolves to (through `tokio-rustls`), and only
-# `pki_types` (PEM) plus `sign` (`keys_match`) are used.
 rustls = "0.23"
 
-# Chosen over `aws-sdk-s3`: reqwest/rustls-based, no `aws-runtime` (which fails
-# to build on the pinned toolchain). `aws` brings AmazonS3 + its presign Signer.
 object_store = { version = "0.14", features = ["aws"] }
-# `signed_url` takes a `reqwest::Method` (a re-export of `http::Method`) — a
-# direct dep keeps nest-rs-storage off whichever reqwest minor object_store pins.
 http = "1.5"
 
-# The access log counts the response bytes actually sent. Counting means wrapping
-# the body, and the wrapper has to be an `http_body::Body` that **forwards
-# `size_hint`**: hyper picks the framing from `size_hint().exact()`, so a wrapper
-# that drops it turns every response into `Transfer-Encoding: chunked`. poem's
-# only public stream constructor (`Body::from_bytes_stream`) does drop it, which
-# is why the count goes through the trait rather than through poem's own seam —
-# `Body` converts to and from `http_body_util`'s `BoxBody` in public impls.
-#
-# Neither crate is new to the build: poem and object_store both compile them
-# already. These two lines name what `nest-rs-http`'s own source now writes.
 http-body = "1.1"
 http-body-util = "0.1"
 
 bytes = "1.12"
 futures-util = "0.3"
 
-# The WebSocket client `nest-rs-testing`'s `ws` driver drives a real upgrade
-# with — the one request-carrying edge whose protocol *is* the socket, so no
-# in-process engine can stand in for it. Not a new crate in the build: poem's
-# own `websocket` feature already compiles this exact version, which is why the
-# requirement tracks poem's rather than floating ahead of it.
 tokio-tungstenite = "0.30"
 
 async-trait = "0.1"
 
-# No lock poisoning, so the framework's hot-path locks need no `.unwrap()` —
-# one lock primitive shared by every crate.
 parking_lot = "0.12"
 
-# Constant-time comparison for the client-credentials grant: a hand-rolled `==`
-# leaks length through its early return.
 subtle = "2.6"
 
-# GraphQL. `dataloader` gives us async-graphql's batching loader, surfaced via
-# the `#[dataloader]` decorator to kill field-resolver N+1s.
-#
-# EXACT pin, not a caret range: `nest-rs-graphql/src/resolver.rs` reads
-# async-graphql's public-but-internal registry API — it spells out the whole
-# `MetaType::Object { .. }` literal and relies on `remove_unused_types`
-# behaviour. A minor bump can silently add/rename a field or change that
-# behaviour, so the version is frozen and guarded in three layers (compile-time
-# canary + exhaustive literal + SDL snapshot test, all in that file/crate). On
-# bump, follow the procedure in the `nest-rs-graphql` crate `//!` doc: bump this
-# pin, fix the canary, run the SDL snapshot test, review the SDL diff.
+# Exact pin: nest-rs-graphql reads async-graphql's registry internals.
 async-graphql = { version = "=7.2.1", features = ["dataloader"] }
 async-graphql-poem = "=7.2.1"
-# Link-time registry: each `#[resolver]` submits its query/mutation objects so
-# the schema composes itself at boot with no central list.
 inventory = "0.3"
 
 argon2 = "0.6"
 validator = { version = "0.21", features = ["derive"] }
-# `serde` so UUID-keyed entity rows serialize for the authz response masker.
 uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
 
-# EXACT pin (`=`), not a caret range: sea-orm types saturate the ORM public
-# surface (`Repo` bounds, `Executor`'s `ConnectionTrait`, `ServiceError::Db`),
-# so even a minor is a reviewed change. On bump, move both pins together and
-# re-run the seaorm/storage e2e suites.
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
-# HTTP client (rustls so we avoid an OpenSSL system dep)
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
-# Dev-only. Pins the macros' compile-time diagnostics (the boot-time ones are
-# pinned by integration tests), so the framework's #1 differentiator cannot
-# regress silently.
 trybuild = "1.0"
 
-# Dev-only. Builds a real gzip request body, so the transport's body cap is
-# proved against the composition that defeated it — poem's `Compression`
-# decompresses the body and leaves `Content-Length` describing the compressed
-# bytes. A hand-set header would test the symptom; this tests the wire.
 flate2 = "1.1"
 
-# schemars must match rmcp's re-exported version, or the derive resolves to a
-# different trait than `rmcp::handler::server::wrapper::Parameters` expects.
 rmcp = { version = "3.4", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
 
-# `#[cron("...")]` parsing. croner accepts 5/6/7 fields (seconds optional);
-# chrono-tz resolves the IANA name of the optional per-job timezone.
 croner = "4.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 chrono-tz = "0.10"
 
-# Held at 0.7.4 past the 12-month freshness bar (released 2025-11-18) — the one
-# dependency 7.0 keeps past it, by decision, because the only newer line fails
-# the queue's recovery obligation. apalis-redis 1.0.0-rc.9 (2026-09-23, with
-# apalis 1.0.0-rc.10): a worker that exits without its clean close — OOM,
-# SIGKILL, a cut drain, even a 1.5 s Redis stall or a connection reset — leaves
-# a registration its sweep reads with the wrong type (WRONGTYPE, upstream
-# apalis-redis#103), and five minutes later every surviving worker of that queue
-# dies at its heartbeat. The proposed fix (#104) recovers no job when replayed,
-# and #76 (workers die on transient errors) still reproduces. 0.7.4 rides the
-# same stall and reset out. Move when an apalis-redis release passes
-# nest-rs-redis's resilience e2e suite — never through `cargo update`, and
-# without forking or vendoring (owner decision). The crate lives at
-# github.com/apalis-dev/apalis-redis, split out of geofmureithi/apalis.
-# The 0.7 build carries a future-incompat lint (never-type fallback) that rustc
-# says becomes a hard error "in a future release in all editions";
-# `.github/workflows/security-watch.yml` builds on beta to see it six weeks
-# before stable does.
+# Held at 0.7: apalis-redis 1.0 loses workers after an unclean exit (apalis-redis#103).
 apalis = "0.7"
 apalis-redis = "0.7"
-# Same 0.32 line apalis-redis pins, so the two share one connection type:
-# `RedisConnection` is the connection apalis's storage runs on, which a second
-# line would make two unrelated traits. This is why redis 1.x waits on
-# apalis-redis 1.0.
-#
-# `rediss://` goes through rustls, verified against the webpki roots compiled
-# into the binary: with `tls-rustls-webpki-roots` redis never reads the system's
-# store, which it would re-read on every connection it opens, blocking the
-# runtime while it does, and fail the connection whenever that read failed.
-# `tls-rustls-insecure`, which honours `#insecure`, stays off — nest-rs-redis
-# refuses that fragment at boot, and this is what makes the refusal final.
+# Must match apalis-redis's redis version.
 redis = { version = "0.32", default-features = false, features = [
     "aio",
     "connection-manager",
@@ -208,40 +98,20 @@ redis = { version = "0.32", default-features = false, features = [
     "tls-rustls-webpki-roots",
 ] }
 
-# CLI (nest-rs-cli)
 clap = { version = "4.6", features = ["derive", "env"] }
 toml_edit = "0.25"
 
-# Proc-macro dependencies
 syn = { version = "3.0", features = ["full"] }
 quote = "1.0"
 proc-macro2 = "1.0"
-# Resolves the name the call site reaches the framework by, so an expansion can
-# root itself at `::nest_rs::<concern>` in an app and at `::nest_rs_<concern>`
-# inside the framework's own crates. See `nest-rs-codegen`'s `reroot`.
 proc-macro-crate = "3.5"
 
-# Dev-only (test targets)
 tempfile = "3.27"
-# The TLS server side `nest-rs-redis`'s tests put in front of its client: a
-# refusing listener in the unit tests, and in the e2e suite a TLS-terminating
-# proxy before the dev container's plaintext Redis, so `rediss://` is exercised
-# against it.
 tokio-rustls = "0.26"
 tower = "0.5"
 libc = "0.2"
 
-# Internal crates. Kebab-case everywhere (the crates.io form); Cargo's default
-# hyphen→underscore mapping gives the `nest_rs_*` import paths the macros emit.
-#
-# Each is required at `=` the release — the lockstep one tag publishes, and the
-# one floor that keeps an expansion and the seams it calls in one release. A
-# `*-macros` crate emits calls into `#[doc(hidden)]` seams of its runtime crate
-# and of up to eleven others, through code `nest-rs-codegen` writes, and semver
-# covers none of them: under `"7.0"` a partial `cargo update -p` could pair one
-# crate's 7.0.1 expansion with another's 7.0.0 seams. Bump these with
-# `[workspace.package] version`; `the_framework_requires_itself_at_its_own_release`
-# (nest-rs-cli) fails on any requirement that is not `=` it.
+# `=`: macro expansions call #[doc(hidden)] items semver does not cover.
 nest-rs-core = { version = "=7.0.0", path = "crates/nest-rs-core" }
 nest-rs-authn = { version = "=7.0.0", path = "crates/nest-rs-authn" }
 nest-rs-throttler = { version = "=7.0.0", path = "crates/nest-rs-throttler" }
@@ -287,24 +157,10 @@ nest-rs-worker = { version = "=7.0.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "=7.0.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "=7.0.0", path = "crates/nest-rs-ws-macros" }
 
-# Every crate opts in with `[lints] workspace = true`, test targets included.
-# A lint here is `deny`, never `forbid`: the few sites that must break one say so
-# with `#[expect(lint, reason = "…")]` — an expect, so a stale exception fails the
-# build, and a reason, so `allow_attributes_without_reason` has nothing to catch.
-# `unsafe_code` was `forbid`, which no site can override, and three crates opted
-# out of the whole table to reach their one `std::env::set_var`.
 [workspace.lints.rust]
 unsafe_code = "deny"
 unreachable_pub = "warn"
 
-# The restriction lints that hold a written rule: no `unwrap`/`expect`/`panic!`
-# outside a reasoned bootstrap or invariant, no dropped error (`let _ =` on a
-# `Result`, `map_err(|_| …)`) without a reason at the site, no `println!`
-# outside the CLI, and no `foo.rs` beside `foo/`. Tests are exempt through
-# `clippy.toml`'s `allow-*-in-tests` and one attribute per suite root.
-#
-# Config literals always close with `..Default::default()` so an import site
-# stays forward-compatible as the options struct gains fields.
 [workspace.lints.clippy]
 needless_update = "allow"
 allow_attributes_without_reason = "deny"
@@ -321,14 +177,11 @@ unimplemented = "deny"
 unwrap_used = "deny"
 wildcard_imports = "deny"
 
-# Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]
-opt-level = 3       # max performance (the release default; explicit for clarity)
-lto = "fat"         # whole-program optimisation: best cross-crate dead-code elimination
-codegen-units = 1   # a single unit gives the optimiser the most to work with
-strip = true        # drop symbols from the final binary (~18 MB -> ~15 MB)
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
 
-# opt-level = 0 and incremental are already the defaults; the win is dropping
-# full debuginfo while keeping file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"

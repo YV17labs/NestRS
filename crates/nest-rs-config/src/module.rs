@@ -171,10 +171,9 @@ mod tests {
     /// The `for_root` / `for_feature` seam, exercised through a real boot.
     ///
     /// A nested module rather than a second file-level `#[cfg(test)] mod`:
-    /// `CLAUDE.md` fixes the shape at one per file — "`#[cfg(test)] mod tests`
-    /// in the file under test" — and a `seam::…` filter path existed nowhere
-    /// else in either workspace, so "where is this asserted?" had two answers
-    /// inside one file.
+    /// the shape is one per file, `#[cfg(test)] mod tests` in the file under
+    /// test, and a `seam::…` filter path existed nowhere else in either
+    /// workspace, so "where is this asserted?" had two answers inside one file.
     mod seam {
         use nest_rs_core::{App, ContainerBuilder, DynamicModule, Module, module};
         use validator::Validate;
@@ -386,7 +385,7 @@ mod tests {
             // directory" — but the runner is nextest, which gives every test its
             // own process, so the `OnceLock` is always this test's. The guard
             // made the read half of the cell unfailable, which is worse than
-            // empty (`testing.md` clause 3).
+            // empty.
             let value = crate::ConfigService::for_namespace("readpath_guard")
                 .get("URL")
                 .unwrap();

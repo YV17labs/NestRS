@@ -5,7 +5,7 @@
 //! both: every key [`CrudDeclaration`] carries is read by each generator. The
 //! sentence here used to promise otherwise — "REST consumes `guards`; GraphQL
 //! ignores them", about a `guards` key that has never existed — and the second
-//! half is the shape `CLAUDE.md` bans, written as though it were the design. A
+//! half is a silently ignored key, written as though it were the design. A
 //! key one surface cannot honour is a compile error naming the fact, never a
 //! field quietly dropped.
 

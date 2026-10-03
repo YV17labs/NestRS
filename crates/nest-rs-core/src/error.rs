@@ -80,12 +80,11 @@ pub struct MissingDependencyError {
 /// same law [`target`](crate::target) and [`operation_log`](crate::operation_log)
 /// state for themselves: the kernel holds no name for a concern it does not know
 /// exists. It listed three `Scoped<T>` paths for one round — `nest_rs_http`,
-/// `nest_rs_graphql`, `nest_rs_mcp` — copied from a prose list in
-/// `edges.md` that was itself three of four, so a developer who hit this on
-/// a WS gateway was handed three paths none of which was theirs while
-/// `nest_rs_ws::Scoped<T>` existed. Nothing compiles against a message, so the
-/// fourth would never have been added; every future edge would have inherited
-/// the same wrong remedy.
+/// `nest_rs_graphql`, `nest_rs_mcp` — copied from a prose list that was itself
+/// three of four, so a developer who hit this on a WS gateway was handed three
+/// paths none of which was theirs while `nest_rs_ws::Scoped<T>` existed.
+/// Nothing compiles against a message, so the fourth would never have been
+/// added; every future edge would have inherited the same wrong remedy.
 ///
 /// **The reason is worded per arm, because the two arms are not the same fact.**
 /// A request-scoped provider genuinely has no instance outside a request. A

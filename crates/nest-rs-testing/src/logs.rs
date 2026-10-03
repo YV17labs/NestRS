@@ -56,7 +56,7 @@ pub struct CapturedEvent {
     /// The event's `name:` — its metadata identity, which an OTLP log bridge
     /// exports as `event.name`.
     ///
-    /// A unit of work is named three times (`CLAUDE.md`): by the
+    /// A unit of work is named three times: by the
     /// `operation_span!` that opens it, by the operation line's `name:`, and by
     /// that line's `message`. Without this field a harness could match only the
     /// message, so a line whose `name:` had drifted from it passed every

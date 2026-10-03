@@ -1,10 +1,5 @@
 [workspace]
 resolver = "2"
-# The product workspace — the **Publish** demo. This is a *consumer* of the
-# framework: the runnable apps plus the product crates (`features` /
-# `migrations` / `seed`). The framework's `nest-rs-*` crates live one level up
-# in `../crates/` and are referenced by relative path below, so you can `cd
-# demo` and drive the app as if this were its own repository.
 members = [
     "apps/*",
     "crates/*",
@@ -19,14 +14,8 @@ repository = "https://github.com/YV17labs/NestRS"
 homepage = "https://nestrs.dev"
 
 [workspace.dependencies]
-# One entry, capabilities as features — the shape every app consuming NestRS
-# uses. The demo is the reference product: if it needed a second framework
-# line, no user could avoid one either.
 nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "redis-throttler", "redis-schedule", "schedule", "events", "authn", "authz", "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "worker", "storage"] }
 
-# Third-party crates this product's own source names. Requirements are
-# `major.minor` and the exact pins mirror the framework's — see the root
-# `Cargo.toml`, which owns the rationale for both.
 tokio = { version = "1.53", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -48,17 +37,11 @@ sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-to
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 schemars = { version = "1.2", features = ["uuid1"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-# Dev-only. WebSocket client driving the live gateway in e2e tests.
 tokio-tungstenite = "0.30"
 
-# The product's own crates. `features` holds the shared business logic and the
-# transport adapters that expose it; `migrations` holds the schema. (`seed` is
-# a binary — `cargo run -p seed` — nothing depends on it as a lib.)
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
 
-# Config literals always close with `..Default::default()` so an import site
-# stays forward-compatible as the options struct gains fields.
 [workspace.lints.clippy]
 needless_update = "allow"
 allow_attributes_without_reason = "deny"
@@ -75,20 +58,14 @@ unimplemented = "deny"
 unwrap_used = "deny"
 wildcard_imports = "deny"
 
-# Compiler-enforced unsafe-freedom across the demo, mirroring the root workspace.
-# Every demo crate opts in via `[lints] workspace = true`, so `unsafe` is a
-# compile error in its lib and test targets alike.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-# Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]
-opt-level = 3       # max performance (the release default; explicit for clarity)
-lto = "fat"         # whole-program optimisation: best cross-crate dead-code elimination
-codegen-units = 1   # a single unit gives the optimiser the most to work with
-strip = true        # drop symbols from the final binary (~18 MB -> ~15 MB)
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
 
-# opt-level = 0 and incremental are already the defaults; the win is dropping
-# full debuginfo while keeping file:line in backtraces.
 [profile.dev]
 debug = "line-tables-only"

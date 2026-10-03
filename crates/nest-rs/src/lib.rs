@@ -59,7 +59,7 @@ pub use nest_rs_authz as authz;
 /// The level exists because a family whose members are named by one standard is
 /// read as one thing; the word below it is looked up in §1.1 rather than chosen,
 /// so a role added later has exactly one place to land. See *Families* in
-/// `.claude/rules/architecture.md`.
+/// `architecture.md`.
 #[cfg(any(
     feature = "oauth-client",
     feature = "oauth-server",

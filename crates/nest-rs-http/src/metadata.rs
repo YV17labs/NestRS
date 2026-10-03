@@ -16,8 +16,8 @@
 //! implementor for as long as that promise stood unread.
 //!
 //! Every reader already depends on this crate unconditionally — `nest-rs-guards`
-//! by the argument recorded in `edges.md`, and the four Layer families
-//! through it — so nothing pays a dependency for the move.
+//! directly, and the four Layer families through it — so nothing pays a
+//! dependency for the move.
 
 use std::any::Any;
 

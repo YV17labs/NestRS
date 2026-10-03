@@ -630,11 +630,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 // `check_ws_message`, where `AuthnGuard` keeps the no-op default
                 // by design. Applied there the check was wrong in both
                 // directions — silently green on a chain that attaches no
-                // principal, and a false boot failure on the split-scope shape
-                // `authn-authz.md` sanctions — and it refused `#[force_guards]`
-                // under the canonical pool. Answering at that site needs a
-                // per-message notion of "producer", which is a design question,
-                // not a patch. See `guards-baseline.txt`.
+                // principal, and a false boot failure on the sanctioned
+                // split-scope shape — and it refused `#[force_guards]` under the
+                // canonical pool. Answering at that site needs a per-message
+                // notion of "producer", which is a design question, not a
+                // patch. See `guards-baseline.txt`.
                 .attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpBootCheck>(
                     ::nest_rs_ws::nest_rs_http::HttpBootCheck::new(|__container| {
                         ::nest_rs_guards::dispatch::boot_validate_guards(

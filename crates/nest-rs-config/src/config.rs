@@ -40,11 +40,11 @@ pub trait Namespaced {
 /// `#[config]` author — the decorator emits only [`Namespaced`] — so writing
 /// `fn read` beside their own `from_env` withdrew that type from the claim
 /// registry silently, with the boot green and no diagnostic anywhere.
-/// `container.md` names that shape and calls it a shipped defect: *"A refusal
-/// that reads a missing marker is fillable"* — here it was worse, a *present*
-/// default the checked party could replace. It stays `pub` — `nest-rs-social`'s
-/// registry is the third caller — because what had to go is the *override*, not
-/// the reachability: a free function cannot be replaced by the type it checks.
+/// That shape is a shipped defect — a refusal that reads a missing marker is
+/// fillable — and here it was worse, a *present* default the checked party
+/// could replace. It stays `pub` — `nest-rs-social`'s registry is the third
+/// caller — because what had to go is the *override*, not the reachability: a
+/// free function cannot be replaced by the type it checks.
 ///
 /// It refuses first a namespace another type declares too
 /// ([`ConfigError::SharedNamespace`](crate::ConfigError)): before any variable

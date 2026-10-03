@@ -46,7 +46,7 @@ pub fn load_project_env() {
             // spawns can read the environment, and it never runs again. The
             // residual race is with a reader spawned by an *earlier* test in
             // the same process, which nextest's process-per-test model rules
-            // out (see `.claude/rules/testing.md`).
+            // out.
             //
             // The write is what `<PREFIX>_LOG` and `OpenTelemetry::init` read
             // through bare `std::env::var`, which is the whole reason a

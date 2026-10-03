@@ -539,7 +539,7 @@ mod panic_containment {
 
         // The ids are read off the **span**, never off the line: a log line
         // renders the ambient correlation and carries no span state, so writing
-        // them as event fields would be the duplicate CLAUDE.md forbids.
+        // them as event fields would be a duplicate.
         let units: Vec<_> = logs
             .spans()
             .into_iter()

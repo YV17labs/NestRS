@@ -1,6 +1,6 @@
 //! The span targets **this crate** emits on.
 //!
-//! `CLAUDE.md` fixes the shape — dotted, lowercase, **rooted at the crate that
+//! The shape is fixed — dotted, lowercase, **rooted at the crate that
 //! emits them**, the crate picking the root and the concern the tail — and that
 //! rule decides where a constant lives as much as what it says. A target's one
 //! job is to name *where* an event came from, so the crate that **owns the
@@ -47,7 +47,7 @@ mod tests {
     /// keep in step for nothing.
     const ALL: [&str; 5] = [APP, CONTAINER, LAYERS, LIFECYCLE, MODULE];
 
-    /// The shape `CLAUDE.md` fixes: `nest_rs::<concern>`, lowercase, **two**
+    /// The fixed shape: `nest_rs::<concern>`, lowercase, **two**
     /// segments. A third would be a hierarchy this table does not have, and the
     /// prose has no way to notice one.
     #[test]
@@ -78,8 +78,7 @@ mod tests {
     /// `EnvFilter` matches a directive by `starts_with` on the raw string, so a
     /// target that prefixes another cannot be silenced alone — the defect
     /// `nest_rs::access` / `nest_rs::access_graph` shipped as. This crate's own
-    /// five are checked here; across crates the property is review's
-    /// (`observability.md`).
+    /// five are checked here; across crates the property is review's.
     #[test]
     fn no_target_is_a_prefix_of_another() {
         for outer in ALL {

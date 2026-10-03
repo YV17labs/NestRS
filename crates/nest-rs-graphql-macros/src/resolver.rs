@@ -6,8 +6,7 @@
 //! attribute macro is a single path in the macro namespace: the shape is
 //! discriminated *after* `syn::parse`, so a shared name gives one rustdoc page
 //! for two argument grammars and annotates every expansion error with the same
-//! attribute whichever half emitted it. See the *one decorator, one item shape*
-//! rule in `CLAUDE.md`.
+//! attribute whichever half emitted it.
 
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;

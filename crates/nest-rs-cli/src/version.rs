@@ -6,8 +6,8 @@
 //! every release: a project scaffolded by a newer CLI would still pull the old
 //! framework line and miss fixes shipped in lockstep. Deriving the requirement
 //! from the CLI's own version closes the gap — the whole workspace publishes in
-//! lockstep (see the release procedure in `CLAUDE.md`), so the CLI's
-//! `major.minor` *is* the framework line it was cut from.
+//! lockstep, so the CLI's `major.minor` *is* the framework line it was cut
+//! from.
 
 /// The semver requirement (`"<major>.<minor>"`) generated manifests pin for
 /// every `nest-rs-*` crate. Tracks the CLI's own `CARGO_PKG_VERSION`, so a

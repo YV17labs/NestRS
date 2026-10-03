@@ -4,9 +4,7 @@
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
 	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli",
-	// Extensions are installed in the container; every setting lives in the
-	// committed `.vscode/settings.json`, which the container mounts with the
-	// workspace. Keep this list in sync with `.vscode/extensions.json`.
+	// Keep in sync with .vscode/extensions.json.
 	"customizations": {
 		"vscode": {
 			"extensions": [

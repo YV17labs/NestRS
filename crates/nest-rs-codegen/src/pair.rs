@@ -3,7 +3,7 @@
 //!
 //! An attribute macro is a single path in the macro namespace, so a name worn by
 //! both a struct and its `impl` gives one rustdoc page for two argument grammars
-//! and one symbol for go-to-definition. `CLAUDE.md` therefore fixes an edge as a
+//! and one symbol for go-to-definition. An edge is therefore written as a
 //! **pair**: the host on the struct, and on the impl a sibling named for what it
 //! collects. What makes the pair usable is the diagnostic — reaching for the
 //! wrong half must say *which decorator the other shape wants*, never syn's
@@ -271,10 +271,9 @@ impl DecoratorPair {
     ///
     /// The impl half collects; it declares nothing. Every edge owes the same
     /// sentence, and every edge was writing its own — nine copies, differing in
-    /// wording and in span mechanism, which is what CLAUDE.md means by
-    /// "refusals are shared, not per key: per-key refusals multiply with the
-    /// matrix, and what multiplies is what gets skipped". The pair already
-    /// carries both nouns the sentence needs.
+    /// wording and in span mechanism. Refusals are shared, not per key:
+    /// per-key refusals multiply with the matrix, and what multiplies is what
+    /// gets skipped. The pair already carries both nouns the sentence needs.
     ///
     /// `declares` names what the host half takes, so the remedy points at the
     /// line above rather than merely refusing.
@@ -490,7 +489,7 @@ fn only_compile_errors(tokens: &TokenStream) -> bool {
 /// whole point of this module: the five pairs already say "the struct itself
 /// takes `#[injectable]`", and the sentence coming back the other way has to
 /// agree with them. It answered `expected struct` until this existed — the one
-/// phrasing `CLAUDE.md` names as the defect.
+/// phrasing that is the defect.
 pub fn parse_provider_host(input: TokenStream) -> syn::Result<ItemStruct> {
     match syn::parse2::<Item>(input)? {
         Item::Struct(item) => Ok(item),

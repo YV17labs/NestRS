@@ -12,7 +12,7 @@
 //! wrong direction: the MCP spec namespaces tools **per endpoint** and every
 //! shipped client config points at a single URL, so a product exposing several
 //! domains over MCP had to fold them into one god-host, inverting the
-//! one-adapter-per-feature layout the rules mandate.
+//! one-adapter-per-feature layout.
 //!
 //! Now a `#[mcp]` host is a *contribution*: [`register_host`] records an
 //! [`McpHostMeta`] for it and, for the **first** host on a given path, attaches
@@ -219,10 +219,10 @@ pub fn register_host<P: 'static>(
     // every contributor back from the container, so all of them are equivalent.
     // The deeper form — `HttpEndpointMeta` gaining an "aggregated mount" the
     // transport merges itself, so every host attaches unconditionally — is
-    // deliberately not built for one caller: `CLAUDE.md` says extract after a
-    // pattern appears twice, and MCP is the only aggregating self-mount today.
-    // A second one (the WS "route by event name" change `edges.md`
-    // anticipates) is what should generalize this.
+    // deliberately not built for one caller: a pattern is extracted once it
+    // appears twice, and MCP is the only aggregating self-mount today. A
+    // second one (an anticipated WS "route by event name" change) is what
+    // should generalize this.
     let claimed = builder
         .attached_meta::<HttpEndpointMeta>()
         .any(|meta| meta.label() == MCP_LABEL && meta.path() == path);

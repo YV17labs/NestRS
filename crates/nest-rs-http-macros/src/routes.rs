@@ -1544,10 +1544,10 @@ const API: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("api", &API_
 /// Parse `#[api(...)]` straight into [`ApiMeta`].
 ///
 /// **A repeated key is refused**, and on this decorator that matters more than
-/// on most: `CLAUDE.md` mandates `#[api(summary = …, description = …)]` *instead
-/// of* a doc comment — "Prose the framework compiles into behaviour is declared
-/// as an argument, never as a doc comment" — so a dropped `description` is
-/// published prose silently replaced by source order.
+/// on most: `#[api(summary = …, description = …)]` is written *instead of* a
+/// doc comment — prose the framework compiles into behaviour is declared as an
+/// argument, never as a doc comment — so a dropped `description` is published
+/// prose silently replaced by source order.
 ///
 /// **The key is judged before its value**, so an unknown key reads as unknown
 /// whatever follows it, and a known one written bare reads as missing its value

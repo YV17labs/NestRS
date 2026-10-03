@@ -262,14 +262,14 @@ pub(crate) fn validate_access_graph(
             let deps = (p.injects)();
             let names = (p.inject_names)();
             // A singleton may not inject a provider that only exists inside a
-            // request. `container.md` states the rule — "**One level deep**:
-            // request-scoped may inject singletons; never the reverse" — and
-            // nothing enforced it, so the case failed **silently**: the register
-            // phase gates readiness on the singleton map alone, so a singleton
-            // whose dependency is a scoped or transient factory never becomes
-            // ready, is classified unprovided, and is dropped along with
-            // everything downstream of it. The boot returned `Ok`, emitted
-            // nothing, and the provider was simply absent at first `get`.
+            // request — **one level deep**: request-scoped may inject
+            // singletons, never the reverse — and nothing enforced it, so the
+            // case failed **silently**: the register phase gates readiness on
+            // the singleton map alone, so a singleton whose dependency is a
+            // scoped or transient factory never becomes ready, is classified
+            // unprovided, and is dropped along with everything downstream of it.
+            // The boot returned `Ok`, emitted nothing, and the provider was
+            // simply absent at first `get`.
             //
             // Checked before the presence checks below, because the dependency
             // *is* declared and reachable — presence was never the problem.

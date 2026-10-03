@@ -50,8 +50,8 @@ mod service;
 
 pub use config::HealthConfig;
 /// The kernel's, re-exported so `#[indicators]`' expansion reaches it through
-/// this crate rather than across to a sibling — the form `macros.md`
-/// sanctions for a `*-macros` crate.
+/// this crate rather than across to a sibling — the sanctioned form for a
+/// `*-macros` crate.
 #[doc(hidden)]
 pub use nest_rs_core::unresolved_host;
 // `IndicatorFuture` and `IndicatorRun` are exported because `HealthIndicator`

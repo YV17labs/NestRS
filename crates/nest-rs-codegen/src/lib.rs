@@ -40,7 +40,7 @@ mod ungrouped;
 /// grammar and pins it against this one in a dev-dependency test that reads the
 /// module's items by path. A rule whose runtime copy needs only a function to
 /// call — `queue_name` — stays private and re-exports that function flat
-/// (`macros.md`, *written twice and pinned once*).
+/// (*written twice and pinned once*).
 pub mod versioning;
 
 pub use args::{

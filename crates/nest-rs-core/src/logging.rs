@@ -525,8 +525,7 @@ where
             // two ids, and it is emitted here and not in text on purpose: this
             // record is read by a machine that may join it against an export,
             // where the sampling bit decides whether the other half exists. A
-            // human at a console never acts on it. Asymmetry recorded in
-            // `.claude/rules/`.
+            // human at a console never acts on it.
             write!(
                 writer,
                 ",\"{}\":\"{}\",\"{}\":\"{}\",\"{}\":\"{}\"",
@@ -713,7 +712,7 @@ fn write_json_escaped(writer: &mut Writer<'_>, value: &str) -> fmt::Result {
 ///
 /// `Format<Full>` normalizes through `tracing_log::NormalizeEvent`, a trait on a
 /// crate nothing here declares: it is compiled in already, but its last release
-/// predates the floor `CLAUDE.md` sets for adopting one. The bridge's shape is
+/// predates the release-age floor for adopting one. The bridge's shape is
 /// its documented contract — one static callsite per level, named `"log event"`
 /// on target `"log"`, carrying the record's real metadata in `log.*` fields — so
 /// seeding from the event's own metadata and letting those fields overwrite it is
@@ -955,8 +954,8 @@ mod tests {
     /// formatter tests, so the name is a **fixture**: a namespace outside the
     /// closed edge vocabulary, deliberately, because copying a real one
     /// (`schedule.tick`) is not standing in for it — it is the same string,
-    /// asserted from a file that cannot see the constant, which is the copied
-    /// literal `CLAUDE.md` forbids wearing a fixture's name. It is filed by hand
+    /// asserted from a file that cannot see the constant, which is a copied
+    /// literal wearing a fixture's name. It is filed by hand
     /// rather than through `operation_line!`, which only the crate that
     /// declared a unit may call.
     const FIXTURE_UNIT: &str = "fixture.line";

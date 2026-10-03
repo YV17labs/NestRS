@@ -199,13 +199,12 @@ fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
 /// whole reason this returns a `Result`. [`Attribute::path`] answers the same
 /// for `#[public]`, `#[public(admin)]` and `#[public = "x"]`, so a `position` +
 /// `remove` on the path alone accepted all three and dropped what the developer
-/// wrote — *"never an ignored argument"* (`CLAUDE.md`, *One declaration, every
-/// site the standard permits*). The doc above this function said "no args, no
-/// parens" while the body enforced nothing, which is the drift the sentence
-/// closes.
+/// wrote — never an ignored argument. The doc above this function said "no
+/// args, no parens" while the body enforced nothing, which is the drift the
+/// sentence closes.
 ///
 /// **`#[public]` is why it ranks where it does.** It is the posture
-/// declaration — one of the three greppable sites `CLAUDE.md` reserves for the
+/// declaration — one of the three greppable sites reserved for the
 /// authn/authz decision — and it sits beside `#[authorize(Action, Entity)]`,
 /// which *does* take arguments. A developer writing `#[public(read_only)]` by
 /// analogy shipped an ungated, unmasked operation with the compiler silent.
@@ -341,9 +340,8 @@ fn listed_noun(ident: &str) -> String {
 /// nowhere else, exactly as their two neighbours are, so writing either on a
 /// gateway, a resolver or an `#[mcp]` host reached rustc as
 /// `cannot find attribute … in this scope` — no transport named, no reason, no
-/// remedy. `edges.md` item 8 asks for "a named compile error for **every**
-/// layer family the edge does not bridge"; the list is what makes "every"
-/// checkable.
+/// remedy. Every layer family an edge does not bridge owes a named compile
+/// error; the list is what makes "every" checkable.
 ///
 /// Guards are bridged at all four edges and are deliberately absent.
 const HTTP_ONLY_LAYERS: [&str; 4] = [

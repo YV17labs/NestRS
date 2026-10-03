@@ -240,10 +240,9 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     let self_ty = item.self_ty.clone();
     // **`#[tools]`, because this file is `#[tools]`' expansion.** The pair
-    // split exists so "the compiler can tell the reader which decorator it is
-    // looking at" (`CLAUDE.md`, *Hard "no" — the project*); three
-    // sentences here named the decorator on the *struct* and gave that back by
-    // hand.
+    // split exists so the compiler can tell the reader which decorator it is
+    // looking at; three sentences here named the decorator on the *struct* and
+    // gave that back by hand.
     let base = impl_self_ident(&self_ty, "#[tools]")?;
     let (operations, declared) = take_operations(&mut item, &base)?;
     let markers = declared.markers(&self_ty, &item.generics);

@@ -2,8 +2,8 @@
 //! is worded.
 //!
 //! `#[authorize(Action, Entity)]` / `#[public]` beside an operation is the only
-//! greppable declaration of what a caller must be allowed to do — `CLAUDE.md`'s
-//! *no authn/authz decision outside a guard*. Three transports emit a class gate
+//! greppable declaration of what a caller must be allowed to do — *no
+//! authn/authz decision outside a guard*. Three transports emit a class gate
 //! and a response mask from it (`#[tools]`, `#[messages]`, `#[operations]`), and
 //! two of them parse exactly the same grammar, so that grammar and the refusal
 //! that makes it mandatory live here rather than in each macro crate.
@@ -55,11 +55,11 @@ pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's 
 ///
 /// Free-standing beside [`at_most_one_authorize`] and
 /// [`posture_key_unsupported`], because the seam for *wording without parsing*
-/// is what this family needed: `edges.md` argues that two of four edges
-/// parse their own posture — GraphQL's `bind = Service` and `id_arg`, HTTP's
-/// optional posture — and both arguments are about the parser's **signature**.
-/// Neither reaches this sentence, which contains no `bind`, no `id_arg` and no
-/// optionality, and which GraphQL had retyped byte for byte.
+/// is what this family needed: two of four edges parse their own posture —
+/// GraphQL's `bind = Service` and `id_arg`, HTTP's optional posture — and both
+/// reasons are about the parser's **signature**. Neither reaches this
+/// sentence, which contains no `bind`, no `id_arg` and no optionality, and
+/// which GraphQL had retyped byte for byte.
 pub fn posture_contradiction() -> &'static str {
     "`#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both"
 }
@@ -68,10 +68,9 @@ pub fn posture_contradiction() -> &'static str {
 ///
 /// `operation` names what the edge calls one and `public_means` says what
 /// `#[public]` costs there — the two axes that genuinely differ. Everything
-/// else is one wording, for [`posture_contradiction`]'s reason. It is
-/// `edges.md`'s *"the one item on this list that is load-bearing on its
-/// own"*, so three spellings of it was the worst place in the framework to have
-/// three.
+/// else is one wording, for [`posture_contradiction`]'s reason. It is the one
+/// sentence of the family that is load-bearing on its own, so three spellings
+/// of it was the worst place in the framework to have three.
 pub fn posture_required(operation: &str, public_means: &str) -> String {
     format!(
         "every {operation} declares its access posture: `#[authorize(Action, Entity)]` \
@@ -82,11 +81,10 @@ pub fn posture_required(operation: &str, public_means: &str) -> String {
 
 /// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
 ///
-/// **One helper for all three keys**, because `CLAUDE.md` says so in the
-/// sentence this replaces two functions with: *"Refusals are shared, not per
-/// key. One helper, one sentence, every key it covers, one trybuild snapshot
+/// **One helper for all three keys**, because refusals are shared, not per
+/// key: one helper, one sentence, every key it covers, one trybuild snapshot
 /// per site. Per-key refusals multiply with the matrix, and what multiplies is
-/// what gets skipped."* There were two — `unmasked_unsupported` and
+/// what gets skipped. There were two — `unmasked_unsupported` and
 /// `bind_unsupported`, each with its key baked into its `format!` — and the
 /// third key, `id_arg`, got neither. It was refused at exactly one of the three
 /// sites that cannot express it, through `bind_unsupported`, which printed

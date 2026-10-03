@@ -554,7 +554,7 @@ mod tests {
     /// Deduped once per process by reason. That is safe to assert on because
     /// nextest runs each test in its own process — a sibling burning the same
     /// reason cannot silence this one, and `cargo test`'s shared binary is
-    /// unsupported here anyway (`CLAUDE.md`: the runner is nextest).
+    /// unsupported here anyway (the runner is nextest).
     #[test]
     fn a_degraded_keying_is_reported_once_with_its_remedy() {
         let logs = nest_rs_testing::LogCapture::install();

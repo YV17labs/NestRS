@@ -342,7 +342,12 @@ impl DecodeError {
     /// text. From the first such sentence to the end of `text` is the failure's,
     /// since nothing marks where it ends, and is bounded like a report.
     ///
-    /// Borrowed when nothing in `text` was a decode failure's.
+    /// A `validator` failure is a refusal of input too, and its own wording lists
+    /// the rejected input among a rule's parameters: each
+    /// `Validation error: <code> [<params>]` in `text` is said as
+    /// `Validation error: <code>`, whatever wrapper spelled it.
+    ///
+    /// Borrowed when nothing in `text` was a decode or validation failure's.
     pub fn redact<'t>(
         text: &'t str,
         error: Option<&(dyn std::error::Error + 'static)>,
@@ -417,7 +422,12 @@ impl DecodeFailures {
             Cow::Owned(rebuilt) => Some(rebuilt),
             Cow::Borrowed(_) => None,
         };
-        rebuilt.map_or(text, Cow::Owned)
+        let text = rebuilt.map_or(text, Cow::Owned);
+        let validated = match validation_sentences(&text) {
+            Cow::Owned(validated) => Some(validated),
+            Cow::Borrowed(_) => None,
+        };
+        validated.map_or(text, Cow::Owned)
     }
 }
 
@@ -547,6 +557,71 @@ fn quoting_sentences(text: &str) -> Cow<'_, str> {
         redacted.push('…');
     }
     Cow::Owned(redacted)
+}
+
+/// What opens `validator`'s wording of a failing rule: `Validation error: <code>
+/// [<params>]`, its `Display` for a rule given no message of its own.
+const VALIDATION_OPENING: &str = "Validation error: ";
+
+/// `text` with each `validator` failure in it said without its parameters.
+///
+/// The parameters hold the rejected input (`value`, and `must_match`'s `other`),
+/// so they are dropped up to their closing bracket, read past every quoted
+/// string so a value cannot close them early — or to the end of `text` when they
+/// never close. The code is the rule's own and is kept. A rule given its own
+/// `message` displays that message alone, which is its author's.
+fn validation_sentences(text: &str) -> Cow<'_, str> {
+    if !text.contains(VALIDATION_OPENING) {
+        return Cow::Borrowed(text);
+    }
+    let mut said = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(VALIDATION_OPENING) {
+        let after = &rest[at + VALIDATION_OPENING.len()..];
+        let params = after
+            .find(" [")
+            .filter(|open| !after[..*open].contains('\n'));
+        let Some(open) = params else {
+            said.push_str(&rest[..at + VALIDATION_OPENING.len()]);
+            rest = after;
+            continue;
+        };
+        said.push_str(&rest[..at + VALIDATION_OPENING.len() + open]);
+        rest = past_closing_bracket(&after[open + 2..]);
+    }
+    said.push_str(rest);
+    Cow::Owned(said)
+}
+
+/// What follows the `]` closing a bracket already open, read past quoted
+/// strings and their escapes; nothing when it never closes.
+fn past_closing_bracket(text: &str) -> &str {
+    let mut depth = 1_usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (at, c) in text.char_indices() {
+        if quoted {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => quoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &text[at + 1..];
+                }
+            }
+            _ => {}
+        }
+    }
+    ""
 }
 
 /// `invalid type` or `invalid value`, said with the kind of value found and the
@@ -922,5 +997,39 @@ mod decode_error_tests {
             DecodeError::new(&error).to_string(),
             "a value its type does not accept"
         );
+    }
+
+    #[test]
+    fn a_validator_failure_keeps_its_rule_and_drops_its_parameters() {
+        let text = "signup refused: password: Validation error: length \
+                    [{\"min\": Number(32), \"value\": String(\"sk_live_secret\")}]\n\
+                    email: Validation error: email [{\"value\": String(\"sk_live_secret\")}]";
+        assert_eq!(
+            DecodeError::redact(text, None),
+            "signup refused: password: Validation error: length\nemail: Validation error: email"
+        );
+    }
+
+    /// A value spelling the closing bracket, or a quote, cannot end the
+    /// parameters early; parameters that never close run to the end of the text.
+    #[test]
+    fn a_validator_parameter_cannot_close_itself_early() {
+        let spelled =
+            r#"x: Validation error: must_match [{"other": String("a]\"b] sk_live_secret")}] tail"#;
+        assert_eq!(
+            DecodeError::redact(spelled, None),
+            "x: Validation error: must_match tail"
+        );
+        let cut = r#"x: Validation error: length [{"value": String("sk_live_sec"#;
+        assert_eq!(
+            DecodeError::redact(cut, None),
+            "x: Validation error: length"
+        );
+    }
+
+    #[test]
+    fn a_validator_rule_with_its_own_message_is_left_to_its_author() {
+        let text = "password: must be at least 32 characters";
+        assert!(matches!(DecodeError::redact(text, None), Cow::Borrowed(_)));
     }
 }

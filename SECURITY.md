@@ -24,22 +24,32 @@ If you can, include:
 
 ## What to expect
 
-Reports are triaged on receipt. You can expect an acknowledgement, a disclosure
-timeline agreed with you, a fix shipped in the next patch of the current major,
-and credit in the advisory — unless you prefer to stay anonymous.
+| Step | Within |
+| --- | --- |
+| Acknowledgement | 3 working days |
+| Triage, with a severity and a plan | 14 days |
+| Fix released and advisory published | 90 days of the report, 7 when the flaw is exploited |
+
+A fix ships as a patch on every supported line. Its advisory is a GitHub
+Security Advisory with a CVE, cross-filed to the [**RustSec advisory database**]
+the same day, and the CHANGELOG names both identifiers and credits you — unless
+you prefer to stay anonymous. A release is yanked only for a critical flaw, and
+only once its fix is published.
 
 ## Supported versions
 
 Every `nest-rs-*` crate versions in **lockstep** (one number across the
-workspace), and security fixes target the **latest release** — which is what
-`cargo add nest-rs` resolves. [`CHANGELOG.md`](CHANGELOG.md) records it, and the
-latest release is its topmost **dated** entry: the heading above it, if any,
-carries `- main` and is the unreleased work in progress.
+workspace). A major ships at most every six months, announced four weeks ahead
+with its upgrading guide; minors and patches ship when ready.
 
-| Version                     | Supported                      |
-| --------------------------- | ------------------------------ |
-| latest patch, current major | ✅                              |
-| anything older              | ⚠️ upgrade to the latest patch |
+| Line | Receives |
+| --- | --- |
+| latest minor of the current major | every fix |
+| previous major | security fixes, for three months after the current major's release — the end date is written here when it ships |
+| anything older | nothing: upgrade to a supported line |
+
+Never more than two lines are supported at once. [`CHANGELOG.md`](CHANGELOG.md)
+records each release; its `[Unreleased]` heading is the work in progress.
 
 ## Advisories
 

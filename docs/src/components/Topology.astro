@@ -5,53 +5,49 @@
  * between one binary per workload and one binary over the same modules, with
  * two radios and no script: the modules row never moves, which is the point.
  */
-import { COLLISION, FEATURES, TIERS, TRACED } from '../topology.mjs';
-
-type Edge = 'http' | 'graphql' | 'ws' | 'mcp' | 'events' | 'queue' | 'schedule';
-
-/** The order and spelling the figure reads an edge in. */
-const EDGES: [Edge, string][] = [
-  ['http', 'HTTP'],
-  ['graphql', 'GraphQL'],
-  ['ws', 'WebSocket'],
-  ['mcp', 'MCP'],
-  ['events', 'events'],
-  ['queue', 'queue'],
-  ['schedule', 'schedule'],
-];
-
 interface Binary {
   app: string;
   edges: string;
   modules: string[];
 }
 
-type Import = [string, Edge | null];
+interface Tier {
+  hint: string;
+  private: boolean;
+  bins: Binary[];
+}
 
-const modulesOf = (imports: Import[]) => FEATURES.filter((m) => imports.some(([i]) => i === m));
-const edgesOf = (imports: Import[]) =>
-  EDGES.filter(([e]) => imports.some(([, i]) => i === e)).map(([, label]) => label);
-const binary = (app: string, imports: Import[]): Binary => ({
-  app,
-  edges: edgesOf(imports).join(' · '),
-  modules: modulesOf(imports),
-});
+const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'authn', 'authz', 'oauth'];
 
-const split = TIERS.map((tier) => ({
-  ...tier,
-  bins: tier.apps.map((a) => binary(a.app, a.imports as Import[])),
-}));
-const all = TIERS.flatMap((tier) => tier.apps.flatMap((a) => a.imports as Import[]));
-const mono = binary('publish', all);
+const split: Tier[] = [
+  {
+    hint: 'exposed to clients',
+    private: false,
+    bins: [
+      { app: 'auth', edges: 'HTTP', modules: ['oauth'] },
+      {
+        app: 'api',
+        edges: 'HTTP · GraphQL · events · schedule',
+        modules: ['users', 'orgs', 'posts', 'audio', 'notifications', 'authn', 'authz'],
+      },
+      { app: 'live', edges: 'WebSocket', modules: ['users', 'chat', 'notifications', 'authn'] },
+      { app: 'assistant', edges: 'MCP', modules: ['users', 'posts', 'audio'] },
+    ],
+  },
+  {
+    hint: 'off the request path',
+    private: true,
+    bins: [{ app: 'worker', edges: 'queue · schedule', modules: ['audio', 'notifications'] }],
+  },
+];
 
-const traced = TRACED;
-const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'];
-const serving = TIERS.flatMap((tier) => tier.apps)
-  .map((a) => ({ app: a.app, edges: edgesOf((a.imports as Import[]).filter(([m]) => m === traced)) }))
-  .filter((a) => a.edges.length);
-const tracedLine = serving.map((a) => `${a.app} over ${a.edges.join(' and ')}`).join(', ');
-const collisionModules = [...new Set(COLLISION.files.map((f) => f.split('/')[3]))].join(', ');
-const collisionRoles = COLLISION.files.map((f) => f.split('/').pop()!.replace(/\.rs$/, '')).join(' and ');
+const mono: Binary = {
+  app: 'publish',
+  edges: 'HTTP · GraphQL · WebSocket · MCP · events · queue · schedule',
+  modules,
+};
+
+const traced = 'users';
 ---
 
 <figure class="rs-topo not-content" aria-label="Write once, run per workload or as one binary, deploy anywhere a container runs">
@@ -67,7 +63,7 @@ const collisionRoles = COLLISION.files.map((f) => f.split('/').pop()!.replace(/\
       <div class="rs-topo-features">
         <span class="rs-topo-path">crates/features/</span>
         <ul class="rs-topo-mods">
-          {FEATURES.map((m) => <li class:list={['rs-topo-mod', { 'rs-topo-mod--traced': m === traced }]}>{m}</li>)}
+          {modules.map((m) => <li class:list={['rs-topo-mod', { 'rs-topo-mod--traced': m === traced }]}>{m}</li>)}
         </ul>
       </div>
       <div class="rs-topo-framework">
@@ -151,10 +147,10 @@ const collisionRoles = COLLISION.files.map((f) => f.split('/').pop()!.replace(/\
   </div>
 
   <figcaption class="rs-card-note">
-    <code>{traced}</code> is one module, served by {words[serving.length] ?? serving.length} binaries: {tracedLine}.
-    In one binary, no two edges may share a path, and the boot refuses a pair by name:
-    Publish's <code>{collisionModules}</code> {collisionRoles} both mount <code>{COLLISION.path}</code>,
-    so merging it takes one rename. Drawn after the overview figure in Google's <a href="https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html">Service Weaver announcement</a>:
+    <code>users</code> is one module, served by three binaries: over HTTP and GraphQL, a WebSocket,
+    and MCP. In one binary, no two edges may share a path, and the boot refuses a pair by name:
+    Publish's <code>users</code> controller and gateway both mount <code>/users</code>, so merging it
+    takes one rename. Drawn after the overview figure in Google's <a href="https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html">Service Weaver announcement</a>:
     the same three layers, with the queue and the database where it draws RPC.
   </figcaption>
 </figure>

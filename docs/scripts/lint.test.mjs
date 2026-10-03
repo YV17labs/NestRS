@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import {
-  CANON, CONTENT_ROOT, RULES, familyMentions, lintFile, lint, readmeInstalls, topologyDrift,
+  CANON, CONTENT_ROOT, RULES, familyMentions, lintFile, lint, readmeInstalls,
 } from './lint-docs.mjs';
 
 /// The version a documented pin has to carry, read from the same canon the rule
@@ -137,18 +137,6 @@ const FAMILY = {
 };
 const NAMES_EVERY_MEMBER = 'Group on `probe.unit`, filter `nest_rs::probe`, declare '
   + '`Capability::Probe`.\n\n## Install\n\n```bash\ncargo add nest-rs --features http,probe\n```\n';
-/// A demo of one app and the figure that draws it, so the `topology-drift`
-/// fixture breaks one fact per violation it counts.
-const PROBE_CANON = {
-  ...CANON,
-  demo_apps: { probe: [['users', 'UsersHttpModule'], ['authn', 'AuthnModule']] },
-};
-const PROBE_FIGURE = {
-  FEATURES: ['users', 'authn'],
-  TIERS: [{ apps: [{ app: 'probe', imports: [['users', 'http'], ['authn', null]] }] }],
-  TRACED: 'users',
-  COLLISION: { path: '/probe', files: ['probe.rs'] },
-};
 const CORPUS_FIXTURES = [
   [RULES.familyMention, () => familyMentions(['A page naming nothing.'], FAMILY),
     () => familyMentions([NAMES_EVERY_MEMBER], FAMILY), 4],
@@ -159,13 +147,6 @@ const CORPUS_FIXTURES = [
     ['README.md', 'Run `cargo add nest-rs --features probe`.'],
     ['crates/nest-rs-probe/README.md', '```bash\ncargo add --dev nest-rs --features probe\n```'],
   ]), FAMILY), 2],
-  // A port the figure forgot, an app the demo does not have, a features folder
-  // the figure does not draw, and a caption citing a file that mounts nothing.
-  [RULES.topologyDrift, () => topologyDrift({
-    ...PROBE_FIGURE,
-    TIERS: [{ apps: [{ app: 'probe', imports: [['users', 'http']] }, { app: 'ghost', imports: [] }] }],
-  }, PROBE_CANON, ['users', 'authn', 'extra'], () => null),
-  () => topologyDrift(PROBE_FIGURE, PROBE_CANON, ['users', 'authn'], () => 'path = "/probe"'), 4],
 ];
 
 for (const [rule, fires, quiet, count] of CORPUS_FIXTURES) {

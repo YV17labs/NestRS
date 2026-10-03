@@ -10,6 +10,7 @@ mod access;
 mod app;
 mod container;
 mod diagnostics;
+mod error_message;
 mod lifecycle;
 mod module;
 mod way_down;

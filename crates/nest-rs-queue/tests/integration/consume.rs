@@ -450,6 +450,78 @@ async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
     assert_never_quoted(&logs, "sk_live");
 }
 
+/// A signup the processor validates itself, the way its service does.
+#[nest_rs_core::input]
+struct Signup {
+    #[validate(length(min = 32))]
+    password: String,
+}
+
+/// `ServiceError::Validation`'s shape: a constant sentence, the validation
+/// failure kept as its source.
+#[derive(Debug, thiserror::Error)]
+enum SignupError {
+    #[error("validation failed")]
+    Validation(#[from] nest_rs_core::validator::ValidationErrors),
+}
+
+#[queue(name = "signups", job = String)]
+struct SignupsQueue;
+
+struct SignupProcessor;
+
+impl nest_rs_core::ProviderResidency for SignupProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl SignupProcessor {
+    #[process(queue = SignupsQueue, retries = 1)]
+    async fn sign_up(&self, password: String) -> Result<(), SignupError> {
+        use nest_rs_core::validator::Validate;
+        Signup { password }.validate()?;
+        Ok(())
+    }
+}
+
+/// A validation failure a handler returns is said without the value it refused,
+/// on the retry's line, on the dead letter's and in the record an adapter
+/// keeps. Each renders the error's whole chain, and validator's own `Display`
+/// prints every rule's parameters, the submitted value among them.
+#[tokio::test]
+async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_value() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = Container::builder().provide(SignupProcessor).build();
+    let sign_up = method("SignupProcessor::sign_up");
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new("signups").expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": "sk_live_51HsecretTOKEN" }),
+    );
+
+    let first = consume::attempt(sign_up, &mut delivery, container.clone()).await;
+    assert!(matches!(first, AttemptOutcome::Retry { .. }), "{first:?}");
+    let last = consume::attempt(sign_up, &mut delivery, container).await;
+
+    let AttemptOutcome::DeadLetter(error) = last else {
+        panic!("the second attempt spends the budget: {last:?}");
+    };
+    let record = nest_rs_core::error_message(&error);
+    assert!(
+        !record.contains("sk_live"),
+        "the dead-letter record quotes the submitted value: {record}",
+    );
+    logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job failed; will retry within the budget",
+    );
+    logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: retry budget spent",
+    );
+    assert_never_quoted(&logs, "sk_live");
+}
+
 /// A context that reports it could not honour the attempt, carrying the
 /// classification a `WorkerDbContext` reaches from the database's own error.
 struct Unsettleable(nest_rs_worker::Unhonoured);

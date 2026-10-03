@@ -64,6 +64,26 @@ struct NameInput {
     name: String,
 }
 
+/// A signup a handler validates itself, the way its service does.
+#[derive(Validate)]
+struct Signup {
+    #[validate(length(min = 32))]
+    password: String,
+}
+
+/// `ServiceError::Validation`'s shape: a constant sentence, the validation
+/// failure kept as its source.
+#[derive(Debug, thiserror::Error)]
+enum SignupError {
+    #[error("validation failed")]
+    Validation(#[from] validator::ValidationErrors),
+}
+
+/// A developer's own error saying the validation failure as its own.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+struct SpelledSignupError(#[from] validator::ValidationErrors);
+
 #[gateway(path = "/test")]
 pub(crate) struct TestGateway;
 
@@ -123,6 +143,25 @@ impl TestGateway {
     #[public]
     async fn ids_handler(&self, ids: Piped<ParseArray<u64>, String>) -> Vec<u64> {
         ids.into_inner()
+    }
+
+    // A handler whose own validation refuses the payload, through its error.
+    #[subscribe_message("sign_up")]
+    #[public]
+    async fn sign_up_handler(&self, password: String) -> Result<String, SignupError> {
+        Signup { password }.validate()?;
+        Ok("signed up".to_owned())
+    }
+
+    // The same refusal, through an error that spells it.
+    #[subscribe_message("sign_up_spelled")]
+    #[public]
+    async fn sign_up_spelled_handler(
+        &self,
+        password: String,
+    ) -> Result<String, SpelledSignupError> {
+        Signup { password }.validate()?;
+        Ok("signed up".to_owned())
     }
 
     // `Valid<T>`: validates the deserialized payload before the handler runs.
@@ -760,6 +799,44 @@ async fn a_refused_list_item_is_quoted_neither_in_the_frame_nor_on_the_line() {
         .map(|event| format!("{} {:?}", event.message, event.fields))
         .collect();
     assert!(quoting.is_empty(), "lines quoting the item: {quoting:#?}");
+}
+
+/// A validation failure a handler returns is said without the value it refused,
+/// in the frame and on the line, whether its error keeps the failure as its
+/// source or spells it. The line renders the error's whole chain and the frame
+/// the error's own sentence, and validator's own `Display` prints every rule's
+/// parameters, the submitted value among them.
+#[tokio::test]
+async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_value() {
+    let mut quoting = Vec::new();
+    for event in ["sign_up", "sign_up_spelled"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        let reply = TestGateway
+            .dispatch(
+                &WsClient::for_test(),
+                event,
+                serde_json::json!("sk_live_51HsecretTOKEN"),
+            )
+            .await;
+        let WsReply::Error(error) = reply else {
+            panic!("`{event}`: expected an error frame from the refusing handler");
+        };
+        let frame = nest_rs_ws::WsEnvelope::encode(event, &error).expect("encode");
+        if frame.contains("sk_live") {
+            quoting.push(format!("`{event}` frame: {frame}"));
+        }
+        logs.expect_one(nest_rs_ws::TARGET, "subscribe_message handler returned Err");
+        quoting.extend(
+            logs.events()
+                .into_iter()
+                .filter(|line| line.fields.values().any(|value| value.contains("sk_live")))
+                .map(|line| format!("`{event}` line: {} {:?}", line.message, line.fields)),
+        );
+    }
+    assert!(
+        quoting.is_empty(),
+        "the submitted value, quoted: {quoting:#?}"
+    );
 }
 
 // ── The mount address: `#[gateway(version = …)]` ────────────────────────────

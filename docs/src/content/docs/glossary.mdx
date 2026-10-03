@@ -187,8 +187,9 @@ deep on each.
 
 - **[Modular monolith, deployed per workload](/why/#a-modular-monolith-deployed-per-workload)** —
   the architecture NestRS builds: the domain written once, as modules in
-  `crates/features`, and deployed as one binary per workload. The binaries
-  share the code, the database and the queue, and never call each other.
+  `crates/features`, and deployed as one binary per workload, or as one
+  binary from the same modules. The binaries share the code, the database and
+  the queue; the framework generates no RPC between them.
 - **[Workload](/publish/)** — one deployable binary with one
   operational job (the HTTP API, the WS server, the token issuer, the
   queue worker). One product splits into several workloads that share

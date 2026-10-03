@@ -1984,6 +1984,273 @@ mobile-starlight-toc nav > button {
   margin-left: 0.375rem;
 }
 
+/* --- Topology: write, run, deploy -------------------------------------- */
+
+.rs-topo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 2rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--rs-hairline);
+  border-radius: 16px;
+  background: var(--rs-card);
+}
+
+.rs-topo-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.rs-topo-layer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rs-topo-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.rs-topo-label {
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--nestrs-accent);
+}
+
+.rs-topo-hint {
+  font-size: 0.78125rem;
+  color: var(--rs-text-3);
+}
+
+.rs-topo-switch {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--rs-hairline-strong);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.rs-topo-switch label {
+  cursor: pointer;
+  font-size: 0.71875rem;
+  font-weight: 600;
+  padding: 0.1875rem 0.625rem;
+  border-radius: 999px;
+  color: var(--rs-text-3);
+}
+
+#rs-topo-split:checked ~ .rs-topo-run label[for='rs-topo-split'],
+#rs-topo-mono:checked ~ .rs-topo-run label[for='rs-topo-mono'] {
+  background: color-mix(in srgb, var(--nestrs-accent) 14%, transparent);
+  color: var(--rs-text);
+}
+
+#rs-topo-split:focus-visible ~ .rs-topo-run label[for='rs-topo-split'],
+#rs-topo-mono:focus-visible ~ .rs-topo-run label[for='rs-topo-mono'] {
+  outline: 2px solid var(--nestrs-accent);
+  outline-offset: 1px;
+}
+
+#rs-topo-split:checked ~ .rs-topo-run .rs-topo-only-mono,
+#rs-topo-mono:checked ~ .rs-topo-run .rs-topo-only-split {
+  display: none;
+}
+
+.rs-topo-write {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
+  gap: 0.625rem;
+}
+
+.rs-topo-features,
+.rs-topo-framework {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 12px;
+}
+
+.rs-topo-features {
+  border: 1px solid var(--rs-hairline-strong);
+}
+
+.rs-topo-framework {
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--nestrs-accent) 35%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-accent) 6%, transparent);
+}
+
+.rs-topo-path,
+.rs-topo-app {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78125rem;
+  font-weight: 700;
+  color: var(--rs-text);
+}
+
+.rs-topo-framework-sub,
+.rs-topo-edges,
+.rs-topo-target-sub {
+  font-size: 0.71875rem;
+  line-height: 1.4;
+  color: var(--rs-text-3);
+}
+
+.rs-topo-mods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rs-topo-mod {
+  margin: 0;
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.4375rem;
+  border: 1px solid var(--rs-hairline-strong);
+  border-radius: 6px;
+  color: var(--rs-text-2);
+}
+
+.rs-topo-mod--traced {
+  border-color: color-mix(in srgb, var(--nestrs-teal) 55%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-teal) 12%, transparent);
+  color: var(--rs-text);
+}
+
+.rs-topo-step {
+  align-self: center;
+  font-size: 0.71875rem;
+  color: var(--rs-text-4);
+  text-align: center;
+}
+
+.rs-topo-step::before {
+  content: '↓';
+  display: block;
+  font-size: 1rem;
+  line-height: 1.2;
+  color: var(--rs-text-3);
+}
+
+.rs-topo-step code,
+.rs-topo-target code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+  background: none;
+  padding: 0;
+  color: var(--rs-text-2);
+}
+
+.rs-topo-tiers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rs-topo-tier {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.rs-topo-tier-hint {
+  font-size: 0.71875rem;
+  color: var(--rs-text-4);
+}
+
+.rs-topo-bins {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.25rem, 1fr));
+  gap: 0.875rem;
+  padding: 0 8px 8px 0;
+}
+
+.rs-topo-bins--mono {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Each binary is a stack of three: its replicas, scaled on its own signal. */
+.rs-topo-bin {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.625rem;
+  border: 1px solid color-mix(in srgb, var(--nestrs-accent) 30%, var(--rs-hairline));
+  border-radius: 10px;
+  background: var(--rs-card);
+  box-shadow:
+    4px 4px 0 -1px var(--rs-card),
+    4px 4px 0 0 var(--rs-hairline-strong),
+    8px 8px 0 -1px var(--rs-card),
+    8px 8px 0 0 var(--rs-hairline);
+}
+
+.rs-topo-bin--private {
+  border-style: dashed;
+  border-color: var(--rs-hairline-hover);
+}
+
+.rs-topo-shared {
+  text-align: center;
+  border: 1px solid color-mix(in srgb, var(--nestrs-teal) 42%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-teal) 8%, transparent);
+  border-radius: 12px;
+  padding: 0.5rem 0.75rem;
+}
+
+.rs-topo-shared-label {
+  display: block;
+  font-family: var(--sl-font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--nestrs-teal);
+}
+
+.rs-topo-shared-sub {
+  display: block;
+  font-size: 0.71875rem;
+  color: var(--rs-text-3);
+  margin-top: 0.125rem;
+}
+
+.rs-topo-targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.625rem;
+}
+
+.rs-topo-target {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--rs-hairline-strong);
+  border-radius: 10px;
+}
+
+.rs-topo-target-name {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--rs-text);
+}
+
+.rs-topo .rs-card-note a {
+  color: var(--rs-text-2);
+}
+
 /* --- Closing bands ----------------------------------------------------- */
 
 .rs-band--cta {
@@ -2090,6 +2357,15 @@ mobile-starlight-toc nav > button {
   }
   .rs-lane-app {
     flex: 0 0 auto;
+  }
+  .rs-topo {
+    padding: 1rem;
+  }
+  .rs-topo-write {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rs-topo-switch {
+    margin-left: 0;
   }
 }
 

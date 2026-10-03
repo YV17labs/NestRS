@@ -4,6 +4,7 @@ description: The thesis, the architecture — a modular monolith, deployed per w
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
+import Topology from '../../components/Topology.astro';
 
 ## The thesis
 
@@ -40,47 +41,61 @@ written slightly differently in two different files.
 ## A modular monolith, deployed per workload
 
 The tagline's two adjectives are one architecture, and it has a name: **you
-write one modular monolith, and you deploy it as one binary per workload.**
+write one modular monolith, and you deploy it as one binary per workload** — or
+as a single binary, from the same modules. Google built
+[Service Weaver](https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html)
+for the same goal and put it in one line: "the development velocity of a
+monolith, with the scalability, security, and fault-tolerance of
+microservices". Its [HotOS paper](https://sigops.org/s/conferences/hotos/2023/papers/ghemawat.pdf)
+names the cause: microservices conflate *how code is written* with *how it is
+deployed*. NestRS is built on that separation.
 
-**Modular is how the code is written.** Your domain — entities, services,
-policy — lives once, in `crates/features/`, cut into modules whose boundaries
-the framework holds: a module reaches only what it imports, or the
+<Topology />
+
+**Write.** Your domain — entities, services, policy — lives once, in
+`crates/features/`, cut into modules whose boundaries the framework holds: a
+module reaches only what it imports, or the
 [access graph](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot)
-fails the boot. A call from one module to another is a Rust method call, in
-every binary.
+fails the boot. A call from one module to another is a Rust method call, with
+no endpoint and no serialization.
 
-**Per workload is how it runs.** A workload is one kind of work and the trigger
-that starts it — an HTTP request, a socket message, a job, a tick, an MCP call;
-the [twelve-factor app](https://12factor.net/concurrency) calls it a process
-type. Each app under `apps/` is a thin composition root that imports the edges
-it serves, and nothing it does not import is mounted. A workload scales on its
-own signal, a crash stays in its own binary, and no binary calls another. What
-two of them agree on — a table, a queue payload — is one type in the shared
-crate, compiled into both.
+**Run.** A workload is one kind of work and the trigger that starts it — an
+HTTP request, a socket message, a job, a tick, an MCP call; the
+[twelve-factor app](https://12factor.net/concurrency) calls it a process type.
+Each app under `apps/` is a thin composition root importing the edges it
+serves, and an edge it does not import is never mounted. A workload scales on
+its own signal, and a crash stays in its own binary. One app importing every
+edge is a plain monolith and a sound place to start: splitting it later edits
+composition roots, never a module.
 
-**The split follows the trigger, never the domain.** That is the line
-microservices draw the other way, and the reason NestRS has no RPC to generate,
-version or secure between its parts.
+**Deploy.** Every binary builds from one workspace into one image, and the
+[Publish chart](/publish/#deploy-it) runs each app from it with its own command.
+Your machine runs the same binaries with `nestrs run dev`.
 
-| | Written as | Deployed as | Between deployables |
-|---|---|---|---|
-| Modular monolith | modules | one process | nothing to cross |
-| Microservices | one service per domain | one service per domain | network calls and versioned APIs |
-| Service Weaver | a modular monolith | components, placed by a runtime | RPC the runtime generates |
-| **NestRS** | a modular monolith | one binary per workload | no calls — the crate, the database and the queue are shared |
+**Between binaries, the queue and the database.** Where Service Weaver's
+runtime turned a method call into an RPC, NestRS links a module into every
+binary that uses it — `users` is served by the API, the WebSocket server and
+the MCP assistant alike — and binaries coordinate through the data they share.
+That removes the costs Service Weaver's own motivation lists: no endpoint
+between binaries, no API frozen between them, and a cross-binary change is one
+commit the compiler checks whole. The one format that crosses, a queue payload,
+is a type in the shared crate, compiled into both sides. An app may still call
+another over HTTP with its own client; the framework never makes a network call
+look like a method call.
 
-Google's [Service Weaver](https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html)
-named the problem in 2023: microservices conflate *how code is written* with
-*how it is deployed* ([the HotOS paper](https://sigops.org/s/conferences/hotos/2023/papers/ghemawat.pdf)).
-Its answer was to "write your application as a modular monolith and deploy it
-as a set of microservices", with a runtime turning a method call into an RPC
-whenever two components landed in different processes.
+**What it trades.** The binaries release together, from one commit. During a
+rolling deploy two releases briefly share the queue and the schema: the
+framework versions its own queue envelope
+([wire-format mismatch](/queue/retries-and-failure/#wire-format-mismatch)), and
+a payload field or a column you change follows the expand-then-contract
+discipline of any rolling deploy. The database every binary shares is the
+ceiling, and [split deployment](/security/authentication/split-deployment/)
+sizes it.
 
-NestRS keeps the diagnosis and the first half of the answer. It never cuts the
-domain, so no call leaves the process, and adding a workload rewrites nothing:
-it is one more composition root over the crate you already have. Service Weaver
-itself [stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)
-in December 2024; the diagnosis outlives it.
+Service Weaver itself
+[stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)
+in December 2024, its team citing how much of an existing application adoption
+meant rewriting; the separation it argued for outlives it.
 
 ## Who it is for
 

@@ -159,14 +159,14 @@ HTTP stack.
 
 Entities, services and policy live once in a shared `features` crate; each app
 under `apps/*` is a thin composition root importing only the transports it
-serves. Every workload scales on its own signal, and no binary calls another:
-microservice scaling without the distributed-systems tax.
+serves. Every workload scales on its own signal, and one app importing them all
+is a plain monolith: microservice scaling without the distributed-systems tax.
 
 <Workspace />
 
 <div class="rs-band-foot">
 
-**One domain, one binary per workload**, no RPC between them. [The architecture →](/why/#a-modular-monolith-deployed-per-workload)
+**Service Weaver's goal**, with the queue and the database where it draws RPC. [The architecture →](/why/#a-modular-monolith-deployed-per-workload)
 
 </div>
 

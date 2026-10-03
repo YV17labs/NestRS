@@ -1,0 +1,150 @@
+---
+/**
+ * The architecture in three layers — write, run, deploy — after the overview
+ * figure in Google's Service Weaver announcement. The run layer switches
+ * between one binary per workload and one binary over the same modules, with
+ * two radios and no script: the modules row never moves, which is the point.
+ */
+interface Binary {
+  app: string;
+  edges: string;
+  modules: string[];
+}
+
+interface Tier {
+  hint: string;
+  private: boolean;
+  bins: Binary[];
+}
+
+const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'oauth'];
+
+const split: Tier[] = [
+  {
+    hint: 'exposed to clients',
+    private: false,
+    bins: [
+      { app: 'auth', edges: 'HTTP', modules: ['oauth'] },
+      { app: 'api', edges: 'HTTP · GraphQL', modules: ['users', 'orgs', 'posts', 'audio', 'notifications'] },
+      { app: 'live', edges: 'WebSocket', modules: ['users', 'chat', 'notifications'] },
+      { app: 'assistant', edges: 'MCP', modules: ['users', 'posts', 'audio'] },
+    ],
+  },
+  {
+    hint: 'off the request path',
+    private: true,
+    bins: [{ app: 'worker', edges: 'queue · schedule', modules: ['audio', 'notifications'] }],
+  },
+];
+
+const mono: Binary = {
+  app: 'publish',
+  edges: 'HTTP · GraphQL · WebSocket · MCP · queue · schedule',
+  modules,
+};
+
+const traced = 'users';
+---
+
+<figure class="rs-topo not-content" aria-label="Write once, run per workload or as one binary, deploy anywhere a container runs">
+  <input type="radio" name="rs-topo" id="rs-topo-split" class="rs-topo-radio" checked />
+  <input type="radio" name="rs-topo" id="rs-topo-mono" class="rs-topo-radio" />
+
+  <div class="rs-topo-layer">
+    <div class="rs-topo-head">
+      <span class="rs-topo-label">WRITE</span>
+      <span class="rs-topo-hint">one modular monolith</span>
+    </div>
+    <div class="rs-topo-write">
+      <div class="rs-topo-features">
+        <span class="rs-topo-path">crates/features/</span>
+        <ul class="rs-topo-mods">
+          {modules.map((m) => <li class:list={['rs-topo-mod', { 'rs-topo-mod--traced': m === traced }]}>{m}</li>)}
+        </ul>
+      </div>
+      <div class="rs-topo-framework">
+        <span class="rs-topo-path">nest-rs</span>
+        <span class="rs-topo-framework-sub">decorators, guards, transactions, discovery</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="rs-topo-step">each <code>apps/&lt;app&gt;/module.rs</code> imports the edges it serves</div>
+
+  <div class="rs-topo-layer rs-topo-run">
+    <div class="rs-topo-head">
+      <span class="rs-topo-label">RUN</span>
+      <span class="rs-topo-hint rs-topo-only-split">one binary per workload, each on its own replicas</span>
+      <span class="rs-topo-hint rs-topo-only-mono">one binary serving every edge: the monolith</span>
+      <span class="rs-topo-switch">
+        <label for="rs-topo-split">Per workload</label>
+        <label for="rs-topo-mono">One binary</label>
+      </span>
+    </div>
+
+    <div class="rs-topo-tiers rs-topo-only-split">
+      {
+        split.map((tier) => (
+          <div class="rs-topo-tier">
+            <span class="rs-topo-tier-hint">{tier.hint}</span>
+            <div class="rs-topo-bins">
+              {tier.bins.map((b) => (
+                <div class:list={['rs-topo-bin', { 'rs-topo-bin--private': tier.private }]}>
+                  <span class="rs-topo-app">{b.app}</span>
+                  <span class="rs-topo-edges">{b.edges}</span>
+                  <ul class="rs-topo-mods">
+                    {b.modules.map((m) => <li class:list={['rs-topo-mod', { 'rs-topo-mod--traced': m === traced }]}>{m}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))
+      }
+    </div>
+
+    <div class="rs-topo-bins rs-topo-bins--mono rs-topo-only-mono">
+      <div class="rs-topo-bin">
+        <span class="rs-topo-app">{mono.app}</span>
+        <span class="rs-topo-edges">{mono.edges}</span>
+        <ul class="rs-topo-mods">
+          {mono.modules.map((m) => <li class:list={['rs-topo-mod', { 'rs-topo-mod--traced': m === traced }]}>{m}</li>)}
+        </ul>
+      </div>
+    </div>
+
+    <div class="rs-topo-shared">
+      <span class="rs-topo-shared-label">Postgres · Redis</span>
+      <span class="rs-topo-shared-sub">the database and the queue every binary shares; no RPC between binaries</span>
+    </div>
+  </div>
+
+  <div class="rs-topo-step">one workspace, one image</div>
+
+  <div class="rs-topo-layer">
+    <div class="rs-topo-head">
+      <span class="rs-topo-label">DEPLOY</span>
+      <span class="rs-topo-hint">anywhere a container runs</span>
+    </div>
+    <div class="rs-topo-targets">
+      <div class="rs-topo-target">
+        <span class="rs-topo-target-name">Your machine</span>
+        <code>nestrs run dev api</code>
+      </div>
+      <div class="rs-topo-target">
+        <span class="rs-topo-target-name">Containers</span>
+        <span class="rs-topo-target-sub">one image, one command per app</span>
+      </div>
+      <div class="rs-topo-target">
+        <span class="rs-topo-target-name">Kubernetes</span>
+        <span class="rs-topo-target-sub">the Helm chart, KEDA on queue depth</span>
+      </div>
+    </div>
+  </div>
+
+  <figcaption class="rs-card-note">
+    <code>users</code> is one module, served by three binaries over three edges. Drawn after the
+    overview figure in Google's <a href="https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html">Service Weaver announcement</a>:
+    the same three layers, with the queue and the database where it draws RPC.
+  </figcaption>
+</figure>

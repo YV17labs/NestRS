@@ -34,4 +34,4 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
           -c rustfmt -c clippy -c rust-analyzer -c llvm-tools-preview \
  && cargo install --locked cargo-binstall \
  && cargo binstall --no-confirm --locked \
-      just bacon cargo-nextest cargo-llvm-cov cargo-audit cargo-outdated
+      just bacon cargo-nextest cargo-llvm-cov cargo-deny cargo-outdated

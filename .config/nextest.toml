@@ -37,3 +37,8 @@ max-threads = 1
 [[profile.default.overrides]]
 filter = 'test(/_diagnostics$/)'
 test-group = 'trybuild'
+
+# CI (`NEXTEST_PROFILE=ci`, set by `.github/workflows/ci.yml`) reports every
+# failing test of a run, not just the first; the groups above still apply.
+[profile.ci]
+fail-fast = false

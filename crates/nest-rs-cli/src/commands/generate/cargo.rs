@@ -693,16 +693,17 @@ mod tests {
         // The two image shapes are `false` because the scaffold writes no
         // Dockerfile: the repo's own images still carry them and are still
         // compared, but a packaged crate has none to find.
+        // The workflows are not on it either: they install whatever
+        // `rust-toolchain.toml` names, so they spell no floor that could drift.
         // `doctor`'s floor is **not** on this list, and its absence is the
         // finding rather than a gap: `MIN_RUST_VERSION` is now parsed from
         // `CARGO_PKG_RUST_VERSION`, so it is derived from the workspace
         // `rust-version` this scan anchors on and cannot disagree with it. A
         // row here would compare the anchor against itself.
-        const SHAPES: [(&str, Pin, bool); 8] = [
+        const SHAPES: [(&str, Pin, bool); 7] = [
             ("rust-version = \"", Pin::Exact, true),
             ("channel = \"", Pin::Exact, true),
             ("ARG RUST_VERSION=", Pin::Exact, false),
-            ("toolchain: '", Pin::Exact, false),
             ("FROM rust:", Pin::Image, false),
             ("**Rust ", Pin::Prose, false),
             ("pins Rust ", Pin::Prose, false),

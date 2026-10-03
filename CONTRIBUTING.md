@@ -102,12 +102,15 @@ server (see CLAUDE.md).
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-The *Definition of done* is a green local gate, and it is part of the PR. Run
-`cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo fmt --all --check`, and `cargo nextest run --workspace` (plus the
-`demo/` equivalents via `nestrs run` when you touch the product), then paste
-the output in your PR description. A PR that has not passed them is not ready
-for review.
+The *Definition of done* is a green CI run. `.github/workflows/ci.yml` runs on
+every pull request: formatting, clippy and rustdoc, the test suites (the e2e
+ones against real Postgres, Redis and S3), the Redis/Valkey version matrix, the
+feature matrix, cargo-deny and cargo-machete, the demo and the docs lint. A PR
+that has not passed it is not ready for review. Before you push, the fast local
+loop catches most of it: `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, and `cargo nextest run`
+on the crates you touched (plus the `demo/` equivalents via `nestrs run` when
+you touch the product).
 
 ### Commit messages
 

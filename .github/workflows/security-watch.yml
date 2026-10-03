@@ -1,27 +1,20 @@
-# Scheduled advisory watch — a monitor, never a gate.
+# Scheduled watch — a monitor, never a gate.
 #
-# The Definition of done runs locally (see `.claude/rules/manifests-ci.md`,
-# "CI is NOT the gate"), so nothing here blocks a merge or a release. What the
-# local loop cannot do is notice the world changing while nobody touches the
-# repo: RUSTSEC-2026-0285 (rustls) was published on 2026-09-14 and sat in all
-# three lockfiles for eleven days. This workflow is the part that notices.
+# `ci.yml` is the gate: every push and pull request runs cargo-deny, the feature
+# matrix and a beta clippy. What a gate cannot do is notice the world changing
+# while nobody touches the repo: RUSTSEC-2026-0285 (rustls) was published on
+# 2026-09-14 and sat in all three lockfiles for eleven days. This workflow is
+# the part that notices.
 #
 # Two watches, one signal:
-#   * `audit` — cargo-audit over every lockfile the repo owns (the framework's,
-#     the demo's, the benchmark SUT's), warnings denied, so an `unsound` or
-#     `unmaintained` advisory fails too. Every accepted advisory is argued in
-#     `.cargo/audit.toml`, which cargo-audit reads from the repo root.
+#   * `advisories` — cargo-deny's advisory check over every lockfile the repo
+#     owns (the framework's, the demo's, the benchmark SUT's), against the
+#     policy in `deny.toml`: a vulnerability, an unmaintained or unsound crate,
+#     or a yanked release fails it unless `deny.toml` argues it away.
 #   * `future-incompat` — the framework built on the Rust *beta* toolchain.
 #     apalis-redis 0.7.4 carries a never-type-fallback lint that rustc says will
 #     become a hard error "in a future release in all editions"; beta runs six
 #     weeks ahead of stable, so a failure here is the notice before the break.
-#   * `feature-matrix` — `scripts/check-features.sh`: every workspace crate
-#     checked alone under its default features, under none, and under each of
-#     its features alone. Every other build is one feature union (`--workspace`
-#     unifies), so a crate that compiles only because a sibling turned a feature
-#     on is invisible there: `nest-rs-authz` shipped not compiling alone that
-#     way. The same script is the local gate whenever a manifest or a
-#     `cfg(feature)` moves; here it also runs nightly.
 #
 # A failure opens one issue, or comments on it while it stays open, so the
 # signal outlives the Actions tab. `GITHUB_TOKEN` is scoped to that one write.
@@ -32,56 +25,42 @@ on:
   schedule:
     - cron: '23 5 * * *'
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '**/Cargo.lock'
-      - '**/Cargo.toml'
-      - '.cargo/audit.toml'
-      - '.github/workflows/security-watch.yml'
-      - 'scripts/check-features.sh'
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: security-watch
   cancel-in-progress: false
 
 jobs:
-  audit:
-    runs-on: ubuntu-latest
+  advisories:
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: '1.97'
+          persist-credentials: false
 
-      # Keyed on the tool's version so only a version change pays the compile.
-      - name: Cache cargo-audit binary
-        id: cache-cargo-audit
-        uses: actions/cache@v5
+      # cargo-deny reads the dependency graph through `cargo metadata`.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install --profile minimal
+
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-0.22.2-${{ runner.os }}
+          tool: cargo-deny@0.20
 
-      - name: Install cargo-audit
-        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
-        run: cargo install cargo-audit --version 0.22.2 --locked
-
-      - name: Audit every lockfile the repo owns
+      - name: Check every lockfile the repo owns
         run: |
           status=0
-          for lock in Cargo.lock demo/Cargo.lock bench/sut/nestrs/Cargo.lock; do
-            echo "::group::$lock"
-            if cargo audit --file "$lock" --deny warnings; then
-              echo "- \`$lock\`: clean" >> "$GITHUB_STEP_SUMMARY"
+          for manifest in Cargo.toml demo/Cargo.toml bench/sut/nestrs/Cargo.toml; do
+            echo "::group::$manifest"
+            if cargo deny --manifest-path "$manifest" check advisories; then
+              echo "- \`$manifest\`: clean" >> "$GITHUB_STEP_SUMMARY"
             else
-              echo "- \`$lock\`: **advisories found**" >> "$GITHUB_STEP_SUMMARY"
+              echo "- \`$manifest\`: **advisories found**" >> "$GITHUB_STEP_SUMMARY"
               status=1
             fi
             echo "::endgroup::"
@@ -89,81 +68,44 @@ jobs:
           exit $status
 
   future-incompat:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: beta
 
       - name: Install Rust beta toolchain
-        uses: dtolnay/rust-toolchain@beta
+        run: rustup toolchain install beta --profile minimal
 
-      # .cargo/config.toml selects mold on Linux; without it the link fails.
-      - name: Install mold linker
-        run: sudo apt-get update && sudo apt-get install -y mold
-
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-beta-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-beta-
-
-      # The toolchain file pins 1.97 for local work; this job is the one place
-      # that deliberately builds ahead of it.
+      # The toolchain file pins the stable floor for local work and CI; this
+      # job is the one place that deliberately builds ahead of it.
       - name: Build the framework on beta
         run: cargo +beta check --workspace --all-targets
 
       - name: Report future incompatibilities
         run: cargo +beta report future-incompatibilities || echo "no future-incompatibility report"
 
-  feature-matrix:
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.97'
-
-      - name: Install mold linker
-        run: sudo apt-get update && sudo apt-get install -y mold
-
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-matrix-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-matrix-
-
-      - name: Every crate alone, and each of its features alone
-        run: scripts/check-features.sh
-
   report:
-    needs: [audit, future-incompat, feature-matrix]
+    needs: [advisories, future-incompat]
     if: failure()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       issues: write
     steps:
       - name: Open or update the watch issue
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          AUDIT: ${{ needs.audit.result }}
+          ADVISORIES: ${{ needs.advisories.result }}
           FUTURE_INCOMPAT: ${{ needs.future-incompat.result }}
-          FEATURE_MATRIX: ${{ needs.feature-matrix.result }}
         with:
           script: |
             const title = 'Security watch: a scheduled check failed';
@@ -171,11 +113,10 @@ jobs:
             const body = [
               `Run: ${run}`,
               '',
-              `- advisory audit (three lockfiles): **${process.env.AUDIT}**`,
+              `- advisories (three lockfiles): **${process.env.ADVISORIES}**`,
               `- beta build (future-incompat lints): **${process.env.FUTURE_INCOMPAT}**`,
-              `- feature matrix (each crate alone, each of its features alone): **${process.env.FEATURE_MATRIX}**`,
               '',
-              'An audit failure means a lockfile resolves a crate with an advisory that `.cargo/audit.toml` does not argue away: update the crate, or add an ignore with the reason it is unreachable. A beta failure means the next stable will not build the framework. A feature-matrix failure means a crate or an umbrella feature does not compile on its own: the step summary names which.',
+              'An advisories failure means a lockfile resolves a crate with an advisory, or a yanked release, that `deny.toml` does not argue away: update the crate, or add an ignore with the reason it is unreachable. A beta failure means the next stable will not build the framework.',
             ].join('\n');
             const open = await github.paginate(github.rest.issues.listForRepo, {
               ...context.repo, state: 'open', per_page: 100,

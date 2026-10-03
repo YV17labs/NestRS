@@ -77,7 +77,7 @@ your own:
 | `Parse<T>` | `String → T` (any `FromStr`) | Generic conversion: `ParseInt`, `ParseFloat`, `ParseBool` |
 | `ParseUuid` | `String → Uuid` | Any-version UUID |
 | `ParseUuidV4` / `ParseUuidV7` / … | `String → Uuid` | Version-pinned UUID |
-| `ParseArray<P>` | `String → Vec<P::Out>` | Comma-separated list, each item piped through `P` |
+| `ParseArray<T>` | `String → Vec<T>` (any `FromStr`) | Comma-separated list; a refused item is named by its position (`item 2 must be a valid u64`), never quoted |
 | `Trim`, `Lowercase`, `Uppercase` | `String → String` | Edge normalization |
 | `ValidationPipe<T>` | `T → T` (where `T: Validate`) | Run [validator](https://docs.rs/validator) attribute rules |
 

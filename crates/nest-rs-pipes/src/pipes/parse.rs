@@ -1,6 +1,8 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
+use nest_rs_core::short_type_name;
+
 use crate::{PipeError, pipe::Pipe};
 
 /// Parse a `String` into any `T: FromStr`. Covers integer, float, and bool
@@ -27,11 +29,6 @@ pub type ParseInt = Parse<i64>;
 pub type ParseFloat = Parse<f64>;
 /// Parse the input string into a `bool`.
 pub type ParseBool = Parse<bool>;
-
-pub(super) fn short_type_name<T>() -> &'static str {
-    let name = std::any::type_name::<T>();
-    name.rsplit("::").next().unwrap_or(name)
-}
 
 #[cfg(test)]
 mod tests {

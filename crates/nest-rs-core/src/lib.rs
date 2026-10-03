@@ -93,6 +93,7 @@ pub mod request_scope;
 pub mod target;
 pub mod trace_context;
 pub mod transport;
+mod type_name;
 mod way_down;
 
 // The three access-graph validators have no caller outside `src/` in either
@@ -140,6 +141,9 @@ pub use trace_context::{
 #[doc(hidden)]
 pub use trace_context::{current_correlation, set_actor_id};
 pub use transport::{Transport, TransportContribution};
+// The pipes word a refusal with it; not public API.
+#[doc(hidden)]
+pub use type_name::short_type_name;
 // `#[nest_rs::main]`'s expansion — see the `way_down` module.
 #[doc(hidden)]
 pub use way_down::__main;

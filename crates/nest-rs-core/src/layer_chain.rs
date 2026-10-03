@@ -226,7 +226,7 @@ where
                     // field name, one rendering, or a grep for
                     // `layer="AuthnGuard"` finds one of the two lines about that
                     // layer and misses the other.
-                    layer = short_type_name(entry.name),
+                    layer = crate::type_name::shorten(entry.name),
                     site = entry.source.label(),
                     chain,
                     "layer forced to re-run despite being declared at a broader site",
@@ -283,36 +283,13 @@ fn report_redundant_site(
     if first_time {
         tracing::debug!(
             target: crate::target::LAYERS,
-            layer = short_type_name(name),
+            layer = crate::type_name::shorten(name),
             kept = existing.label(),
             skipped = skipped.label(),
             hint = "broadest site wins; use `#[force_*]` to re-run",
             "redundant layer declaration deduped",
         );
     }
-}
-
-/// Strip module paths from a `type_name`, keeping the leaf of each segment so
-/// generics survive: `a::b::AuthnGuard<c::d::JwtStrategy<e::Claims>>` becomes
-/// `AuthnGuard<JwtStrategy<Claims>>`. Diagnostic-only — the full path adds no
-/// information a reader scanning boot logs can act on.
-fn short_type_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut segment_start = 0;
-    for (i, c) in name.char_indices() {
-        if !(c.is_alphanumeric() || c == '_' || c == ':') {
-            out.push_str(leaf(&name[segment_start..i]));
-            out.push(c);
-            segment_start = i + c.len_utf8();
-        }
-    }
-    out.push_str(leaf(&name[segment_start..]));
-    out
-}
-
-/// The substring after the last `::` of a path segment.
-fn leaf(segment: &str) -> &str {
-    segment.rsplit("::").next().unwrap_or(segment)
 }
 
 /// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration —

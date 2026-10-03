@@ -1,7 +1,8 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-use super::parse::short_type_name;
+use nest_rs_core::short_type_name;
+
 use crate::{PipeError, pipe::Pipe};
 
 /// Split a comma-separated `String` into `Vec<T>`, parsing each item with
@@ -67,5 +68,11 @@ mod tests {
     fn the_refusal_names_the_position_and_the_type() {
         let err = ParseArray::<u32>::transform("1, x ,3".into()).unwrap_err();
         assert_eq!(err.message(), "item 2 must be a valid u32");
+    }
+
+    #[test]
+    fn a_generic_item_type_is_named_whole() {
+        let err = ParseArray::<std::num::NonZeroU64>::transform("1,0,3".into()).unwrap_err();
+        assert_eq!(err.message(), "item 2 must be a valid NonZero<u64>");
     }
 }

@@ -44,49 +44,78 @@ pub struct Bench {
     pub runs: usize,
 }
 
+enum Measurement {
+    Drain {
+        lane: Lane,
+        jobs: u32,
+        replicas: usize,
+    },
+    Latency {
+        lane: Lane,
+        jobs: u32,
+        rate: u32,
+    },
+    Push {
+        lane: Lane,
+        jobs: u32,
+        pushers: u32,
+    },
+    Idle {
+        secs: u64,
+    },
+}
+
 #[nest_rs::main]
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let measurement = args.next().unwrap_or_default();
-    if measurement == "replica" {
-        return replica::serve().await;
-    }
+    let name = args.next().unwrap_or_default();
     let mut flags = Flags::parse(args)?;
-    let bench = Bench::open(&mut flags).await?;
-    let report = match measurement.as_str() {
-        "drain" => {
-            let (lane, jobs, replicas) = (
-                flags.lane()?,
-                flags.take("jobs", 5000)?,
-                flags.take("replicas", 1)?,
-            );
-            flags.done()?;
-            measure::drain(&bench, lane, jobs, replicas).await?
+    let measurement = match name.as_str() {
+        "replica" => return replica::serve().await,
+        "help" | "--help" | "-h" => {
+            println!("{USAGE}");
+            return Ok(());
         }
-        "latency" => {
-            let (lane, jobs, rate) = (
-                flags.lane()?,
-                flags.take("jobs", 2000)?,
-                flags.take("rate", 200)?,
-            );
-            flags.done()?;
+        "drain" => Measurement::Drain {
+            lane: flags.lane()?,
+            jobs: flags.take("jobs", 5000)?,
+            replicas: flags.take("replicas", 1)?,
+        },
+        "latency" => Measurement::Latency {
+            lane: flags.lane()?,
+            jobs: flags.take("jobs", 2000)?,
+            rate: flags.take("rate", 200)?,
+        },
+        "push" => Measurement::Push {
+            lane: flags.lane()?,
+            jobs: flags.take("jobs", 5000)?,
+            pushers: flags.take("pushers", 1)?,
+        },
+        "idle" => Measurement::Idle {
+            secs: flags.take("secs", 30)?,
+        },
+        _ => bail!("{USAGE}"),
+    };
+    let runs = flags.take("runs", 3)?;
+    let log = flags.take_text("log", "warn");
+    flags.done()?;
+
+    let bench = Bench::open(runs, log).await?;
+    let report = match measurement {
+        Measurement::Drain {
+            lane,
+            jobs,
+            replicas,
+        } => measure::drain(&bench, lane, jobs, replicas).await?,
+        Measurement::Latency { lane, jobs, rate } => {
             measure::latency(&bench, lane, jobs, rate).await?
         }
-        "push" => {
-            let (lane, jobs, pushers) = (
-                flags.lane()?,
-                flags.take("jobs", 5000)?,
-                flags.take("pushers", 1)?,
-            );
-            flags.done()?;
-            measure::push(&bench, lane, jobs, pushers).await?
-        }
-        "idle" => {
-            let secs = flags.take("secs", 30)?;
-            flags.done()?;
-            measure::idle(&bench, secs).await?
-        }
-        _ => bail!("{USAGE}"),
+        Measurement::Push {
+            lane,
+            jobs,
+            pushers,
+        } => measure::push(&bench, lane, jobs, pushers).await?,
+        Measurement::Idle { secs } => measure::idle(&bench, secs).await?,
     };
     bench.admin.flush().await?;
     println!(
@@ -98,9 +127,7 @@ async fn main() -> Result<()> {
 }
 
 impl Bench {
-    async fn open(flags: &mut Flags) -> Result<Self> {
-        let runs = flags.take("runs", 3)?;
-        let log = flags.take_text("log", "warn");
+    async fn open(runs: usize, log: String) -> Result<Self> {
         let app = App::builder().module::<BenchModule>().build().await?;
         let config = app
             .container()

@@ -315,6 +315,14 @@ files a fence quotes, the READMEs `readme-install` reads — the linter reads di
   **A page's surface is its source plus the components it renders**: the landing is MDX importing
   `src/components/*.astro`, and the decorator count is a sentence inside one of them, so the check
   reads both — still `docs/**` exactly.
+- **`topology-drift`** — the architecture figure on `/why/` draws the demo's composition, so every
+  app, module and edge in its data (`src/topology.mjs`, which the `Topology` component renders)
+  is what `demo/apps/*/src/module.rs` imports, in both directions; its module list is the features
+  crate's directories, and the collision its caption names is declared in the two files it cites.
+  The imports come from the canon's `demo_apps`, read with `syn`, and each is placed by its name —
+  `<Module><Edge>Module` an edge from the reserved block's `edges` line, `<Module>Module` a port.
+  The figure's first cut, hand-kept, omitted two modules and two of the API's four edges, and
+  claimed every binary used the queue: an audit found it, and nothing else would have.
 - **`decorator-index`** — `/decorators/` opens by calling itself the index of every decorator the
   framework ships, so every name in the canon's decorator list owes a row. Derived, because a
   hand-kept index is wrong the day a decorator lands and nothing says so.

@@ -34,6 +34,7 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `scripts/lint-docs.mjs` | the gate: every rule in `STYLE.md` §F |
 | `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
+| `src/topology.mjs` | the `/why/` architecture figure's data, checked against the demo's composition by `topology-drift` |
 
 **The linter needs a Rust toolchain.** It checks pages against the framework facts
 `nest-rs-conformance`'s `canon` binary prints, and runs it on every start, so the

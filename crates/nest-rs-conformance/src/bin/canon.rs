@@ -12,7 +12,8 @@
 //! re-derives them; two readers of one definition is how it once counted 27
 //! capabilities against a landing that correctly said 28. Raw demo sources do
 //! not travel here — the linter reads `demo/` itself, because file content is
-//! not a derivation and cannot drift.
+//! not a derivation and cannot drift. What the demo's apps compose is a
+//! derivation, so it travels like the framework's facts.
 //!
 //! **What travels, and in which of two shapes.** A fact whose comparison needs
 //! no grammar travels **extracted** (a list of names, checked with `includes`);
@@ -30,8 +31,10 @@ use std::path::Path;
 
 use nest_rs_conformance::sources::{
     config_namespace, crate_dirs, declared_targets, declared_units, exported_decorators,
-    is_cfg_test, parsed, read, relative, repo_root, rust_files, umbrella_matrix,
+    is_cfg_test, item_attrs, parsed, qualified_paths, read, relative, repo_root, rust_files,
+    umbrella_matrix,
 };
+use quote::ToTokens;
 use serde::Serialize;
 use syn::visit::Visit;
 use syn::{ItemFn, ItemTrait, TraitItem};
@@ -79,6 +82,7 @@ mod floors {
     pub(super) const UNITS: usize = 8;
     pub(super) const TARGETS: usize = 20;
     pub(super) const QUEUE_CAPABILITIES: usize = 4;
+    pub(super) const DEMO_APPS: usize = 3;
 }
 
 /// A `#[config]` struct, as the page publishing its key table has to describe
@@ -136,6 +140,10 @@ struct Canon {
     targets: Vec<String>,
     /// Every variant of `nest_rs_queue::Capability`.
     queue_capabilities: Vec<String>,
+    /// Every `features::<module>::<item>` a demo app's `module.rs` imports, as
+    /// `[module, item]`, keyed by app — what the `/why/` architecture figure
+    /// draws.
+    demo_apps: BTreeMap<String, Vec<[String; 2]>>,
 }
 
 fn main() -> Result<(), Refusal> {
@@ -205,6 +213,8 @@ fn derive(root: &Path) -> Result<Canon, Refusal> {
         floors::QUEUE_CAPABILITIES,
         "`nest_rs_queue::Capability` variants",
     )?;
+    let demo_apps = demo_apps(root)?;
+    floor(demo_apps.len(), floors::DEMO_APPS, "demo apps")?;
 
     Ok(Canon {
         capabilities,
@@ -221,6 +231,7 @@ fn derive(root: &Path) -> Result<Canon, Refusal> {
         units: units.into_iter().collect(),
         targets: targets.into_iter().collect(),
         queue_capabilities,
+        demo_apps,
     })
 }
 
@@ -474,6 +485,80 @@ fn queue_capabilities(root: &Path) -> Result<Vec<String>, Refusal> {
         .collect())
 }
 
+/// What each app under `demo/apps/` composes from the features crate: every
+/// `features::<module>::<item>` its `module.rs` names, through a `use` or a path
+/// written in the `#[module]` attribute.
+fn demo_apps(root: &Path) -> Result<BTreeMap<String, Vec<[String; 2]>>, Refusal> {
+    let mut apps = BTreeMap::new();
+    for entry in std::fs::read_dir(root.join("demo/apps"))? {
+        let dir = entry?.path();
+        let file = dir.join("src/module.rs");
+        let Some(app) = dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file.is_file() {
+            continue;
+        }
+        let Some(ast) = parsed(&file) else {
+            return refuse(format!("{} does not parse", relative(&file, root)));
+        };
+        let mut imports = BTreeSet::new();
+        for item in &ast.items {
+            if let syn::Item::Use(used) = item {
+                features_uses(&used.tree, &mut Vec::new(), &mut imports)?;
+                continue;
+            }
+            for attr in item_attrs(item) {
+                for (module, name) in qualified_paths(&attr.to_token_stream(), "features") {
+                    imports.insert([module, name]);
+                }
+            }
+        }
+        apps.insert(app.to_owned(), imports.into_iter().collect());
+    }
+    Ok(apps)
+}
+
+/// The `features::<module>::<item>` leaves of one `use` tree. A glob, or the
+/// module itself imported for a later `users::…`, would hide what the app
+/// composes, so either refuses rather than reading as nothing.
+fn features_uses(
+    tree: &syn::UseTree,
+    path: &mut Vec<String>,
+    out: &mut BTreeSet<[String; 2]>,
+) -> Result<(), Refusal> {
+    let in_features = path.first().is_some_and(|root| root == "features");
+    match tree {
+        syn::UseTree::Path(step) => {
+            path.push(step.ident.to_string());
+            let walked = features_uses(&step.tree, path, out);
+            path.pop();
+            walked
+        }
+        syn::UseTree::Name(syn::UseName { ident })
+        | syn::UseTree::Rename(syn::UseRename { ident, .. }) => match path.as_slice() {
+            [_, module, ..] if in_features => {
+                out.insert([module.clone(), ident.to_string()]);
+                Ok(())
+            }
+            [_] if in_features => refuse(format!(
+                "`use features::{ident}` imports a module for a later `{ident}::…` the canon \
+                     cannot see — import the items an app composes"
+            )),
+            _ => Ok(()),
+        },
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .try_for_each(|item| features_uses(item, path, out)),
+        syn::UseTree::Glob(_) if in_features => refuse(format!(
+            "`use {}::*` hides what an app composes — import each item by name",
+            path.join("::")
+        )),
+        syn::UseTree::Glob(_) => Ok(()),
+    }
+}
+
 /// The two regions of the architecture rules the `/architecture/` page restates:
 /// the table rows, and the fenced reserved-vocabulary block. Read from the
 /// template the CLI ships into every scaffolded project.
@@ -512,4 +597,49 @@ fn architecture(root: &Path) -> Result<ArchitectureFacts, Refusal> {
         role_rows,
         reserved_block,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uses(src: &str) -> Result<BTreeSet<[String; 2]>, Refusal> {
+        let used: syn::ItemUse = syn::parse_str(src).expect("a use item parses");
+        let mut out = BTreeSet::new();
+        features_uses(&used.tree, &mut Vec::new(), &mut out)?;
+        Ok(out)
+    }
+
+    fn pair(module: &str, item: &str) -> [String; 2] {
+        [module.to_owned(), item.to_owned()]
+    }
+
+    #[test]
+    fn a_grouped_or_renamed_features_import_reads_as_its_module_and_item() {
+        let read = uses(
+            "use features::{users::{UsersHttpModule, UsersWsModule as Ws}, authn::AuthnModule};",
+        )
+        .expect("named imports are read");
+        assert_eq!(
+            read,
+            BTreeSet::from([
+                pair("authn", "AuthnModule"),
+                pair("users", "UsersHttpModule"),
+                pair("users", "UsersWsModule"),
+            ]),
+        );
+    }
+
+    #[test]
+    fn an_import_outside_features_reads_as_nothing() {
+        let read = uses("use nest_rs::http::{HttpConfig, HttpModule};").expect("read");
+        assert!(read.is_empty(), "{read:?}");
+    }
+
+    #[test]
+    fn a_glob_or_a_module_import_from_features_is_refused() {
+        for hides in ["use features::users::*;", "use features::users;"] {
+            assert!(uses(hides).is_err(), "{hides} hides what the app composes");
+        }
+    }
 }

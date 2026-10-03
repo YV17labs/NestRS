@@ -66,3 +66,11 @@ The objections, and the answers settled:
 Open (2026-10-03): the `Topology` figure's data is kept by hand, so a demo change
 can make it false silently. A docs lint rule checking it against
 `demo/apps/*/src/module.rs` is the planned fix.
+
+Closed (2026-10-03): the figure's data moved to `docs/src/topology.mjs`, which
+the component renders and the docs lint imports. `topology-drift` checks every
+app, module and edge in it against the canon's `demo_apps` (each app's
+`module.rs` imports, read with `syn`), its module list against the features
+crate's directories, and the caption's collision against the two files it
+cites. Removing one import from the api, or one module from the figure, fails
+the lint by name.

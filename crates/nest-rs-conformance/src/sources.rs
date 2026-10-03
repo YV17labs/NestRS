@@ -624,6 +624,31 @@ pub fn path_roots(tokens: &TokenStream) -> Vec<String> {
         .collect()
 }
 
+/// Every `<root>::<second>::<third>` path `tokens` spells, as `(second, third)`.
+///
+/// An app's `#[module(imports = [features::users::UsersHttpModule])]` names a
+/// module without a `use` line, and an attribute's contents are tokens, so the
+/// path is read from them. The colons are matched the way `path_roots` matches
+/// them, `Joint` first, so a `name:` field never reads as a path.
+pub fn qualified_paths(tokens: &TokenStream, root: &str) -> Vec<(String, String)> {
+    let mut flat = Vec::new();
+    flatten(tokens.clone(), &mut flat);
+    let colons = |a: &TokenTree, b: &TokenTree| {
+        matches!((a, b), (TokenTree::Punct(x), TokenTree::Punct(y))
+            if x.as_char() == ':' && x.spacing() == Spacing::Joint && y.as_char() == ':')
+    };
+    flat.windows(7)
+        .filter_map(|w| match (&w[0], &w[3], &w[6]) {
+            (TokenTree::Ident(r), TokenTree::Ident(second), TokenTree::Ident(third))
+                if r == root && colons(&w[1], &w[2]) && colons(&w[4], &w[5]) =>
+            {
+                Some((second.to_string(), third.to_string()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Every token at every depth, groups kept *and* descended into.
 ///
 /// Both halves matter: a join keying on `Group` needs the group itself, and one
@@ -750,6 +775,23 @@ mod tests {
         ] {
             assert!(!fixture(ships), "{ships}");
         }
+    }
+
+    /// An app names a module in its `#[module]` attribute with no `use` line;
+    /// a field init and a single colon are not paths.
+    #[test]
+    fn a_qualified_path_reads_inside_an_attribute() {
+        let item: syn::ItemStruct = syn::parse_str(
+            "#[module(imports = [features::users::UsersHttpModule, \
+             HttpModule::for_root(HttpConfig { features: 1, ..Default::default() })])] \
+             pub struct ApiModule;",
+        )
+        .expect("a module struct parses");
+        let tokens = item.attrs[0].to_token_stream();
+        assert_eq!(
+            qualified_paths(&tokens, "features"),
+            [("users".to_owned(), "UsersHttpModule".to_owned())],
+        );
     }
 
     /// A root spelling every word a join classifies a path on — `src`, an edge,

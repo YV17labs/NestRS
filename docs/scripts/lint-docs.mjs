@@ -19,6 +19,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { REDIRECTS } from '../src/redirects.mjs';
+import * as TOPOLOGY from '../src/topology.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = join(HERE, '..');
@@ -60,7 +61,7 @@ function loadCanon() {
   const owed = [
     'capabilities', 'capability_crates', 'decorators', 'layer_subtraits', 'trait_methods',
     'test_count', 'version_req', 'otel_binding', 'envelope_keys', 'configs', 'architecture',
-    'units', 'targets', 'queue_capabilities',
+    'units', 'targets', 'queue_capabilities', 'demo_apps',
   ];
   const missing = owed.filter((key) => parsed[key] === undefined);
   if (missing.length) {
@@ -107,6 +108,7 @@ export const RULES = Object.freeze({
   architectureDrift: 'architecture-drift',
   envelopeDrift: 'envelope-drift',
   landingClaim: 'landing-claim',
+  topologyDrift: 'topology-drift',
   // Corpus-scoped — every member of a family the canon publishes is owed
   // somewhere, rather than one page owing anything.
   familyMention: 'family-mention',
@@ -592,6 +594,96 @@ export function familyMentions(sources, canon = CANON) {
     if (!installs.has(feature)) {
       add(`capability \`${feature}\` has no \`cargo add nest-rs --features ${feature}\` under any `
         + 'page\'s `## Install`');
+    }
+  }
+  return out;
+}
+
+/// The file the architecture figure's data lives in, named by every violation
+/// `topology-drift` files: it is the one to fix.
+const TOPOLOGY_REL = 'docs/src/topology.mjs';
+
+/// The edges a module folder may hold, read off the architecture rules' reserved
+/// block — the same raw text, and the same tokenizer, `architecture-drift` uses.
+function edgeVocabulary(canon) {
+  const line = canon.architecture.reserved_block.split('\n').find((l) => l.startsWith('edges'));
+  return new Set(line ? [...reservedWordsIn(line)].slice(1) : []);
+}
+
+/// One `features::<module>::<item>` an app imports, placed as the figure draws
+/// it: `module:edge` for `<Module><Edge>Module`, `module:port` for
+/// `<Module>Module`, and `null` for anything the figure has no place for. The
+/// naming law makes the stem the folder path, so the item names its edge.
+function placeImport([module, item], edges) {
+  const stem = module.replaceAll('_', '');
+  const name = item.toLowerCase();
+  if (name === `${stem}module`) return `${module}:port`;
+  if (!name.startsWith(stem) || !name.endsWith('module')) return null;
+  const edge = name.slice(stem.length, -'module'.length);
+  return edges.has(edge) ? `${module}:${edge}` : null;
+}
+
+/// The modules of the demo's features crate: its directories, read as paths.
+function demoFeatureDirs() {
+  return readdirSync(join(REPO_ROOT, 'demo', 'crates', 'features', 'src'), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+}
+
+function demoFileText(rel) {
+  const path = join(REPO_ROOT, 'demo', rel);
+  return existsSync(path) ? readFileSync(path, 'utf8') : null;
+}
+
+/// **`topology-drift`** — the architecture figure on `/why/` draws the demo's
+/// composition, so every app, module and edge it draws is what the demo's
+/// composition roots import, in both directions: an app, a module or an edge
+/// added to `demo/` and not to the figure is the figure lying as surely as one
+/// drawn and gone. The imports come from the canon (`demo_apps`, read with
+/// `syn`), the module list from the features crate's directories, and the
+/// collision the caption names from the two files it cites.
+export function topologyDrift(
+  figure = TOPOLOGY, canon = CANON, featureDirs = demoFeatureDirs(), demoText = demoFileText,
+) {
+  const out = [];
+  const add = (detail) => out.push(`${TOPOLOGY_REL}::${RULES.topologyDrift}::${detail}`);
+  const edges = edgeVocabulary(canon);
+  const drawn = new Map(figure.TIERS.flatMap((tier) => tier.apps)
+    .map(({ app, imports }) => [app, new Set(imports.map(([m, e]) => `${m}:${e ?? 'port'}`))]));
+
+  for (const [app, imports] of Object.entries(canon.demo_apps)) {
+    const placed = new Set();
+    for (const pair of imports) {
+      const at = placeImport(pair, edges);
+      if (at === null) {
+        add(`\`features::${pair[0]}::${pair[1]}\`, imported by \`${app}\`, is neither a port nor `
+          + 'an edge module — the figure has no place for it');
+      } else {
+        placed.add(at);
+      }
+    }
+    const figured = drawn.get(app);
+    if (!figured) {
+      add(`demo app \`${app}\` is not drawn`);
+      continue;
+    }
+    for (const at of placed) if (!figured.has(at)) add(`\`${app}\` imports \`${at}\`, not drawn`);
+    for (const at of figured) if (!placed.has(at)) add(`\`${app}\` is drawn with \`${at}\`, not imported`);
+  }
+  for (const app of drawn.keys()) {
+    if (!(app in canon.demo_apps)) add(`\`${app}\` is drawn and is no demo app`);
+  }
+
+  const features = new Set(figure.FEATURES);
+  for (const dir of featureDirs) if (!features.has(dir)) add(`features module \`${dir}\` is not drawn`);
+  for (const module of features) {
+    if (!featureDirs.includes(module)) add(`\`${module}\` is drawn and is no features module`);
+  }
+  if (!features.has(figure.TRACED)) add(`the traced module \`${figure.TRACED}\` is not drawn`);
+
+  for (const rel of figure.COLLISION.files) {
+    if (!(demoText(rel) ?? '').includes(`path = "${figure.COLLISION.path}"`)) {
+      add(`\`demo/${rel}\` does not mount \`${figure.COLLISION.path}\`, which the caption says it does`);
     }
   }
   return out;
@@ -1250,6 +1342,7 @@ export function lint() {
     ...PAGES.flatMap((page) => lintFile(page)),
     ...familyMentions(PAGES.map((page) => readFileSync(page, 'utf8'))),
     ...readmeInstalls(readmes()),
+    ...topologyDrift(),
   ].sort();
 
   // Fail closed: a registered mirror that no page matched means the page was

@@ -83,16 +83,15 @@ is a type in the shared crate, compiled into both sides. An app may still call
 another over HTTP with its own client; the framework never makes a network call
 look like a method call.
 
-**Every choice stays open.** Per workload is the shape NestRS proposes, not the
-only one it runs. As proposed, the binaries release together from one commit
-and share one database, so every contract between them is a type the compiler
-checks. Give an app its own database through its own `<PREFIX>_SEAORM__URL`,
-release it on its own schedule, or move it to its own repository with the
-features crate as a dependency, and the framework runs it the same way. What
-you take on is what any independently released services take on: versioning
-what crosses between them. The framework versions its own queue envelope
-([wire-format mismatch](/queue/retries-and-failure/#wire-format-mismatch)); a
-payload field or a column follows expand-then-contract, and
+**The line is the database.** Per workload is the shape NestRS proposes, and
+one binary is the same modules in one process. Binaries that share a database
+belong in one workspace: they release together from one commit, so every
+contract between them is a type the compiler checks. An app that needs a
+database of its own is simpler as a project of its own — its own workspace,
+repository and release — and what it shares with the first goes through a
+crate both depend on or through the queue, versioned like any contract between
+independently released services. The framework versions its own queue envelope
+([wire-format mismatch](/queue/retries-and-failure/#wire-format-mismatch)), and
 [split deployment](/security/authentication/split-deployment/) weighs one
 database against several.
 

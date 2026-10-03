@@ -197,8 +197,8 @@ deep on each.
 - **[Workspace](/cli/)** — the shape `nestrs new` scaffolds: a monorepo
   hosting one binary per app under `apps/<name>/`, over a shared
   `crates/features`. One app is the starting point; a second workload is
-  another `nestrs new` inside it — the shape the docs teach, though an app in
-  its own repository, with the features crate as a dependency, runs the same.
+  another `nestrs new` inside it. An app that needs a database of its own is a
+  workspace of its own, in its own repository.
 - **[Marker guard](/security/authorization/per-transport-bridges/)** —
   a unit guard with no logic that exists so the access graph can
   prove a transport's authz seam is wired; omitting the authz module

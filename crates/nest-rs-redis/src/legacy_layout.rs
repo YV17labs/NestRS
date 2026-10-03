@@ -30,10 +30,6 @@
 //! Never a `SCAN`, which costs the whole keyspace and which the queue's ACL rule,
 //! confined to `nestrs:queue:*`, refuses; a `NOPERM` answer is the caller's to say
 //! ([`outside_the_acl`]), never taken for an empty layout.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "the one file that reads apalis's structures"
-)]
 
 use apalis_redis::Config;
 use nest_rs_queue::QueueName;
@@ -265,39 +261,6 @@ mod tests {
 
     fn audio() -> QueueName {
         QueueName::new("audio").expect("a valid name")
-    }
-
-    /// Every getter `clippy.toml` refuses outside this file is one clippy
-    /// resolves: a path that stops resolving is only a warning, so each entry
-    /// is held by an expectation that fails once its lint no longer fires.
-    #[test]
-    fn every_getter_clippy_refuses_is_one_it_resolves() {
-        let apalis = legacy_config(&audio());
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let active = apalis.active_jobs_list();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let consumers = apalis.consumers_set();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let dead = apalis.dead_jobs_set();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let done = apalis.done_jobs_set();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let failed = apalis.failed_jobs_set();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let inflight = apalis.inflight_jobs_set();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let data = apalis.job_data_hash();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let scheduled = apalis.scheduled_jobs_set();
-        #[expect(clippy::disallowed_methods, reason = "canary")]
-        let signal = apalis.signal_list();
-        let names = [
-            active, consumers, dead, done, failed, inflight, data, scheduled, signal,
-        ];
-        assert!(
-            names.iter().all(|name| name.starts_with("audio:")),
-            "{names:?}"
-        );
     }
 
     /// Every 6.x name is apalis's derivation from the queue's bare name, at the

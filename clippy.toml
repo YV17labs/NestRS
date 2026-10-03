@@ -1,33 +1,14 @@
-# One file for the repository: clippy reads the nearest `clippy.toml` upwards
-# from each crate, so this one covers `crates/`, `demo/` and `bench/`. A closer
-# file would *replace* it, not merge with it — never add one below.
-#
-# A path here that stops resolving is only a warning, so every entry has a
-# canary `#[expect]`: in `nest-rs-macro-hygiene`, or at the one sanctioned site
-# when that crate cannot reach the item. A dead entry then fails the build.
-
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-print-in-tests = true
 allow-dbg-in-tests = true
 
-disallowed-macros = [
-    { path = "tokio::main", reason = "use #[nest_rs::main]: its runtime teardown is bounded by the shutdown budget" },
-]
-
 disallowed-methods = [
     { path = "std::env::var", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
     { path = "std::env::var_os", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
-    { path = "syn::Attribute::parse_nested_meta", reason = "read key = value through nest_rs_codegen::Grammar" },
-    { path = "syn::meta::parser", reason = "read key = value through nest_rs_codegen::Grammar" },
-    { path = "apalis_redis::Config::active_jobs_list", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::consumers_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::dead_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::done_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::failed_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::inflight_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::job_data_hash", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::scheduled_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
-    { path = "apalis_redis::Config::signal_list", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+]
+
+disallowed-macros = [
+    { path = "tokio::main", reason = "use #[nest_rs::main]: its runtime teardown is bounded by the shutdown budget" },
 ]

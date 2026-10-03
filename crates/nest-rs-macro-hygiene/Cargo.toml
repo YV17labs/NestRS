@@ -11,21 +11,11 @@ description = "Compile-time witness that nest-rs decorators emit only ::std/::co
 publish = false
 
 [dependencies]
-# ONE dependency, and it must stay one. This crate is the witness named by
-# `CLAUDE.md`'s *The umbrella is the front door*: if a decorator's expansion
-# ever needs a second line here — a sibling `nest-rs-*` or any third-party
-# crate — the rule is broken and this crate stops compiling. That failure is
-# the point.
+# The one dependency: a decorator whose expansion needs a second line here
+# fails this crate's build.
 nest-rs = { path = "../nest-rs", default-features = false }
 
-# One feature per umbrella capability that owns a decorator, each forwarding to
-# the umbrella's feature of the same name, and each witness module compiled
-# under its capability's feature alone. Built as the default union, the crate
-# proves no decorator needs a second manifest line; built one feature at a time
-# (`cargo hack --each-feature`), it proves each capability pulls what its own
-# decorators emit — a satellite a feature forgot, or a re-export gated on the
-# wrong one, fails under that feature even when a sibling supplies it in the
-# union.
+# One feature per umbrella capability that owns a decorator.
 [features]
 default = ["config", "events", "graphql", "health", "http", "mcp", "queue", "schedule", "seaorm", "ws"]
 config = ["nest-rs/config"]
@@ -40,11 +30,6 @@ schedule = ["nest-rs/schedule"]
 # witness names. `#[crud]` rides `http` and `seaorm` together.
 seaorm = ["nest-rs/seaorm"]
 ws = ["nest-rs/ws"]
-
-# The `tokio::main` canary in `src/canary.rs` — the unit-test build only, so the
-# witness above still compiles against the umbrella alone.
-[dev-dependencies]
-tokio.workspace = true
 
 [lints]
 workspace = true

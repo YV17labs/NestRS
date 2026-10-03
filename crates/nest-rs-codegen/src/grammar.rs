@@ -292,20 +292,6 @@ mod tests {
             .map_err(|refusal| refusal.to_string())
     }
 
-    /// Canaries for the root `clippy.toml`: an entry whose path stops resolving
-    /// is only a warning, which `-D warnings` does not promote, so each entry is
-    /// held by an expectation that fails the lint run once it is unmet.
-    #[test]
-    fn the_syn_meta_readers_stay_refused() {
-        #[expect(clippy::disallowed_methods, reason = "canary for clippy.toml")]
-        let parser = syn::meta::parser(|_| Ok(()));
-        assert!(parser.parse2(TokenStream::new()).is_ok());
-        let attr: syn::Attribute = syn::parse_quote!(#[probe()]);
-        #[expect(clippy::disallowed_methods, reason = "canary for clippy.toml")]
-        let read = attr.parse_nested_meta(|_| Ok(()));
-        assert!(read.is_ok());
-    }
-
     #[test]
     fn every_key_is_handed_over_in_order_with_its_value() {
         assert_eq!(

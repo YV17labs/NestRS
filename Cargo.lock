@@ -2981,7 +2981,6 @@ name = "nest-rs-macro-hygiene"
 version = "7.0.0"
 dependencies = [
  "nest-rs",
- "tokio",
 ]
 
 [[package]]

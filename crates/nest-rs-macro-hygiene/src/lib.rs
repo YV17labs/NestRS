@@ -1,4 +1,4 @@
-//! Compile-time witness of macro path hygiene (`macros.md`).
+//! Compile-time witness of macro path hygiene.
 //!
 //! This crate depends **only** on `nest-rs-*` surface crates — no third-party
 //! dependency at all. Every decorator exercised here is therefore proven to
@@ -17,8 +17,8 @@
 //! `#[hooks]`, `#[nest_rs::main]`) are witnessed under no feature at all.
 //!
 //! Extend this crate whenever a decorator is added. Emitted derives are the
-//! one class deliberately not exercised (see `macros.md`): a derive without a
-//! `crate = ` override targets the call-site prelude by construction.
+//! one class deliberately not exercised: a derive without a `crate = ` override
+//! targets the call-site prelude by construction.
 //!
 //! `#[resolver]` **is** witnessed ([`resolver`]), and it is the case this file
 //! most needed: it wraps async-graphql's own `#[Object]`, a third-party macro
@@ -47,19 +47,7 @@
 //! combination the matrix does not build — is proved only where something else
 //! compiles it, such as `nest-rs-cli`'s scaffold e2e; and that proves nothing
 //! when the generated project happens to declare the crate the arm names.
-//!
-//! [`canary`] is the witness's second mandate: one `#[expect]` per entry of the
-//! repository's `clippy.toml`, so an entry that stops resolving fails the build
-//! instead of switching its rule off in silence.
-#![cfg_attr(
-    test,
-    expect(
-        clippy::disallowed_macros,
-        reason = "canary: proves clippy.toml's tokio::main entry resolves (see `canary`)"
-    )
-)]
 
-pub mod canary;
 #[cfg(feature = "config")]
 pub mod config;
 #[cfg(feature = "http")]

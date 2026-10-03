@@ -207,11 +207,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             // Surface a sea_orm-side parse failure — silently swallowing it
             // (the previous `let _ = ...`) hid malformed `from = some_expr`
             // shapes behind a downstream 'missing from' diagnostic.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "reads sea-orm's own `#[sea_orm]` attribute, whose grammar is sea-orm's: \
-                          a key nestrs does not read is not nestrs's to refuse"
-            )]
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("primary_key") {
                     is_pk = true;

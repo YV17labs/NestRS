@@ -22,3 +22,12 @@ review. Run on one crate, `cargo mutants` found nine untested boundary
 conditions that 39 green tests and every join had missed.
 
 What remains in `nest-rs-conformance` reads file paths and manifests only.
+
+**Removed (2026-10-03).** The crate is gone. Its last sentence above was no
+longer true: `naming`, `paths`, `umbrella` and `snapshots` still parsed source
+with `syn`, and its `canon` binary fed a docs lint. The owner's line: a
+developer writes unit, integration and e2e tests, and what no type, lint or
+test holds is the vigilance of whoever writes the change, developer or agent,
+never a home-made checker. The one security property it held, every guard
+crate's edges armed by the umbrella, is item 6 of *Shipping a capability* in
+`manifests-ci.md`, held by review.

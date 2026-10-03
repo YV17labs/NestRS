@@ -105,6 +105,11 @@ of this, or it is not shipped:
    `App::builder`) and asserting what a caller gets back, one per `for_root`
    seam. A boot through the real transport is the evidence that a route is
    mounted.
+6. **Every guard edge armed**: a crate implementing `Guard::check_<edge>`
+   behind its own `<edge>` feature is enabled by the umbrella's `<edge>`
+   feature as `<crate>?/<edge>`. Every `check_*` defaults to `Ok(())`, so a
+   pairing left out is a guard that passes everything on that edge. Held by
+   review.
 
 `demo/` is our `sample/`: a docs snippet with no counterpart in `demo/` or the
 owning crate's suite is undocumented.

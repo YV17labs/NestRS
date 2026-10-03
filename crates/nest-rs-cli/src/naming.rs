@@ -4,7 +4,7 @@
 //! kebab/snake/pascal forms, the singular entity name (`users` → `User`),
 //! the CRUD form names, and the per-transport module names.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 /// The transports a feature can expose. Drives adapter folder names,
@@ -133,15 +133,6 @@ static RESERVED: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(
 /// it. Test-visible so the derivation is asserted rather than assumed.
 pub(crate) fn reserved_category(word: &str) -> Option<&'static str> {
     RESERVED.get(word).copied()
-}
-
-/// Every word the structural vocabulary claims, derived from the rules file.
-///
-/// Public because `nest-rs-conformance` holds the framework to the same block
-/// this CLI refuses a feature name with: a second parser over the same markdown
-/// is how the two would come to disagree about what is reserved.
-pub fn reserved_words() -> BTreeSet<&'static str> {
-    RESERVED.keys().copied().collect()
 }
 
 /// How a category's words are already spent, in the sentence a refusal reads.
@@ -489,6 +480,8 @@ fn singularize(pascal: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     /// The scrape is silent when it fails: a heading rename or a fence moved in

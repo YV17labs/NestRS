@@ -54,8 +54,8 @@ single top-level edge folder injecting every service: that trades the module
 gate — an app importing exactly the edges it serves — for a god-adapter no app
 can subset, which hides every route or tool behind one provider in the access
 graph. No adapter there could be named: `features` is a container, never a
-subject (`architecture.md`). The naming check in `nest-rs-conformance` refuses
-an edge folder directly under `features/src/`.
+subject (`architecture.md`), and review refuses an edge folder directly under
+`features/src/`.
 
 **A transport that cannot host two features at one mount point is a framework
 defect**, unless `edges.md` argues it (a WS gateway owns its path). Report it

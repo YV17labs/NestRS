@@ -4,7 +4,6 @@ paths:
   - "crates/nest-rs-testing/**"
   - "demo/crates/features/src/testing.rs"
   - ".config/nextest.toml"
-  - "crates/nest-rs-conformance/**"
 ---
 
 # Writing tests — the toolbox
@@ -120,15 +119,6 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
 - **trybuild and doctests compile the sources on disk when they run**: a file
   edited during a run voids it. Re-run rather than read its failures.
 
-## What `nest-rs-conformance` holds
-
-Structure only: facts read off file paths, manifests and the declarations
-themselves — a constant's value, a type's name beside its file — never a scan
-of how code uses them, so there is nothing to evade
-(`.claude/decisions/conformance-scanner.md`). A check carries no baseline of
-tolerated violations: a violation is fixed, or the check is wrong. The CLI
-reading the shipped `architecture.md` is product data, not an exception.
-
 ## Compile-fail snapshots
 
 **A snapshot pins the refusal its fixture exists for, and no error the fixture
@@ -136,10 +126,9 @@ made on its own.** A fixture that does not parse, or whose names no longer
 resolve, stays red whatever the decorator says, so the refusal it promises can
 change or vanish with the suite green. A fixture therefore parses and its
 `.stderr` carries no name-resolution error, unless its `//!` says
-`deliberately does not parse` or `deliberately fails to resolve` — held by the
-`snapshots` check in `nest-rs-conformance`. Anything else a regenerated
-snapshot pins is review: read the `.stderr` `TRYBUILD=overwrite` wrote before
-committing it.
+`deliberately does not parse` or `deliberately fails to resolve`. Held by
+review, like anything else a regenerated snapshot pins: read the `.stderr`
+`TRYBUILD=overwrite` wrote before committing it.
 
 **Snapshots change only on a deliberate toolchain bump.** rustc's wording is
 the toolchain's, and `rust-toolchain.toml` pins it, so a `.stderr` moves in the

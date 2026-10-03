@@ -27,10 +27,8 @@ disagreement, and the page is fixed in the same commit as the code it follows.
   capability is named on some page.
 - **A `nest_rs::…` or `nest_rs_<crate>::…` path a page or a crate README names
   resolves to a public item**; a sentence about a private module names its
-  file (`crates/<crate>/src/<module>.rs`) instead — the `paths` check in
-  `nest-rs-conformance`.
-- **A datastore key a page spells is one the code declares** — the `keys`
-  check in `nest-rs-conformance`.
+  file (`crates/<crate>/src/<module>.rs`) instead.
+- **A datastore key a page spells is one the code declares.**
 - **The `/architecture/` page agrees with the role tables and the reserved
   vocabulary of the shipped `architecture.md`.**
 - **A capability is a feature a developer can type after `--features`**, not a

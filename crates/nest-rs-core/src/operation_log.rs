@@ -106,9 +106,8 @@ use std::time::Instant;
 /// boot `warn` naming resolvers unreachable from the GraphQL schema — an
 /// operator lost a startup diagnostic with nothing to show it had gone. Neither
 /// name survives: that warn belongs to `nest_rs::graphql`, filed by the crate
-/// that owns the resolver registry rather than by the kernel. The
-/// `filters` check in `nest-rs-conformance` reads every target the framework
-/// declares and fails on the next such pair.
+/// that owns the resolver registry rather than by the kernel. No target may
+/// prefix another (`observability.md`).
 pub const TARGET: &str = "nest_rs::operation";
 
 /// OpenTelemetry's `SpanKind`, which [`operation_span!`](crate::operation_span)

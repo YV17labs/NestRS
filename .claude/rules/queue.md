@@ -188,9 +188,9 @@ surface of one derivation: crate, span target, `<PREFIX>_<CONCERN>__*`, key.
   developer's variables; a key is the framework's machinery, and deployments
   sharing a Redis are separated by the logical database in the URL.
 
-Held by a unit test over the key constants and by the `keys` check in
-`nest-rs-conformance`, which reads charts, scripts and pages against them; the
-table of keys is `layout.rs`'s `//!`.
+Held by a unit test over the key constants; a chart, a script or a page that
+spells a key follows the constant by review. The table of keys is
+`layout.rs`'s `//!`.
 
 ## The schedule
 

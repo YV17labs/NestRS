@@ -1451,10 +1451,10 @@ mod tests {
     /// `EnvFilter` matches a directive against an event's target with
     /// `starts_with` on the **raw string**, not on `::` segments.
     ///
-    /// This is a property of `tracing-subscriber`, not of our tree, and the
-    /// `filters` join in `nest-rs-conformance` rests entirely on it: if a
-    /// version ever matched by segment, that join's whole subject would
-    /// disappear with nothing to say so. It shipped as a defect once —
+    /// This is a property of `tracing-subscriber`, not of our tree, and the rule
+    /// that no target prefixes another rests entirely on it: if a version ever
+    /// matched by segment, that rule's whole subject would disappear with
+    /// nothing to say so. It shipped as a defect once —
     /// `nest_rs::access`, the family's target through 5.1, prefixed
     /// `nest_rs::access_graph`, so the toggle the docs handed operators also
     /// took away a boot diagnostic.
@@ -1489,7 +1489,7 @@ mod tests {
         assert!(
             captured.take().is_empty(),
             "`{prefix}=off` must silence `{family}` — a segment matcher would let it \
-             through, and the `filters` join would be checking a property nothing has",
+             through, and the no-prefix rule would guard a property nothing has",
         );
     }
 

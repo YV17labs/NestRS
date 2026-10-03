@@ -199,5 +199,6 @@ say where an event was emitted. **A family member roots at its family**
 one standard — prefixing on purpose, a level a reader sees in the path. **No
 other target is a raw-string prefix of another**: `EnvFilter` matches with
 `starts_with`, so a toggle for one would silence the other
-(`.claude/decisions/operation-target.md`). Held by the `filters` check in
-`nest-rs-conformance`, over the declared target constants.
+(`.claude/decisions/operation-target.md`). Held within a crate by a unit test
+over its own targets (`nest-rs-core`'s `no_target_is_a_prefix_of_another`), and
+across crates by review.

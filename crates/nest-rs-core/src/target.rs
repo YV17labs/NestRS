@@ -42,10 +42,9 @@ mod tests {
 
     /// Every target this crate declares.
     ///
-    /// Test-local, and deliberately: the `filters` join reads the declarations
-    /// out of the source rather than linking this crate, so a `pub` list has no
-    /// reader outside these three checks — and a published array nobody calls is
-    /// surface to keep in step for nothing.
+    /// Test-local, and deliberately: a `pub` list would have no reader outside
+    /// these three checks, and a published array nobody calls is surface to
+    /// keep in step for nothing.
     const ALL: [&str; 5] = [APP, CONTAINER, LAYERS, LIFECYCLE, MODULE];
 
     /// The shape `CLAUDE.md` fixes: `nest_rs::<concern>`, lowercase, **two**
@@ -79,9 +78,8 @@ mod tests {
     /// `EnvFilter` matches a directive by `starts_with` on the raw string, so a
     /// target that prefixes another cannot be silenced alone — the defect
     /// `nest_rs::access` / `nest_rs::access_graph` shipped as. This crate's own
-    /// five are checked here; the `filters` check in `nest-rs-conformance` holds
-    /// the same property across every target the framework declares, which is
-    /// the population that can actually collide.
+    /// five are checked here; across crates the property is review's
+    /// (`observability.md`).
     #[test]
     fn no_target_is_a_prefix_of_another() {
         for outer in ALL {

@@ -1,13 +1,9 @@
 //! The `nestrs` command, as a library.
 //!
-//! The binary is the product; this target exists so that one definition of a
-//! rule serves two callers. `nestrs lint` runs the naming rules over a
-//! developer's tree and `nest-rs-conformance` runs **the same code** over the
-//! framework's own, because a rule the framework ships and does not itself pass
-//! is the failure that matters, and a second implementation in the suite is how
-//! the two come to disagree without anyone noticing.
+//! The binary is the product; this target exists so this crate's own suites
+//! call what the commands run, rather than a second copy of it.
 //!
-//! The same holds for a mirror: `nestrs doctor` answers what an app makes of a
+//! A mirror is the case it matters most for: `nestrs doctor` answers what an app makes of a
 //! variable and of the `.env` cascade without linking the loader, and this
 //! crate's own suite runs [`resolve_variable`] and [`cascade_refusals`] beside
 //! the loader they mirror — a dev-dependency, which `cargo install` never
@@ -15,8 +11,8 @@
 //!
 //! Nothing here is an install surface: `nestrs` is reached with
 //! `cargo install --locked nest-rs-cli`, never with `cargo add`. So the seam is
-//! only what a second caller needs — [`lint`], [`reserved_words`],
-//! [`resolve_variable`], [`cascade_refusals`] and [`scaffolded_var`]; the rest
+//! only what a second caller needs — [`lint`], [`resolve_variable`],
+//! [`cascade_refusals`] and [`scaffolded_var`]; the rest
 //! is the binary's own and hidden from the docs.
 
 #![allow(
@@ -28,7 +24,6 @@
 pub mod lint;
 
 pub use commands::doctor::{Resolution, cascade_refusals, resolve_variable};
-pub use naming::reserved_words;
 
 /// The variable the prefix is read from, and the one name no prefix renames —
 /// spelled once for this crate, in `context`, and read from there.

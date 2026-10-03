@@ -996,9 +996,7 @@ while another binary's variable carries its own, so `NESTRS_OPENAI__API_KEY`
 beside a linked `openapi` stays silent. And a misspelled segment must have six
 letters or more, within a quarter of its length: a shorter one has no room for a
 typo that is not also a word (`auth` and `authz` beside `authn`, `es` beside
-`ws`), so there only separators and case count. `nest-rs-conformance`'s naming
-check holds every namespace of both workspaces outside that reach of every other,
-reading the namespaces the `#[config]` declarations state. The namespace half
+`ws`), so there only separators and case count. The namespace half
 runs at every read of its namespace, ended by an error or not, so a renamed
 required variable is named ahead of the boot error its absence causes; the key
 half runs per namespace, where that namespace's `from_env` ran, because a config's
@@ -1679,11 +1677,9 @@ rung that can hold it (`CLAUDE.md`, *How a rule is held*; the history is
   its value.
 - **Review**, against a written sentence, for what none of these can see.
 
-`nest-rs-conformance` keeps only structural checks over paths, manifests and
-declared constants — the naming law, the test-target layout, the snapshot
-fixtures, the target-constant prefixes and the `nestrs:` keys written outside
-Rust — with no baseline file: 17,875 lines and 106 tests become 3,583 and 23.
-The four source-reading tests left elsewhere are replaced too:
+`nest-rs-conformance` is removed: its 17,875 lines and 106 tests go, and what
+they checked is held by the rungs above or by review. The four source-reading
+tests left elsewhere are replaced too:
 
 - **`nest-rs-macro-hygiene` holds a real entity**, so `#[expose]` (both arms),
   `#[crud]` with every operation and `#[authorize(Action, Entity)]` at HTTP,
@@ -1807,8 +1803,6 @@ For a contributor.
 - **Breaking for a copy of the demo: its OAuth issuer config is `OAuthConfig`**,
   read from `NESTRS_OAUTH__CLIENTS` and `NESTRS_OAUTH__DEFAULT_ORG_ID` — it was
   `IssuerConfig`, under `NESTRS_ISSUER__*`, a namespace its path did not name.
-  `nest-rs-conformance`'s naming check now holds every `#[config]`'s namespace and
-  type name to its path in both workspaces.
 - **A publish whose transaction rolls back enqueues no notification**, now that
   events wait for the commit; an e2e test drives both outcomes against real
   Postgres and Redis.
@@ -1840,29 +1834,19 @@ For a contributor.
 
 ### Also
 
-- **`nest-rs-conformance` reads every path below the repository root.** Its
-  checks took the absolute path's components, so a clone under `~/src/`, or under
-  a folder named like an edge, changed their verdicts; one strip now serves them
-  all, and a unit test reads a path the same below any root.
 - **What holds each rule 7.0 states**, now that the source scanner is gone (see
-  *The rules are held by types, lints and behaviour tests* above): every
-  `nestrs:` key a page, a chart or a script spells is built from a key constant
-  the code declares (`nest-rs-conformance`'s keys check), and the constants obey
-  the key law — each a level of its owner's concern, a queue's keys naming the
-  queue first, none a twin of another or a prefix inside a level (a unit test
-  over `nest-rs-redis`'s key constants); every queue `Capability` is refused
-  where a backend lacks it (an exhaustive `match` in `nest-rs-queue`'s tests, so
-  a new variant does not compile until it is); a compile-fail fixture parses, and its snapshot pins no
-  resolution error the fixture does not declare (the snapshots check); every type
-  a `module.rs` declares shares its stem, a module lives nowhere else, an edge
-  folder directly under a framework crate's `src/` adapts the crate and takes its
-  subject, and in a product crate an edge adapter belongs to a module folder (the
-  naming check); every `nest_rs…::` path a docs page or a crate README names
-  resolves to a public item (the paths check), which found a pagination example
-  calling a private module. That every error type lives in `error.rs`, that a root
-  file of an adapter crate serves more than one binding, that `Config` names a
-  `#[config]` alone and that a file under an edge folder serves that edge alone
-  are review items.
+  *The rules are held by types, lints and behaviour tests* above): the `nestrs:`
+  key constants obey the key law — each a level of its owner's concern, a
+  queue's keys naming the queue first, none a twin of another or a prefix inside
+  a level (a unit test over `nest-rs-redis`'s key constants); every queue
+  `Capability` is refused where a backend lacks it (an exhaustive `match` in
+  `nest-rs-queue`'s tests, so a new variant does not compile until it is). A key
+  a page, a chart or a script spells, a compile-fail fixture's snapshot, the stem
+  every type in a `module.rs` shares, where an edge folder sits, and every
+  `nest_rs…::` path a page names are review items, as are every error type
+  living in `error.rs`, a root file of an adapter crate serving more than one
+  binding, `Config` naming a `#[config]` alone and a file under an edge folder
+  serving that edge alone.
 - **`unreachable_pub` is a workspace lint**, and every crate now opts into
   `[lints] workspace = true`, so an item no caller outside its crate reaches is
   `pub(crate)`.

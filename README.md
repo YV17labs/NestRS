@@ -121,11 +121,9 @@ Claims a clone of this repository lets you check:
 - **1,800+ tests** across the framework workspace, with the end-to-end suites
   running against live Postgres, Redis and S3 rather than mocks — the dev
   container brings all three up before you get a shell.
-- **Structural checks** — the naming law (a type and its path say the same
-  thing), the test-target layout, and every datastore key a chart or a page
-  spells are checked against the tree
-  ([`crates/nest-rs-conformance/`](crates/nest-rs-conformance/)); the rules a
-  path cannot carry are held by types, `clippy.toml` and behaviour tests.
+- **Rules held by the toolchain** — types that make the wrong code
+  unwritable, `clippy.toml`'s resolved-path lints, and behaviour tests; what
+  none of them can hold is review's.
 
 ## Stability
 

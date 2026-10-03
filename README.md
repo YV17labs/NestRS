@@ -148,8 +148,8 @@ tutorial, [why NestRS](https://nestrs.dev/why/), the
 [axum comparison](https://nestrs.dev/why-not-axum/), and one section per
 capability crate.
 
-**Contributing to the framework?** This README is your entry point. For design
-rules and conventions, read [`CLAUDE.md`](CLAUDE.md) and
+**Contributing to the framework?** This README is your entry point. For the
+layout and conventions, read [`CLAUDE.md`](CLAUDE.md) and
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Contributing

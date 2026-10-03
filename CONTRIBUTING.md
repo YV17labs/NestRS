@@ -29,8 +29,8 @@ saves you from building something that doesn't fit the project's direction, and
 lets a maintainer flag overlap or design constraints early. Drafts and questions
 are welcome — you don't need a finished idea to start the conversation.
 
-Read **[CLAUDE.md](CLAUDE.md)** before a non-trivial change. It is the project's
-design record: what was decided and why. Two rules matter most:
+Read **[CLAUDE.md](CLAUDE.md)** before a non-trivial change: the layout, the
+commands and the conventions. Two rules matter most:
 
 - **Reach for the macros first.** Application code stays declarative through
   `#[injectable]`, `#[module]`, `#[controller]`, `#[resolver]` and friends. When a
@@ -58,21 +58,18 @@ rustup component add llvm-tools-preview
 ## The workflow
 
 The framework's checks are recipes of the root `Justfile`, the same ones CI
-runs; the product drives itself from `demo/` with `nestrs run`.
+runs. `demo/` is a separate project and drives itself with `nestrs run`.
 
 ```bash
-just pre-commit   # before each commit: fmt, clippy, the in-process suites
-just ci           # everything CI runs: lint, supply chain, workflows, every suite, features, docs, demo
-just --list       # each part on its own
+just lint   # fmt check + clippy
+just test   # every test, against the dev container's Postgres, Redis and S3
+just verify # every check: lint, docs and tests
 ```
 
-Before opening a PR, `just ci` passes. Unit tests cover logic; the **e2e**
-suites (`just e2e`) cover routing and wiring against live infra. For **HTTP,
-GraphQL, or MCP changes**, close the loop on a real socket too: start the app
-(`nestrs run dev <app>` in `demo/`), exercise the affected endpoints (`curl`, an
-MCP client, the GraphQL playground), and note it in the PR. A GraphQL change
-regenerates the committed SDL by running the dev server
-(`.claude/rules/apps.md`).
+Before opening a PR, `just verify` passes. For **HTTP, GraphQL, or MCP changes**,
+close the loop on a real socket too: start an app (`nestrs run dev <app>` in
+`demo/`), exercise the affected endpoints (`curl`, an MCP client, the GraphQL
+playground), and note it in the PR.
 
 ## Pull requests
 
@@ -82,25 +79,18 @@ regenerates the committed SDL by running the dev server
 2. **Keep it focused.** One logical change per PR. Unrelated cleanups belong in
    their own PR.
 3. **Add tests.** A bug fix gets a regression test; a feature gets coverage of
-   the new behaviour. A test binary is always `tests/<suite>/main.rs` with
-   exactly two suite names: **`tests/integration/`** (in-process, submodules
-   **mirror `src/`** — see CLAUDE.md and `nest-rs-authn` as the reference) and
-   **`tests/e2e/`** (live infra, gated by `binary(e2e)`; apps boot their real
-   module against Postgres, no mocks). Never a flat `tests/<x>.rs`.
-   Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
-   add `Type::new(...)` so integration tests can construct providers without boot.
-4. **Update the docs.** If you change behaviour, update the crate README, the
-   docs site, and — if you made a design decision — its entry in
-   `.claude/decisions/` and the rule it changes. Crate READMEs
-   stay tight (the `Cargo.toml` description, the install line, and links to the
-   matching [nestrs.dev](https://nestrs.dev) page and the repo) — anything
-   longer belongs on the docs site.
+   the new behaviour. Each crate has one suite, `tests/integration/main.rs`,
+   whose tests run in process or against the dev container's services — no
+   mocks. Unit tests sit in `#[cfg(test)] mod tests` beside the code.
+4. **Update the docs.** If you change behaviour, update the crate README and
+   the docs site. Crate READMEs stay tight (the `Cargo.toml` description, the
+   install line, and links to the matching [nestrs.dev](https://nestrs.dev)
+   page and the repo) — anything longer belongs on the docs site.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-The *Definition of done* is `just ci` green: the checks CI runs on every pull
-request (`ci.yml`, plus the path-filtered `backends.yml`, `features.yml` and
-`docs.yml`). A PR that has not passed it is not ready for review.
+The *Definition of done* is `just verify` green — the checks `ci.yml` runs on every
+pull request. A PR that has not passed it is not ready for review.
 
 ### Commit messages
 
@@ -117,8 +107,7 @@ Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `chore`,
 ## Adding a dependency
 
 A new third-party crate is a maintainer's decision: propose it in the issue
-first. It needs a published release within about the last twelve months
-(`.claude/rules/manifests-ci.md`).
+first. It needs a published release within about the last twelve months.
 
 ## Code of Conduct
 

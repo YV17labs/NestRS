@@ -17,7 +17,7 @@ interface Tier {
   bins: Binary[];
 }
 
-const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'oauth'];
+const modules = ['users', 'orgs', 'posts', 'audio', 'chat', 'notifications', 'authn', 'authz', 'oauth'];
 
 const split: Tier[] = [
   {
@@ -25,8 +25,12 @@ const split: Tier[] = [
     private: false,
     bins: [
       { app: 'auth', edges: 'HTTP', modules: ['oauth'] },
-      { app: 'api', edges: 'HTTP · GraphQL', modules: ['users', 'orgs', 'posts', 'audio', 'notifications'] },
-      { app: 'live', edges: 'WebSocket', modules: ['users', 'chat', 'notifications'] },
+      {
+        app: 'api',
+        edges: 'HTTP · GraphQL · events · schedule',
+        modules: ['users', 'orgs', 'posts', 'audio', 'notifications', 'authn', 'authz'],
+      },
+      { app: 'live', edges: 'WebSocket', modules: ['users', 'chat', 'notifications', 'authn'] },
       { app: 'assistant', edges: 'MCP', modules: ['users', 'posts', 'audio'] },
     ],
   },
@@ -39,7 +43,7 @@ const split: Tier[] = [
 
 const mono: Binary = {
   app: 'publish',
-  edges: 'HTTP · GraphQL · WebSocket · MCP · queue · schedule',
+  edges: 'HTTP · GraphQL · WebSocket · MCP · events · queue · schedule',
   modules,
 };
 
@@ -115,7 +119,7 @@ const traced = 'users';
 
     <div class="rs-topo-shared">
       <span class="rs-topo-shared-label">Postgres · Redis</span>
-      <span class="rs-topo-shared-sub">one database per workspace, shared with the queue by its binaries; no RPC between them</span>
+      <span class="rs-topo-shared-sub">one database per workspace, and the queue between producers and workers; no RPC between binaries</span>
     </div>
   </div>
 
@@ -137,14 +141,16 @@ const traced = 'users';
       </div>
       <div class="rs-topo-target">
         <span class="rs-topo-target-name">Kubernetes</span>
-        <span class="rs-topo-target-sub">the Helm chart, KEDA on queue depth</span>
+        <span class="rs-topo-target-sub">the Helm chart, opt-in KEDA on queue depth</span>
       </div>
     </div>
   </div>
 
   <figcaption class="rs-card-note">
-    <code>users</code> is one module, served by three binaries over three edges. Drawn after the
-    overview figure in Google's <a href="https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html">Service Weaver announcement</a>:
+    <code>users</code> is one module, served by three binaries: over HTTP and GraphQL, a WebSocket,
+    and MCP. In one binary, no two edges may share a path, and the boot refuses a pair by name:
+    Publish's <code>users</code> controller and gateway both mount <code>/users</code>, so merging it
+    takes one rename. Drawn after the overview figure in Google's <a href="https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html">Service Weaver announcement</a>:
     the same three layers, with the queue and the database where it draws RPC.
   </figcaption>
 </figure>

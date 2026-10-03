@@ -59,14 +59,16 @@ module reaches only what it imports, or the
 fails the boot. A call from one module to another is a Rust method call, with
 no endpoint and no serialization.
 
-**Run.** A workload is one kind of work and the trigger that starts it — an
-HTTP request, a socket message, a job, a tick, an MCP call; the
+**Run.** A workload is one operational job — serving the API, holding the
+sockets, issuing tokens, draining the queue; the
 [twelve-factor app](https://12factor.net/concurrency) calls it a process type.
 Each app under `apps/` is a thin composition root importing the edges it
 serves, and an edge it does not import is never mounted. A workload scales on
 its own signal, and a crash stays in its own binary. One app importing every
 edge is a plain monolith and a sound place to start: splitting it later edits
-composition roots, never a module.
+composition roots, never a module. Merging two apps back is the same edit, once
+no two of their edges share a path — the boot refuses a duplicate and names
+both.
 
 **Deploy.** Every binary builds from one workspace into one image, and the
 [Publish chart](/publish/#deploy-it) runs each app from it with its own command.
@@ -78,9 +80,10 @@ binary that uses it — `users` is served by the API, the WebSocket server and
 the MCP assistant alike — and binaries coordinate through the data they share.
 That removes the costs Service Weaver's own motivation lists: no endpoint
 between binaries, no API frozen between them, and a cross-binary change is one
-commit the compiler checks whole. The one format that crosses, a queue payload,
-is a type in the shared crate, compiled into both sides. An app may still call
-another over HTTP with its own client; the framework never makes a network call
+commit the compiler checks whole. What crosses between them — a table, a queue
+payload — is a type in the shared crate, compiled into both sides. An app may
+still call another over HTTP with its own client, but the framework carries
+none of that call, from its authentication to its retries, and never makes it
 look like a method call.
 
 **The line is the database.** Per workload is the shape NestRS proposes, and
@@ -97,8 +100,7 @@ database against several.
 
 Service Weaver itself
 [stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)
-in December 2024, its team citing how much of an existing application adoption
-meant rewriting; the separation it argued for outlives it.
+in December 2024; the separation it argued for outlives it.
 
 ## Who it is for
 

@@ -57,8 +57,8 @@ scalability of microservices. Your domain lives once, in a shared crate, cut
 into modules whose boundaries are checked at boot; each binary — the API, the
 worker, the WebSocket server — is a thin composition root importing only the
 edges it serves, and one binary importing them all is a plain monolith. The
-binaries share the code, the database and the queue, with no generated RPC
-between them, and each scales on its own signal.
+binaries share the code and the database, hand work over through the queue,
+and each scales on its own signal, with no generated RPC between them.
 [The architecture, drawn →](https://nestrs.dev/why/#a-modular-monolith-deployed-per-workload)
 
 The numbers behind the tagline — against the same hello-world service in

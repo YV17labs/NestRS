@@ -46,11 +46,6 @@ crate; the worker shares Redis with the API's queue producer. Tokens are
 self-contained JWTs — the API verifies with a public key, never calls the
 issuer over HTTP.
 
-With `auth` and `api` up on a freshly seeded database (`nestrs run db reset`),
-`nestrs run demo` plays the security story in a few `curl` calls: the Acme admin
-reads every field, a member reads the same rows without `email`, and the
-member's read of a Globex user is refused with a `403`.
-
 ## Deploy it
 
 The workspace ships a container and a Helm chart. One image holds every binary,

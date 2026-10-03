@@ -13,9 +13,8 @@ categories = ["web-programming", "filesystem"]
 [dependencies]
 nest-rs-core.workspace = true
 # `StorageModule` owns its `#[config]` `StorageConfig` (namespace `storage`),
-# loaded from `NESTRS_STORAGE__*`; `validator` backs its `#[validate]` rules.
+# loaded from `NESTRS_STORAGE__*`.
 nest-rs-config.workspace = true
-validator.workspace = true
 # The object-store abstraction. `aws` brings the `AmazonS3` driver, which
 # implements both `ObjectStore` and the `Signer` trait used for presigning.
 object_store.workspace = true

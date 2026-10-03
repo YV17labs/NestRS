@@ -2658,7 +2658,6 @@ dependencies = [
  "poem",
  "serde",
  "serde_json",
- "subtle",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -3093,7 +3092,6 @@ dependencies = [
  "subtle",
  "thiserror 2.0.20",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3112,7 +3110,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "validator",
 ]
 
 [[package]]
@@ -3206,7 +3203,6 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "uuid",
- "validator",
 ]
 
 [[package]]
@@ -3363,7 +3359,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "validator",
 ]
 
 [[package]]
@@ -3427,7 +3422,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "validator",
 ]
 
 [[package]]

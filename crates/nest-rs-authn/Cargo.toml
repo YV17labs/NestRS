@@ -36,9 +36,6 @@ serde.workspace = true
 # JSON object before the framework's own claims are merged into it.
 serde_json.workspace = true
 thiserror.workspace = true
-# Constant-time comparison for the machine-client registry — the same
-# fail-closed discipline `verify_password` needs, for the other credential kind.
-subtle.workspace = true
 # Argon2id for local credential storage (`hash_password` / `verify_password`).
 argon2.workspace = true
 # `AuthnModule::for_root` provides `JwtService` through the factory phase, whose

@@ -35,9 +35,8 @@ ws = ["dep:nest-rs-ws", "dep:serde_json", "nest-rs-guards/ws"]
 # `ThrottlerGuard` is `#[injectable]`; `ThrottlerModule` is a `DynamicModule`.
 nest-rs-core.workspace = true
 # `ThrottlerModule` owns its `#[config]` (`ThrottlerConfig`, namespace `throttler`),
-# loaded from `NESTRS_THROTTLER__*`; `validator` backs the derives.
+# loaded from `NESTRS_THROTTLER__*`.
 nest-rs-config.workspace = true
-validator.workspace = true
 # `ThrottlerGuard` plugs into the Layer System (RateLimit category).
 nest-rs-guards.workspace = true
 # The guard implements the `Guard` trait and reads route metadata via `Reflector`,

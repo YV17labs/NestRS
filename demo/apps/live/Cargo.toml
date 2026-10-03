@@ -7,9 +7,7 @@ publish = false
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
-serde.workspace = true
 anyhow.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

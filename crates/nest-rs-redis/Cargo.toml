@@ -26,10 +26,8 @@ nest-rs-core.workspace = true
 # the same import root by depending on `nest-rs-queue` + `nest-rs-redis`.
 nest-rs-queue.workspace = true
 # `RedisModule` owns `RedisConfig` (namespace `redis`, `NESTRS_REDIS__*`) and
-# `RedisWorkerModule` owns `RedisWorkerConfig` (namespace `redis__worker`);
-# `validator` backs their `#[validate]` rules.
+# `RedisWorkerModule` owns `RedisWorkerConfig` (namespace `redis__worker`).
 nest-rs-config.workspace = true
-validator.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 # Typed `RedisError` for the Redis backend (the producer surface speaks

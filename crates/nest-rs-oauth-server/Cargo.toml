@@ -34,7 +34,6 @@ subtle.workspace = true
 # `TokenError::Sign`/`Server` keep the real cause attached for tracing while
 # `Display` stays the opaque `server_error`.
 anyhow.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }

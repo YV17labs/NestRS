@@ -418,16 +418,18 @@ impl DecodeFailures {
                 text = Cow::Owned(text.replace(displayed.as_str(), report));
             }
         }
-        let rebuilt = match quoting_sentences(&text) {
-            Cow::Owned(rebuilt) => Some(rebuilt),
-            Cow::Borrowed(_) => None,
-        };
-        let text = rebuilt.map_or(text, Cow::Owned);
+        // validator's wording first: a value it lists may spell what serde's
+        // shapes look for, and serde's reading keeps what follows them.
         let validated = match validation_sentences(&text) {
             Cow::Owned(validated) => Some(validated),
             Cow::Borrowed(_) => None,
         };
-        validated.map_or(text, Cow::Owned)
+        let text = validated.map_or(text, Cow::Owned);
+        let rebuilt = match quoting_sentences(&text) {
+            Cow::Owned(rebuilt) => Some(rebuilt),
+            Cow::Borrowed(_) => None,
+        };
+        rebuilt.map_or(text, Cow::Owned)
     }
 }
 
@@ -565,11 +567,13 @@ const VALIDATION_OPENING: &str = "Validation error: ";
 
 /// `text` with each `validator` failure in it said without its parameters.
 ///
-/// The parameters hold the rejected input (`value`, and `must_match`'s `other`),
-/// so they are dropped up to their closing bracket, read past every quoted
-/// string so a value cannot close them early — or to the end of `text` when they
-/// never close. The code is the rule's own and is kept. A rule given its own
-/// `message` displays that message alone, which is its author's.
+/// The parameters hold the rejected input (`value`, `must_match`'s `other`, a
+/// bound read from another field), so they are dropped up to their closing
+/// bracket, read past every quoted string so a value cannot close them early —
+/// or to the end of `text`, marked `…`, when they never close. The code is the
+/// rule's own and is kept. A rule given its own `message` displays that message
+/// alone, which is its author's. Each stretch of `text` is read a bounded number
+/// of times, however many openings a client packs into it.
 fn validation_sentences(text: &str) -> Cow<'_, str> {
     if !text.contains(VALIDATION_OPENING) {
         return Cow::Borrowed(text);
@@ -578,24 +582,30 @@ fn validation_sentences(text: &str) -> Cow<'_, str> {
     let mut rest = text;
     while let Some(at) = rest.find(VALIDATION_OPENING) {
         let after = &rest[at + VALIDATION_OPENING.len()..];
-        let params = after
-            .find(" [")
-            .filter(|open| !after[..*open].contains('\n'));
-        let Some(open) = params else {
+        // The code ends at ` [`, before the next opening and on the same line.
+        let next = after.find(VALIDATION_OPENING).unwrap_or(after.len());
+        let line = after[..next].split('\n').next().unwrap_or_default();
+        let Some(open) = line.find(" [") else {
             said.push_str(&rest[..at + VALIDATION_OPENING.len()]);
             rest = after;
             continue;
         };
         said.push_str(&rest[..at + VALIDATION_OPENING.len() + open]);
-        rest = past_closing_bracket(&after[open + 2..]);
+        match past_closing_bracket(&after[open + 2..]) {
+            Some(tail) => rest = tail,
+            None => {
+                said.push('…');
+                rest = "";
+            }
+        }
     }
     said.push_str(rest);
     Cow::Owned(said)
 }
 
 /// What follows the `]` closing a bracket already open, read past quoted
-/// strings and their escapes; nothing when it never closes.
-fn past_closing_bracket(text: &str) -> &str {
+/// strings and their escapes; `None` when it never closes.
+fn past_closing_bracket(text: &str) -> Option<&str> {
     let mut depth = 1_usize;
     let mut quoted = false;
     let mut escaped = false;
@@ -615,13 +625,13 @@ fn past_closing_bracket(text: &str) -> &str {
             ']' => {
                 depth -= 1;
                 if depth == 0 {
-                    return &text[at + 1..];
+                    return Some(&text[at + 1..]);
                 }
             }
             _ => {}
         }
     }
-    ""
+    None
 }
 
 /// `invalid type` or `invalid value`, said with the kind of value found and the
@@ -1023,8 +1033,24 @@ mod decode_error_tests {
         let cut = r#"x: Validation error: length [{"value": String("sk_live_sec"#;
         assert_eq!(
             DecodeError::redact(cut, None),
-            "x: Validation error: length"
+            "x: Validation error: length…"
         );
+    }
+
+    /// serde's reading keeps the text after the last `, expected `, which a value
+    /// validator lists can spell; validator's wording is read first.
+    #[test]
+    fn a_validator_value_cannot_hide_behind_a_serde_sentence() {
+        let text = r#"body: invalid type: string "x", expected u64; pw: Validation error: length [{"value": String("zz, expected sk_live_secret")}]"#;
+        let redacted = DecodeError::redact(text, None);
+        assert!(!redacted.contains("sk_live"), "{redacted}");
+    }
+
+    /// Openings that never open parameters are left as they are.
+    #[test]
+    fn openings_without_parameters_are_left_as_they_are() {
+        let crowded = "Validation error: x ".repeat(10_000);
+        assert_eq!(DecodeError::redact(&crowded, None), crowded);
     }
 
     #[test]

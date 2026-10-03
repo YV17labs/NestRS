@@ -1742,6 +1742,57 @@ The four source-reading tests left elsewhere are replaced too:
   `.claude/decisions/`, one file per decision recording what was tried and what
   retired it. Rustdoc cites the zone rule that holds its decision.
 
+
+### CI is the gate, the docs lint checks facts, and the rules fit their budget
+
+For a contributor.
+
+- **CI gates every push and pull request** (`.github/workflows/ci.yml`), cheap
+  jobs first. Each change runs rustfmt, clippy and rustdoc (all features,
+  warnings denied); cargo-deny and cargo-machete; actionlint and zizmor; the
+  test suites, including under `NESTRS_ENV_PREFIX=ACME`; the e2e against real
+  Postgres, Redis and RustFS; and the demo. The nest-rs-redis suite against
+  Redis 6.2, 7.0 and 8.6 and Valkey 7.2 and 8.1, the feature matrix, minimal
+  versions and beta clippy run nightly and on release branches. `cargo mutants`
+  runs on a pull request labelled `mutants`. The docs lint has its own workflow,
+  started by a change to what the pages quote. The local definition of done is
+  the minute-long loop CLAUDE.md states.
+- **cargo-deny replaces cargo-audit.** `deny.toml` replaces `.cargo/audit.toml`.
+  It keeps the argued advisory ignores, minus RUSTSEC-2026-0173, whose crate
+  has left every lockfile. It also denies unmaintained, unsound and yanked
+  crates, sources other than crates.io, licences outside an allow-list, and
+  wildcard or unused workspace requirements.
+- **The workflows are hardened.** Actions are pinned to commits, checkout
+  credentials are dropped, permissions are granted per job, and the deploy and
+  release workflows restore no cache.
+- **Unused dependencies removed.** `validator` is gone from nest-rs-openapi,
+  nest-rs-redis, nest-rs-storage and nest-rs-throttler, `subtle` from
+  nest-rs-authn, and `tracing` from nest-rs-oauth-server.
+- **docs.rs renders every feature** for nest-rs, nest-rs-authz, nest-rs-redis,
+  nest-rs-resource, nest-rs-seaorm and nest-rs-testing, so feature-gated items
+  and the links to them appear. Broken intra-doc links in eleven crates are
+  fixed.
+- **The docs lint keeps the 22 rules that catch a fact**: a snippet that no
+  longer matches `demo/`, an install line, a version, a dead link, frontmatter
+  the build needs, a family member no page names. The 15 house-style rules
+  go, and so does the baseline of tolerated violations: the gate fails on any
+  violation. `fence-drift` now checks every demo file a `(from the demo…)`
+  title names, manifests included. The unrendered `tier:` frontmatter is
+  removed.
+- **The pages teach what the code asks for.** Response masking, CRUD, OpenAPI
+  and the tutorial declared a route's posture through the
+  `Authorize<A, S>` parameter, which the hard rules forbid; they now use
+  `#[authorize(Action, Entity)]`. Snippets returning an undefined
+  `AccessTokenDto` use the framework's
+  `nest_rs::oauth::server::AccessTokenResponse`. The file-upload, streaming,
+  password, policy-test, e2e-layout, seeding, migrator, claims, social-login,
+  guards and dataloader excerpts match the demo again.
+- **The rules fit their budget.** CLAUDE.md is a 200-line map and the
+  `architecture.md` every scaffold ships as `AGENTS.md` is 250 lines instead
+  of 449, with its tables unchanged. A committed Claude Code hook formats every
+  Rust file an agent edits, skipping trybuild fixtures, whose snapshots pin
+  line numbers.
+
 ### The demo follows 7.0
 
 - **The OAuth resource variables wear the family's namespace** in `.env` and the

@@ -46,4 +46,5 @@ disagreement, and the page is fixed in the same commit as the code it follows.
 - **A snippet with no counterpart in `demo/` or the owning crate's suite is
   undocumented** (`manifests-ci.md`, *Shipping a capability*).
 - **`npm run build` is the docs' one check**, run by CI's `docs` job on every
-  pull request touching `docs/**`. Deploy is `docs-pages.yml` on push.
+  pull request touching `docs/**`; `starlight-links-validator` fails it on a
+  dead internal link or anchor. Deploy is `docs-pages.yml` on push.

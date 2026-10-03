@@ -16,7 +16,7 @@ Requires **Node.js 22.12 or newer** — Astro 7's own floor, and what
 cd docs
 npm install
 npm run dev        # → http://localhost:4321
-npm run build      # static site under docs/dist/ — CI runs it on every pull request
+npm run build      # static site under docs/dist/, internal links checked — CI runs it on every pull request
 ```
 
 `npm run build` produces a fully static tree (HTML, CSS, minimal JS, a static

@@ -213,8 +213,10 @@ wrong, each filed by a reader following a page verbatim — check them on sight:
   page and its crate README install the umbrella with the feature.
 - **A table claiming to be complete.** A `#[config]` key table lists every field, and names the
   profile when the struct's `defaults()` branches on it.
-- **A figure or a link.** A count the landing or `/why/` states is one the repo still holds; an
-  internal link resolves, and a route that moved gets a `src/redirects.mjs` entry.
+- **A figure.** A count the landing or `/why/` states is one the repo still holds.
+
+Internal links and their anchors are the build's: `starlight-links-validator` fails it on one that
+does not resolve, and a route that moved gets a `src/redirects.mjs` entry.
 
 ## G. Section tiers — Basics above All options
 

@@ -2,6 +2,7 @@ import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import starlightLinksValidator from 'starlight-links-validator';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
@@ -145,6 +146,7 @@ export default defineConfig({
         { tag: 'meta', attrs: { name: 'twitter:image:alt', content: ogImageAlt } },
       ],
       plugins: [
+        starlightLinksValidator({ errorOnLocalLinks: false }),
         starlightLlmsTxt({
           projectName: 'NestRS',
           description:

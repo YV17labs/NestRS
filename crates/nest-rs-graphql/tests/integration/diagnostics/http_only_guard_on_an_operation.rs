@@ -2,10 +2,10 @@
 //! `http_only_guard_on_a_resolver`.
 //!
 //! `#[resolver]` and `#[operations]` are two decorators emitting the same
-//! `GraphqlGuard` bound at two scopes, and `edges.md` asks for a snapshot
-//! per site — HTTP's three emitters being the worked example, "each
-//! underlin[ing] the decorator the guard was written under, with a snapshot of
-//! its own". The resolver scope had one and the operation scope did not, so
+//! `GraphqlGuard` bound at two scopes, and a snapshot is owed per
+//! site — HTTP's three emitters being the worked example, each
+//! underlining the decorator the guard was written under, with a snapshot of
+//! its own. The resolver scope had one and the operation scope did not, so
 //! either half of `#[operations]`' bound could be deleted and the pair stayed
 //! proved by the other decorator's snapshot.
 

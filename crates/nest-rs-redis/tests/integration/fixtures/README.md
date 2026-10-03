@@ -1,6 +1,6 @@
 # TLS fixtures
 
-Throwaway material for `tests/e2e/tls.rs` and the TLS unit tests, generated once
+Throwaway material for `tests/integration/tls.rs` and the TLS unit tests, generated once
 with `openssl` and committed so the suite needs no toolchain beyond cargo:
 
 - `tls_ca.pem` — a self-signed CA the tests pin as the trust anchor. Its key was

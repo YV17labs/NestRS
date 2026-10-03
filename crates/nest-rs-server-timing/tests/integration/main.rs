@@ -1,4 +1,4 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
+//! Integration tests mirroring `src/`.
 //!
 //! Documented gaps (no test file required): `src/lib.rs` re-exports only;
 //! `src/module.rs` is a bare `#[module]`, exercised by the boot in

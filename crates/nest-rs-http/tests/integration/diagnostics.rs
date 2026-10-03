@@ -2,7 +2,7 @@
 //! diagnostics — the
 //! exact error a developer sees is part of the framework's contract, so a
 //! wording or span regression fails this test instead of shipping silently. Two
-//! of them pin the *one decorator, one item shape* rule (`CLAUDE.md`): each half
+//! of them pin the *one decorator, one item shape* rule: each half
 //! on the wrong shape names its sibling, because the shape the developer reached
 //! for does exist — it is spelled with the other decorator, and a macro that
 //! merely said "expected struct" would send them hunting a bug in their own

@@ -5,12 +5,11 @@
 //! MCP needs all their tools on one path. That is what makes the merge a
 //! framework concern rather than a convenience: without it a product has to
 //! fold every domain into one god-host, inverting the one-adapter-per-feature
-//! layout the rules mandate.
+//! layout.
 //!
-//! This is the **composition witness** `CLAUDE.md` § *Shipping a new
-//! capability* step 5 requires: two modules, each with its own `#[mcp]`
-//! provider on one path, booted through `TestApp` and driven over the real
-//! streamable-HTTP endpoint.
+//! This is the capability's **composition witness**: two modules, each with
+//! its own `#[mcp]` provider on one path, booted through `TestApp` and driven
+//! over the real streamable-HTTP endpoint.
 
 use std::sync::Arc;
 
@@ -129,7 +128,7 @@ impl ServerHandler for BetaTool {
     }
 }
 
-/// Each host lives in its own module — the adapter shape the rules mandate,
+/// Each host lives in its own module — the one-adapter-per-feature shape,
 /// which is exactly what the merge exists to keep possible.
 #[module(providers = [AlphaTool, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct AlphaMcpModule;

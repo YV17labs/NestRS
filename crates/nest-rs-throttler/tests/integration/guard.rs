@@ -103,8 +103,8 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     denied.assert_header_exist("retry-after");
 
     // The `429` tells the client it was throttled; only the event says *whose*
-    // bucket filled. `CLAUDE.md` ranks a rate-limit denial with the security
-    // events an incident queries, so the route and the caller are two fields —
+    // bucket filled. A rate-limit denial ranks with the security events an
+    // incident queries, so the route and the caller are two fields —
     // never the composite store key, which an operator would have to split on
     // U+001F to filter by either half.
     let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");

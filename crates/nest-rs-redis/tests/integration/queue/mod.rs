@@ -3,6 +3,7 @@
 //! ends, a push under a unique key and a cancel, and [`promoter`] for the
 //! producer moving a delayed job onto its queue when no worker runs to do it.
 
+mod composition;
 mod module;
 mod producer;
 mod promoter;

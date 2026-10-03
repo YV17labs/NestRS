@@ -5,8 +5,8 @@
 //! strategy, the body cap, the request timeout, CORS, compression, the security
 //! headers — was silently absent under test. A suite then asserted against a
 //! transport the deployment never runs, which is the exact failure e2e exists
-//! to catch: `CLAUDE.md` opens its testing section with "wiring bugs don't
-//! surface in unit tests", and the wiring was what the harness dropped.
+//! to catch: wiring bugs don't surface in unit tests, and the wiring was what
+//! the harness dropped.
 //!
 //! Two fields are pinned here rather than all of them, chosen because they
 //! change the *address* a request must use: a harness that gets these wrong

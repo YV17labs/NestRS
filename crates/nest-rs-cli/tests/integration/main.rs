@@ -1,8 +1,5 @@
-//! `nestrs` CLI integration suite — drives the built binary against a scratch
-//! workspace on disk. No live infrastructure, so it is the `integration` suite.
-//!
-//! The module tree mirrors `src/`: one file per command, `generate/` per
-//! generator, and the shared fixtures in [`harness`].
+//! `nestrs` CLI suite — drives the built binary against a scratch workspace on
+//! disk; [`scaffold`] then compiles what the generators wrote.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -18,3 +15,4 @@ mod harness;
 mod info;
 mod lint;
 mod new;
+mod scaffold;

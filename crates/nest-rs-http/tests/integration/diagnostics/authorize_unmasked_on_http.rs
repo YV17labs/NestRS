@@ -4,9 +4,9 @@
 //! It is shared posture vocabulary at the three in-band edges (`#[tools]`,
 //! `#[messages]`, `#[operations]`), so a developer who learned it on one reaches
 //! for it on the fourth. HTTP answered with a shape error naming neither the key
-//! nor the reason — which is the silence `CLAUDE.md`'s *One declaration, every
-//! site the standard permits* forbids: a site that cannot follow owes a
-//! sentence, not a stub.
+//! nor the reason — the silence *one declaration, every site the standard
+//! permits* forbids: a site that cannot follow owes a sentence, not a
+//! stub.
 
 use nest_rs_http::{controller, routes};
 

@@ -1313,9 +1313,9 @@ async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
 
 /// RFC 6455 §5.6 makes Binary a first-class data frame, so a client is entitled
 /// to send one. This gateway's contract is a JSON text envelope, so refusing it
-/// is right — refusing it with no reply and no log at any level is the silent
-/// failure `CLAUDE.md` forbids, and from the client's side it is
-/// indistinguishable from a handler that never answered.
+/// is right — refusing it with no reply and no log at any level is a silent
+/// failure, and from the client's side it is indistinguishable from a handler
+/// that never answered.
 #[tokio::test]
 async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
     let logs = LogCapture::install();

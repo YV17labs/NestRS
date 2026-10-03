@@ -87,13 +87,7 @@ schedule = ["dep:nest-rs-schedule"]
 # A dead-lettered job that logs nothing passes every outcome assertion —
 # `LogCapture` covers the event half of the worker's contract.
 nest-rs-testing = { path = "../nest-rs-testing" }
-# Self dev-dependency: turn on the `throttler` and `schedule` features for this
-# crate's own test targets, so the `[[test]] e2e` target's `required-features`
-# below are satisfied under `cargo nextest run --workspace -E 'binary(e2e)'`.
-# Without it the live-Redis suite is skipped in silence rather than run.
-# Dev-deps do not propagate, and a path-only dev-dep is stripped from the
-# published manifest, so a producer-only consumer still pulls neither
-# `nest-rs-throttler` nor `nest-rs-schedule`.
+# Self dev-dependency: the suite runs with `throttler` and `schedule` on.
 nest-rs-redis = { path = ".", features = ["throttler", "schedule"] }
 nest-rs-core = { path = "../nest-rs-core" }
 # The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
@@ -101,35 +95,22 @@ nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-worker = { path = "../nest-rs-worker" }
 # Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
 nest-rs-pipes = { path = "../nest-rs-pipes" }
-# The live-Redis `e2e` binary names `Throttle`/`ThrottlerStore` to drive the
-# `RedisThrottler` store directly. Path-only (intra-workspace dev-dep) and only
-# built when the `throttler` feature is on — see the `[[test]]` below.
+# The suite drives the `RedisThrottler` store directly.
 nest-rs-throttler = { path = "../nest-rs-throttler" }
-# The live-Redis `e2e` binary declares `#[scheduled]` jobs and drives the
-# `Scheduler` against `RedisOccurrenceLock`.
+# The suite declares `#[scheduled]` jobs against `RedisOccurrenceLock`.
 nest-rs-schedule = { path = "../nest-rs-schedule" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
 tower.workspace = true
-# The e2e suite plays a peer's orphan sweep through apalis's own
+# The suite plays a peer's orphan sweep through apalis's own
 # `reenqueue_orphaned`, which takes its cutoff as a `chrono` instant.
 chrono.workspace = true
 # The TLS server side the tests put in front of the client: the dev container's
 # Redis speaks plaintext, so `rediss://` meets a rustls listener presenting the
-# fixture certificates — the unit tests' refusing one, the e2e suite's proxy.
+# fixture certificates — the unit tests' refusing one, the suite's proxy.
 # Already in the tree through `redis`'s rustls support.
 tokio-rustls.workspace = true
-
-# The `e2e` binary exercises the `RedisThrottler` and the `RedisOccurrenceLock`,
-# which only exist under their features — so the target is skipped entirely
-# unless both are on (`cargo nextest run -p nest-rs-redis --features
-# throttler,schedule -E 'binary(e2e)'`). `tests/integration/main.rs` stays
-# auto-discovered.
-[[test]]
-name = "e2e"
-path = "tests/e2e/main.rs"
-required-features = ["throttler", "schedule"]
 
 [lints]
 workspace = true

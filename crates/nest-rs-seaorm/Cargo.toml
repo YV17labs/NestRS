@@ -105,13 +105,7 @@ nest-rs-mcp = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Self dev-dependency: turn on every transport binding for this crate's own test
-# targets. Without it `cargo nextest run --workspace` builds this crate with
-# `default = []`, the `[[test]] e2e` target's `required-features` below are
-# never satisfied, and the whole Postgres suite is skipped in silence — the
-# opposite of what the Definition of done's `-E 'binary(e2e)'` step reads as.
-# Dev-deps do not propagate, so no consumer gains a feature from this, and a
-# path-only dev-dep is stripped from the published manifest.
+# Self dev-dependency: the suite runs with every transport binding on.
 nest-rs-seaorm = { path = ".", features = ["full"] }
 # The `public_visitor` e2e boots a real app: a `#[public]` controller behind
 # `AbilityGuard`, driven through the in-process harness. `#[routes]` expands to
@@ -136,14 +130,6 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
 # rustc reports the two bound failures against the `#[crud]` attribute rather
 # than the parameter. Snapshotted so a wording regression fails here.
 trybuild.workspace = true
-
-# The e2e suite imports feature-gated transport bridges: `DbContext` (`http`)
-# and `WsDataContext` (`ws`). Without this gate, a default-feature
-# `cargo test -p nest-rs-seaorm` fails to compile the test binary (E0432).
-# The `ws` module inside `tests/e2e/ws.rs` stays additionally `#[cfg]`-gated.
-[[test]]
-name = "e2e"
-required-features = ["http", "ws", "graphql"]
 
 [lints]
 workspace = true

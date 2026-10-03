@@ -1,4 +1,4 @@
-//! Integration tests for `nest-rs-authn`. Layout strictly mirrors `src/` (see CLAUDE.md).
+//! Integration tests for `nest-rs-authn`. Layout strictly mirrors `src/`.
 //!
 //! - This file is the only `tests/*.rs` binary; paths under `tests/` are modules.
 //! - Shared fixtures live below at the suite root (`crate::…`), so every module

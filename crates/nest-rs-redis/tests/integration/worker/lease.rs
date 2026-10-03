@@ -926,10 +926,6 @@ struct UnackedModule;
 /// sweeps it. The line says so at `error`, and the job's settled mark keeps the
 /// one span every mark is kept for: nothing extends it, so a redelivery after
 /// it lapses runs the job again, which at least once allows.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the suite plays what apalis files, where apalis files it"
-)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_lost_acknowledgement_is_said_and_the_settled_mark_keeps_its_one_span() {
     crate::forget(UNACKED_QUEUE).await;

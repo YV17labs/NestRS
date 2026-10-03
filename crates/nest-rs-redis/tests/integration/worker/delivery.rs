@@ -918,10 +918,6 @@ struct NewerModule;
 /// left. Its wait is counted from this first hand-back, in Redis's own record —
 /// never from its push, which is years old, so a job pushed with a delay is
 /// not charged for the delay.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the suite plays what apalis files, where apalis files it"
-)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_within_the_patience() {
     let logs = LogCapture::install_global();
@@ -1053,10 +1049,6 @@ struct PatienceModule;
 /// next replica of this release that meets it rather than handed back forever:
 /// said at `error` naming both versions, its unit line filed, its record kept in
 /// the dead set for a consumer of that release, and nothing it held left behind.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the suite plays what apalis files, where apalis files it"
-)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_past_the_patience() {
     let logs = LogCapture::install_global();

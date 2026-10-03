@@ -52,7 +52,7 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
     // route, which posture, and what to do about it. The path comes from
     // `original_uri`, which a hand-built request leaves at `/` — what matters
     // here is that the field is carried at all, since a bare `warn`+ is itself
-    // the defect `CLAUDE.md` names.
+    // a defect.
     assert!(
         event.field("path").is_some(),
         "the event names the route, got {:?}",

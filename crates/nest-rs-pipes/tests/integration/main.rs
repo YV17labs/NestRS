@@ -1,6 +1,5 @@
-//! Integration tests for `nest-rs-pipes`, mirroring `src/` (see CLAUDE.md): each
-//! pipe through `Pipe::transform`, the call every transport's binding makes, in
-//! process.
+//! Integration tests for `nest-rs-pipes`, mirroring `src/`: each pipe through
+//! `Pipe::transform`, the call every transport's binding makes, in process.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

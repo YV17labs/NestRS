@@ -1,4 +1,4 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
+//! Integration tests mirroring `src/`.
 //!
 //! Transport-binding tests are gated on the same feature that exposes them in
 //! `src/`: run with `cargo test -p nest-rs-authz --features full` to exercise

@@ -1,4 +1,4 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md) — one binary, one module per concern.
+//! Integration tests mirroring `src/` — one binary, one module per concern.
 //!
 //! The fixtures below are the ones the shutdown tests share: a transport served
 //! on a real loopback port, and raw HTTP/1.1 the way a client that holds a

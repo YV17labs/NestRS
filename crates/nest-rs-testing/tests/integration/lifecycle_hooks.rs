@@ -4,9 +4,9 @@
 //! `Result`-returning forms are adapted to the runner's `anyhow::Result<()>`.
 //!
 //! The home-crate unit test in `nest-rs-core/src/lifecycle.rs` drives a
-//! hand-built `LifecycleHook`; this is the cross-crate wiring test CLAUDE.md's
-//! *Testing* section calls for ("hook ordering"), proving the macro's
-//! `inventory::submit!`, `present` probe, and return adaptation all hold.
+//! hand-built `LifecycleHook`; this is the cross-crate wiring test for hook
+//! ordering, proving the macro's `inventory::submit!`, `present` probe, and
+//! return adaptation all hold.
 
 use std::sync::Mutex;
 

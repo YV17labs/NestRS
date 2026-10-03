@@ -3,8 +3,8 @@
 //! It reached rustc as `cannot find attribute \`use_pipes\` in this scope` —
 //! no transport named, no reason, no remedy — while its two neighbours
 //! `#[use_interceptors]` and `#[use_filters]` were refused properly.
-//! `edges.md` item 8 asks for the named error on **every** layer family the
-//! edge does not bridge, and the list was two of four.
+//! The named error is owed on **every** layer family the edge does not
+//! bridge, and the list was two of four.
 
 use nest_rs_ws::{gateway, messages};
 

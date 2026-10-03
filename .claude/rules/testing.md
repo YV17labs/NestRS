@@ -3,22 +3,50 @@ paths:
   - "**/tests/**/*.rs"
   - "crates/nest-rs-testing/**"
   - "demo/crates/features/src/testing.rs"
-  - ".config/nextest.toml"
 ---
 
 # Writing tests — the toolbox
 
-The test layout, the two suite names, the runner and "e2e infra is always
-reachable" are `CLAUDE.md`'s, and locked — a flat `tests/<x>.rs` is a binary of
-its own, outside the nextest gates and relinked per file. This file is the
-toolbox and the decisions that keep live suites from meeting each other. Reach
-for `nest-rs-testing` before hand-rolling a harness.
+A framework crate has one suite, `tests/integration/main.rs`, whose modules
+mirror `src/`; a test that needs Postgres, Redis or S3 connects to the dev
+container's, which is always reachable. A flat `tests/<x>.rs` is a binary of
+its own, relinked per file. This file is the toolbox and the decisions that
+keep live tests from meeting each other. Reach for `nest-rs-testing` before
+hand-rolling a harness.
+
+## Choosing the level
+
+Every test is paid on every run, so the level is chosen by what must be proved,
+cheapest first. Nothing is mocked at any level: what runs is the real code, and
+only what the level leaves out is absent.
+
+- **Unit** (`#[cfg(test)] mod tests`) — logic without wiring: a parser, a
+  decision table, an error's wording. Systematic: a branch nobody tests is a
+  branch nobody knows works.
+- **In process** (`TestApp`, `HeadlessApp`) — composition: a decorator's
+  expansion booted, a guard on a route, a module's `for_root`. The real DI graph
+  and transport run without a socket. The default for framework behaviour, since
+  wiring bugs live here.
+- **Live service** — only what the service itself decides: the SQL a query
+  becomes, a Redis script, a presigned URL, a reconnect. Never a second copy of
+  an in-process assertion.
+- **Compile-fail snapshot** (trybuild) — only a compile error a developer reads.
+- **Scaffold compile** — only what a generator writes.
+
+Coverage is a map, not a target: it points at the branch nothing executes, and
+the test written for it asserts behaviour. Every public contract and every
+refusal has a test.
+
+**A slow test is a defect.** The slowest tests set the floor of every run, so a
+test that grows is made cheaper first — shared setup, a smaller fixture, the
+assertion moved down a level — and what a cheaper level already proves is cut.
+nextest prints each test's time: compare before and after.
 
 ## `nest-rs-testing`
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives
   HTTP, GraphQL, OpenAPI and MCP through poem's `TestClient`, no socket. The
-  default e2e entry point, and the composition witness `manifests-ci.md` asks
+  default entry point, and the composition witness `manifests-ci.md` asks
   of every `for_root` seam. It boots the transport the app's own
   `HttpModule::for_root(cfg)` describes, through the call the module itself
   makes: pin an `HttpConfig` on the module to test a prefix, a versioning
@@ -36,33 +64,8 @@ for `nest-rs-testing` before hand-rolling a harness.
   that fails closed and logs nothing passes every response assertion.
 - **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
   the value.
-- **`load_project_env`** — the `.env` cascade, so an e2e reaches the
+- **`load_project_env`** — the `.env` cascade, so a test reaches the
   devcontainer's `postgres`, `redis` and `rustfs`.
-
-## `cargo mutants` — advisory
-
-A test is evidence for what it asserts, and a surviving mutant shows what it
-does not — a stronger question than coverage's *did this line run*. Nothing
-here measures tests by name or by count. Mutants are advisory: CI runs them on
-the diff of a pull request labelled `mutants` and never blocks, and locally they
-are on demand for a logic change. A
-missed mutant gets the test that kills it, or the commit body says why it is
-equivalent; an unviable one is noise.
-
-```
-git diff HEAD > /tmp/c.diff
-CARGO_TARGET_DIR=target/mutants cargo mutants --in-diff /tmp/c.diff \
-  --test-tool nextest -p <touched crate> -j1
-```
-
-- **Its own target directory.** It builds in a copy of the tree under
-  `TMPDIR`, and the trybuild projects it leaves behind point into that
-  deleted copy, which breaks the next build of anything else sharing the
-  directory.
-- **`-j1` whenever the target directory is shared**, since every job then
-  builds into it at once. With `CARGO_TARGET_DIR` unset, each job builds in its
-  own copy: parallel, slower cold.
-- **`--test-tool nextest`**, because the suites are nextest's.
 
 ## Live backends are shared — each suite hands out its parts
 
@@ -78,7 +81,7 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   developer's — what `nestrs run dev` drains — and the framework suite's
   shared one; the demo holds the lower half above it, the framework the upper
   half. Each list is checked at compile time where it is written: the
-  framework's `DB_*` constants in `nest-rs-redis`'s e2e `main.rs`, the demo's
+  framework's `DB_*` constants in `nest-rs-redis`'s suite `main.rs`, the demo's
   `features::testing::RedisDatabase`, one variant per test, so two tests on
   one database is a duplicate discriminant. A `FLUSHDB` in one half never
   reaches a job the other filed.
@@ -102,17 +105,15 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
 - **A test asserts against the shared constant, never a copied literal.** One
   that re-types `"posts:read audio:transcode"` passes while the policy and the
   deployment drift apart; one that reads the constant fails the day they do.
-- **A procedure the docs hand an operator is run by an e2e test, as printed** —
+- **A procedure the docs hand an operator is run by a test, as printed** —
   a move, a drain, anything that changes data an operator cannot get back.
-- **Runner configuration is `.config/nextest.toml`**, read automatically, so
-  every invocation in `CLAUDE.md` is the same on every machine.
-- **A suite sharing a build directory declares a test group.** `nest-rs-cli`'s
-  e2e compiles every scaffolded workspace into one target directory and runs
-  in the `scaffold-check` group; the trybuild suites (`diagnostics.rs` in each
-  crate's integration suite) run in the `trybuild` group. Both have
-  `max-threads = 1`. Per-test target directories are not the fix: each would
-  rebuild the tree. A missing group shows as a linker error on an unrelated
-  crate, which reads as a broken toolchain.
+- **nextest is the runner, with no configuration**: `just test` runs every
+  test and the doctests.
+- **Builds sharing a target directory take a file lock.** `nest-rs-cli`'s
+  scaffold tests compile every generated workspace into
+  `target/scaffold-check` and serialize on its `scaffold.lock`; per-test target
+  directories are not the fix, each would rebuild the tree. Two builds writing
+  one directory show as a linker error on an unrelated crate.
 - **A second checkout takes its own `CARGO_TARGET_DIR`.** Sharing one, cargo
   reuses the other checkout's test binaries, whose `CARGO_MANIFEST_DIR` still
   points there, so every test reading the tree reads the wrong one.
@@ -134,7 +135,6 @@ review, like anything else a regenerated snapshot pins: read the `.stderr`
 **Snapshots change only on a deliberate toolchain bump.** rustc's wording is
 the toolchain's, and `rust-toolchain.toml` pins it, so a `.stderr` moves in the
 commit that bumps the toolchain and nowhere else; a snapshot diff in any other
-commit is a refusal that changed. `just pre-commit` leaves the snapshots out
-(`!test(/_diagnostics$/)`); `just test` runs them, and a `*-macros` or
-`nest-rs-codegen` change runs it. The format hook skips `tests/*/diagnostics/`: `cargo fmt` never reaches
-a fixture, and reformatting one moves the line numbers its `.stderr` pins.
+commit is a refusal that changed. `just test` runs them. `cargo fmt` never
+reaches a fixture (no module tree declares it), and reformatting one moves the
+line numbers its `.stderr` pins.

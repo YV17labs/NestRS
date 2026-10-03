@@ -4,8 +4,8 @@
 //! It was refused at exactly one of the three sites that cannot express it, and
 //! there through the `bind` helper — so a developer who wrote `id_arg` and never
 //! wrote `bind` read *"`bind = Service` is not available on HTTP — and neither
-//! is `id_arg`…"*. `CLAUDE.md`: "Refusals are shared, not per key. One helper,
-//! one sentence, every key it covers, **one trybuild snapshot per site**."
+//! is `id_arg`…"*. Refusals are shared, not per key. One helper,
+//! one sentence, every key it covers, **one trybuild snapshot per site**.
 
 use nest_rs_mcp::{mcp, tools};
 

@@ -362,7 +362,7 @@ async fn infra_interceptor_mounts_at_the_transport_edge_and_is_not_a_provider() 
     let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
 
     // A matched route: the scoped interceptor completes inside, the infra
-    // wrap completes outside — band nesting matches the CLAUDE.md table.
+    // wrap completes outside.
     let resp = app.http().get("/edge/probe").send().await;
     resp.assert_status_is_ok();
     resp.assert_header("x-edge", "hit");

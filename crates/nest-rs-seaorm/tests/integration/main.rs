@@ -1,5 +1,5 @@
-//! In-process suite for `nest-rs-seaorm`'s compile-time contracts. The
-//! Postgres-backed behaviour lives next door in `tests/e2e/`.
+//! `nest-rs-seaorm`'s suite: the compile-time contracts, and the behaviour
+//! against the dev container's Postgres.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -8,5 +8,18 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+mod harness;
+
+mod create;
 mod diagnostics;
-mod soft_delete;
+#[cfg(feature = "graphql")]
+mod graphql;
+mod interceptor;
+mod lazy;
+mod lifecycle_hooks;
+mod public_visitor;
+mod relational_authz;
+mod scope;
+mod worker;
+#[cfg(feature = "ws")]
+mod ws;

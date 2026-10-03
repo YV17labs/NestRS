@@ -1,6 +1,6 @@
 //! The worker-job keys a `#[scheduled]` cron trigger cannot take, each refused
-//! with the fact that makes it meaningless — the table in `macros.md`, *The
-//! impl half* — rather than as an unknown key. One method per cell.
+//! with the fact that makes it meaningless rather than as an unknown key. One
+//! method per key.
 
 use nest_rs_core::injectable;
 use nest_rs_schedule::scheduled;

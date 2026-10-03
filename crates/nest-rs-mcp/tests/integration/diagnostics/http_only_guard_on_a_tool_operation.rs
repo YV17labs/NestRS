@@ -2,12 +2,12 @@
 //! `http_only_guard_on_a_tool`.
 //!
 //! `#[mcp]` and `#[tools]` are two decorators emitting the same `McpGuard`
-//! bound at two scopes, and `edges.md` asks for "a trybuild snapshot per
-//! edge, binding a guard that does not check it at that edge's site" — with
-//! HTTP's three emitters as the worked example, "each underlin[ing] the
-//! decorator the guard was written under, with a snapshot of its own". The host
-//! scope had one and the operation scope did not, so deleting either half of
-//! `#[tools]`' bound left the pair proved by the other's snapshot.
+//! bound at two scopes, and each edge owes a trybuild snapshot binding a guard
+//! that does not check it at that edge's site — with HTTP's three emitters as
+//! the worked example, each underlining the decorator the guard was written
+//! under, with a snapshot of its own. The host scope had one and the operation
+//! scope did not, so deleting either half of `#[tools]`' bound left the pair
+//! proved by the other's snapshot.
 
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard, async_trait};

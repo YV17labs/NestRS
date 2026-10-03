@@ -8,6 +8,7 @@
 //! a unique key and counts a throttle, and [`checkpoint`] for a job's progress
 //! across its attempts.
 
+mod boot;
 mod checkpoint;
 mod config;
 mod consumer;

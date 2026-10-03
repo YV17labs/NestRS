@@ -43,7 +43,7 @@ tokio = { workspace = true }
 reqwest.workspace = true
 # Whether an interrupted multipart upload's parts were discarded is not
 # observable through the store (`ListMultipartUploads` is not on
-# `object_store`'s surface), so the e2e suite asserts on the event the client
+# `object_store`'s surface), so the test suite asserts on the event the client
 # emits — which means collecting events with a `Layer` of its own.
 tracing-subscriber.workspace = true
 # `LogCapture`, for the unit half of the same problem: what the abort-on-drop

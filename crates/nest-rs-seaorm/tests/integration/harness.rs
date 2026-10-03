@@ -1,13 +1,6 @@
-//! Shared Postgres connection for the e2e suite — one place for the env-var
-//! contract instead of a copy per module.
-//!
-//! Same shape as the sibling live-backend suites (`nest-rs-redis`'s
-//! `redis_url`, `nest-rs-storage`'s `StorageConfig::default`): the dev
-//! container's address is the default, and `NESTRS_SEAORM__URL` overrides it
-//! to point at a Postgres outside the container. The framework workspace
-//! deliberately ships no `.env` (that is the product's, under `demo/`), so a
-//! hard `expect` on the variable made the whole suite unrunnable from the
-//! workspace-wide `-E 'binary(e2e)'` step.
+//! Shared Postgres connection for the suite. The dev container's address is
+//! the default, and `NESTRS_SEAORM__URL` overrides it to point at a Postgres
+//! outside the container.
 
 use std::sync::Arc;
 

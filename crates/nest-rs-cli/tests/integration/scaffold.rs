@@ -59,18 +59,24 @@ fn patch_to_working_tree(workspace: &Path) {
 /// template importing a name no rendered body used, and a borrow the lint
 /// rejects. Both compiled, so both reached a user on their first `just lint` and
 /// nowhere earlier. A generator that emits code failing the lint it also emits
-/// is a generator defect, so the e2e holds it to the same bar rather than a
+/// is a generator defect, so this suite holds it to the same bar rather than a
 /// lower one.
 ///
-/// The target directory is shared with the repo's own so the framework's
-/// artifacts are reused rather than rebuilt from scratch per run — the
-/// difference between ~45 seconds and several minutes. It is a sibling of
-/// `target/`, so it is already ignored by git.
+/// Every scaffold builds into one shared target directory so the framework's
+/// artifacts are reused rather than rebuilt per test. Two builds writing it at
+/// once corrupt each other, and nextest runs each test in its own process, so a
+/// file lock takes them one at a time.
 #[expect(
     clippy::disallowed_methods,
     reason = "CARGO is the cargo that runs the suite, set by cargo itself"
 )]
 fn cargo_check(workspace: &Path) -> Result<(), String> {
+    let target = repo().join("target/scaffold-check");
+    std::fs::create_dir_all(&target).map_err(|err| format!("no target dir: {err}"))?;
+    let lock = std::fs::File::create(target.join("scaffold.lock"))
+        .map_err(|err| format!("no lock file: {err}"))?;
+    lock.lock()
+        .map_err(|err| format!("the lock is not taken: {err}"))?;
     let output = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args([
             "clippy",
@@ -81,7 +87,7 @@ fn cargo_check(workspace: &Path) -> Result<(), String> {
             "warnings",
         ])
         .current_dir(workspace)
-        .env("CARGO_TARGET_DIR", repo().join("target/scaffold-check"))
+        .env("CARGO_TARGET_DIR", &target)
         .output()
         .map_err(|err| format!("cargo did not run: {err}"))?;
     if output.status.success() {
@@ -165,11 +171,11 @@ fn a_greenfield_workspace_compiles() {
 
 #[test]
 fn a_generated_crud_resource_compiles() {
-    // This is the claim `.claude/rules/macros.md` makes and this suite
-    // exists to honour: `#[crud]` and `#[expose]` are deliberately absent from
-    // `nest-rs-macro-hygiene` because they need a real entity and a real
-    // service, so their contract is proved *here* — on generated code, with the
-    // derives the decorators emit and the auth adapter the guards require.
+    // This is the claim this suite exists to honour: `#[crud]` and `#[expose]`
+    // are deliberately absent from `nest-rs-macro-hygiene` because they need a
+    // real entity and a real service, so their contract is proved *here* — on
+    // generated code, with the derives the decorators emit and the auth
+    // adapter the guards require.
     scaffold_and_check(&[&["g", "resource", "post"]], "a generated CRUD resource");
 }
 
@@ -179,7 +185,7 @@ fn a_generated_entity_compiles() {
     // absence is the part only a compiler can judge: `#[expose(service = …)]`
     // requires a `CrudService`, a plain `g feature` port's service is not one,
     // and naming it anyway fails inside the macro expansion — where the
-    // `integration` suite, which reads the text back, sees nothing wrong.
+    // text assertions, which read the output back, see nothing wrong.
     //
     // The port is that plain port on purpose: it is the case that would break
     // first, and the one `g resource` never exercises.
@@ -418,7 +424,7 @@ fn every_adapter_over_a_plain_port_compiles() {
     // The guarantee the CLI page makes — a freshly generated port plus **any**
     // adapter compiles — held over this port for one edge of seven: the suite
     // compiled `events` here and nothing else, so the HTTP, GraphQL, WS, queue,
-    // schedule and MCP skeletons were proved by the `integration` suite's text
+    // schedule and MCP skeletons were proved by the text
     // assertions alone, which read a wrong import as readily as a right one.
     let mut generate = vec![vec!["g", "feature", "blog"]];
     generate.extend(every_edge("blog", &[]));
@@ -435,8 +441,8 @@ fn every_adapter_over_a_plain_port_compiles() {
 fn every_adapter_over_a_resource_port_compiles() {
     // F4: `g ws` and `g mcp` named `AuthzWsModule` / `features::authz::mcp` in
     // their own output while writing neither. They write both now — and a
-    // bridge module is exactly the shape the `integration` suite cannot judge:
-    // it asserts on the *text* a generator produced, so a `#[module]` naming a
+    // bridge module is exactly the shape the text assertions cannot judge:
+    // they assert on the *text* a generator produced, so a `#[module]` naming a
     // provider behind a feature the manifest never enabled reads as correct
     // there and fails on the user's first `cargo check`. The bridges share the
     // `authz/` tree, so this also pins that they land side by side without

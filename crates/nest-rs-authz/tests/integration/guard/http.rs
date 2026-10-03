@@ -1,10 +1,10 @@
 //! Covers `src/guard.rs` — what `AbilityGuard` *says* when it denies.
 //!
 //! The refusals themselves are asserted elsewhere; what nothing read was the
-//! event. Both are `warn`+ on `nest_rs::authz`, which `CLAUDE.md` calls the
-//! events queried under incident: an operator answering "why did this 500" has
-//! only these lines, and a denial that fails closed while logging nothing is
-//! indistinguishable from a bug in the handler.
+//! event. Both are `warn`+ on `nest_rs::authz`, the events queried under
+//! incident: an operator answering "why did this 500" has only these lines,
+//! and a denial that fails closed while logging nothing is indistinguishable
+//! from a bug in the handler.
 
 use std::sync::Arc;
 

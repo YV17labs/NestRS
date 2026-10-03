@@ -1,4 +1,6 @@
-//! The boot audit that closes the half-wired tombstone.
+//! The boot audit that closes the half-wired tombstone. Its own binary: the
+//! half-wired entity below sits in the link-time registry, which every app
+//! booted in the same binary audits.
 //!
 //! `#[expose(..., soft_delete)]` makes the column addressable and implements
 //! `SoftDeletable`; only `CrudService::soft_delete_column` makes `DELETE`

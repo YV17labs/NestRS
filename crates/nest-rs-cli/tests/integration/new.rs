@@ -222,10 +222,10 @@ fn new_workspace_greenfield() {
 /// in feature code and none says to add it; the same page adds
 /// `-> anyhow::Result<()>` on a `#[hooks]` method, and `anyhow` was missing from
 /// the features crate too. Both are the developer's *own* source naming its own
-/// crate (`CLAUDE.md`: the manifest names what the source names), so the
+/// crate (the manifest names what the source names), so the
 /// scaffold declares them rather than the umbrella re-exporting them.
 ///
-/// Text-level here; `tests/e2e/scaffold.rs` compiles a feature that uses both.
+/// Text-level here; `scaffold.rs` compiles a feature that uses both.
 fn assert_feature_code_can_log_and_fail(workspace: &str, root: &std::path::Path) {
     let features = fs::read_to_string(root.join("crates/features/Cargo.toml")).unwrap();
     for dep in ["anyhow", "tracing"] {

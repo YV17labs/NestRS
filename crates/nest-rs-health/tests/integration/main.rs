@@ -1,8 +1,8 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
+//! Integration tests mirroring `src/`.
 //!
 //! Documented gaps (no test file required): `src/lib.rs` re-exports only;
 //! `src/config.rs` is asserted by its own in-file `#[cfg(test)] mod tests`
-//! (the norm's item 4) and through the boot in `module` below.
+//! and through the boot in `module` below.
 //!
 //! `indicator` covers `src/indicator.rs` — not the data, which `service`
 //! exercises through hand-built entries, but the `#[indicators]` expansion
@@ -12,8 +12,8 @@
 //! import, booted, answering. It used to be listed among the gaps above, on the
 //! grounds that "every app importing `HealthModule`" exercises it end-to-end;
 //! those apps are in `demo/`, so the capability's own crate proved none of it,
-//! which is the obligation `CLAUDE.md`'s *Shipping a new capability* puts on the
-//! capability rather than on its consumers.
+//! and that proof is an obligation on the capability rather than on its
+//! consumers.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

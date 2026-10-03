@@ -1,4 +1,4 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
+//! Integration tests mirroring `src/`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

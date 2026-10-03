@@ -1,8 +1,8 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
+//! Integration tests mirroring `src/`.
 //!
 //! Documented gaps for the initial pass:
 //! - `src/context.rs` — trait-only seam; exercised by the data-context bridge
-//!   tests in `nest-rs-seaorm/tests/e2e/ws.rs`.
+//!   tests in `nest-rs-seaorm/tests/integration/ws.rs`.
 //! - `src/server.rs` — `WsServer` registry has inline `#[cfg(test)] mod tests`.
 //! - `src/envelope.rs`, `src/guard.rs` — coverage to add when next touched.
 #![allow(

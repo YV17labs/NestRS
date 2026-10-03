@@ -1,4 +1,4 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md) — one binary, one module per concern.
+//! Integration tests mirroring `src/` — one binary, one module per concern.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

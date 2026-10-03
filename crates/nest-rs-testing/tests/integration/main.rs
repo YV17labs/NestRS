@@ -1,5 +1,5 @@
-//! Integration tests organized by concern — the exception `CLAUDE.md`'s test-layout
-//! norm grants this crate rather than mirroring `src/`. One binary, one module per
+//! Integration tests organized by concern — the exception the test layout
+//! grants this crate rather than mirroring `src/`. One binary, one module per
 //! concern.
 #![allow(
     clippy::unwrap_used,

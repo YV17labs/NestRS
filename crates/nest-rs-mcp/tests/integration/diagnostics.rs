@@ -1,6 +1,6 @@
 //! trybuild snapshots of the `#[mcp]` / `#[tools]` compile diagnostics.
 //!
-//! Two of them pin the *one decorator, one item shape* rule (`CLAUDE.md`): a
+//! Two of them pin the *one decorator, one item shape* rule: a
 //! decorator on the wrong shape names its sibling, because the shape the
 //! developer reached for does exist — it is spelled with the other decorator,
 //! and a macro that merely said "expected struct" would send them looking for a
@@ -11,8 +11,8 @@
 //! this edge's own answer (the address is the whole path, the server's version
 //! is the app's one declaration), every other field of the server's identity
 //! with the seam that declares it — while a key that is nobody's gets the list
-//! of what remains. A bare "unknown key" for the first kind is the silence
-//! `CLAUDE.md` counts as a defect.
+//! of what remains. A bare "unknown key" for the first kind is a silence, and
+//! a silence is a defect.
 
 #[test]
 fn mcp_macro_diagnostics() {

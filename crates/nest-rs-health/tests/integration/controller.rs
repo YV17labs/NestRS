@@ -1,10 +1,10 @@
 //! The composition witness: the documented import, booted, answering.
 //!
-//! `CLAUDE.md`'s *Shipping a new capability* asks every capability for "a test
-//! in the capability's **own crate** that boots the documented wiring … and
-//! asserts what a caller gets back", and says composition is **executed**, never
-//! merely compiled — a boot proves the access graph, the mounted routes and the
-//! lifecycle hook at once, and compiling proves none of the three.
+//! Every capability carries a test in its **own crate** that boots the
+//! documented wiring and asserts what a caller gets back: composition is
+//! **executed**, never merely compiled — a boot proves the access graph, the
+//! mounted routes and the lifecycle hook at once, and compiling proves none of
+//! the three.
 //!
 //! What this one catches that `module.rs` cannot: `module.rs` registers
 //! `HealthModule` into a bare container, so the three routes could stop mounting

@@ -6,7 +6,6 @@ paths:
   - "bench/**/Cargo.toml"
   - "rust-toolchain.toml"
   - "clippy.toml"
-  - "scripts/**"
   - ".cargo/**"
   - "deny.toml"
   - ".config/**"
@@ -19,16 +18,16 @@ paths:
 ## Lints are workspace policy
 
 - **`[workspace.lints]` is the one table, and every crate opts in** with
-  `[lints] workspace = true`; no crate restates or narrows it. A lint there is
-  `deny`, never `forbid`, so the site that must break one can say so with
+  `[lints] workspace = true`; no crate restates or narrows it. No lint there is
+  `forbid`, so the site that must break one can say so with
   `#[expect(lint, reason = "…")]` (`CLAUDE.md`, *How a rule is held*).
   `unreachable_pub` is the mechanical half of `architecture.md`'s *`pub` means
   exported*: an item no `lib.rs` re-export reaches is `pub(crate)` or private.
 - **`clippy.toml` exists once, at the repository root.** clippy reads the
   nearest file upwards from each crate, so the root file covers `crates/`,
   `demo/` and `bench/` — and a closer one would *replace* it rather than merge.
-  Never add one below the root. A `disallowed-*` entry ships with its canary
-  in `nest-rs-macro-hygiene` (an entry whose path stops resolving is only a
+  Never add one below the root. A `disallowed-*` entry ships with a canary
+  proving it still resolves (an entry whose path stops resolving is only a
   warning) and a `reason` naming what to use instead.
 - **Tests are exempt by configuration, not by attribute sprawl**: the
   `allow-*-in-tests` keys in `clippy.toml`, and one attribute per suite root
@@ -146,10 +145,11 @@ reason per entry, and revisited on every dependency bump.
 
 ## CI
 
-**CI is the gate.** It runs on every push and pull request, cheap checks before
-expensive ones, and a change is done when it is green; the local loop in
-`CLAUDE.md` is its fast subset, never a substitute. The workflow is the list of
-what runs, and is not restated here. What CI owes the rules:
+**`just ci` is the gate, CI its safety net.** The root `Justfile` runs locally
+every check CI runs, cheapest first; CI runs them on a push to `main` or a
+release branch and on a pull request. A check added to a workflow gets its
+recipe in the same change, and a check CI runs that cannot run locally is a
+defect of the devcontainer, which pins the same tools. What CI owes the rules:
 
 - every suite against real backends — Postgres, the Redis and Valkey versions
   the docs claim, S3 — never a mock (`CLAUDE.md`, hard "no");

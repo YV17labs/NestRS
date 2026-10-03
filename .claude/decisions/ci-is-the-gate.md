@@ -35,3 +35,12 @@ GitHub's Dependabot alerts, a repository setting; a dependency a coming Rust
 release will reject is read from the clippy build CI already runs. Minimal
 versions and beta clippy were dropped: the first cannot pass under the
 `major.minor` rule, and nobody acts on an advisory lane.
+
+**The local run is the gate, CI its safety net (2026-10-03).** Agents cannot
+push, so a gate only CI could run was one no change reached before the owner's
+branch; the gap was filled by a private script outside the repository. The
+owner's line: an agent runs everything locally, and a check it cannot run
+locally is a defect of the environment, since CI minutes are paid and a local
+run is not. So the root `Justfile` runs every check CI runs (`just ci`, with
+`just pre-commit` as its minute-long subset), the devcontainer pins the same
+tools, and CI runs the same checks on push.

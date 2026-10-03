@@ -43,8 +43,8 @@ design record: what was decided and why. Two rules matter most:
 
 The fastest path is the dev container — see
 [Contributing → Get the dev container running](README.md#contributing) in the
-README. It provisions the Rust toolchain, the dev tooling, and Postgres + Redis
-with `NESTRS_SEAORM__URL` / `NESTRS_REDIS__URL` already wired.
+README. It provisions the Rust toolchain, every tool CI runs, and Postgres, Redis
+and S3 (RustFS) with their URLs already wired.
 
 Prefer a local toolchain? Install Rust (stable, see
 [`rust-toolchain.toml`](rust-toolchain.toml)) and the CLI:
@@ -57,32 +57,27 @@ rustup component add llvm-tools-preview
 
 ## The workflow
 
-```bash
-nestrs run dev <app>   # run an app in watch mode (rebuild + restart on save)
-nestrs run test unit        # full test suite (cargo-nextest)
-nestrs run lint        # clippy (strict) + format check
-nestrs run fmt         # apply rustfmt
-nestrs run check       # fast type-check
-```
-
-Run `nestrs run` with no arguments to list every recipe.
-
-Before opening a PR, make sure these pass:
+The framework's checks are recipes of the root `Justfile`, the same ones CI
+runs; the product drives itself from `demo/` with `nestrs run`.
 
 ```bash
-nestrs run fmt && nestrs run lint && nestrs run test unit
+just pre-commit   # before each commit: fmt, clippy, the in-process suites
+just ci           # everything CI runs: lint, supply chain, workflows, every suite, features, docs, demo
+just --list       # each part on its own
 ```
 
-Unit tests cover logic; the **e2e** suite (`nestrs run test e2e`) covers routing
-and wiring against live infra. For **HTTP, GraphQL, or MCP changes**, close the
-loop on a real socket too: start the app (`nestrs run dev <app>`), exercise the
-affected endpoints (`curl`, an MCP client, the GraphQL playground), and note it
-in the PR. A GraphQL change regenerates the committed SDL by running the dev
-server (see CLAUDE.md).
+Before opening a PR, `just ci` passes. Unit tests cover logic; the **e2e**
+suites (`just e2e`) cover routing and wiring against live infra. For **HTTP,
+GraphQL, or MCP changes**, close the loop on a real socket too: start the app
+(`nestrs run dev <app>` in `demo/`), exercise the affected endpoints (`curl`, an
+MCP client, the GraphQL playground), and note it in the PR. A GraphQL change
+regenerates the committed SDL by running the dev server
+(`.claude/rules/apps.md`).
 
 ## Pull requests
 
-1. **Fork and branch.** Branch off `main`; name it for the change
+1. **Fork and branch.** Branch off the integration branch — `main`, or the
+   `release/<x.y>` a major is prepared on — and name it for the change
    (`feat/query-param-schemas`, `fix/access-graph-diamond`).
 2. **Keep it focused.** One logical change per PR. Unrelated cleanups belong in
    their own PR.
@@ -95,39 +90,35 @@ server (see CLAUDE.md).
    Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
    add `Type::new(...)` so integration tests can construct providers without boot.
 4. **Update the docs.** If you change behaviour, update the crate README, the
-   docs site, and — if you made a design decision — CLAUDE.md. Crate READMEs
+   docs site, and — if you made a design decision — its entry in
+   `.claude/decisions/` and the rule it changes. Crate READMEs
    stay tight (the `Cargo.toml` description, the install line, and links to the
    matching [nestrs.dev](https://nestrs.dev) page and the repo) — anything
    longer belongs on the docs site.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-The *Definition of done* is a green CI run. `.github/workflows/ci.yml` runs on
-every pull request: formatting, clippy and rustdoc, the test suites (the e2e
-ones against real Postgres, Redis and S3), the Redis/Valkey version matrix, the
-feature matrix, cargo-deny and cargo-machete, the demo and the docs build. A PR
-that has not passed it is not ready for review. Before you push, the fast local
-loop catches most of it: `cargo fmt --all --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`, and `cargo nextest run`
-on the crates you touched (plus the `demo/` equivalents via `nestrs run` when
-you touch the product).
+The *Definition of done* is `just ci` green: the checks CI runs on every pull
+request (`ci.yml`, plus the path-filtered `backends.yml`, `features.yml` and
+`docs.yml`). A PR that has not passed it is not ready for review.
 
 ### Commit messages
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-<type>: <summary in the imperative mood>
+<type>(<scope>): <what is now true, as one sentence>
 ```
 
 Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `chore`,
-`style`, `perf`. Example: `feat(openapi): emit query-parameter schemas`.
+`perf`, with `!` for a breaking change. Example:
+`fix(pipes): a refused ParseArray item is named by its position and type, never quoted`.
 
 ## Adding a dependency
 
-Every new third-party crate must have a published release within the last ~12
-months. If a candidate fails this bar, say so explicitly in the PR — don't add a
-stale dependency silently. See the *Dependency bar* section of CLAUDE.md.
+A new third-party crate is a maintainer's decision: propose it in the issue
+first. It needs a published release within about the last twelve months
+(`.claude/rules/manifests-ci.md`).
 
 ## Code of Conduct
 

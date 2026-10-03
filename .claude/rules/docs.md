@@ -19,7 +19,9 @@ only the traps a session hits before it thinks to look.
 ## What a page owes the code
 
 No script checks a page against the code: the author does, before it ships,
-with `STYLE.md` § F as the list of what has shipped wrong. The code wins a
+with `STYLE.md` § F as the list of what has shipped wrong. A few tests read a
+fact off a page (Redis ACL lines, the toolchain pins); CI's code jobs skip a
+docs-only change, so editing such a page runs `just test`. The code wins a
 disagreement, and the page is fixed in the same commit as the code it follows.
 
 - **A capability's `## Install` and its crate README spell

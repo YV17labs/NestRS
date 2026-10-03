@@ -55,3 +55,7 @@ multiplexed socket it would stall every caller.
 shipped, so nothing migrates from it. 6.x structures are apalis-0.6 lists and
 sets that cannot be renamed into a stream: the worker still refuses to start
 beside them, read-only, and the upgrade path is to drain them with 6.x workers.
+
+**Status (2026-10-03): decided, not landed.** The code still runs apalis, so
+`queue.md`, the docs and the 6.x upgrade guide describe the code until the
+rewrite lands and updates them in the same change.

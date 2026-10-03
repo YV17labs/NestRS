@@ -36,8 +36,8 @@ stops at `<App>Module` (`architecture.md`).
 | `assistant` | MCP |
 | `worker` | the queue, and the one-replica notifications purge |
 
-Hello and blog layouts are scaffolded by the CLI and documented on the site,
-never hosted here.
+The starter layout is scaffolded by the CLI and documented on the site, never
+hosted here.
 
 ## App-local features are the exception
 
@@ -62,8 +62,9 @@ and a shared database, never RPC (`CLAUDE.md`, hard "no").
 `just`, whose recipes are `demo/Justfile`, `db.just` and `test.just`. The
 `.env` cascade, the `Dockerfile` — built with the parent directory as context,
 so it reaches `../crates` — and a separate `Cargo.lock` and `target/` all live
-under `demo/`. The root framework workspace has no `Justfile`: it is driven
-with bare `cargo`.
+under `demo/`. The root workspace's `Justfile` holds the checks CI runs (`just
+pre-commit`, `just ci`) and nothing else; the framework is otherwise driven with
+bare `cargo`.
 
 ## Transports and output
 

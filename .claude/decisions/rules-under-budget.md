@@ -18,3 +18,7 @@ for the product, `manifests-ci.md` for shipping a capability, `testing.md` for
 what `nest-rs-conformance` holds, `observability.md` for the target table), how
 rules are written went to `rules.md`, and the history of each refused
 alternative stays here.
+
+`nest-rs-conformance` was removed the same day
+(`.claude/decisions/conformance-scanner.md`); what `testing.md` said it held
+went with it.

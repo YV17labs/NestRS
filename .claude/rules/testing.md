@@ -18,8 +18,8 @@ for `nest-rs-testing` before hand-rolling a harness.
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives
   HTTP, GraphQL, OpenAPI and MCP through poem's `TestClient`, no socket. The
-  default e2e entry point, and the composition witness `CLAUDE.md` asks of
-  every `for_root` seam. It boots the transport the app's own
+  default e2e entry point, and the composition witness `manifests-ci.md` asks
+  of every `for_root` seam. It boots the transport the app's own
   `HttpModule::for_root(cfg)` describes, through the call the module itself
   makes: pin an `HttpConfig` on the module to test a prefix, a versioning
   strategy, a body cap or a timeout. `TestAppBuilder::http(t)` is only for a
@@ -44,7 +44,8 @@ for `nest-rs-testing` before hand-rolling a harness.
 A test is evidence for what it asserts, and a surviving mutant shows what it
 does not — a stronger question than coverage's *did this line run*. Nothing
 here measures tests by name or by count. Mutants are advisory: CI runs them on
-the diff and never blocks, and locally they are on demand for a logic change. A
+the diff of a pull request labelled `mutants` and never blocks, and locally they
+are on demand for a logic change. A
 missed mutant gets the test that kills it, or the commit body says why it is
 equivalent; an unviable one is noise.
 
@@ -133,7 +134,7 @@ review, like anything else a regenerated snapshot pins: read the `.stderr`
 **Snapshots change only on a deliberate toolchain bump.** rustc's wording is
 the toolchain's, and `rust-toolchain.toml` pins it, so a `.stderr` moves in the
 commit that bumps the toolchain and nowhere else; a snapshot diff in any other
-commit is a refusal that changed. The local loop leaves the snapshots out
-(`!test(/_diagnostics$/)`) unless a `*-macros` or `nest-rs-codegen` crate
-moved. The format hook skips `tests/*/diagnostics/`: `cargo fmt` never reaches
+commit is a refusal that changed. `just pre-commit` leaves the snapshots out
+(`!test(/_diagnostics$/)`); `just test` runs them, and a `*-macros` or
+`nest-rs-codegen` change runs it. The format hook skips `tests/*/diagnostics/`: `cargo fmt` never reaches
 a fixture, and reformatting one moves the line numbers its `.stderr` pins.

@@ -17,9 +17,6 @@ paths:
   - "crates/nest-rs-exception-filters/**"
   - "crates/nest-rs-throttler/**"
   - "crates/nest-rs-openapi/**"
-  - "**/controller.rs"
-  - "**/resolver.rs"
-  - "**/gateway.rs"
 ---
 
 # Edges — transports, posture and request layers

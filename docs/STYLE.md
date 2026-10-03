@@ -1,9 +1,10 @@
 # NestRS docs — style & structure norm
 
 This file is the **single source of truth** for how docs pages are written. It exists because the
-corpus was authored across many LLM/human sessions and drifted into dialects. The norm lives in
-the repo — enforced by `docs/scripts/lint-docs.mjs` in CI — so a new session cannot ship a new
-dialect unnoticed. When in doubt on any page, apply these rules.
+corpus was authored across many LLM/human sessions and drifted into dialects. Review holds the
+house style below; `docs/scripts/lint-docs.mjs` holds only what a page states that the code, the
+demo or the site can contradict (§F), because those are the errors a reader acts on. When in
+doubt on any page, apply these rules.
 
 On conflict about docs prose, this file wins; on conflict about code or naming, `CLAUDE.md` wins.
 Where a rule is *derived* from the framework's own source (§F), the source wins over both — the
@@ -34,9 +35,8 @@ Structural section headings use **only** these names, in canonical order where p
 Recorded because it was written the other way round and every page disagreed: the order used to
 put `Run it` above `Wire it in`, and not one of the pages carrying both followed it — you cannot
 run what is not yet mounted. The pages were right and the sentence was wrong, so the sentence
-moved. `Reference` before `Going further` is the half that was *not* followed — sixteen pages
-nested a `### Reference` inside the closing block — and that one is now the `reference-order`
-rule rather than a convention.
+moved. `Reference` sits above `Going further`, as an H2 — never a `### Reference` nested inside
+the closing block.
 
 Page-specific *content* headings are free. Structural blocks use only the controlled names.
 
@@ -47,20 +47,17 @@ Page-specific *content* headings are free. Structural blocks use only the contro
 | Wiring it up, Wire it into the app, Mount it | Wire it in |
 | Where to go next, Next steps, See also, Going deeper | Going further |
 
-A heading from the left column is the `heading` rule. Frontmatter is `frontmatter` (present at
-all) and `description` (present, ≤ 160 characters, no unquoted `#` — YAML truncates there and the
-sidebar shows half a sentence).
+Every page states a `description` of at most 160 characters: the one question the page answers.
 
-The normative closing block is **`## Going further`** (`going-further`; the majority convention). Utility/terminal
-pages are exempt (see the linter's exempt list): `404`, `glossary`, `decorators`, env-var
-reference.
+The normative closing block is **`## Going further`** (the majority convention). Utility and
+terminal pages close without one: `404`, `glossary`, `decorators`, the env-var reference, and the
+landing, whose every door is already a card.
 
-**It is 2–4 doors wide**, and the same rule counts them: a closing block is where a reader leaves
-the page, not a second copy of what the page contained. A section index whose `Going further` had
-grown to nine links was listing its own pages under the wrong header — that list is `## In this
-section` (§ G), and a run of repository paths is `## Reference`. A bullet naming three sibling
-transports is one door; a step in `tutorial/` points at the next step only, so one door is right
-there and the rule leaves it alone.
+**It is 2–4 doors wide**: a closing block is where a reader leaves the page, not a second copy of
+what the page contained. A section index whose `Going further` had grown to nine links was
+listing its own pages under the wrong header — that list is `## In this section` (§ G), and a run
+of repository paths is `## Reference`. A bullet naming three sibling transports is one door; a
+step in `tutorial/` points at the next step only, so one door is right there.
 
 ## B. One template per page type
 
@@ -84,13 +81,12 @@ Skeletons live in `docs/templates/`.
 ## C. Component conventions
 
 - `<Aside type="tip">` = optional shortcut; `note` = context the reader may skip; `caution` =
-  footgun with consequences. **≤ 3 Asides total per page** (`asides`), and **every one declares
-  its `type`** (`aside-type`) — an untyped `<Aside>` renders as a note while asserting nothing,
-  which is what twenty-six of them did, several being real cautions.
+  footgun with consequences. **≤ 3 Asides total per page**, and **every one declares its `type`**
+  — an untyped `<Aside>` renders as a note while asserting nothing.
 - `<Steps>` for any numbered procedure.
 - `<Tabs syncKey=…>` only for genuine alternatives (workspace/standalone).
 - **Every fence of file content carries a `title=`** — `rust`, `toml`, `sql`, `graphql`, `ts`,
-  `yaml` (`fence-untitled`). Code with no file name is code the reader cannot place. A `bash`
+  `yaml`. Code with no file name is code the reader cannot place. A `bash`
   block is a command, a `json`/`http`/`text` block is a payload or an output, `mermaid` is a
   picture: none is a file, so none takes one.
 
@@ -162,9 +158,9 @@ Skeletons live in `docs/templates/`.
    **only** on the landing, `why.mdx`, and the comparison page. Reference pages sell by
    demonstration.
 4. **Prose style charter.** Second person, present tense, active voice. Average sentence ≤ ~22
-   words. **Banned words** (`banned-word`): *blazing(ly), powerful, seamless(ly), simply,
-   effortless(ly), easy, magic(al)*. **No exclamation marks in prose** (`exclamation`). The voice is a calm senior
-   engineer showing you something that works — never a brochure.
+   words. **Banned words**: *blazing(ly), powerful, seamless(ly), simply, effortless(ly), easy,
+   magic(al)*. **No exclamation marks in prose.** The voice is a calm senior engineer showing you
+   something that works — never a brochure.
 5. **Table-vs-prose.** Tables only for parallel lookup facts (≥ 3 rows, comparable columns).
    Decisions and narratives stay prose. No single-row tables.
 6. **Link discipline.** Glossary link on first use per page only, never in headings or code
@@ -182,15 +178,9 @@ has no feature for: the app's own claims module, an external service you depend 
 **neutral placeholder** rather than a second product (`identity`, which is also what `nestrs g
 auth` scaffolds; `upstream` for a third-party dependency). The test is whether the canon *could*
 have carried it: a pure calculation, a CRUD slice or a migration walkthrough always can, so it
-takes `posts` / `users` / `orgs` and inventing a name there is the violation this rule names. The
-linter greps a ban list and cannot see this — it is a review call.
-
-**Ban list** (the linter greps; must return zero): the identifiers `ItemsService`,
-`ProductEntity`, `artworks`, `file_assets`, `Ledger` — plus the *shapes* an off-canon feature
-leaks in as, whatever noun it picks: an `Item`/`Product`/`Order` role type
-(`OrdersController`, `ProductService`), a `path =`/`title =` under `/items`, `/products`,
-`/orders`, and a route attribute on one. Bare `items`/`products`/`points` as English are
-deliberately not greped — too many false positives; they are a review call, like the escape above.
+takes `posts` / `users` / `orgs` and inventing a name there is the violation this rule names. It
+is a review call: an `ItemsService`, an `OrdersController` or a route under `/products` is the
+shape an off-canon feature leaks in as.
 
 | Docs area | Canonical example |
 |---|---|
@@ -207,11 +197,14 @@ deliberately not greped — too many false positives; they are a review call, li
 | OpenAPI, Health, Rate limiting, OTel, Testing | the `api` app over `users`/`posts` |
 | Storage | the `audio` slice's uploads (`demo/crates/features/src/audio`) |
 
-## F. Code truth — the checks the prose rules can't see
+## F. What the linter checks — the page against the facts
 
-Style is half the job; a page that reads well and does not run is still a defect. Each of these
-was filed against a shipped release by a reader following a page verbatim, so the linter now
-greps for them:
+A page that reads well and does not run is a defect, and review does not catch it: the page is
+plausible on its own, and only the code says otherwise. So the linter checks what a page states
+against what the code, the demo and the site hold — a snippet that does not compile or no
+longer matches `demo/`, an install line, a version, a figure, a link, a member of a family no
+page names. Each rule below was filed against a shipped release by a reader following a page
+verbatim. House style (§A–§E, §G) is not here: a page off-style still works, so it is review's.
 
 **Every framework fact here comes from the canon, and the linter derives nothing.** The linter
 runs `nest-rs-conformance`'s `canon` binary on start (`cargo run -p nest-rs-conformance --bin
@@ -225,6 +218,10 @@ needing a new fact adds a field to the binary, never a regex over `crates/`. Not
 to disk, so no stale copy can pass. What is *content* rather than a derived fact — the `demo/`
 files a fence quotes, the READMEs `readme-install` reads — the linter reads directly.
 
+- **`frontmatter`** — every page opens with a frontmatter block: Starlight's schema needs its
+  `title`, and the build fails without it.
+- **`description`** — a `description` containing ` #` is quoted. YAML ends a plain scalar there,
+  so the rest of the sentence silently never reaches the meta tag or the search result.
 - **`version-pin`** — a literal `nest-rs* = "X.Y"` (either manifest form) must match
   `[workspace.package] version` in the repo root `Cargo.toml`, which is also what
   `nestrs g resource` writes. Bump the release, bump the pages — or use `workspace = true`,
@@ -292,12 +289,6 @@ files a fence quotes, the READMEs `readme-install` reads — the linter reads di
   trait nor the default status it supplies. The filter *replaces* that status; it does not create
   it. 2.0.0's `/fundamentals/exception-filters/` defined the type and the filter, showed no
   handler, and left the impl behind in the demo file it cited two sections lower.
-- **`bare-log`** — a documented `tracing::<level>!` carries at least one structured field, in any
-  of the three spellings (`k = v`, `%v`/`?v`, the bare shorthand), whether or not it names a
-  `target:` and whether or not rustfmt broke it across lines. `CLAUDE.md`:
-  *metadata is mandatory — a bare log is a defect*, since those are the events queried under
-  incident. The scaffolds are already held at zero by a unit test over every template
-  (`nest-rs-cli/src/templates/mod.rs`); the pages a reader copies from are held to the same bar.
 - **`config-table`** — a page publishing a `#[config]` struct's key table lists **every** field,
   and names `staging/production` whenever that struct's `defaults()` branches on the profile. The
   fields are read out of the crate's `config.rs`, not restated. 2.0.0's `/storage/` published five
@@ -318,9 +309,9 @@ files a fence quotes, the READMEs `readme-install` reads — the linter reads di
   in `--features`**, not a crate; the two number the same today and did not before `seaorm` grew a
   second `dep:`, which is the drift that produced this paragraph. Two shapes, on purpose: an
   **exact** count names a set the reader can enumerate elsewhere on the site, so drift is a
-  contradiction; a `+` **floor** may lag what the repo holds, but only inside a band, past which
-  the page undersells a framework that grew. A missing figure is reported too — dropping the claim
-  is dropping the gate, which is how a marketing page starts drifting from the product again.
+  contradiction; a `+` **floor** is false only once the repo holds fewer, so a floor the repo
+  has outgrown is left alone. A missing figure is reported too — a reworded claim the pattern no
+  longer finds would otherwise retire the check in silence.
   **A page's surface is its source plus the components it renders**: the landing is MDX importing
   `src/components/*.astro`, and the decorator count is a sentence inside one of them, so the check
   reads both — still `docs/**` exactly.
@@ -335,23 +326,11 @@ files a fence quotes, the READMEs `readme-install` reads — the linter reads di
   `/fundamentals/exception-filters/` published `Filter` and `ExceptionFilter` with three methods
   each — four names that exist nowhere under `crates/` — then spent an Aside explaining why they
   do not work. A reader who wrote one got `E0407`.
-- **`for-root-form`** — the seam takes `impl Into<Option<C>>`, so a snippet writing
-  `for_root(Some(cfg))` teaches a spelling the signature does not need.
 - **`fence-title`** — a fence titled with a real `demo/` file may not contradict it. Two exact
   probes rather than the byte-for-byte rule of §C: a comment (the demo workspace carries none, so
   quoting one publishes code the repo forbids writing) and a `port:` disagreeing with the app's.
   The strict form would report 134 pages at once and the signal would be gone; the narrowing is
   deliberate and this sentence is where it is stated.
-- **`fence-untitled`** — a fence whose language is the *content of a file* — `rust`, `toml`,
-  `sql`, `graphql`, `ts`, `yaml` — carries a `title=`. A reader who cannot see where a snippet
-  goes cannot use it, and 244 fences across 71 pages said nothing. The complement is the
-  argument: a `bash` block is a command, a `json`/`http`/`text` block is a payload or an output,
-  `mermaid` is a picture — none of them is a file, and none owes a title. See § C for the three
-  shapes a title may take.
-- **`test-layout`** — a test target is a directory (`tests/<suite>/main.rs`), so a page
-  prescribing a flat `tests/<x>.rs` in a fence title or a table cell teaches a suite that escapes
-  the `binary(e2e)` gate. Scoped to prescriptive lines, because naming the flat form is exactly
-  how `/testing/e2e/` refuses it.
 - **`fence-drift`** — a fence titled with a real `demo/` file is an **excerpt of that file**:
   every non-elided line appears in it, in order. Weaker than § C's byte-for-byte rule on purpose
   — most fences are honest excerpts written before the `(abridged)` convention, and the strict
@@ -404,36 +383,17 @@ it**, never by its content mix. `/http/extractors/` reads as a reference and is 
 opened to write a handler. `/queue/retries-and-failure/` teaches a contract and is All options:
 it is opened once the jobs already run.
 
-**The split is a reading, not a menu level.** It is drawn by the section index's "In this
-section" list (§B) and nowhere else. **The sidebar is two deep and never three**: a group is a
-section, its items are that section's pages. Drawn in the menu as well, the split was the third
-of four levels, and it charged every reader on the site a level to tell one reader which half of
-one section a page sits in — the index is where that reader already is.
+**The split is a reading, not a menu level.** It is drawn by the section index's `## In this
+section` list, under a `### Basics` and an `### All options` heading (§B, T-INDEX), and nowhere
+else. **The sidebar is two deep and never three**: a group is a section, its items are that
+section's pages. Drawn in the menu as well, the split was the third of four levels, and it
+charged every reader on the site a level to tell one reader which half of one section a page
+sits in — the index is where that reader already is. Order stays in each page's
+`sidebar.order`; the index lists each group in that order.
 
-The tier is declared **per page, in frontmatter** — `tier: basics` or `tier: all-options` — on
-every non-index page of a tiered section. The section `index` declares none: it frames the
-split and sits above both groups. Order stays in `sidebar.order`; a tier **partitions** a
-section and never restates its order.
-
-**Under five non-index pages a section stays undivided**, and a `tier` there is a violation, not
-a no-op: two headers over three links cost a reader more than they save. One section is exempt at
-any size — `tutorial/` is an ordered path, where a tier boundary mid-sequence would claim
-something false.
-
-`docs/src/sidebar.mjs` owns the vocabulary, the threshold and that exemption;
-`src/content.config.ts` validates the key, and the linter's `tier` rule gates it — an unknown
-tier fails the **build**, and an undeclared page or a section declaring only one fails CI.
-
-**The other half is gated too, and it is the half that was missing: `section-index`.** A tiered
-section's index must carry `## In this section` with a `### Basics` and an `### All options`
-under it. Eight of the ten tiered sections shipped without that list — `tier:` in the frontmatter
-of some fifty pages, validated by the schema, gated by the linter, and rendered to the reader
-nowhere at all. A tier declared and never drawn is not a weaker split; it is no split, plus the
-cost of maintaining one. `/http/` and `/graphql/` are the two that had it, and they are the
-shape to copy.
-
-This is §D made structural. §D budgets one page against drowning the reader; §G budgets the
-section, so the page that frames it says which half a reader came for.
+**Under five non-index pages a section stays undivided**: two headers over three links cost a
+reader more than they save. One section is exempt at any size — `tutorial/` is an ordered path,
+where a tier boundary mid-sequence would claim something false.
 
 ## H. The menu — two levels, everything shown, no name said twice
 

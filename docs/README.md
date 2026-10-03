@@ -16,7 +16,7 @@ Requires **Node.js 22.12 or newer** — Astro 7's own floor, and what
 cd docs
 npm install
 npm run dev        # → http://localhost:4321
-npm run lint:docs  # the style & code-truth gate — CI runs this before the build
+npm run lint:docs  # every page against the code, the demo and its own links — CI runs it before the build
 npm test           # the linter joined against itself
 npm run build      # static site under docs/dist/
 ```
@@ -31,9 +31,8 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `src/content/docs/` | every page — one directory per section |
 | `STYLE.md` | **the law** for docs prose and structure; read it before editing a page |
 | `templates/` | the five skeletons `STYLE.md` §B names — T-CONCEPT, T-INDEX, T-TUTORIAL, T-RECIPE, T-SINGLE |
-| `scripts/lint-docs.mjs` | the gate: every rule in §F, plus the H2 vocabulary, the caps, links and anchors |
+| `scripts/lint-docs.mjs` | the gate: every rule in `STYLE.md` §F |
 | `scripts/lint-baseline.json` | violations a rule inherited when it landed — shrinks only |
-| `src/sidebar.mjs` | the Basics / All options tier split — threshold, vocabulary, exemption |
 | `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
 
@@ -95,12 +94,11 @@ its four pages by slug — autogenerating it would nest `authentication/` under 
 which is the third level again.
 
 A section of **five or more non-index pages** presents two lists — **Basics**
-then **All options** — in its index's "In this section" prose. A page declares
-which one it is in with `tier:` in its frontmatter. That split is *not* a menu
-level: it is a reading of one section, offered where the reader of that section
-already is. `tutorial/` is exempt at any size: its pages are steps 1..n, so a
-tier boundary mid-sequence would claim something false. `STYLE.md` §G is the
-norm, `src/sidebar.mjs` owns the threshold, and the linter gates it.
+then **All options** — in its index's "In this section" list. That split is
+*not* a menu level: it is a reading of one section, offered where the reader of
+that section already is. `tutorial/` is exempt at any size: its pages are steps
+1..n, so a tier boundary mid-sequence would claim something false. `STYLE.md`
+§G is the norm.
 
 ## Deploying
 

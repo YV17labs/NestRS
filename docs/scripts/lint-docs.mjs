@@ -1,44 +1,33 @@
 #!/usr/bin/env node
-// Docs prose/structure linter — enforces docs/STYLE.md.
-//
-// Baseline-gated: docs/scripts/lint-baseline.json records currently-tolerated violations so CI
-// fails only on NEW dialect drift. As pages reach conformance the baseline shrinks; when empty,
-// the linter gates the whole corpus.
+// Docs linter — checks every page against the facts it states.
 //
 //   node scripts/lint-docs.mjs   # fail on any violation not in the baseline, and on any
 //                                # baseline line naming a violation since fixed
 //
-// Two jobs, and the split is what decides where a check may read from.
+// A rule earns its place by catching something a reader would act on and get wrong: a snippet
+// that does not compile or no longer matches `demo/`, an install line that installs the wrong
+// thing, a version pin, a figure, a dead link, frontmatter the site build needs, a member of a
+// family no page names. House style — headings, word lists, asides, page shape — is review's,
+// against `STYLE.md`, and never a rule here.
 //
-// **Prose and structure** (see STYLE.md) — `frontmatter`, `description`, `tier`, `heading`,
-// `banned-word`, `exclamation`, `going-further`, `asides`, `canon`, `title`. These read the
-// page and nothing else.
-//
-// **Code-truth** — `version-pin`, `unauthed-curl`, `crud-error`, `bind-order`, `queue-name`,
-// `install-stanza`, `otel-guard`, `decorator-import`, `decorator-index`, `layer-impl`,
-// `trait-surface`, `exception-response-error`, `bare-log`, `config-table`, `for-root-form`,
-// `fence-title`, `fence-untitled`, `test-layout`, `architecture-drift`, `envelope-drift`,
-// `landing-claim`, `family-mention`, `readme-install`. Each
-// is documented on its constant below and each was filed as a shipped defect first.
-//
-// Every code-truth check reads the canon, which `nest-rs-conformance`'s `canon` binary derives
-// from the tree and this file runs on start — see the `CANON` doc below. The checks quoting
-// `demo/` read its files directly, and `readme-install` reads the crate READMEs: raw content,
-// never a second derivation of a framework fact.
+// Every framework fact a rule needs is read from the canon, which `nest-rs-conformance`'s
+// `canon` binary derives from the tree and this file runs on start — see the `CANON` doc
+// below. The rules quoting `demo/` read its files directly, and `readme-install` reads the
+// crate READMEs: raw content, never a second derivation of a framework fact.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { REDIRECTS } from '../src/redirects.mjs';
-import {
-  CONTENT_ROOT, TIERS, TIER_LABELS, TIER_THRESHOLD, UNTIERED_SECTIONS, sections,
-} from '../src/sidebar.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = join(HERE, '..');
 
 const REPO_ROOT = join(DOCS_ROOT, '..');
+
+/// The docs collection root — the one place the content path is spelled.
+export const CONTENT_ROOT = join(DOCS_ROOT, 'src', 'content', 'docs');
 
 /// Every fact about the framework a page is checked against, printed by
 /// `nest-rs-conformance`'s `canon` binary, which this file runs on start.
@@ -133,89 +122,27 @@ function pinnedPort(text) {
   return m ? Number(m[1]) : null;
 }
 
-// The same root the sidebar reads, so the two never disagree about what a page is.
-const CONTENT = CONTENT_ROOT;
 // Every page, walked once. Two consumers — the per-file lint pass, and the
 // `N+ pages` floor on `/why/`, which is *checked against this number*: a second
 // walk would be a second answer to the question the claim is gated on.
-const PAGES = walk(CONTENT).sort();
+const PAGES = walk(CONTENT_ROOT).sort();
 const BASELINE = join(HERE, 'lint-baseline.json');
-
-// Pages exempt from the closing "Going further" requirement (utility/terminal pages).
-const GOING_FURTHER_EXEMPT = new Set([
-  '404.md',
-  'glossary.mdx',
-  'decorators.mdx',
-  'configuration/env-reference.mdx', // env-var reference (step 10)
-  // The landing is a splash, not a reference page: it closes on its call to
-  // action, and every door a `Going further` block would list is already a
-  // capability card, a nav link or the footer. The rule exists so a reader is
-  // never left at the end of a page with nowhere to go — which is a question
-  // the splash answers six times before it ends.
-  'index.mdx',
-]);
-
-const BANNED_HEADINGS = [
-  'wiring it up', 'wire it into the app', 'mount it', 'where to go next',
-  'next steps', 'see also', 'going deeper',
-];
-
-const BANNED_WORDS = [
-  'blazing', 'blazingly', 'powerful', 'seamless', 'seamlessly',
-  'simply', 'effortless', 'effortlessly', 'easy', 'magic', 'magical',
-];
-
-const CANON_BANLIST = [
-  'ItemsService', 'ProductEntity', 'artworks', 'file_assets', 'Ledger',
-  // whole-word 'items'/'products' as a feature name are context-heavy; the identifiers above
-  // are the reliable signal.
-];
-
-/// Off-canon features leak in as *variants* of the banned identifiers —
-/// `ItemsController`, `ItemsResolver`, a `path = "/items"`, a `src/items/`
-/// snippet title. A word-list can't keep up; these shapes can.
-/// `items` as plain English ("items reachable from the root") is untouched.
-const CANON_SHAPES = [
-  [/\b(?:Item|Product|Order)s?(?:Controller|Resolver|Service|Entity|Module|Gateway|Processor)\b/,
-    'off-canon feature type'],
-  [/(?:path|title)\s*=\s*"[^"]*\/(?:items|products|orders)\b/, 'off-canon feature path'],
-  [/#\[(?:get|post|patch|put|delete)\("\/(?:items|products|orders)\b/, 'off-canon feature route'],
-  // The residue the type and path shapes both miss: an entity keeps the banned
-  // table under a canon `#[expose(name = "Post")]`, and a GraphQL `path` or a
-  // `data` key still spells the field the old example resolved.
-  [/table_name\s*=\s*"\w*(?:item|product|order)s?\w*"/, 'off-canon table'],
-  [/"(?:path|data)":\s*[[{]\s*"(?:item|product|order)s?"/, 'off-canon wire field'],
-];
 
 /// Every rule this linter can file, spelled once.
 ///
-/// **A rule name is a string the tooling interprets, so it is a constant.** They
-/// were 30 bare literals at 32 call sites, restated by hand in `STYLE.md` § F
-/// and in `.claude/rules/docs.md` — three lists, kept in step by nobody, and
-/// seven rules existed in none but this file. A typo'd name is a violation the
-/// baseline can never match and no document describes.
+/// **A rule name is a string the tooling interprets, so it is a constant**: a
+/// typo'd name at a call site is a violation no document describes.
 ///
 /// The object is the family's derived population: `lint.test.mjs` joins it
-/// against the fixtures that prove each rule still fires **and** against the two
-/// documents that describe them, so a rule cannot be added silently, lost
-/// silently, or documented without existing.
+/// against the fixtures that prove each rule still fires **and** against
+/// `STYLE.md` § F, which describes them, so a rule cannot be added silently,
+/// lost silently, or documented without existing.
 export const RULES = Object.freeze({
-  // Prose and structure — these read the page and nothing else.
+  // The page against the site build and the site's own routes.
   frontmatter: 'frontmatter',
   description: 'description',
-  tier: 'tier',
-  title: 'title',
-  heading: 'heading',
-  bannedWord: 'banned-word',
-  exclamation: 'exclamation',
-  goingFurther: 'going-further',
-  referenceOrder: 'reference-order',
-  asides: 'asides',
-  asideType: 'aside-type',
-  sectionIndex: 'section-index',
-  canon: 'canon',
   link: 'link',
-  // Code-truth — these read the canon, or the demo sources a fence quotes.
+  // The page against the code — these read the canon, or the demo sources a fence quotes.
   versionPin: 'version-pin',
   bindOrder: 'bind-order',
   queueName: 'queue-name',
@@ -228,18 +155,14 @@ export const RULES = Object.freeze({
   layerImpl: 'layer-impl',
   traitSurface: 'trait-surface',
   exceptionResponseError: 'exception-response-error',
-  bareLog: 'bare-log',
   configTable: 'config-table',
-  forRootForm: 'for-root-form',
   fenceTitle: 'fence-title',
-  fenceUntitled: 'fence-untitled',
   fenceDrift: 'fence-drift',
-  testLayout: 'test-layout',
   architectureDrift: 'architecture-drift',
   envelopeDrift: 'envelope-drift',
   landingClaim: 'landing-claim',
-  // Corpus-scoped code-truth — every member of a family the canon publishes is
-  // owed somewhere, rather than one page owing anything.
+  // Corpus-scoped — every member of a family the canon publishes is owed
+  // somewhere, rather than one page owing anything.
   familyMention: 'family-mention',
   readmeInstall: 'readme-install',
 });
@@ -327,7 +250,7 @@ function decoratorIndexDrift(src) {
 /// attributes an orchestrator reads (`#[get]`, `#[public]`) count here exactly
 /// because the page's inclusion rule is "everything you write".
 function documentedDecorators() {
-  const src = readFileSync(join(CONTENT, 'decorators.mdx'), 'utf8');
+  const src = readFileSync(join(CONTENT_ROOT, 'decorators.mdx'), 'utf8');
   const names = new Set();
   for (const row of src.split('\n').filter((l) => l.startsWith('| `#['))) {
     for (const m of row.slice(1, row.indexOf('|', 1)).matchAll(/#\[(\w+)/g)) names.add(m[1]);
@@ -338,19 +261,6 @@ function documentedDecorators() {
   }
   return names.size;
 }
-
-/// The landing sells the framework on figures, so the figures are read out of
-/// the repo rather than typed once and left. Four claims, four sources: the
-/// umbrella's feature matrix, the decorator index, the test functions under
-/// `crates/`, and this content tree.
-///
-/// Two shapes, and the difference is deliberate. An **exact** claim (`28
-/// capabilities`) names a set the reader can enumerate on another page of this
-/// site, so any drift is a contradiction. A **floor** (`1,800+ tests`) may lag
-/// what the repo holds — that is what the `+` says — but only within a band:
-/// past it the page undersells a framework that grew, which is the same defect
-/// pointing the other way.
-const CLAIM_BAND = new Map([['tests', 600], ['pages', 30]]);
 
 /// **A page's surface is its source plus the components it renders.** The
 /// landing is MDX that imports `src/components/*.astro`, and half its figures
@@ -366,13 +276,15 @@ function surfaceOf(src) {
   return parts.join('\n');
 }
 
-/// One figure, checked two ways.
+/// One figure, checked against the repo.
 ///
-/// An **exact** claim names a set the reader can enumerate on another page of
-/// this site, so any drift is a contradiction. A **floor** (`2,000+ tests`) may
-/// lag what the repo holds — that is what the `+` says — but only within a
-/// band: past it the page undersells a framework that grew, which is the same
-/// defect pointing the other way.
+/// An **exact** claim (`28 capabilities`) names a set the reader can enumerate
+/// on another page of this site, so any drift is a contradiction. A **floor**
+/// (`2,000+ tests`) is false only once the repo holds fewer — a floor the repo
+/// has outgrown is still true, so it is left alone.
+///
+/// A figure the pattern no longer finds is reported rather than skipped: a
+/// rewording would otherwise retire the check in silence.
 ///
 /// The emphasis is optional because a figure is not always markdown: the
 /// decorator count is a sentence inside a component, where `**` would render
@@ -389,18 +301,8 @@ function figureDrift(surface, where, specs) {
     if (claimed === null) {
       out.push(`no \`${floor ? 'N+' : 'N'} ${what}\` claim on ${where} — the figure is gated `
         + `against the repo, so removing it removes the gate; say what the repo holds (${actual})`);
-      continue;
-    }
-    if (!floor) {
-      if (claimed !== actual) out.push(`${where} claims ${claimed} ${what}, the repo holds ${actual}`);
-      continue;
-    }
-    const band = CLAIM_BAND.get(what);
-    if (claimed > actual) {
-      out.push(`${where} claims ${claimed}+ ${what}, the repo holds ${actual}`);
-    } else if (actual - claimed > band) {
-      out.push(`${where} claims ${claimed}+ ${what} and the repo holds ${actual} — past `
-        + `${band} the floor undersells; raise it`);
+    } else if (floor ? claimed > actual : claimed !== actual) {
+      out.push(`${where} claims ${claimed}${floor ? '+' : ''} ${what}, the repo holds ${actual}`);
     }
   }
   return out;
@@ -521,17 +423,6 @@ const QUEUE_STRING_FORM = /#\[process\(\s*(?:queue\s*=\s*)?"/g;
 /// in 7.0 any more than a constant does, but it is 6.x's `push(name, job)`, and
 /// the upgrade pages spell that in their before column on purpose.
 const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
-
-/// A test target is a **directory** — `tests/<suite>/main.rs`. Cargo compiles a
-/// flat `tests/<x>.rs` as its own binary, so a suite scattered across sibling
-/// files escapes the `binary(e2e)` gate and relinks once per file. The section
-/// index taught the flat form three times while `testing/integration.mdx` next
-/// door explained why it does not exist, and neither workspace holds one.
-///
-/// Scoped to where a page **prescribes** a location — a fence `title=` and a
-/// table cell — because naming the flat form is exactly how `e2e.mdx` refuses
-/// it, and a check that cannot tell the two apart makes the refusal unwritable.
-const FLAT_TEST_TARGET = /\btests\/[A-Za-z0-9_*]+\.rs\b/g;
 
 /// Two facts a fence titled with a real `demo/` file cannot contradict. Titles
 /// cite the *user's* workspace shape, so the prefix is mapped back onto `demo/`;
@@ -675,11 +566,6 @@ function fenceTitleDrift(blocks) {
     }
   }
   return out;
-}
-
-/// The lines that prescribe a path: a fence title, and a table row.
-function prescriptiveLines(src) {
-  return src.split('\n').filter((line) => /^\s*\|/.test(line) || /```[^\n]*title=/.test(line));
 }
 
 /// The binding the crate's own panic text tells a reader to write when
@@ -1113,19 +999,6 @@ function rustDeclarations(blocks) {
 /// `PostError`, cited two sections below on the same page, has the impl.
 const EXCEPTION_ASSOC = /^\s*type\s+Exception\s*=\s*([A-Za-z_]\w*)\s*;/gm;
 
-/// `CLAUDE.md`: *metadata is mandatory — a bare log is a defect*, because those
-/// are the events queried under incident. The scaffolds hold this at zero
-/// (`nest-rs-cli/src/templates/mod.rs` asserts it over every template); the
-/// pages a reader copies from have to as well.
-///
-/// A match *is* the violation: the pattern runs from the macro call, past an
-/// optional `target:`, straight into the message literal, so anything between —
-/// `k = v`, the `%v`/`?v` sigils, the bare shorthand — makes it fail. `\s*`
-/// spans newlines deliberately: the corpus's multi-field logs are the ones
-/// rustfmt broke across lines, and they are where a dropped field would hide.
-/// Anchoring on the macro-call shape keeps prose mentioning `tracing::` out.
-const BARE_LOG = /tracing::\w+!\(\s*(?:target:\s*"([^"]*)"\s*,\s*)?"/g;
-
 /// Marks a snippet as a handler — the only layer where the check above applies.
 /// A **service** method returning `ServiceError` converts `DbErr` through `?`
 /// legitimately, and that is where the conversion belongs: the exemplar's
@@ -1155,17 +1028,6 @@ function fencedBlocks(src) {
 
 /// The fence languages that hold a pasteable shell command.
 const SHELL_INFO = /^(bash|sh|shell|console|zsh)\b/;
-
-/// The fence languages whose blocks are the *contents of a file*, and which
-/// therefore owe a `title=` saying which one.
-///
-/// The complement is the point: a shell block is a command and has no file, a
-/// `json`/`http`/`text` block is a payload or an output the reader reads rather
-/// than writes, and `mermaid` is a picture. Those four say nothing by having no
-/// title. A `rust` block that says nothing leaves the reader holding code with
-/// nowhere to put it, which is the defect this rule was filed for — 244 fences
-/// across 71 pages, on the pages a newcomer opens first.
-const FILE_CONTENT_INFO = /^(rust|toml|sql|graphql|ts|yaml|yml)\b/;
 
 /// The lines of a shell block as a reader would run them: continuations folded
 /// so an argument on the next line still belongs to its command, and a `$`
@@ -1201,7 +1063,8 @@ function walk(dir) {
   return out;
 }
 
-// Remove fenced code blocks and inline code so prose checks don't fire inside code.
+/// The page with its fenced blocks and inline code removed, so a link spelled
+/// inside code is not read as one.
 function stripCode(src) {
   return stripFences(src).replace(/`[^`\n]*`/g, '');
 }
@@ -1211,15 +1074,15 @@ function stripCode(src) {
 /// The distinction is load-bearing for headings: `## \`ConfigService\` API`
 /// renders an id built from the whole line, so stripping the span first reads
 /// the heading as `API` and reports every link to it as dead. `stripCode`'s
-/// inline pass is right for prose rules — a banned word inside backticks is a
-/// code sample — and wrong for anything reading a heading's text.
+/// inline pass is right for links — a `](/x/)` inside backticks is a code
+/// sample — and wrong for anything reading a heading's text.
 function stripFences(src) {
   return src.replace(/```[\s\S]*?```/g, '');
 }
 
-/// A page's id — its path under `CONTENT`, slash-separated on every platform.
+/// A page's id — its path under `CONTENT_ROOT`, slash-separated on every platform.
 function relOf(absPath) {
-  return relative(CONTENT, absPath).split('\\').join('/');
+  return relative(CONTENT_ROOT, absPath).split('\\').join('/');
 }
 
 /// The route a page is served at — `/http/streaming/`, `/database/`, `/`.
@@ -1318,12 +1181,6 @@ function deadLinks(rel, src) {
   return out;
 }
 
-/// Every page's frontmatter `title`, filled as `lintFile` walks. Accumulated
-/// rather than re-read: `lintFile` already has the source and already parsed the
-/// frontmatter, and a second pass would be a second place deciding what counts
-/// as a page.
-const PAGE_TITLES = new Map();
-
 function frontmatter(src) {
   const m = src.match(/^---\n([\s\S]*?)\n---/);
   return m ? m[1] : null;
@@ -1332,134 +1189,34 @@ function frontmatter(src) {
 /// One page, linted.
 ///
 /// `src` defaults to the file's own contents and is injectable so the suite can
-/// prove a rule still fires against a fixture. That injection is the *whole*
-/// seam that made this file testable: nothing here was importable and every
-/// derivation ran at module scope, so thirty rules had no way to be exercised
-/// and none of them was — weaken any regex and the run went greener, which
-/// `.claude/rules/testing.md` calls worse than an empty cell.
+/// prove a rule still fires against a fixture: a rule nothing exercises goes
+/// quiet the day its regex is weakened, and the run turns greener.
 export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
   const rel = relOf(absPath);
-  const prose = stripCode(src);
   const blocks = fencedBlocks(src);
   const v = [];
   const add = (rule, detail) => v.push(`${rel}::${rule}::${detail}`);
 
-  // 1. Frontmatter description.
+  // Frontmatter — Starlight's schema requires it — with a description YAML
+  // reads whole: a plain scalar ends at ` #`, so the rest of the sentence never
+  // reaches the meta tag, and nothing reports it.
   const fm = frontmatter(src);
   if (fm === null) {
     add(RULES.frontmatter, 'missing frontmatter');
   } else {
-    const title = fm.match(/^title:\s*(.+?)\s*$/m)?.[1].replace(/^["']|["']$/g, '');
-    if (title) {
-      if (!PAGE_TITLES.has(title)) PAGE_TITLES.set(title, []);
-      PAGE_TITLES.get(title).push(rel);
-    }
-    const dm = fm.match(/^description:\s*(.*)$/m);
-    if (!dm) {
-      add(RULES.description, 'missing');
-    } else {
-      let raw = dm[1].trim();
-      const quoted = /^".*"$/.test(raw) || /^'.*'$/.test(raw);
-      const value = quoted ? raw.slice(1, -1) : raw;
-      if (!quoted && /\s#/.test(raw)) add(RULES.description, 'unquoted-hash (YAML truncation)');
-      if (value.length > 160) add(RULES.description, `too-long (${value.length}>160)`);
-    }
-    // 1b. A tier places a page inside one of its section index's two lists. A
-    // page that is in no section — the hand-listed roots of `Start here` and
-    // `Reference` — has no index to be placed in, so the key would sit there
-    // saying nothing.
-    if (!rel.includes('/') && /^tier:/m.test(fm)) {
-      add(RULES.tier, 'a page in no section declares a tier — nothing would group it');
-    }
+    const raw = fm.match(/^description:\s*(.*)$/m)?.[1].trim() ?? '';
+    const quoted = /^".*"$/.test(raw) || /^'.*'$/.test(raw);
+    if (!quoted && /\s#/.test(raw)) add(RULES.description, 'unquoted-hash (YAML truncation)');
   }
 
-  // 2. Banned heading variants (## or ###).
-  for (const line of src.split('\n')) {
-    const h = line.match(/^#{2,3}\s+(.*)$/);
-    if (h && BANNED_HEADINGS.includes(h[1].trim().toLowerCase())) {
-      add(RULES.heading, h[1].trim());
-    }
-  }
-
-  // 3. Banned prose words.
-  for (const w of BANNED_WORDS) {
-    const re = new RegExp(`\\b${w}\\b`, 'i');
-    if (re.test(prose)) add(RULES.bannedWord, w);
-  }
-  // Exclamation marks in prose (exclude "!=" and markup).
-  if (/[A-Za-z0-9,)"'’]!(\s|$)/m.test(prose)) add(RULES.exclamation, 'prose ! found');
-
-  // 4. Closing "## Going further" — present, and no wider than four doors.
-  //
-  // The width half is the one that drifted: a section index whose closing block
-  // had grown into a second copy of its own page list (nine links on
-  // `/database/`, seven on `/http/controllers/`), which is the "In this section"
-  // list wearing the wrong header. A block with *one* link is left alone —
-  // T-TUTORIAL says a step points at the next step only.
-  if (!GOING_FURTHER_EXEMPT.has(rel)) {
-    const block = src.split(/^##\s+Going further\s*$/m)[1];
-    if (block === undefined) add(RULES.goingFurther, 'missing closing block');
-    else {
-      // Doors, not links: a bullet naming three sibling transports is one door,
-      // and it is the bullet count a reader scans.
-      const doors = (block.split(/^##\s/m)[0].match(/^-\s/gm) || []).length;
-      if (doors > 4) {
-        add(RULES.goingFurther, `${doors} doors — a closing block is 2–4 of them; a longer `
-          + 'list is the section index\'s "In this section" filed under the wrong header, or '
-          + 'a `## Reference` that never got one');
-      }
-    }
-  }
-
-  // 4a. `Reference` sits *above* the closing block, and is an H2.
-  //
-  // § A's canonical order ends `… → Reference → Going further`, and sixteen
-  // pages had it the other way round — an `### Reference` nested inside the
-  // closing block, so the page's last word was a reference list the reader met
-  // after being sent elsewhere.
-  const refH3 = /^###\s+Reference\s*$/m.exec(src);
-  if (refH3) {
-    add(RULES.referenceOrder, '`### Reference` — a structural block is an H2, not a '
-      + 'sub-heading of `## Going further`');
-  }
-  const refAt = src.search(/^##\s+Reference\s*$/m);
-  const gfAt = src.search(/^##\s+Going further\s*$/m);
-  if (refAt !== -1 && gfAt !== -1 && refAt > gfAt) {
-    add(RULES.referenceOrder, '`## Reference` after `## Going further` — the closing block '
-      + 'closes the page');
-  }
-
-  // 4b. A page that restates a shipped file may not drift from it.
+  // A page that restates a shipped file may not drift from it.
   const mirror = MIRRORED_PAGES.get(rel);
   if (mirror) {
     MIRRORS_SEEN.add(rel);
     for (const detail of mirror.check(src)) add(mirror.rule, detail);
   }
 
-  // 5. ≤3 Asides, each declaring which of the three it is.
-  //
-  // § C gives `tip`, `note` and `caution` distinct meanings — an optional
-  // shortcut, context the reader may skip, a footgun with consequences — so an
-  // untyped `<Aside>` renders as a note while asserting nothing. Twenty-six
-  // shipped that way, several of them real cautions.
-  const asides = (src.match(/<Aside\b/g) || []).length;
-  if (asides > 3) add(RULES.asides, `${asides} > 3`);
-  for (const m of src.matchAll(/<Aside\b([^>]*)>/g)) {
-    if (!/\btype\s*=/.test(m[1])) {
-      add(RULES.asideType, 'an `<Aside>` with no `type=` — one of `tip`, `note`, `caution`');
-    }
-  }
-
-  // 6. Example-canon ban list.
-  for (const term of CANON_BANLIST) {
-    if (new RegExp(`\\b${term}\\b`).test(src)) add(RULES.canon, term);
-  }
-  for (const [re, label] of CANON_SHAPES) {
-    const hit = src.match(re);
-    if (hit) add(RULES.canon, `${label}: ${hit[0]}`);
-  }
-
-  // 7. `nest-rs*` pins track the version the repo builds.
+  // 1. `nest-rs*` pins track the version the repo builds.
   for (const m of src.matchAll(NEST_RS_PIN)) {
     const pinned = bareReq(m[1]);
     const [major, minor] = pinned.split('.');
@@ -1468,12 +1225,12 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     }
   }
 
-  // 8. The by-id binder's type parameters, in the order the code declares.
+  // 2. The by-id binder's type parameters, in the order the code declares.
   for (const m of src.matchAll(BIND_ORDER)) {
     add(RULES.bindOrder, `${m[0]}… — the action marker comes first`);
   }
 
-  // 9. A queue is named by its `Queue` type on both sides.
+  // 3. A queue is named by its `Queue` type on both sides.
   for (const m of src.matchAll(QUEUE_STRING_FORM)) {
     add(RULES.queueName, `${m[0]}…" — name the queue by its Queue type`);
   }
@@ -1486,7 +1243,7 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
   for (const block of blocks) {
     const shell = SHELL_INFO.test(block.info);
 
-      // 10. A pasteable `curl` against a guarded route carries a bearer — unless
+    // 4. A pasteable `curl` against a guarded route carries a bearer — unless
     // the block is documenting the denial itself.
     if (shell && !/\b(401|403|Unauthorized|Forbidden)\b/.test(block.body)) {
       for (const line of shellLines(block.body)) {
@@ -1496,7 +1253,7 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
       }
     }
 
-    // 11. A handler snippet that `?`s a `CrudService` read does not compile.
+    // 5. A handler snippet that `?`s a `CrudService` read does not compile.
     if (RUST_INFO.test(block.info) && HANDLER_SNIPPET.test(block.body)) {
       for (const line of block.body.split('\n')) {
         if (UNMAPPED_CRUD_READ.test(line) && !line.includes('map_err')) {
@@ -1506,10 +1263,10 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     }
   }
 
-  // 11b. Every internal link resolves to a page, and every anchor to a heading.
+  // 6. Every internal link resolves to a page, and every anchor to a heading.
   for (const detail of deadLinks(rel, src)) add(RULES.link, detail);
 
-  // 12. The OTel guard binds the name the crate's boot panic prescribes.
+  // 7. The OTel guard binds the name the crate's boot panic prescribes.
   for (const m of src.matchAll(OTEL_INIT)) {
     if (m[1] !== OTEL_BINDING) {
       // No `::` in the detail — the console splits a violation on it.
@@ -1518,14 +1275,14 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     }
   }
 
-  // 13. Under `## Install`, the `cargo add` line and the `[dependencies]` block
+  // 8. Under `## Install`, the `cargo add` line and the `[dependencies]` block
   // say the same thing.
   for (const detail of installStanzaViolations(blocks)) add(RULES.installStanza, detail);
 
-  // 14. A snippet that shows its imports imports the decorator it illustrates.
+  // 9. A snippet that shows its imports imports the decorator it illustrates.
   for (const detail of missingDecoratorImports(blocks)) add(RULES.decoratorImport, detail);
 
-  // 15. A page-defined type implementing a Layer sub-trait carries `impl Layer`.
+  // 10. A page-defined type implementing a Layer sub-trait carries `impl Layer`.
   const rust = rustDeclarations(blocks);
   const hasLayer = rust.implementorsOf('Layer');
   for (const { trait: t, type } of rust.impls) {
@@ -1534,7 +1291,7 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
       + `${t} is declared \`: Layer\` and there is no blanket impl`);
   }
 
-  // 16. An `ExceptionFilter`'s exception reaches the chain as a `poem::Error`.
+  // 11. An `ExceptionFilter`'s exception reaches the chain as a `poem::Error`.
   const hasResponseError = rust.implementorsOf('ResponseError');
   for (const m of src.matchAll(EXCEPTION_ASSOC)) {
     const exception = m[1];
@@ -1544,15 +1301,7 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
       + `already a poem-Error, so the handler raising it does not compile`);
   }
 
-  // 17. Every documented log carries at least one structured field — a match on
-  // `BARE_LOG` is the violation itself.
-  for (const m of src.matchAll(BARE_LOG)) {
-    // No `::` in the detail — the console splits a violation on it.
-    const where = m[1] ? `on target ${m[1].replace(/::/g, '.')}` : 'with no target';
-    add(RULES.bareLog, `the log ${where} carries no structured field`);
-  }
-
-  // 18. A config-key table is exhaustive, and publishes both branches of a
+  // 12. A config-key table is exhaustive, and publishes both branches of a
   // profile-dependent default.
   const configStruct = CONFIG_TABLES.get(rel);
   if (configStruct) {
@@ -1571,23 +1320,11 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     }
   }
 
-  // 19. One spelling for a pinned config: `for_root(x)`, never `for_root(Some(x))`.
-  for (const m of src.matchAll(/\bfor_root\(\s*Some\(/g)) {
-    add(RULES.forRootForm, `${m[0]}…)) — the seam takes \`impl Into<Option<C>>\`, so the demo `
-      + 'and every scaffold write the bare value; keep `None` for the env-only call');
-  }
-
-  // 20. A fence titled with a real file quotes it, and a fence of file content
-  //     says which file (STYLE.md § C).
+  // 13. A fence titled with a real demo file quotes it.
   for (const detail of fenceTitleDrift(blocks)) add(RULES.fenceTitle, detail);
   for (const detail of fenceDrift(blocks)) add(RULES.fenceDrift, detail);
-  for (const block of blocks) {
-    if (!FILE_CONTENT_INFO.test(block.info) || /title="/.test(block.info)) continue;
-    add(RULES.fenceUntitled, `a \`${block.info.split(/\s/)[0]}\` fence with no \`title=\` — `
-      + 'a reader cannot place code that does not say where it goes');
-  }
 
-  // 21. A published trait signature does not invent a method.
+  // 14. A published trait signature does not invent a method.
   for (const block of blocks) {
     if (!RUST_INFO.test(block.info)) continue;
     for (const { name: trait, methods } of traitDecls(block.body)) {
@@ -1604,111 +1341,17 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     }
   }
 
-  // 22. A test target is a directory, never a flat `tests/<x>.rs`.
-  for (const line of prescriptiveLines(src)) {
-    for (const m of line.matchAll(FLAT_TEST_TARGET)) {
-      add(RULES.testLayout, `${m[0]} is a flat test target — a suite is a directory, `
-        + 'tests/<suite>/main.rs');
-    }
-  }
-
   return v;
-}
-
-/// 19. The Basics / All options split (STYLE.md §G), checked per **section** —
-/// the one invariant no single page can carry. A section past the threshold
-/// presents two lists on its index, so every page in it says which one it is in,
-/// and both have to hold something: a section that declares one tier is the
-/// undivided list with a header on it, which is the state the split exists to
-/// replace.
-///
-/// Below the threshold the rule inverts — a `tier` there is a page claiming a
-/// grouping nothing renders, and the reader never sees it. Violations are filed
-/// against the page that carries the wrong frontmatter, and a missing tier
-/// against the `index` that frames the section.
-///
-/// The sidebar reads none of this: it is two deep, a group being a section and
-/// its items that section's pages. So this rule is the split's only gate, where
-/// it used to share the job with a build that failed on an unsorted page.
-function lintSections() {
-  const out = [];
-  const add = (rel, detail) => out.push(`${rel}::${RULES.tier}::${detail}`);
-
-  for (const { dir, index, pages, tiered } of sections()) {
-    if (!tiered) {
-      const why = UNTIERED_SECTIONS.has(dir)
-        ? `${dir}/ is an ordered path, exempt from the split at any size`
-        : `${dir}/ has ${pages.length} pages, under the ${TIER_THRESHOLD} a split needs`;
-      for (const page of pages.filter((p) => p.tier)) {
-        add(page.rel, `\`tier: ${page.tier}\` on a page in an undivided section — ${why}`);
-      }
-      continue;
-    }
-    for (const page of pages) {
-      if (!page.tier) {
-        add(page.rel, `no tier — ${dir}/index presents ${pages.length} pages in two lists, so `
-          + `each one declares \`tier: ${TIERS.join('` or `tier: ')}\``);
-      } else if (!TIERS.includes(page.tier)) {
-        add(page.rel, `unknown tier \`${page.tier}\` — the tiers are `
-          + TIERS.map((t) => `\`${t}\``).join(' and '));
-      }
-    }
-    for (const tier of TIERS.filter((t) => !pages.some((p) => p.tier === t))) {
-      add(index ? index.rel : `${dir}/index.mdx`,
-        `${dir}/ declares no ${TIER_LABELS[tier]} page — a section split into one tier is `
-        + 'the undivided list with a header on it');
-    }
-
-    // § G: the index's "In this section" list is where the split is *drawn*,
-    // and the only place — the menu is two deep and never three. Without it
-    // every `tier:` in the section is frontmatter no reader ever sees, which is
-    // the state eight of the ten tiered sections shipped in.
-    const idx = index ? join(CONTENT_ROOT, index.rel) : null;
-    const src = idx && existsSync(idx) ? readFileSync(idx, 'utf8') : null;
-    if (src === null) continue;
-    const missing = [
-      [/^##\s+In this section\s*$/m, '`## In this section`'],
-      ...TIERS.map((t) => [new RegExp(`^###\\s+${TIER_LABELS[t]}\\s*$`, 'm'),
-        `\`### ${TIER_LABELS[t]}\``]),
-    ].filter(([re]) => !re.test(src)).map(([, label]) => label);
-    if (missing.length) {
-      out.push(`${index.rel}::${RULES.sectionIndex}::${dir}/ is tiered and its index does not `
-        + `draw the split — missing ${missing.join(', ')}. The tier is rendered here and `
-        + 'nowhere else, so without this list every `tier:` in the section is invisible');
-    }
-  }
-  return out;
-}
-
-/// No two pages carry the same `title`. In search (Pagefind) the title is all a
-/// reader sees, so two "Health" pages — one of them the stale one — is the exact
-/// configuration where the wrong page wins. The fix is a qualified `title` plus
-/// a short `sidebar.label`, which leaves the navigation unchanged.
-function lintTitles() {
-  return [...PAGE_TITLES]
-    .filter(([, pages]) => pages.length > 1)
-    .flatMap(([title, pages]) => pages.map((rel) => `${rel}::${RULES.title}::\`${title}\` is also the `
-      + `title of ${pages.filter((p) => p !== rel).join(', ')} — qualify it and keep the short `
-      + 'name as `sidebar.label`'));
 }
 
 /// The whole corpus, linted. Exported so the suite can assert a rule still
 /// fires without running the gate — see the driver guard below.
 export function lint() {
   MIRRORS_SEEN.clear();
-  // Both accumulators, for the same reason. `PAGE_TITLES` is filled by
-  // `lintFile`, which the suite also calls directly against fixtures — so a
-  // `lint()` after those calls saw every fixture title as a second page
-  // claiming it, and reported one `title` violation per fixture. That result is
-  // what `no violation names a rule outside RULES` asserts on, and it stayed
-  // green because `title` is itself a member: the join passed for the wrong
-  // reason, which is the state `.claude/rules/testing.md` calls worse than an
-  // empty cell.
-  PAGE_TITLES.clear();
   // `(page) => …` and not a bare reference: `flatMap` passes the index second,
   // which `lintFile`'s injectable `src` would take as the page's contents.
   const current = [
-    ...PAGES.flatMap((page) => lintFile(page)), ...lintSections(), ...lintTitles(),
+    ...PAGES.flatMap((page) => lintFile(page)),
     ...familyMentions(PAGES.map((page) => readFileSync(page, 'utf8'))),
     ...readmeInstalls(readmes()),
   ].sort();

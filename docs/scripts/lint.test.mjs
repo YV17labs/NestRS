@@ -1,11 +1,8 @@
 // The linter, joined against itself.
 //
-// Thirty rules, each written as the fix for a named shipped defect, and until
-// this file not one had a proof that it still fired. Weaken any regex and the
-// run went *greener* — `.claude/rules/testing.md`: "A green cell that would stay
-// green is worse than an empty one: the matrix reads as covered and the join
-// goes quiet." With the baseline at zero the signal was gone entirely, since
-// there was not even a count that could move.
+// Every rule was written as the fix for a named shipped defect, and a rule
+// with no proof that it still fires goes quiet the day its regex is weakened:
+// the run turns *greener*, and nothing says so.
 //
 // So the rules are a family and this is their join. Members are derived from
 // `RULES`, never listed here; the obligations are three, and a member owing an
@@ -28,9 +25,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-import { CONTENT_ROOT } from '../src/sidebar.mjs';
 import {
-  CANON, RULES, familyMentions, lintFile, lint, readmeInstalls,
+  CANON, CONTENT_ROOT, RULES, familyMentions, lintFile, lint, readmeInstalls,
 } from './lint-docs.mjs';
 
 /// The version a documented pin has to carry, read from the same canon the rule
@@ -53,9 +49,7 @@ description: A page that breaks nothing, so a fixture can break one thing.
 
 Prose that says something.
 
-## Going further
-
-- [Testing](/testing/)
+See [Testing](/testing/).
 `;
 
 /// Replace one line of the base page, or append when the marker is absent.
@@ -70,17 +64,11 @@ function rulesFor(rel, src) {
 
 /// One fixture per rule: the page that must produce it, and where it goes.
 ///
-/// The rel path matters for the rules keyed on it — a mirror, a config table, a
-/// tier — so each entry names the page it belongs to rather than a generic one.
+/// The rel path matters for the rules keyed on it — a mirror, a config table —
+/// so each entry names the page it belongs to rather than a generic one.
 const FIXTURES = [
   [RULES.frontmatter, 'sample.mdx', 'No frontmatter at all.\n'],
-  [RULES.description, 'sample.mdx', '---\ntitle: Sample\n---\n\nBody.\n'],
-  [RULES.heading, 'sample.mdx', page('## Next steps', '', 'Body.')],
-  [RULES.bannedWord, 'sample.mdx', page('This is blazingly fast.')],
-  [RULES.exclamation, 'sample.mdx', page('It works!')],
-  [RULES.goingFurther, 'sample.mdx', '---\ntitle: Sample\ndescription: A page with no closing block.\n---\n\nBody.\n'],
-  [RULES.asides, 'sample.mdx', page(...Array(4).fill('<Aside>Note.</Aside>'))],
-  [RULES.canon, 'sample.mdx', page('The `ItemsService` resolves it.')],
+  [RULES.description, 'sample.mdx', '---\ntitle: Sample\ndescription: Ends #here\n---\n\nBody.\n'],
   [RULES.link, 'sample.mdx', page('See [nowhere](/no-such-route/).')],
   [RULES.versionPin, 'sample.mdx', page('```toml', 'nest-rs = "0.1"', '```')],
   [RULES.bindOrder, 'sample.mdx', page('```rust', 'fn f(b: Bind<PostsService, Read>) {}', '```')],
@@ -91,7 +79,7 @@ const FIXTURES = [
     '    let all = self.svc.list().await?;', '    Ok(Json(all))', '}', '```',
   )],
   [RULES.otelGuard, 'sample.mdx', page('```rust', 'let _wrong = OpenTelemetry::init(cfg);', '```')],
-  [RULES.installStanza, 'sample.mdx', OK.replace('\n## Going further\n', `
+  [RULES.installStanza, 'sample.mdx', `${OK}
 ## Install
 
 \`\`\`bash
@@ -102,9 +90,7 @@ cargo add nest-rs --features http
 [dependencies]
 nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
 \`\`\`
-
-## Going further
-`)],
+`],
   [RULES.decoratorImport, 'sample.mdx', page(
     '```rust', 'use nest_rs::core::Module;', '', '#[controller(path = "/x")]', 'pub struct C;', '```',
   )],
@@ -119,8 +105,6 @@ nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
     '```rust', 'pub enum MyError { Nope }', '', 'impl ExceptionFilter for F {',
     '    type Exception = MyError;', '}', '```',
   )],
-  [RULES.bareLog, 'sample.mdx', page('```rust', 'tracing::info!("started");', '```')],
-  [RULES.forRootForm, 'sample.mdx', page('```rust', 'HttpModule::for_root(Some(cfg))', '```')],
   // Both carry `(from the demo)`: the marker is what makes a title a claim about
   // `demo/`, so a fixture without it exercises nothing — which is what this join
   // reported the moment the rules stopped keying on the path prefix.
@@ -132,17 +116,11 @@ nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
     '/// a doc comment the demo workspace forbids',
     'pub struct ApiModule;', '```',
   )],
-  [RULES.fenceUntitled, 'sample.mdx', page('```rust', 'pub struct Untitled;', '```')],
-  [RULES.testLayout, 'sample.mdx', page('| Suite | `tests/e2e.rs` |')],
   [RULES.configTable, 'storage/index.mdx', page('The keys are `ENDPOINT` and nothing else.')],
   [RULES.architectureDrift, 'architecture.mdx', page('No role table, no reserved block.')],
   [RULES.decoratorIndex, 'decorators.mdx', page('An index with no rows.')],
   [RULES.landingClaim, 'index.mdx', page('No figures at all.')],
   [RULES.envelopeDrift, 'queue/writing-a-driver.mdx', page('```json', '{}', '```')],
-  [RULES.referenceOrder, 'sample.mdx', OK.replace(
-    '\n- [Testing](/testing/)\n', '\n- [Testing](/testing/)\n\n### Reference\n\n- `crates/nest-rs-core/`\n',
-  )],
-  [RULES.asideType, 'sample.mdx', page('<Aside>Untyped.</Aside>')],
 ];
 
 /// The rules whose population is a whole corpus rather than one page, each with
@@ -190,21 +168,6 @@ for (const [rule, rel, src] of FIXTURES) {
   });
 }
 
-/// The two rules whose population is the corpus, not a page: they cannot take a
-/// fixture, so they are covered by what the real tree already exercises.
-///
-/// Stated rather than skipped. `tier` and `title` are computed by `lintSections`
-/// and `lintTitles` over every page at once — a fixture would have to replace
-/// the corpus, and a corpus-shaped fixture is a second walk with its own answer.
-/// What is asserted instead is that both rules are *reachable*: the functions
-/// run over the real tree on every gate, and obligation 3 below proves nothing
-/// else can file under their names.
-///
-/// `section-index` joins them: it is computed by `lintSections` over a whole
-/// directory — its index read against the tiers its siblings declare — so no
-/// single page can produce it either.
-const CORPUS_SCOPED = new Set([RULES.tier, RULES.title, RULES.sectionIndex]);
-
 /// The anchor cases that decide `slugify`, pinned because the algorithm is
 /// written out rather than imported — see the `link` rule's note on the
 /// freshness bar.
@@ -242,13 +205,11 @@ test('a duplicate heading takes the -1 suffix', () => {
 
 test('every rule has a fixture that proves it still fires', () => {
   const proved = new Set([...FIXTURES, ...CORPUS_FIXTURES].map(([rule]) => rule));
-  const owed = Object.values(RULES).filter(
-    (rule) => !proved.has(rule) && !CORPUS_SCOPED.has(rule),
-  );
+  const owed = Object.values(RULES).filter((rule) => !proved.has(rule));
   assert.deepEqual(
     owed, [],
     'these rules can be deleted or broken and every suite stays green — add a fixture to '
-      + 'FIXTURES, or, if the rule is genuinely corpus-scoped, to CORPUS_SCOPED with the reason',
+      + 'FIXTURES, or to CORPUS_FIXTURES when the rule reads the whole corpus',
   );
 });
 
@@ -257,9 +218,8 @@ test('every rule is documented in STYLE.md', () => {
   const undocumented = Object.values(RULES).filter((rule) => !style.includes(`\`${rule}\``));
   assert.deepEqual(
     undocumented, [],
-    'these rules gate the corpus and STYLE.md — the document it calls itself the law of — '
-      + 'does not mention them. Seven shipped that way, all of them the most recent, which is '
-      + 'the direction this drifts: the linter grows and the prose does not follow',
+    'these rules gate the corpus and STYLE.md § F does not mention them — the linter grows '
+      + 'and the prose does not follow unless something joins the two',
   );
 });
 

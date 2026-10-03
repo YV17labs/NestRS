@@ -110,9 +110,10 @@ impl ServiceError {
     ///
     /// One accessor so no transport can disagree about the shape, and it routes
     /// through `nest_rs_pipes::validation_details` so none can disagree about
-    /// the **policy** either: a raw `serde_json::to_value` keeps `params.value`,
-    /// the rejected input, and would put a too-short password or a malformed
-    /// token in every log and transcript that captures the response.
+    /// the **policy** either: a raw `serde_json::to_value` keeps a rule's
+    /// parameters, which hold the rejected input, and would put a too-short
+    /// password or a malformed token in every log and transcript that captures
+    /// the response.
     pub fn field_errors(&self) -> Option<serde_json::Value> {
         match self {
             Self::Validation(errors) => Some(nest_rs_pipes::validation_details(errors)),
@@ -429,8 +430,8 @@ mod tests {
         }
     }
 
-    // `serde_json::to_value(ValidationErrors)` keeps `params.value` — the
-    // rejected input. Every transport reads the field errors through
+    // `serde_json::to_value(ValidationErrors)` keeps the rule's parameters, the
+    // rejected input among them. Every transport reads the field errors through
     // `field_errors`, so the redaction has to hold there, not at each renderer.
     #[test]
     fn field_errors_never_echo_the_submitted_value() {
@@ -446,7 +447,10 @@ mod tests {
         let rendered = fields.to_string();
 
         assert!(rendered.contains("length"), "the rule survives: {rendered}");
-        assert!(rendered.contains("min"), "and its bound: {rendered}");
+        assert!(
+            !rendered.contains("params"),
+            "none of its parameters: {rendered}"
+        );
         assert!(
             !rendered.contains("hunter2"),
             "the submitted value must never ride back out: {rendered}",

@@ -134,13 +134,16 @@ that fails validation is an RFC 9457 `problem+json` `400` with:
   "status": 400,
   "detail": "validation failed",
   "errors": {
-    "email": [{ "code": "email", "message": null, "params": { /* ... */ } }],
-    "password": [{ "code": "length", "params": { "min": 8 } }]
+    "email": [{ "code": "email", "message": null }],
+    "password": [{ "code": "length", "message": null }]
   }
 }
 ```
 
-No manual checks in the handler.
+A failure names its field and its rule, never the rule's parameters: they hold
+what was sent (`value`, and `must_match`'s other field), and a bound such as
+`max = self.limit` can read another field. A rule that should tell the client
+its bound says so in its `message`. No manual checks in the handler.
 
 ## Custom transforms with `Piped<P, E>`
 

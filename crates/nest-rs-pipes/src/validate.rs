@@ -20,13 +20,13 @@ use crate::PipeError;
 /// field-level errors **without** the echoed submitted value.
 ///
 /// `validator` records the rejected input under `params.value` on every error,
-/// and `must_match` the other field's input under `params.other`. Returning
-/// them leaks what was submitted — a too-short password, the password a
-/// confirmation failed to match — into the response body and anything that
-/// captures it (a log, a cache, a proxy). Keep the field name, the
-/// `code`/`message`, and the constraint parameters that make the message
-/// actionable ([`CONSTRAINT_PARAMS`]), at every nesting depth; every other
-/// parameter goes, a custom rule's included, since any of them can carry input.
+/// `must_match` the other field's input under `params.other`, and a bound
+/// (`min`, `max`, `equal`) is an expression that can read another field.
+/// Returning them leaks what was submitted — a too-short password, the password
+/// a confirmation failed to match — into the response body and anything that
+/// captures it (a log, a cache, a proxy). So a failure keeps its field name and
+/// its `code`/`message`, at every nesting depth, and no parameter at all; a rule
+/// that should tell the client its bound says so in its `message`.
 /// Fail-secure: an unserializable error map collapses to `Null` rather than
 /// surfacing raw input. Shared by
 /// every validation entry point ([`ValidateProbe`] here,
@@ -50,25 +50,14 @@ pub fn validation_details(errors: &ValidationErrors) -> serde_json::Value {
     details
 }
 
-/// The parameters `validator`'s own rules set to describe a constraint:
-/// `length`'s and `range`'s bounds, and the substring `contains` looks for.
-const CONSTRAINT_PARAMS: [&str; 6] = [
-    "min",
-    "max",
-    "equal",
-    "exclusive_min",
-    "exclusive_max",
-    "needle",
-];
-
-/// Recursively keep only the [`CONSTRAINT_PARAMS`] of serialized `validator`
-/// errors. Nested (`#[validate(nested)]`) and list validations embed further
-/// error maps, so the walk descends through every object and array.
+/// Recursively drop the `params` of serialized `validator` errors. Nested
+/// (`#[validate(nested)]`) and list validations embed further error maps, so
+/// the walk descends through every object and array.
 fn redact_submitted_values(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
-            if let Some(serde_json::Value::Object(params)) = map.get_mut("params") {
-                params.retain(|key, _| CONSTRAINT_PARAMS.contains(&key.as_str()));
+            if matches!(map.get("params"), Some(serde_json::Value::Object(_))) {
+                map.remove("params");
             }
             for nested in map.values_mut() {
                 redact_submitted_values(nested);
@@ -129,14 +118,6 @@ mod tests {
         _name: String,
     }
 
-    #[derive(Validate)]
-    struct PasswordChange {
-        #[validate(length(min = 12))]
-        password: String,
-        #[validate(must_match(other = "password"))]
-        confirmation: String,
-    }
-
     #[test]
     fn a_validate_type_that_passes_is_ok() {
         let ok = Guarded { name: "x".into() };
@@ -155,33 +136,28 @@ mod tests {
         assert!(err.details().is_some(), "field-level details are carried");
     }
 
-    #[test]
-    fn the_details_keep_the_constraints_and_drop_every_submitted_value() {
-        let change = PasswordChange {
-            password: "hunter2-hunter".into(),
-            confirmation: "hunter3-hunter".into(),
-        };
-        let Err(errors) = change.validate() else {
-            panic!("a confirmation that differs must fail must_match");
-        };
-        let details = validation_details(&errors).to_string();
-        assert!(
-            !details.contains("hunter"),
-            "a submitted value survived: {details}"
-        );
+    #[derive(Validate)]
+    struct Transfer {
+        ceiling: u64,
+        #[validate(range(max = self.ceiling))]
+        amount: u64,
+    }
 
-        let short = PasswordChange {
-            password: "short".into(),
-            confirmation: "short".into(),
+    /// A bound is an expression that can read another field, so the details say
+    /// the rule and none of its parameters.
+    #[test]
+    fn the_details_say_the_rule_and_none_of_its_parameters() {
+        let transfer = Transfer {
+            ceiling: 4_242_424_242,
+            amount: 9_999_999_999,
         };
-        let Err(errors) = short.validate() else {
-            panic!("a short password must fail the length rule");
+        let Err(errors) = transfer.validate() else {
+            panic!("an amount above its ceiling must fail the range rule");
         };
         let details = validation_details(&errors);
-        assert_eq!(
-            details["password"][0]["params"],
-            serde_json::json!({ "min": 12 })
-        );
+        assert_eq!(details["amount"][0]["code"], "range");
+        assert!(details["amount"][0].get("params").is_none(), "{details}");
+        assert!(!details.to_string().contains("4242424242"), "{details}");
     }
 
     #[test]

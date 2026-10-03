@@ -38,10 +38,14 @@ nobody pushes.
 details — the password a confirmation did not match. Both reached the HTTP 400
 body, the WS error frame and its `warn` line, a GraphQL or MCP error, and the
 queue's dead-letter record and line. `ParseArray` now names the item's position
-and the expected type, as `Parse<T>` already did (`item 2 must be a valid u64`),
-and a validation error's details keep only the constraint parameters `validator`
-declares (`min`, `max`, `equal`, `exclusive_min`, `exclusive_max`, `needle`): a
-custom rule's own parameters are dropped too, since any of them can carry input.
+and the expected type, as `Parse<T>` already did (`item 2 must be a valid u64`).
+
+**Breaking: a validation failure is said by its field, its rule and its message,
+never the rule's parameters**, in a reply's `errors`, a boot error and a log
+line alike: `value` is the rejected input, `must_match`'s `other` the other
+field's, and a bound such as `max = self.limit` can read another field. A client
+that read `errors.<field>[].params.min` reads `code`; a rule that should tell
+the client its bound says so in its `message`.
 
 An error carrying a `validator` failure — `ServiceError::Validation`, or an
 application's own error wrapping one — was said on every line and frame that

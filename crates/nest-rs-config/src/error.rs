@@ -176,14 +176,14 @@ fn is_source_excerpt(line: &str) -> bool {
         .starts_with('|')
 }
 
-/// One `  - field: rule (bound = n)` line per failure, deepest field path
-/// flattened into a dotted name.
+/// One `  - field: rule` line per failure, deepest field path flattened into a
+/// dotted name.
 ///
-/// The rule's parameters are kept — a bound is what makes the message
-/// actionable — **except** `value`, which is the rejected input itself:
-/// echoing a too-short password or a malformed token into a boot error puts it
-/// in every log, shell history and CI transcript that captures the line. Same
-/// posture as `nest_rs_pipes`' wire rendering.
+/// A rule's parameters are never said: `value` is the rejected input, `must_match`
+/// carries the other field's under `other`, and a bound is an expression that can
+/// read another field — any of them would put a secret in every log, shell
+/// history and CI transcript that captures the line. Same posture as
+/// `nest_rs_pipes`' wire rendering.
 fn render(errors: &ValidationErrors) -> String {
     let mut out = String::new();
     render_into(&mut out, errors, "");
@@ -204,17 +204,7 @@ fn render_into(out: &mut String, errors: &ValidationErrors, prefix: &str) {
         match kind {
             ValidationErrorsKind::Field(list) => {
                 for error in list {
-                    let params: Vec<String> = error
-                        .params
-                        .iter()
-                        .filter(|(name, _)| name.as_ref() != "value")
-                        .map(|(name, value)| format!("{name} = {value}"))
-                        .collect();
-                    let _ = write!(out, "  - {path}: {}", error.code);
-                    if !params.is_empty() {
-                        let _ = write!(out, " ({})", params.join(", "));
-                    }
-                    out.push('\n');
+                    let _ = writeln!(out, "  - {path}: {}", error.code);
                 }
             }
             ValidationErrorsKind::Struct(nested) => render_into(out, nested, &path),
@@ -272,6 +262,38 @@ mod tests {
 
     const SECRET: &str = "sk_live_51HsecretTOKEN";
 
+    #[derive(Validate)]
+    struct Signing {
+        signing_key: String,
+        #[validate(must_match(other = "signing_key"))]
+        signing_key_confirm: String,
+        ceiling: u64,
+        #[validate(range(max = self.ceiling))]
+        burst: u64,
+    }
+
+    /// A rule's parameters can hold input: `must_match`'s `other` is another
+    /// field's value, and a bound is an expression that can read one.
+    #[test]
+    fn a_validation_failure_says_its_rules_and_none_of_their_parameters() {
+        let text = rendered(
+            "signing",
+            &Signing {
+                signing_key: SECRET.into(),
+                signing_key_confirm: "mistyped".into(),
+                ceiling: 4_242_424_242,
+                burst: 9_999_999_999,
+            },
+        );
+        assert!(!text.contains("sk_live"), "{text}");
+        assert!(!text.contains("4242424242"), "{text}");
+        assert!(
+            text.contains("\n  - signing_key_confirm: must_match"),
+            "{text}"
+        );
+        assert!(text.contains("\n  - burst: range"), "{text}");
+    }
+
     /// A JSON decoder's sentence handed to the sink whole, as a reader judging
     /// a value of its own would hand it, quotes nothing it refused.
     #[test]
@@ -327,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bounds_survive_but_the_submitted_value_never_does() {
+    fn the_submitted_value_and_the_bounds_are_never_said() {
         let text = rendered(
             "issuer",
             &Issuer {
@@ -336,17 +358,15 @@ mod tests {
             },
         );
 
-        // The bound is what makes the message actionable.
-        assert!(
-            text.contains("min = 1") && text.contains("max = 500"),
-            "{text}"
-        );
-        // The rejected input is not: a too-short password or a malformed token
-        // would otherwise land in every log and CI transcript that captures it.
+        assert!(text.contains("\n  - page_size: range"), "{text}");
+        // The rejected input would land in every log and CI transcript that
+        // captures the line, and a bound is an expression that can read another
+        // field, so neither is said.
         assert!(
             !text.contains("900"),
             "the submitted value must not be echoed: {text}",
         );
+        assert!(!text.contains("500"), "no bound: {text}");
         assert!(!text.contains("Number("), "no raw debug payload: {text}");
     }
 }

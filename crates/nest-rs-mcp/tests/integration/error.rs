@@ -1,13 +1,19 @@
 //! Covers `src/error.rs` — what `.opaque()` says about a tool body's own decode
-//! failure. The model is told the one constant sentence; the operator's line
+//! failure, and what `pipe_error` tells the model of a refused argument. The
+//! model is told the one constant sentence, or the pipe's; the operator's line
 //! carries the cause, said without the value it refused, through the documented
 //! shape: `anyhow::Result` and `?`.
 
 use nest_rs_core::anyhow::{self, Context};
+use nest_rs_core::module;
 use nest_rs_core::serde::de::Error as _;
 use nest_rs_core::serde::de::value::Error as ValueError;
-use nest_rs_mcp::Opaque;
-use nest_rs_testing::LogCapture;
+use nest_rs_mcp::{
+    AllowAllMcpGuard, McpError, McpOperationGuard, Opaque, Parameters, Piped, input, mcp, tools,
+};
+use nest_rs_pipes::{ParseArray, Pipe, PipeError};
+use nest_rs_testing::mcp::call_tool_with;
+use nest_rs_testing::{LogCapture, TestApp};
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";
 
@@ -53,4 +59,80 @@ fn a_decode_failure_in_a_type_s_own_words_is_said_without_its_value() {
     let refused = ValueError::custom(format!("token {SECRET} is not ours"));
     let text = said(Err(anyhow::Error::new(refused)));
     assert!(!text.contains(SECRET), "{text}");
+}
+
+/// A tool's arguments arrive as an object, so a list rides in a field and the
+/// operation's pipe hands that field to `ParseArray`.
+#[input]
+struct IdListArgs {
+    ids: String,
+}
+
+struct ParseIdList;
+
+impl Pipe for ParseIdList {
+    type In = IdListArgs;
+    type Out = Vec<u64>;
+    fn transform(input: IdListArgs) -> Result<Vec<u64>, PipeError> {
+        ParseArray::<u64>::transform(input.ids)
+    }
+}
+
+#[mcp(path = "/mcp/id-lists")]
+#[derive(Clone, Default)]
+struct IdListTool;
+
+#[tools]
+impl IdListTool {
+    /// Count the ids in a comma-separated list.
+    #[tool]
+    #[public]
+    async fn count_ids(
+        &self,
+        Parameters(ids): Parameters<Piped<ParseIdList, IdListArgs>>,
+    ) -> Result<String, McpError> {
+        Ok(ids.into_inner().len().to_string())
+    }
+}
+
+#[module(providers = [IdListTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct IdListModule;
+
+/// A list item the pipe refuses is said without its value, in the reply and on
+/// every line. `ParseArray`'s refusal quoted the item, and `pipe_error` hands a
+/// pipe's refusal to the model as it is.
+#[tokio::test]
+async fn a_refused_list_item_is_never_quoted_to_the_model() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<IdListModule>()
+        .await
+        .expect("a host taking a piped list boots");
+
+    let body = call_tool_with(
+        app.http(),
+        "/mcp/id-lists",
+        "count_ids",
+        None,
+        serde_json::json!({ "ids": format!("1,{SECRET},3") }),
+    )
+    .await;
+
+    assert!(
+        !body.contains("sk_live"),
+        "the reply quotes the item: {body}"
+    );
+    assert!(
+        body.contains("u64"),
+        "the refusal names what an item must be: {body}"
+    );
+    // rmcp's own trace and debug lines print every request whole, before any
+    // pipe runs: they are the dependency's, not this edge's.
+    let quoting: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| !event.target.starts_with("rmcp"))
+        .filter(|event| event.fields.values().any(|value| value.contains("sk_live")))
+        .map(|event| format!("{} {} {:?}", event.target, event.message, event.fields))
+        .collect();
+    assert!(quoting.is_empty(), "lines quoting the item: {quoting:#?}");
 }

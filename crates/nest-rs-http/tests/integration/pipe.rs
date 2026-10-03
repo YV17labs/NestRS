@@ -50,7 +50,7 @@ async fn a_refused_list_item_is_never_quoted_in_the_problem() {
     assert!(
         problem["detail"]
             .as_str()
-            .is_some_and(|detail| !detail.is_empty()),
-        "the refusal still says what was wrong: {problem}",
+            .is_some_and(|detail| detail.contains("u64")),
+        "the refusal names what an item must be: {problem}",
     );
 }

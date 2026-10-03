@@ -2,16 +2,7 @@
 
 use nest_rs_pipes::{ParseArray, Pipe};
 
-/// A live secret, sent where a list item belongs.
-const SECRET: &str = "sk_live_51HsecretTOKEN";
-
-/// The first eight-character run of [`SECRET`] that `text` spells, so a refusal
-/// quoting the item cut short or elided still counts as quoting it.
-fn quoted_run(text: &str) -> Option<&'static str> {
-    (0..=SECRET.len() - 8)
-        .map(|start| &SECRET[start..start + 8])
-        .find(|run| text.contains(run))
-}
+use crate::{SECRET, carried, quoted_run};
 
 /// A refused item is never quoted back, wherever it sits in the list, and the
 /// refusal still says what an item must be. Every edge renders the refusal
@@ -26,13 +17,11 @@ fn a_refused_item_is_never_quoted_back_and_the_expected_type_is_named() {
         format!("1, 2,  {SECRET} "),
     ] {
         let refusal = ParseArray::<u64>::transform(input.clone()).unwrap_err();
-        // `Debug` spells everything the refusal carries: the message every edge
-        // renders, and the details an edge forwards as `errors`.
-        let carried = format!("{refusal:?}");
+        let said = carried(&refusal);
         assert_eq!(
-            quoted_run(&carried),
+            quoted_run(&said, SECRET),
             None,
-            "`{input}` is quoted back: {carried}"
+            "`{input}` is quoted back: {said}"
         );
         assert!(
             refusal.message().contains("u64"),

@@ -30,3 +30,7 @@ bench-one provider:
 # Re-render REPORT.md for an existing results dir.
 report dir:
     ./harness/report.sh {{dir}}
+
+# The job queue over Redis — needs <PREFIX>_REDIS__URL on a throwaway Redis.
+queue:
+    queue/run.sh

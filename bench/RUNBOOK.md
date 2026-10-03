@@ -65,3 +65,22 @@ and `REPORT.md`, nothing else. Do not edit anything outside `results/`.
 Cross-check for published figures: replay at least T1 with a second load
 generator (e.g. [k6](https://k6.io)) and confirm the ratios hold — the tool
 must never be the story.
+
+## 6. The queue bench
+
+Separate from the HTTP protocol above, and needing only Redis beside the
+Rust toolchain. Run it on the same idle host, with a Redis of its own —
+every run flushes it — and the version you mean to quote:
+
+```bash
+redis-server --port 16403 --save '' --appendonly no --daemonize yes
+export NESTRS_REDIS__URL=redis://127.0.0.1:16403/
+just queue > "results/queue-$(date +%Y-%m-%d)-$(hostname -s).md"
+redis-cli -p 16403 shutdown nosave
+```
+
+Before quoting it: `duplicates` is 0 in every drain, `pushed/s` matches
+the rate asked for, and the replicas printed no warning on stderr — or the
+report says why. Compare two adapters only from reports taken on one host,
+one Redis version and one toolchain, each header showing its commit.
+

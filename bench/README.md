@@ -10,7 +10,8 @@ bench/
 ├── sut/<provider>/  # one self-described SUT per framework×variant
 ├── harness/         # run.sh (measure) · fingerprint.sh · report.sh
 ├── results/         # local, fingerprinted runs + generated REPORT.md (git-ignored)
-└── Justfile         # front door: just build | conformance | bench | report
+├── queue/           # the job queue over Redis, on its own (see below)
+└── Justfile         # front door: just build | conformance | bench | report | queue
 ```
 
 ## Principles
@@ -84,3 +85,36 @@ That is the whole interface — the harness globs `sut/*/provider.toml`.
   still spawns its default worker pool confined to one core, and Node
   runs its usual single event loop — both are "the scaffold under a
   1-core budget", which is the honest reading.
+
+## The queue bench — `queue/`
+
+The job queue over Redis, against the adapter it replaces rather than
+another framework, so it has no contract and no provider. It names
+nothing below `nest_rs::queue` and `nest_rs::redis` — the same source
+measures any adapter that keeps that surface — and, like `sut/nestrs`,
+is its own Cargo project on the framework by path.
+
+```bash
+redis-server --port 16403 --save '' --appendonly no --daemonize yes
+export NESTRS_REDIS__URL=redis://127.0.0.1:16403/   # <PREFIX>_REDIS__URL
+just queue            # every measurement, 3 runs each, Markdown on stdout
+```
+
+**Every run flushes that database**, and the bench refuses to start on
+the framework's default URL: give it a Redis of its own.
+
+| Measurement | What is timed |
+|---|---|
+| `drain` | 5 000 jobs pushed, then 1 or `--replicas` worker processes started: spawn → last job's first completion; worker and Redis CPU, Redis commands per job |
+| `latency` | an idle worker, then 2 000 jobs at `--rate`/s: each push → its handler's start (p50/p90/p99/max) |
+| `push` | 5 000 single pushes from 1 or `--pushers` tasks, no worker |
+| `idle` | a worker with nothing to do for 30 s: Redis commands/s, worker CPU |
+
+The worker serves two queues, `bench-c1` and `bench-c16`, one
+`#[process]` each at concurrency 1 and 16, on the adapter's default
+settings. A replica is a child process, as a pod is; each reports every
+handler run, and a job run twice is counted as a duplicate, never as a
+second job. Times are wall-clock microseconds compared across processes,
+so the bench runs on one host. `queue-bench --help` lists the flags;
+`queue/run.sh` is the full set.
+

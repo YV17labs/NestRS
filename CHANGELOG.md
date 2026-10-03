@@ -31,14 +31,17 @@ tree for eleven days with nothing noticing; every change now runs `cargo deny`
 against the advisory database, and GitHub's Dependabot alerts cover the days
 nobody pushes.
 
-### A refused `ParseArray` item is never quoted back
+### A pipe's refusal never quotes what the client sent
 
-`ParseArray<T>` refused a list with `contains an invalid item: `<item>``, so
-whatever a client sent — a token pasted into a path segment, a payload a producer
-built — came back in the HTTP 400 `detail`, the WS error frame and its `warn`
-line, a GraphQL or MCP error, and the queue's dead-letter record and line. The
-refusal now names the item's position and the expected type, as `Parse<T>`
-already did: `item 2 must be a valid u64`.
+`ParseArray<T>` refused a list with `contains an invalid item: `<item>``, and a
+`ValidationPipe` failing `must_match` carried the other field's value in its
+details — the password a confirmation did not match. Both reached the HTTP 400
+body, the WS error frame and its `warn` line, a GraphQL or MCP error, and the
+queue's dead-letter record and line. `ParseArray` now names the item's position
+and the expected type, as `Parse<T>` already did (`item 2 must be a valid u64`),
+and a validation error's details keep only the constraint parameters `validator`
+declares (`min`, `max`, `equal`, `exclusive_min`, `exclusive_max`, `needle`): a
+custom rule's own parameters are dropped too, since any of them can carry input.
 
 ### A GraphQL operation runs its guards whatever it returns
 

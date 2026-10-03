@@ -83,14 +83,18 @@ is a type in the shared crate, compiled into both sides. An app may still call
 another over HTTP with its own client; the framework never makes a network call
 look like a method call.
 
-**What it trades.** The binaries release together, from one commit. During a
-rolling deploy two releases briefly share the queue and the schema: the
-framework versions its own queue envelope
-([wire-format mismatch](/queue/retries-and-failure/#wire-format-mismatch)), and
-a payload field or a column you change follows the expand-then-contract
-discipline of any rolling deploy. The database every binary shares is the
-ceiling, and [split deployment](/security/authentication/split-deployment/)
-sizes it.
+**Every choice stays open.** Per workload is the shape NestRS proposes, not the
+only one it runs. As proposed, the binaries release together from one commit
+and share one database, so every contract between them is a type the compiler
+checks. Give an app its own database through its own `<PREFIX>_SEAORM__URL`,
+release it on its own schedule, or move it to its own repository with the
+features crate as a dependency, and the framework runs it the same way. What
+you take on is what any independently released services take on: versioning
+what crosses between them. The framework versions its own queue envelope
+([wire-format mismatch](/queue/retries-and-failure/#wire-format-mismatch)); a
+payload field or a column follows expand-then-contract, and
+[split deployment](/security/authentication/split-deployment/) weighs one
+database against several.
 
 Service Weaver itself
 [stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)

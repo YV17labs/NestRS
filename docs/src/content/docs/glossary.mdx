@@ -188,8 +188,8 @@ deep on each.
 - **[Modular monolith, deployed per workload](/why/#a-modular-monolith-deployed-per-workload)** —
   the architecture NestRS builds: the domain written once, as modules in
   `crates/features`, and deployed as one binary per workload, or as one
-  binary from the same modules. The binaries share the code, the database and
-  the queue; the framework generates no RPC between them.
+  binary from the same modules. As proposed, the binaries share the code, the
+  database and the queue; the framework generates no RPC between them.
 - **[Workload](/publish/)** — one deployable binary with one
   operational job (the HTTP API, the WS server, the token issuer, the
   queue worker). One product splits into several workloads that share
@@ -197,7 +197,8 @@ deep on each.
 - **[Workspace](/cli/)** — the shape `nestrs new` scaffolds: a monorepo
   hosting one binary per app under `apps/<name>/`, over a shared
   `crates/features`. One app is the starting point; a second workload is
-  another `nestrs new` inside it, never a second repository.
+  another `nestrs new` inside it — the shape the docs teach, though an app in
+  its own repository, with the features crate as a dependency, runs the same.
 - **[Marker guard](/security/authorization/per-transport-bridges/)** —
   a unit guard with no logic that exists so the access graph can
   prove a transport's authz seam is wired; omitting the authz module

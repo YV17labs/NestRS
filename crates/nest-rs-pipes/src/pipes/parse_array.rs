@@ -1,11 +1,13 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
+use super::parse::short_type_name;
 use crate::{PipeError, pipe::Pipe};
 
 /// Split a comma-separated `String` into `Vec<T>`, parsing each item with
 /// `T: FromStr` (surrounding whitespace trimmed). Empty input yields an empty
-/// `Vec`.
+/// `Vec`. A refusal names the item's position and the expected type, never
+/// the item.
 pub struct ParseArray<T>(PhantomData<fn() -> T>);
 
 impl<T: FromStr> Pipe for ParseArray<T> {
@@ -21,9 +23,14 @@ impl<T: FromStr> Pipe for ParseArray<T> {
         }
         input
             .split(',')
-            .map(|item| {
+            .enumerate()
+            .map(|(index, item)| {
                 item.trim().parse::<T>().map_err(|_| {
-                    PipeError::new(format!("contains an invalid item: `{}`", item.trim()))
+                    PipeError::new(format!(
+                        "item {} must be a valid {}",
+                        index + 1,
+                        short_type_name::<T>()
+                    ))
                 })
             })
             .collect()
@@ -54,5 +61,11 @@ mod tests {
     #[test]
     fn one_bad_item_rejects_the_whole_list() {
         assert!(ParseArray::<u32>::transform("1,x,3".into()).is_err());
+    }
+
+    #[test]
+    fn the_refusal_names_the_position_and_the_type() {
+        let err = ParseArray::<u32>::transform("1, x ,3".into()).unwrap_err();
+        assert_eq!(err.message(), "item 2 must be a valid u32");
     }
 }

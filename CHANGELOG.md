@@ -31,6 +31,15 @@ tree for eleven days with nothing noticing; every change now runs `cargo deny`
 against the advisory database, and GitHub's Dependabot alerts cover the days
 nobody pushes.
 
+### A refused `ParseArray` item is never quoted back
+
+`ParseArray<T>` refused a list with `contains an invalid item: `<item>``, so
+whatever a client sent — a token pasted into a path segment, a payload a producer
+built — came back in the HTTP 400 `detail`, the WS error frame and its `warn`
+line, a GraphQL or MCP error, and the queue's dead-letter record and line. The
+refusal now names the item's position and the expected type, as `Parse<T>`
+already did: `item 2 must be a valid u64`.
+
 ### A GraphQL operation runs its guards whatever it returns
 
 `#[operations]` emitted the guard chain only for an operation whose return type

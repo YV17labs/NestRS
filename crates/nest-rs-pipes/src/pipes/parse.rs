@@ -28,7 +28,7 @@ pub type ParseFloat = Parse<f64>;
 /// Parse the input string into a `bool`.
 pub type ParseBool = Parse<bool>;
 
-fn short_type_name<T>() -> &'static str {
+pub(super) fn short_type_name<T>() -> &'static str {
     let name = std::any::type_name::<T>();
     name.rsplit("::").next().unwrap_or(name)
 }

@@ -35,6 +35,9 @@
 # The job declares `environment: crates-io` so the secret is in scope. Generate
 # the token at https://crates.io/me with scope `publish-new` + `publish-update`,
 # scoped to the `nest-rs-*` package prefix.
+#
+# Nothing here restores a cache: a cache another workflow can write is an input
+# to what gets published, so a release builds from the tagged tree alone.
 
 name: Publish — crates.io
 
@@ -43,8 +46,7 @@ on:
     tags:
       - 'v*.*.*'
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: publish-crates-io
@@ -52,33 +54,25 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: crates-io
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: '1.97'
+          persist-credentials: false
+
+      # No argument: the toolchain `rust-toolchain.toml` pins.
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
 
       # .cargo/config.toml selects mold on Linux for faster local/devcontainer
       # links; install it here too or gcc fails with "cannot find 'ld'".
       - name: Install mold linker
-        run: sudo apt-get update && sudo apt-get install -y mold
-
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-publish-
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mold
 
       - name: Verify tag matches workspace version
         run: |
@@ -93,24 +87,16 @@ jobs:
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets
 
-      # cargo-workspaces is the idempotent publisher (see header). Cache the
-      # built binary keyed on its version so only the first release ever pays
-      # the compile cost — the Cargo.lock-keyed cache above would miss every
-      # release (the lockfile changes on each version bump).
-      - name: Cache cargo-workspaces binary
-        id: cache-cargo-workspaces
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/bin/cargo-workspaces
-          key: cargo-workspaces-0.4.2-${{ runner.os }}
-
+      # cargo-workspaces is the idempotent publisher (see header).
       - name: Install cargo-workspaces
-        if: steps.cache-cargo-workspaces.outputs.cache-hit != 'true'
         run: cargo install cargo-workspaces --version 0.4.2 --locked
 
+      # crates.io trusted publishing (OIDC instead of a stored token) is planned
+      # once 7.0.0 is on crates.io; until then the token stays in the
+      # `crates-io` environment.
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }} # zizmor: ignore[use-trusted-publishing]
         # Idempotent + paced publish: sequential, one crate at a time, waiting
         # for each to land in the index before the next — so the index never
         # backlogs (the failure mode that deadlocked `cargo publish --workspace`).

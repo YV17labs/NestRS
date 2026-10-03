@@ -1,9 +1,10 @@
 # Build docs/ (Astro + Starlight) and publish to GitHub Pages on every push to main.
 # Repo settings: Settings → Pages → Build and deployment → Source: GitHub Actions.
 #
-# The paths are the lint's whole input set: the pages, plus what the canon is
-# derived from and the demo sources and READMEs the lint reads directly — so a
-# framework change that falsifies a page fails here, on the commit that caused it.
+# The site is built from docs/ alone. The docs lint — the pages checked against
+# the framework, the demo and the READMEs — is CI's `docs` job, which gates the
+# commit before it reaches main; this workflow only publishes. It restores no
+# cache: what it builds is deployed.
 
 name: Docs — GitHub Pages
 
@@ -12,18 +13,10 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
-      - 'crates/**'
-      - 'demo/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'README.md'
       - '.github/workflows/docs-pages.yml'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: pages
@@ -31,41 +24,24 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
+          package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
-        working-directory: docs
-
-      # The lint runs `nest-rs-conformance`'s `canon` binary for the framework
-      # facts it checks pages against. It builds syn and toml_edit, not the
-      # framework, so a cold cache costs seconds.
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.97'
-
-      - name: Cache the canon build
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: docs-canon-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-
-      - name: Lint docs prose & structure
-        run: npm run lint:docs
         working-directory: docs
 
       - name: Build site
@@ -76,17 +52,21 @@ jobs:
         working-directory: docs
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: docs/dist
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

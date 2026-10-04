@@ -1,5 +1,5 @@
-//! `nest-rs-seaorm`'s suite: the compile-time contracts, and the behaviour
-//! against the dev container's Postgres.
+//! `nest-rs-seaorm`'s suite, against the dev container's Postgres: every test
+//! here needs the database, so the crate has no in-process suite.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

@@ -1,5 +1,5 @@
-//! Live presign round-trip against an S3-compatible server (RustFS in the dev
-//! container). Proves that `object_store`'s `Signer` produces URLs a plain HTTP
+//! `nest-rs-storage`'s suite: a live presign round-trip against an
+//! S3-compatible server (RustFS in the dev container). Proves that `object_store`'s `Signer` produces URLs a plain HTTP
 //! client can PUT to and GET from, in path-style over plain HTTP.
 //!
 //! Config starts from `StorageConfig::default()`, which targets the dev

@@ -384,8 +384,8 @@ fn half_an_identity(env: &ConfigService, given: &Setting<Material>, missing: &st
 mod tests {
     use super::*;
 
-    const CLIENT_CERT: &[u8] = include_bytes!("../tests/integration/fixtures/tls_client.pem");
-    const CLIENT_KEY: &[u8] = include_bytes!("../tests/integration/fixtures/tls_client.key.pem");
+    const CLIENT_CERT: &[u8] = include_bytes!("../tests/harness/fixtures/tls_client.pem");
+    const CLIENT_KEY: &[u8] = include_bytes!("../tests/harness/fixtures/tls_client.key.pem");
 
     #[test]
     fn the_deployment_overlays_each_field_and_the_certificate_moves_with_its_key() {
@@ -430,7 +430,7 @@ mod tests {
     fn half_a_client_certificate_is_refused_naming_what_was_set_and_what_is_missing() {
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/integration/fixtures/tls_client.pem"
+            "/tests/harness/fixtures/tls_client.pem"
         );
         for (key, value, named, missing) in [
             ("TLS_CERT", "-----PEM-----", "TLS_CERT", "TLS_KEY"),

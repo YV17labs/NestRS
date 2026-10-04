@@ -104,7 +104,7 @@ since the crate under test is the framework itself.
 If the crate genuinely owns a live backend (e.g. `nest-rs-seaorm`
 against Postgres, `nest-rs-storage` against an S3 server), those tests
 move to the crate's **`tests/e2e/main.rs`** suite — same directory
-form, gated out of `nestrs run test unit` by the `binary(e2e)` filter,
+form, gated out of `just test integration` by the `binary(e2e)` filter,
 never by `#[ignore]`. A test that mocks the database to assert query
 shape belongs deleted, not rewritten — the queries are exercised
 end-to-end against a real engine.

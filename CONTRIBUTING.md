@@ -51,7 +51,7 @@ Prefer a local toolchain? Install Rust (stable, see
 
 ```bash
 cargo install --locked nest-rs-cli      # `nestrs run` bootstraps just, bacon, and cargo-nextest on first use
-cargo install --locked cargo-llvm-cov   # only for `nestrs run test cov`
+cargo install --locked cargo-llvm-cov   # only for coverage: `just test::cov`, `nestrs run test cov`
 rustup component add llvm-tools-preview
 ```
 
@@ -64,6 +64,7 @@ runs. `demo/` is a separate project and drives itself with `nestrs run`.
 just lint   # fmt, clippy, each capability alone, dependency policy
 just test   # every test, against the dev container's Postgres, Redis and S3
 just ci     # every check CI runs: lint, docs and tests
+just test::cov  # coverage of the same tests, doctests aside
 ```
 
 Before opening a PR, `just ci` passes. For **HTTP, GraphQL, or MCP changes**,
@@ -79,9 +80,9 @@ playground), and note it in the PR.
 2. **Keep it focused.** One logical change per PR. Unrelated cleanups belong in
    their own PR.
 3. **Add tests.** A bug fix gets a regression test; a feature gets coverage of
-   the new behaviour. Each crate has one suite, `tests/integration/main.rs`,
-   whose tests run in process or against the dev container's services — no
-   mocks. Unit tests sit in `#[cfg(test)] mod tests` beside the code.
+   the new behaviour. A crate's tests that run in process sit in
+   `tests/integration/main.rs`, those against the dev container's services in
+   `tests/e2e/main.rs` — no mocks. Unit tests sit in `#[cfg(test)] mod tests` beside the code.
 4. **Update the docs.** If you change behaviour, update the crate README and
    the docs site. Crate READMEs stay tight (the `Cargo.toml` description, the
    install line, and links to the matching [nestrs.dev](https://nestrs.dev)

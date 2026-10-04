@@ -8,13 +8,17 @@ all: && doc
 unit:
     {{nextest}} --lib --bins
 
-# The suites under each crate's `tests/`
+# The in-process suites under each crate's `tests/`, no service needed
 integration:
-    {{nextest}} --test '*'
+    {{nextest}} -E 'kind(test) and not binary(e2e)'
 
 # The `tests/e2e` suites, against Postgres, Redis and S3
 e2e:
     {{nextest}} -E 'binary(e2e)'
+
+# Coverage of the nextest suite, per file; doctests count on nightly only
+cov:
+    cargo llvm-cov nextest --workspace --no-fail-fast
 
 # The examples in the docs
 doc:

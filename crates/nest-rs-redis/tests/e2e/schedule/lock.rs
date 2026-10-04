@@ -511,11 +511,7 @@ mod after {
 
     #[scheduled]
     impl LedgerTasks {
-        #[every(
-            "250ms",
-            replicas = "one",
-            key = "integration::InvoiceTasks::close_day"
-        )]
+        #[every("250ms", replicas = "one", key = "e2e::InvoiceTasks::close_day")]
         async fn close(&self) -> anyhow::Result<()> {
             Ok(())
         }

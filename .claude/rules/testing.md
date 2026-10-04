@@ -7,12 +7,12 @@ paths:
 
 # Writing tests — the toolbox
 
-A framework crate has one suite, `tests/integration/main.rs`, whose modules
-mirror `src/`; a test that needs Postgres, Redis or S3 connects to the dev
-container's, which is always reachable. A flat `tests/<x>.rs` is a binary of
-its own, relinked per file. This file is the toolbox and the decisions that
-keep live tests from meeting each other. Reach for `nest-rs-testing` before
-hand-rolling a harness.
+A framework crate's tests run in process in `tests/integration/main.rs`, and
+against Postgres, Redis or S3 in `tests/e2e/main.rs`, which connects to the dev
+container's — always reachable; each suite's modules mirror `src/`. A flat
+`tests/<x>.rs` is a binary of its own, relinked per file. This file is the
+toolbox and the decisions that keep live tests from meeting each other. Reach
+for `nest-rs-testing` before hand-rolling a harness.
 
 ## Choosing the level
 
@@ -82,7 +82,7 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   developer's — what `nestrs run dev` drains — and the framework suite's
   shared one; the demo holds the lower half above it, the framework the upper
   half. Each list is checked at compile time where it is written: the
-  framework's `DB_*` constants in `nest-rs-redis`'s suite `main.rs`, the demo's
+  framework's `DB_*` constants in `nest-rs-redis`'s e2e `main.rs`, the demo's
   `features::testing::RedisDatabase`, one variant per test, so two tests on
   one database is a duplicate discriminant. A `FLUSHDB` in one half never
   reaches a job the other filed.

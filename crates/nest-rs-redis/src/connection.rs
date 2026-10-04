@@ -657,10 +657,10 @@ mod tests {
     use super::*;
     use crate::RedisTlsIdentity;
 
-    const AUTHORITY: &[u8] = include_bytes!("../tests/integration/fixtures/tls_ca.pem");
-    const SERVER_CERT: &[u8] = include_bytes!("../tests/integration/fixtures/tls_server.pem");
-    const SERVER_KEY: &[u8] = include_bytes!("../tests/integration/fixtures/tls_server.key.pem");
-    const CLIENT_CERT: &[u8] = include_bytes!("../tests/integration/fixtures/tls_client.pem");
+    const AUTHORITY: &[u8] = include_bytes!("../tests/harness/fixtures/tls_ca.pem");
+    const SERVER_CERT: &[u8] = include_bytes!("../tests/harness/fixtures/tls_server.pem");
+    const SERVER_KEY: &[u8] = include_bytes!("../tests/harness/fixtures/tls_server.key.pem");
+    const CLIENT_CERT: &[u8] = include_bytes!("../tests/harness/fixtures/tls_client.pem");
 
     const REFUSED: &str = "redis refused a reopened tls connection";
 

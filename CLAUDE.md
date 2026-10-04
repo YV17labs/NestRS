@@ -196,17 +196,18 @@ prove it** — unit, then in process, then against a live service — and treat 
 slow test as a defect: make it cheaper, or cut what a cheaper test already
 proves (`testing.md`).
 
-1. A framework crate has one suite, `tests/integration/main.rs`, never a flat
-   `tests/<x>.rs`. Its tests run in process or against the live services,
-   never `#[ignore]`. The one exception: a fixture that puts a deliberately
-   invalid declaration in the link-time registry (`inventory`) gets its own
-   `tests/<fixture>/main.rs`, since every app booted beside it would read it.
-2. The suite mirrors `src/`; its `main.rs` holds the `mod`s, shared fixtures and
-   a `//!`, never a `#[test]`.
+1. A framework crate has at most two suites, never a flat `tests/<x>.rs`:
+   `tests/integration/main.rs` runs in process, `tests/e2e/main.rs` against the
+   live services, so `just test integration` needs none. Neither is
+   `#[ignore]`d. What both use sits in `tests/harness/`, included by path. The
+   one exception: a fixture that puts a deliberately invalid declaration in the
+   link-time registry (`inventory`) gets its own `tests/<fixture>/main.rs`,
+   since every app booted beside it would read it.
+2. Each suite mirrors `src/`; its `main.rs` holds the `mod`s, shared fixtures
+   and a `//!`, never a `#[test]`.
 3. Unit tests are `#[cfg(test)] mod tests` in the file under test. nextest runs
    everything; bare `cargo test` only for `--doc`.
-4. `demo/` apps keep their own `tests/integration` and `tests/e2e` suites,
-   driven by `nestrs run test`.
+4. `demo/` apps keep the same two suites, driven by `nestrs run test`.
 
 ## Definition of done
 

@@ -1,7 +1,8 @@
 # TLS fixtures
 
-Throwaway material for `tests/integration/tls.rs` and the TLS unit tests, generated once
-with `openssl` and committed so the suite needs no toolchain beyond cargo:
+Throwaway material for the suites' TLS proxy (`tests/harness/tls.rs`) and the
+TLS unit tests, generated once with `openssl` and committed so the suites need
+no toolchain beyond cargo:
 
 - `tls_ca.pem` — a self-signed CA the tests pin as the trust anchor. Its key was
   discarded after signing the three leaves below.
@@ -14,4 +15,4 @@ with `openssl` and committed so the suite needs no toolchain beyond cargo:
   CA, for the mutual-TLS case.
 
 These keys protect nothing. They are not valid for any real name, and nothing
-outside this suite reads them.
+outside this crate's tests reads them.

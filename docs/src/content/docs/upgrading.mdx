@@ -9,7 +9,7 @@ import { Steps } from '@astrojs/starlight/components';
 variables, and renames a handful of types and signatures. This page is the order
 to take them in: a 6.1 workspace goes in, a 7.0 one comes out, and each step ends
 on something you can check. The
-[changelog](https://github.com/YV17labs/NestRS/blob/main/CHANGELOG.md) says why each
+[changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/7.0.md) says why each
 change was made; this page says what to do about it.
 
 You need the 6.1 project building, and — for a queue on Redis — either a short
@@ -33,7 +33,7 @@ rolls out (step 7).
 
    The check now fails on the calls steps 3 to 6 change. A refusal beyond them
    names the rule it applies: 7.0 judges every decorated method by one grammar,
-   and the [changelog](https://github.com/YV17labs/NestRS/blob/main/CHANGELOG.md)
+   and the [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/7.0.md)
    lists what it refuses. One change no compiler finds: every binary's `main`
    moves from `#[tokio::main]` to `#[nest_rs::main]`, in step 8.
 

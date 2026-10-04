@@ -10,6 +10,7 @@ paths:
   - ".github/**"
   - "Justfile"
   - "CHANGELOG.md"
+  - "changelog/**"
 ---
 
 # Manifests, lints, CI and release
@@ -104,5 +105,8 @@ Dependabot alerts cover the days nobody pushes. `docs.yml` builds the site when
 
 ## Release
 
-The tag equals the workspace `version`; `publish.yml` publishes. `CHANGELOG.md`
-follows Keep a Changelog, and a breaking change carries its upgrading entry.
+The tag equals the workspace `version`; `publish.yml` publishes. The changelog
+follows Keep a Changelog, one file per minor line — `changelog/<major>.<minor>.md`
+holds that line's releases and patches — and `CHANGELOG.md` is their index, newest
+first. A new line opens its file under `[Unreleased]` and its index row; a breaking
+change carries its upgrading entry.

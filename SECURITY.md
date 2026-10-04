@@ -49,7 +49,8 @@ with its upgrading guide; minors and patches ship when ready.
 | anything older | nothing: upgrade to a supported line |
 
 Never more than two lines are supported at once. [`CHANGELOG.md`](CHANGELOG.md)
-records each release; its `[Unreleased]` heading is the work in progress.
+indexes one file per minor line under `changelog/`; the `[Unreleased]` heading of
+the newest is the work in progress.
 
 ## Advisories
 

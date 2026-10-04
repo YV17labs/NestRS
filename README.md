@@ -134,7 +134,7 @@ one compatible resolution — down to the third-party crates that surface in you
 own signatures (`poem`, `sea-orm`, `async-graphql`, `rmcp`, `schemars`), whose
 majors are tied to the NestRS major and frozen for the whole line.
 
-Coming from the previous major? [`CHANGELOG.md`](CHANGELOG.md) lists what moved:
+Coming from the previous major? [`changelog/7.0.md`](changelog/7.0.md) lists what moved:
 an edge is now **two** decorators — `#[resolver]` / `#[mcp]` on the struct,
 `#[operations]` / `#[tools]` on the impl; a guard bound where its check never
 runs no longer compiles; `McpModule::for_root` takes one value; a WebSocket

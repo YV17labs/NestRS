@@ -59,6 +59,7 @@ lists.
 - `demo/` — the "Publish" product, its own workspace on the framework by path,
   driven with `nestrs run`. Nothing at the root builds or tests it.
 - `bench/` — a standalone benchmark against NestJS. `docs/` — nestrs.dev.
+  `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
 
 ```bash
 just lint   # fmt, clippy, each capability alone, dependency policy

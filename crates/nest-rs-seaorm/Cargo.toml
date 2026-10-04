@@ -72,6 +72,8 @@ nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 poem.workspace = true
 sea-orm = { workspace = true, features = ["with-chrono"] }
+# The pool's TLS backend, selected here because sea-orm cannot select it.
+sqlx.workspace = true
 chrono.workspace = true
 # `PageParams` (the `?first&after` cursor query) derives `Deserialize` so the
 # generated `#[crud]` list handler can read it with poem's `Query<…>`.

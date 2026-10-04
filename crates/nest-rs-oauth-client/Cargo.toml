@@ -23,13 +23,14 @@ validator.workspace = true
 # transaction is a `JwtService`-signed cookie — both belong to the crate that
 # answers *who*, so this crate reads them rather than declaring a second pair.
 nest-rs-authn.workspace = true
-# OAuth2 Authorization Code flow; its bundled reqwest (re-exported as
-# `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The
-# default features (reqwest + rustls-tls) are exactly what we want.
+# OAuth2 Authorization Code flow, without its bundled reqwest 0.12: that one can
+# only speak TLS through ring, so the exchange runs on the workspace's reqwest
+# through `oauth2::AsyncHttpClient`, and every TLS client shares one provider.
 oauth2.workspace = true
+reqwest.workspace = true
 serde.workspace = true
-# Parsing the OAuth userinfo response (oauth2's reqwest is built without its
-# `json` feature, so we read the body and deserialize it ourselves).
+# Parsing the OAuth userinfo response: the body is read whole and deserialized
+# here, so a refusal says where it failed without quoting the profile.
 serde_json.workspace = true
 # Constant-time comparison of the CSRF state carried in the transaction cookie.
 subtle.workspace = true

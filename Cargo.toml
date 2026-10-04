@@ -32,7 +32,10 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 jsonwebtoken = { version = "11.0", features = ["aws_lc_rs"] }
-oauth2 = "5.0"
+# Past the 12-month bar: 5.0.0 (2025-01-21) is the last release. Only RFC 6749's
+# types and flow are its; the HTTP client is the workspace's. No release by
+# 2027-01-31 and the exchange is written on reqwest instead.
+oauth2 = { version = "5.0", default-features = false }
 base64 = "0.23"
 
 serde = { version = "1.0", features = ["derive"] }
@@ -61,7 +64,9 @@ parking_lot = "0.12"
 subtle = "2.6"
 
 # Exact pin: nest-rs-graphql reads async-graphql's registry internals.
-async-graphql = { version = "=7.2.1", features = ["dataloader"] }
+# Without its defaults: the framework serves the playground and builds dataloaders,
+# and an email check is `validator`'s, the one validation at the edge.
+async-graphql = { version = "=7.2.1", default-features = false, features = ["dataloader", "playground"] }
 async-graphql-poem = "=7.2.1"
 inventory = "0.3"
 
@@ -69,8 +74,12 @@ argon2 = "0.6"
 validator = { version = "0.21", features = ["derive"] }
 uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
 
-sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
-sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid"] }
+sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio"] }
+# Postgres's TLS on aws-lc-rs, the provider every other client uses: sea-orm's
+# `runtime-tokio-rustls` can only select sqlx's ring backend, and sqlx picks ring
+# whenever any ring feature is on.
+sqlx = { version = "0.9", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 

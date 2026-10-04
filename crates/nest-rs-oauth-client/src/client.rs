@@ -143,7 +143,7 @@ impl fmt::Display for Endpoint<'_> {
 ///
 /// The rest of the cause is reqwest's own chain with the URL taken out, since
 /// reqwest quotes the URL whole, query included.
-fn call_failed(endpoint: &Endpoint<'_>, error: oauth2::reqwest::Error) -> AuthError {
+fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
     let detail = if error.is_timeout() && error.is_connect() {
         format!(
             "{endpoint} could not be connected to within {:?}",
@@ -194,7 +194,7 @@ fn provider_unavailable(
 fn exchange_failed(
     endpoint: &Endpoint<'_>,
     answered: Option<Answered>,
-    error: RequestTokenError<HttpClientError<oauth2::reqwest::Error>, BasicErrorResponse>,
+    error: RequestTokenError<HttpClientError<reqwest::Error>, BasicErrorResponse>,
 ) -> AuthError {
     if let Some(unavailable) = answered.and_then(|answered| {
         provider_unavailable(endpoint, answered.status, answered.retry_after.as_deref())
@@ -219,12 +219,12 @@ struct Answered {
 /// The client's HTTP backend, keeping the last answer's [`Answered`] — what the
 /// exchange hands `oauth2` in place of the backend itself.
 struct Observed<'a> {
-    http: &'a oauth2::reqwest::Client,
+    http: &'a reqwest::Client,
     answered: std::sync::Mutex<Option<Answered>>,
 }
 
 impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
-    type Error = HttpClientError<oauth2::reqwest::Error>;
+    type Error = HttpClientError<reqwest::Error>;
     type Future = std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<oauth2::HttpResponse, Self::Error>> + Send + 'c,
@@ -233,17 +233,25 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
 
     fn call(&'c self, request: oauth2::HttpRequest) -> Self::Future {
         Box::pin(async move {
-            let response = oauth2::AsyncHttpClient::call(self.http, request).await?;
+            let request = reqwest::Request::try_from(request).map_err(Box::new)?;
+            let response = self.http.execute(request).await.map_err(Box::new)?;
             if let Ok(mut slot) = self.answered.lock() {
                 *slot = Some(Answered {
                     status: response.status().as_u16(),
                     retry_after: response
                         .headers()
-                        .get(oauth2::http::header::RETRY_AFTER)
+                        .get(reqwest::header::RETRY_AFTER)
                         .map(|value| value.as_bytes().to_vec()),
                 });
             }
-            Ok(response)
+            let mut answer = oauth2::http::Response::builder()
+                .status(response.status())
+                .version(response.version());
+            for (name, value) in response.headers() {
+                answer = answer.header(name, value);
+            }
+            let body = response.bytes().await.map_err(Box::new)?;
+            answer.body(body.to_vec()).map_err(HttpClientError::Http)
         })
     }
 }
@@ -251,9 +259,9 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
 /// The HTTP backend every call to a provider goes through, as
 /// [`OAuthClient::new`] builds it: no redirect followed, one user-agent, and
 /// both bounds.
-fn backend() -> oauth2::reqwest::ClientBuilder {
-    oauth2::reqwest::ClientBuilder::new()
-        .redirect(oauth2::reqwest::redirect::Policy::none())
+fn backend() -> reqwest::ClientBuilder {
+    reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
         // A client-wide UA so every outbound request carries it uniformly —
         // some provider APIs (GitHub) reject requests without one, and the
         // token exchange uses this same client.
@@ -267,7 +275,7 @@ fn backend() -> oauth2::reqwest::ClientBuilder {
 /// a fixed user-agent, and bounds every call it makes; see [`new`](Self::new).
 pub struct OAuthClient {
     config: OAuthClientConfig,
-    http: oauth2::reqwest::Client,
+    http: reqwest::Client,
 }
 
 impl OAuthClient {
@@ -533,7 +541,7 @@ impl OAuthClient {
                 status.as_u16(),
                 response
                     .headers()
-                    .get(oauth2::reqwest::header::RETRY_AFTER)
+                    .get(reqwest::header::RETRY_AFTER)
                     .map(|value| value.as_bytes()),
             )
             .unwrap_or_else(|| AuthError::Failed(format!("{endpoint} answered {status}"))));
@@ -741,8 +749,8 @@ mod tests {
     /// inside the connect bound, like the handshakes after it.
     struct NeverResolves;
 
-    impl oauth2::reqwest::dns::Resolve for NeverResolves {
-        fn resolve(&self, _name: oauth2::reqwest::dns::Name) -> oauth2::reqwest::dns::Resolving {
+    impl reqwest::dns::Resolve for NeverResolves {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
             Box::pin(std::future::pending())
         }
     }

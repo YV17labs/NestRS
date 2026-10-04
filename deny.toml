@@ -35,8 +35,6 @@ allow = [
 # MPL-2.0 binds the files it covers, not the crates linking them, so it is
 # accepted crate by crate rather than for any dependency that turns up with it.
 exceptions = [
-    { crate = "ascii_utils", allow = ["MPL-2.0"] },
-    { crate = "fast_chemail", allow = ["MPL-2.0"] },
     { crate = "sse-codec", allow = ["MPL-2.0"] },
 ]
 unused-allowed-license = "deny"
@@ -45,3 +43,12 @@ unused-license-exception = "deny"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+
+[bans]
+# Two majors of one crate (syn 1 and 2, thiserror 1 and 2) are the ecosystem's
+# pace, not a security or licence matter, so the bans check polices what is
+# denied below and does not warn on duplicates.
+multiple-versions = "allow"
+deny = [
+    { crate = "ring", reason = "one crypto provider: rustls, jsonwebtoken and object_store run on aws-lc-rs, and a second compiles twice the cryptography (sea-orm's `runtime-tokio-rustls` and reqwest 0.12's `rustls-tls` bring it back)" },
+]

@@ -22,8 +22,8 @@ features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
 nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm", "testing"] }
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls"] }
-sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
-sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
+sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio"] }
 
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]

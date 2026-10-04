@@ -69,7 +69,7 @@ pub(super) const AUTHZ: Dep = nest_rs(&["authz", "http"]);
 // to un-learn later.
 const SEA_ORM: Dep = Dep {
     name: "sea-orm",
-    workspace_value: "{ version = \"2.0\", default-features = false, features = [\"sqlx-postgres\", \"runtime-tokio-rustls\", \"macros\", \"with-uuid\", \"with-chrono\"] }",
+    workspace_value: "{ version = \"2.0\", default-features = false, features = [\"sqlx-postgres\", \"runtime-tokio\", \"macros\", \"with-uuid\", \"with-chrono\"] }",
     features: &[],
 };
 const UUID: Dep = Dep {
@@ -106,7 +106,7 @@ const ANYHOW: Dep = Dep {
 };
 const SEA_ORM_MIGRATION: Dep = Dep {
     name: "sea-orm-migration",
-    workspace_value: "{ version = \"2.0\", features = [\"sqlx-postgres\", \"runtime-tokio-rustls\"] }",
+    workspace_value: "{ version = \"2.0\", features = [\"sqlx-postgres\", \"runtime-tokio\"] }",
     features: &[],
 };
 const TRACING_SUBSCRIBER: Dep = Dep {

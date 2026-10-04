@@ -21,7 +21,7 @@ all-features = true
 # Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
 opentelemetry = ["dep:nest-rs-opentelemetry"]
 # An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`).
-orm = ["dep:sea-orm", "dep:sea-orm-migration"]
+orm = ["dep:sea-orm", "dep:sea-orm-migration", "dep:sqlx"]
 # The graphql-ws subscription driver (`TestApp::graphql_socket`). Gated because a
 # headless app's suite should not link a GraphQL schema to assert on a queue.
 graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
@@ -76,6 +76,8 @@ nest-rs-ws = { workspace = true, optional = true }
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 sea-orm-migration = { workspace = true, optional = true }
+# The fixture's TLS backend, as `nest-rs-seaorm` selects it for the pool.
+sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `transport_parity` boots one module serving both `Exempt`-edge transports to

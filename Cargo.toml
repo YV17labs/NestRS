@@ -43,6 +43,10 @@ serde_json = "1.0"
 
 figment = { version = "0.10", features = ["toml", "env"] }
 
+# Past the 12-month bar: 3.1.12 (2025-07-28) is the last release. 4.0, prepared
+# upstream (poem-web/poem#1200), drops the unmaintained rustls-pemfile; it moves
+# at its release, in a nestrs major since poem's types are in the API. No release
+# by 2027-01-31 and the server moves (`.claude/decisions/http-server.md`).
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 rustls = "0.23"
 

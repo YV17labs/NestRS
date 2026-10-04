@@ -772,7 +772,7 @@ async fn an_attempt_cut_while_redis_stalls_gives_its_start_back_and_runs_again()
          Redis",
     );
 
-    let second = crate::replica::<CutStalledModule>().await;
+    let second = crate::replica_on::<CutStalledModule>(crate::redis_config()).await;
     crate::wait_until(Duration::from_secs(15), || CUT_STALLED.finished(run) == 1).await;
     second.worker.shutdown().await.expect("clean shutdown");
     crate::forget(CUT_STALLED_QUEUE).await;

@@ -17,6 +17,16 @@ pub fn __module_registered(name: &'static str) {
     );
 }
 
+/// The type of a dynamic import's value, read off its expression without
+/// evaluating it, so the access graph can name the import before the boot runs.
+///
+/// **Internal ABI** — emitted by `#[module]`, lockstep with
+/// `nest-rs-core-macros`; do not call by hand.
+#[doc(hidden)]
+pub fn __dynamic_import_type<D: 'static>(_import: impl FnOnce() -> D) -> std::any::TypeId {
+    std::any::TypeId::of::<D>()
+}
+
 /// A statically-composed module — the common case, listed by type in
 /// `#[module(imports = [...])]`. The `#[module]` macro makes registration
 /// idempotent via [`ContainerBuilder::mark_registered`], so a diamond import
@@ -38,16 +48,72 @@ pub trait Module {
 ///
 /// Unlike [`Module`], a dynamic module is a value that captures options:
 ///
-/// ```ignore
+/// ```
+/// # use nest_rs_core::{App, ContainerBuilder, DynamicModule, module};
+/// # #[module]
+/// # pub struct UsersModule;
+/// # pub struct Greeting(&'static str);
+/// # pub struct GreetingModule;
+/// # pub struct GreetingSetup(Greeting);
+/// # impl GreetingModule {
+/// #     pub fn for_root(greeting: Greeting) -> GreetingSetup { GreetingSetup(greeting) }
+/// # }
+/// # impl DynamicModule for GreetingSetup {
+/// #     fn register(self, builder: ContainerBuilder) -> ContainerBuilder { builder.provide(self.0) }
+/// # }
 /// #[module(imports = [
-///     UsersModule,                  // static, by type
-///     OpenApiModule::for_root(),    // dynamic, configured at its import site
+///     UsersModule,                                  // static, by type
+///     GreetingModule::for_root(Greeting("hello")),  // dynamic, configured at its import site
 /// ])]
 /// pub struct AppModule;
+///
+/// let app = App::new::<AppModule>()?;
+/// assert_eq!(app.container().get::<Greeting>().map(|g| g.0), Some("hello"));
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 ///
 /// Dynamic modules are **not** auto-deduplicated — each carries its own
 /// config.
+///
+/// # Importing it imports the module it registers
+///
+/// A dynamic import whose [`register`] registers a module *is* that module,
+/// configured, as NestJS's `DynamicModule { module }` is: a provider beside the
+/// import injects what the module provides, as beside a static import.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use nest_rs_core::{App, ContainerBuilder, DynamicModule, Module, injectable, module};
+/// #[injectable]
+/// pub struct Client;
+///
+/// #[module(providers = [Client])]
+/// pub struct ClientModule;
+///
+/// pub struct ClientSetup;
+///
+/// impl DynamicModule for ClientSetup {
+///     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+///         <ClientModule as Module>::register(builder)
+///     }
+/// }
+/// # impl ClientModule {
+/// #     pub fn for_root() -> ClientSetup { ClientSetup }
+/// # }
+///
+/// #[injectable]
+/// pub struct Uploads {
+///     #[inject]
+///     client: Arc<Client>,
+/// }
+///
+/// #[module(imports = [ClientModule::for_root()], providers = [Uploads])]
+/// pub struct UploadsModule;
+///
+/// let app = App::new::<UploadsModule>()?;
+/// assert!(app.container().get::<Uploads>().is_some());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
 ///
 /// Two phases, both defaulting to no-op:
 ///

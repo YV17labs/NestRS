@@ -159,6 +159,10 @@ both reach `SeaOrmDatabaseModule` (the bare binding beside `SeaOrmModule`), its
 providers are built once. Dynamic
 modules do **not** dedupe — each call carries its own config.
 
+A dynamic import is the module it configures, as a NestJS `DynamicModule`
+names its `module`: importing `StorageModule::for_root(cfg)` reaches what
+`StorageModule` provides, exactly as importing `StorageModule` does.
+
 <Aside type="tip">
 Env vars (`NESTRS_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
 Pass `None` for env-only; pass a config to set defaults in code that the

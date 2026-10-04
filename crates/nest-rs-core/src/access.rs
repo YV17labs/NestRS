@@ -69,6 +69,12 @@ pub struct ProviderDescriptor {
     pub injects_keyed: fn() -> Vec<KeyedDependency>,
 }
 
+/// The module each dynamic import registered, keyed by its value's type:
+/// importing `X::for_root(..)` imports `X`, as NestJS's
+/// `DynamicModule { module: X }` does. A dynamic import that registers no
+/// module contributes global infrastructure only.
+pub(crate) type DynamicModules = HashMap<TypeId, TypeId>;
+
 /// Per-module descriptor submitted to the link-time registry by `#[module]`.
 ///
 /// **Internal ABI** (see [`ProviderDescriptor`]) — macro-constructed, lockstep
@@ -80,9 +86,9 @@ pub struct ModuleDescriptor {
     pub module: fn() -> TypeId,
     /// The module type's name, used to name the module in a boot access error.
     pub name: &'static str,
-    /// Statically-typed imports only. Dynamic (`for_root(...)`) imports
-    /// contribute only global infrastructure, never an injectable a provider
-    /// could depend on.
+    /// Every import in declaration order: a module by its type, a dynamic
+    /// import (`for_root(...)`) by its value's type, which the boot resolves
+    /// to the module it registers ([`DynamicModules`]).
     pub imports: &'static [fn() -> TypeId],
     /// Every provider this module declares in its `providers = [...]`, each with
     /// the dependency information the access-graph walk needs.
@@ -129,17 +135,12 @@ pub struct Composition {
 }
 
 impl Composition {
-    /// The composition of an app built from `roots`, each with its type's name,
-    /// against the link-time module registry.
-    pub(crate) fn of(roots: &[(TypeId, &'static str)]) -> Self {
-        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-        Self::from_descriptors(&descriptors, roots)
-    }
-
-    /// [`of`](Self::of) over `descriptors`. Pure over its inputs.
+    /// The composition of an app built from `roots`, each with its type's name.
+    /// Pure over its inputs.
     pub(crate) fn from_descriptors(
         descriptors: &[&ModuleDescriptor],
         roots: &[(TypeId, &'static str)],
+        dynamic: &DynamicModules,
     ) -> Self {
         let by_id: HashMap<TypeId, &ModuleDescriptor> =
             descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -150,7 +151,7 @@ impl Composition {
         root_crates.dedup();
         Self {
             root_crates,
-            modules: reachable(&ids, &by_id),
+            modules: reachable(&ids, &by_id, dynamic),
         }
     }
 
@@ -215,6 +216,7 @@ impl ProviderOrder {
 pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
+    dynamic: &DynamicModules,
     global: &HashSet<TypeId>,
     registered: &HashSet<TypeId>,
     scoped_or_transient: &HashSet<TypeId>,
@@ -240,7 +242,7 @@ pub(crate) fn validate_access_graph(
         }
     }
 
-    for module_id in reachable(roots, &by_id) {
+    for module_id in reachable(roots, &by_id, dynamic) {
         let Some(desc) = by_id.get(&module_id) else {
             continue;
         };
@@ -249,7 +251,7 @@ pub(crate) fn validate_access_graph(
         // is checked separately, not cloned in. The module graph is shallow,
         // so single-pass closure memoization would not earn its complexity.
         let mut closure_keys = HashSet::new();
-        for import_id in reachable(&[module_id], &by_id) {
+        for import_id in reachable(&[module_id], &by_id, dynamic) {
             if let Some(imported) = by_id.get(&import_id) {
                 for p in imported.providers {
                     closure_keys.insert((p.provides)());
@@ -335,12 +337,13 @@ pub(crate) fn validate_access_graph(
 pub(crate) fn validate_keyed_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
+    dynamic: &DynamicModules,
     global_keyed: &HashSet<ProviderKey>,
 ) -> Result<(), KeyedDependencyError> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
 
-    for module_id in reachable(roots, &by_id) {
+    for module_id in reachable(roots, &by_id, dynamic) {
         let Some(desc) = by_id.get(&module_id) else {
             continue;
         };
@@ -365,10 +368,16 @@ pub(crate) fn validate_keyed_access_graph(
 
 /// BFS over `imports` from `roots`, returning every module `TypeId` reached
 /// (roots included). A `TypeId` without a descriptor terminates its branch.
-fn reachable(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> HashSet<TypeId> {
+fn reachable(
+    roots: &[TypeId],
+    by_id: &HashMap<TypeId, &ModuleDescriptor>,
+    dynamic: &DynamicModules,
+) -> HashSet<TypeId> {
     // The ordered walk, collected — order is irrelevant to a set, and one
     // traversal is one thing to keep correct.
-    reachable_in_order(roots, by_id).into_iter().collect()
+    reachable_in_order(roots, by_id, dynamic)
+        .into_iter()
+        .collect()
 }
 
 /// The same walk, **in source order**: roots first, then each module's
@@ -379,7 +388,11 @@ fn reachable(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> Ha
 /// linker emitted them, which is stable per binary and changes when the code
 /// does. Any discovery seam that promises a *declaration* order (the event bus
 /// does) needs an ordering derived from the module graph instead.
-fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> Vec<TypeId> {
+fn reachable_in_order(
+    roots: &[TypeId],
+    by_id: &HashMap<TypeId, &ModuleDescriptor>,
+    dynamic: &DynamicModules,
+) -> Vec<TypeId> {
     let mut seen = HashSet::new();
     let mut order = Vec::new();
     let mut stack: Vec<TypeId> = roots.iter().rev().copied().collect();
@@ -391,48 +404,40 @@ fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescripto
         if let Some(desc) = by_id.get(&id) {
             // Reversed onto the stack so the first import is visited first.
             for import in desc.imports.iter().rev() {
-                stack.push((import)());
+                let import = (import)();
+                stack.push(dynamic.get(&import).copied().unwrap_or(import));
             }
         }
     }
     order
 }
 
-/// Provider keys reachable from `roots` via the module import graph plus
+/// Provider keys the roots reach — `order`, from [`provider_order`] — plus
 /// `global`. Used at boot to seed [`ReachableProviders`] so transports can
-/// module-gate their discovery. Pure over its inputs.
+/// module-gate their discovery.
 pub(crate) fn reachable_provider_ids(
-    descriptors: &[&ModuleDescriptor],
-    roots: &[TypeId],
+    order: &[TypeId],
     global: &HashSet<TypeId>,
 ) -> HashSet<TypeId> {
-    // The same providers [`provider_order`] enumerates, plus global infra — one
-    // walk, one collection loop, two shapes of the answer.
     let mut keys = global.clone();
-    keys.extend(provider_order(descriptors, roots));
+    keys.extend(order.iter().copied());
     keys
-}
-
-/// Boot-time equivalent of [`reachable_provider_ids`] against the link-time
-/// module registry.
-pub(crate) fn reachable_provider_ids_from_inventory(
-    roots: &[TypeId],
-    global: &HashSet<TypeId>,
-) -> HashSet<TypeId> {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    reachable_provider_ids(&descriptors, roots, global)
 }
 
 /// Every reachable provider in **declaration order**: modules depth-first from
 /// the roots along their `imports = [...]`, and within each module its
 /// `providers = [...]` left to right. First occurrence wins, so a diamond
 /// import ranks a provider where it is first reached. Pure over its inputs.
-pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
+pub(crate) fn provider_order(
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    dynamic: &DynamicModules,
+) -> Vec<TypeId> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
     let mut seen = HashSet::new();
     let mut order = Vec::new();
-    for module_id in reachable_in_order(roots, &by_id) {
+    for module_id in reachable_in_order(roots, &by_id, dynamic) {
         let Some(desc) = by_id.get(&module_id) else {
             continue;
         };
@@ -444,35 +449,6 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
         }
     }
     order
-}
-
-/// Boot-time equivalent of [`provider_order`] against the link-time registry.
-pub(crate) fn provider_order_from_inventory(roots: &[TypeId]) -> Vec<TypeId> {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    provider_order(&descriptors, roots)
-}
-
-/// Boot-time entry point: validate the link-time module registry against the
-/// app's roots and global set. Returns the concrete [`AccessGraphError`] so a
-/// caller can downcast the boot failure to the precise cause.
-pub(crate) fn validate_from_inventory(
-    roots: &[TypeId],
-    global: &HashSet<TypeId>,
-    registered: &HashSet<TypeId>,
-    scoped_or_transient: &HashSet<TypeId>,
-) -> Result<(), AccessError> {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    validate_access_graph(&descriptors, roots, global, registered, scoped_or_transient)
-}
-
-/// Boot-time keyed pass over the link-time module registry — the
-/// [`validate_keyed_access_graph`] counterpart of [`validate_from_inventory`].
-pub(crate) fn validate_keyed_from_inventory(
-    roots: &[TypeId],
-    global_keyed: &HashSet<ProviderKey>,
-) -> Result<(), KeyedDependencyError> {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    validate_keyed_access_graph(&descriptors, roots, global_keyed)
 }
 
 #[cfg(test)]
@@ -554,6 +530,7 @@ mod tests {
         validate_access_graph(
             &descriptors,
             &[TypeId::of::<AppMod>()],
+            &DynamicModules::new(),
             &global(),
             &HashSet::new(),
             &HashSet::new(),
@@ -591,6 +568,7 @@ mod tests {
         validate_access_graph(
             &[&app],
             &[TypeId::of::<AppMod>()],
+            &DynamicModules::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -624,6 +602,7 @@ mod tests {
         validate_access_graph(
             &[&app, &billing, &users],
             &[TypeId::of::<AppMod>()],
+            &DynamicModules::new(),
             &global(),
             &HashSet::new(),
             &HashSet::new(),
@@ -657,6 +636,7 @@ mod tests {
         let err = validate_access_graph(
             &[&app, &billing, &users],
             &[TypeId::of::<AppMod>()],
+            &DynamicModules::new(),
             &global(),
             &HashSet::new(),
             &HashSet::new(),
@@ -698,6 +678,7 @@ mod tests {
         let err = validate_access_graph(
             &[&billing],
             &[TypeId::of::<BillingMod>()],
+            &DynamicModules::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -741,6 +722,7 @@ mod tests {
         validate_access_graph(
             &[&app, &billing],
             &[TypeId::of::<AppMod>()],
+            &DynamicModules::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -753,6 +735,7 @@ mod tests {
         validate_access_graph(
             &[],
             &[TypeId::of::<AppMod>()],
+            &DynamicModules::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -776,7 +759,10 @@ mod tests {
                 also_provides: provides_only_itself,
             }],
         };
-        let keys = reachable_provider_ids(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new());
+        let keys = reachable_provider_ids(
+            &provider_order(&[&app], &[TypeId::of::<AppMod>()], &DynamicModules::new()),
+            &HashSet::new(),
+        );
         assert!(keys.contains(&TypeId::of::<OrgsResolver>()));
     }
 
@@ -803,8 +789,11 @@ mod tests {
             providers: &[],
         };
         let keys = reachable_provider_ids(
-            &[&app, &billing],
-            &[TypeId::of::<AppMod>()],
+            &provider_order(
+                &[&app, &billing],
+                &[TypeId::of::<AppMod>()],
+                &DynamicModules::new(),
+            ),
             &HashSet::new(),
         );
         assert!(!keys.contains(&TypeId::of::<OrgsResolver>()));
@@ -818,7 +807,10 @@ mod tests {
             imports: &[],
             providers: &[],
         };
-        let keys = reachable_provider_ids(&[&app], &[TypeId::of::<AppMod>()], &global());
+        let keys = reachable_provider_ids(
+            &provider_order(&[&app], &[TypeId::of::<AppMod>()], &DynamicModules::new()),
+            &global(),
+        );
         assert!(keys.contains(&TypeId::of::<Db>()));
     }
 
@@ -854,16 +846,25 @@ mod tests {
     fn keyed_dependency_supplied_globally_passes() {
         let users = keyed_consumer_module();
         let global_keyed = HashSet::from([ProviderKey::named::<OAuthClient>("github")]);
-        validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
-            .expect("a globally-seeded keyed provider satisfies the keyed dependency");
+        validate_keyed_access_graph(
+            &[&users],
+            &[TypeId::of::<UsersMod>()],
+            &DynamicModules::new(),
+            &global_keyed,
+        )
+        .expect("a globally-seeded keyed provider satisfies the keyed dependency");
     }
 
     #[test]
     fn unmet_keyed_dependency_is_rejected_naming_type_and_key() {
         let users = keyed_consumer_module();
-        let err =
-            validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &HashSet::new())
-                .expect_err("a keyed dependency with no keyed provider must fail");
+        let err = validate_keyed_access_graph(
+            &[&users],
+            &[TypeId::of::<UsersMod>()],
+            &DynamicModules::new(),
+            &HashSet::new(),
+        )
+        .expect_err("a keyed dependency with no keyed provider must fail");
         assert_eq!(err.consumer, "SocialLoginService");
         assert_eq!(err.module, "UsersModule");
         assert_eq!(err.type_name, "OAuthClient");
@@ -879,9 +880,13 @@ mod tests {
         // type leaves the dependency unmet.
         let users = keyed_consumer_module();
         let global_keyed = HashSet::from([ProviderKey::named::<OAuthClient>("google")]);
-        let err =
-            validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
-                .expect_err("the `google` key must not satisfy a `github` dependency");
+        let err = validate_keyed_access_graph(
+            &[&users],
+            &[TypeId::of::<UsersMod>()],
+            &DynamicModules::new(),
+            &global_keyed,
+        )
+        .expect_err("the `google` key must not satisfy a `github` dependency");
         assert_eq!(err.key, "github");
     }
 }

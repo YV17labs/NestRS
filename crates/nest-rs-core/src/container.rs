@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::RequestScope;
+use crate::access::DynamicModules;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 use crate::module::DynamicModule;
 
@@ -389,6 +390,11 @@ pub struct ContainerBuilder {
     /// same value instead of re-evaluating the expression. Builder-only —
     /// never copied into a [`Container`] or a [`snapshot`](Self::snapshot).
     dynamic_registrars: HashMap<DynamicImportSite, Registrar>,
+    /// The type of the dynamic import whose register phase is running and has
+    /// registered no module yet: the next module registered is the one it is.
+    registering_dynamic: Option<TypeId>,
+    /// The module each dynamic import registered, which the access graph walks.
+    dynamic_modules: DynamicModules,
 }
 
 /// Identifies one `#[module(imports = [...])]` entry: the importing module's
@@ -591,9 +597,19 @@ impl ContainerBuilder {
 
     /// Record that a module of type `id` is being registered. Returns `true`
     /// the first time, `false` thereafter — a module imported via several
-    /// paths registers exactly once.
+    /// paths registers exactly once. The first module a dynamic import
+    /// registers is recorded as the module that import is, for the access
+    /// graph.
     pub fn mark_registered(&mut self, id: TypeId) -> bool {
+        if let Some(import) = self.registering_dynamic.take() {
+            self.dynamic_modules.insert(import, id);
+        }
         self.registered_modules.insert(id)
+    }
+
+    /// The module each dynamic import registered, keyed by its value's type.
+    pub(crate) fn dynamic_modules(&self) -> &DynamicModules {
+        &self.dynamic_modules
     }
 
     /// Collect-phase counterpart of [`mark_registered`](Self::mark_registered).
@@ -642,7 +658,8 @@ impl ContainerBuilder {
         D: DynamicModule + Send + 'static,
         F: FnOnce() -> D,
     {
-        match self.dynamic_registrars.remove(&(module, index)) {
+        self.registering_dynamic = Some(TypeId::of::<D>());
+        let mut builder = match self.dynamic_registrars.remove(&(module, index)) {
             Some(registrar) => registrar(self),
             None => {
                 // No collect phase ran, so run it here: its synchronous half
@@ -655,7 +672,9 @@ impl ContainerBuilder {
                 let builder = value.collect(self);
                 value.register(builder)
             }
-        }
+        };
+        builder.registering_dynamic = None;
+        builder
     }
 
     /// Queue an async factory whose awaited output is stored as a provider

@@ -28,9 +28,10 @@ framework half.
   reached through the edge's `Scoped<T>`, never `#[inject]`. `scope = transient`
   is rebuilt on every resolution; a transient cycle panics at first resolution
   naming the chain — the one provider error not caught at boot.
-- **Modules compose by type or by configured value** (`DynamicModule`).
-  Registration is idempotent, so a diamond builds once; dynamic imports are not
-  deduplicated.
+- **Modules compose by type or by configured value** (`DynamicModule`), and a
+  configured value is the module it registers, as NestJS's
+  `DynamicModule { module }` is. Registration is idempotent, so a diamond builds
+  once; dynamic imports are not deduplicated.
 - **The container is flat and the access graph is the contract.** Visibility is
   Rust's: hide an implementation module-private and bind a `pub trait` with
   `provide_dyn`; there is no `exports` list. `#[module]` records each provider's

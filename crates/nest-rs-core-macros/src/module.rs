@@ -70,15 +70,15 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
-    // Access-graph descriptor submitted to the link-time registry. Only
-    // statically-typed imports are recorded — a dynamic `for_root(...)`
-    // contributes only global infrastructure, never an injectable.
-    let import_type_ids = args.imports.iter().filter_map(|import| match import {
+    // Access-graph descriptor submitted to the link-time registry. A dynamic
+    // import is named by its value's type, never evaluated here; the boot
+    // resolves it to the module it registers.
+    let import_type_ids = args.imports.iter().map(|import| match import {
         Expr::Path(p) => {
             let path = &p.path;
-            Some(quote! { || ::std::any::TypeId::of::<#path>() })
+            quote! { || ::std::any::TypeId::of::<#path>() }
         }
-        _ => None,
+        other => quote! { || ::nest_rs_core::__dynamic_import_type(|| #other) },
     });
     let provider_descriptors = args.providers.iter().map(|binding| match binding {
         ProviderBinding::Concrete(p) => {

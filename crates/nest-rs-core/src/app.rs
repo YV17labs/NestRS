@@ -12,8 +12,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    Composition, ProviderOrder, ReachableProviders, provider_order_from_inventory,
-    reachable_provider_ids_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
+    Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, provider_order,
+    reachable_provider_ids, validate_access_graph, validate_keyed_access_graph,
 };
 use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Registrar};
@@ -94,7 +94,6 @@ impl App {
         let root = std::any::type_name::<M>();
         let builder = M::collect(Container::builder().enter_root(root)).leave_import();
         let builder = M::register(builder.enter_root(root)).leave_import();
-        let roots = [TypeId::of::<M>()];
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
         // front regardless of seed ordering.
@@ -119,18 +118,14 @@ impl App {
         // The actual registered set (singletons + scoped/transient factories +
         // imperatively-provided values) — consulted so a dependency provided
         // outside the declarative graph is not misreported as unmet.
-        let registered = builder.registered_ids();
-        let deferred = builder.scoped_or_transient_ids();
-        validate_from_inventory(&roots, &global, &registered, &deferred)
-            .map_err(AccessError::into_anyhow)?;
         // Keyed providers are configured imperatively; the sync path seeds none
         // up front, so any keyed dependency here is genuinely unmet.
-        validate_keyed_from_inventory(&roots, &HashSet::new())?;
-        let reachable = reachable_provider_ids_from_inventory(&roots, &global);
-        let builder = builder
-            .provide(ReachableProviders(reachable))
-            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)))
-            .provide(Composition::of(&[(TypeId::of::<M>(), root)]));
+        let builder = seal(
+            builder,
+            &[(TypeId::of::<M>(), root)],
+            &global,
+            &HashSet::new(),
+        )?;
         Ok(Self {
             container: builder.build(),
         })
@@ -513,27 +508,46 @@ impl AppBuilder {
             builder = ov(builder);
         }
 
-        let roots: Vec<TypeId> = modules.iter().map(|h| h.type_id).collect();
-        // The full registered set after modules and overrides — includes
-        // imperatively-provided values (a hand-written `impl Module`) and
-        // scoped/transient factories the declarative graph cannot see.
         check_duplicate_providers(&builder)?;
-        let registered = builder.registered_ids();
-        let deferred = builder.scoped_or_transient_ids();
-        validate_from_inventory(&roots, &global, &registered, &deferred)
-            .map_err(AccessError::into_anyhow)?;
-        validate_keyed_from_inventory(&roots, &global_keyed)?;
-        let reachable = reachable_provider_ids_from_inventory(&roots, &global);
-        let composition: Vec<(TypeId, &'static str)> =
+        let roots: Vec<(TypeId, &'static str)> =
             modules.iter().map(|h| (h.type_id, h.name)).collect();
-        let builder = builder
-            .provide(ReachableProviders(reachable))
-            .provide(ProviderOrder::new(provider_order_from_inventory(&roots)))
-            .provide(Composition::of(&composition));
+        let builder = seal(builder, &roots, &global, &global_keyed)?;
         Ok(App {
             container: builder.build(),
         })
     }
+}
+
+/// The boot's last pass, shared by both paths: the access graph checked over
+/// what registered — imperatively-provided values and scoped or transient
+/// factories included, which the declarative graph cannot see — then the seeds
+/// the transports read off it. The link-time registry is read once.
+fn seal(
+    builder: ContainerBuilder,
+    roots: &[(TypeId, &'static str)],
+    global: &HashSet<TypeId>,
+    global_keyed: &HashSet<ProviderKey>,
+) -> Result<ContainerBuilder> {
+    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+    let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
+    let dynamic = builder.dynamic_modules();
+    validate_access_graph(
+        &descriptors,
+        &ids,
+        dynamic,
+        global,
+        &builder.registered_ids(),
+        &builder.scoped_or_transient_ids(),
+    )
+    .map_err(AccessError::into_anyhow)?;
+    validate_keyed_access_graph(&descriptors, &ids, dynamic, global_keyed)?;
+    let order = provider_order(&descriptors, &ids, dynamic);
+    let reachable = ReachableProviders(reachable_provider_ids(&order, global));
+    let composition = Composition::from_descriptors(&descriptors, roots, dynamic);
+    Ok(builder
+        .provide(reachable)
+        .provide(ProviderOrder::new(order))
+        .provide(composition))
 }
 
 /// The transports still running, in a stable order, for the line a signal on

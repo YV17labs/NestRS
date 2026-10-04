@@ -5,7 +5,9 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::{App, ContainerBuilder, Discoverable, injectable, module};
+use nest_rs_core::{
+    App, ContainerBuilder, Discoverable, DynamicModule, Module, injectable, module,
+};
 
 // A type no module provides — the dependency a scoped provider will fail to
 // resolve. Not `#[injectable]`, so nothing ever registers it.
@@ -117,6 +119,48 @@ async fn imported_cross_module_dependency_boots() {
         .build()
         .await
         .expect("declaring the import makes the cross-module dependency legal");
+}
+
+#[injectable]
+struct PinnedClient;
+
+#[module(providers = [PinnedClient])]
+struct ClientModule;
+
+/// The `for_root` shape of a module owning a config (`ConfigSetup<M, C>`): the
+/// dynamic import registers the module it configures.
+struct ClientSetup;
+
+fn client_for_root() -> ClientSetup {
+    ClientSetup
+}
+
+impl DynamicModule for ClientSetup {
+    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+        <ClientModule as Module>::register(builder)
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ClientUser {
+    #[inject]
+    client: Arc<PinnedClient>,
+}
+
+#[module(imports = [client_for_root()], providers = [ClientUser])]
+struct ClientUserModule;
+
+#[tokio::test]
+async fn a_provider_injects_what_a_dynamic_import_registers_on_the_async_path() {
+    App::builder()
+        .module::<ClientUserModule>()
+        .build()
+        .await
+        .expect("a dynamic import imports the module it registers");
 }
 
 // A lazily-built provider (controller / cron job / processor shape): empty

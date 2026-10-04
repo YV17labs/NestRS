@@ -329,23 +329,14 @@ for Claude Code alone belong below the import.
 
 /// The conventions, in two pieces.
 ///
-/// The architecture model is `architecture.md` beside this file — one copy,
-/// embedded here and symlinked into `.claude/rules/`, so the rules this repo
-/// works under and the rules it ships are the same bytes.
+/// The architecture model is `architecture.md` beside this file, embedded
+/// verbatim; `naming.rs` scrapes its reserved-vocabulary fence, and
+/// `.claude/rules/architecture.md` is this repository's copy of it.
 ///
-/// **The real file is the build's, the symlink is `.claude/`'s**, and not the
-/// reverse: a checkout with `core.symlinks=false` (Windows without Developer
-/// Mode) materializes a link as a text file holding its target path, so an
-/// inverted arrangement would embed that path into every scaffolded
-/// `AGENTS.md` and compile clean. `.claude/` degrading there costs a session
-/// its rules; the build silently shipping a filename does not degrade, it
-/// lies. `cargo package` follows a symlink under the package root and archives
-/// its bytes, so publishing does not decide this — the failure mode does.
+/// It carries no `{{key}}`: `render` would substitute one here, but the
+/// `.claude/` copy is read as rules unrendered and would show it literally —
+/// so everything per-project lives in the half below.
 ///
-/// The split point is the symlink, not the placeholders: `render` runs over
-/// the whole document, so an embedded `{{key}}` would substitute fine. What it
-/// cannot do is read as rules through the raw symlink, where a placeholder
-/// stays literal — so everything per-project lives in the half below.
 /// `static`, not `const`: a `const` is re-materialized at every use site, and
 /// this one embeds ~9 KB from two modules that land in different codegen units.
 /// A `static` has one address, so the blob ships once however many scaffolds

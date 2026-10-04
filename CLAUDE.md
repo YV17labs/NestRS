@@ -95,9 +95,7 @@ source, manifests or `.claude/`.
 
 A name and its path say the same thing, and a name is judged in its set.
 `.claude/rules/naming.md` holds the principles for every name;
-`.claude/rules/architecture.md` applies them to modules, files and types. It
-is a symlink to `crates/nest-rs-cli/src/templates/architecture.md`, which every
-scaffold ships as `AGENTS.md` — edit the real file.
+`.claude/rules/architecture.md` applies them to modules, files and types.
 
 ## Hard "no" — security and data
 

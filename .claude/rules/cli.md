@@ -34,16 +34,12 @@ rendered and wired by `src/scaffold/`, which rolls back a partial scaffold.
 
 **A template becomes a file only when a second consumer must read the same
 bytes.** There is one: `src/templates/architecture.md`, embedded with
-`include_str!` into every scaffold's `AGENTS.md` and symlinked as
-`.claude/rules/architecture.md`, so the rules this repo works under and the
-rules it ships are identical. Carrying no placeholder is a consequence of that,
-not the reason. **The real file is on the build's side** — under
-`core.symlinks=false` a link checks out as a text file holding its target, and
-the inverse arrangement would embed a filename into every scaffold and still
-compile. **Two readers parse it**: `naming.rs` derives the reserved words from
-the fence under `## Reserved vocabulary`, and the scaffold test asserts its
-headings; the `/architecture/` page restates its tables and that fence, kept in
-step by review. Change a table, a heading or the fence with them.
+`include_str!` into every scaffold's `AGENTS.md` and into `naming.rs`;
+`.claude/rules/architecture.md` is this repository's copy, edited with it.
+**Two readers parse it**: `naming.rs` derives the reserved words from the fence
+under `## Reserved vocabulary`, and the scaffold test asserts its headings; the
+`/architecture/` page restates its tables and that fence, kept in step by
+review. Change a table, a heading or the fence with them.
 
 **A template is the developer's own repository, so it may teach in a comment**
 — the `// SECURITY:` note above a generated `#[public]` route is the case that

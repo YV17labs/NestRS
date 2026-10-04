@@ -94,9 +94,8 @@ pub(crate) struct Names {
 }
 
 /// The architecture rules this CLI ships — the *same bytes* `shared::AGENTS_BODY`
-/// embeds. Read here so the refusal below and the rule a generated project is
-/// handed cannot disagree: there is one copy, and it is the one on the build's
-/// side.
+/// embeds, so the refusal below and the rule a generated project is handed
+/// cannot disagree.
 static ARCHITECTURE_RULES: &str = include_str!("templates/architecture.md");
 
 /// The structural vocabulary, word → the category that claims it, **derived**

@@ -2033,8 +2033,9 @@ fn tick_slightly_longer_than_its_period(_: &Container) -> RunFuture<'_> {
 /// A run a few milliseconds over its period fires every tick late, and skips
 /// none until the lateness adds up to a whole period — dozens of ticks past this
 /// half second — so it files no skip: it warned on every tick, counting the late
-/// one as skipped.
-#[tokio::test]
+/// one as skipped. The clock is paused so the lateness is the run's alone: on a
+/// loaded machine the executor's own delay added up to a period and filed one.
+#[tokio::test(start_paused = true)]
 async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
     struct SlightlyLongHost;
 

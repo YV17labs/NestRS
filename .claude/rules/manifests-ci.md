@@ -65,7 +65,8 @@ with all of this, or it is not shipped:
    `crate = ` override, so the use site declares neither the crate nor a
    version.
 4. **The expansion witness**: a use site in `nest-rs-macro-hygiene`, gated on
-   the capability's feature. Decorators only.
+   the capability's feature, and a snapshot per refusal in its suite.
+   Decorators only.
 5. **The composition witness**: a test in the capability's own crate booting
    the documented wiring through `nest_rs_testing::TestApp` (or
    `App::builder`), one per `for_root` seam.

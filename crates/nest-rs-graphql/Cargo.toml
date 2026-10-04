@@ -75,8 +75,6 @@ nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # being approximated by a wall-clock sleep nobody would keep honest.
 tokio = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
-# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
-trybuild.workspace = true
 
 [lints]
 workspace = true

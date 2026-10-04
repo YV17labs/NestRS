@@ -1,5 +1,0 @@
-error: #[crud] `paginate` configures the `list` op, which `ops` leaves out — list `list` in `ops` to generate it, or drop `paginate = …`
-  --> tests/integration/diagnostics/crud_paginate_for_an_excluded_list.rs:11:70
-   |
-11 | #[crud(service = svc, entity = OrgEntity, output = Org, ops = [get], paginate = none)]
-   |                                                                      ^^^^^^^^

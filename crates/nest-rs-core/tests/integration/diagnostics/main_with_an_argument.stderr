@@ -1,5 +1,0 @@
-error: #[main] takes no arguments: it builds tokio's multi-threaded runtime with every driver enabled, sized by `TOKIO_WORKER_THREADS`, and tears it down within the shutdown budget — there is nothing left for an argument to choose
- --> tests/integration/diagnostics/main_with_an_argument.rs:9:22
-  |
-9 | #[nest_rs_core::main(flavor = "current_thread")]
-  |                      ^^^^^^

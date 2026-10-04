@@ -1,5 +1,0 @@
-error: a method declares exactly one role — this one writes `#[tool]` 3 times. Accepted: `#[tool]` or `#[prompt]`. A method that must be two is two methods.
-  --> tests/integration/diagnostics/a_method_repeating_one_role.rs:12:5
-   |
-12 |     #[tool(description = "Does the thing again")]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

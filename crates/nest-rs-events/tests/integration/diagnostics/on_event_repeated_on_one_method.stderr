@@ -1,5 +1,0 @@
-error: a method declares exactly one listener — this one writes `#[on_event]` 3 times. Accepted: `#[on_event]`. A method that must be two is two methods.
-  --> tests/integration/diagnostics/on_event_repeated_on_one_method.rs:19:5
-   |
-19 |     #[on_event]
-   |     ^^^^^^^^^^^

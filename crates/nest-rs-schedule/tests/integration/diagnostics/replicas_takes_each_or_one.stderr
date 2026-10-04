@@ -1,5 +1,0 @@
-error: unknown #[every] replicas `all`; expected `each` or `one` — `"each"` (the default) fires every occurrence on every replica of the app; `"one"` fires each occurrence on exactly one replica, the one that claims it through the occurrence lock the app imports
-  --> tests/integration/diagnostics/replicas_takes_each_or_one.rs:13:31
-   |
-13 |     #[every("30s", replicas = "all")]
-   |                               ^^^^^

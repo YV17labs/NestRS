@@ -249,9 +249,9 @@ async fn an_operation_calls_its_method_and_not_a_trait_method_of_the_same_name()
 // async-graphql's own rule (`Inflector`'s camel case) reads `a1_b` and `a_1b` as
 // one field; through 6.x both compiled and one method's body ran for the other's
 // field. The framework now states every field's name *by that same rule*, so the
-// duplicate check refuses the pair at compile time
-// (`diagnostics/operations_two_methods_one_served_name`) and every name served is
-// the one async-graphql would have served.
+// duplicate check refuses the pair at compile time (`nest-rs-macro-hygiene`'s
+// `diagnostics/graphql/operations_two_methods_one_served_name`) and every name
+// served is the one async-graphql would have served.
 
 #[derive(nest_rs_graphql::async_graphql::SimpleObject)]
 #[graphql(complex)]

@@ -11,5 +11,4 @@
 )]
 
 mod bus;
-mod diagnostics;
 mod order;

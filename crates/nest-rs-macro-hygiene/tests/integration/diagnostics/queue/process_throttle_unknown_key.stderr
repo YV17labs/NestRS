@@ -1,0 +1,5 @@
+error: unknown #[process] argument `throttle(burst)`; expected `limit` or `window`
+  --> tests/integration/diagnostics/queue/process_throttle_unknown_key.rs:22:43
+   |
+22 |     #[process(queue = DemoQueue, throttle(burst = 10))]
+   |                                           ^^^^^

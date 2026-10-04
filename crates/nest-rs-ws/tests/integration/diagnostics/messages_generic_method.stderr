@@ -1,5 +1,0 @@
-error: a `#[messages]` method takes no type or const parameters, and `ping` declares type parameter `T`: the expansion calls it with only what its transport carries, so nothing supplies a type for it — name a concrete one, or call a generic function from the body
-  --> tests/integration/diagnostics/messages_generic_method.rs:13:19
-   |
-13 |     async fn ping<T: Default + ToString>(&self) -> String {
-   |                   ^^^^^^^^^^^^^^^^^^^^^

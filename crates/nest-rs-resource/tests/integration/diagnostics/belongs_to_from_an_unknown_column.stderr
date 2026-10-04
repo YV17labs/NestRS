@@ -1,5 +1,0 @@
-error: #[sea_orm] `from`: "organisation_id" is not a column of this entity — `#[expose]` reads it as the field holding this relation's foreign key
-  --> tests/integration/diagnostics/belongs_to_from_an_unknown_column.rs:17:34
-   |
-17 |     #[sea_orm(belongs_to, from = "organisation_id", to = "Column::Id")]
-   |                                  ^^^^^^^^^^^^^^^^^

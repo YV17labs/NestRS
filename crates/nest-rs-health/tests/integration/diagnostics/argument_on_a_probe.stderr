@@ -1,5 +1,0 @@
-error: `#[readiness]` takes no arguments — it is a flag, and what it declares is its presence
-  --> tests/integration/diagnostics/argument_on_a_probe.rs:13:5
-   |
-13 |     #[readiness(timeout = "5s")]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

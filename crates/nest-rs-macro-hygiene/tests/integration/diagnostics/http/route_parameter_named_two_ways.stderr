@@ -1,0 +1,5 @@
+error: `#[routes]` mounts one address as `/:id` on `read` and as `/:other` on `remove`: poem mounts an address once and binds each parameter by the name it was mounted under, so one handler would read a parameter that is not there — name the parameters alike on both
+  --> tests/integration/diagnostics/http/route_parameter_named_two_ways.rs:16:14
+   |
+16 |     #[delete("/:other")]
+   |              ^^^^^^^^^

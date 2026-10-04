@@ -1,0 +1,29 @@
+error: #[every] takes no `retries`: a tick's retry is the next occurrence
+  --> tests/integration/diagnostics/schedule/every_refused_keys.rs:14:20
+   |
+14 |     #[every("30s", retries = 3)]
+   |                    ^^^^^^^
+
+error: #[every] takes no `concurrency`: a replica runs one occurrence of a scheduled job at a time — one falling due inside a run there is skipped and counted
+  --> tests/integration/diagnostics/schedule/every_refused_keys.rs:19:20
+   |
+19 |     #[every("30s", concurrency = 2)]
+   |                    ^^^^^^^^^^^
+
+error: #[every] takes no `throttle`: the trigger is the rate
+  --> tests/integration/diagnostics/schedule/every_refused_keys.rs:24:20
+   |
+24 |     #[every("30s", throttle(limit = 1, window = "1m"))]
+   |                    ^^^^^^^^
+
+error: #[every] takes no `tz`: an interval has no wall clock
+  --> tests/integration/diagnostics/schedule/every_refused_keys.rs:29:20
+   |
+29 |     #[every("30s", tz = "Europe/Paris")]
+   |                    ^^
+
+error: #[every] takes no `queue`: a scheduled tick runs in process and is not delivered from a queue — push a job from the tick to reach one
+  --> tests/integration/diagnostics/schedule/every_refused_keys.rs:34:20
+   |
+34 |     #[every("30s", queue = DemoQueue)]
+   |                    ^^^^^

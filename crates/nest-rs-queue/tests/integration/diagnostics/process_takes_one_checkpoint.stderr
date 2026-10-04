@@ -1,5 +1,0 @@
-error: a #[process] method takes at most one `Checkpoint<_>` parameter — a job keeps one checkpoint
-  --> tests/integration/diagnostics/process_takes_one_checkpoint.rs:27:17
-   |
-27 |         _other: Checkpoint<String>,
-   |                 ^^^^^^^^^^^^^^^^^^

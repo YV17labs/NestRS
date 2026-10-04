@@ -87,8 +87,6 @@ tokio-tungstenite.workspace = true
 # `tests/global_prefix.rs` env-path test isolates the process env via
 # `figment::Jail`, matching how `nest-rs-config` itself tests env reads.
 figment = { workspace = true, features = ["test"] }
-# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
-trybuild.workspace = true
 # Dev-only, and deliberately so: the version grammar is worded once in
 # `nest_rs_codegen`, but that crate pulls `syn`, which must never reach an app's
 # dependency graph. So the runtime half carries its own copy of the predicate and

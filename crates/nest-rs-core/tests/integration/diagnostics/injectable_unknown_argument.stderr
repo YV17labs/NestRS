@@ -1,5 +1,0 @@
-error: unknown #[injectable] argument `lifetime`; expected `scope`
- --> tests/integration/diagnostics/injectable_unknown_argument.rs:8:14
-  |
-8 | #[injectable(lifetime = request)]
-  |              ^^^^^^^^

@@ -1,5 +1,0 @@
-error: `bind = Service` is not available on MCP — an operation takes one `Parameters<T>` struct, not the named id argument the binding reads. Keep `#[authorize(Action, Entity)]` and bind in the body with the service's `access`
-  --> tests/integration/diagnostics/authorize_bind_on_a_tool.rs:19:25
-   |
-19 |     #[authorize(Update, bind = DemoService)]
-   |                         ^^^^^^^^^^^^^^^^^^

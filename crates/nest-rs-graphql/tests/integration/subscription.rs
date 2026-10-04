@@ -261,8 +261,8 @@ async fn a_pipe_binds_on_a_subscription_argument() {
 }
 
 /// A `#[public]` subscription is reachable — the posture's other half. (The
-/// unannotated one does not compile: see
-/// `tests/integration/diagnostics/subscription_without_posture.rs`.)
+/// unannotated one does not compile: see `nest-rs-macro-hygiene`'s
+/// `tests/integration/diagnostics/graphql/subscription_without_posture.rs`.)
 #[tokio::test]
 async fn a_public_subscription_is_reachable() {
     let app = boot().await;

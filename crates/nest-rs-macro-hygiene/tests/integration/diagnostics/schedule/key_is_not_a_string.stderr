@@ -1,0 +1,11 @@
+error: #[every] `key` takes the job's identity as a string — the path its boot line names, e.g. `key = "billing::InvoiceTasks::close_day"`
+  --> tests/integration/diagnostics/schedule/key_is_not_a_string.rs:14:44
+   |
+14 |     #[every("30s", replicas = "one", key = billing::Tasks::tick)]
+   |                                            ^^^^^^^^^^^^^^^^^^^^
+
+error: #[cron] `key` takes the job's identity as a string — the path its boot line names, e.g. `key = "billing::InvoiceTasks::close_day"`
+  --> tests/integration/diagnostics/schedule/key_is_not_a_string.rs:19:51
+   |
+19 |     #[cron("0 0 * * * *", replicas = "one", key = 42)]
+   |                                                   ^^

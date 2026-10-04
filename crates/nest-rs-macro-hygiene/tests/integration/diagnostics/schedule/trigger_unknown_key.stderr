@@ -1,0 +1,17 @@
+error: unknown #[every] argument `priority`; expected `transactional`, `replicas` or `key`
+  --> tests/integration/diagnostics/schedule/trigger_unknown_key.rs:15:20
+   |
+15 |     #[every("30s", priority = 1)]
+   |                    ^^^^^^^^
+
+error: unknown #[cron] argument `priority`; expected `tz`, `transactional`, `replicas` or `key`
+  --> tests/integration/diagnostics/schedule/trigger_unknown_key.rs:20:27
+   |
+20 |     #[cron("0 0 * * * *", priority = 1)]
+   |                           ^^^^^^^^
+
+error: unknown #[after] argument `priority`; expected `transactional`
+  --> tests/integration/diagnostics/schedule/trigger_unknown_key.rs:25:19
+   |
+25 |     #[after("1s", priority = 1)]
+   |                   ^^^^^^^^

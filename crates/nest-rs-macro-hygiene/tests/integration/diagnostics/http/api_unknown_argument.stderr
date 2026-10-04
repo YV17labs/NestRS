@@ -1,0 +1,5 @@
+error: unknown #[api] argument `summry`; expected `summary`, `description`, `tags`, `response`, `multipart` or `response_content_type`
+  --> tests/integration/diagnostics/http/api_unknown_argument.rs:14:11
+   |
+14 |     #[api(summry = "List users")]
+   |           ^^^^^^

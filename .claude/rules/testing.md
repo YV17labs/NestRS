@@ -30,7 +30,8 @@ only what the level leaves out is absent.
 - **Live service** — only what the service itself decides: the SQL a query
   becomes, a Redis script, a presigned URL, a reconnect. Never a second copy of
   an in-process assertion.
-- **Compile-fail snapshot** (trybuild) — only a compile error a developer reads.
+- **Compile-fail snapshot** (trybuild) — only a compile error a developer reads,
+  through the umbrella as they read it.
 - **Scaffold compile** — only what a generator writes.
 
 Coverage is a map, not a target: it points at the branch nothing executes, and
@@ -123,6 +124,13 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
 
 ## Compile-fail snapshots
 
+**One suite holds them, `nest-rs-macro-hygiene`'s**: a folder per umbrella
+module, each fixture written through `nest_rs::` as a developer writes it, so a
+snapshot pins the words and the span a developer meets. Split across crates,
+the suites rebuild each other's dependencies: trybuild runs cargo with the
+identity of the crate under test, and ring's build script tracks it
+(cargo#16134).
+
 **A snapshot pins the refusal its fixture exists for, and no error the fixture
 made on its own.** A fixture that does not parse, or whose names no longer
 resolve, stays red whatever the decorator says, so the refusal it promises can
@@ -132,9 +140,10 @@ change or vanish with the suite green. A fixture therefore parses and its
 review, like anything else a regenerated snapshot pins: read the `.stderr`
 `TRYBUILD=overwrite` wrote before committing it.
 
-**Snapshots change only on a deliberate toolchain bump.** rustc's wording is
-the toolchain's, and `rust-toolchain.toml` pins it, so a `.stderr` moves in the
-commit that bumps the toolchain and nowhere else; a snapshot diff in any other
-commit is a refusal that changed. `just test` runs them. `cargo fmt` never
+**Snapshots change only on a deliberate toolchain bump**, or where rustc lists
+a trait's implementors and the framework gained one. rustc's wording is the
+toolchain's, and `rust-toolchain.toml` pins it, so a `.stderr` moves in the
+commit that bumps the toolchain; any other snapshot diff is a refusal that
+changed. `just test` runs them. `cargo fmt` never
 reaches a fixture (no module tree declares it), and reformatting one moves the
 line numbers its `.stderr` pins.

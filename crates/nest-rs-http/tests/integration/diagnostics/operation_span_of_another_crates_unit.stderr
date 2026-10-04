@@ -1,7 +1,0 @@
-error[E0080]: evaluation panicked: a unit is opened only by the crate that declares it
- --> tests/integration/diagnostics/operation_span_of_another_crates_unit.rs:3:17
-  |
-3 |     let _span = nest_rs_core::operation_span!(nest_rs_http::unit::REQUEST, &correlation);
-  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::_` failed here
-  |
-  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `nest_rs_core::operation_span` (in Nightly builds, run with -Z macro-backtrace for more info)

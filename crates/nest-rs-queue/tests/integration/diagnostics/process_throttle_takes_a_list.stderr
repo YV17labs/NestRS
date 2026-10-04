@@ -1,5 +1,0 @@
-error: #[process] `throttle` takes a list — write `throttle(limit = 10, window = "1m")`
-  --> tests/integration/diagnostics/process_throttle_takes_a_list.rs:21:34
-   |
-21 |     #[process(queue = DemoQueue, throttle = 10)]
-   |                                  ^^^^^^^^

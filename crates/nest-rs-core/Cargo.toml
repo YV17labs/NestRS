@@ -58,10 +58,6 @@ uuid.workspace = true
 # trace a shadowed provider leaves. Dev-only, so the cycle back to this crate
 # never reaches a consumer build.
 nest-rs-testing = { path = "../nest-rs-testing" }
-# Snapshot-tests the core macro compile diagnostics (`#[injectable]`, `#[module]`)
-# — the exact error a developer sees is part of the contract (CORE-I10), the
-# same net the http/graphql/ws macros already have.
-trybuild.workspace = true
 # `test-util` (not part of tokio's `full`) pauses time, so a shutdown hook that
 # never returns is abandoned at its bound without the suite waiting it out.
 tokio = { workspace = true, features = ["test-util"] }

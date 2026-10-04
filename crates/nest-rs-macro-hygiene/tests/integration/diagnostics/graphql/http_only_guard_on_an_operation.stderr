@@ -1,0 +1,27 @@
+error[E0277]: `HttpOnlyGuard` does not check GraphQL operations
+  --> tests/integration/diagnostics/graphql/http_only_guard_on_an_operation.rs:36:18
+   |
+36 |     #[use_guards(HttpOnlyGuard)]
+   |                  ^^^^^^^^^^^^^ this guard has no `check_graphql`
+   |
+help: the trait `GraphqlGuard` is not implemented for `HttpOnlyGuard`
+  --> tests/integration/diagnostics/graphql/http_only_guard_on_an_operation.rs:19:1
+   |
+19 | struct HttpOnlyGuard;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: a guard bound on a resolver runs `Guard::check_graphql`, whose default is `Ok(())` — binding one that does not override it passes every operation silently
+   = note: override `check_graphql`, then declare `impl GraphqlGuard for HttpOnlyGuard {}`; or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
+help: the trait `GraphqlGuard` is implemented for `AbilityGuard<F>`
+  --> $WORKSPACE/crates/nest-rs-authz/src/guard.rs
+   |
+   | impl<F: AbilityFactory> nest_rs_guards::GraphqlGuard for AbilityGuard<F> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/graphql/http_only_guard_on_an_operation.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+...
+36 |     #[use_guards(HttpOnlyGuard)]
+   |                  ------------- required by a bound in this function
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,5 +1,0 @@
-error: a `#[messages]` method borrows its host — `&self` — and this one takes `&mut self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
-  --> tests/integration/diagnostics/messages_takes_self_by_reference.rs:13:19
-   |
-13 |     async fn ping(&mut self) {}
-   |                   ^^^^^^^^^

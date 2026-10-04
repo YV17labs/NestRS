@@ -1,5 +1,0 @@
-error: #[process] `throttle` needs both `limit` and `window` — write `throttle(limit = 10, window = "1m")`
-  --> tests/integration/diagnostics/process_throttle_needs_limit_and_window.rs:21:34
-   |
-21 |     #[process(queue = DemoQueue, throttle(limit = 10))]
-   |                                  ^^^^^^^^

@@ -1,5 +1,0 @@
-error: a `#[every]` method returns a `Result`: `Ok(())` completes the occurrence and an `Err` fails it, which the scheduler logs before the next one — write `-> anyhow::Result<()>`
-  --> tests/integration/diagnostics/scheduled_returns_a_result.rs:15:5
-   |
-15 |     async fn tick(&self) {}
-   |     ^^^^^^^^^^^^^^^^^^^^

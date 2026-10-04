@@ -1,5 +1,0 @@
-error: a `#[indicators]` method takes no type or const parameters, and `upstream_reachable` declares type parameter `T`: the expansion calls it with only what its transport carries, so nothing supplies a type for it — name a concrete one, or call a generic function from the body
-  --> tests/integration/diagnostics/indicators_generic_method.rs:15:33
-   |
-15 |     async fn upstream_reachable<T: Default>(&self) -> Result<(), std::io::Error> {
-   |                                 ^^^^^^^^^^

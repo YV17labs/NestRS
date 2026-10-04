@@ -1,5 +1,0 @@
-error: a `#[hooks]` method takes no type or const parameters, and `init` declares type parameter `T`: the expansion calls it with only what its transport carries, so nothing supplies a type for it — name a concrete one, or call a generic function from the body
-  --> tests/integration/diagnostics/hooks_generic_method.rs:12:19
-   |
-12 |     async fn init<T: Default>(&self) {}
-   |                   ^^^^^^^^^^

@@ -47,8 +47,6 @@ libc.workspace = true
 nest-rs-testing = { path = "../nest-rs-testing" }
 # `figment::Jail` isolates the process env + cwd for the loader/cascade tests.
 figment = { workspace = true, features = ["test"] }
-# trybuild pins the `#[config]` macro's compile diagnostics as a contract (CORE-I10).
-trybuild.workspace = true
 # The custom-prefix suite boots a real app (`ConfigModule::for_feature` is an
 # async factory), which is what proves the declared prefix reaches the field —
 # compiling only proves the name was built.

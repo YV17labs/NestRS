@@ -1,0 +1,5 @@
+error: #[process] `retries` takes a whole number — the re-runs a failed attempt gets before the job dead-letters
+  --> tests/integration/diagnostics/queue/process_retries_is_a_whole_number.rs:21:44
+   |
+21 |     #[process(queue = DemoQueue, retries = 2.5)]
+   |                                            ^^^

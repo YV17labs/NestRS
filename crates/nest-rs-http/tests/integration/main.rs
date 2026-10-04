@@ -11,7 +11,6 @@ mod allow;
 mod body_limit;
 mod compression;
 mod controller;
-mod diagnostics;
 mod edge;
 mod exclusive_paths;
 mod fail_secure;

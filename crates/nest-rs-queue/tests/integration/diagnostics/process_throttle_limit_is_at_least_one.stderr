@@ -1,5 +1,0 @@
-error: #[process] `throttle(limit)` takes a whole number of at least 1 — how many jobs may start in one window; 0 would never run a job
-  --> tests/integration/diagnostics/process_throttle_limit_is_at_least_one.rs:21:51
-   |
-21 |     #[process(queue = DemoQueue, throttle(limit = 0, window = "1m"))]
-   |                                                   ^

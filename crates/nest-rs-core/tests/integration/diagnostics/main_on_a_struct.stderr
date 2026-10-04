@@ -1,5 +1,0 @@
-error: #[main] goes on an `async fn` — the binary's `main` — whose body it runs on the runtime it builds; write `#[nest_rs::main] async fn main()`
- --> tests/integration/diagnostics/main_on_a_struct.rs:6:1
-  |
-6 | struct Entry;
-  | ^^^^^^

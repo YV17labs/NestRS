@@ -1,5 +1,0 @@
-error: #[queue] applies to a unit struct, and this is an impl block — a queue's identity is a type carrying no data, the marker a push and a `#[process]` both name (e.g. `#[queue(name = "audio", job = TranscodeCommand)] pub struct AudioQueue;`)
-  --> tests/integration/diagnostics/queue_on_an_impl.rs:16:1
-   |
-16 | impl DemoQueue {}
-   | ^^^^^^^^^^^^^^^^^

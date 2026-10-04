@@ -1,0 +1,5 @@
+error: unknown #[gateway] argument `prefix`; expected `path`, `version` or `namespace`
+ --> tests/integration/diagnostics/ws/gateway_unknown_key.rs:9:25
+  |
+9 | #[gateway(path = "/ws", prefix = "/v1")]
+  |                         ^^^^^^

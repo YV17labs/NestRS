@@ -1,5 +1,0 @@
-error: `id_arg = argument` is not available on MCP — it renames the argument GraphQL's `bind = Service` synthesises, and no other transport synthesises one
-  --> tests/integration/diagnostics/authorize_id_arg_on_a_tool.rs:25:25
-   |
-25 |     #[authorize(Update, id_arg = subject_id)]
-   |                         ^^^^^^^^^^^^^^^^^^^

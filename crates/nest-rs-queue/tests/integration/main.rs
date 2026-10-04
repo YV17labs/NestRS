@@ -22,7 +22,6 @@
 
 mod checkpoint;
 mod consume;
-mod diagnostics;
 mod inventory;
 mod producer;
 mod queue;

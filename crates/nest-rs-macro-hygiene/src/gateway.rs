@@ -15,7 +15,7 @@ use nest_rs::ws::{gateway, messages};
 ///
 /// It overrides `check_http` rather than inheriting the default, and that is not
 /// decoration: an empty `impl Guard for X {}` beside an `impl HttpGuard` is an
-/// attestation that lies, which is exactly what the trybuild snapshots next door
+/// attestation that lies, which is exactly what this crate's trybuild snapshots
 /// exist to refuse. The witness must not ship the shape it witnesses against.
 #[injectable]
 pub struct HygieneWsGuard;

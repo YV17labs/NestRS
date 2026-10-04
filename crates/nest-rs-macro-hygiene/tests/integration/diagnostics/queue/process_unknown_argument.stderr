@@ -1,0 +1,5 @@
+error: unknown #[process] argument `topic`; expected `queue`, `retries`, `concurrency`, `throttle` or `transactional`
+  --> tests/integration/diagnostics/queue/process_unknown_argument.rs:15:15
+   |
+15 |     #[process(topic = "emails")]
+   |               ^^^^^

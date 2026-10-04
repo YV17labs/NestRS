@@ -1,0 +1,5 @@
+error: unknown #[expose] argument `readonly`; expected `input`, `validate`, `complexity` or `via`
+  --> tests/integration/diagnostics/resource/unknown_field_option.rs:14:14
+   |
+14 |     #[expose(readonly)]
+   |              ^^^^^^^^

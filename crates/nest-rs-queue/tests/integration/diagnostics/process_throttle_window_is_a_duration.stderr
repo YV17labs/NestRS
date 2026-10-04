@@ -1,5 +1,0 @@
-error: #[process] `throttle(window)` takes a duration literal: a whole number above zero with an `ms`, `s`, `m` or `h` suffix, at most `u64::MAX` milliseconds (e.g. "500ms", "30s", "5m", "1h")
-  --> tests/integration/diagnostics/process_throttle_window_is_a_duration.rs:21:64
-   |
-21 |     #[process(queue = DemoQueue, throttle(limit = 10, window = "60"))]
-   |                                                                ^^^^

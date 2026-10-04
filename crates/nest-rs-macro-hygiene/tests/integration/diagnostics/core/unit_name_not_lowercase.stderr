@@ -1,0 +1,24 @@
+error[E0080]: evaluation panicked: a unit name is lowercase ASCII words, `<edge>.<unit>`
+ --> tests/integration/diagnostics/core/unit_name_not_lowercase.rs:3:19
+  |
+3 | const JOB: Unit = nest_rs::core::unit!("Queue.Job", target: "nest_rs::queue", kind: Consumer);
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `JOB::__UNIT` failed inside this call
+  |
+note: inside `nest_rs::nest_rs_core::operation_log::Unit::__declare`
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: $WORKSPACE/crates/nest-rs-core/src/operation_log.rs
+  |
+  |                 _ => panic!("a unit name is lowercase ASCII words, `<edge>.<unit>`"),
+  |                      --------------------------------------------------------------- in this macro invocation
+
+note: erroneous constant encountered
+ --> tests/integration/diagnostics/core/unit_name_not_lowercase.rs:3:19
+  |
+3 | const JOB: Unit = nest_rs::core::unit!("Queue.Job", target: "nest_rs::queue", kind: Consumer);
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `nest_rs::core::unit` (in Nightly builds, run with -Z macro-backtrace for more info)

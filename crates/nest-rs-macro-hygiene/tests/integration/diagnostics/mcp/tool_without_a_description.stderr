@@ -1,0 +1,5 @@
+error: an MCP operation needs a description — the model reads it to choose between operations. Write a doc comment above it, or state `description = "…"` on the attribute
+  --> tests/integration/diagnostics/mcp/tool_without_a_description.rs:15:14
+   |
+15 |     async fn count(&self) -> Result<String, McpError> {
+   |              ^^^^^

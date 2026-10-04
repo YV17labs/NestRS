@@ -465,7 +465,7 @@ mod tests {
 
     /// The grammar `unit!` evaluates at compile time, run here at run time so
     /// each refusal is asserted on its own; the trybuild snapshots in
-    /// `tests/integration/diagnostics/` prove the evaluation is a compile error.
+    /// `nest-rs-macro-hygiene`'s suite prove the evaluation is a compile error.
     fn declare(owner: &str, target: &'static str, name: &'static str) -> Result<Unit, String> {
         std::panic::catch_unwind(|| Unit::__declare(owner, target, Kind::Server, name))
             .map_err(|payload| crate::panic_message(payload.as_ref()))

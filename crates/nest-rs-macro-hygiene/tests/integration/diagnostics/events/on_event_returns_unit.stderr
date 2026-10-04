@@ -1,0 +1,5 @@
+error: #[on_event] methods are fire-and-forget — return `()`, written out or left out (an alias of `()` is not read as one), and handle errors inside the method (push a failed job to the queue, log, etc.)
+  --> tests/integration/diagnostics/events/on_event_returns_unit.rs:18:43
+   |
+18 |     async fn on_ping(&self, _event: Ping) -> Result<(), std::io::Error> {
+   |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,5 +1,0 @@
-error: #[queue] `name`: "billing:invoices" is not a valid queue name: it takes 1 to 128 ASCII letters, digits, `_`, `.` or `-` — `:` separates the levels of a backend's keys, and whitespace would reach a log field or a metric label
- --> tests/integration/diagnostics/queue_name_outside_the_rule.rs:6:16
-  |
-6 | #[queue(name = "billing:invoices", job = String)]
-  |                ^^^^^^^^^^^^^^^^^^

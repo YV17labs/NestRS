@@ -1,5 +1,0 @@
-error: a `#[tools]` method takes no type or const parameters, and `run` declares type parameter `T`: the expansion calls it with only what its transport carries, so nothing supplies a type for it — name a concrete one, or call a generic function from the body
-  --> tests/integration/diagnostics/tools_generic_method.rs:13:18
-   |
-13 |     async fn run<T: Default + ToString>(&self) -> Result<String, nest_rs_mcp::McpError> {
-   |                  ^^^^^^^^^^^^^^^^^^^^^

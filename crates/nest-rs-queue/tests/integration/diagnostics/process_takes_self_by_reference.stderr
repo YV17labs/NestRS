@@ -1,5 +1,0 @@
-error: a `#[process]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `&mut self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
-  --> tests/integration/diagnostics/process_takes_self_by_reference.rs:24:21
-   |
-24 |     async fn handle(&mut self, _job: DemoCommand) -> anyhow::Result<()> {
-   |                     ^^^^^^^^^

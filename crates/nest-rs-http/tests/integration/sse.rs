@@ -1,10 +1,10 @@
 //! `#[sse]` — the `text/event-stream` route, its ceiling and its refusals.
 //!
 //! The compile-time refusals (`#[authorize]`, a response decorator, a declared
-//! `response_content_type`) are trybuild snapshots next door; what is asserted
-//! here is what only a running route can show: the media type on the wire, the
-//! frames a client actually reads, and the ceiling ending a stream that would
-//! otherwise never stop.
+//! `response_content_type`) are trybuild snapshots in `nest-rs-macro-hygiene`;
+//! what is asserted here is what only a running route can show: the media type
+//! on the wire, the frames a client actually reads, and the ceiling ending a
+//! stream that would otherwise never stop.
 
 use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;

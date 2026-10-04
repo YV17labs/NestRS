@@ -1,0 +1,11 @@
+error: no rules expected `"http.request"`
+ --> tests/integration/diagnostics/core/operation_span_of_a_literal.rs:3:48
+  |
+3 |     let _span = nest_rs::core::operation_span!("http.request", &correlation);
+  |                                                ^^^^^^^^^^^^^^ no rules expected this token in macro call
+  |
+note: while trying to match meta-variable `$unit:path`
+ --> $WORKSPACE/crates/nest-rs-core/src/trace_context.rs
+  |
+  |     ($unit:path, $correlation:expr $(, $($field:tt)*)?) => {{
+  |      ^^^^^^^^^^

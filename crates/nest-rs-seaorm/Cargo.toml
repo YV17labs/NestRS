@@ -125,11 +125,6 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 # `cargo clippy --workspace --all-targets` never saw those 176 published
 # lines and only `demo/` (a separate workspace) built them.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
-# The by-id binding's swapped-parameter diagnostic is an upgrade contract: the
-# `on_unimplemented` notes are the only thing that names the 1.1.x order, since
-# rustc reports the two bound failures against the `#[crud]` attribute rather
-# than the parameter. Snapshotted so a wording regression fails here.
-trybuild.workspace = true
 
 [lints]
 workspace = true

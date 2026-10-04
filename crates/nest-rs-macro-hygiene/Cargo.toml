@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Compile-time witness that nest-rs decorators emit only ::std/::core paths or paths rooted at the umbrella: this crate consumes them through a single dependency, with no third-party crate."
+description = "Compile-time witness that nest-rs decorators emit only ::std/::core paths or paths rooted at the umbrella: this crate consumes them through a single dependency, with no third-party crate, and its suite pins what they refuse."
 # Internal proof crate — never published; the proof is that it compiles.
 publish = false
 
@@ -30,6 +30,18 @@ schedule = ["nest-rs/schedule"]
 # witness names. `#[crud]` rides `http` and `seaorm` together.
 seaorm = ["nest-rs/seaorm"]
 ws = ["nest-rs/ws"]
+
+# The suite pins the decorators' refusals; its fixtures name the crates a
+# developer's own code names beside the umbrella.
+[dev-dependencies]
+trybuild.workspace = true
+anyhow.workspace = true
+async-graphql.workspace = true
+futures-util.workspace = true
+poem.workspace = true
+sea-orm.workspace = true
+serde.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

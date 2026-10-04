@@ -1,5 +1,0 @@
-error: a `#[hooks]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `self: std::sync::Arc<Self>`: a host is one instance shared by every call, and each method is lent a shared borrow of it
-  --> tests/integration/diagnostics/hooks_takes_self_by_reference.rs:11:19
-   |
-11 |     async fn init(self: std::sync::Arc<Self>) {}
-   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^

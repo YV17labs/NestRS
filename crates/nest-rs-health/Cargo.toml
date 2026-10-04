@@ -30,9 +30,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# Pins the wording of the `on_provider` wrong-shape diagnostic: the rule is
-# that it names the sibling decorator, and only a snapshot keeps it there.
-trybuild.workspace = true
 # `test-util` (not part of tokio's `full`) pauses time, so "four checks cost one
 # interval, not four" is asserted on a virtual clock instead of a wall-clock
 # margin that flakes on a loaded runner.

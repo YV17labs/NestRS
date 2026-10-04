@@ -1,5 +1,0 @@
-error: a method declares exactly one lifecycle phase — this one writes `#[on_module_init]` twice. Accepted: `#[on_module_init]`, `#[on_application_bootstrap]`, `#[on_module_destroy]`, `#[before_application_shutdown]` or `#[on_application_shutdown]`. A method that must be two is two methods.
-  --> tests/integration/diagnostics/hooks_declaring_one_phase_twice.rs:11:5
-   |
-11 |     #[on_module_init]
-   |     ^^^^^^^^^^^^^^^^^

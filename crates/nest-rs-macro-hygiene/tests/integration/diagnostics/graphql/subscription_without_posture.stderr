@@ -1,0 +1,5 @@
+error: every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (no `#[authorize]` gate and no response mask — `#[use_guards]` guards still run)
+  --> tests/integration/diagnostics/graphql/subscription_without_posture.rs:17:14
+   |
+17 |     async fn ticks(&self) -> impl Stream<Item = i32> {
+   |              ^^^^^

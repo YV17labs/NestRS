@@ -1,0 +1,23 @@
+error: #[api] `tags` takes a list of string literals, e.g. `tags("users", "admin")`
+  --> tests/integration/diagnostics/http/api_value_of_the_wrong_kind.rs:15:16
+   |
+15 |     #[api(tags(users))]
+   |                ^^^^^
+
+error: #[api] `tags` takes a list of string literals, e.g. `tags("users", "admin")`
+  --> tests/integration/diagnostics/http/api_value_of_the_wrong_kind.rs:28:11
+   |
+28 |     #[api(tags = "users")]
+   |           ^^^^
+
+error: #[api] `response` takes a type, e.g. `response = Vec<Post>`
+  --> tests/integration/diagnostics/http/api_value_of_the_wrong_kind.rs:41:22
+   |
+41 |     #[api(response = "Post")]
+   |                      ^^^^^^
+
+error: #[api] `multipart` takes a type, e.g. `multipart = UploadForm`
+  --> tests/integration/diagnostics/http/api_value_of_the_wrong_kind.rs:54:23
+   |
+54 |     #[api(multipart = 42)]
+   |                       ^^

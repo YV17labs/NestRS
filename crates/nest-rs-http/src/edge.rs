@@ -225,7 +225,7 @@ pub(crate) struct EdgeEndpoint<E> {
     /// Wall-clock budget for the inner tree; `None` ⇒ no timeout enforced.
     timeout: Option<Duration>,
     /// Raw-body byte cap; `None` ⇒ no cap enforced (body readers fall back
-    /// to their own default via [`current_body_limit`]).
+    /// to their own default via [`current_body_limit`](crate::current_body_limit)).
     body_limit: Option<usize>,
     /// Boot-validated response headers (security policy + optional
     /// `Server`), stamped with replace semantics — the framework value wins

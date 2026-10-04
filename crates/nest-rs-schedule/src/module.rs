@@ -1,5 +1,5 @@
 //! The activation seam: import [`ScheduleModule`] in an `#[module(imports =
-//! [...])]` and the framework attaches the [`Scheduler`](crate::Scheduler) to
+//! [...])]` and the framework attaches the [`Scheduler`] to
 //! the app at boot.
 //!
 //! The module is hand-written `impl Module` (rather than `#[module]`) because

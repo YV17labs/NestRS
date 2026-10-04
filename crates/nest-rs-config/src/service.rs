@@ -86,7 +86,7 @@ struct Owner {
 /// uses the separator as a nesting device.
 ///
 /// **What it covers, and what it does not.** The window is armed by
-/// [`Config::read`](crate::Config::read), which every path into a `Config`'s
+/// [`config::read`](crate::config::read), which every path into a `Config`'s
 /// `from_env` takes — the two `resolve` paths and a discovery registry reading
 /// its plugin's namespace, i.e. all three rows of `architecture.md`'s
 /// Configuration table. Inside it, a key reaches [`ConfigService::get`] from a

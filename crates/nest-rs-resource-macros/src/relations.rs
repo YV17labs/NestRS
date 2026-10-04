@@ -36,7 +36,7 @@ use crate::attr::{
 /// expressible while the field returned an unparameterised list. A 3-deep chain
 /// at the default page size scores `20^3`; at `first: 3` it scores `27`.
 ///
-/// The `20` mirrors [`DEFAULT_PAGE_SIZE`](nest_rs_seaorm::DEFAULT_PAGE_SIZE),
+/// The `20` mirrors `nest_rs_seaorm::DEFAULT_PAGE_SIZE`,
 /// which the emitted body reaches by path. It is spelled again here because
 /// async-graphql takes a complexity expression as a **string**, which no
 /// re-rooting pass rewrites. The duplication is bounded on purpose: this literal
@@ -56,7 +56,7 @@ use crate::attr::{
 /// `20` is a literal: this is a **string**, so no path in it is re-rooted, and
 /// `nest-rs-resource`'s own tests compile the expansion without the umbrella in
 /// scope. The window mirrors
-/// [`clamp_page_size`](nest_rs_seaorm::clamp_page_size) and is bounded
+/// `nest_rs_seaorm::clamp_page_size` and is bounded
 /// duplication of the same kind — with the overflow gone, a drift here shifts a
 /// score and cannot change a result.
 ///
@@ -458,7 +458,7 @@ fn via_marker_ident(column: &Ident) -> Ident {
 /// `RelatedTo<Entity, Via>` for one `HasMany`, as the trait-path half of a
 /// `<Child as …>::Loader` projection.
 ///
-/// Without `via` the default [`SoleForeignKey`](nest_rs_resource::SoleForeignKey)
+/// Without `via` the default `nest_rs_resource::SoleForeignKey`
 /// applies and the path is written bare.
 ///
 /// With it, the marker is reached **beside the child entity the developer

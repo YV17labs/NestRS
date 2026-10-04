@@ -11,7 +11,7 @@
 //!
 //! # Pinned async-graphql version
 //!
-//! [`resolver`] reads async-graphql's public-but-internal registry API: it
+//! `src/resolver.rs` reads async-graphql's public-but-internal registry API: it
 //! spells out an exhaustive `MetaType::Object { .. }` literal and relies on
 //! `remove_unused_types` behaviour. The workspace therefore pins the *exact*
 //! version (`async-graphql = "=7.2.1"` in the root `Cargo.toml`) and guards it
@@ -143,7 +143,7 @@ pub use nest_rs_graphql_macros::crud;
 /// ```
 pub use nest_rs_graphql_macros::dataloader;
 
-/// Declare a [`resolver`]'s operations on its impl block. Each operation
+/// Declare a [`resolver`](macro@resolver)'s operations on its impl block. Each operation
 /// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the
 /// gate and the reply mask `#[authorize]` emits run in `nest_rs_authz::graphql`.
 ///

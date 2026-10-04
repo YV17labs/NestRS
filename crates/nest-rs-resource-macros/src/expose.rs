@@ -5,7 +5,7 @@ use syn::{Item, ItemStruct};
 
 use crate::{active, attr, dto, input, lifecycle, relations, wire};
 
-/// This decorator as written, for the sentence [`crate::wire_enum`] prints when
+/// This decorator as written, for the sentence [`#[wire_enum]`](macro@crate::wire_enum) prints when
 /// it is handed the entity struct. Each half names the *other*, from the other's
 /// own constant, so neither message can come to name a decorator that moved.
 pub(crate) const NAME: &str = "#[expose(name = \"…\")]";
@@ -78,7 +78,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse the entity struct, naming [`crate::wire_enum`] when the developer
+/// Parse the entity struct, naming [`#[wire_enum]`](macro@crate::wire_enum) when the developer
 /// decorated a column's enum type instead — the mistake this pair exists to
 /// absorb, since "make this reach the wire" is one intent with two item shapes.
 /// The item is parsed as an [`Item`] *before* the shape is judged, so a genuine

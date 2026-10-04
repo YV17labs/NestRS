@@ -5,7 +5,7 @@
 //! Each `#[subscribe_message]` handler runs through the Layer System: the
 //! global guard chain (from `App::builder().use_guards_global(...)`) is
 //! merged with per-message `#[use_guards]`, deduped by `TypeId`, then
-//! driven via [`EventLayerTable`] at dispatch in declaration order. The
+//! driven via `EventLayerTable` at dispatch in declaration order. The
 //! chain is composed **once at gateway mount** and frozen for the rest of
 //! the process — no per-message container lookup.
 

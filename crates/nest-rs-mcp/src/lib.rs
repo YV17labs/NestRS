@@ -2,7 +2,7 @@
 //! and `#[tools]` declares the operations it serves.
 //!
 //! MCP is **not a transport**, it is a graft on `HttpTransport` (the same
-//! pattern as WS): `#[mcp]` on a struct emits an [`endpoint`] factory that
+//! pattern as WS): `#[mcp]` on a struct emits an [`endpoint`](fn@endpoint) factory that
 //! mounts under the HTTP server. Apps activate MCP by listing the
 //! `#[mcp]`-decorated provider — there is no `<Transport>Module` activation
 //! seam to import, and no `Transport` impl. [`McpModule`] exists only to

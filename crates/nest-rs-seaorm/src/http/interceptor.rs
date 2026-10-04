@@ -9,7 +9,7 @@
 //! — costs no transaction at all (no pool connection, no Postgres transaction
 //! slot; an unauthenticated POST flood cannot amplify into `BEGIN`/`ROLLBACK`
 //! round-trips). Guards and handlers resolve the same ambient
-//! [`Executor`](crate::Executor) via [`Repo`](crate::Repo). Safe methods
+//! [`Executor`] via [`Repo`](crate::Repo). Safe methods
 //! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
 //! transaction committed on 2xx/3xx and rolled back otherwise — a failed
 //! mutation never half-persists, and a response tagged

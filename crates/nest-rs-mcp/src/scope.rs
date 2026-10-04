@@ -3,7 +3,7 @@
 //!
 //! rmcp owns the tool-call dispatch (the handler struct is built once per
 //! session, and a tool method receives no poem request), so there is no
-//! parameter to forward a scope through. Instead [`GuardedEndpoint`] installs
+//! parameter to forward a scope through. Instead `endpoint.rs`'s `GuardedEndpoint` installs
 //! the per-operation `RequestScope` as a task-local around
 //! `self.inner.call(req)`, and a tool method reads it back with
 //! [`Scoped::<T>::from_context`].

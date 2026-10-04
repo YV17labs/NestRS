@@ -19,7 +19,7 @@
 //! strategy populates — tracked as a post-1.0 enhancement, not a silent gap.
 //!
 //! **Per-message transactions, lazily**, through the same
-//! [`with_data_context`](crate::dispatch::with_data_context) every other
+//! [`with_data_context`] every other
 //! after-the-request transport uses: `BEGIN` is deferred to the handler's first
 //! data-layer touch, so a read-only or non-querying message costs no
 //! transaction at all, while a writing handler gets the same

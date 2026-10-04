@@ -2,7 +2,7 @@
 //!
 //! `#[controller(version = "1")]` stays the one place a version is *declared*;
 //! this module decides how a caller *selects* one. All three strategies resolve
-//! to the same mounted path — [`version_path`](crate::version_path) — so the
+//! to the same mounted path — [`version_path`] — so the
 //! served, logged and documented routes cannot drift apart:
 //!
 //! | Strategy | The caller writes | Resolved |

@@ -12,7 +12,7 @@
 //!
 //! **`0` is not the unlimited sentinel here, and the refusal is the point.**
 //! A connection ceiling reads `0` as *off*
-//! ([`Floor::UnitsOrOff`](nest_rs_config::Floor::UnitsOrOff)), which is right
+//! ([`Floor::UnitsOrOff`]), which is right
 //! where the ceiling bounds how long a connection may replay privileges it
 //! authenticated with once: turning it off restores the pre-ceiling behaviour,
 //! and the deployment that asks for that has asked for something coherent. Here *off* is the defect — an
@@ -20,7 +20,7 @@
 //! fields exist to prevent — so a `0` cannot mean "no ceiling" without meaning
 //! "restart loop", and it cannot mean "zero milliseconds" either, which would
 //! fail every probe on the first poll. Both are read through
-//! [`DurationBounds`](nest_rs_config::DurationBounds) from one millisecond to a
+//! [`DurationBounds`] from one millisecond to a
 //! minute, so `0` is a boot error naming the variable — from the environment or
 //! pinned in code alike, in the sentence every bounded duration of the
 //! framework is refused in.

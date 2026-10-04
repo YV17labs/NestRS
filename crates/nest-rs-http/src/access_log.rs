@@ -3,12 +3,12 @@
 //! The file keeps its name: it implements `NESTRS_HTTP__ACCESS_LOG`, and an
 //! access log is precisely what one edge's per-request line is. What the rename
 //! took away is the *family's* target wearing this edge's word — see
-//! [`nest_rs_core::operation_log::TARGET`](nest_rs_core::operation_log::TARGET).
+//! [`nest_rs_core::operation_log::TARGET`].
 //!
 //! # Why the transport owns this
 //!
 //! Everything the line carries — method, path, status, duration, client, user
-//! agent, and the request's [`Correlation`] — is what *this* transport knows
+//! agent, and the request's [`Correlation`](nest_rs_core::Correlation) — is what *this* transport knows
 //! about a request it served. None of it needs a collector, a propagator or an
 //! exporter, so none of it may depend on one being mounted: an access log is how
 //! an operator answers "what did this deployment do", and that question does not

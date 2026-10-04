@@ -1,4 +1,4 @@
-//! Ownership of the per-namespace [`WsServer<N>`] registries.
+//! Ownership of the per-namespace [`WsServer<N>`](crate::WsServer) registries.
 //!
 //! [`WsServer<Global>`] is a plain provider of [`WsModule`], so a service that
 //! injects it either imports `WsModule` or gets a boot error naming it. A

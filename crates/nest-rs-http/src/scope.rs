@@ -1,5 +1,5 @@
 //! HTTP binding for request-scoped providers — the transport edge
-//! (`EdgeEndpoint`) installs a [`RequestScope`] per request; [`Scoped<T>`]
+//! (`EdgeEndpoint`) installs a [`RequestScope`](nest_rs_core::RequestScope) per request; [`Scoped<T>`]
 //! reads it back to resolve an `#[injectable(scope = request)]` provider
 //! (or, falling through, a singleton — prefer plain `#[inject]` for those).
 

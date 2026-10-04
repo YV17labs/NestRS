@@ -1,5 +1,5 @@
 //! Adds [`AppBuilderExceptionFiltersExt::use_exception_filters_global`] to
-//! [`AppBuilder`](nest_rs_core::AppBuilder).
+//! [`AppBuilder`].
 
 use nest_rs_core::{AppBuilder, check_specs_resolvable};
 use nest_rs_http::HttpBootCheck;

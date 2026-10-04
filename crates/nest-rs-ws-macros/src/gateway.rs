@@ -317,9 +317,9 @@ fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
 /// Reversed so the first-listed guard ends up outermost (HTTP convention).
 ///
 /// Resolves each guard via the container, erases it to `Arc<dyn Guard>`, and
-/// wraps the endpoint with [`nest_rs_guards::GuardExt::guard`] — which calls
+/// wraps the endpoint with `nest_rs_guards::GuardExt::guard` — which calls
 /// `Guard::check_http` (the WS upgrade is an HTTP GET) and maps a `Denial` to
-/// a poem [`Response`].
+/// a poem `Response`.
 ///
 /// **Dedup against Global**: the WS upgrade is a `Guarded` self-mount —
 /// the transport applies the global guard chain at its edge via

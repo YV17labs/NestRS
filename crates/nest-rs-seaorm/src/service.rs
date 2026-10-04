@@ -64,7 +64,7 @@ pub enum Access<M> {
 /// caller was never allowed to load, nor act under an action it was never
 /// granted. The model is read through [`Deref`](std::ops::Deref);
 /// [`into_inner`](Authorized::into_inner) takes ownership for the active-model
-/// write (which [`Repo`](crate::Repo) re-scopes by the ambient ability — defense
+/// write (which [`Repo`] re-scopes by the ambient ability — defense
 /// in depth, not the only line).
 pub struct Authorized<A: ActionMarker, E: EntityTrait>(E::Model, PhantomData<fn() -> A>);
 

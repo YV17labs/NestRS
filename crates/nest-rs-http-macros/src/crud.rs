@@ -1,7 +1,7 @@
 //! `#[crud]` — generate standard REST operations on a `#[controller]` impl
 //! block (all five by default; a subset with `ops = [list, get, ...]`) and
 //! re-emit under `#[routes]`. Read ops delegate to the entity's
-//! [`CrudService`] (`access` for by-id route-model binding); the write ops
+//! `CrudService` (`access` for by-id route-model binding); the write ops
 //! delegate to its opt-in `Creatable`/`Updatable`/`Deletable` impls. A
 //! hand-written method overrides its generated counterpart.
 

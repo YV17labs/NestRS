@@ -2,7 +2,7 @@
 //! `#[subscription]` expands into.
 //!
 //! A subscription is an operation, so it goes through the gate every other
-//! operation goes through — the same [`GraphqlOperationGuard`], the same
+//! operation goes through — the same [`GraphqlOperationGuard`](crate::GraphqlOperationGuard), the same
 //! `#[authorize]`/`#[public]`. What differs is *when* it answers: once at
 //! subscribe, then repeatedly, for as long as the socket lives. That produces
 //! the two obligations this module carries and the POST path does not:

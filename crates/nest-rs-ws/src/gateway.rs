@@ -535,7 +535,7 @@ fn stalled_outbox(conn_id: u64) -> Closure {
 /// identically against both and never learns what it has to do differently. For
 /// the socket-lifetime ceiling that difference is the whole point of the
 /// ceiling: what it asks for is a fresh upgrade, and with it a fresh authn/authz
-/// check (see [`WsConfig`](crate::WsConfig)).
+/// check (see [`WsConfig`]).
 enum Closure {
     /// The peer sent a Close, and §5.5.1 obliges the endpoint that *receives*
     /// one to send one back. The protocol layer has already queued that echo —

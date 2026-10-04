@@ -1,8 +1,8 @@
 //! `#[listeners]` — orchestrator on a provider's `impl` block. Walks the
 //! methods; for each one tagged with `#[on_event]`, emits a free `wire` fn
 //! that resolves the provider from the assembled container and subscribes a
-//! closure to the [`EventBus`], then submits a `ListenerMethod` inventory
-//! entry the [`EventsModule`] drains at bootstrap.
+//! closure to the `EventBus`, then submits a `ListenerMethod` inventory
+//! entry the `EventsModule` drains at bootstrap.
 //!
 //! Mirrors `#[processor]`/`#[process]` and `#[scheduled]`/`#[every]`: the
 //! host struct keeps its own `#[injectable]` (which owns `Discoverable`), and

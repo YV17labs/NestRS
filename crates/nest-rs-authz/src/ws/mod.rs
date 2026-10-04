@@ -1,6 +1,6 @@
 //! WebSocket bindings (feature `ws`) — the per-message analog of [`crate::mcp`].
 //!
-//! [`authorize`] is the class-level gate and [`masked_reply_for`] masks a
+//! [`authorize`](fn@authorize) is the class-level gate and [`masked_reply_for`] masks a
 //! message's reply. A gateway calls neither directly:
 //! `#[authorize(Action, Entity)]` beside a `#[subscribe_message]` makes
 //! `#[messages]` emit both, exactly as `#[tools]` does on MCP, `#[operations]` on

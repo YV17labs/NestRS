@@ -1,5 +1,5 @@
 //! Adds [`AppBuilderFiltersExt::use_filters_global`] to
-//! [`AppBuilder`](nest_rs_core::AppBuilder).
+//! [`AppBuilder`].
 
 use nest_rs_core::layer_chain::{ResolvedLayer, compose_chain, resolve_global_layers};
 use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};

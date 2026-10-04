@@ -3,7 +3,7 @@
 //! Entities declare [`SoftDeletable`] via `#[expose(..., soft_delete)]`; services
 //! opt in through [`CrudService::soft_delete_column`](crate::CrudService::soft_delete_column).
 //! Hand-written queries that bypass `CrudService` should AND
-//! [`live_condition`](live_condition) onto [`Repo::scoped`](crate::Repo::scoped).
+//! [`live_condition`] onto [`Repo::scoped`](crate::Repo::scoped).
 //!
 //! **The two halves are checked at boot.** An entity carrying the flag whose
 //! service never overrides the column is not a half-configured feature — it is

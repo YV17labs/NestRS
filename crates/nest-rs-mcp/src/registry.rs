@@ -1,6 +1,6 @@
 //! The per-path host registry — what a `#[mcp]` provider contributes, and the
 //! single mount it contributes *to*. The contribution itself is an
-//! [`McpHost`](crate::McpHost); this module is where several of them become one
+//! [`McpHost`]; this module is where several of them become one
 //! endpoint.
 //!
 //! # One mount, several providers
@@ -18,7 +18,7 @@
 //! [`McpHostMeta`] for it and, for the **first** host on a given path, attaches
 //! the one [`HttpEndpointMeta`] that mounts them all. At mount time the
 //! contributions for that path are merged into a
-//! [`CompositeHandler`](crate::CompositeHandler).
+//! [`CompositeHandler`].
 //!
 //! # Where a host lands
 //!

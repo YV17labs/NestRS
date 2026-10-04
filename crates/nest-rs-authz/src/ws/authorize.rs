@@ -10,7 +10,7 @@ use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
 /// Class-level gate: require action `A` on subject `S`, against the **ambient**
 /// ability the connection's `SocketContext` re-installed for this message.
 ///
-/// The decision itself is [`gate`], shared with GraphQL and MCP so `#[authorize]`
+/// The decision itself is [`gate`](fn@gate), shared with GraphQL and MCP so `#[authorize]`
 /// cannot come to mean three things; this function is the WS half — where the
 /// ability comes from, and what a refusal looks like on the wire.
 ///

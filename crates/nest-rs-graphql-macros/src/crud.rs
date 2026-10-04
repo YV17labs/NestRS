@@ -1,13 +1,13 @@
 //! `#[crud]` — synthesise the standard resolver operations the developer did
 //! not hand-write, then re-emit under `#[operations]`. Every operation
-//! delegates to the entity's [`CrudService`] — never `Repo` directly.
+//! delegates to the entity's `CrudService` — never `Repo` directly.
 //! Override by writing the matching method.
 //!
 //! Each generated operation declares its posture with the same
 //! `#[authorize(Action, Entity)]` a hand-written one would — `#[operations]`
 //! emits the class gate and the response mask from it, so generated and
 //! hand-written operations share one mechanism. The by-id operations
-//! (`get`/`update`/`delete`) still row-gate through [`CrudService::access`];
+//! (`get`/`update`/`delete`) still row-gate through `CrudService::access`;
 //! the class gate in front of it is observably equivalent for any caller with
 //! at least one grant (`Ability::can_class` counts row-scoped rules) and
 //! rejects zero-grant callers one step earlier.

@@ -1,4 +1,4 @@
-//! Generic bearer-JWT [`Strategy`](crate::Strategy) — verifies into caller-chosen claims type `C`.
+//! Generic bearer-JWT [`Strategy`] — verifies into caller-chosen claims type `C`.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use crate::JwtService;
 use crate::error::AuthError;
 use crate::{PrincipalIdentity, Strategy, bearer_token};
 
-/// Bearer-token [`Strategy`](crate::Strategy): reads the `Authorization: Bearer`
+/// Bearer-token [`Strategy`]: reads the `Authorization: Bearer`
 /// token and verifies it into the caller-chosen claims type `C` via the injected
 /// [`JwtService`]. `C` must be the principal (`DeserializeOwned + PrincipalIdentity`).
 #[injectable]

@@ -330,7 +330,7 @@ impl HttpConfig {
         self
     }
 
-    /// Pin the [`RawBody`](crate::RawBody) byte cap in code. Applies to every
+    /// Pin the [`RawBody`] byte cap in code. Applies to every
     /// extractor invocation that does not pick its own limit via
     /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit).
     pub fn with_max_body_bytes(mut self, n: usize) -> Self {

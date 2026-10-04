@@ -1,6 +1,6 @@
 //! GraphQL bindings (feature `graphql`) — the resolver analog of
 //! [`crate::http`]: [`GraphqlAbilityBridge`] is the per-operation guard that
-//! authenticates and installs the ambient ability; [`authorize`] is the
+//! authenticates and installs the ambient ability; [`authorize`](fn@authorize) is the
 //! class-level gate; [`masked_value_for`] masks a resolver's return value;
 //! [`ability`] accesses the per-request ability. Importing this module submits
 //! the `GraphqlContextSeed` that forwards `Arc<Ability>` into each operation's

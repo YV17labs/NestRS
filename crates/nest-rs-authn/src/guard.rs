@@ -1,4 +1,4 @@
-//! Per-route guard that runs a [`Strategy`](crate::Strategy) and attaches the principal.
+//! Per-route guard that runs a [`Strategy`] and attaches the principal.
 
 use std::future::{Future as _, poll_fn};
 use std::pin::pin;

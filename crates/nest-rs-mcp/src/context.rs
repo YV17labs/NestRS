@@ -3,7 +3,7 @@
 //!
 //! rmcp dispatches every operation on its own spawned task, so a task-local
 //! installed around the poem endpoint is gone by the time a handler runs. rmcp
-//! does, however, inject the request's [`Parts`](poem::http::request::Parts) —
+//! does, however, inject the request's [`Parts`] —
 //! extensions included — into each operation's `RequestContext`. That is the
 //! carrier this module rides: the endpoint stashes an [`McpAmbient`] in the
 //! request extensions, and [`PropagatingHandler`](crate::PropagatingHandler)

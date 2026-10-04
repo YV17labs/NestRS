@@ -3,8 +3,8 @@
 //! guard reads the route's required roles to vary its decision).
 //!
 //! Implements [`HandlerMetadata`] so a Layer written against the trait stays
-//! portable across transports — the trait's [`is_public`] default reads the
-//! attached [`Public`] marker uniformly.
+//! portable across transports — the trait's [`is_public`](HandlerMetadata::is_public) default reads the
+//! attached [`Public`](crate::metadata::Public) marker uniformly.
 //!
 //! Scope does not change what a guard reads. `#[routes]` attaches the metadata
 //! as route data *outside* the guard chain, so it is on the request by the time

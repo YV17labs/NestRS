@@ -38,7 +38,7 @@
 //! in-flight jobs back on the queue. The delivery guard
 //! is what makes that harmless — the job's lease is held by the delivery running
 //! it, so the second delivery hands it back until the first has settled it, then
-//! acknowledges it without running. Measured in `tests/integration/worker/`.
+//! acknowledges it without running. Measured in `tests/e2e/worker/`.
 //!
 //! **Due records reach the queue at the fetch's pace.** A record held back —
 //! a delayed push, a retry's next attempt, a job handed back — waits on the

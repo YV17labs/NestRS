@@ -39,7 +39,7 @@ pub(crate) enum RelationKind {
         /// `#[expose(via = "author_id")]` — which of the child's foreign keys
         /// this relation follows. `None` ⇒ the child's sole key to this parent
         /// (`SoleForeignKey`), which is a compile error when it has two. Kept
-        /// as the [`LitStr`] the developer wrote so a bad column name reports
+        /// as the [`LitStr`](struct@LitStr) the developer wrote so a bad column name reports
         /// at the string, not at the field.
         via: Option<LitStr>,
     },
@@ -113,7 +113,7 @@ pub(crate) struct ResourceModel {
     pub complex: bool,
     /// When set, emit GraphQL surface types (SimpleObject, loaders, relations).
     pub graphql: bool,
-    /// Stamp `deleted_at` instead of hard-deleting; emit [`SoftDeletable`].
+    /// Stamp `deleted_at` instead of hard-deleting; emit `SoftDeletable`.
     pub soft_delete: bool,
     /// Maintain `created_at` / `updated_at` via `ActiveModelBehavior::before_save`.
     pub timestamps: bool,

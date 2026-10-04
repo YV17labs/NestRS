@@ -1,6 +1,6 @@
 //! CORS settings for the HTTP transport, settable both via `NESTRS_HTTP__CORS_*`
 //! env vars and pinned in code as `HttpConfig.cors`. The [`HttpModule`](crate::HttpModule)
-//! translates a [`HttpCors`] into poem's [`Cors`](poem::middleware::Cors)
+//! translates a [`HttpCors`] into poem's [`Cors`]
 //! middleware at boot.
 
 use std::str::FromStr;

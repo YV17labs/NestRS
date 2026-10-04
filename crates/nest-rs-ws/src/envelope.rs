@@ -104,7 +104,7 @@ pub enum WsReply {
 impl WsReply {
     /// Serializes a handler's return; a failure degrades to [`WsReply::Error`].
     ///
-    /// Through [`Opaque`](crate::Opaque), like every other failure on this edge,
+    /// Through [`Opaque`], like every other failure on this edge,
     /// and for both of its reasons at once. It said nothing at all — the one
     /// silent site in this file, next door to [`pipe_error`](Self::pipe_error),
     /// whose own doc records learning the same lesson — and what it handed the

@@ -1,4 +1,4 @@
-//! HTTP credential extractors shared by bearer and basic-auth [`Strategy`] impls.
+//! HTTP credential extractors shared by bearer and basic-auth [`Strategy`](crate::Strategy) impls.
 
 use base64::Engine as _;
 use poem::{Request, http::header};

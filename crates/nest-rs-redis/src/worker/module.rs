@@ -15,7 +15,7 @@ use nest_rs_core::{ContainerBuilder, Module, TransportContribution};
 use super::{RedisWorker, RedisWorkerConfig};
 
 /// The consumer-side activation seam. Import `RedisWorkerModule::for_root(None)`
-/// in a worker app to attach the [`RedisWorker`](crate::RedisWorker) transport;
+/// in a worker app to attach the [`RedisWorker`] transport;
 /// a producer-only app omits it.
 pub struct RedisWorkerModule;
 

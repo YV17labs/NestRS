@@ -126,7 +126,7 @@ pub struct HttpTransport {
     version_selector: Option<crate::VersionSelector>,
     /// What each self-mount runs off its connections, by mount path: told at
     /// the signal, given the window, and stopped at its close. See
-    /// [`DetachedWork`](crate::DetachedWork).
+    /// [`DetachedWork`].
     detached: Vec<(String, DetachedWork)>,
     /// The way down, shared with the edge so a response body can read it — see
     /// `crate::drain`.

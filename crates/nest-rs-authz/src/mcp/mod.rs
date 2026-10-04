@@ -3,7 +3,7 @@
 //! [`McpAbilityBridge`] is the endpoint's per-operation guard: it authenticates
 //! each `/mcp` request with the same chain controllers use and installs the
 //! caller's ambient [`Ability`](crate::Ability) for the operation's duration.
-//! [`authorize`] is the class-level gate and [`masked_value_for`] masks an
+//! [`authorize`](fn@authorize) is the class-level gate and [`masked_value_for`] masks an
 //! operation's return value.
 //!
 //! A host does not call the last two directly: `#[authorize(Action, Entity)]`

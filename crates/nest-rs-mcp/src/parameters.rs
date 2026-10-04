@@ -7,7 +7,7 @@
 //! model, whose transcript keeps it and may repeat it to whoever is chatting —
 //! the same reader [`Opaque`](crate::Opaque) exists for. So the framework's
 //! `Parameters<P>` is its own: rmcp's shape, rmcp's schema, and a refusal worded
-//! by [`DecodeError`](nest_rs_core::DecodeError).
+//! by [`DecodeError`].
 
 use nest_rs_core::DecodeError;
 use rmcp::ErrorData as McpError;

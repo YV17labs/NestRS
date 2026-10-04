@@ -1,7 +1,7 @@
 //! `#[interceptor]` — mark a struct as a **global** HTTP interceptor (for
 //! infrastructure that must wrap everything: a DB-transaction context,
 //! tracing). The macro attaches an
-//! [`HttpEndpointWrap`](::nest_rs_http::HttpEndpointWrap) but does *not*
+//! `nest_rs_http::HttpEndpointWrap` but does *not*
 //! register the type as a provider — it is mounted automatically. To bind
 //! per-controller/handler, write a plain `#[injectable] + impl Interceptor`
 //! and list it in `#[use_interceptors(...)]`.

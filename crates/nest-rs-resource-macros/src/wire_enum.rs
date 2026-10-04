@@ -22,7 +22,7 @@ use syn::{Fields, Item, ItemEnum};
 
 use crate::attr::{graphql_root, graphql_root_str};
 
-/// This decorator as written, for the sentence [`crate::expose`] prints when it
+/// This decorator as written, for the sentence [`#[expose]`](macro@crate::expose) prints when it
 /// is handed a column's enum. Each half names the *other*, from the other's own
 /// constant, so neither message can come to name a decorator that moved.
 pub(crate) const NAME: &str = "#[wire_enum]";

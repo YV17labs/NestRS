@@ -1,7 +1,7 @@
 //! Layer registration — typed specs the builder uses to seed the global
 //! interceptor chain into the container.
 //!
-//! `InterceptorSpec` is a [`LayerSpec`](nest_rs_core::LayerSpec) alias — the
+//! `InterceptorSpec` is a [`LayerSpec`] alias — the
 //! shared shape and its `resolve` method live in `nest-rs-core`; only the typed
 //! constructor and the erased trait differ per family.
 

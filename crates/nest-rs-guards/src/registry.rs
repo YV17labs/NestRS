@@ -2,7 +2,7 @@
 //! layer chain into the container. Each transport's shaper resolves them
 //! against the live container at configure time.
 //!
-//! `GuardSpec` and `PipeSpec` are [`LayerSpec`](nest_rs_core::LayerSpec)
+//! `GuardSpec` and `PipeSpec` are [`LayerSpec`]
 //! aliases — the shared shape and its `resolve` method live in `nest-rs-core`;
 //! only the typed constructor and the erased trait differ per family.
 

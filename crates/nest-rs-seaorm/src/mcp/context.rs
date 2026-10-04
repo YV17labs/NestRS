@@ -4,7 +4,7 @@
 //! and authz ability the HTTP request installed are gone by the time a tool
 //! body runs. This implements `nest-rs-mcp`'s [`McpToolContext`] seam to
 //! re-install both around each operation — the same
-//! [`with_data_context`](crate::dispatch::with_data_context) every other
+//! [`with_data_context`] every other
 //! after-the-request transport uses, so the transaction semantics cannot drift
 //! between them.
 //!

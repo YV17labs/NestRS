@@ -1,5 +1,5 @@
 //! Default deny-all guard for MCP endpoints mounted without an explicit
-//! [`McpOperationGuard`](crate::guard::McpOperationGuard).
+//! [`McpOperationGuard`].
 
 use std::sync::Arc;
 

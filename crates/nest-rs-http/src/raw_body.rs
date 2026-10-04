@@ -3,7 +3,7 @@
 //! [`RawBody`] reads the whole body into [`Bytes`], capped at
 //! [`RawBody::DEFAULT_LIMIT`] (2 MiB) unless the transport edge carries a
 //! configured cap (`HttpConfig.max_body_bytes`, read back through
-//! [`current_body_limit`](crate::current_body_limit)). Past the limit the
+//! [`current_body_limit`]). Past the limit the
 //! extractor rejects with `413 Payload Too Large` — never silently
 //! truncates, never buffers unbounded memory.
 //!

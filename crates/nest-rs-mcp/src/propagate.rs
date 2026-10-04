@@ -105,7 +105,7 @@ use crate::guard::{BoxFuture, McpOperationGuard};
 /// operation guard's ambient state, and the registered [`McpToolContext`]'s
 /// state installed.
 ///
-/// Built by [`endpoint`](crate::endpoint) around the handler the `#[mcp]`
+/// Built by [`endpoint`](fn@crate::endpoint) around the handler the `#[mcp]`
 /// factory produces — never constructed by hand.
 pub struct PropagatingHandler<H> {
     inner: H,

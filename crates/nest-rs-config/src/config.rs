@@ -11,7 +11,7 @@ use crate::Result;
 use crate::service::ConfigService;
 
 /// The `<DOMAIN>` in `<PREFIX>_<DOMAIN>__<KEY>`. Supplied by the
-/// [`config`](crate::config) macro from `#[config(namespace = "…")]`.
+/// [`config`](macro@crate::config) macro from `#[config(namespace = "…")]`.
 pub trait Namespaced {
     /// The `<DOMAIN>` segment of every `<PREFIX>_<DOMAIN>__<KEY>` this type reads.
     const NAMESPACE: &'static str;

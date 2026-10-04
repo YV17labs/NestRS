@@ -18,8 +18,10 @@ lint:
 # Tests, one recipe per kind; `just test` runs them all
 mod test
 
-# rustdoc as docs.rs builds it
+# rustdoc over the private items, then as docs.rs builds it: each pass refuses
+# a broken link the other cannot see
 doc:
+    RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going --document-private-items
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going
 
 # Every check CI runs: lint, docs and tests

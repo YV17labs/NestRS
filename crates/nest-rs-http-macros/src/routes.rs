@@ -28,7 +28,7 @@ struct RouteHandler {
     /// The generated wrapper fn's ident.
     wrapper: syn::Ident,
     /// Whether the verb was `#[sse]` — the endpoint carries the resolved
-    /// [`SseSettings`] and wraps the handler's stream.
+    /// `SseSettings` and wraps the handler's stream.
     is_sse: bool,
     /// `#[use_guards]` paths on the method.
     guards: Vec<Path>,

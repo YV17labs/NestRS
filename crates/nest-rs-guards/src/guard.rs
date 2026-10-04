@@ -312,7 +312,7 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 }
 
 /// Newtype adapter that lets any [`Guard`] satisfy the
-/// [`WsMessageCheck`](nest_rs_ws::WsMessageCheck) interface — the bridge the
+/// [`WsMessageCheck`] interface — the bridge the
 /// `#[messages]` macro uses to put guards in the per-event chain table
 /// without nest-rs-ws depending on nest-rs-guards.
 #[cfg(feature = "ws")]

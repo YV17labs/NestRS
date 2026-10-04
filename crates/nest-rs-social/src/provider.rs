@@ -3,7 +3,7 @@
 //! `SocialProvider` is **flow-owning**: `authorize` and `exchange` carry
 //! default implementations that drive the shared PKCE/CSRF Authorization-Code
 //! flow through the provider's [`OAuthClient`]. A provider writes nothing for
-//! the common case — GitHub and Google override only [`profile`], the one
+//! the common case — GitHub and Google override only [`profile`](SocialProvider::profile), the one
 //! method whose per-provider code justifies the crate. A provider whose
 //! protocol genuinely deviates (e.g. Apple's per-request ES256-signed client
 //! secret, or reading identity from an id_token instead of a userinfo

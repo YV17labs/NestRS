@@ -2,7 +2,7 @@
 //! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
 //! the app's [`AbilityFactory`].
 //!
-//! **At the crate root, beside [`gate`](crate::gate) and
+//! **At the crate root, beside [`gate`](mod@crate::gate) and
 //! [`chain`](crate::chain), because it answers every transport.** It implements
 //! four of `Guard`'s entries — `check_http`, `check_graphql`,
 //! `check_ws_message`, `check_mcp` — and carries the matching four marker

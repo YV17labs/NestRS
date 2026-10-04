@@ -1,5 +1,5 @@
 //! Boot-time guard-chain validation — declared [`GuardPhase`] ordering and
-//! produced/expected [`PrincipalClaim`] cross-checks. Replaces the former
+//! produced/expected [`PrincipalClaim`](crate::PrincipalClaim) cross-checks. Replaces the former
 //! name-substring ordering heuristic: guards **declare** their phase and the
 //! principal type they attach or expect, and a chain whose declarations
 //! cannot line up fails boot with a named error instead of answering `500`

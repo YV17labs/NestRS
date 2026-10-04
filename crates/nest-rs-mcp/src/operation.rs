@@ -6,7 +6,7 @@
 //! operation on its own spawned task, so a generated prelude has nothing to read
 //! the app off. This module is that seam.
 //!
-//! [`McpOperationContext`] is what a [`Guard`] then sees. It deliberately does
+//! [`McpOperationContext`] is what a `nest_rs_guards::Guard` then sees. It deliberately does
 //! **not** carry the operation's arguments: deciding *access* from a payload is
 //! a pipe's job (`Valid<T>` / `Piped<P, T>` run on the wire value before the
 //! body), and handing a guard the arguments invites the check to migrate into

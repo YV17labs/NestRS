@@ -79,7 +79,7 @@ struct MountedHost {
 }
 
 /// The merged handler for one MCP endpoint. Built per session, like the single
-/// host it replaced — see [`crate::endpoint`].
+/// host it replaced — see [`endpoint`](fn@crate::endpoint).
 pub struct CompositeHandler {
     /// The path's hosts, in registration order. Never empty in practice: the
     /// mount exists because a host claimed the path.

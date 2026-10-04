@@ -566,7 +566,7 @@ pub fn optional_dependencies_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
 }
 
 /// `Discoverable::injected_names` — index-aligned with
-/// [`injected_method`](injected_method), so the access graph can name a
+/// [`injected_method`], so the access graph can name a
 /// dependency no module provides. Every provider that emits `injected` should
 /// emit this too; one that does not falls back to a placeholder name.
 pub fn injected_names_method(dep_names: &[TokenStream2]) -> TokenStream2 {

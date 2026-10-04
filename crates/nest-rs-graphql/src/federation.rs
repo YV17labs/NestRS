@@ -2,7 +2,7 @@
 //! the ceiling on how many references one call may carry.
 //!
 //! `_service` and `_entities` are resolved by async-graphql's own `QueryRoot`,
-//! *above* [`DiscoveredQuery`](crate::resolver): the guard chain `#[operations]`
+//! *above* [`DiscoveredQuery`](crate::resolver::DiscoveredQuery): the guard chain `#[operations]`
 //! emits inside a resolver body never sees them. For `_entities` that showed as
 //! a chain running once **per representation**, inside whichever member the
 //! router's reference happened to match; for `_service` it showed as nothing at

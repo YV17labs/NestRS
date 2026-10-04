@@ -1,5 +1,5 @@
 //! [`RedisThrottler`] — a cross-process rate-limit store backing the
-//! `nest-rs-throttler` [`ThrottlerGuard`], enabled by the `throttler` feature.
+//! `nest-rs-throttler` [`ThrottlerGuard`](nest_rs_throttler::ThrottlerGuard), enabled by the `throttler` feature.
 //!
 //! Same fixed-window semantics as the in-process
 //! [`InMemoryThrottler`](nest_rs_throttler::InMemoryThrottler), but the counter

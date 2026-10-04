@@ -1,5 +1,5 @@
 //! Extension traits that add the global Layer-System APIs to
-//! [`AppBuilder`](nest_rs_core::AppBuilder):
+//! [`AppBuilder`]:
 //!
 //! - [`AppBuilderGuardsExt::use_guards_global`] — register guards once,
 //!   applied to every transport.

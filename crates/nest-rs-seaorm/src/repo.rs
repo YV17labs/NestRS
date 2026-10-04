@@ -1,6 +1,6 @@
 //! [`Repo`] — the query entry point that makes security and transactions
 //! transparent. Every call runs against the ambient
-//! [`Executor`](crate::Executor) (the request's transaction when open) and is
+//! [`Executor`] (the request's transaction when open) and is
 //! filtered by the caller's [`Ability`](nest_rs_authz::Ability): reads via
 //! `condition_for(Read)`, by-id writes via `condition_for(Update/Delete)` ANDed
 //! with the primary key — so a caller cannot mutate a row outside its scope

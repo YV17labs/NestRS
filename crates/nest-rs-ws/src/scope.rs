@@ -9,13 +9,57 @@
 //! guards already run under — and installs it as a task-local. A handler reads
 //! it back with [`Scoped::<T>::from_context`].
 //!
-//! ```ignore
+//! ```
+//! # use std::sync::atomic::{AtomicU64, Ordering};
+//! # use std::sync::Arc;
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_ws::{WsModule, gateway, messages};
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct Counter {
+//! #     next: AtomicU64,
+//! # }
+//! #
+//! # #[injectable(scope = request)]
+//! # struct RequestSeq {
+//! #     #[inject]
+//! #     counter: Arc<Counter>,
+//! # }
+//! #
+//! # impl RequestSeq {
+//! #     fn value(&self) -> u64 {
+//! #         self.counter.next.fetch_add(1, Ordering::SeqCst)
+//! #     }
+//! # }
+//! #
+//! # #[gateway(path = "/ws")]
+//! # #[derive(Default)]
+//! # struct SeqGateway;
+//! #
+//! # #[messages]
+//! # impl SeqGateway {
 //! #[subscribe_message("whoami")]
 //! #[public]
 //! async fn whoami(&self) -> Result<u64, nest_rs_ws::WsScopeError> {
 //!     let per_msg = nest_rs_ws::Scoped::<RequestSeq>::from_context()?;
 //!     Ok(per_msg.value())
 //! }
+//! # }
+//! #
+//! # #[module(imports = [WsModule], providers = [Counter, RequestSeq, SeqGateway])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::builder().module::<AppModule>().build_ws().await?;
+//! # let mut socket = app.socket("/ws").connect().await;
+//! # socket.send("whoami", serde_json::Value::Null).await;
+//!
+//! assert_eq!(socket.next_envelope().await["data"], 0);
+//! # app.shutdown().await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Scope is **per message**, so an `#[injectable(scope = request)]` provider is

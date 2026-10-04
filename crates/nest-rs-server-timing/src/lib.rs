@@ -6,6 +6,7 @@
 //!
 //! [Server-Timing]: https://www.w3.org/TR/server-timing/
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod entry;
 mod format;

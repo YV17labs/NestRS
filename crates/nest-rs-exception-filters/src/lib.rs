@@ -23,11 +23,10 @@
 //!
 //! ## Defining an exception filter
 //!
-//! ```rust,ignore
+//! ```
 //! use nest_rs_core::{Layer, injectable};
-//! use nest_rs_exception_filters::ExceptionFilter;
+//! use nest_rs_exception_filters::{ExceptionFilter, async_trait};
 //! use poem::{Response, http::StatusCode};
-//! use async_trait::async_trait;
 //!
 //! #[derive(Debug, thiserror::Error)]
 //! #[error("domain error")]
@@ -46,20 +45,16 @@
 //!         Response::builder().status(StatusCode::BAD_REQUEST).body("domain error")
 //!     }
 //! }
+//! # fn main() {}
 //! ```
 //!
 //! ## Registering globally
 //!
-//! ```rust,ignore
-//! use nest_rs::prelude::App;
-//! use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
-//!
-//! App::builder()
-//!     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
-//!     .module::<AppModule>()
-//!     .build().await?.run().await
-//! ```
+//! Register with `App::builder().use_exception_filters_global([...])`
+//! ([`AppBuilderExceptionFiltersExt`]); the example on
+//! [`exception_filter`](fn@exception_filter) runs it.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod builder;
 mod erased;

@@ -29,6 +29,7 @@
 //! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — principal resolution: strategies, credential
 /// verification, and the guard's authentication outcome.

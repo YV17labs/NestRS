@@ -17,11 +17,10 @@
 //!
 //! ## Defining an interceptor
 //!
-//! ```rust,ignore
+//! ```
 //! use nest_rs_core::{Layer, injectable};
-//! use nest_rs_interceptors::{Interceptor, Next};
+//! use nest_rs_interceptors::{Interceptor, Next, async_trait};
 //! use poem::{Request, Response, Result};
-//! use async_trait::async_trait;
 //!
 //! #[injectable]
 //! #[derive(Default)]
@@ -44,20 +43,16 @@
 //!         Ok(resp)
 //!     }
 //! }
+//! # fn main() {}
 //! ```
 //!
 //! ## Registering globally
 //!
-//! ```rust,ignore
-//! use nest_rs::App;
-//! use nest_rs_interceptors::{AppBuilderInterceptorsExt, interceptor};
-//!
-//! App::builder()
-//!     .use_interceptors_global([interceptor::<ServerTiming>()])
-//!     .module::<AppModule>()
-//!     .build().await?.run().await
-//! ```
+//! Register with `App::builder().use_interceptors_global([...])`
+//! ([`AppBuilderInterceptorsExt`]); the example on
+//! [`interceptor`](fn@interceptor) runs it.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod builder;
 mod ext;

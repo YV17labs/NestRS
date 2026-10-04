@@ -30,6 +30,7 @@
 //! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 // No span target: this crate emits no events. A rejected client credential is a
 // denial, and the guard that raised it already files one `warn` on

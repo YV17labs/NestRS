@@ -8,12 +8,55 @@
 //! error type has no such discipline imposed on it — and a GraphQL client is
 //! exactly as untrusted as a language model.
 //!
-//! ```ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_graphql::async_graphql::{Result, SimpleObject};
+//! # use nest_rs_graphql::{GraphqlModule, Opaque, operations, resolver};
+//! #
+//! # #[derive(SimpleObject)]
+//! # struct Room {
+//! #     name: String,
+//! # }
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct RoomsService;
+//! #
+//! # impl RoomsService {
+//! #     async fn list(&self) -> Result<Vec<Room>, std::io::Error> {
+//! #         Err(std::io::Error::other("relation \"rooms\" does not exist"))
+//! #     }
+//! # }
+//! #
+//! # #[resolver]
+//! # struct RoomsResolver {
+//! #     #[inject]
+//! #     svc: Arc<RoomsService>,
+//! # }
+//! #
+//! # #[operations]
+//! # impl RoomsResolver {
 //! #[query]
-//! #[authorize(Read, rooms::Entity)]
+//! #[public]
 //! async fn rooms(&self) -> Result<Vec<Room>> {
 //!     Ok(self.svc.list().await.opaque()?)
 //! }
+//! # }
+//! #
+//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [RoomsService, RoomsResolver])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let resp = app.http().post("/graphql")
+//! #     .body_json(&serde_json::json!({ "query": "{ rooms { name } }" })).send().await;
+//! # let body: serde_json::Value = resp.json().await.value().deserialize();
+//!
+//! assert_eq!(body["errors"][0]["message"], nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **A deliberate error is not this.** A validation rejection, a `Denial`, a

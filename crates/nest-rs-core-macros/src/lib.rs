@@ -3,6 +3,7 @@
 //! `#[proc_macro_attribute]` entry below is a thin delegation to its
 //! implementation module.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
@@ -12,8 +13,6 @@ mod injectable;
 mod input;
 mod module;
 
-/// Mark a struct as a DI provider built from the container.
-///
 /// `#[inject]` fields resolve via `container.get()` (or `get_dyn` for
 /// `Arc<dyn Trait>`); other fields fall back to `Default::default()`. A struct
 /// with no `#[inject]` field uses `<Self as Default>::default()` so a custom
@@ -33,42 +32,14 @@ mod module;
 /// providers; a transient depending (transitively) on itself panics with a
 /// cycle diagnostic at resolution time.
 ///
-/// # Expands to
-///
-/// Illustrative sketch (singleton scope):
-///
-/// ```ignore
-/// struct Foo { /* … */ }                       // the item, unchanged
-///
-/// impl Foo {
-///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* resolve #[inject] fields */ }
-/// }
-///
-/// impl ::nest_rs_core::Discoverable for Foo {
-///     fn dependencies() -> Vec<TypeId> { /* required #[inject] keys */ }
-///     fn dependency_names() -> Vec<&'static str> { /* … */ }
-///     fn optional_dependencies() -> Vec<TypeId> { /* Option<Arc<…>> keys */ }
-///     fn injected() -> Vec<TypeId> { /* every #[inject] key, for the access graph */ }
-///     fn register(b: ContainerBuilder) -> ContainerBuilder {
-///         b.provide(Self::from_container(&b.snapshot()))   // singleton: eager value
-///     }
-/// }
-/// ```
-///
-/// `scope = request` / `scope = transient` keep the same shape but `register`
-/// installs a factory (`provide_scoped` / `provide_transient`) instead of an
-/// eager value, and report no register-phase `dependencies` (the factory builds
-/// lazily); `injected` is still reported for the access graph.
+/// It also emits `impl ProviderResidency`: `true` for a singleton, `false` for
+/// `request` and `transient`.
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(injectable::injectable(args, input).into()).into()
 }
 
-/// Declare application lifecycle hooks on a provider's impl block, for the
-/// module/application init and shutdown phases.
-///
-/// Each method tagged with a phase attribute is invoked by
-/// `App`:
+/// Each method tagged with a phase attribute is invoked by `App`:
 ///
 /// - `#[on_module_init]` / `#[on_application_bootstrap]` — after wiring,
 ///   before serving. An error aborts boot.
@@ -78,45 +49,11 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// A hook is `async fn(&self)` returning `()` or
 /// `Result<(), E: Into<anyhow::Error>>`. Hooks are submitted to a link-time
 /// registry, so the provider keeps its single `impl Discoverable`.
-///
-/// # Expands to
-///
-/// The impl block is re-emitted with the phase attributes stripped; each tagged
-/// method gains a free `run` fn plus an `inventory::submit!`. Illustrative
-/// sketch for one `#[on_module_init] async fn ready(&self)`:
-///
-/// ```ignore
-/// impl Foo { async fn ready(&self) { /* … */ } }   // phase attr removed
-///
-/// fn __nestrs_hook_Foo_ready(c: &::nest_rs_core::Container)
-///     -> Pin<Box<dyn Future<Output = ::nest_rs_core::anyhow::Result<()>> + Send + '_>>
-/// {
-///     Box::pin(async move {
-///         match ::nest_rs_core::Container::get::<Foo>(c) {
-///             Some(p) => { <Foo>::ready(&p).await; Ok(()) }   // Result methods map_err(Into::into)
-///             None => Ok(()),
-///         }
-///     })
-/// }
-///
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_core::LifecycleHook {
-///         phase: ::nest_rs_core::LifecyclePhase::OnModuleInit,
-///         provider: "Foo", method: "ready",
-///         origin: module_path!(),
-///         provider_type_id: TypeId::of::<Foo>,
-///         present: |c| Container::get::<Foo>(c).is_some(),
-///         run: __nestrs_hook_Foo_ready,
-///     }
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(hooks::hooks(args, input).into()).into()
 }
 
-/// `#[module(imports = [...], providers = [...])]`.
-///
 /// `imports` is either a type (a static `Module`) or a
 /// call expression (a configured `DynamicModule`
 /// built at its import site). `providers` lists what this module
@@ -139,35 +76,8 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// other wiring failure takes, and only a true provider **cycle**, invisible to
 /// that graph, still panics.
 ///
-/// # Expands to
-///
-/// `impl Module` (a `register` fixpoint loop + a `collect` async-factory pass)
-/// plus a link-time `ModuleDescriptor` for the access graph. Illustrative
-/// sketch:
-///
-/// ```text
-/// struct AppModule;                                  // the item, unchanged
-///
-/// impl ::nest_rs_core::Module for AppModule {
-///     fn register(mut b: ContainerBuilder) -> ContainerBuilder {
-///         if !b.mark_registered(TypeId::of::<AppModule>()) { return b; }   // dedup diamonds
-///         b = <SomeImport as Module>::register(b);                          // imports first
-///         // fixpoint: each provider registers once its deps are present —
-///         //   <Foo as Discoverable>::register(b)            (concrete)
-///         //   b.provide_dyn::<Trait>(Arc::new(Foo::from_container(&b.snapshot())))  (`as dyn Trait`)
-///         // stalls panic naming the unprovided / cyclic provider
-///         ::nest_rs_core::__module_registered("AppModule");
-///         b
-///     }
-///     fn collect(mut b: ContainerBuilder) -> ContainerBuilder {
-///         /* queue each import's async factories */ b
-///     }
-/// }
-///
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_core::ModuleDescriptor { module, name, imports: &[…], providers: &[…] }
-/// }
-/// ```
+/// The struct gains an `impl Module` and a hidden link-time descriptor the
+/// boot's access-graph check reads.
 #[proc_macro_attribute]
 pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(module::module(args, input).into()).into()
@@ -195,16 +105,6 @@ pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()
 }
 
-/// Run an app's `async fn main` on the runtime the framework owns, and end the
-/// process within the shutdown budget.
-///
-/// ```ignore
-/// #[nest_rs::main]
-/// async fn main() -> anyhow::Result<()> {
-///     App::builder().module::<AppModule>().build().await?.run().await
-/// }
-/// ```
-///
 /// It builds what `#[tokio::main]` builds — tokio's multi-threaded runtime with
 /// every driver enabled, sized by `TOKIO_WORKER_THREADS` — runs the body on it,
 /// and then does the one thing `#[tokio::main]` cannot: it tears the runtime
@@ -218,14 +118,6 @@ pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// No argument is taken, and one is refused naming why: there is nothing left
 /// for one to choose. The app's manifest needs no `tokio` line for it.
-///
-/// # Expands to
-///
-/// ```ignore
-/// fn main() -> anyhow::Result<()> {
-///     ::nest_rs_core::__main::<anyhow::Result<()>, _>(async move { /* the body */ })
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(entry::main(args, input).into()).into()

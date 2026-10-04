@@ -14,14 +14,32 @@
 //! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability)
 //! (row-level security cannot be forgotten).
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_core::module;
+//! # use nest_rs_seaorm::sea_orm::{ConnectOptions, Database};
+//! # use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+//! # use nest_rs_testing::TestApp;
+//! # use nest_rs_worker::JobContext;
+//! # #[module(providers = [])]
+//! # pub struct UsersModule;
 //! #[module(imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule, UsersModule])]
 //! pub struct AppModule;
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! # let mut options = ConnectOptions::new("postgres://app@localhost/app");
+//! # options.connect_lazy(true);
+//! # let db = Database::connect(options).await?;
+//! # let app = TestApp::builder().provide(db).module::<AppModule>().build().await?;
+//!
+//! assert!(app.container().get_dyn::<dyn JobContext>().is_some());
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Pin explicit values with [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Repository access — every query, and every row-level filter applied.
 ///

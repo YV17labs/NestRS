@@ -29,6 +29,7 @@
 //!    snapshot; an unexpected one is a regression in the composed schema.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Schema execution, subscriptions, and federation entities.
 ///
@@ -110,15 +111,143 @@ pub use inventory;
 // nest-rs-pipes directly — the global-validation ("ValidationPipe") path.
 pub use nest_rs_pipes::{MaybeValidateFallback, ValidateProbe};
 
-pub use nest_rs_graphql_macros::{crud, dataloader};
+/// Generate a resolver's standard CRUD operations on its impl block, in place
+/// of [`operations`]; each one delegates to the entity's `CrudService` and
+/// declares `#[authorize(Action, Entity)]`, as a hand-written one would. The
+/// running example sits on `nest_rs_seaorm::CrudService`, beside the HTTP one.
+pub use nest_rs_graphql_macros::crud;
 
-/// The operations decorator — `#[resolver]`'s impl-block half, the GraphQL
-/// counterpart of `#[routes]`.
+/// Turn a data-layer impl block into batched DataLoaders, one per method, each
+/// named `{Owner}{PascalMethod}`.
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::convert::Infallible;
+/// use nest_rs_core::injectable;
+/// use nest_rs_graphql::async_graphql::dataloader::Loader;
+/// use nest_rs_graphql::dataloader;
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct UsersService;
+///
+/// #[dataloader]
+/// impl UsersService {
+///     async fn by_id(&self, keys: &[i32]) -> HashMap<i32, String> {
+///         keys.iter().map(|id| (*id, format!("user {id}"))).collect()
+///     }
+/// }
+///
+/// fn implements<T: Loader<i32, Value = String, Error = Infallible>>() {}
+/// implements::<UsersServiceById>();
+/// ```
+pub use nest_rs_graphql_macros::dataloader;
+
+/// Declare a [`resolver`]'s operations on its impl block. Each operation
+/// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the
+/// gate and the reply mask `#[authorize]` emits run in `nest_rs_authz::graphql`.
+///
+/// ```
+/// use nest_rs_core::Discoverable;
+/// use nest_rs_graphql::async_graphql::{Result, SimpleObject};
+/// use nest_rs_graphql::{operations, resolver};
+/// # use nest_rs_core::module;
+/// # use nest_rs_graphql::GraphqlModule;
+///
+/// #[derive(SimpleObject)]
+/// struct User {
+///     id: i32,
+///     name: String,
+/// }
+///
+/// #[resolver]
+/// struct UsersResolver;
+///
+/// #[operations]
+/// impl UsersResolver {
+///     #[query]
+///     #[public]
+///     async fn user(&self, id: i32) -> Result<Option<User>> {
+///         Ok(Some(User { id, name: "Ada".into() }))
+///     }
+/// }
+///
+/// fn implements<T: Discoverable>() {}
+/// # #[module(imports = [GraphqlModule::for_root(None)], providers = [UsersResolver])]
+/// # struct AppModule;
+/// #
+/// # async fn query(app: &nest_rs_testing::TestApp, query: &str) -> serde_json::Value {
+/// #     let resp = app.http().post("/graphql").body_json(&serde_json::json!({ "query": query })).send().await;
+/// #     resp.json().await.value().deserialize()
+/// # }
+/// #
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<UsersResolver>();
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// let reply = query(&app, "{ user(id: 1) { name } }").await;
+/// assert_eq!(reply["data"]["user"]["name"], "Ada");
+/// # Ok(())
+/// # }
+/// ```
 pub use nest_rs_graphql_macros::operations;
-/// The resolver decorator, for the struct. `#[use_interceptors(...)]` /
-/// `#[use_filters(...)]` are **HTTP-only** — the per-operation GraphQL seam is
-/// reserved but not invoked, so binding one on a resolver is rejected at compile
-/// time instead of silently doing nothing:
+/// Mark a GraphQL resolver struct: built from the container, its
+/// `#[use_guards(...)]` the resolver-scope layer.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_core::{injectable, module};
+/// use nest_rs_graphql::{GraphqlModule, operations, resolver};
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct GreetingService;
+///
+/// impl GreetingService {
+///     fn greet(&self) -> String {
+///         "hello".into()
+///     }
+/// }
+///
+/// #[resolver]
+/// struct GreetingResolver {
+///     #[inject]
+///     svc: Arc<GreetingService>,
+/// }
+///
+/// #[operations]
+/// impl GreetingResolver {
+///     #[query]
+///     #[public]
+///     async fn greeting(&self) -> String {
+///         self.svc.greet()
+///     }
+/// }
+///
+/// #[module(
+///     imports = [GraphqlModule::for_root(None)],
+///     providers = [GreetingService, GreetingResolver],
+/// )]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// let resp = app
+///     .http()
+///     .post("/graphql")
+///     .body_json(&serde_json::json!({ "query": "{ greeting }" }))
+///     .send()
+///     .await;
+/// resp.assert_json(serde_json::json!({ "data": { "greeting": "hello" } })).await;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** — the
+/// per-operation GraphQL seam is reserved but not invoked, so binding one on a
+/// resolver is rejected at compile time instead of silently doing nothing:
 ///
 /// ```compile_fail
 /// use nest_rs_graphql::resolver;

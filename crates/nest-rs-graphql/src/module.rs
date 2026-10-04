@@ -23,8 +23,21 @@ use crate::subscription::SubscriptionEndpoint;
 /// **off** for production safety; a dev run opts them in via
 /// `NESTRS_GRAPHQL__PLAYGROUND=true` / `…__EMIT_SDL=true`.
 ///
-/// ```ignore
-/// #[module(imports = [GraphqlModule::for_root()])]
+/// ```
+/// use nest_rs_core::module;
+/// use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
+///
+/// #[module(imports = [GraphqlModule::for_root(None)])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+/// # assert!(app.container().get::<GraphqlConfig>().is_some());
+///
+/// let defaults = GraphqlConfig::default();
+/// assert!(!defaults.playground && !defaults.emit_sdl);
+/// # Ok(())
+/// # }
 /// ```
 pub struct GraphqlModule;
 

@@ -57,15 +57,41 @@ use crate::error::HeaderError;
 
 /// Request headers deserialized into `T`.
 ///
-/// ```ignore
+/// ```
+/// # use nest_rs_core::module;
+/// # use nest_rs_http::poem::web::Json;
+/// # use nest_rs_http::{Header, controller, input, routes};
+/// # use nest_rs_testing::TestApp;
 /// #[input]
 /// struct Tracing {
 ///     #[serde(rename = "X-Request-Id")]
 ///     request_id: Option<String>,
 /// }
+/// # #[input]
+/// # struct Thing {
+/// #     request_id: Option<String>,
+/// # }
+/// # #[controller(path = "/")]
+/// # #[derive(Default)]
+/// # struct ThingsController;
+/// # #[routes]
+/// # impl ThingsController {
 ///
 /// #[get("/things")]
-/// async fn list(&self, tracing: Header<Tracing>) -> Json<Vec<Thing>> { /* … */ }
+/// async fn list(&self, tracing: Header<Tracing>) -> Json<Vec<Thing>> {
+///     Json(vec![Thing { request_id: tracing.into_inner().request_id }])
+/// }
+/// # }
+/// # #[module(providers = [ThingsController])]
+/// # struct ThingsModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// # let app = TestApp::for_module::<ThingsModule>().await?;
+///
+/// let reply = app.http().get("/things").header("x-request-id", "abc-123").send().await;
+/// reply.assert_json(serde_json::json!([{ "request_id": "abc-123" }])).await;
+/// # Ok(())
+/// # }
 /// ```
 pub struct Header<T>(pub T);
 

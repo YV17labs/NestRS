@@ -7,6 +7,7 @@
 //! collects what already exists behind Cargo features, with one feature per
 //! surface so an app pays only for what it uses.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub use nest_rs_core as core;
 
@@ -124,8 +125,10 @@ pub use nest_rs_worker as worker;
 /// The everyday import — covers the decorators and types an app reaches for
 /// on every controller, service, and module.
 ///
-/// ```ignore
+/// ```
 /// use nest_rs::prelude::*;
+/// # fn everyday(_: App, _: AppBuilder, _: Container, _: ContainerBuilder) {}
+/// # fn root<M: Module>() {}
 /// ```
 ///
 /// Items behind Cargo features are pulled in only when the matching feature

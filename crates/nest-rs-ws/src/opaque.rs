@@ -8,12 +8,49 @@
 //! nothing leaks today, but a feature's own error type has no such discipline
 //! imposed on it — and a WS client is exactly as untrusted as a language model.
 //!
-//! ```ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::injectable;
+//! # use nest_rs_ws::{Gateway, Opaque, WsClient, WsError, WsReply, gateway, messages};
+//! #
+//! # #[derive(serde::Serialize)]
+//! # struct Room {
+//! #     name: String,
+//! # }
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct RoomsService;
+//! #
+//! # impl RoomsService {
+//! #     async fn list(&self) -> Result<Vec<Room>, std::io::Error> {
+//! #         Err(std::io::Error::other("relation \"rooms\" does not exist"))
+//! #     }
+//! # }
+//! #
+//! # #[gateway(path = "/ws")]
+//! # struct RoomsGateway {
+//! #     #[inject]
+//! #     svc: Arc<RoomsService>,
+//! # }
+//! #
+//! # #[messages]
+//! # impl RoomsGateway {
 //! #[subscribe_message("rooms.list")]
-//! #[authorize(Read, rooms::Entity)]
+//! #[public]
 //! async fn rooms(&self) -> Result<Vec<Room>, WsError> {
 //!     Ok(self.svc.list().await.opaque()?)
 //! }
+//! # }
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let gateway = RoomsGateway { svc: Arc::new(RoomsService) };
+//! # let reply = gateway.dispatch(&WsClient::for_test(), "rooms.list", serde_json::Value::Null).await;
+//!
+//! assert!(matches!(reply, WsReply::Error(e) if e.error == nest_rs_core::OPAQUE_CLIENT_MESSAGE));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **A deliberate error is not this.** A validation rejection, a `Denial`, a

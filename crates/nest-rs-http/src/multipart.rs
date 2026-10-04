@@ -35,12 +35,36 @@ impl Stream for PartStream {
 
 /// Read a multipart part without buffering it.
 pub trait PartExt {
-    /// The part's bytes as they arrive.
+    /// The part's bytes as they arrive, for a sink that consumes a stream — an
+    /// object store's streamed upload — rather than a buffered part.
     ///
-    /// ```rust,ignore
-    /// # use nest_rs::http::PartExt;
-    /// let key = format!("{}-{}", Uuid::now_v7(), part.file_name().unwrap_or("upload"));
-    /// storage.put_stream(&key, "audio/mpeg", part.into_byte_stream()).await?;
+    /// ```
+    /// # use nest_rs_http::{Opaque, PartExt};
+    /// # use nest_rs_http::poem::test::{TestClient, TestForm};
+    /// # use nest_rs_http::poem::web::Multipart;
+    /// # use nest_rs_http::poem::{Result, handler};
+    /// use futures_util::TryStreamExt;
+    /// # #[handler]
+    /// # async fn upload(mut form: Multipart) -> Result<String> {
+    /// # let Some(part) = form.next_field().await? else { return Ok(String::new()) };
+    ///
+    /// let mut stream = part.into_byte_stream();
+    /// let mut received = 0;
+    /// while let Some(chunk) = stream.try_next().await.opaque()? {
+    ///     received += chunk.len();
+    /// }
+    /// # Ok(received.to_string())
+    /// # }
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// # let audio = vec![7u8; 512 * 1024];
+    /// # let form = TestForm::new().bytes("file", audio.clone());
+    /// # let reply = TestClient::new(upload).post("/").multipart(form).send().await;
+    /// # let received = reply.0.into_body().into_string().await?;
+    ///
+    /// assert_eq!(received, audio.len().to_string());
+    /// # Ok(())
+    /// # }
     /// ```
     fn into_byte_stream(self) -> PartStream;
 }

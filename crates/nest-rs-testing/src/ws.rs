@@ -16,12 +16,43 @@
 //! address, and [`WsSocket`](crate::ws::WsSocket) speaks the gateway's
 //! `{ event, data }` envelope over it.
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_core::module;
+//! # use nest_rs_testing::TestApp;
+//! # use nest_rs_ws::{WsModule, gateway, input, messages};
+//! # use serde_json::json;
+//! #
+//! # #[input]
+//! # struct ChatMessage {
+//! #     text: String,
+//! # }
+//! #
+//! # #[gateway(path = "/ws")]
+//! # #[derive(Default)]
+//! # struct ChatGateway;
+//! #
+//! # #[messages]
+//! # impl ChatGateway {
+//! #     #[subscribe_message("message")]
+//! #     #[public]
+//! #     async fn message(&self, msg: ChatMessage) -> ChatMessage {
+//! #         msg
+//! #     }
+//! # }
+//! #
+//! # #[module(imports = [WsModule], providers = [ChatGateway])]
+//! # struct ChatModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! # let token = String::from("a-token");
 //! let app = TestApp::builder().module::<ChatModule>().build_ws().await?;
 //! let mut socket = app.socket("/ws").bearer(&token).connect().await;
 //! socket.send("message", json!({ "text": "hi" })).await;
 //! assert_eq!(socket.next_envelope().await["event"], "message");
 //! app.shutdown().await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Close frames are read as well as messages:

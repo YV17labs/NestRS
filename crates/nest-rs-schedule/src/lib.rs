@@ -18,6 +18,7 @@
 //! it; `key = "…"` pins it across a rename of the type or the crate.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Cron and interval registration, and a tick that failed.
 ///
@@ -49,4 +50,39 @@ pub use nest_rs_worker;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
 
+/// Orchestrator on a provider's `impl` block: each `#[every]`, `#[after]` or
+/// `#[cron]` method in it is a job the [`Scheduler`] fires.
+///
+/// ```
+/// # use std::time::Duration;
+/// use nest_rs_core::injectable;
+/// use nest_rs_schedule::{Replicas, ScheduledMethod, Trigger, scheduled};
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// pub struct ReportTasks;
+///
+/// #[scheduled]
+/// impl ReportTasks {
+///     #[cron("0 0 2 * * *", tz = "Europe/Paris")]
+///     async fn nightly(&self) -> anyhow::Result<()> {
+///         Ok(())
+///     }
+///
+///     #[every("30s", replicas = "one")]
+///     async fn refresh(&self) -> anyhow::Result<()> {
+///         Ok(())
+///     }
+/// }
+///
+/// let jobs: Vec<&ScheduledMethod> = nest_rs_core::inventory::iter::<ScheduledMethod>()
+///     .filter(|job| job.provider == "ReportTasks")
+///     .collect();
+/// assert!(jobs.iter().any(|job| job.method == "nightly"
+///     && job.replicas == Replicas::Each
+///     && matches!(job.trigger, Trigger::Cron { expr: "0 0 2 * * *", tz: Some("Europe/Paris") })));
+/// assert!(jobs.iter().any(|job| job.method == "refresh"
+///     && job.replicas == Replicas::One
+///     && matches!(job.trigger, Trigger::Interval(every) if every == Duration::from_secs(30))));
+/// ```
 pub use nest_rs_schedule_macros::scheduled;

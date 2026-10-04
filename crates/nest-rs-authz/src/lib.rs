@@ -14,6 +14,7 @@
 //! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
 //! `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod ability;
 mod action;

@@ -44,14 +44,31 @@ pub trait HandlerMetadata {
 /// framework does **not** act on it — guards read it through
 /// [`HandlerMetadata::is_public`] and decide whether to honor it.
 ///
-/// ```rust,ignore
+/// ```
+/// # use nest_rs_guards::prelude::*;
+/// # use nest_rs_http::Reflector;
+/// # struct ApiKeyGuard;
+/// # impl Layer for ApiKeyGuard {}
+/// # #[async_trait]
+/// # impl Guard for ApiKeyGuard {
 /// // In a guard:
-/// fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+/// async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
 ///     if Reflector::new(req).is_public() {
 ///         return Ok(());
 ///     }
 ///     // ...standard policy...
+/// #   Err(Denial::unauthorized("an API key is required"))
 /// }
+/// # }
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// # let mut public = HttpRequest::default();
+/// # public.extensions_mut().insert(Public);
+///
+/// assert!(ApiKeyGuard.check_http(&mut public).await.is_ok());
+/// assert!(ApiKeyGuard.check_http(&mut HttpRequest::default()).await.is_err());
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Public;

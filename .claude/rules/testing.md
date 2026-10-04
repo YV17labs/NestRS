@@ -110,6 +110,14 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   a move, a drain, anything that changes data an operator cannot get back.
 - **nextest is the runner, with no configuration**: `just test` runs every
   test and the doctests.
+- **A doc example is compiled, and run unless it serves forever**: a fragment
+  carries its scaffolding in hidden `# ` lines, `.run().await` is `no_run`, a
+  refusal is `compile_fail`, and `text` is for what is not Rust. Held by review.
+- **A doc example compiles with what its crate already depends on**: a
+  composition sits with its owner — `#[authorize]` on each edge in
+  `nest-rs-authz`, `#[crud]` on `CrudService` — rather than pulling the stack
+  into an edge's dev-dependencies, and a macro's examples sit on its surface
+  crate's re-export.
 - **Builds sharing a target directory take a file lock.** `nest-rs-cli`'s
   scaffold tests compile every generated workspace into
   `target/scaffold-check` and serialize on its `scaffold.lock`; per-test target

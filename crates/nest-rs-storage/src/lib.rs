@@ -24,13 +24,31 @@
 //! [`StorageConfig`] (namespace `storage`, loaded from `NESTRS_STORAGE__*`) and
 //! registers [`Storage`] as an injectable provider:
 //!
-//! ```ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use std::time::Duration;
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_testing::TestApp;
 //! use nest_rs_storage::{Storage, StorageModule};
 //!
 //! // in a feature service:
-//! #[inject] storage: Arc<Storage>,
+//! #[injectable]
+//! struct UploadsService {
+//!     #[inject]
+//!     storage: Arc<Storage>,
+//! }
+//!
+//! #[module(imports = [StorageModule], providers = [UploadsService])]
+//! struct UploadsModule;
+//! # #[nest_rs_core::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let app = TestApp::builder().module::<UploadsModule>().build_headless().await?;
+//! # let UploadsService { storage } = &*app.container().get::<UploadsService>().expect("provided");
 //!
 //! let url = storage.presign_put("uploads/abc", Duration::from_secs(900)).await?;
+//! assert!(url.contains("/uploads/abc?") && url.contains("X-Amz-Expires=900"));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## API surface
@@ -48,6 +66,7 @@
 //!   [`ObjectEntry`] values.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Object storage operations.
 ///

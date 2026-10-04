@@ -11,15 +11,28 @@
 //! A transport supplies only what is genuinely its own — how its operations are
 //! spelled, and what `#[public]` buys on it:
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_codegen::{Posture, PostureRules};
+//! # fn main() -> syn::Result<()> {
 //! const POSTURE: PostureRules = PostureRules {
 //!     operation: "#[subscribe_message]",
 //!     transport: "WebSockets",
 //!     public_means: "no gate and no mask — the guards bound beside it still run",
 //!     bind_unsupported_because: "a message takes one payload value, not the …",
 //! };
+//! # let mut public: syn::ImplItemFn = syn::parse_quote! {
+//! #     #[public]
+//! #     async fn ping(&self) {}
+//! # };
+//! # let method = &mut public;
 //!
 //! let posture = POSTURE.take(method)?;
+//! assert!(matches!(posture, Posture::Public));
+//!
+//! let mut undeclared: syn::ImplItemFn = syn::parse_quote! { async fn ping(&self) {} };
+//! assert!(POSTURE.take(&mut undeclared).is_err());
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! GraphQL keeps its own parser: `#[authorize(Update, bind = ArtworksService)]`

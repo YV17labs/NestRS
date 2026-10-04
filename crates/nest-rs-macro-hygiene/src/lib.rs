@@ -5,9 +5,10 @@
 //! emit only `::std`/`::core` paths or paths routed through its surface
 //! crate's re-exports: a bare third-party path (`::anyhow`, `::tracing`, …)
 //! emitted by any of them fails **this crate's** compile, because nothing
-//! third-party sits in its extern prelude. Same spirit as the trybuild
-//! diagnostics suites — macro hygiene is proven by compiling a consumer, not
-//! by reading emissions.
+//! third-party sits in its extern prelude. Macro hygiene is proven by compiling
+//! a consumer, not by reading emissions, and the decorators' refusals the same
+//! way: this crate's suite pins each one through the umbrella, as a developer
+//! meets it.
 //!
 //! **Each witness compiles under its capability's feature alone** — the
 //! crate's features mirror the umbrella's, one per capability that owns a
@@ -47,6 +48,8 @@
 //! combination the matrix does not build — is proved only where something else
 //! compiles it, such as `nest-rs-cli`'s scaffold e2e; and that proves nothing
 //! when the generated project happens to declare the crate the arm names.
+
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 #[cfg(feature = "config")]
 pub mod config;

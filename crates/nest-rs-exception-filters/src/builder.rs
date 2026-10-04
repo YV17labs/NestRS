@@ -8,16 +8,7 @@ use crate::registry::{ExceptionFilterSpec, ExceptionFilterSpecs};
 
 /// Adds `.use_exception_filters_global(...)` to [`AppBuilder`].
 ///
-/// ```rust,ignore
-/// use nest_rs::prelude::App;
-/// use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
-///
-/// App::builder()
-///     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
-///     .module::<AppModule>()
-///     .build().await?
-///     .run().await
-/// ```
+/// The example on [`exception_filter`](fn@crate::exception_filter) registers through it.
 pub trait AppBuilderExceptionFiltersExt: Sized {
     /// Register `specs` as the global exception-filter chain — the pool every
     /// **route** composes in, deduped by type against controller/method-scope

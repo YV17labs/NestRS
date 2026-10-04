@@ -10,7 +10,7 @@
 //!
 //! ## Defining a global pipe
 //!
-//! ```rust,ignore
+//! ```
 //! use nest_rs_core::{injectable, Layer};
 //! use nest_rs_pipes::{GlobalPipe, PipeError};
 //!
@@ -26,17 +26,14 @@
 //!         Ok(())
 //!     }
 //! }
+//! # fn main() {}
 //! ```
 //!
 //! ## Registering globally
 //!
-//! ```rust,ignore
-//! use nest_rs_guards::{AppBuilderPipesExt, pipe};
-//!
-//! App::builder()
-//!     .use_pipes_global([pipe::<StripUnknownFields>()])
-//!     .module::<AppModule>()
-//! ```
+//! `App::builder().use_pipes_global([pipe::<StripUnknownFields>()])`, with
+//! `AppBuilderPipesExt` and `pipe` imported from `nest-rs-guards`; the running
+//! example sits on `nest_rs_guards::pipe`.
 
 use std::sync::Arc;
 

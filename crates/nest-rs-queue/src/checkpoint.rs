@@ -111,13 +111,35 @@ impl CheckpointCell {
 ///
 /// A `#[process]` parameter, recognised by its type:
 ///
-/// ```text
+/// ```
+/// # use anyhow::Result;
+/// # use nest_rs_core::injectable;
+/// # use nest_rs_queue::{Checkpoint, ProcessMethod, input, processor, queue};
+/// # #[input]
+/// # #[derive(Clone)]
+/// # pub struct ImportCommand { pub rows: u32 }
+/// # #[input]
+/// # #[derive(Clone)]
+/// # pub struct ImportProgress { pub row: u32 }
+/// # #[queue(name = "imports", job = ImportCommand)]
+/// # pub struct ImportQueue;
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # pub struct ImportProcessor;
+/// # #[processor]
+/// # impl ImportProcessor {
 /// #[process(queue = ImportQueue, transactional = false)]
 /// async fn import(&self, job: ImportCommand, mut checkpoint: Checkpoint<ImportProgress>) -> Result<()> {
 ///     let start = checkpoint.get().map_or(0, |progress| progress.row);
 ///     // … import rows from `start`, saving every batch:
+/// #   let row = start + job.rows;
 ///     checkpoint.save(ImportProgress { row }).await?;
+/// #   Ok(())
 /// }
+/// # }
+/// # let import = nest_rs_core::inventory::iter::<ProcessMethod>()
+/// #     .find(|method| method.name() == "ImportProcessor::import");
+/// # assert_eq!(import.map(|method| method.options().checkpoint()), Some(true));
 /// ```
 ///
 /// It lasts through the job's retries and through a redelivery after the

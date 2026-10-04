@@ -114,10 +114,14 @@ pub trait Discoverable {
 /// survives only where nothing has spoken, on a provider registered by hand with
 /// [`ContainerBuilder::provide`]:
 ///
-/// ```ignore
+/// ```
+/// # use nest_rs_core::{Container, ProviderResidency};
+/// # struct MyHandWrittenProvider;
 /// impl ProviderResidency for MyHandWrittenProvider {
 ///     const SINGLETON: bool = true;
 /// }
+/// # let container = Container::builder().provide(MyHandWrittenProvider).build();
+/// # assert!(container.get::<MyHandWrittenProvider>().is_some());
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a provider, so a provider-hosted decorator (`#[hooks]`, \
@@ -420,9 +424,15 @@ pub fn is_framework_owned(origin: &str) -> bool {
 /// edge owes an inert-entry report, so a sixth site is scheduled rather than
 /// hypothetical.
 ///
-/// ```ignore
+/// ```
+/// # use std::any::TypeId;
+/// # use nest_rs_core::{Container, report_inert_host};
+/// # struct Entry { origin: &'static str, provider: &'static str, method: &'static str, provider_type_id: fn() -> TypeId }
+/// # struct Reports;
+/// # let entry = Entry { origin: "my_app::reports", provider: "Reports", method: "nightly", provider_type_id: TypeId::of::<Reports> };
+/// # let container = &Container::default();
 /// report_inert_host!(
-///     target: crate::target::LIFECYCLE,
+///     target: nest_rs_core::target::LIFECYCLE,
 ///     what: "scheduled method",
 ///     origin: entry.origin,
 ///     host: (entry.provider_type_id)(),
@@ -606,6 +616,7 @@ mod tests {
             let composition = Composition::from_descriptors(
                 &refs,
                 &[(TypeId::of::<AppModule>(), "api::module::ApiModule")],
+                &crate::access::DynamicModules::new(),
             );
             (modules, composition)
         }

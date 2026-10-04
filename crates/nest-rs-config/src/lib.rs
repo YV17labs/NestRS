@@ -15,6 +15,7 @@
 //! other separators, another case, one misspelled segment ([`unclaimed`]).
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The `.env` cascade, resolved namespaces, and refused values.
 ///
@@ -54,6 +55,23 @@ pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
 /// injectable [`Config`]. Re-exported from `nest-rs-config-macros` so apps write
 /// `nest_rs_config::config`.
+///
+/// ```
+/// # use validator::Validate as _;
+/// use nest_rs_config::{Namespaced, config};
+///
+/// #[config(namespace = "seaorm")]
+/// #[derive(Clone, Debug, serde::Deserialize)]
+/// pub struct SeaOrmConfig {
+///     pub url: String,
+///     #[validate(range(min = 1))]
+///     pub max_connections: u32,
+/// }
+///
+/// assert_eq!(<SeaOrmConfig as Namespaced>::NAMESPACE, "seaorm");
+/// let config = SeaOrmConfig { url: "postgres://localhost/app".into(), max_connections: 0 };
+/// assert!(config.validate().is_err());
+/// ```
 pub use nest_rs_config_macros::config;
 
 // `#[config]` injects the `Validate` derive and its `crate = ` override, so a

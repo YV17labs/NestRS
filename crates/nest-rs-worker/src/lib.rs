@@ -13,6 +13,7 @@
 //! state, not per-worker — installed once around each unit of work the
 //! transport drives.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod context;
 mod error;

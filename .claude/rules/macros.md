@@ -167,7 +167,8 @@ mechanical, and the rule is teachable in one sentence. Never for business logic,
 one-off integrations, inference Rust cannot give (prefer a builder), or anything
 needing `unsafe` or runtime reflection.
 
-It ships with rustdoc showing the expansion, a test in the home crate's suite
+It ships with rustdoc whose example, on its surface crate's re-export, runs
+and proves what the expansion provides, a test in the home crate's suite
 (or `nest-rs-testing` for cross-crate wiring), a use site in `demo/`, and its
 `nest-rs-macro-hygiene` witness. **Compile cost above 0.5 s per use site is a
 defect — measure it.**

@@ -28,15 +28,7 @@ use nest_rs_ws::WsDataPipe;
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
 ///
-/// ```rust,ignore
-/// use nest_rs_guards::{AppBuilderGuardsExt, guard};
-///
-/// App::builder()
-///     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
-///     .module::<AppModule>()
-///     .build().await?
-///     .run().await
-/// ```
+/// The example on [`guard`](fn@crate::guard) registers through it.
 ///
 /// Declaration order matters — the runtime chain runs in the order you list
 /// the guards (with [`Layer::priority`](nest_rs_core::Layer::priority) as an

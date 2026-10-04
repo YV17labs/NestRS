@@ -16,9 +16,16 @@
 //! `rg 'Edge::' crates/*-macros/src/` names every rejection site, and a sentence
 //! that lives once cannot drift into naming a remedy that no longer exists.
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_codegen::Edge;
+//! # fn refuse(args: proc_macro2::TokenStream, value: syn::LitStr) -> syn::Result<()> {
 //! Edge::Schedule.reject_version(&args)?;        // raw decorator argument tokens
 //! return Err(Edge::Mcp.refuse_version(&value)); // a value already parsed out
+//! # }
+//! # let declared = refuse(quote::quote!(version = "1"), syn::parse_quote!("1"));
+//! # assert!(declared.is_err_and(|e| e.to_string().contains("#[scheduled]")));
+//! # let parsed = refuse(quote::quote!(), syn::parse_quote!("1"));
+//! # assert!(parsed.is_err_and(|e| e.to_string().contains("#[mcp]")));
 //! ```
 
 use proc_macro2::{Span, TokenStream, TokenTree};

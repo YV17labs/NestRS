@@ -11,16 +11,7 @@ use crate::registry::{FilterSpec, FilterSpecs};
 
 /// Adds `.use_filters_global(...)` to [`AppBuilder`].
 ///
-/// ```rust,ignore
-/// use nest_rs::prelude::App;
-/// use nest_rs::filters::{AppBuilderFiltersExt, filter};
-///
-/// App::builder()
-///     .use_filters_global([filter::<ProblemDetailsFilter>()])
-///     .module::<AppModule>()
-///     .build().await?
-///     .run().await
-/// ```
+/// The example on [`filter`](fn@crate::filter) registers through it.
 ///
 /// This seeds [`FilterSpecs`] into the container and attaches the
 /// transport-edge wrap that executes the **global** sub-chain around the

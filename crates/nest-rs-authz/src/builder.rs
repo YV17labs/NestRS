@@ -167,10 +167,38 @@ where
     /// Gate this rule behind an OAuth scope: it materializes only when the
     /// caller's credential carries `scope`.
     ///
-    /// ```rust,ignore
+    /// ```
+    /// # use std::any::TypeId;
+    /// # use std::sync::Arc;
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// # mod post {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[sea_orm(table_name = "posts")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub org_id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # struct Actor {
+    /// #     org_id: i32,
+    /// # }
+    /// # let actor = Actor { org_id: 7 };
+    /// # let granted: Arc<[String]> = Arc::from(["profile".to_owned()]);
+    /// # let mut ab = AbilityBuilder::new().with_granted_scopes(Some(granted));
     /// ab.can(Action::Read, post::Entity)
     ///     .when(|p| p.eq(post::Column::OrgId, actor.org_id))
     ///     .requires_scope("posts:read");
+    /// # let ability = ab.build()?;
+    ///
+    /// let posts = TypeId::of::<post::Entity>();
+    /// assert!(!ability.can_class(Action::Read, posts));
+    /// assert_eq!(ability.missing_scopes(Action::Read, posts), ["posts:read"]);
+    /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
     /// ```
     ///
     /// One declaration, three effects, and **no second decision site**: the

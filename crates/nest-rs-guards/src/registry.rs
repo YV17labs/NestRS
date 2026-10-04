@@ -23,10 +23,29 @@ pub type GuardSpec = LayerSpec<dyn Guard>;
 /// Use inside `App::builder().use_guards_global([...])` to declare which
 /// guards run on every request across all transports.
 ///
-/// ```rust,ignore
+/// ```
+/// # use nest_rs_core::{App, Layer, injectable, module};
+/// # use nest_rs_guards::{AppBuilderGuardsExt, Guard, guard};
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct AuthnGuard;
+/// # impl Layer for AuthnGuard {}
+/// # impl Guard for AuthnGuard {}
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct AuthzGuard;
+/// # impl Layer for AuthzGuard {}
+/// # impl Guard for AuthzGuard {}
+/// # #[module(providers = [AuthnGuard, AuthzGuard])]
+/// # struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 /// App::builder()
 ///     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
 ///     .module::<AppModule>()
+/// #   .build().await?;
+/// # Ok(())
+/// # }
 /// ```
 pub fn guard<G: Guard + 'static>() -> GuardSpec {
     LayerSpec::new(TypeId::of::<G>(), std::any::type_name::<G>(), |c| {
@@ -39,10 +58,25 @@ pub type PipeSpec = LayerSpec<dyn GlobalPipe>;
 
 /// Construct a [`PipeSpec`] for the given pipe type.
 ///
-/// ```rust,ignore
+/// ```
+/// # use nest_rs_core::{App, Layer, injectable, module};
+/// # use nest_rs_guards::{AppBuilderPipesExt, pipe};
+/// # use nest_rs_pipes::GlobalPipe;
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct StripUnknownFields;
+/// # impl Layer for StripUnknownFields {}
+/// # impl GlobalPipe for StripUnknownFields {}
+/// # #[module(providers = [StripUnknownFields])]
+/// # struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 /// App::builder()
 ///     .use_pipes_global([pipe::<StripUnknownFields>()])
 ///     .module::<AppModule>()
+/// #   .build().await?;
+/// # Ok(())
+/// # }
 /// ```
 pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
     LayerSpec::new(TypeId::of::<P>(), std::any::type_name::<P>(), |c| {

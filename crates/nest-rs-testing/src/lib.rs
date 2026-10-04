@@ -12,6 +12,7 @@
 //! it emits. A denial that fails closed but logs nothing passes every response
 //! assertion — and is exactly what nobody can debug at 3am.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 #![expect(
     clippy::panic,
     clippy::expect_used,

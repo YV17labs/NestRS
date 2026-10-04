@@ -29,8 +29,9 @@
 //! `Layer` provides `priority()` / `name()` defaults; override `priority()`
 //! only when this guard must beat declaration order.
 //!
-//! ```rust,ignore
+//! ```
 //! use nest_rs_guards::prelude::*;
+//! # mod audit { pub const TARGET: &str = "features::audit"; }
 //!
 //! #[injectable]
 //! #[derive(Default)]
@@ -41,26 +42,19 @@
 //! #[async_trait]
 //! impl Guard for AuditGuard {
 //!     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-//!         tracing::info!(target: crate::authn::TARGET, method = %req.method(), path = %req.uri(), "request seen");
+//!         tracing::info!(target: audit::TARGET, method = %req.method(), path = %req.uri(), "request seen");
 //!         Ok(())
 //!     }
 //! }
 //!
 //! impl HttpGuard for AuditGuard {}
+//! # fn main() {}
 //! ```
 //!
 //! ## Registering globally
 //!
-//! ```rust,ignore
-//! use nest_rs::App;
-//! use nest_rs_guards::{AppBuilderGuardsExt, guard};
-//!
-//! App::builder()
-//!     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
-//!     .module::<AppModule>()
-//!     .build().await?
-//!     .run().await
-//! ```
+//! Register with `App::builder().use_guards_global([...])`
+//! ([`AppBuilderGuardsExt`]); the example on [`guard`](fn@guard) runs it.
 //!
 //! Declaration order is the runtime order. If you list `AuthzGuard` before
 //! `AuthnGuard` the authorization check runs against an empty principal — a
@@ -74,10 +68,17 @@
 //!
 //! ## Marking a handler `#[public]`
 //!
-//! ```rust,ignore
+//! ```
+//! # use nest_rs_http::{controller, routes};
+//! # #[controller(path = "/")]
+//! # struct HealthController;
+//! # #[routes]
+//! # impl HealthController {
 //! #[get("/health/live")]
 //! #[public]
-//! async fn live() -> &'static str { "ok" }
+//! async fn live(&self) -> &'static str { "ok" }
+//! # }
+//! # fn main() {}
 //! ```
 //!
 //! The macro attaches a [`Public`](nest_rs_http::Public) marker to the
@@ -120,6 +121,7 @@
 //! attestation the extension trait was wanted for is what [`HttpGuard`]
 //! provides, at no runtime cost.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod builder;
 mod denial;

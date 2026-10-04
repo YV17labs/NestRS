@@ -10,12 +10,51 @@
 //! feature's own error type has no such discipline imposed on it — and a browser
 //! is exactly as untrusted as a language model.
 //!
-//! ```ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_http::poem::Result;
+//! # use nest_rs_http::poem::http::StatusCode;
+//! # use nest_rs_http::poem::web::{Json, Path};
+//! # use nest_rs_http::{Opaque, controller, input, routes};
+//! # use nest_rs_testing::TestApp;
+//! # #[input]
+//! # struct Report {
+//! #     title: String,
+//! # }
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct ReportsService;
+//! # impl ReportsService {
+//! #     async fn render(&self, _id: u64) -> anyhow::Result<Report> {
+//! #         anyhow::bail!("relation reports does not exist")
+//! #     }
+//! # }
+//! # #[controller(path = "/")]
+//! # struct ReportsController {
+//! #     #[inject]
+//! #     svc: Arc<ReportsService>,
+//! # }
+//! # #[routes]
+//! # impl ReportsController {
 //! #[get("/reports/:id")]
-//! #[authorize(Read, reports::Entity)]
-//! async fn report(&self, Path(id): Path<Uuid>) -> Result<Json<Report>> {
+//! async fn report(&self, Path(id): Path<u64>) -> Result<Json<Report>> {
 //!     Ok(Json(self.svc.render(id).await.opaque()?))
 //! }
+//! # }
+//! # #[module(providers = [ReportsService, ReportsController])]
+//! # struct ReportsModule;
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! # let app = TestApp::for_module::<ReportsModule>().await?;
+//! # let reply = app.http().get("/reports/7").send().await;
+//!
+//! reply.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+//! let body = reply.0.into_body().into_string().await?;
+//! assert!(body.contains(nest_rs_core::OPAQUE_CLIENT_MESSAGE));
+//! assert!(!body.contains("does not exist"));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **A deliberate error is not this.** A validation rejection, a `Denial`, a

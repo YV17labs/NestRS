@@ -7,23 +7,53 @@
 //! `#[module(providers = [...])]` is the entire wiring; it inherits port,
 //! CORS, TLS, and is governed by the boot-time access graph.
 //!
-//! ```ignore
+//! ```
+//! use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
+//! # use nest_rs_core::{Layer, injectable};
+//! # use nest_rs_guards::{Guard, HttpGuard};
+//! # use nest_rs_ws::{async_trait, input};
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct AuthnGuard;
+//! #
+//! # impl Layer for AuthnGuard {}
+//! #
+//! # #[async_trait]
+//! # impl Guard for AuthnGuard {}
+//! #
+//! # impl HttpGuard for AuthnGuard {}
+//! #
+//! # #[input]
+//! # struct SendMessage {
+//! #     text: String,
+//! # }
+//! #
+//! # #[derive(serde::Serialize)]
+//! # struct ChatMessage {
+//! #     text: String,
+//! # }
+//!
 //! #[gateway(path = "/ws")]
 //! #[use_guards(AuthnGuard)]
-//! struct ChatGateway {
-//!     #[inject] svc: Arc<RoomService>,
-//! }
+//! struct ChatGateway;
 //!
 //! #[messages]
 //! impl ChatGateway {
 //!     #[subscribe_message("message")]
 //!     #[public]
-//!     async fn on_message(&self, msg: SendMessage) -> ChatMessage { /* ... */ }
-//!
-//!     #[subscribe_message("rooms.list")]
-//!     #[authorize(Read, rooms::Entity)]  // class gate + reply mask, both emitted
-//!     async fn rooms(&self) -> Result<Vec<Room>, ServiceError> { /* ... */ }
+//!     async fn on_message(&self, msg: SendMessage) -> ChatMessage {
+//!         ChatMessage { text: msg.text }
+//!     }
 //! }
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let client = WsClient::for_test();
+//!
+//! let echoed = ChatGateway.dispatch(&client, "message", serde_json::json!({ "text": "hi" })).await;
+//! assert!(matches!(echoed, WsReply::Reply(reply) if reply["text"] == "hi"));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Every message declares its access posture
@@ -33,7 +63,8 @@
 //! `#[tool]` carry. `#[authorize]` emits the class gate
 //! (`nest_rs_authz::ws::authorize`) before the payload is deserialized and the
 //! reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned value,
-//! so a handler answering with entity rows writes no masking call. `#[public]`
+//! so a handler answering with entity rows writes no masking call; both run in
+//! `nest_rs_authz::ws`'s example. `#[public]`
 //! declares the message deliberately ungated: the guards bound on the gateway and
 //! beside the message still run.
 //!
@@ -123,6 +154,7 @@
 //! dispatch — this is how `nest_rs_seaorm::ws` re-binds executor + ability
 //! per message without `nest-rs-ws` depending on the ORM or authz.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The WebSocket edge: upgrades, connections, message dispatch.
 ///
@@ -210,12 +242,78 @@ pub use nest_rs_http;
 /// here so a payload crossing this transport needs no `serde` of its own.
 pub use nest_rs_core::input;
 
+/// Bind a `#[gateway]` impl block's message handlers.
+///
+/// ```
+/// use nest_rs_core::Discoverable;
+/// use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
+///
+/// #[gateway(path = "/chat")]
+/// #[derive(Default)]
+/// struct ChatGateway;
+///
+/// #[messages]
+/// impl ChatGateway {
+///     #[subscribe_message("shout")]
+///     #[public]
+///     async fn shout(&self, text: String) -> String {
+///         text.to_uppercase()
+///     }
+/// }
+///
+/// fn implements<T: Gateway + Discoverable>() {}
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<ChatGateway>();
+///
+/// let reply = ChatGateway
+///     .dispatch(&WsClient::for_test(), "shout", serde_json::json!("hi"))
+///     .await;
+/// assert!(matches!(reply, WsReply::Reply(text) if text == "HI"));
+/// # Ok(())
+/// # }
+/// ```
 pub use nest_rs_ws_macros::messages;
 
-/// The gateway decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`
-/// are **HTTP-only** — the per-message WS seam is reserved but not invoked, so
-/// binding one on a gateway is rejected at compile time instead of silently
-/// doing nothing:
+/// Mark a struct as a WebSocket gateway, the `@WebSocketGateway` analog.
+///
+/// ```
+/// use nest_rs_core::module;
+/// use nest_rs_ws::{WsModule, gateway, messages};
+///
+/// #[gateway(path = "/ws", version = "1")]
+/// #[derive(Default)]
+/// struct ChatGateway;
+///
+/// #[messages]
+/// impl ChatGateway {
+///     #[subscribe_message("ping")]
+///     #[public]
+///     async fn ping(&self) -> String {
+///         "pong".into()
+///     }
+/// }
+///
+/// #[module(imports = [WsModule], providers = [ChatGateway])]
+/// struct ChatModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+///
+/// assert_eq!(ChatGateway::PATH, "/ws");
+/// assert_eq!(ChatGateway::VERSION, Some("1"));
+/// # let app = nest_rs_testing::TestApp::builder().module::<ChatModule>().build_ws().await?;
+///
+/// let mut socket = app.socket("/v1/ws").connect().await;
+/// socket.send("ping", serde_json::Value::Null).await;
+/// assert_eq!(socket.next_envelope().await["data"], "pong");
+/// # app.shutdown().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// `#[use_interceptors(...)]` / `#[use_filters(...)]` are **HTTP-only** — the
+/// per-message WS seam is reserved but not invoked, so binding one on a gateway
+/// is rejected at compile time instead of silently doing nothing:
 ///
 /// ```compile_fail
 /// use nest_rs_ws::gateway;

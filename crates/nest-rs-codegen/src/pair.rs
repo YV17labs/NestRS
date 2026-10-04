@@ -12,9 +12,20 @@
 //! Two shapes produce that message, and they are the same two sentences with the
 //! halves swapped, so they live here rather than in nine macro crates:
 //!
-//! ```ignore
+//! ```
+//! # use quote::quote;
+//! # fn main() -> syn::Result<()> {
+//! # let input = quote! { struct Chat; };
 //! let item = nest_rs_codegen::pair::WS.parse_host(input.into())?;       // in `#[gateway]`
+//! # assert_eq!(item.ident, "Chat");
+//! # let input = quote! { impl Chat {} };
 //! let item = nest_rs_codegen::pair::WS.parse_operations(input.into())?; // in `#[messages]`
+//! # assert!(item.items.is_empty());
+//!
+//! let wrong_half = nest_rs_codegen::pair::WS.parse_host(quote! { impl Chat {} });
+//! assert!(wrong_half.is_err_and(|e| e.to_string().contains("#[messages]")));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **Every pair is declared here, and only here.** The fields are private and

@@ -12,12 +12,9 @@
 //! # Where `use_pipes_global` lives
 //!
 //! Registration is imported from **`nest-rs-guards`**, not from here:
-//!
-//! ```rust,ignore
-//! use nest_rs_guards::{AppBuilderPipesExt, pipe};
-//!
-//! App::builder().use_pipes_global([pipe::<ValidationPipe>()])
-//! ```
+//! `use nest_rs_guards::{AppBuilderPipesExt, pipe};`, then
+//! `App::builder().use_pipes_global([pipe::<StripUnknownFields>()])`. The running
+//! example sits on `nest_rs_guards::pipe`.
 //!
 //! The asymmetry with the other layer families is structural, not an
 //! oversight: `nest-rs-guards` owns the route shaper that *executes* the pipe
@@ -25,6 +22,7 @@
 //! `use_pipes_global` here would close a dependency cycle. The pipe trait lives
 //! with the pipes; the registration lives with the dispatch that runs it.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod error;
 mod global;

@@ -5,6 +5,7 @@
 //! via [`HttpEndpointMeta`]), and any extra endpoint registered with
 //! [`HttpTransport::mount`].
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod access_log;
 mod allow;
@@ -113,6 +114,116 @@ pub use validator;
 
 pub use async_trait::async_trait;
 
-pub use nest_rs_http_macros::{
-    controller, crud, http_code, interceptor, redirect, response_header, routes,
-};
+/// `#[controller(path = "/users")]` — the HTTP host on a struct, paired with
+/// [`#[routes]`](macro@routes) on its impl block.
+///
+/// ```
+/// # use nest_rs_core::Container;
+/// # use nest_rs_http::{controller, routes};
+/// #[controller(path = "/users", version = "1")]
+/// #[derive(Default)]
+/// struct UsersController;
+///
+/// #[routes]
+/// impl UsersController {
+///     #[get("/")]
+///     async fn list(&self) -> &'static str {
+///         "[]"
+///     }
+/// }
+///
+/// assert_eq!(UsersController::PATH, "/users");
+/// assert_eq!(UsersController::VERSIONS, ["1"]);
+/// let _: fn(&Container) -> UsersController = UsersController::from_container;
+/// ```
+pub use nest_rs_http_macros::controller;
+
+/// `#[routes]` — binds a [`#[controller]`](macro@controller)'s methods to HTTP
+/// routes, one per verb attribute.
+///
+/// ```
+/// # use nest_rs_core::{Discoverable, Discovery, module};
+/// # use nest_rs_http::poem::web::Json;
+/// # use nest_rs_http::{Controller, HttpControllerMeta, HttpVerb, controller, routes};
+/// # use nest_rs_testing::TestApp;
+/// #[controller(path = "/users")]
+/// #[derive(Default)]
+/// struct UsersController;
+///
+/// #[routes]
+/// impl UsersController {
+///     #[get("/")]
+///     async fn list(&self) -> Json<Vec<String>> {
+///         Json(vec!["ada".into()])
+///     }
+/// }
+/// # #[module(providers = [UsersController])]
+/// # struct UsersModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+///
+/// fn implements<T: Controller + Discoverable>() {}
+/// implements::<UsersController>();
+///
+/// # let app = TestApp::for_module::<UsersModule>().await?;
+/// let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
+/// let route = &controllers[0].meta.routes[0];
+/// assert_eq!((route.verb, route.path, route.handler), (HttpVerb::Get, "/", "list"));
+/// assert!(route.response.is_some());
+///
+/// app.http().get("/users").send().await.assert_json(["ada"]).await;
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_http_macros::routes;
+
+/// `#[crud(...)]` — generates the standard REST operations (list, get,
+/// create, update, delete) on a [`#[controller]`](macro@controller) impl block,
+/// re-emitted under [`#[routes]`](macro@routes).
+///
+/// Each route delegates to the service's `nest_rs_seaorm::CrudService` and
+/// declares `Authorize<Action, Entity>`, so the running example sits on that
+/// trait, beside the GraphQL one.
+pub use nest_rs_http_macros::crud;
+
+/// `#[interceptor]` — mounts a struct implementing
+/// `nest_rs_interceptors::Interceptor` around the whole HTTP endpoint, as a
+/// transport-edge wrap rather than a provider.
+///
+/// ```
+/// # use nest_rs_core::{Layer, module};
+/// # use nest_rs_http::poem::http::HeaderValue;
+/// # use nest_rs_http::poem::{Request, Response, Result};
+/// # use nest_rs_http::{async_trait, interceptor};
+/// # use nest_rs_interceptors::{Interceptor, Next};
+/// # use nest_rs_testing::TestApp;
+/// #[interceptor]
+/// struct ServedBy;
+///
+/// impl Layer for ServedBy {}
+///
+/// #[async_trait]
+/// impl Interceptor for ServedBy {
+///     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+///         let mut resp = next.run(req).await.unwrap_or_else(|err| err.into_response());
+///         resp.headers_mut().insert("x-served-by", HeaderValue::from_static("api"));
+///         Ok(resp)
+///     }
+/// }
+///
+/// #[module(providers = [ServedBy])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// # let app = TestApp::for_module::<AppModule>().await?;
+///
+/// app.http().get("/nowhere").send().await.assert_header("x-served-by", "api");
+/// assert!(app.container().get::<ServedBy>().is_none());
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_http_macros::interceptor;
+
+pub use nest_rs_http_macros::http_code;
+pub use nest_rs_http_macros::redirect;
+pub use nest_rs_http_macros::response_header;

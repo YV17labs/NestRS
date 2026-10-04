@@ -7,6 +7,7 @@
 //! Backed by an in-memory fixed-window counter ([`InMemoryThrottler`]).
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Rate-limit verdicts.
 ///

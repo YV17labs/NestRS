@@ -51,8 +51,7 @@
 //! feature crate serve different per-binary subsets (an API mounts HTTP and
 //! GraphQL; a worker mounts only the queue).
 //!
-//! ```ignore
-//! use std::sync::Arc;
+//! ```
 //! use nest_rs_core::{App, injectable, module};
 //!
 //! #[injectable]
@@ -64,9 +63,11 @@
 //!
 //! // Boot fails here with a named error if the graph is misconfigured.
 //! let app = App::new::<AppModule>()?;
+//! assert!(app.container().get::<GreetingService>().is_some());
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod access;
 mod answer;
@@ -191,12 +192,140 @@ pub use validator;
 // only path that used to exist for one) reads as a mistake.
 pub use async_trait::async_trait;
 
-pub use nest_rs_core_macros::{hooks, main, module};
+/// Declare application lifecycle hooks on a provider's impl block, for the
+/// module/application init and shutdown phases.
+///
+/// ```
+/// use std::sync::atomic::{AtomicBool, Ordering};
+/// use nest_rs_core::{App, hooks, injectable, module};
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct CacheWarmer {
+///     warm: AtomicBool,
+/// }
+///
+/// #[hooks]
+/// impl CacheWarmer {
+///     #[on_module_init]
+///     async fn warm_up(&self) {
+///         self.warm.store(true, Ordering::SeqCst);
+///     }
+/// }
+///
+/// #[module(providers = [CacheWarmer])]
+/// struct AppModule;
+///
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let app = App::builder().module::<AppModule>().build().await?;
+/// app.init().await?;
+/// let warmer = app.container().get::<CacheWarmer>();
+/// assert!(warmer.is_some_and(|w| w.warm.load(Ordering::SeqCst)));
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_core_macros::hooks;
 
-/// The provider decorator. Every `#[inject]` field must be an `Arc<T>` or
-/// `Arc<dyn Trait>` — a dependency is resolved from the container as a shared
-/// `Arc` — so a non-`Arc` injected field is rejected at compile time rather than
-/// failing with a cryptic type error in generated code:
+/// Run an app's `async fn main` on the runtime the framework owns, and end the
+/// process within the shutdown budget.
+///
+/// ```
+/// # use nest_rs_core::{App, module};
+/// # #[module]
+/// # struct AppModule;
+/// #[nest_rs_core::main]
+/// async fn main() -> anyhow::Result<()> {
+///     App::builder().module::<AppModule>().build().await?.run().await
+/// }
+/// ```
+///
+/// The function keeps its name and becomes a synchronous one returning what
+/// its body returns:
+///
+/// ```
+/// #[nest_rs_core::main]
+/// async fn answer() -> u8 {
+///     42
+/// }
+///
+/// assert_eq!(answer(), 42);
+/// ```
+pub use nest_rs_core_macros::main;
+
+/// `#[module(imports = [...], providers = [...])]` — a module of the app's
+/// tree, implementing [`Module`].
+///
+/// ```
+/// use nest_rs_core::{App, Module, injectable, module};
+///
+/// trait Greeter: Send + Sync {
+///     fn greet(&self) -> &'static str;
+/// }
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct English;
+///
+/// impl Greeter for English {
+///     fn greet(&self) -> &'static str {
+///         "hello"
+///     }
+/// }
+///
+/// #[module(providers = [English as dyn Greeter])]
+/// struct GreetingModule;
+///
+/// #[module(imports = [GreetingModule])]
+/// struct AppModule;
+///
+/// fn implements<T: Module>() {}
+/// implements::<AppModule>();
+///
+/// let app = App::new::<AppModule>()?;
+/// let greeter = app.container().get_dyn::<dyn Greeter>();
+/// assert_eq!(greeter.map(|g| g.greet()), Some("hello"));
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub use nest_rs_core_macros::module;
+
+/// Mark a struct as a DI provider built from the container.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_core::{App, Discoverable, ProviderResidency, injectable, module};
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct Clock;
+///
+/// #[injectable]
+/// struct Greeter {
+///     #[inject]
+///     clock: Arc<Clock>,
+/// }
+///
+/// #[injectable(scope = transient)]
+/// #[derive(Default)]
+/// struct Draft;
+///
+/// #[module(providers = [Clock, Greeter, Draft])]
+/// struct AppModule;
+///
+/// fn implements<T: Discoverable>() {}
+/// implements::<Greeter>();
+/// assert!(<Greeter as ProviderResidency>::SINGLETON);
+/// assert!(!<Draft as ProviderResidency>::SINGLETON);
+///
+/// let app = App::new::<AppModule>()?;
+/// assert!(app.container().get::<Greeter>().is_some());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// Every `#[inject]` field must be an `Arc<T>` or `Arc<dyn Trait>` — a
+/// dependency is resolved from the container as a shared `Arc` — so a non-`Arc`
+/// injected field is rejected at compile time rather than failing with a
+/// cryptic type error in generated code:
 ///
 /// ```compile_fail
 /// use nest_rs_core::injectable;

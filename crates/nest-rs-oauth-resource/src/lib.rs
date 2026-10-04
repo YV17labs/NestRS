@@ -31,6 +31,7 @@
 //! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — RFC 9728 discovery: the metadata document, the
 /// challenge stamped onto a `401`, and the boot-time audience binding.

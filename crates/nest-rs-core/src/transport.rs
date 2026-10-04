@@ -53,7 +53,20 @@ pub trait Transport: Send + Sync + 'static {
 /// Modules attach one with
 /// [`ContainerBuilder::provide_meta`](crate::ContainerBuilder::provide_meta):
 ///
-/// ```ignore
+/// ```
+/// # use std::time::Duration;
+/// # use nest_rs_core::{Container, ContainerBuilder, Discovery, Module, Transport, TransportContribution, async_trait};
+/// # struct ScheduleModule;
+/// # struct Scheduler;
+/// # impl Scheduler {
+/// #     fn new() -> Self { Self }
+/// # }
+/// # #[async_trait]
+/// # impl Transport for Scheduler {
+/// #     async fn configure(&mut self, _: &Container) -> anyhow::Result<()> { Ok(()) }
+/// #     async fn serve(self: Box<Self>, cancel: tokio_util::sync::CancellationToken) -> anyhow::Result<()> { cancel.cancelled().await; Ok(()) }
+/// #     fn stop_bound(&self) -> Duration { Duration::ZERO }
+/// # }
 /// impl Module for ScheduleModule {
 ///     fn register(builder: ContainerBuilder) -> ContainerBuilder {
 ///         builder.provide_meta(TransportContribution {
@@ -62,6 +75,9 @@ pub trait Transport: Send + Sync + 'static {
 ///         })
 ///     }
 /// }
+/// # let container = ScheduleModule::register(Container::builder()).build();
+/// # let contributed = Discovery::new(&container).meta::<TransportContribution>();
+/// # assert_eq!(contributed.iter().map(|c| c.meta.name).collect::<Vec<_>>(), ["Scheduler"]);
 /// ```
 ///
 /// A module that is not imported never runs its `register`, so its

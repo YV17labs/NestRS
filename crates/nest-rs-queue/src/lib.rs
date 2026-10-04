@@ -67,6 +67,7 @@
 //! The walkthrough is the docs' *Writing a queue driver*.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — job registration, attempts, dead-letters and the
 /// reason each failed.
@@ -147,4 +148,64 @@ pub use nest_rs_worker;
 /// here so a payload crossing this transport needs no `serde` of its own.
 pub use nest_rs_core::input;
 
-pub use nest_rs_queue_macros::{processor, queue};
+/// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
+/// tagged with `#[process(queue = <Queue>, …)]` becomes a queue consumer — a
+/// [`ProcessMethod`] — that a backend's worker transport drains at boot.
+///
+/// ```
+/// use nest_rs_core::injectable;
+/// use nest_rs_queue::{ProcessMethod, Queue, input, processor, queue};
+///
+/// #[input]
+/// #[derive(Clone)]
+/// pub struct TranscodeCommand {
+///     pub file: String,
+/// }
+///
+/// #[queue(name = "audio", job = TranscodeCommand)]
+/// pub struct AudioQueue;
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// pub struct AudioProcessor;
+///
+/// #[processor]
+/// impl AudioProcessor {
+///     #[process(queue = AudioQueue, retries = 3)]
+///     async fn transcode(&self, job: TranscodeCommand) -> anyhow::Result<()> {
+///         anyhow::ensure!(!job.file.is_empty(), "nothing to transcode");
+///         Ok(())
+///     }
+/// }
+///
+/// let transcode = nest_rs_core::inventory::iter::<ProcessMethod>()
+///     .find(|method| method.name() == "AudioProcessor::transcode");
+/// assert_eq!(transcode.map(ProcessMethod::queue), Some(<AudioQueue as Queue>::NAME));
+/// assert_eq!(transcode.map(|method| method.options().retries()), Some(3));
+/// ```
+pub use nest_rs_queue_macros::processor;
+
+/// Stamp a unit struct with a queue's compile-time identity — its wire name and
+/// the `Job` payload it carries — by implementing [`Queue`]. Lives beside the
+/// payload at the feature port; the producer (`queue.push(Q, job, None)`) and
+/// the consumer (`#[process(queue = Q)]`) both name the type, so a typo'd name or
+/// a mismatched payload is a compile error.
+///
+/// ```
+/// # use std::any::TypeId;
+/// # use nest_rs_queue::{Destination, Queue, input, queue};
+/// # #[input]
+/// # #[derive(Clone)]
+/// # pub struct TranscodeCommand {
+/// #     pub file: String,
+/// # }
+/// // The marker is the destination a push names.
+/// #[queue(name = "audio", job = TranscodeCommand)]
+/// pub struct AudioQueue;
+///
+/// assert_eq!(<AudioQueue as Queue>::NAME, "audio");
+/// assert_eq!(TypeId::of::<<AudioQueue as Queue>::Job>(), TypeId::of::<TranscodeCommand>());
+/// assert_eq!(AudioQueue.queue_name()?.as_str(), "audio");
+/// # Ok::<(), nest_rs_queue::QueueError>(())
+/// ```
+pub use nest_rs_queue_macros::queue;

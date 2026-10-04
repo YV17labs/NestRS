@@ -5,12 +5,46 @@
 //! `#[injectable(scope = request)]` provider (or, falling through, a singleton —
 //! prefer plain `#[inject]` for those).
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_graphql::async_graphql::{self, Context};
+//! # use nest_rs_graphql::{GraphqlModule, Scoped, operations, resolver};
+//! #
+//! # #[injectable(scope = request)]
+//! # #[derive(Default)]
+//! # struct PerRequestCache;
+//! #
+//! # impl PerRequestCache {
+//! #     fn value(&self) -> &'static str {
+//! #         "cached"
+//! #     }
+//! # }
+//! #
+//! # #[resolver]
+//! # struct WhoResolver;
+//! #
+//! # #[operations]
+//! # impl WhoResolver {
 //! #[query]
+//! #[public]
 //! async fn who(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
 //!     let per_req = Scoped::<PerRequestCache>::from_context(ctx)?;
 //!     Ok(per_req.value().to_string())
 //! }
+//! # }
+//! #
+//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [PerRequestCache, WhoResolver])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let resp = app.http().post("/graphql")
+//! #     .body_json(&serde_json::json!({ "query": "{ who }" })).send().await;
+//!
+//! resp.assert_json(serde_json::json!({ "data": { "who": "cached" } })).await;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **Caveat.** This works inside resolver bodies, which run on the request's

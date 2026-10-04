@@ -83,6 +83,7 @@
 //! answer.
 //!
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — MCP operations, hosts and the merged endpoint.
 ///
@@ -218,4 +219,138 @@ pub use nest_rs_core::input;
 /// before the body, and answers a rejection with `invalid_params`.
 pub use nest_rs_pipes::{Piped, Valid};
 
-pub use nest_rs_mcp_macros::{mcp, tools};
+/// Mark a struct as an MCP host that self-mounts over HTTP.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_core::Discoverable;
+/// use nest_rs_mcp::{DEFAULT_PATH, hosts_on, mcp};
+/// # use nest_rs_core::{injectable, module};
+/// # use nest_rs_mcp::{
+/// #     AllowAllMcpGuard, McpError, McpIdentity, McpModule, McpOperationGuard, McpOptions, tools,
+/// # };
+/// # use nest_rs_testing::mcp::{initialize, result};
+/// #
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct MyService;
+/// #
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct PostsService;
+///
+/// #[mcp]
+/// struct MyHandler {
+///     #[inject]
+///     svc: Arc<MyService>,
+/// }
+///
+/// #[mcp(path = "/mcp/posts", name = "assistant-posts")]
+/// struct PostsHandler {
+///     #[inject]
+///     svc: Arc<PostsService>,
+/// }
+/// #
+/// # #[tools]
+/// # impl MyHandler {
+/// #     #[tool(description = "Answer a ping.")]
+/// #     #[public]
+/// #     async fn ping(&self) -> Result<String, McpError> {
+/// #         Ok("pong".into())
+/// #     }
+/// # }
+/// #
+/// # #[tools]
+/// # impl PostsHandler {
+/// #     #[tool(description = "Count the posts.")]
+/// #     #[public]
+/// #     async fn count_posts(&self) -> Result<String, McpError> {
+/// #         Ok("0".into())
+/// #     }
+/// # }
+/// #
+/// # #[module(imports = [
+/// #     McpModule::for_root(McpOptions {
+/// #         server: Some(McpIdentity::new("assistant", "1.0.0")),
+/// #         ..Default::default()
+/// #     }),
+/// # ], providers = [
+/// #     MyService,
+/// #     PostsService,
+/// #     MyHandler,
+/// #     PostsHandler,
+/// #     AllowAllMcpGuard as dyn McpOperationGuard,
+/// # ])]
+/// # struct AppModule;
+///
+/// fn implements<T: Discoverable>() {}
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<MyHandler>();
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// assert_eq!(hosts_on(app.container(), DEFAULT_PATH).len(), 1);
+/// assert_eq!(hosts_on(app.container(), "/mcp/posts").len(), 1);
+///
+/// let handshake = result(&initialize(app.http(), "/mcp/posts", None).await);
+/// assert_eq!(handshake["result"]["serverInfo"]["name"], "assistant-posts");
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_mcp_macros::mcp;
+
+/// Declare an `#[mcp]` host's operations on its inherent impl block. Each tool
+/// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the gate
+/// and the reply mask `#[authorize]` emits run in `nest_rs_authz::mcp`.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_mcp::{McpError, Parameters, ServerHandler, Valid, input, mcp, tools};
+/// # use nest_rs_core::{injectable, module};
+/// # use nest_rs_mcp::{AllowAllMcpGuard, DEFAULT_PATH, McpOperationGuard, hosts_on};
+/// # use nest_rs_testing::mcp::{call_tool_with, result};
+/// #
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct MyService;
+///
+/// #[input]
+/// struct FindDto {
+///     #[validate(length(min = 1))]
+///     name: String,
+/// }
+///
+/// #[mcp]
+/// struct MyHandler {
+///     #[inject]
+///     svc: Arc<MyService>,
+/// }
+///
+/// #[tools]
+/// impl MyHandler {
+///     #[tool(description = "Find a user by name.")]
+///     #[public]
+///     async fn find(&self, Parameters(p): Parameters<Valid<FindDto>>) -> Result<String, McpError> {
+///         Ok(p.into_inner().name)
+///     }
+/// }
+///
+/// fn implements<T: ServerHandler>() {}
+/// # #[module(providers = [MyService, MyHandler, AllowAllMcpGuard as dyn McpOperationGuard])]
+/// # struct AppModule;
+/// #
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<MyHandler>();
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// let declared = hosts_on(app.container(), DEFAULT_PATH)[0].declared_tools();
+/// assert_eq!(declared[0].name, "find");
+///
+/// let arguments = serde_json::json!({ "name": "ada" });
+/// let body = call_tool_with(app.http(), DEFAULT_PATH, "find", None, arguments).await;
+/// assert_eq!(result(&body)["result"]["content"][0]["text"], "ada");
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_mcp_macros::tools;

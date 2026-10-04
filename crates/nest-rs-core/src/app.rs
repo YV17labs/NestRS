@@ -380,16 +380,34 @@ impl AppBuilder {
     /// owned by any module (most module-owned resources expose a `for_root`
     /// instead). A seed of the same type wins (the factory is skipped).
     ///
-    /// ```ignore
-    /// App::builder()
+    /// ```
+    /// # use anyhow::Context as _;
+    /// # use nest_rs_core::{App, module};
+    /// # struct DbConfig { url: String }
+    /// # impl DbConfig {
+    /// #     fn from_env() -> Self { Self { url: "postgres://localhost/app".into() } }
+    /// # }
+    /// # struct DbPool { url: String }
+    /// # impl DbPool {
+    /// #     async fn connect(url: &str) -> anyhow::Result<Self> { Ok(Self { url: url.into() }) }
+    /// # }
+    /// # #[module]
+    /// # struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let app = App::builder()
     ///     .provide(DbConfig::from_env())
     ///     .provide_factory(|c| async move {
-    ///         let cfg = c.get::<DbConfig>().expect("DbConfig seeded");
+    ///         let cfg = c.get::<DbConfig>().context("DbConfig seeded")?;
     ///         Ok(DbPool::connect(&cfg.url).await?)
     ///     })
     ///     .module::<AppModule>()
     ///     .build()
-    ///     .await?
+    ///     .await?;
+    /// let pool = app.container().get::<DbPool>();
+    /// assert_eq!(pool.map(|p| p.url.clone()).as_deref(), Some("postgres://localhost/app"));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn provide_factory<T, F, Fut>(mut self, factory: F) -> Self
     where

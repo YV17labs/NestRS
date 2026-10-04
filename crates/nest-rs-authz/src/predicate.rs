@@ -347,7 +347,45 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     /// (a variant of `E`'s SeaORM `Relation` enum). The closure builds the
     /// sub-condition using `R`'s own typed columns.
     ///
-    /// ```ignore
+    /// ```
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// # use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+    /// # mod conversation {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[sea_orm(table_name = "conversations")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub org_id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # mod message {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    /// #     #[sea_orm(table_name = "messages")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub conversation_id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {
+    /// #         #[sea_orm(
+    /// #             belongs_to = "super::conversation::Entity",
+    /// #             from = "Column::ConversationId",
+    /// #             to = "super::conversation::Column::Id"
+    /// #         )]
+    /// #         Conversation,
+    /// #     }
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # fn main() -> Result<(), nest_rs_authz::MalformedRuleError> {
+    /// # let org_id = 7;
+    /// # let mut ab = AbilityBuilder::new();
     /// // `message` has no `org_id`; its tenant is the parent conversation's.
     /// ab.can(Action::Read, message::Entity).when(|p| {
     ///     p.related::<conversation::Entity, _>(
@@ -355,6 +393,17 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     ///         |c| c.eq(conversation::Column::OrgId, org_id),
     ///     )
     /// });
+    /// # let ability = ab.build()?;
+    ///
+    /// let sql = message::Entity::find()
+    ///     .filter(ability.condition_for::<message::Entity>(Action::Read))
+    ///     .build(DatabaseBackend::Postgres)
+    ///     .to_string();
+    /// assert!(sql.ends_with(
+    ///     r#"WHERE "messages"."conversation_id" IN (SELECT "conversations"."id" FROM "conversations" WHERE "conversations"."org_id" = 7)"#
+    /// ));
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// Two runtime checks close the gap that type erasure opens. `related()`

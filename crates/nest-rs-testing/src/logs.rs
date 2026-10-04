@@ -5,7 +5,7 @@
 //! filed under the wrong target. Those are the lines an operator queries during
 //! an incident, so they deserve the same coverage as a status code.
 //!
-//! ```no_run
+//! ```
 //! # use nest_rs_testing::LogCapture;
 //! # const TARGET: &str = "features::orders";
 //! let logs = LogCapture::install();

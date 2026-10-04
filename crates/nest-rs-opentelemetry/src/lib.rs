@@ -13,6 +13,7 @@
 //! and to `nest-rs-core`: they must exist whether or not this crate does.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The exporter's own diagnostics.
 ///

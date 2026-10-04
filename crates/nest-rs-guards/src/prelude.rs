@@ -1,6 +1,6 @@
 //! Re-export everything a custom guard implementation needs in one `use`.
 //!
-//! ```rust,ignore
+//! ```
 //! use nest_rs_guards::prelude::*;
 //!
 //! #[injectable]
@@ -17,6 +17,7 @@
 //! }
 //!
 //! impl HttpGuard for MyGuard {}
+//! # fn main() {}
 //! ```
 
 pub use crate::{

@@ -20,6 +20,7 @@
     clippy::print_stderr,
     reason = "a command-line tool's output is its interface; tracing is for the apps it scaffolds"
 )]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod lint;
 

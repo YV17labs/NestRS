@@ -6,6 +6,7 @@
 //! the `Json<T>` payload types via [`schemars::JsonSchema`].
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Document composition and the mounted UI.
 ///

@@ -1,16 +1,13 @@
 //! The `#[processor]` and `#[queue]` decorators, re-exported by `nest-rs-queue`
 //! and reached through the umbrella as `nest_rs::queue::{processor, queue}`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod processor;
 mod queue;
 
-/// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
-/// tagged with `#[process(queue = <Queue>, …)]` becomes a queue consumer that a
-/// backend's worker transport drains at boot.
-///
 /// A single provider may carry several `#[process]` methods (different queues)
 /// sharing the same `#[inject]` dependencies — pooling related queue handlers
 /// on one service keeps shared state (clients, repositories) in one place.
@@ -47,58 +44,20 @@ mod queue;
 /// cleared when it ends. A key the app's queue backend cannot honour fails the
 /// worker's boot, naming the method.
 ///
-/// # Expands to
-///
-/// The impl unchanged, plus per `#[process]` method: a hidden type-erased
-/// handler `fn` (deserializes the payload, resolves the provider, dispatches
-/// inside the `JobContext`) and a `ProcessMethod` submitted to the link-time
-/// inventory. No `Discoverable` — the host's own `#[injectable]` owns it.
-///
-/// ```text
-/// impl AudioProcessor { /* unchanged */ }
-/// fn __nestrs_process_handler_audio_processor_transcode(payload, context) -> Pin<Box<dyn Future<…>>> { /* … */ }
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_queue::ProcessMethod::new(
-///         module_path!(), "AudioProcessor::transcode",
-///         <AudioQueue as Queue>::NAME,
-///         ProcessOptions::DEFAULT.with_retries(3),
-///         || TypeId::of::<AudioProcessor>(),
-///         __nestrs_process_handler_audio_processor_transcode,
-///     )
-/// }
-/// ```
+/// The impl is re-emitted unchanged, with no `Discoverable` — the host's own
+/// `#[injectable]` owns it.
 #[proc_macro_attribute]
 pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(processor::processor(args, input).into()).into()
 }
 
-/// Stamp a unit struct with a queue's compile-time identity — its wire name and
-/// the `Job` payload it carries — by implementing `Queue`. Lives beside the
-/// payload at the feature port; the producer (`queue.push(Q, job, None)`) and
-/// the consumer (`#[process(queue = Q)]`) both name the type, so a typo'd name or
-/// a mismatched payload is a compile error.
-///
-/// ```ignore
-/// // The marker is the destination a push names.
-/// #[queue(name = "audio", job = TranscodeCommand)]
-/// pub struct AudioQueue;
-/// ```
-///
 /// The name follows the rule `QueueName` states, checked here at compile time.
 /// A queue per runtime key (`prefix = ..`) is refused, naming why: the Redis
 /// backend drains every queue from a list of its own that each replica polls, so
 /// a key that varies at runtime rides in the job instead.
 ///
-/// # Expands to
-///
-/// ```ignore
-/// pub struct AudioQueue;
-/// impl ::nest_rs_queue::Queue for AudioQueue {
-///     const NAME: &'static str = "audio";
-///     type Job = TranscodeCommand;
-/// }
-/// impl ::nest_rs_queue::Destination for AudioQueue { /* the queue's name */ }
-/// ```
+/// The struct is re-emitted unchanged and gains `impl Queue` and
+/// `impl Destination`.
 #[proc_macro_attribute]
 pub fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(queue::queue(args, input).into()).into()

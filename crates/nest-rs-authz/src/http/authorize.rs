@@ -23,10 +23,86 @@ use crate::{Ability, ActionMarker, Subject};
 /// The posture of an HTTP route is declared by the decorator, exactly as on a
 /// `#[query]`/`#[mutation]`:
 ///
-/// ```rust,ignore
+/// ```
+/// # use std::sync::Arc;
+/// # use nest_rs_authz::{AbilityBuilder, Action, Create};
+/// # use nest_rs_core::{Layer, injectable, input, module};
+/// # use nest_rs_guards::{Denial, Guard, HttpGuard};
+/// # use nest_rs_http::poem::http::StatusCode;
+/// # use nest_rs_http::poem::web::Json;
+/// # use nest_rs_http::poem::{Request, Result};
+/// # use nest_rs_http::{Valid, async_trait, controller, routes};
+/// # use nest_rs_testing::TestApp;
+/// # mod users {
+/// #     use sea_orm::entity::prelude::*;
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[sea_orm(table_name = "users")]
+/// #     pub struct Model {
+/// #         #[sea_orm(primary_key)]
+/// #         pub id: i32,
+/// #         pub name: String,
+/// #     }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # impl nest_rs_resource::WireModelDefaults for users::Entity {}
+/// # #[input]
+/// # struct CreateUser {
+/// #     name: String,
+/// # }
+/// # #[input]
+/// # struct User {
+/// #     id: i32,
+/// #     name: String,
+/// # }
+/// # impl From<CreateUser> for User {
+/// #     fn from(input: CreateUser) -> Self {
+/// #         User { id: 1, name: input.name }
+/// #     }
+/// # }
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct Grants;
+/// # impl Layer for Grants {}
+/// # #[async_trait]
+/// # impl Guard for Grants {
+/// #     async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
+/// #         let mut ab = AbilityBuilder::new();
+/// #         if req.headers().contains_key("x-admin") {
+/// #             ab.can(Action::Manage, users::Entity);
+/// #         }
+/// #         let ability = ab.build().map_err(|_| Denial::internal("malformed rules"))?;
+/// #         req.extensions_mut().insert(Arc::new(ability));
+/// #         Ok(())
+/// #     }
+/// # }
+/// # impl HttpGuard for Grants {}
+/// # #[controller(path = "/users")]
+/// # #[use_guards(Grants)]
+/// # #[derive(Default)]
+/// # struct UsersController;
+/// # #[routes]
+/// # impl UsersController {
 /// #[post("/")]
 /// #[authorize(Create, users::Entity)]
-/// async fn create(&self, body: Valid<Json<CreateUser>>) -> Result<Json<User>> { todo!() }
+/// async fn create(&self, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
+///     Ok(Json(User::from(body.into_inner())))
+/// }
+/// # }
+/// # #[module(providers = [Grants, UsersController])]
+/// # struct UsersModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+/// # let app = TestApp::for_module::<UsersModule>().await?;
+/// # let ada = serde_json::json!({ "name": "ada" });
+/// # let admin = app.http().post("/users").header("x-admin", "").body_json(&ada).send().await;
+/// # let stranger = app.http().post("/users").body_json(&ada).send().await;
+///
+/// admin.assert_json(serde_json::json!({ "id": 1, "name": "ada" })).await;
+/// stranger.assert_status(StatusCode::FORBIDDEN);
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// `#[routes]` desugars that to this extractor, fully qualified, as the

@@ -1,11 +1,12 @@
 //! The `#[scheduled]` decorator, re-exported by `nest-rs-schedule`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod scheduled;
 
-/// Orchestrator on a provider's `impl` block. Walks the methods; for each one
+/// Walks the methods; for each one
 /// tagged with a trigger attribute, submits a `ScheduledMethod` to the
 /// link-time inventory the [`Scheduler`](../nest_rs_schedule/struct.Scheduler.html)
 /// drains at boot. The struct itself must be a regular `#[injectable]`.
@@ -47,28 +48,8 @@ mod scheduled;
 /// methods on a single service keeps shared state (clients, caches) in
 /// one place.
 ///
-/// # Expands to
-///
-/// The impl unchanged (methods stay callable), plus one `ScheduledMethod`
-/// submitted to the link-time inventory per trigger-tagged method, whose `run`
-/// resolves the provider from the container and invokes the method. No
+/// The impl is re-emitted unchanged, its methods still callable, with no
 /// `Discoverable` — the host's own `#[injectable]` owns it.
-///
-/// ```ignore
-/// impl ReportTasks { /* unchanged */ }
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_schedule::ScheduledMethod {
-///         provider: "ReportTasks", method: "nightly",
-///         provider_type_id: || TypeId::of::<ReportTasks>(),
-///         trigger: ::nest_rs_schedule::Trigger::Cron { expr, tz }, // or Interval / Timeout
-///         transaction: ::nest_rs_schedule::nest_rs_worker::JobTransaction::PerAttempt,
-///         replicas: ::nest_rs_schedule::Replicas::Each,
-///         key: ::std::option::Option::None, // or Some("billing::InvoiceTasks::close_day")
-///         origin: ::core::module_path!(),
-///         run: |c| Box::pin(async move { /* resolve + call */ }),
-///     }
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(scheduled::scheduled(args, input).into()).into()

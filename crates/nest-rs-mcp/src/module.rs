@@ -47,17 +47,51 @@ impl McpModule {
 /// What an app declares about MCP: the server options every mount runs on, and
 /// the identity every endpoint reports unless one of its hosts says otherwise.
 ///
-/// ```no_run
+/// ```
 /// use nest_rs_core::module;
 /// use nest_rs_mcp::{McpIdentity, McpModule, McpOptions};
+/// # use nest_rs_mcp::{AllowAllMcpGuard, DEFAULT_PATH, McpError, McpOperationGuard, mcp, tools};
+/// # use nest_rs_testing::mcp::{initialize, result};
 ///
 /// #[module(imports = [
 ///     McpModule::for_root(McpOptions {
-///         server: Some(McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))),
+///         server: Some(
+///             McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))
+///                 .instructions("Every result is scoped to the caller's token."),
+///         ),
 ///         ..Default::default()
 ///     }),
 /// ])]
 /// struct AppModule;
+/// #
+/// # #[mcp]
+/// # #[derive(Default)]
+/// # struct PingHost;
+/// #
+/// # #[tools]
+/// # impl PingHost {
+/// #     #[tool(description = "Answer a ping.")]
+/// #     #[public]
+/// #     async fn ping(&self) -> Result<String, McpError> {
+/// #         Ok("pong".into())
+/// #     }
+/// # }
+/// #
+/// # #[module(imports = [AppModule], providers = [PingHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+/// # struct ServedModule;
+/// #
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// # let app = nest_rs_testing::TestApp::for_module::<ServedModule>().await?;
+/// # let handshake = result(&initialize(app.http(), DEFAULT_PATH, None).await);
+///
+/// assert_eq!(handshake["result"]["serverInfo"]["name"], "assistant");
+/// assert_eq!(
+///     handshake["result"]["instructions"],
+///     "Every result is scoped to the caller's token.",
+/// );
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct McpOptions {

@@ -1,11 +1,12 @@
 //! The `#[indicators]` decorator, re-exported by `nest-rs-health`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod indicators;
 
-/// Orchestrator on a provider's `impl` block. Walks the methods; for each one
+/// Walks the methods; for each one
 /// tagged with `#[liveness]`, `#[readiness]`, or `#[startup]`, submits a
 /// `HealthIndicator` to the link-time inventory the
 /// [`HealthService`](../nest_rs_health/struct.HealthService.html) drains at
@@ -47,24 +48,8 @@ mod indicators;
 /// ping, and a migration check on a single `AppHealth` service rather than
 /// writing a struct per check.
 ///
-/// # Expands to
-///
-/// The impl unchanged, plus one `HealthIndicator` submitted to the link-time
-/// inventory per probe-tagged method, whose `run` resolves the provider and
-/// invokes the method (adapting its return to `anyhow::Result<()>`). No
-/// `Discoverable` — the host's own `#[injectable]` owns it.
-///
-/// ```ignore
-/// impl AppHealth { /* unchanged */ }
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_health::HealthIndicator {
-///         name: "db_ping",
-///         kind: ::nest_rs_health::ProbeKind::Readiness, // Liveness / Startup
-///         provider_type_id: || TypeId::of::<AppHealth>(),
-///         run: |c| Box::pin(async move { /* resolve + call → Ok/Err */ }),
-///     }
-/// }
-/// ```
+/// The impl is re-emitted unchanged, with no `Discoverable` — the host's own
+/// `#[injectable]` owns it.
 #[proc_macro_attribute]
 pub fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(indicators::indicators(args, input).into()).into()

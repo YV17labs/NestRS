@@ -98,6 +98,174 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// (e.g. a relation or a projection) implements just this trait and never has
 /// to declare an unused `Create`/`Update` placeholder.
 ///
+/// # Exposed by `#[crud]`
+///
+/// `#[crud]` on a controller or a resolver generates the operations the
+/// service implements, each delegating here and declaring
+/// `#[authorize(Action, Entity)]`. Over HTTP:
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_core::injectable;
+/// use nest_rs_http::{controller, crud};
+/// use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
+/// # use nest_rs_core::{Discovery, module};
+/// # use nest_rs_http::{HttpControllerMeta, HttpVerb};
+/// # use nest_rs_testing::TestApp;
+/// # mod users {
+/// #     use nest_rs_resource::expose;
+/// #     use sea_orm::entity::prelude::*;
+/// #     #[expose(name = "User")]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[sea_orm(table_name = "users")]
+/// #     pub struct Model {
+/// #         #[sea_orm(primary_key, auto_increment = false)]
+/// #         #[expose]
+/// #         pub id: Uuid,
+/// #         #[expose(input(create, update), validate(length(min = 1)))]
+/// #         pub name: String,
+/// #     }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct UsersService;
+///
+/// impl CrudService for UsersService {
+///     type Entity = users::Entity;
+/// }
+/// impl Creatable for UsersService {
+///     type Create = users::CreateUser;
+/// }
+/// impl Updatable for UsersService {
+///     type Update = users::UpdateUser;
+/// }
+/// impl Deletable for UsersService {}
+///
+/// #[controller(path = "/users")]
+/// struct UsersController {
+///     #[inject]
+///     svc: Arc<UsersService>,
+/// }
+///
+/// #[crud(
+///     service = svc,
+///     entity = users::Entity,
+///     output = users::User,
+///     create = users::CreateUser,
+///     update = users::UpdateUser,
+/// )]
+/// impl UsersController {}
+/// # #[module(providers = [UsersService, UsersController])]
+/// # struct UsersModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// # let app = TestApp::for_module::<UsersModule>().await?;
+/// # let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
+/// # let routes: Vec<_> = controllers[0]
+/// #     .meta
+/// #     .routes
+/// #     .iter()
+/// #     .map(|route| (route.verb, route.path, route.handler))
+/// #     .collect();
+///
+/// assert_eq!(
+///     routes,
+///     [
+///         (HttpVerb::Get, "/", "list"),
+///         (HttpVerb::Get, "/:id", "get"),
+///         (HttpVerb::Post, "/", "create"),
+///         (HttpVerb::Patch, "/:id", "update"),
+///         (HttpVerb::Delete, "/:id", "delete"),
+///     ],
+/// );
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Over GraphQL:
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_graphql::{crud, resolver};
+/// # use nest_rs_core::{injectable, module};
+/// # use nest_rs_graphql::{GraphqlConfig, GraphqlModule};
+/// # use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
+/// # use nest_rs_testing::TestApp;
+/// # mod users {
+/// #     use nest_rs_resource::expose;
+/// #     use sea_orm::entity::prelude::*;
+/// #     #[expose(name = "User", graphql)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+/// #     #[sea_orm(table_name = "users")]
+/// #     pub struct Model {
+/// #         #[sea_orm(primary_key, auto_increment = false)]
+/// #         #[expose]
+/// #         pub id: Uuid,
+/// #         #[expose(input(create, update), validate(length(min = 1)))]
+/// #         pub name: String,
+/// #     }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct UsersService;
+/// #
+/// # impl CrudService for UsersService {
+/// #     type Entity = users::Entity;
+/// # }
+/// # impl Creatable for UsersService {
+/// #     type Create = users::CreateUser;
+/// # }
+/// # impl Updatable for UsersService {
+/// #     type Update = users::UpdateUser;
+/// # }
+/// # impl Deletable for UsersService {}
+///
+/// #[resolver]
+/// struct UsersResolver {
+///     #[inject]
+///     svc: Arc<UsersService>,
+/// }
+///
+/// #[crud(
+///     service = svc,
+///     entity = users::Entity,
+///     output = users::User,
+///     create = users::CreateUser,
+///     update = users::UpdateUser,
+/// )]
+/// impl UsersResolver {}
+/// # #[module(
+/// #     imports = [GraphqlModule::for_root(GraphqlConfig {
+/// #         disable_introspection: false,
+/// #         ..GraphqlConfig::default()
+/// #     })],
+/// #     providers = [UsersService, UsersResolver],
+/// # )]
+/// # struct AppModule;
+/// # async fn fields(app: &TestApp, root: &str) -> Vec<String> {
+/// #     let query = format!("{{ __type(name: \"{root}\") {{ fields {{ name }} }} }}");
+/// #     let resp = app.http().post("/graphql").body_json(&serde_json::json!({ "query": query })).send().await;
+/// #     let body: serde_json::Value = resp.json().await.value().deserialize();
+/// #     body["data"]["__type"]["fields"].as_array().into_iter().flatten()
+/// #         .filter_map(|field| field["name"].as_str().map(str::to_owned)).collect()
+/// # }
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// # let app = TestApp::for_module::<AppModule>().await?;
+///
+/// assert_eq!(fields(&app, "Query").await, ["users", "user"]);
+/// assert_eq!(fields(&app, "Mutation").await, ["createUser", "updateUser", "deleteUser"]);
+/// # Ok(())
+/// # }
+/// ```
+///
 /// The `on_unimplemented` note pairs with `ActionMarker`'s: a swapped
 /// `Bind<Service, Action>` (the 1.1.x order) trips both bounds at once, and
 /// the pair is what names the swap rather than leaving two unrelated errors

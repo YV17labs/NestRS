@@ -24,11 +24,51 @@
 //! `GraphqlConfig::max_connection`; that half needs a real socket and belongs in
 //! an app's e2e suite.
 //!
-//! ```ignore
-//! let mut socket = app.graphql_socket().data(ability).open();
+//! ```
+//! # use nest_rs_core::module;
+//! # use nest_rs_graphql::async_graphql::{Context, SimpleObject};
+//! # use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
+//! # use nest_rs_graphql::{GraphqlModule, operations, resolver};
+//! # use nest_rs_testing::TestApp;
+//! #
+//! # #[derive(SimpleObject)]
+//! # struct Post {
+//! #     id: i32,
+//! # }
+//! #
+//! # struct Viewer(i32);
+//! #
+//! # #[resolver]
+//! # struct PostsResolver;
+//! #
+//! # #[operations]
+//! # impl PostsResolver {
+//! #     #[query]
+//! #     #[public]
+//! #     async fn post_count(&self) -> i32 {
+//! #         1
+//! #     }
+//! #
+//! #     #[subscription]
+//! #     #[public]
+//! #     fn post_published(&self, ctx: &Context<'_>) -> impl Stream<Item = Post> {
+//! #         stream::iter([Post { id: ctx.data_unchecked::<Viewer>().0 }])
+//! #     }
+//! # }
+//! #
+//! # #[module(imports = [GraphqlModule::for_root(None)], providers = [PostsResolver])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! # let app = TestApp::for_module::<AppModule>().await?;
+//! let mut socket = app.graphql_socket().data(Viewer(7)).open();
 //! socket.connect().await;
-//! socket.subscribe("1", "subscription { postPublished { id } }").await;
+//! socket.subscribe("1", "subscription { postPublished { id } }");
 //! let item = socket.next_item("1").await.expect("an item");
+//! assert_eq!(item["data"]["postPublished"]["id"], 7);
+//! # Ok(())
+//! # }
 //! ```
 
 use std::pin::Pin;

@@ -6,23 +6,32 @@
 //! posts:write"` that matches nothing, and the failure looks like an
 //! authorization bug rather than a parsing one.
 //!
-//! ```rust,ignore
+//! ```
+//! # use nest_rs_authn::PrincipalIdentity;
+//! # use serde::{Deserialize, Serialize};
 //! #[derive(Serialize, Deserialize)]
 //! pub struct Claims {
-//!     pub sub: Option<Uuid>,
+//!     pub sub: Option<String>,
 //!     #[serde(
 //!         default,
 //!         rename = "scope",
-//!         with = "nest_rs::authn::scope::space_delimited",
+//!         with = "nest_rs_authn::scope::space_delimited",
 //!         skip_serializing_if = "Vec::is_empty"
 //!     )]
 //!     pub scopes: Vec<String>,
 //! }
 //!
 //! impl PrincipalIdentity for Claims {
-//!     fn actor_id(&self) -> Option<String> { self.sub.map(|s| s.to_string()) }
+//!     fn actor_id(&self) -> Option<String> { self.sub.clone() }
 //!     fn scopes(&self) -> Option<&[String]> { Some(&self.scopes) }
 //! }
+//! # fn main() -> Result<(), serde_json::Error> {
+//!
+//! let claims: Claims = serde_json::from_str(r#"{ "scope": "posts:read posts:write" }"#)?;
+//! assert_eq!(claims.scopes(), Some(&["posts:read".to_owned(), "posts:write".to_owned()][..]));
+//! assert_eq!(serde_json::to_string(&claims)?, r#"{"sub":null,"scope":"posts:read posts:write"}"#);
+//! # Ok(())
+//! # }
 //! ```
 
 /// `serde` support for a space-delimited scope list, for

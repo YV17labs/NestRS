@@ -41,6 +41,7 @@
 //! the ecosystem never breaks on a new provider shape.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Discovered social providers and their credential state.
 ///

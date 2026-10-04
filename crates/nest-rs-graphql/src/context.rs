@@ -551,8 +551,46 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 /// Forward a per-request value attached by the authentication guard into the
 /// GraphQL context, so resolvers read it with `ctx.data::<T>()`.
 ///
-/// ```ignore
+/// ```
+/// use nest_rs_graphql::async_graphql::{Context, Result};
+/// use nest_rs_graphql::{operations, resolver};
+/// # use nest_rs_core::module;
+/// # use nest_rs_graphql::GraphqlModule;
+///
+/// #[derive(Clone)]
+/// struct MyPrincipal(String);
+///
 /// nest_rs_graphql::forward_principal!(MyPrincipal);
+///
+/// #[resolver]
+/// struct MeResolver;
+///
+/// #[operations]
+/// impl MeResolver {
+///     #[query]
+///     #[public]
+///     async fn me(&self, ctx: &Context<'_>) -> Result<String> {
+///         Ok(ctx.data::<MyPrincipal>()?.0.clone())
+///     }
+/// }
+/// # #[module(imports = [GraphqlModule::for_root(None)], providers = [MeResolver])]
+/// # struct AppModule;
+/// #
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+///
+/// // Attached here the way the authentication guard attaches it.
+/// let resp = app
+///     .http()
+///     .post("/graphql")
+///     .data(MyPrincipal("ada".into()))
+///     .body_json(&serde_json::json!({ "query": "{ me }" }))
+///     .send()
+///     .await;
+/// resp.assert_json(serde_json::json!({ "data": { "me": "ada" } })).await;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// `T: Clone + Send + Sync + 'static`. Anonymous requests pass through

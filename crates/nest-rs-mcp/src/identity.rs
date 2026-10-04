@@ -50,21 +50,8 @@
 //! Undeclared instructions are **joined** from the hosts rather than dropped, so
 //! a shared endpoint reads as the sum of its features until someone frames it.
 //!
-//! ```no_run
-//! use nest_rs_core::module;
-//! use nest_rs_mcp::{McpIdentity, McpModule, McpOptions};
-//!
-//! #[module(imports = [
-//!     McpModule::for_root(McpOptions {
-//!         server: Some(
-//!             McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))
-//!                 .instructions("Every result is scoped to the caller's token."),
-//!         ),
-//!         ..Default::default()
-//!     }),
-//! ])]
-//! struct AppModule;
-//! ```
+//! [`McpOptions`](crate::McpOptions)'s example declares one and reads it back
+//! from the handshake.
 
 use rmcp::model::{Icon, Implementation};
 

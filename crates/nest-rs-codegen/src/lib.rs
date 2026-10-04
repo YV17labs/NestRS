@@ -11,6 +11,7 @@
 //! Which root actually resolves there depends on what the call site declared —
 //! see [`reroot`], which every decorator applies to what it returns.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod args;
 mod attrs;

@@ -90,7 +90,21 @@ impl ConfigModule {
     /// The whole body of a `for_root` whose module pins a config and does
     /// nothing else — `WsModule` and `StorageModule` today:
     ///
-    /// ```ignore
+    /// ```
+    /// # use nest_rs_config::{Config, ConfigModule, ConfigService, ConfigSetup, config};
+    /// # use nest_rs_core::{App, module};
+    /// # #[config(namespace = "ws")]
+    /// # #[derive(Clone, Debug, Default)]
+    /// # pub struct WsConfig {
+    /// #     pub max_message_bytes: usize,
+    /// # }
+    /// # impl Config for WsConfig {
+    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    /// #         Ok(base)
+    /// #     }
+    /// # }
+    /// # #[module(imports = [ConfigModule::for_feature::<WsConfig>()])]
+    /// # pub struct WsModule;
     /// pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
     ///
     /// impl WsModule {
@@ -98,6 +112,15 @@ impl ConfigModule {
     ///         ConfigModule::setup(config)
     ///     }
     /// }
+    /// # #[module(imports = [WsModule::for_root(WsConfig { max_message_bytes: 42 })])]
+    /// # struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// #     let app = App::builder().module::<AppModule>().build().await?;
+    /// #     let pinned = app.container().get::<WsConfig>().map(|c| c.max_message_bytes);
+    /// #     assert_eq!(pinned, Some(42));
+    /// #     Ok(())
+    /// # }
     /// ```
     ///
     /// Lives on `ConfigModule` rather than as `ConfigSetup::new` so the setup

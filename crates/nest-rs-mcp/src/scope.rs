@@ -8,12 +8,49 @@
 //! `self.inner.call(req)`, and a tool method reads it back with
 //! [`Scoped::<T>::from_context`].
 //!
-//! ```ignore
-//! #[tool(description = "…")]
+//! ```
+//! # use nest_rs_core::{injectable, module};
+//! # use nest_rs_mcp::{
+//! #     AllowAllMcpGuard, CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpOperationGuard,
+//! #     mcp, tools,
+//! # };
+//! # use nest_rs_testing::mcp::{call_tool, result};
+//! #
+//! # #[injectable(scope = request)]
+//! # #[derive(Default)]
+//! # struct RequestCache;
+//! #
+//! # impl RequestCache {
+//! #     fn value(&self) -> &'static str {
+//! #         "cached"
+//! #     }
+//! # }
+//! #
+//! # #[mcp]
+//! # #[derive(Default)]
+//! # struct CacheHost;
+//! #
+//! # #[tools]
+//! # impl CacheHost {
+//! #[tool(description = "Read this operation's cache.")]
+//! #[public]
 //! async fn do_it(&self) -> Result<CallToolResult, McpError> {
 //!     let cache = nest_rs_mcp::Scoped::<RequestCache>::from_context()?;
-//!     // …
+//!     Ok(CallToolResult::success(vec![ContentBlock::text(cache.value())]))
 //! }
+//! # }
+//! #
+//! # #[module(providers = [RequestCache, CacheHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let body = call_tool(app.http(), DEFAULT_PATH, "do_it", None).await;
+//!
+//! assert_eq!(result(&body)["result"]["content"][0]["text"], "cached");
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! The scope is the one the HTTP transport edge installed outermost over the

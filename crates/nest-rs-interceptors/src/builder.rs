@@ -11,15 +11,7 @@ use crate::registry::{InterceptorSpec, InterceptorSpecs};
 
 /// Adds `.use_interceptors_global(...)` to [`AppBuilder`].
 ///
-/// ```rust,ignore
-/// use nest_rs_interceptors::{AppBuilderInterceptorsExt, interceptor};
-///
-/// App::builder()
-///     .use_interceptors_global([interceptor::<ServerTiming>()])
-///     .module::<AppModule>()
-///     .build().await?
-///     .run().await
-/// ```
+/// The example on [`interceptor`](fn@crate::interceptor) registers through it.
 ///
 /// Declaration order matters: the chain wraps in reverse order of
 /// declaration (first listed = outermost), with

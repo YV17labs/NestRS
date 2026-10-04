@@ -44,6 +44,7 @@
 //! generic abstraction over them would lose 80% of their value. A new ORM
 //! integration ships its own row-level-filter equivalent.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod executor;
 

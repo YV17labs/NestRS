@@ -44,14 +44,15 @@ enum TlsSource {
 /// TLS material for the HTTP transport: a PEM certificate chain and private
 /// key, handed to [`HttpTransport::tls`](crate::HttpTransport::tls).
 ///
-/// ```no_run
+/// ```
 /// # use nest_rs_config::ConfigService;
 /// # use nest_rs_http::{HttpTransport, HttpTls};
 /// let env = ConfigService::for_namespace("http");
-/// let mut http = HttpTransport::new().bind("0.0.0.0:3000");
-/// if let Some(tls) = HttpTls::from_env(&env, None)? {
-///     http = http.tls(tls);
-/// }
+/// let http = HttpTransport::new().bind("0.0.0.0:3000");
+/// let http = match HttpTls::from_env(&env, None)? {
+///     Some(tls) => http.tls(tls),
+///     None => http,
+/// };
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 ///

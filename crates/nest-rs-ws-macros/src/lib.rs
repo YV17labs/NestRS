@@ -5,15 +5,15 @@
 //! inert attributes consumed by `#[messages]`, same shape as the HTTP verb
 //! attributes consumed by `#[routes]`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod gateway;
 mod messages;
 
-/// `#[gateway(path = "/ws")]` — the `@WebSocketGateway` analog. Generates
-/// `from_container`, `pub const PATH` / `pub const VERSION`, and the inherent
-/// helpers `#[messages]` reads back.
+/// `#[gateway(path = "/ws")]` generates `from_container`, `pub const PATH` /
+/// `pub const VERSION`, and the inherent helpers `#[messages]` reads back.
 ///
 /// `version = "1"` mounts the gateway at `/v1/ws` instead of `/ws` — the same
 /// declaration `#[controller]` takes, resolved through the same
@@ -31,34 +31,17 @@ mod messages;
 ///
 /// # Expands to
 ///
-/// The struct unchanged, plus inherent items: `PATH`, `VERSION`,
-/// `from_container`, `__nestrs_mount_path` (the two folded through
-/// `version_path`), `__nestrs_injected` (inject keys + connection guards),
-/// `__nestrs_registry` / `__nestrs_provide_registry` (resolve/provide the
-/// `WsServer<Ns>`), and `__nestrs_gateway_layers` (wraps the endpoint with the
-/// connection-level guard chain, deduped against the global chain). No
+/// The struct unchanged, plus inherent items: `PATH`, `VERSION`, a private
+/// `from_container`, and hidden helpers that fold the two into the mount path,
+/// list the injected keys and connection guards, resolve the namespace's
+/// `WsServer<Ns>`, and wrap the endpoint in the connection-level guard chain. No
 /// `Discoverable` here — `#[messages]` emits it.
-///
-/// ```ignore
-/// pub struct ChatGateway { /* … */ }
-/// impl ChatGateway {
-///     pub const PATH: &'static str = "/ws";
-///     pub const VERSION: Option<&'static str> = Some("1");
-///     pub fn __nestrs_mount_path() -> String { /* "/v1/ws" */ }
-///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
-///     pub fn __nestrs_injected() -> Vec<TypeId> { /* … */ }
-///     pub fn __nestrs_registry(c) -> Arc<::nest_rs_ws::WsServer<Ns>> { /* … */ }
-///     pub fn __nestrs_provide_registry(b) -> ContainerBuilder { /* … */ }
-///     pub fn __nestrs_gateway_layers<E>(c, ep) -> BoxEndpoint { /* guard layers */ }
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(gateway::gateway(args, input).into()).into()
 }
 
-/// Bind a `#[gateway]` impl block's message handlers. Each
-/// `#[subscribe_message("event")]` method handles `{ "event": "...", "data":
+/// Each `#[subscribe_message("event")]` method handles `{ "event": "...", "data":
 /// ... }`; the owned parameter is deserialized from `data`, the return value
 /// serialized back under the same event (`()` => no reply).
 ///
@@ -84,19 +67,6 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Discoverable` whose `register` attaches an `HttpEndpointMeta` that
 /// self-mounts at `__nestrs_mount_path()` and composes the per-event guard
 /// chains (global + per-message, deduped) once at mount.
-///
-/// ```ignore
-/// #[::nest_rs_ws::async_trait]
-/// impl ::nest_rs_ws::Gateway for ChatGateway {
-///     async fn dispatch(&self, client, event, data) -> ::nest_rs_ws::WsReply {
-///         match event { "send" => { /* deser data → call handler → reply */ } _ => unknown }
-///     }
-///     async fn on_connect(&self, client) { /* … */ }    // if present
-/// }
-/// impl ::nest_rs_core::Discoverable for ChatGateway {
-///     fn register(b) -> ContainerBuilder { /* attach_meta::<_, HttpEndpointMeta>(… self-mount at PATH …) */ }
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(messages::messages(args, input).into()).into()

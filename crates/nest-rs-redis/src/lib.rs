@@ -33,6 +33,7 @@
 //! [`JobProducer`]: ::nest_rs_queue::JobProducer
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — the shared connection's own events (reaching
 /// Redis at boot). Declared by the crate that owns the concern: the queue's

@@ -18,12 +18,32 @@ pub type FilterSpec = LayerSpec<dyn Filter>;
 
 /// Construct a [`FilterSpec`] for the given filter type.
 ///
-/// ```rust,ignore
-/// use nest_rs::filters::{AppBuilderFiltersExt, filter};
+/// ```
+/// use nest_rs_filters::{AppBuilderFiltersExt, filter};
+/// # use nest_rs_core::App;
+/// # use nest_rs_core::{Layer, injectable, module};
+/// # use nest_rs_filters::{Filter, RequestSnapshot, async_trait};
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct ProblemDetailsFilter;
+/// # impl Layer for ProblemDetailsFilter {}
+/// # #[async_trait]
+/// # impl Filter for ProblemDetailsFilter {
+/// #     async fn filter(&self, _snap: &RequestSnapshot, err: poem::Error) -> poem::Response {
+/// #         err.into_response()
+/// #     }
+/// # }
+/// # #[module(providers = [ProblemDetailsFilter])]
+/// # struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
 ///
 /// App::builder()
 ///     .use_filters_global([filter::<ProblemDetailsFilter>()])
 ///     .module::<AppModule>()
+/// #   .build().await?;
+/// # Ok(())
+/// # }
 /// ```
 pub fn filter<F: Filter + 'static>() -> FilterSpec {
     LayerSpec::new(TypeId::of::<F>(), std::any::type_name::<F>(), |c| {

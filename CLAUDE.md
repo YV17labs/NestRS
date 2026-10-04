@@ -61,10 +61,10 @@ lists.
 - `bench/` — a standalone benchmark against NestJS. `docs/` — nestrs.dev.
 
 ```bash
-just lint   # fmt check + clippy
+just lint   # fmt, clippy, each capability alone, dependency policy
 just test   # every test (nextest) + doctests, against Postgres, Redis and S3
 just doc    # rustdoc, warnings denied
-just verify # every check: lint, docs and tests
+just ci     # every check CI runs: lint, docs and tests
 ```
 
 ## How we work
@@ -73,7 +73,7 @@ just verify # every check: lint, docs and tests
   cause and its family. A feature that changes the public API, adds a
   dependency or touches a decision here is agreed with the owner first.
 - Branch `<type>/<slug>`, Conventional Commit subjects stating what is now
-  true. `just verify` green before a branch reaches the owner's. Push, tag,
+  true. `just ci` green before a branch reaches the owner's. Push, tag,
   publish and anything posted outside are the owner's.
 - **Ask the owner only for** a hard "no", a decision recorded here, a new
   third-party dependency, a public API break, a migration dropping or rewriting
@@ -209,6 +209,6 @@ proves (`testing.md`).
 
 ## Definition of done
 
-`just verify` green: formatting, clippy, rustdoc and every test. An app's `main.rs`
+`just ci` green: formatting, clippy, rustdoc and every test. An app's `main.rs`
 or wiring outside `TestApp` moved: run the binary, `curl` what changed, stop it.
 Report each command run with its summary line.

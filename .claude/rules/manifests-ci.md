@@ -87,16 +87,20 @@ owning crate's suite is undocumented.
   `rust-version`, the images, `nestrs doctor`, the docs and every scaffold move
   with it in one change. The pin also keeps the trybuild snapshots still.
 - `--workspace` builds one feature union, so a crate that compiles only
-  because a sibling enabled a feature passes it. After touching features or the
-  umbrella, run `cargo hack check --workspace --each-feature --no-dev-deps`.
+  because a sibling enabled a feature passes it. `just lint` builds the umbrella
+  and `nest-rs-macro-hygiene` under each feature alone (`cargo hack`): the
+  install contract is `cargo add nest-rs --features <x>`, not a sub-crate.
 
 ## CI
 
-`just verify` runs locally what `ci.yml` runs: fmt, clippy, rustdoc, then every test
-against real Postgres, Redis and S3 — never a mock. `docs.yml` builds the site
-when `docs/` changes. The workflows stay hardened: actions pinned by SHA,
-`persist-credentials: false`, least permissions. Advisories are GitHub's
-Dependabot alerts, a repository setting.
+`just ci` is what `ci.yml` runs, recipe for recipe: fmt, clippy, each capability
+alone, the dependency policy, rustdoc, then every test against real Postgres,
+Redis and S3 — never a mock. `deny.toml` is the dependency policy: no known
+vulnerable, unsound or unmaintained crate, no licence outside its list, nothing
+outside crates.io; an exception names its advisory or crate and its reason.
+Dependabot alerts cover the days nobody pushes. `docs.yml` builds the site when
+`docs/` changes. The workflows stay hardened: actions pinned by SHA,
+`persist-credentials: false`, least permissions.
 
 ## Release
 

@@ -167,10 +167,14 @@ where
 /// serialized); MCP, having no selection set, always refuses — and asks only
 /// *which* keys, so the refusal it files can name them.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
-// MCP asks only *which* keys went missing; `kept` and `dropped_rows` answer
-// GraphQL's second question — whether the surviving value can be handed back as
-// it stands — so a build without that edge reads neither.
-#[cfg_attr(not(feature = "graphql"), allow(dead_code))]
+#[cfg_attr(
+    not(feature = "graphql"),
+    expect(
+        dead_code,
+        reason = "MCP asks only which keys went missing; `kept` and `dropped_rows` answer \
+                  GraphQL's question of whether the surviving value can be handed back as is"
+    )
+)]
 pub(crate) struct MaskedDetail {
     /// Surviving rows with their original keys — same row set as
     /// [`mask_wire_json`] produces, without the field-level stripping.

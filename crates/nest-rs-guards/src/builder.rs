@@ -71,10 +71,13 @@ impl AppBuilderGuardsExt for AppBuilder {
         //   unguarded. A registered bridge replaces the fallback (it runs
         //   the same guards itself — nothing runs twice).
         let active = !collected.is_empty();
-        // `builder` is only reassigned under `graphql` / `mcp` (the fallback
-        // op-guards); without either feature it stays bound once, so the `mut`
-        // is unused there.
-        #[cfg_attr(not(any(feature = "graphql", feature = "mcp")), allow(unused_mut))]
+        #[cfg_attr(
+            not(any(feature = "graphql", feature = "mcp")),
+            expect(
+                unused_mut,
+                reason = "only the graphql / mcp fallback op-guards reassign `builder`"
+            )
+        )]
         let mut builder = self.provide(GuardSpecs(collected));
         #[cfg(feature = "graphql")]
         {

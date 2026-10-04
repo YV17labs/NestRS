@@ -63,7 +63,7 @@ and a shared database, never RPC (`CLAUDE.md`, hard "no").
 `.env` cascade, the `Dockerfile` — built with the parent directory as context,
 so it reaches `../crates` — and a separate `Cargo.lock` and `target/` all live
 under `demo/`. The root workspace's `Justfile` holds the framework's checks (`just lint`,
-`just test`, `just verify`) and never drives `demo/`.
+`just test`, `just ci`) and never drives `demo/`.
 
 ## Transports and output
 

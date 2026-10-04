@@ -61,12 +61,12 @@ The framework's checks are recipes of the root `Justfile`, the same ones CI
 runs. `demo/` is a separate project and drives itself with `nestrs run`.
 
 ```bash
-just lint   # fmt check + clippy
+just lint   # fmt, clippy, each capability alone, dependency policy
 just test   # every test, against the dev container's Postgres, Redis and S3
-just verify # every check: lint, docs and tests
+just ci     # every check CI runs: lint, docs and tests
 ```
 
-Before opening a PR, `just verify` passes. For **HTTP, GraphQL, or MCP changes**,
+Before opening a PR, `just ci` passes. For **HTTP, GraphQL, or MCP changes**,
 close the loop on a real socket too: start an app (`nestrs run dev <app>` in
 `demo/`), exercise the affected endpoints (`curl`, an MCP client, the GraphQL
 playground), and note it in the PR.
@@ -89,7 +89,7 @@ playground), and note it in the PR.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-The *Definition of done* is `just verify` green — the checks `ci.yml` runs on every
+The *Definition of done* is `just ci` green — the checks `ci.yml` runs on every
 pull request. A PR that has not passed it is not ready for review.
 
 ### Commit messages

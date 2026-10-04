@@ -112,11 +112,11 @@ fn print_next_steps(
     println!();
     println!("Next steps:");
     println!("  1. Fill in `entity.rs` columns, then:  nestrs g migration create_{snake}");
-    println!("  2. Grant the ability in `crates/features/src/authz/ability.rs` — until you");
-    println!("     do, every route answers 403 and no row crosses the data layer:");
+    println!("  2. Grant the ability in `define`, in `crates/features/src/authz/ability.rs`, its");
+    println!("     `_ab` parameter becoming `ab` — until you do, every route answers 403 and no");
+    println!("     row crosses the data layer:");
     println!();
-    println!("       use crate::{snake} as {snake}_entity;");
-    println!("       ab.can(Action::Manage, {snake}_entity::Entity);");
+    println!("       ab.can(nest_rs::authz::Action::Manage, crate::{snake}::Entity);");
     println!();
     if wired_app.is_some() {
         println!(

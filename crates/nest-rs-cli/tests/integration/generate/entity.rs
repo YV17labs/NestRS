@@ -100,7 +100,7 @@ fn generate_entity_names_no_service_it_could_not_name_truthfully() {
         "…plus the migration for the columns it declares: {stdout}",
     );
     assert!(
-        stdout.contains("ab.can(Action::Manage, posts_entity::Entity);"),
+        stdout.contains("ab.can(nest_rs::authz::Action::Manage, crate::posts::Entity);"),
         "…plus the ability grant its reads need: {stdout}",
     );
 }

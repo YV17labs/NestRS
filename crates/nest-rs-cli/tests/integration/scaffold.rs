@@ -13,13 +13,13 @@ fn repo() -> PathBuf {
 }
 
 /// Run `nestrs <args…>` with cwd at `dir` and `env` on the process, asserting
-/// success.
+/// success, and hand back what it printed.
 ///
 /// The environment is explicit because the CLI reads the project's env prefix
 /// from its own: a generator writing variable names behaves differently in a
 /// shell that names one and a shell that does not. Passing it here is what a
 /// developer's `direnv`, devcontainer or `nestrs run` does.
-fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) {
+fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
         .args(args)
         .current_dir(dir)
@@ -32,6 +32,7 @@ fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr),
     );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 /// Point the generated `nest-rs` requirement at this working tree.
@@ -109,31 +110,33 @@ fn scaffold_and_check(generate: &[&[&str]], what: &str) {
 /// check — for the half of the contract the generators do not emit: what the
 /// docs tell the reader to *write* into a scaffolded feature.
 fn scaffold_write_and_check(generate: &[&[&str]], write: &[(&str, &str)], what: &str) {
-    scaffold_write_and_check_in(&["new", "acme"], generate, &[], write, what, |_| {});
+    scaffold_write_and_check_in(&["new", "acme"], generate, &[], write, what, |_, _| {});
 }
 
 /// The same, with the `nestrs new` invocation, the environment every `nestrs`
-/// runs under, and an inspection hook over the generated tree — for a flag whose
-/// effect is spread across the Justfile and the `.env` cascade.
+/// runs under, and an inspection hook over the generated tree and what each
+/// generator printed — for a flag whose effect is spread across the Justfile and
+/// the `.env` cascade, or a step a generator tells the developer to take.
 fn scaffold_write_and_check_in(
     new: &[&str],
     generate: &[&[&str]],
     env: &[(&str, &str)],
     write: &[(&str, &str)],
     what: &str,
-    inspect: impl FnOnce(&Path),
+    inspect: impl FnOnce(&Path, &[String]),
 ) {
     let dir = tempfile::tempdir().expect("a temp dir");
     nestrs(dir.path(), new, env);
     let workspace = dir.path().join("acme");
-    for args in generate {
-        nestrs(&workspace, args, env);
-    }
+    let printed: Vec<String> = generate
+        .iter()
+        .map(|args| nestrs(&workspace, args, env))
+        .collect();
     for (path, body) in write {
         std::fs::write(workspace.join(path), body).expect("the generated tree is writable");
     }
 
-    inspect(&workspace);
+    inspect(&workspace, &printed);
 
     patch_to_working_tree(&workspace);
     if let Err(stderr) = cargo_check(&workspace) {
@@ -156,7 +159,7 @@ fn a_greenfield_workspace_compiles() {
         &[],
         &[],
         "the scaffolded workspace",
-        |workspace| {
+        |workspace, _| {
             // A prefix placeholder is empty on the default, and `cargo check`
             // would never notice one left unrendered in a non-Rust file — the
             // Justfile is read by `just`, not by the compiler.
@@ -169,29 +172,52 @@ fn a_greenfield_workspace_compiles() {
     );
 }
 
-#[test]
-fn a_generated_crud_resource_compiles() {
-    // This is the claim this suite exists to honour: `#[crud]` and `#[expose]`
-    // are deliberately absent from `nest-rs-macro-hygiene` because they need a
-    // real entity and a real service, so their contract is proved *here* — on
-    // generated code, with the derives the decorators emit and the auth
-    // adapter the guards require.
-    scaffold_and_check(&[&["g", "resource", "post"]], "a generated CRUD resource");
-}
+/// The empty `define` the auth adapter scaffolds, as `ability.rs` spells it.
+const EMPTY_DEFINE: &str = "fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}";
 
 #[test]
-fn a_generated_entity_compiles() {
-    // `g entity` emits an `#[expose]` entity that names **no** service, and the
-    // absence is the part only a compiler can judge: `#[expose(service = …)]`
-    // requires a `CrudService`, a plain `g feature` port's service is not one,
-    // and naming it anyway fails inside the macro expansion — where the
-    // text assertions, which read the output back, see nothing wrong.
-    //
-    // The port is that plain port on purpose: it is the case that would break
-    // first, and the one `g resource` never exercises.
-    scaffold_and_check(
-        &[&["g", "feature", "blog"], &["g", "entity", "blog/article"]],
-        "a generated entity",
+fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {
+    // `#[crud]` and `#[expose]` are absent from `nest-rs-macro-hygiene` because
+    // they need a real entity and service, so their contract is proved here. The
+    // entity sits on a plain `g feature` port on purpose: its service is no
+    // `CrudService`, so `#[expose(service = …)]` naming it would fail inside the
+    // expansion, the case `g resource` never exercises. A resource serves
+    // nothing until its grant is written, and the developer writes it by pasting
+    // what each generator prints into `define`, renaming `_ab` as the step says.
+    scaffold_write_and_check_in(
+        &["new", "acme"],
+        &[
+            &["g", "resource", "post"],
+            &["g", "feature", "blog"],
+            &["g", "entity", "blog/article"],
+        ],
+        &[],
+        &[],
+        "a generated resource and entity, with the grants they print",
+        |workspace, printed| {
+            let grants: Vec<&str> = printed
+                .iter()
+                .flat_map(|out| out.lines().map(str::trim))
+                .filter(|line| line.starts_with("ab.can("))
+                .collect();
+            assert_eq!(
+                grants.len(),
+                2,
+                "each generator prints its grant:\n{printed:?}"
+            );
+
+            let path = "crates/features/src/authz/ability.rs";
+            let ability = read(workspace, path);
+            assert!(
+                ability.contains(EMPTY_DEFINE),
+                "the scaffolded ability has its empty `define`:\n{ability}",
+            );
+            let define = EMPTY_DEFINE
+                .replace("_ab:", "ab:")
+                .replace("{}", &format!("{{\n{}\n}}", grants.join("\n")));
+            std::fs::write(workspace.join(path), ability.replace(EMPTY_DEFINE, &define))
+                .expect("the generated tree is writable");
+        },
     );
 }
 
@@ -278,7 +304,7 @@ fn crud_needs_no_dependency_the_controller_does_not_name() {
             ),
         ],
         "a CRUD resource in a crate that does not declare `uuid`",
-        |workspace| {
+        |workspace, _| {
             let manifest = workspace.join("crates/features/Cargo.toml");
             let kept: String = read(workspace, "crates/features/Cargo.toml")
                 .lines()
@@ -357,7 +383,7 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
         &[("NESTRS_ENV_PREFIX", "ACME")],
         &[],
         "a workspace scaffolded with a custom env prefix",
-        |workspace| {
+        |workspace, _| {
             // The prefix is set on the process, not declared in a crate. The
             // Justfile is where `nestrs run` picks it up, so a missing export
             // there means every recipe starts an app reading NESTRS_* against

@@ -209,11 +209,11 @@ fn print_next_steps(target: &Target, placement: Placement, stem: &str) {
     let (file, type_path) = match placement {
         Placement::Lone => (
             format!("crates/features/src/{feature}/entity.rs"),
-            format!("{feature}_entity::Entity"),
+            format!("crate::{feature}::Entity"),
         ),
         Placement::Folder => (
             format!("crates/features/src/{feature}/entities/{stem}.rs"),
-            format!("{feature}_entity::{stem}::Entity"),
+            format!("crate::{feature}::{stem}::Entity"),
         ),
     };
 
@@ -246,11 +246,11 @@ fn print_next_steps(target: &Target, placement: Placement, stem: &str) {
         }
     }
     println!();
-    println!("  3. Grant the ability in `crates/features/src/authz/ability.rs` once something");
-    println!("     reads it — `Repo` filters every read by the caller's ambient `Ability`:");
+    println!("  3. Grant the ability in `define`, in `crates/features/src/authz/ability.rs`, its");
+    println!("     `_ab` parameter becoming `ab`, once something reads it — `Repo` filters every");
+    println!("     read by the caller's ambient `Ability`:");
     println!();
-    println!("       use crate::{feature} as {feature}_entity;");
-    println!("       ab.can(Action::Manage, {type_path});");
+    println!("       ab.can(nest_rs::authz::Action::Manage, {type_path});");
 }
 
 #[cfg(test)]

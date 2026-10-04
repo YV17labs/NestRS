@@ -281,30 +281,16 @@ impl AbilityFactory for AuthzAbility {
     /// is granted until you add a `can` here — reads return 403 and no row
     /// crosses the data layer.
     ///
-    /// ```ignore
-    /// use nest_rs::authz::Action;
-    /// use crate::posts as post;
-    ///
-    /// ab.can(Action::Read, post::Entity);
-    /// ab.can(Action::Manage, post::Entity)
-    ///     .when(|p| p.eq(post::Column::AuthorId, actor.sub));
-    /// ```
-    ///
-    /// `nestrs g resource <name>` prints the two lines to paste for the
-    /// resource it just generated.
+    /// `nestrs g resource <name>` prints the grant to paste for the resource it
+    /// just generated, with `_ab` renamed `ab`; narrow it with
+    /// `.when(|p| p.eq(Column::AuthorId, actor.sub))` to the caller's own rows.
     fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}
 
     /// What an *unauthenticated* caller may do, on a `#[public]` route only.
     /// Empty on purpose: nothing is public until you say so here, and a route
-    /// you open with `#[public]` still serves no row without a grant.
-    ///
-    /// ```ignore
-    /// use nest_rs::authz::Action;
-    /// use crate::posts as post;
-    ///
-    /// ab.can(Action::Read, post::Entity)
-    ///     .when(|p| p.eq(post::Column::Published, true));
-    /// ```
+    /// you open with `#[public]` still serves no row without a grant — a
+    /// `can(Action::Read, …)` narrowed by `.when(…)` to the rows meant for
+    /// anyone.
     ///
     /// A `#[public]` route reached with a valid token uses `define` instead —
     /// this branch answers only for the visitor.

@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use proc_macro_crate::{Error, FoundCrate, crate_name};
-use proc_macro2::{Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Group, Ident, Literal, Spacing, Span, TokenStream, TokenTree};
 use quote::quote;
 
 /// How the call site reaches the umbrella, when it can reach it at all.
@@ -158,13 +158,17 @@ fn walk(
         {
             found.push(concern.clone());
             if let Some(prefix) = prefix {
+                // The rewritten root keeps the span of the root it replaces: a
+                // token at the call site would move every error on this path to
+                // the decorator's attribute.
+                let span = trees[i].span();
                 let buf = out.get_or_insert_with(|| trees[..i].to_vec());
-                buf.extend(prefix.iter().cloned());
-                buf.extend([
-                    TokenTree::Punct(Punct::new(':', Spacing::Joint)),
-                    TokenTree::Punct(Punct::new(':', Spacing::Alone)),
-                    TokenTree::Ident(Ident::new(&concern, ident.span())),
-                ]);
+                buf.extend(prefix.iter().cloned().map(|mut tree| {
+                    tree.set_span(span);
+                    tree
+                }));
+                buf.extend(trees[i..i + 2].iter().cloned());
+                buf.push(TokenTree::Ident(Ident::new(&concern, ident.span())));
                 i += 3;
                 // The rest of *this* path is copied verbatim. A path has one
                 // root, and `nest-rs-ws` re-exports `nest_rs_http`, so

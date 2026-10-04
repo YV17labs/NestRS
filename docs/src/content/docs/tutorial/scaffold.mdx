@@ -172,7 +172,7 @@ transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
 whatever the way down abandoned. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
 for the tests in [Test it end to end](/tutorial/testing/)), a smoke test that
 asserts the greeting, and an **empty** `tests/e2e/main.rs`. The e2e suite has to
-exist even while empty: `nestrs run test unit` filters on `not binary(e2e)`, and
+exist even while empty: `nestrs run test integration` filters on `not binary(e2e)`, and
 nextest rejects a filterset naming a binary the workspace does not have.
 
 ## Run it again

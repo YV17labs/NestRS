@@ -103,7 +103,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
         - e2e/main.rs
 </FileTree>
 
-The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test unit`
+The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test integration`
 filters on `not binary(e2e)` and `nestrs run test e2e` on `binary(e2e)`, and
 nextest rejects a filterset naming a binary the workspace does not have.
 
@@ -180,10 +180,10 @@ door. It forwards the recipe and its arguments verbatim to
 scaffolder wrote:
 
 ```bash
-nestrs run dev          # watch mode (rebuild + restart on save)
-nestrs run test unit         # unit + integration
-nestrs run db up        # apply migrations
-nestrs run              # list the available recipes
+nestrs run dev               # watch mode (rebuild + restart on save)
+nestrs run test integration  # in process, no database
+nestrs run db up             # apply migrations
+nestrs run                   # list the available recipes
 ```
 
 The recipes are yours to edit. Add your own to the `Justfile` and they run the

@@ -62,6 +62,7 @@ tracing.workspace = true
 /// The feature-crate root. Every workspace starts with the app's own `hello`
 /// feature declared here (see [`super::hello`]).
 pub(crate) const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod {{snake}};
 
@@ -85,7 +86,9 @@ anyhow.workspace = true
 tokio.workspace = true
 "#;
 
-pub(crate) const APP_LIB: &str = r#"mod module;
+pub(crate) const APP_LIB: &str = r#"#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
+
+mod module;
 
 pub use module::{{module}};
 "#;
@@ -186,7 +189,8 @@ build app="hello":
 check:
     cargo check --workspace
 
-# Tests — unit/integration/e2e/doctests. Usage: nestrs run test [unit|e2e|doc]
+# Tests, one recipe per kind; bare `nestrs run test` runs them all.
+# Usage: nestrs run test [unit|integration|e2e|doc|cov]
 mod test
 
 # Database lifecycle. Usage: nestrs run db up|down|fresh|status|seed|reset
@@ -196,30 +200,36 @@ mod db
 fmt:
     cargo fmt --all
 
-# Clippy (strict) + format check.
+# Clippy (strict, every feature) + format check + the naming lint.
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo fmt --all --check
     nestrs lint
+
+# Every check before a merge: lint, then every test.
+ci: lint test::all
 "#;
 
 pub(crate) const TEST_JUSTFILE: &str = r#"# Test recipes, exposed as `nestrs run test <kind>` (see `mod test` in the
-# Justfile). Bare `nestrs run test` lists these — pick a kind to run.
+# Justfile). Bare `nestrs run test` runs the first, every kind.
 
-# Bare `nestrs run test` lists the kinds instead of running one.
-_default:
-    @just --list test
+# Every test: unit, integration, e2e and the doc examples.
+all: && doc
+    cargo nextest run --workspace --no-fail-fast
 
-# Unit + integration + doctests, no DB.
+# A new project has no `#[cfg(test)]` module yet, nor an e2e test: their
+# recipes pass with nothing to run until you write the first.
+# The `#[cfg(test)]` modules in each crate's `src/`.
 unit:
-    cargo nextest run --workspace -E 'not binary(e2e)'
-    cargo test --workspace --doc          # nextest skips doctests; run them too
+    cargo nextest run --workspace --no-fail-fast --lib --bins --no-tests=pass
 
-# Each app is scaffolded with an empty one, so `--no-tests=pass` keeps this
-# green until you write the first.
-# e2e tests — the `tests/e2e/main.rs` suites, over live Postgres/Redis.
+# The `tests/integration` suites, in process: no database needed.
+integration:
+    cargo nextest run --workspace --no-fail-fast -E 'kind(test) and not binary(e2e)'
+
+# The `tests/e2e` suites, over live Postgres and Redis.
 e2e:
-    cargo nextest run --workspace -E 'binary(e2e)' --no-tests=pass
+    cargo nextest run --workspace --no-fail-fast -E 'binary(e2e)' --no-tests=pass
 
 # Nothing to install by hand: `cargo-llvm-cov` comes with the CLI's first-run
 # bootstrap, and the `llvm-cov` / `llvm-profdata` it shells out to come from the
@@ -229,9 +239,9 @@ e2e:
 # `just --list` shows the line above a recipe, so the summary goes last.
 # Coverage over the full suite, e2e included.
 cov:
-    cargo llvm-cov nextest --workspace
+    cargo llvm-cov nextest --workspace --no-fail-fast
 
 # Doctests only — the code examples inside `///` doc comments.
 doc:
-    cargo test --workspace --doc
+    cargo test --workspace --doc --no-fail-fast
 "#;

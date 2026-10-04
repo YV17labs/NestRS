@@ -69,7 +69,7 @@ what it doesn't.
 ## Run it
 
 ```bash frame="terminal"
-$ nestrs run test unit                   # unit + integration, no DB
+$ nestrs run test integration            # in process, no database
    Compiling api v0.1.0
     Finished `test` profile in 12.4s
 test result: ok. 142 passed in 0.21s
@@ -91,13 +91,14 @@ error: failed to find llvm-tools-preview, please install llvm-tools-preview,
 shells out to the LLVM tools, installed with
 `rustup component add llvm-tools-preview`. A toolchain without rustup
 (Homebrew, a distro package) points `LLVM_COV` / `LLVM_PROFDATA` at its own
-copies instead. `unit`, `e2e` and `doc` need nothing beyond the bootstrap.
+copies instead. `unit`, `integration`, `e2e` and `doc` need nothing beyond the
+bootstrap.
 
-The split is by **what each command needs to run**, not by Rust test
-category. `nestrs run test unit` covers everything that runs without Postgres —
-unit tests *and* integration tests of crates that don't own
-persistence. `nestrs run test e2e` covers the rest. The full suite is
-`nestrs run test unit && nestrs run test e2e`.
+One recipe per kind, named for the suite it runs: `unit` the `#[cfg(test)]`
+modules, `integration` the `tests/integration` suites — in process, no
+database — `e2e` the `tests/e2e` suites against Postgres and Redis, and `doc`
+the examples in doc comments. Bare `nestrs run test` runs every kind, and
+`nestrs run ci` runs the lint before it.
 
 ## What "done" requires
 

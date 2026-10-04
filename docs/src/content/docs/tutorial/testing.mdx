@@ -210,18 +210,19 @@ filter for the e2e file.
          PASS [   0.7s] blog::e2e create_without_a_token_returns_401
    ```
 
-3. Run the rest of the workspace too — unit and integration tests
-   don't need a database.
+3. Run the rest of the workspace too — the integration suites don't need a
+   database.
 
    ```bash frame="terminal"
-   $ nestrs run test unit
+   $ nestrs run test integration
    ```
 
 </Steps>
 
-`nestrs run test unit` and `nestrs run test e2e` are the two recipes you reach for day
-to day; `nestrs run test cov` adds coverage and `nestrs run test doc` runs the
-`///` examples. None of them use `#[ignore]` — gating is the nextest binary filter
+`nestrs run test integration` and `nestrs run test e2e` are the two recipes you
+reach for day to day; `nestrs run test unit` runs the `#[cfg(test)]` modules,
+`nestrs run test doc` the `///` examples, `nestrs run test cov` adds coverage,
+and bare `nestrs run test` runs every kind. None of them use `#[ignore]` — gating is the nextest binary filter
 on `tests/e2e/main.rs`.
 
 ## What you have now

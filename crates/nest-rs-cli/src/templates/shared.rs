@@ -188,8 +188,8 @@ pub(crate) const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-speci
 /// suite boots a feature rather than the root.
 pub(crate) const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
 //! no live infra, so it belongs to the `integration` suite and runs on every
-//! `nestrs run test unit`. Tests needing a database, queue or object store go
-//! next door in `tests/e2e/main.rs`.
+//! `nestrs run test integration`. Tests needing a database, queue or object
+//! store go next door in `tests/e2e/main.rs`.
 //!
 //! It deliberately boots the *feature* module rather than the app root: the app
 //! root grows every transport and connection the app serves, and this suite
@@ -466,8 +466,9 @@ driving it through `TestApp` the same way.
 
 ## Commands
 
-`nestrs run` is the single front door: `dev`, `start`, `build`, `lint`,
-`check`, `test <unit|e2e|cov|doc>`. This project's framework variables carry
+`nestrs run` is the single front door: `dev`, `start`, `build`, `lint`, `ci`,
+`check`, `test [unit|integration|e2e|doc|cov]` — bare `test` runs every kind.
+This project's framework variables carry
 the `{{env_prefix}}_` prefix.
 "#
 );
@@ -476,7 +477,7 @@ the `{{env_prefix}}_` prefix.
 /// layout — it exists so the two filtersets resolve, and a suite with no tests
 /// yet has nothing to say that its own header would not be guessing at.
 ///
-/// `nestrs run test unit` filters on `not binary(e2e)` and `test e2e` on
+/// `nestrs run test integration` filters on `not binary(e2e)` and `test e2e` on
 /// `binary(e2e)` — nextest rejects a filterset naming a binary the workspace
 /// does not have, so the suite has to exist from day one for either command to
 /// run at all. What belongs in it — the tests needing live Postgres, Redis or

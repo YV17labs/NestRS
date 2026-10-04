@@ -53,7 +53,7 @@ fn patch_to_working_tree(workspace: &Path) {
     std::fs::write(&manifest, raw).expect("the manifest is writable");
 }
 
-/// `cargo clippy --workspace --all-targets -- -D warnings` over the generated
+/// `cargo clippy --workspace --all-targets --all-features -- -D warnings` over the generated
 /// tree — **the gate the generated project sets for itself**.
 ///
 /// It used to be a bare `cargo check`, and that gap shipped two defects: a
@@ -83,6 +83,7 @@ fn cargo_check(workspace: &Path) -> Result<(), String> {
             "clippy",
             "--workspace",
             "--all-targets",
+            "--all-features",
             "--",
             "-D",
             "warnings",

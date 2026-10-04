@@ -31,7 +31,7 @@ tracing-opentelemetry = "0.33"
 thiserror = "2.0"
 anyhow = "1.0"
 
-jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0", features = ["aws_lc_rs"] }
 oauth2 = "5.0"
 base64 = "0.23"
 

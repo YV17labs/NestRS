@@ -548,20 +548,18 @@ fn seal(
 ) -> Result<ContainerBuilder> {
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
     let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
-    let dynamic = builder.dynamic_modules();
     validate_access_graph(
         &descriptors,
         &ids,
-        dynamic,
         global,
         &builder.registered_ids(),
         &builder.scoped_or_transient_ids(),
     )
     .map_err(AccessError::into_anyhow)?;
-    validate_keyed_access_graph(&descriptors, &ids, dynamic, global_keyed)?;
-    let order = provider_order(&descriptors, &ids, dynamic);
+    validate_keyed_access_graph(&descriptors, &ids, global_keyed)?;
+    let order = provider_order(&descriptors, &ids);
     let reachable = ReachableProviders(reachable_provider_ids(&order, global));
-    let composition = Composition::from_descriptors(&descriptors, roots, dynamic);
+    let composition = Composition::from_descriptors(&descriptors, roots);
     Ok(builder
         .provide(reachable)
         .provide(ProviderOrder::new(order))

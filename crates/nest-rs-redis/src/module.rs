@@ -10,6 +10,8 @@
 //! crate's name. Every binding folder reaches it, which is the level a shared
 //! thing belongs at.
 
+use std::any::TypeId;
+
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
 
@@ -38,6 +40,10 @@ pub struct RedisSetup {
 }
 
 impl DynamicModule for RedisSetup {
+    fn module() -> TypeId {
+        TypeId::of::<RedisModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<RedisConnection, _, _>(|container| async move {

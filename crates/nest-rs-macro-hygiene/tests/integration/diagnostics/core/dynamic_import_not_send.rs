@@ -4,6 +4,7 @@
 //! fails to compile — this pins the diagnostic so the bound is not silently
 //! relaxed.
 
+use std::any::TypeId;
 use std::rc::Rc;
 
 use nest_rs::core::{DynamicModule, module};
@@ -21,7 +22,11 @@ struct NotSendSetup {
     local: Rc<()>,
 }
 
-impl DynamicModule for NotSendSetup {}
+impl DynamicModule for NotSendSetup {
+    fn module() -> TypeId {
+        TypeId::of::<NotSendModule>()
+    }
+}
 
 #[module(imports = [NotSendModule::for_root()])]
 struct AppModule;

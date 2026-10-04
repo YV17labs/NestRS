@@ -1,5 +1,7 @@
 //! [`ConfigModule`] — the `ConfigModule.for_root` / `for_feature` DI wiring.
 
+use std::any::TypeId;
+
 use std::marker::PhantomData;
 
 use nest_rs_core::{ContainerBuilder, DynamicModule, Module};
@@ -148,7 +150,11 @@ pub struct ConfigSetup<M, C> {
     module: PhantomData<fn() -> M>,
 }
 
-impl<M: Module, C: Config> DynamicModule for ConfigSetup<M, C> {
+impl<M: Module + 'static, C: Config> DynamicModule for ConfigSetup<M, C> {
+    fn module() -> TypeId {
+        TypeId::of::<M>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }
@@ -163,6 +169,10 @@ impl<M: Module, C: Config> DynamicModule for ConfigSetup<M, C> {
 pub struct ConfigFeatureSetup<C>(PhantomData<fn() -> C>);
 
 impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
+    fn module() -> TypeId {
+        TypeId::of::<ConfigModule>()
+    }
+
     // Loading is sync-but-fallible and `register` cannot return an error, so
     // we queue a factory the build awaits — an Err there aborts boot with the
     // variable named.
@@ -176,6 +186,10 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
 pub struct ConfigRootSetup;
 
 impl DynamicModule for ConfigRootSetup {
+    fn module() -> TypeId {
+        TypeId::of::<ConfigModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         // `Environment::from_env` reads `NESTRS_ENV` from the real process env;
         // dotenv values reach config reads lazily via `env_var` (the in-crate

@@ -20,6 +20,8 @@
 //! — the two declarations travel together into the one `for_root` seam instead
 //! of the identity arriving through a second call.
 
+use std::any::TypeId;
+
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, Module, module};
 
@@ -133,6 +135,10 @@ pub struct McpSetup {
 }
 
 impl DynamicModule for McpSetup {
+    fn module() -> TypeId {
+        TypeId::of::<McpModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         ConfigModule::provide_feature(self.options.config.clone(), builder)
     }

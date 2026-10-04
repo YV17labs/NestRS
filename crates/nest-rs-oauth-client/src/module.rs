@@ -1,10 +1,12 @@
-//! [`OAuthClientModule`] — wires a configured [`OAuthClient`](crate::OAuthClient) as global infrastructure.
+//! [`OAuthClientModule`] — wires a configured [`OAuthClient`] as global infrastructure.
 //!
 //! For **social login** (mounting GitHub/Google or a custom provider behind an
 //! open, discovered provider contract), reach for `nest-rs-social` instead —
 //! its providers compose this `OAuthClient` as their shared flow. This module
 //! stays for wiring a single OAuth2 client as generic infrastructure (e.g.
 //! non-login API access).
+
+use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
@@ -34,6 +36,10 @@ pub struct OAuthClientSetup {
 }
 
 impl DynamicModule for OAuthClientSetup {
+    fn module() -> TypeId {
+        TypeId::of::<OAuthClientModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<OAuthClient, _, _>(|container| async move {

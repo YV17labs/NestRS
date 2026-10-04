@@ -6,6 +6,8 @@
 //! supersedes the store wherever it sits in `imports`, and the app removes no
 //! line to move its counters off-process.
 
+use std::any::TypeId;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -39,6 +41,10 @@ pub struct ThrottlerSetup {
 }
 
 impl DynamicModule for ThrottlerSetup {
+    fn module() -> TypeId {
+        TypeId::of::<ThrottlerModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         // The default store, as an *ordinary* factory: a vendor binding's

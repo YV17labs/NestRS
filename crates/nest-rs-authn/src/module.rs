@@ -1,4 +1,6 @@
-//! [`AuthnModule`] — wires a configured [`JwtService`](crate::JwtService) as global infrastructure.
+//! [`AuthnModule`] — wires a configured [`JwtService`] as global infrastructure.
+
+use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
@@ -27,6 +29,10 @@ pub struct AuthnSetup {
 }
 
 impl DynamicModule for AuthnSetup {
+    fn module() -> TypeId {
+        TypeId::of::<AuthnModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<JwtService, _, _>(|container| async move {

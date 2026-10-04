@@ -323,6 +323,7 @@ crate root; `queue/producer.rs` + `queue/module.rs`; `worker/consumer.rs` +
 your variables findable from your types and your types from your variables.
 
 ```rust title="the three modules — substrate, producer, consumer"
+use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs::config::{ConfigModule, ConfigSetup};
@@ -343,6 +344,10 @@ pub struct YourSetup {
 }
 
 impl DynamicModule for YourSetup {
+    fn module() -> TypeId {
+        TypeId::of::<YourModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<YourConnection, _, _>(|container| async move {

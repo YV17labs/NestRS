@@ -136,6 +136,10 @@ fn client_for_root() -> ClientSetup {
 }
 
 impl DynamicModule for ClientSetup {
+    fn module() -> TypeId {
+        TypeId::of::<ClientModule>()
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
         <ClientModule as Module>::register(builder)
     }
@@ -161,6 +165,53 @@ async fn a_provider_injects_what_a_dynamic_import_registers_on_the_async_path() 
         .build()
         .await
         .expect("a dynamic import imports the module it registers");
+}
+
+#[injectable]
+struct Prerequisite;
+
+#[module(providers = [Prerequisite])]
+struct PrerequisiteModule;
+
+/// A `for_root` whose module needs another one wired first, so its `register`
+/// registers that one before its own.
+struct OrderedSetup;
+
+fn ordered_for_root() -> OrderedSetup {
+    OrderedSetup
+}
+
+impl DynamicModule for OrderedSetup {
+    fn module() -> TypeId {
+        TypeId::of::<ClientModule>()
+    }
+
+    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+        let builder = <PrerequisiteModule as Module>::register(builder);
+        <ClientModule as Module>::register(builder)
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct OrderedClientUser {
+    #[inject]
+    client: Arc<PinnedClient>,
+}
+
+#[module(imports = [ordered_for_root()], providers = [OrderedClientUser])]
+struct OrderedClientUserModule;
+
+#[tokio::test]
+async fn a_dynamic_import_is_the_module_it_declares_whatever_it_registers_first() {
+    App::builder()
+        .module::<OrderedClientUserModule>()
+        .build()
+        .await
+        .expect("importing the setup imports the module it is, not the first one it wires");
 }
 
 // A lazily-built provider (controller / cron job / processor shape): empty

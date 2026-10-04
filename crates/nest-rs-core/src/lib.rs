@@ -158,7 +158,7 @@ pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain};
 // Macro plumbing — `#[module]`-generated code names this to register a module in
 // the boot inventory. Hidden at its definition; kept off the curated list here.
 #[doc(hidden)]
-pub use module::{__dynamic_import_type, __module_registered};
+pub use module::{__dynamic_import_module, __module_registered};
 
 // Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the
 // framework — apps never depend on `inventory` directly.

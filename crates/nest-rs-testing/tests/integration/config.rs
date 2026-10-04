@@ -4,6 +4,7 @@
 //! code** still lets the environment override it **per field**.
 
 use nest_rs_config::var_name;
+use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
@@ -122,6 +123,10 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
 struct DemoPinnedSetup(DemoConfig);
 
 impl DynamicModule for DemoPinnedSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         ConfigModule::provide_feature(Some(self.0.clone()), builder)
     }

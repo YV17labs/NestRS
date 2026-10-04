@@ -616,7 +616,6 @@ mod tests {
             let composition = Composition::from_descriptors(
                 &refs,
                 &[(TypeId::of::<AppModule>(), "api::module::ApiModule")],
-                &crate::access::DynamicModules::new(),
             );
             (modules, composition)
         }

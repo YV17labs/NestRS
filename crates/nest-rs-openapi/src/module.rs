@@ -9,6 +9,8 @@
 //! published publicly. When disabled the module mounts neither endpoint and logs
 //! one boot event, so an imported-but-off module is never silently inert.
 
+use std::any::TypeId;
+
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Container, ContainerBuilder, DynamicModule};
 use nest_rs_http::{HttpEndpointMeta, join_path, matched, version_path};
@@ -61,6 +63,10 @@ pub struct OpenApiSetup {
 }
 
 impl DynamicModule for OpenApiSetup {
+    fn module() -> TypeId {
+        TypeId::of::<OpenApiModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }

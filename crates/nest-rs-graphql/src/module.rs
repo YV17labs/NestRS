@@ -1,5 +1,7 @@
 //! `GraphqlModule` — import it to serve the auto-discovered schema over HTTP.
 
+use std::any::TypeId;
+
 use std::sync::Arc;
 
 use nest_rs_config::ConfigModule;
@@ -58,6 +60,10 @@ pub struct GraphqlSetup {
 }
 
 impl DynamicModule for GraphqlSetup {
+    fn module() -> TypeId {
+        TypeId::of::<GraphqlModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }

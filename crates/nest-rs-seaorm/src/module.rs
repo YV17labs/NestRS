@@ -9,6 +9,8 @@
 //! SeaORM* — the crate's own subject — and not one binding wearing the crate's
 //! name.
 
+use std::any::TypeId;
+
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
 use sea_orm::{Database, DatabaseConnection};
@@ -48,6 +50,10 @@ pub struct SeaOrmSetup {
 }
 
 impl DynamicModule for SeaOrmSetup {
+    fn module() -> TypeId {
+        TypeId::of::<SeaOrmModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {

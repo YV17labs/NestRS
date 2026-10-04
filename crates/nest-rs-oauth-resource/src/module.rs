@@ -8,7 +8,7 @@
 //!    [`ProtectedResourceMetadata`], and provides it as global infrastructure.
 //! 2. Mounts `GET /.well-known/oauth-protected-resource` (RFC 9728 §3),
 //!    declared `#[public]`.
-//! 3. Attaches [`ResourceChallenge`](super::interceptor::ResourceChallenge), so
+//! 3. Attaches [`ResourceChallenge`], so
 //!    every `401` carries `resource_metadata`.
 //!
 //! **And it makes audience validation mandatory.** The MCP authorization spec
@@ -18,6 +18,8 @@
 //! module it is required, and boot fails naming it. That is the whole point of
 //! the capability: without it the well-known document advertises a resource
 //! identity the verifier never checks.
+
+use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, Module, module};
@@ -59,6 +61,10 @@ pub struct OAuthResourceSetup {
 }
 
 impl DynamicModule for OAuthResourceSetup {
+    fn module() -> TypeId {
+        TypeId::of::<OAuthResourceHost>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<ProtectedResourceMetadata, _, _>(|container| async move {

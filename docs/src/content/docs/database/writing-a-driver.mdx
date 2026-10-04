@@ -293,6 +293,7 @@ from both the environment (`NESTRS_<NAMESPACE>__<KEY>`) and a pinned
 struct — the framework-wide dual-path rule.
 
 ```rust title="crates/yourdb/src/module.rs"
+use std::any::TypeId;
 use std::sync::Arc;
 use nest_rs::config::ConfigModule;
 use nest_rs::core::{ContainerBuilder, DynamicModule};
@@ -310,6 +311,10 @@ pub struct YourDbSetup {
 }
 
 impl DynamicModule for YourDbSetup {
+    fn module() -> TypeId {
+        TypeId::of::<YourDbModule>()
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = <YourDbContext as nest_rs::core::Discoverable>::register(builder);
         let snapshot = builder.snapshot();

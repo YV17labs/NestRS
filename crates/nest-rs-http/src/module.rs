@@ -1,8 +1,10 @@
-//! Activation seam for HTTP. Import [`HttpModule::for_root(...)`] in an
+//! Activation seam for HTTP. Import [`HttpModule::for_root(...)`](HttpModule::for_root) in an
 //! `AppModule.imports` and the framework attaches the
-//! [`HttpTransport`](crate::HttpTransport) at boot. Every option lives on
+//! [`HttpTransport`] at boot. Every option lives on
 //! [`HttpConfig`] (host + port + optional TLS), populated either by the
 //! `NESTRS_HTTP__*` env scheme or by the pinned struct.
+
+use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
@@ -11,7 +13,7 @@ use crate::config::HttpConfig;
 use crate::transport::HttpTransport;
 
 /// The HTTP activation seam. Import [`HttpModule::for_root`] in an app module's
-/// `imports` to attach the [`HttpTransport`](crate::HttpTransport) at boot.
+/// `imports` to attach the [`HttpTransport`] at boot.
 pub struct HttpModule;
 
 impl HttpModule {
@@ -30,6 +32,10 @@ pub struct HttpSetup {
 }
 
 impl DynamicModule for HttpSetup {
+    fn module() -> TypeId {
+        TypeId::of::<HttpModule>()
+    }
+
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }

@@ -3,6 +3,7 @@
 //! expression is evaluated **exactly once**, and the value the collect phase
 //! saw is the value the register phase installs.
 
+use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -32,6 +33,10 @@ fn for_root() -> CountingSetup {
 }
 
 impl DynamicModule for CountingSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
         builder.provide(Installed(self.serial))
     }
@@ -69,6 +74,10 @@ async fn a_dynamic_import_is_evaluated_once_on_the_async_path() {
 struct SyncSetup;
 
 impl DynamicModule for SyncSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
         builder.provide(Installed(BUILDS.fetch_add(1, Ordering::SeqCst)))
     }
@@ -106,6 +115,10 @@ struct Tagged(&'static str);
 struct TaggingSetup(&'static str);
 
 impl DynamicModule for TaggingSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
         builder.provide_keyed(self.0, Tagged(self.0))
     }
@@ -139,6 +152,10 @@ struct Mixed(usize);
 struct MixedSetup;
 
 impl DynamicModule for MixedSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
         builder.provide(Mixed(7))
     }

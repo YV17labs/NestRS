@@ -511,7 +511,11 @@ mod after {
 
     #[scheduled]
     impl LedgerTasks {
-        #[every("250ms", replicas = "one", key = "e2e::InvoiceTasks::close_day")]
+        #[every(
+            "250ms",
+            replicas = "one",
+            key = "integration::InvoiceTasks::close_day"
+        )]
         async fn close(&self) -> anyhow::Result<()> {
             Ok(())
         }
@@ -526,8 +530,9 @@ mod after {
 
 /// A rename starts a new job, and during the rolling deploy that ships it the
 /// old replicas and the new would each fire every occurrence. `key` pins the
-/// identity the job had: a replica of each build claims the same keys, and the
-/// two fire each occurrence once between them.
+/// identity the job had, copied from the old build's boot line: a replica of
+/// each build claims the same keys, and the two fire each occurrence once
+/// between them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_renamed_job_pinning_its_key_shares_its_occurrences_with_the_old_build() {
     let logs = LogCapture::install_global();
@@ -537,6 +542,17 @@ async fn a_renamed_job_pinning_its_key_shares_its_occurrences_with_the_old_build
     let old = schedule_replica::<before::BeforeModule>(schedule_config()).await;
     let new = schedule_replica::<after::AfterModule>(schedule_config()).await;
     let both_up_ms = now_ms();
+    let booted_key = |provider: &str| {
+        logs.find(nest_rs_schedule::TARGET, "scheduled job (interval)")
+            .into_iter()
+            .find(|line| filed_by(line, &[provider]))
+            .and_then(|line| line.field("key"))
+    };
+    assert_eq!(
+        booted_key("LedgerTasks"),
+        booted_key("InvoiceTasks"),
+        "the renamed job pins the identity the old build's boot line names"
+    );
     await_claims(&conn, &pinned, both_up_ms, 6).await;
     old.shutdown().await.expect("clean shutdown");
     new.shutdown().await.expect("clean shutdown");

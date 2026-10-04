@@ -49,4 +49,5 @@ disagreement, and the page is fixed in the same commit as the code it follows.
   undocumented** (`manifests-ci.md`, *Shipping a capability*).
 - **`npm run build` is the docs' one check**, run by CI's `docs` job on every
   pull request touching `docs/**`; `starlight-links-validator` fails it on a
-  dead internal link or anchor. Deploy is `docs-pages.yml` on push.
+  dead internal link or anchor. Deploy is `docs-pages.yml`, from `main` alone:
+  a branch's docs are unfinished and never reach nestrs.dev.

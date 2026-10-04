@@ -45,6 +45,15 @@ jobs:
             exit 1
           fi
 
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1,cargo-deny@0.20
+
+      # A release never ships a tree with a known advisory, whatever the last
+      # audit run said.
+      - name: Audit the tree
+        run: just audit
+
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets
 

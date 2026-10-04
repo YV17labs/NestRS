@@ -1,0 +1,45 @@
+# The dependency tree against the RustSec advisory database. An advisory is
+# published without a change here, so it is checked where it can be acted on:
+# blocking on a change to the tree, daily on `main`, and before a release
+# (`publish.yml`) — never on a change that did not touch the tree.
+
+name: Audit
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths: &tree
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - 'deny.toml'
+  pull_request:
+    paths: *tree
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  advisories:
+    name: advisories (cargo-deny)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # cargo-deny reads the tree through `cargo metadata`, so the pinned
+      # toolchain is all it needs: nothing is compiled.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1,cargo-deny@0.20
+      - run: just audit

@@ -1,6 +1,9 @@
 # What the framework's dependency tree may hold: no known vulnerability or
 # unsound or unmaintained crate, no licence outside this list, nothing outside
-# crates.io. `just lint` runs it; `demo/` and `bench/` are separate projects.
+# crates.io, and no crate denied below. `just lint` checks the bans, licences and
+# sources, which only a change to the tree can break; `just audit` checks the
+# advisories, which the database can break overnight. `demo/` and `bench/` are
+# separate projects.
 
 [graph]
 all-features = true

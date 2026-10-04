@@ -98,8 +98,12 @@ owning crate's suite is undocumented.
 alone, the dependency policy, rustdoc, then every test against real Postgres,
 Redis and S3 — never a mock. `deny.toml` is the dependency policy: no known
 vulnerable, unsound or unmaintained crate, no licence outside its list, nothing
-outside crates.io; an exception names its advisory or crate and its reason.
-Dependabot alerts cover the days nobody pushes. `docs.yml` builds the site when
+outside crates.io, no crate it bans; an exception names its advisory or crate
+and its reason. **A check belongs where only a change can turn it red**: the
+bans, licences and sources are `just lint`'s, while the advisories, which the
+database moves overnight, are `just audit`'s — run by `audit.yml` on a change
+to the tree (blocking), daily on `main`, and by `publish.yml` before a release.
+`docs.yml` builds the site when
 `docs/` changes. The workflows stay hardened: actions pinned by SHA,
 `persist-credentials: false`, least permissions.
 

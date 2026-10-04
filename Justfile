@@ -11,9 +11,13 @@ fmt:
 # Formatting, clippy, each capability alone, and the dependency policy
 lint:
     cargo fmt --all --check
-    cargo deny check advisories licenses sources
+    cargo deny check bans licenses sources
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
     cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going
+
+# The tree against the advisory database, which moves without a change here
+audit:
+    cargo deny check advisories
 
 # Tests, one recipe per kind; `just test` runs them all
 mod test

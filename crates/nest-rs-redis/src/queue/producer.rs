@@ -46,20 +46,23 @@ impl RedisQueueProducer {
     /// Cancel the job `job` names, or the one holding the unique key `key`.
     async fn cancel(&self, queue: &QueueName, job: &str, key: &str) -> Result<bool, QueueError> {
         let keys = QueueKeys::new(queue);
-        let cancelled: i64 = SCRIPTS
-            .cancel
-            .key(&keys.jobs)
-            .key(&keys.entries)
-            .key(&keys.due)
-            .key(&keys.delayed)
-            .key(&keys.unique)
-            .key(&keys.claims)
-            .key(&keys.deferred)
-            .key(&keys.checkpoints)
-            .arg(GROUP)
-            .arg(job)
-            .arg(key)
-            .invoke_async(&mut self.conn.clone())
+        let cancelled: i64 = self
+            .conn
+            .invoke(
+                SCRIPTS
+                    .cancel
+                    .key(&keys.jobs)
+                    .key(&keys.entries)
+                    .key(&keys.due)
+                    .key(&keys.delayed)
+                    .key(&keys.unique)
+                    .key(&keys.claims)
+                    .key(&keys.deferred)
+                    .key(&keys.checkpoints)
+                    .arg(GROUP)
+                    .arg(job)
+                    .arg(key),
+            )
             .await
             .map_err(QueueError::backend)?;
         Ok(cancelled == 1)
@@ -108,10 +111,7 @@ impl JobProducer for RedisQueueProducer {
             push.arg(id).arg(record).arg(&unique);
             unique_keys.push(unique);
         }
-        let answer: redis::Value = push
-            .invoke_async(&mut self.conn.clone())
-            .await
-            .map_err(QueueError::backend)?;
+        let answer: redis::Value = self.conn.invoke(&push).await.map_err(QueueError::backend)?;
         match answer {
             redis::Value::Int(0) => Ok(()),
             redis::Value::Array(refused) => {

@@ -91,11 +91,8 @@ impl RedisThrottler {
     /// the [`ThrottlerStore`] seam is async, so no runtime worker is blocked
     /// and a current-thread runtime works too.
     async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
-        let mut conn = self.conn.clone();
-        self.script
-            .key(bucket(key))
-            .arg(window_ms)
-            .invoke_async::<(i64, i64)>(&mut conn)
+        self.conn
+            .invoke(self.script.key(bucket(key)).arg(window_ms))
             .await
     }
 }

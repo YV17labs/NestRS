@@ -39,7 +39,10 @@ use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
 use redis::io::tcp::TcpSettings;
 use redis::io::tcp::socket2::TcpKeepalive;
-use redis::{Cmd, ConnectionAddr, IntoConnectionInfo, Pipeline, RedisFuture, Value};
+use redis::{
+    Cmd, ConnectionAddr, ErrorKind, FromRedisValue, IntoConnectionInfo, Pipeline, RedisFuture,
+    ScriptInvocation, ServerErrorKind, Value,
+};
 
 use crate::error::RedisError;
 use crate::{RedisConfig, tls};
@@ -48,6 +51,11 @@ use crate::{RedisConfig, tls};
 /// missing — one wording, three sites, so the remedy cannot drift.
 pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered — import \
      RedisModule::for_root(None), which opens the one Redis connection every Redis binding shares";
+
+/// How many times one call loads its script, at most: `redis` loads it once,
+/// and a `SCRIPT FLUSH` or a failover landing between that load and its retry
+/// would otherwise fail the call.
+const SCRIPT_LOADS: u32 = 3;
 
 /// The app's shared Redis connection, and a connection in its own right: it
 /// implements [`ConnectionLike`], so a clone runs any `redis` command, script or
@@ -484,6 +492,32 @@ impl RedisConnection {
     /// How long a command on this handle waits for its answer.
     pub(crate) fn budget(&self) -> Duration {
         self.budget
+    }
+
+    /// Run `script`, loading it again each time Redis answers it holds none, at
+    /// most [`SCRIPT_LOADS`] times.
+    pub(crate) async fn invoke<T: FromRedisValue>(
+        &self,
+        script: &ScriptInvocation<'_>,
+    ) -> Result<T, redis::RedisError> {
+        let mut conn = self.clone();
+        let mut loads = 1;
+        loop {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the one call every script goes through"
+            )]
+            let outcome = script.invoke_async(&mut conn).await;
+            match outcome {
+                Err(error)
+                    if loads < SCRIPT_LOADS
+                        && error.kind() == ErrorKind::Server(ServerErrorKind::NoScript) =>
+                {
+                    loads += 1;
+                }
+                outcome => return outcome,
+            }
+        }
     }
 }
 

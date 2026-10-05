@@ -44,17 +44,20 @@ impl RedisCheckpoint {
 
     /// Write `state` while this delivery holds the job.
     async fn write(&self, state: Vec<u8>) -> Result<(), QueueError> {
-        let written: i64 = SCRIPTS
-            .checkpoint
-            .key(&self.jobs)
-            .key(&self.checkpoints)
-            .arg(GROUP)
-            .arg(&self.worker)
-            .arg(&self.lease.entry)
-            .arg(self.lease.count)
-            .arg(&self.job)
-            .arg(state)
-            .invoke_async(&mut self.conn.clone())
+        let written: i64 = self
+            .conn
+            .invoke(
+                SCRIPTS
+                    .checkpoint
+                    .key(&self.jobs)
+                    .key(&self.checkpoints)
+                    .arg(GROUP)
+                    .arg(&self.worker)
+                    .arg(&self.lease.entry)
+                    .arg(self.lease.count)
+                    .arg(&self.job)
+                    .arg(state),
+            )
             .await
             .map_err(QueueError::backend)?;
         if written == 1 {

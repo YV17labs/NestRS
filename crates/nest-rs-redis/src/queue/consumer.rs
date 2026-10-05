@@ -126,14 +126,17 @@ impl RedisQueueConsumer {
         drained: &Drained,
         max: u32,
     ) -> Result<Vec<Delivery<Lease>>, QueueError> {
-        let (taken, vanished): (Vec<Value>, Vec<String>) = SCRIPTS
-            .reclaim
-            .key(&drained.keys.jobs)
-            .arg(GROUP)
-            .arg(&self.name)
-            .arg(millis(self.lease))
-            .arg(max)
-            .invoke_async(&mut self.conn.clone())
+        let (taken, vanished): (Vec<Value>, Vec<String>) = self
+            .conn
+            .invoke(
+                SCRIPTS
+                    .reclaim
+                    .key(&drained.keys.jobs)
+                    .arg(GROUP)
+                    .arg(&self.name)
+                    .arg(millis(self.lease))
+                    .arg(max),
+            )
             .await
             .map_err(QueueError::backend)?;
         said_vanished(method, &vanished);
@@ -295,13 +298,16 @@ impl JobConsumer for RedisQueueConsumer {
         let mut max = ask.max.get();
         let mut admitted = None;
         if let Some(throttle) = method.options().throttle() {
-            let (taken, closed_for): (u32, u64) = SCRIPTS
-                .admit
-                .key(&drained.keys.throttle)
-                .arg(throttle.limit().get())
-                .arg(millis(throttle.window()))
-                .arg(max)
-                .invoke_async(&mut self.conn.clone())
+            let (taken, closed_for): (u32, u64) = self
+                .conn
+                .invoke(
+                    SCRIPTS
+                        .admit
+                        .key(&drained.keys.throttle)
+                        .arg(throttle.limit().get())
+                        .arg(millis(throttle.window()))
+                        .arg(max),
+                )
                 .await
                 .map_err(QueueError::backend)?;
             if taken == 0 {
@@ -326,11 +332,9 @@ impl JobConsumer for RedisQueueConsumer {
             if unused > 0 {
                 // Starts counted and not used are given back while their window
                 // lasts; a give-back that fails only throttles more, never less.
-                let given: Result<i64, _> = SCRIPTS
-                    .release
-                    .key(&drained.keys.throttle)
-                    .arg(unused)
-                    .invoke_async(&mut self.conn.clone())
+                let given: Result<i64, _> = self
+                    .conn
+                    .invoke(SCRIPTS.release.key(&drained.keys.throttle).arg(unused))
                     .await;
                 if let Err(error) = given {
                     tracing::debug!(
@@ -360,8 +364,9 @@ impl JobConsumer for RedisQueueConsumer {
         for lease in leases {
             renew.arg(&lease.entry).arg(lease.count);
         }
-        let held: Vec<i64> = renew
-            .invoke_async(&mut self.conn.clone())
+        let held: Vec<i64> = self
+            .conn
+            .invoke(&renew)
             .await
             .map_err(QueueError::backend)?;
         if held.len() != leases.len() {
@@ -396,29 +401,32 @@ impl JobConsumer for RedisQueueConsumer {
             _ => return Err(QueueError::backend(UnknownDisposition)),
         };
         let keys = &self.drained(method)?.keys;
-        let settled: i64 = SCRIPTS
-            .settle
-            .key(&keys.jobs)
-            .key(&keys.entries)
-            .key(&keys.due)
-            .key(&keys.delayed)
-            .key(&keys.unique)
-            .key(&keys.claims)
-            .key(&keys.deferred)
-            .key(&keys.checkpoints)
-            .key(&keys.dead)
-            .arg(GROUP)
-            .arg(&self.name)
-            .arg(&lease.entry)
-            .arg(lease.count)
-            .arg(&lease.job)
-            .arg(way)
-            .arg(after)
-            .arg(record)
-            .arg(reason)
-            .arg(DEAD_MOST)
-            .arg(millis(DEAD_KEPT))
-            .invoke_async(&mut self.conn.clone())
+        let settled: i64 = self
+            .conn
+            .invoke(
+                SCRIPTS
+                    .settle
+                    .key(&keys.jobs)
+                    .key(&keys.entries)
+                    .key(&keys.due)
+                    .key(&keys.delayed)
+                    .key(&keys.unique)
+                    .key(&keys.claims)
+                    .key(&keys.deferred)
+                    .key(&keys.checkpoints)
+                    .key(&keys.dead)
+                    .arg(GROUP)
+                    .arg(&self.name)
+                    .arg(&lease.entry)
+                    .arg(lease.count)
+                    .arg(&lease.job)
+                    .arg(way)
+                    .arg(after)
+                    .arg(record)
+                    .arg(reason)
+                    .arg(DEAD_MOST)
+                    .arg(millis(DEAD_KEPT)),
+            )
             .await
             .map_err(QueueError::backend)?;
         Ok(hold(settled))
@@ -430,28 +438,34 @@ impl JobConsumer for RedisQueueConsumer {
     ) -> Result<Option<Duration>, QueueError> {
         let drained = self.drained(method)?;
         let keys = &drained.keys;
-        let next: i64 = SCRIPTS
-            .promote
-            .key(&keys.jobs)
-            .key(&keys.entries)
-            .key(&keys.due)
-            .key(&keys.delayed)
-            .key(&keys.unique)
-            .key(&keys.claims)
-            .key(&keys.deferred)
-            .key(&keys.dead)
-            .arg(PROMOTE_BATCH)
-            .arg(millis(DEAD_KEPT))
-            .invoke_async(&mut self.conn.clone())
+        let next: i64 = self
+            .conn
+            .invoke(
+                SCRIPTS
+                    .promote
+                    .key(&keys.jobs)
+                    .key(&keys.entries)
+                    .key(&keys.due)
+                    .key(&keys.delayed)
+                    .key(&keys.unique)
+                    .key(&keys.claims)
+                    .key(&keys.deferred)
+                    .key(&keys.dead)
+                    .arg(PROMOTE_BATCH)
+                    .arg(millis(DEAD_KEPT)),
+            )
             .await
             .map_err(QueueError::backend)?;
         if Drained::due(&drained.swept, SWEEP_EVERY) {
-            let swept: i64 = SCRIPTS
-                .sweep
-                .key(&keys.jobs)
-                .arg(GROUP)
-                .arg(millis(SILENT_FOR))
-                .invoke_async(&mut self.conn.clone())
+            let swept: i64 = self
+                .conn
+                .invoke(
+                    SCRIPTS
+                        .sweep
+                        .key(&keys.jobs)
+                        .arg(GROUP)
+                        .arg(millis(SILENT_FOR)),
+                )
                 .await
                 .map_err(QueueError::backend)?;
             if swept > 0 {
@@ -475,12 +489,15 @@ impl JobConsumer for RedisQueueConsumer {
         // silent, and the first failure is the one answered.
         let mut failed = None;
         for queue in drained.values() {
-            let left: Result<i64, _> = SCRIPTS
-                .leave
-                .key(&queue.keys.jobs)
-                .arg(GROUP)
-                .arg(&self.name)
-                .invoke_async(&mut self.conn.clone())
+            let left: Result<i64, _> = self
+                .conn
+                .invoke(
+                    SCRIPTS
+                        .leave
+                        .key(&queue.keys.jobs)
+                        .arg(GROUP)
+                        .arg(&self.name),
+                )
                 .await;
             if let Err(error) = left {
                 failed.get_or_insert(error);

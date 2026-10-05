@@ -7,6 +7,8 @@ allow-dbg-in-tests = true
 disallowed-methods = [
     { path = "std::env::var", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
     { path = "std::env::var_os", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
+    { path = "redis::Script::invoke_async", reason = "run a script through RedisConnection::invoke: it loads the script again past a SCRIPT FLUSH racing redis's one reload" },
+    { path = "redis::ScriptInvocation::invoke_async", reason = "run a script through RedisConnection::invoke: it loads the script again past a SCRIPT FLUSH racing redis's one reload" },
 ]
 
 disallowed-macros = [

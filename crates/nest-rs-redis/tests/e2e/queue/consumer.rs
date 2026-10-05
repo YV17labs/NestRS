@@ -754,12 +754,14 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     assert_eq!(letters.len(), 1, "the job dead-lettered");
 
     FIXED.store(true, std::sync::atomic::Ordering::SeqCst);
-    let refiled: Option<String> = redis::Script::new(&documented_refile())
-        .key(crate::key_of(queue, "dead"))
-        .key(crate::key_of(queue, "jobs"))
-        .key(crate::key_of(queue, "entries"))
+    let refiled: Option<String> = redis::cmd("EVAL")
+        .arg(documented_refile())
+        .arg(3)
+        .arg(crate::key_of(queue, "dead"))
+        .arg(crate::key_of(queue, "jobs"))
+        .arg(crate::key_of(queue, "entries"))
         .arg(&letters[0].0)
-        .invoke_async(&mut crate::connect().await)
+        .query_async(&mut crate::connect().await)
         .await
         .expect("the page's command runs");
     assert!(refiled.is_some(), "it filed the dead letter back");

@@ -134,7 +134,10 @@ killed — and is dead-lettered without running, as
 
 Every command a worker or a producer sends answers or fails within
 `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an outage
-fails calls rather than holding them. A worker's read blocks on a connection of
+fails calls rather than holding them. The boot refuses a budget of twenty
+seconds or more, the queue port's own net on every call: the port would stop
+waiting first, and a failure would reach its caller as a bare timeout instead of
+Redis's own cause. A worker's read blocks on a connection of
 its own — on the shared one it would stall every other caller — for at most a
 second, so its bound is that second plus the budget. A timeout says the answer
 did not arrive in time, never that the command did not run: a settle whose
@@ -260,7 +263,7 @@ redis-cli EVAL "local e = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1])[1] if 
 
 | Variable | Default | What it bounds |
 |---|---|---|
-| `<PREFIX>_REDIS__QUEUE__LEASE_SECS` | `30` | How long a delivery holds its job without a renewal — so how long a crashed replica's job waits before another runs it; at least `1`, at most `3600` |
+| `<PREFIX>_REDIS__QUEUE__LEASE_SECS` | `30` | How long a delivery holds its job without a renewal — so how long a crashed replica's job waits before another runs it; at least `1`, at most `3600`, and more than one and a half times `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, since a renewal sent a third into the lease may wait out the whole budget |
 | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` | `20` | The drain window, hand-backs included; at least `1`, at most `3600` |
 
 A value out of its bounds fails the boot, whether the environment set it or

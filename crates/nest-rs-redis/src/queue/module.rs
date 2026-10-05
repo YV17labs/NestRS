@@ -5,15 +5,16 @@
 
 use std::any::TypeId;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, Module};
-use nest_rs_queue::{BACKEND_REMEDY, BoundConsumer, JobProducer};
+use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer};
 
 use super::consumer::RedisQueueConsumer;
 use super::{RedisQueueConfig, RedisQueueProducer};
-use crate::RedisConnection;
 use crate::connection::CONNECTION_REMEDY;
+use crate::{RedisConnection, RedisError};
 
 /// The Redis queue binding. Import it beside
 /// [`RedisModule::for_root`](crate::RedisModule::for_root): an app pushing jobs
@@ -41,6 +42,7 @@ impl RedisQueueModule {
                     let conn = container
                         .get::<RedisConnection>()
                         .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
+                    conn.answers_within(BACKEND_TIMEOUT, "the queue port")?;
                     Ok(RedisQueueProducer::new((*conn).clone()))
                 },
             )
@@ -62,6 +64,7 @@ impl RedisQueueModule {
                     let config = container.get::<RedisQueueConfig>().ok_or_else(|| {
                         anyhow::anyhow!("RedisQueueModule: RedisQueueConfig was not resolved")
                     })?;
+                    renewable(config.lease, conn.budget())?;
                     Ok(BoundConsumer::new(RedisQueueConsumer::new(
                         (*conn).clone(),
                         config.lease,
@@ -107,6 +110,38 @@ impl DynamicModule for RedisQueueSetup {
             RedisQueueModule::bind(builder)
         } else {
             builder
+        }
+    }
+}
+
+/// `Ok` when a renewal fits in `lease`: the port sends one a third into the
+/// lease, and it may wait out the whole `budget`.
+fn renewable(lease: Duration, budget: Duration) -> Result<(), RedisError> {
+    if budget.saturating_mul(3) < lease.saturating_mul(2) {
+        Ok(())
+    } else {
+        Err(RedisError::BudgetPastLease { budget, lease })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defaults fit, and a lease passes only past one and a half budgets.
+    #[test]
+    fn a_lease_passes_only_past_one_and_a_half_budgets() {
+        let budget = crate::RedisConfig::default().connect_timeout;
+        assert!(renewable(RedisQueueConfig::default().lease, budget).is_ok());
+        assert!(renewable(Duration::from_millis(1_501), Duration::from_secs(1)).is_ok());
+        for lease in [Duration::from_millis(1_500), Duration::from_secs(1)] {
+            let Err(refused) = renewable(lease, Duration::from_secs(1)) else {
+                panic!("a {lease:?} lease must be refused under a 1s budget");
+            };
+            assert!(
+                matches!(refused, RedisError::BudgetPastLease { .. }),
+                "{refused}"
+            );
         }
     }
 }

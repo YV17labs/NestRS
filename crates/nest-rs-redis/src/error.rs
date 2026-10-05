@@ -11,7 +11,7 @@
 use thiserror::Error;
 
 /// A failure opening the shared [`RedisConnection`](crate::RedisConnection)
-/// from its configuration.
+/// from its configuration, or binding a port over it.
 ///
 /// Concern-prefixed (`RedisError`, not a generic `ConnectionError`) to match
 /// the house pattern — `ConfigError`, `StorageError`, `QueueError` — and avoid
@@ -59,6 +59,44 @@ pub enum RedisError {
     /// words the variable is refused in.
     #[error(transparent)]
     Budget(nest_rs_config::ConfigError),
+
+    /// The connect budget at or past the net a port waits on each command
+    /// with. The port would stop waiting first, so a command still answering
+    /// would be cut and its cause replaced by a bare timeout; it fails that way
+    /// at every boot, so the binding refuses it.
+    #[error(
+        "the Redis budget ({budget:?}) must be shorter than {port}'s net ({net:?}), which would \
+         otherwise give up on a command still answering and lose its cause: lower \
+         {timeout_var}, or `RedisConfig::connect_timeout` in code",
+        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+    )]
+    BudgetPastNet {
+        /// The connect budget.
+        budget: std::time::Duration,
+        /// The port's net.
+        net: std::time::Duration,
+        /// The port, as a sentence names it.
+        port: &'static str,
+    },
+
+    /// A queue lease the connect budget leaves no renewal room in: the port
+    /// renews a third into the lease, and the renewal may wait out the budget,
+    /// so the two thirds left must outlast it or the lease lapses while Redis
+    /// still answers.
+    #[error(
+        "the Redis queue lease ({lease:?}) must be more than one and a half times the Redis \
+         budget ({budget:?}): a renewal is sent a third into the lease and may wait out the \
+         whole budget, so a shorter lease lapses while Redis still answers — raise {lease_var} \
+         or lower {timeout_var}",
+        lease_var = ::nest_rs_config::var_name("redis__queue", "LEASE_SECS"),
+        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+    )]
+    BudgetPastLease {
+        /// The connect budget.
+        budget: std::time::Duration,
+        /// The queue binding's lease.
+        lease: std::time::Duration,
+    },
 
     /// A `rediss://` URL carrying `#insecure`, which asks the client to accept
     /// whatever certificate it is shown. Encryption nobody verified is open to

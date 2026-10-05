@@ -69,3 +69,62 @@ async fn a_bare_import_beside_a_for_root_binds_once_with_the_pinned_config() {
         std::time::Duration::from_secs(7),
     );
 }
+
+#[module(imports = [
+    RedisModule::for_root(nest_rs_redis::RedisConfig {
+        connect_timeout: nest_rs_queue::BACKEND_TIMEOUT,
+        ..redis_config()
+    }),
+    RedisQueueModule,
+])]
+struct PatientProducerModule;
+
+/// A budget at the queue port's net would let the port give up on a push still
+/// answering, and fail it without its cause: the binding refuses it at boot —
+/// a producer-only app included — naming both durations and the variable.
+#[tokio::test]
+async fn a_budget_at_the_queue_ports_net_fails_the_boot() {
+    let Err(refused) = App::builder()
+        .module::<PatientProducerModule>()
+        .build()
+        .await
+    else {
+        panic!("a budget at the queue port's net must not boot");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("the queue port")
+            && said.contains(&format!("{:?}", nest_rs_queue::BACKEND_TIMEOUT))
+            && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+        "{said}"
+    );
+}
+
+#[module(imports = [
+    RedisModule::for_root(nest_rs_redis::RedisConfig {
+        connect_timeout: std::time::Duration::from_secs(2),
+        ..redis_config()
+    }),
+    RedisQueueModule::for_root(RedisQueueConfig { lease: std::time::Duration::from_secs(3) }),
+])]
+struct UnrenewableLeaseModule;
+
+/// A renewal is sent a third into the lease and may wait out the budget, so a
+/// lease of no more than one and a half budgets can lapse while Redis still
+/// answers: the binding refuses it at boot, naming both variables.
+#[tokio::test]
+async fn a_lease_a_renewal_cannot_fit_in_fails_the_boot() {
+    let Err(refused) = App::builder()
+        .module::<UnrenewableLeaseModule>()
+        .build()
+        .await
+    else {
+        panic!("a lease a renewal cannot fit in must not boot");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains(&nest_rs_config::var_name("redis__queue", "LEASE_SECS"))
+            && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+        "{said}"
+    );
+}

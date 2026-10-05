@@ -633,7 +633,7 @@ async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
     let proxy = crate::MutingProxy::start().await;
     let replica = crate::replica_on::<GatedModule>(nest_rs_redis::RedisConfig {
         url: proxy.url(),
-        connect_timeout: Duration::from_secs(1),
+        connect_timeout: crate::BUDGET,
         ..Default::default()
     })
     .await;

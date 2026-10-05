@@ -494,6 +494,15 @@ impl RedisConnection {
         self.budget
     }
 
+    /// Refuse a budget at or past `net`, the most `port` waits on a command.
+    pub(crate) fn answers_within(
+        &self,
+        net: Duration,
+        port: &'static str,
+    ) -> Result<(), RedisError> {
+        within_net(self.budget, net, port)
+    }
+
     /// Run `script`, loading it again each time Redis answers it holds none, at
     /// most [`SCRIPT_LOADS`] times.
     pub(crate) async fn invoke<T: FromRedisValue>(
@@ -851,6 +860,15 @@ fn is_scheme(candidate: &str) -> bool {
         .next()
         .is_some_and(|first| first.is_ascii_alphabetic())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// `Ok` when a command bounded by `budget` answers before `port`'s `net`.
+fn within_net(budget: Duration, net: Duration, port: &'static str) -> Result<(), RedisError> {
+    if budget < net {
+        Ok(())
+    } else {
+        Err(RedisError::BudgetPastNet { budget, net, port })
+    }
 }
 
 #[cfg(test)]
@@ -1582,5 +1600,21 @@ mod tests {
                 .contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
             "naming the knob that sets it: {error}",
         );
+    }
+
+    /// A budget answers before a net only strictly under it.
+    #[test]
+    fn a_budget_at_or_past_a_net_is_refused_and_one_under_it_passes() {
+        let net = Duration::from_secs(20);
+        assert!(within_net(net - Duration::from_millis(1), net, "the port").is_ok());
+        for budget in [net, net + Duration::from_secs(1)] {
+            let Err(refused) = within_net(budget, net, "the port") else {
+                panic!("{budget:?} must be refused under a {net:?} net");
+            };
+            assert!(
+                matches!(refused, RedisError::BudgetPastNet { .. }),
+                "{refused}"
+            );
+        }
     }
 }

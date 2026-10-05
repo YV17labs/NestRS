@@ -69,9 +69,14 @@ fn redis_address() -> String {
 fn redis_config() -> RedisConfig {
     RedisConfig {
         url: redis_url(),
+        connect_timeout: BUDGET,
         ..Default::default()
     }
 }
+
+/// The budget the suite's connections hold a command to: under two thirds of
+/// [`LEASE`], or the queue binding refuses the boot.
+const BUDGET: Duration = Duration::from_millis(500);
 
 /// The logical databases a test selects when its keys or its connections must
 /// not meet another test's — one per test, all declared here so that no two
@@ -129,7 +134,7 @@ fn redis_url_on(db: u8) -> String {
 fn redis_config_on(db: u8) -> RedisConfig {
     RedisConfig {
         url: redis_url_on(db),
-        ..Default::default()
+        ..redis_config()
     }
 }
 
@@ -601,7 +606,7 @@ async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisCon
         .unwrap_or_else(|error| panic!("Redis takes {page}'s rule `{rule}`: {error}"));
     RedisConfig {
         url: redis_url_on(db).replacen("://", &format!("://{user}:{ACL_PASSWORD}@"), 1),
-        ..Default::default()
+        ..redis_config()
     }
 }
 

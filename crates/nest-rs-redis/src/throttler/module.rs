@@ -41,6 +41,7 @@ impl Module for RedisThrottlerModule {
                 let conn = container
                     .get::<RedisConnection>()
                     .ok_or_else(|| anyhow::anyhow!("RedisThrottlerModule: {CONNECTION_REMEDY}"))?;
+                conn.answers_within(nest_rs_throttler::HIT_TIMEOUT, "the rate limiter's guard")?;
                 Ok(Arc::new(RedisThrottler::new((*conn).clone())) as Arc<dyn ThrottlerStore>)
             },
         )

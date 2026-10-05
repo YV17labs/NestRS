@@ -243,8 +243,8 @@ The counter is one Lua script — `INCR`, read the TTL with `PTTL`, set it with
 check-then-act race. A backend failure
 **denies**: a rate limiter that fails open is not a rate limiter. Each command is
 bounded by the connection's budget (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by
-default), well inside the guard's own bound below, so an outage reaches the caller
-as Redis's own error, with its cause.
+default), well inside the guard's own bound below — the boot refuses a budget at or
+past it — so an outage reaches the caller as Redis's own error, with its cause.
 
 The script is sent as `EVALSHA`, with a `SCRIPT LOAD` the first time Redis has not
 cached it, and Redis checks the commands *inside* it against the caller's ACL as

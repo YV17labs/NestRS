@@ -191,6 +191,7 @@ fn tls_redis_url() -> String {
 fn tls_redis(ca_cert: Option<&[u8]>) -> RedisConfig {
     RedisConfig {
         url: tls_redis_url(),
+        connect_timeout: crate::BUDGET,
         tls: RedisTls {
             ca_cert: ca_cert.map(<[u8]>::to_vec),
             identity: None,

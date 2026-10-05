@@ -36,7 +36,9 @@ pub struct RedisQueueConfig {
     /// goes to the next worker that asks, and the attempt still running, if
     /// any, is cut. So it is also the longest a crashed replica's job waits
     /// before another runs it. Read from `<PREFIX>_REDIS__QUEUE__LEASE_SECS`,
-    /// at least 1 and at most 3600; defaults to 30s.
+    /// at least 1 and at most 3600; defaults to 30s. More than one and a half
+    /// times the connection's budget, or the boot is refused: a renewal sent a
+    /// third into the lease may wait out the whole budget.
     pub lease: Duration,
 }
 

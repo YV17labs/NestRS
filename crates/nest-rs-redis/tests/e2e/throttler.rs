@@ -209,6 +209,37 @@ mod module {
             "the third hit is denied — both apps counted against one budget",
         );
     }
+
+    #[module(imports = [
+        RedisThrottlerModule,
+        pinned_policy(),
+        RedisModule::for_root(nest_rs_redis::RedisConfig {
+            connect_timeout: nest_rs_throttler::HIT_TIMEOUT,
+            ..redis_config()
+        }),
+    ])]
+    struct PatientThrottlerHost;
+
+    /// A budget at the guard's net would let the guard give up on a hit still
+    /// answering, and deny without its cause: the binding refuses it at boot,
+    /// naming both durations and the variable to lower.
+    #[tokio::test]
+    async fn a_budget_at_the_guards_net_fails_the_boot() {
+        let Err(refused) = App::builder()
+            .module::<PatientThrottlerHost>()
+            .build()
+            .await
+        else {
+            panic!("a budget at the guard's net must not boot");
+        };
+        let said = format!("{refused:#}");
+        assert!(
+            said.contains("the rate limiter's guard")
+                && said.contains(&format!("{:?}", nest_rs_throttler::HIT_TIMEOUT))
+                && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+            "{said}"
+        );
+    }
 }
 
 /// A store that cannot answer denies, and says so.

@@ -141,10 +141,19 @@ const KEYS: [&str; 9] = [
 /// above — is decoded as the payload itself, with a `warn`, and starts a trace of
 /// its own. Refusing it would dead-letter a perfectly good job over an
 /// observability field.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Envelope {
     json: Value,
     id: JobId,
+}
+
+/// The job's id, never the payload (`CLAUDE.md`, no payload value in a line).
+impl std::fmt::Debug for Envelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Envelope")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Envelope {
@@ -407,7 +416,6 @@ fn sealed_whole(value: &Value) -> Map<String, Value> {
 }
 
 /// What a stored value turned out to be.
-#[derive(Debug)]
 pub(crate) enum Opened {
     /// A current envelope: the developer's payload, and what to run it under —
     /// the trace it carried, continued; a trace minted for the actor it named
@@ -430,6 +438,22 @@ pub(crate) enum Opened {
     },
     /// A value that is no envelope at all, decoded as the payload itself.
     Unversioned(Value),
+}
+
+/// The shape, never the payload.
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sealed {
+                minted, unusable, ..
+            } => f
+                .debug_struct("Sealed")
+                .field("minted", minted)
+                .field("unusable", unusable)
+                .finish_non_exhaustive(),
+            Self::Unversioned(_) => f.write_str("Unversioned"),
+        }
+    }
 }
 
 /// Which of an envelope's keys were present and unusable.
@@ -649,6 +673,19 @@ mod tests {
         fut: F,
     ) -> impl std::future::Future<Output = F::Output> {
         nest_rs_core::with_request_scope(None, correlation, fut)
+    }
+
+    /// Neither an envelope nor what it opened to prints its payload: a value
+    /// formatted with `{:?}` would reach a line or an error.
+    #[test]
+    fn no_debug_rendering_quotes_the_payload() {
+        let secret = json!({ "card": "4242-SECRET" });
+        let sealed = seal(secret.clone(), JobId::mint(), None);
+        assert!(!format!("{sealed:?}").contains("SECRET"), "{sealed:?}");
+        let opened = opened(sealed.into_json());
+        assert!(!format!("{opened:?}").contains("SECRET"), "{opened:?}");
+        let foreign = Opened::Unversioned(secret);
+        assert!(!format!("{foreign:?}").contains("SECRET"), "{foreign:?}");
     }
 
     /// What the handler decodes is the developer's payload and nothing else —

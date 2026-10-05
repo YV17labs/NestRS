@@ -1,5 +1,5 @@
-//! The four measurements. Each repeats its run `--runs` times on an emptied
-//! Redis and returns one table row per run.
+//! The four measurements. Each repeats its run `--runs` times with none of the
+//! bench's keys left in Redis, and returns one table row per run.
 
 use std::time::Duration;
 
@@ -44,7 +44,7 @@ pub async fn drain(bench: &Bench, lane: Lane, jobs: u32, replicas: usize) -> Res
         ],
     );
     for run in 1..=bench.runs {
-        bench.admin.flush().await?;
+        bench.admin.clear().await?;
         lane.push_all(&bench.producer, jobs, PREFILL_PUSHERS)
             .await?;
         let before = bench.admin.counters().await?;
@@ -90,7 +90,7 @@ pub async fn latency(bench: &Bench, lane: Lane, jobs: u32, rate: u32) -> Result<
         &["p50 ms", "p90 ms", "p99 ms", "max ms", "pushed/s"],
     );
     for _ in 0..bench.runs {
-        bench.admin.flush().await?;
+        bench.admin.clear().await?;
         let mut fleet = Fleet::spawn(1, &bench.log)?;
         let mut ledger = Ledger::new(jobs);
         fleet.ready(&mut ledger).await?;
@@ -131,7 +131,7 @@ pub async fn push(bench: &Bench, lane: Lane, jobs: u32, pushers: u32) -> Result<
         &["jobs/s", "elapsed ms", "Redis CPU ms", "Redis cmds/push"],
     );
     for run in 1..=bench.runs {
-        bench.admin.flush().await?;
+        bench.admin.clear().await?;
         let before = bench.admin.counters().await?;
         let elapsed = lane.push_all(&bench.producer, jobs, pushers).await?;
         let after = bench.admin.counters().await?;
@@ -164,7 +164,7 @@ pub async fn idle(bench: &Bench, secs: u64) -> Result<Table> {
     );
     let window = Duration::from_secs(secs);
     for run in 1..=bench.runs {
-        bench.admin.flush().await?;
+        bench.admin.clear().await?;
         let mut fleet = Fleet::spawn(1, &bench.log)?;
         let mut ledger = Ledger::new(0);
         fleet.ready(&mut ledger).await?;

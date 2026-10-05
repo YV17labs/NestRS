@@ -1,6 +1,6 @@
 //! The nestrs job queue over Redis, measured through its public API alone:
-//! drain, latency, push throughput and idle cost. Every run flushes the Redis
-//! database the app is configured with, so point it at a throwaway one.
+//! drain, latency, push throughput and idle cost. Every run deletes the keys the
+//! bench's queues left, and the bench refuses a Redis holding anything else.
 
 mod admin;
 mod command;
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use nest_rs::core::{App, EnvPrefix};
+use nest_rs::core::App;
 use nest_rs::queue::JobProducer;
 use nest_rs::redis::RedisConfig;
 
@@ -34,7 +34,8 @@ usage: queue-bench <measurement> [--flag value]...
   idle     [--secs 30]                                  what an idle worker costs
 
   every measurement: [--runs 3] [--log warn] (the replicas' log filter)
-  Redis is the app's own (<PREFIX>_REDIS__URL), flushed before every run.";
+  Redis is the app's own (<PREFIX>_REDIS__URL), and holds nothing but the bench's
+  keys: the bench deletes them before every run and refuses a Redis holding more.";
 
 /// What every measurement shares: Redis, a producer, and its flags.
 pub struct Bench {
@@ -117,7 +118,7 @@ async fn main() -> Result<()> {
         } => measure::push(&bench, lane, jobs, pushers).await?,
         Measurement::Idle { secs } => measure::idle(&bench, secs).await?,
     };
-    bench.admin.flush().await?;
+    bench.admin.clear().await?;
     println!(
         "{}\n_Redis {}_",
         report.render(),
@@ -133,18 +134,14 @@ impl Bench {
             .container()
             .get::<RedisConfig>()
             .context("RedisModule resolves its config")?;
-        if config.url == RedisConfig::default().url {
-            bail!(
-                "set {} to a throwaway Redis: the bench flushes it before every run",
-                EnvPrefix::var("REDIS__URL")
-            );
-        }
+        let admin = Admin::from_url(&config.url)?;
+        admin.claim().await?;
         let producer = app
             .container()
             .get_dyn::<dyn JobProducer>()
             .context("RedisQueueModule binds the producer")?;
         Ok(Self {
-            admin: Admin::from_url(&config.url)?,
+            admin,
             producer,
             log,
             runs,

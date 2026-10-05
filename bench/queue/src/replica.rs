@@ -5,7 +5,7 @@
 //! `@run <seq> <pushed_us> <started_us> <done_us>`, batched every
 //! [`REPORT_EVERY`]. Its standard input closing is the parent saying it has
 //! what it came for: the replica reports what is left and exits without
-//! draining — the next run flushes Redis anyway. Every other line on its
+//! draining — the next run deletes what it left anyway. Every other line on its
 //! standard output is the framework's own log.
 
 use std::fmt::Write as _;

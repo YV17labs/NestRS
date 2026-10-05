@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Every queue measurement, three runs each, as one Markdown report on stdout.
-# Point <PREFIX>_REDIS__URL at a throwaway Redis first: every run flushes it.
+# Point <PREFIX>_REDIS__URL at a Redis of its own: the bench refuses one holding other keys.
 set -euo pipefail
 cd "$(dirname "$0")"
 

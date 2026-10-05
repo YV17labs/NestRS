@@ -100,8 +100,9 @@ export NESTRS_REDIS__URL=redis://127.0.0.1:16403/   # <PREFIX>_REDIS__URL
 just queue            # every measurement, 3 runs each, Markdown on stdout
 ```
 
-**Every run flushes that database**, and the bench refuses to start on
-the framework's default URL: give it a Redis of its own.
+**Every run deletes the keys the bench's queues left**, and the bench
+refuses a Redis holding any other key: it reads server-wide counters, so it
+needs a Redis of its own.
 
 | Measurement | What is timed |
 |---|---|

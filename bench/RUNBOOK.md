@@ -69,8 +69,9 @@ must never be the story.
 ## 6. The queue bench
 
 Separate from the HTTP protocol above, and needing only Redis beside the
-Rust toolchain. Run it on the same idle host, with a Redis of its own —
-every run flushes it — and the version you mean to quote:
+Rust toolchain. Run it on the same idle host, with a Redis of its own — the
+bench refuses one holding any key but its own — and the version you mean to
+quote:
 
 ```bash
 redis-server --port 16403 --save '' --appendonly no --daemonize yes

@@ -246,8 +246,10 @@ pub struct ReplyValue<T>(pub T);
 pub enum ReplyOutcome<T, E> {
     /// The value a success replies with — split again, or serialized.
     Value(T),
-    /// The error an `Err` carried, for [`ErrorReport`] to turn into a frame.
-    Failed(E),
+    /// The error an `Err` carried, already in the [`ErrorReport`] that turns it
+    /// into a frame: an `E` with no value (`Infallible` is `!` from Rust 1.100)
+    /// handed to a call in the expansion would make that call unreachable code.
+    Failed(ErrorReport<E>),
 }
 
 impl<T, E> ReplyValue<Result<T, E>> {
@@ -255,7 +257,7 @@ impl<T, E> ReplyValue<Result<T, E>> {
     pub fn into_outcome(self) -> ReplyOutcome<T, E> {
         match self.0 {
             Ok(value) => ReplyOutcome::Value(value),
-            Err(err) => ReplyOutcome::Failed(err),
+            Err(err) => ReplyOutcome::Failed(ErrorReport(err)),
         }
     }
 }

@@ -27,6 +27,11 @@ impl HygieneLifecycle {
 
     /// A hook compiled out takes its registration with it — the missing item it
     /// names is never looked up.
+    #[on_application_shutdown]
+    async fn steady(&self) -> Result<(), crate::never::Never> {
+        Ok(())
+    }
+
     #[cfg(any())]
     #[on_application_shutdown]
     async fn compiled_out(&self) -> crate::does_not_exist::Error {

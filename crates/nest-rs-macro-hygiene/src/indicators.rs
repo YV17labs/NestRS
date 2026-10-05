@@ -30,6 +30,11 @@ impl HygieneIndicator {
     }
 
     /// A probe compiled out takes its registry entry with it.
+    #[readiness]
+    async fn steady(&self) -> Result<(), crate::never::Never> {
+        Ok(())
+    }
+
     #[cfg(any())]
     #[readiness]
     async fn compiled_out(&self) -> crate::does_not_exist::Answer {

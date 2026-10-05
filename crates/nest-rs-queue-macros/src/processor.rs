@@ -343,7 +343,7 @@ fn emit_method(
                     __job_context.as_ref(),
                     #transaction_tokens,
                     async move {
-                        #call.map_err(|__e| ::nest_rs_queue::JobError::retry(__e))
+                        #call.map_err(::nest_rs_queue::JobError::retry)
                     },
                     ::std::result::Result::is_ok,
                     // A job that ran fine but whose transaction could not be

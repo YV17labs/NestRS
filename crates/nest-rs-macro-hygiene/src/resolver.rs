@@ -84,6 +84,12 @@ impl GreetingResolver {
     }
 
     /// The class gate, against the entity [`crate::entity`] declares.
+    #[query]
+    #[public]
+    fn steady(&self) -> Result<String, crate::never::Never> {
+        Ok("steady".to_owned())
+    }
+
     #[cfg(feature = "seaorm")]
     #[query]
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]

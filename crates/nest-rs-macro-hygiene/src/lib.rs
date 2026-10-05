@@ -72,6 +72,7 @@ pub mod lifecycle;
 #[cfg(feature = "events")]
 pub mod listener;
 pub mod module;
+pub mod never;
 pub mod prelude;
 #[cfg(feature = "queue")]
 pub mod processor;

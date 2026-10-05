@@ -35,6 +35,9 @@ pub struct HygieneImportQueue;
 pub struct HygieneSyncQueue;
 
 /// Minimal processor host.
+#[queue(name = "hygiene-steady", job = HygieneCommand)]
+pub struct HygieneSteadyQueue;
+
 #[injectable]
 pub struct HygieneProcessor;
 
@@ -85,6 +88,12 @@ impl HygieneProcessor {
     }
 
     /// A job compiled out takes its handler and its registry entry with it.
+    #[process(queue = HygieneSteadyQueue, transactional = false)]
+    async fn steady(&self, job: HygieneCommand) -> Result<(), crate::never::Never> {
+        let _ = job.file;
+        Ok(())
+    }
+
     #[cfg(any())]
     #[process(queue = crate::does_not_exist::Queue)]
     async fn compiled_out(&self, job: crate::does_not_exist::Job) -> crate::does_not_exist::Answer {

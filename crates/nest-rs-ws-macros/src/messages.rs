@@ -428,12 +428,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // Every `Err` a handler can return is turned into a frame by type, through
         // `ErrorReport`'s three tiers — the imports bring the two trait tiers into
-        // scope, and the inherent one needs none.
+        // scope, and the inherent one needs none. The report is built in library
+        // code (`ReplyOutcome::Failed`, `Result::map_err`), never by a call here:
+        // handed an error with no value (`Infallible` is `!` from Rust 1.100),
+        // that call would be unreachable code.
         let report = quote! {
             {
                 #[allow(unused_imports)]
                 use ::nest_rs_ws::{ErrorReportChain as _, ErrorReportFallback as _};
-                ::nest_rs_ws::ErrorReport(__err).into_frame(#event)
+                __report.into_frame(#event)
             }
         };
         // A handler's value is split once more before it replies: a `Result` inside
@@ -446,7 +449,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 use ::nest_rs_ws::ReplyValueFallback as _;
                 match ::nest_rs_ws::ReplyValue(__ret).into_outcome() {
                     ::nest_rs_ws::ReplyOutcome::Value(__ret) => { #reply }
-                    ::nest_rs_ws::ReplyOutcome::Failed(__err) => #report,
+                    ::nest_rs_ws::ReplyOutcome::Failed(__report) => #report,
                 }
             }
         };
@@ -476,20 +479,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     use ::nest_rs_ws::ReplyValueFallback as _;
                     match ::nest_rs_ws::ReplyValue(__ret).into_outcome() {
                         ::nest_rs_ws::ReplyOutcome::Value(__ret) => #split_then_reply,
-                        ::nest_rs_ws::ReplyOutcome::Failed(__err) => #report,
+                        ::nest_rs_ws::ReplyOutcome::Failed(__report) => #report,
                     }
                 }
             },
             ReturnKind::ResultUnit => quote! {
-                match { #call } {
+                match ::core::result::Result::map_err({ #call }, ::nest_rs_ws::ErrorReport) {
                     ::core::result::Result::Ok(()) => ::nest_rs_ws::WsReply::None,
-                    ::core::result::Result::Err(__err) => #report,
+                    ::core::result::Result::Err(__report) => #report,
                 }
             },
             ReturnKind::Result => quote! {
-                match { #call } {
+                match ::core::result::Result::map_err({ #call }, ::nest_rs_ws::ErrorReport) {
                     ::core::result::Result::Ok(__ret) => #split_then_reply,
-                    ::core::result::Result::Err(__err) => #report,
+                    ::core::result::Result::Err(__report) => #report,
                 }
             },
         };

@@ -51,6 +51,12 @@ impl HygieneGateway {
     }
 
     /// The class gate, against the entity [`crate::entity`] declares.
+    #[subscribe_message("hygiene.steady")]
+    #[public]
+    fn steady(&self) -> Result<String, crate::never::Never> {
+        Ok("steady".into())
+    }
+
     #[cfg(feature = "seaorm")]
     #[subscribe_message("hygiene.count")]
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]

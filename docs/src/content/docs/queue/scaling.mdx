@@ -86,8 +86,9 @@ upkeep, so a burst of due retries is filed in steps rather than in one long
 script. See [Delayed jobs](/queue/delivery/#delayed-jobs).
 
 **An idle method costs Redis a fixed few calls**: per method and per replica,
-one blocking read a second with a look for lapsed leases beside it, one upkeep
-script a second, and one sweep of the consumer group a minute. Multiply by
+one blocking read a second with a look for lapsed leases beside it — a look
+costs at most what ten thousand pending entries cost, however many run — one
+upkeep script a second, and one sweep of the consumer group a minute. Multiply by
 methods and replicas to size what an idle deployment sends.
 
 ## Throttling starts

@@ -41,13 +41,19 @@ const PROMOTE_BATCH: u32 = 100;
 const UPKEEP_MOST: Duration = Duration::from_secs(1);
 
 /// How often a queue's lapsed leases are looked for, at most: a look costs a
-/// page of the deliveries running, and a lease lapses on a scale of seconds.
+/// bounded read of the deliveries running, and a lease lapses on a scale of
+/// seconds.
 const RECLAIM_EVERY: Duration = Duration::from_secs(1);
 
-/// The most pending entries one look reads — `XAUTOCLAIM`'s own bound at its
-/// default `COUNT` (100, scanning ten times it), so a look costs Redis that
-/// much whatever runs elsewhere, and a longer list is read a page per look.
+/// The most pending entries a look reads into its script — `XAUTOCLAIM`'s own
+/// scan bound at its default `COUNT` (100, scanning ten times it).
 const RECLAIM_PAGE: u32 = 1000;
+
+/// The longest pending list a look reads whole, Redis filtering the lapsed
+/// entries itself: measured on Redis 8.6, it filters ten entries for what one
+/// read into the script costs, so a whole list this long costs a page, and a
+/// longer one is read a page per look — no look costs more, however long.
+const RECLAIM_WHOLE: u32 = 10 * RECLAIM_PAGE;
 
 /// How often a queue's group is swept of the consumers stopped replicas left.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
@@ -149,7 +155,8 @@ impl RedisQueueConsumer {
                     .arg(millis(self.lease))
                     .arg(max)
                     .arg(from)
-                    .arg(RECLAIM_PAGE),
+                    .arg(RECLAIM_PAGE)
+                    .arg(RECLAIM_WHOLE),
             )
             .await
             .map_err(QueueError::backend)?;

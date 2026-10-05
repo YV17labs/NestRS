@@ -258,3 +258,18 @@ and "no server matrix job" left every later script change to be re-proved the
 same way or not at all. `ci.yml` now runs `just test redis` — nest-rs-redis's
 suites alone — once per server, each the official image as a service, the TLS
 server started from the same image; the claim and the matrix move in one change.
+
+## 2026-10-05 — a look for lapsed leases costs a bounded read
+
+`XPENDING … IDLE <lease> - + <max>` walks the pending list from its first entry
+until it has found `max` idle ones, so with every delivery running each look
+read the whole list: 2.4 ms of Redis CPU per look beside 10 000 deliveries, and
+ten times that at 100 000, once a second per queue per replica. Reading pages
+into the script instead (1 000 entries, `XAUTOCLAIM`'s own scan bound) cost as
+much at 10 000 and more below: measured on Redis 8.6, Redis filters about ten
+entries for what one read into the script costs. So a look asks the list's
+length first (`XPENDING`'s summary): up to ten pages it is read whole, Redis
+filtering it; past that, a page from a cursor the consumer keeps per queue.
+Refused: a page sized by the free permits (a worker at concurrency 1 would read
+ten entries a second). Accepted: behind a list longer than ten pages, a lapsed
+entry waits up to a look per page.

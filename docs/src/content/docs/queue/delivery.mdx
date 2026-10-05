@@ -55,9 +55,9 @@ key needs an expiry to bound it.
 
 Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
 `~nestrs:queue:*` and nothing else runs a queue. Most of what the binding sends
-is Lua — sent as `EVALSHA`, with a `SCRIPT LOAD` the first time Redis has not
-cached a script — and Redis checks the commands *inside* a script against the
-caller's ACL as well. With the connection's `PING`, which proves it at boot, and
+is Lua — sent as `EVALSHA`, each script loaded with `SCRIPT LOAD` when the
+binding boots and again whenever Redis has forgotten it — and Redis checks the
+commands *inside* a script against the caller's ACL as well. With the connection's `PING`, which proves it at boot, and
 the `SELECT` of the database its URL names, each role's user is one rule and
 nothing more. A producer pushes and cancels:
 
@@ -92,7 +92,11 @@ never handed over without a **lease**. While the attempt runs, the port renews
 the lease every third of its length, by claiming the entry again without
 counting a delivery. A lease no renewal reached for a whole lease has
 **lapsed**: the next worker that asks, with a permit free, takes the entry over,
-which counts a delivery.
+which counts a delivery. A worker looks for lapsed leases once a second: Redis
+filters a pending list of up to ten thousand entries whole, and a longer one is
+read a page of a thousand at a time from where the last look stopped, so no look
+costs Redis more however many deliveries run elsewhere; behind such a list, a
+lapsed entry waits up to a look per page.
 
 Every write a delivery makes — its outcome, a renewal, a checkpoint — is
 **fenced**: the script first reads the entry's owner and delivery count, and

@@ -190,26 +190,35 @@ return 1
 );
 
 /// Take up to `ARGV[4]` deliveries whose lease lapsed — pending for at least
-/// `ARGV[3]` milliseconds without a renewal — for this worker, from one page of
-/// at most `ARGV[6]` pending entries after `ARGV[5]`: `{taken, vanished, next}`,
-/// each taken one as `{entry, delivery count, fields}`, and `next` where the
-/// next look starts — the last entry read, or `-` once the page ran past the
-/// list's end. An entry deleted under its pending line — by hand, since no
-/// script deletes one still pending — is let go and named in `vanished`: Redis
-/// 6.2 answers it as a nil, later servers drop it from the pending list and
-/// answer nothing.
+/// `ARGV[3]` milliseconds without a renewal — for this worker: `{taken,
+/// vanished, next}`, each taken one as `{entry, delivery count, fields}`. A
+/// pending list of at most `ARGV[7]` entries is read whole, Redis filtering it;
+/// a longer one, a page of at most `ARGV[6]` entries after `ARGV[5]`, filtered
+/// here — `next` is where the next look starts, the last entry read, or `-` once
+/// the page ran past the list's end or the list was read whole. An entry
+/// deleted under its pending line — by hand, since no script deletes one still
+/// pending — is let go and named in `vanished`: Redis 6.2 answers it as a nil,
+/// later servers drop it from the pending list and answer nothing.
 ///
 /// `KEYS`: jobs. `ARGV`: the group, this worker, the lease, the most to take,
-/// where the page starts (`-`, or `(` and an entry), the page's length.
+/// where a page starts (`-`, or `(` and an entry), a page's length, the longest
+/// list read whole.
 const RECLAIM: &str = concat!(
     effects!(),
     r"
-local lines = redis.pcall('XPENDING', KEYS[1], ARGV[1], ARGV[5], '+', ARGV[6])
-if lines.err then
-  if string.sub(lines.err, 1, 7) == 'NOGROUP' then
+local pending = redis.pcall('XPENDING', KEYS[1], ARGV[1])
+if pending.err then
+  if string.sub(pending.err, 1, 7) == 'NOGROUP' then
     return {{}, {}, '-'}
   end
-  return lines
+  return pending
+end
+local whole = pending[1] <= tonumber(ARGV[7])
+local lines
+if whole then
+  lines = redis.call('XPENDING', KEYS[1], ARGV[1], 'IDLE', ARGV[3], '-', '+', ARGV[4])
+else
+  lines = redis.call('XPENDING', KEYS[1], ARGV[1], ARGV[5], '+', ARGV[6])
 end
 local lease, most = tonumber(ARGV[3]), tonumber(ARGV[4])
 local taken, vanished, last = {}, {}, nil
@@ -230,7 +239,7 @@ for _, line in ipairs(lines) do
     end
   end
 end
-if last == nil or (#lines < tonumber(ARGV[6]) and last == lines[#lines][1]) then
+if whole or last == nil or (#lines < tonumber(ARGV[6]) and last == lines[#lines][1]) then
   return {taken, vanished, '-'}
 end
 return {taken, vanished, last}

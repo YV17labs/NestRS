@@ -983,11 +983,12 @@ impl PagedProcessor {
 )]
 struct PagedModule;
 
-/// A look for lapsed leases reads one page of a thousand pending entries, and
-/// the next look reads on from where it stopped: its cost to Redis is a page,
-/// however many deliveries run elsewhere. Two lapsed deliveries sit among a
-/// thousand running ones, the first in the first page and the second past it:
-/// the first look takes only the first, and a later one the second.
+/// Past ten thousand pending entries, a look for lapsed leases reads one page
+/// of a thousand, and the next look reads on from where it stopped: its cost to
+/// Redis stays a page, however many deliveries run elsewhere. Two lapsed
+/// deliveries sit among ten thousand running ones, the first in the first page
+/// and the second past it: the first look takes only the first, and a later one
+/// the second.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
     let queue = <PagedQueue as nest_rs_queue::Queue>::NAME;
@@ -999,16 +1000,14 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
         .push(PagedQueue, PagedCommand { run: first }, None)
         .await
         .expect("the first lapsed job");
-    for _ in 0..1000 {
-        producer
-            .push(PagedQueue, PagedCommand { run: running }, None)
-            .await
-            .expect("a running job");
-    }
+    let pushed = (0..999)
+        .map(|_| running)
+        .chain([second])
+        .chain((0..9_001).map(|_| running));
     producer
-        .push(PagedQueue, PagedCommand { run: second }, None)
+        .push_many(PagedQueue, pushed.map(|run| PagedCommand { run }), None)
         .await
-        .expect("the second lapsed job");
+        .expect("the running jobs, the second lapsed one first past a page");
     let jobs = crate::key_of(queue, "jobs");
     let mut conn = crate::connect().await;
     let _: redis::Value = redis::cmd("XGROUP")
@@ -1024,22 +1023,23 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
         .arg(GROUP)
         .arg("elsewhere")
         .arg("COUNT")
-        .arg(2000)
+        .arg(20_000)
         .arg("STREAMS")
         .arg(&jobs)
         .arg(">")
         .query_async(&mut conn)
         .await
         .expect("every job delivered to a worker elsewhere");
-    let entries: Vec<(String, Vec<String>)> = redis::cmd("XRANGE")
+    let first_pages: Vec<(String, Vec<String>)> = redis::cmd("XRANGE")
         .arg(&jobs)
         .arg("-")
         .arg("+")
+        .arg("COUNT")
+        .arg(1001)
         .query_async(&mut conn)
         .await
         .expect("XRANGE");
-    assert_eq!(entries.len(), 1002);
-    for entry in [&entries[0].0, &entries[1001].0] {
+    for (entry, _) in [&first_pages[0], &first_pages[1000]] {
         let _: redis::Value = redis::cmd("XCLAIM")
             .arg(&jobs)
             .arg(GROUP)

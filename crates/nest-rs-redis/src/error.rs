@@ -38,6 +38,19 @@ pub enum RedisError {
         source: redis::RedisError,
     },
 
+    /// A URL asking for RESP3 (`protocol=resp3`). Every binding reads Redis's
+    /// RESP2 replies — the worker's read among them, which would fail on every
+    /// receive — so it is refused at once rather than met by every job.
+    #[error(
+        "the Redis URL for {endpoint} asks for RESP3 (`protocol=resp3`), which nestrs does not \
+         speak to Redis: remove it from {url_var}",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+    )]
+    UnsupportedProtocol {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+    },
+
     /// The connect budget is outside the range its variable is held to — a
     /// [`RedisConfig`](crate::RedisConfig) built in code and handed to
     /// [`RedisConnection::connect`](crate::RedisConnection::connect) without a

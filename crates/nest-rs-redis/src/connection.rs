@@ -315,7 +315,7 @@ impl RedisConnection {
     /// What fails the same way on every attempt fails at once instead of
     /// spending the budget on retries that cannot succeed, saying what to
     /// change: a budget under the floor its variable is held to; a URL the
-    /// client cannot parse; TLS settings it will not use — `#insecure`,
+    /// client cannot parse, or one asking for RESP3; TLS settings it will not use — `#insecure`,
     /// material beside a plaintext URL, material no handshake could use; a
     /// handshake that fails the same way every time; and an answer naming the
     /// deployment's own settings — refused credentials, an ACL denying the
@@ -634,6 +634,11 @@ fn client(
         .as_str()
         .into_connection_info()
         .map_err(invalid_url)?;
+    if info.redis_settings().protocol() != redis::ProtocolVersion::RESP2 {
+        return Err(RedisError::UnsupportedProtocol {
+            endpoint: endpoint.to_owned(),
+        });
+    }
     // Every connection the client opens — the proof, the kept one, one it
     // reopens, a blocking read's — learns through its socket that Redis is gone,
     // and sends no `CLIENT SETINFO`, which an ACL user confined to a binding's
@@ -1133,6 +1138,33 @@ mod tests {
                 .to_string()
                 .contains(&nest_rs_config::var_name("redis", "TLS_CA_CERT")),
             "the refusal names the setting to use instead: {error}",
+        );
+    }
+
+    /// A URL asking for RESP3 is refused before anything is dialled: every
+    /// binding reads Redis's RESP2 replies, and over RESP3 the worker's read
+    /// failed on every receive.
+    #[tokio::test]
+    async fn a_url_asking_for_resp3_is_refused_at_once() {
+        let started = Instant::now();
+        let Err(error) = RedisConnection::connect(&config(
+            "redis://127.0.0.1:9/?protocol=resp3",
+            Duration::from_secs(5),
+        ))
+        .await
+        else {
+            panic!("RESP3 must not connect")
+        };
+        assert!(started.elapsed() < Duration::from_secs(1), "at once");
+        assert!(
+            matches!(error, RedisError::UnsupportedProtocol { .. }),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&nest_rs_config::var_name("redis", "URL")),
+            "the refusal names the setting to change: {error}",
         );
     }
 

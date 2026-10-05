@@ -18,7 +18,7 @@ lint:
 # Each lockfile is read as committed: one its manifests outgrew fails rather than
 # being resolved again. An ignore is judged in the framework's tree, where it is
 # decided: a tree that does not reach the crate says nothing about it.
-# Every lockfile the repository owns against the advisory database, which moves without a change here
+# Every Cargo lockfile the repository owns against the advisory database, which moves without a change here
 audit:
     #!/usr/bin/env bash
     set -euo pipefail

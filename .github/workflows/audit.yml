@@ -1,8 +1,9 @@
-# Every dependency tree the repository owns — the framework's, the demo's and
-# the benchmarks' — against the RustSec advisory database. An advisory is
-# published without a change here, so it is checked where it can be acted on:
-# blocking on a change to the tree, daily on `main`, and before a release
-# (`publish.yml`) — never on a change that did not touch the tree.
+# Every Cargo dependency tree the repository owns — the framework's, the
+# demo's and the benchmarks' — against the RustSec advisory database; the npm
+# trees are not read yet (.claude/decisions/npm-lockfile-advisories.md). An
+# advisory is published without a change here, so it is checked where it can
+# be acted on: blocking on a change to the tree, daily on `main`, and before a
+# release (`publish.yml`) — never on a change that did not touch the tree.
 
 name: Audit
 

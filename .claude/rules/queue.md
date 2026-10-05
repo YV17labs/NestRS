@@ -119,8 +119,9 @@ features because each pulls a port crate an app may not need.
   (`RedisConnection::dedicated`), bounded by its own wait plus the budget.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
   silently unused; verification is never an option (`CLAUDE.md`).
-- **The oldest Redis the docs claim is the oldest the e2e suite passed on at the
-  release**, never one it has not run.
+- **The oldest Redis the docs claim is the oldest the e2e suite passes on**,
+  never one it has not run: `ci.yml`'s `redis` job runs nest-rs-redis's suites
+  on that Redis and that Valkey, so the claim and the matrix move together.
 - **Each binding's docs page prescribes its ACL rule whole, per role** — its
   namespace, the connection's commands, every command it or a script it runs
   sends, and nothing else. Held by `nest-rs-redis`'s e2e, which creates each

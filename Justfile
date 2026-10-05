@@ -15,9 +15,17 @@ lint:
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
     cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going
 
-# The tree against the advisory database, which moves without a change here
+# Each lockfile is read as committed: one its manifests outgrew fails rather than
+# being resolved again. An ignore is judged in the framework's tree, where it is
+# decided: a tree that does not reach the crate says nothing about it.
+# Every lockfile the repository owns against the advisory database, which moves without a change here
 audit:
-    cargo deny check advisories
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo deny --locked check advisories
+    for lock in $(git ls-files '*/Cargo.lock'); do
+        cargo deny --locked --manifest-path "$(dirname "$lock")/Cargo.toml" check advisories --allow advisory-not-detected
+    done
 
 # Tests, one recipe per kind; `just test` runs them all
 mod test

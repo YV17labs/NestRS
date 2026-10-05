@@ -1,0 +1,87 @@
+# The demo's e2e suites — the queue's among them — against the framework it
+# builds on by path, on every change either side could break them with. The
+# demo is its own workspace with its own commands; this runs one of them.
+
+name: Demo
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths: &tree
+      - 'demo/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - '.github/actions/**'
+      - '.github/workflows/demo.yml'
+      - '!**.md'
+      - 'demo/**/src/**'
+      - 'crates/**/src/**'
+  pull_request:
+    paths: *tree
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: demo-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: demo e2e (Postgres, Redis, S3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: nestrs
+          POSTGRES_PASSWORD: nestrs
+          POSTGRES_DB: nestrs
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nestrs -d nestrs"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:8.6.3
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      rustfs:
+        image: rustfs/rustfs:1.0.0-beta.8
+        env:
+          RUSTFS_VOLUMES: /data
+          RUSTFS_ADDRESS: 0.0.0.0:9000
+          RUSTFS_ACCESS_KEY: nestrs
+          RUSTFS_SECRET_KEY: nestrs
+        ports: ['9000:9000']
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9000/health"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    # The dev container's services, as the runner reaches them; the suites push
+    # on Redis database 1, as demo/.env.test sets it.
+    env:
+      NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
+      NESTRS_REDIS__URL: redis://localhost:6379/1
+      NESTRS_STORAGE__ENDPOINT: http://localhost:9000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: demo
+          workspaces: 'demo -> target'
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@0.9,just@1
+      - run: just test e2e
+        working-directory: demo

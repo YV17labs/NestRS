@@ -16,6 +16,11 @@ integration:
 e2e:
     {{nextest}} -E 'binary(e2e)'
 
+# CI runs it on the oldest Redis and Valkey the docs claim.
+# nest-rs-redis's suites alone, against the Redis `<PREFIX>_REDIS__URL` names
+redis:
+    cargo nextest run -p nest-rs-redis --all-features --no-fail-fast
+
 # Coverage of the nextest suite, per file; doctests count on nightly only
 cov:
     cargo llvm-cov nextest --workspace --no-fail-fast

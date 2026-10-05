@@ -1,4 +1,5 @@
-# The dependency tree against the RustSec advisory database. An advisory is
+# Every dependency tree the repository owns — the framework's, the demo's and
+# the benchmarks' — against the RustSec advisory database. An advisory is
 # published without a change here, so it is checked where it can be acted on:
 # blocking on a change to the tree, daily on `main`, and before a release
 # (`publish.yml`) — never on a change that did not touch the tree.
@@ -9,9 +10,11 @@ on:
   push:
     branches: [main, 'release/**']
     paths: &tree
-      - 'Cargo.lock'
+      - '**/Cargo.lock'
       - '**/Cargo.toml'
       - 'deny.toml'
+      - 'Justfile'
+      - '.github/workflows/audit.yml'
   pull_request:
     paths: *tree
   schedule:

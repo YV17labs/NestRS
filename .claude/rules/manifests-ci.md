@@ -82,7 +82,8 @@ owning crate's suite is undocumented.
 ## Workspaces and toolchain
 
 - `demo/` is its own workspace (`publish = false` crates) and never joins the
-  root `members`; nothing at the root builds or tests it. `.cargo/config.toml`
+  root `members`; nothing at the root builds or tests it, and `demo.yml` runs
+  its own recipe. `.cargo/config.toml`
   (mold) is inherited by `demo/`, never duplicated.
 - `rust-toolchain.toml` pins the channel as `major.minor`; each workspace's
   `rust-version`, the images, `nestrs doctor`, the docs and every scaffold move
@@ -96,13 +97,19 @@ owning crate's suite is undocumented.
 
 `just ci` is what `ci.yml` runs, recipe for recipe: fmt, clippy, each capability
 alone, the dependency policy, rustdoc, then every test against real Postgres,
-Redis and S3 — never a mock. `deny.toml` is the dependency policy: no known
+Redis and S3 — never a mock — and `just test redis` once more on each of the
+oldest Redis and Valkey the docs claim. `demo.yml` runs the demo's e2e suites
+on a change to the demo or to the framework it builds on. **A workflow skips
+only what no build or test reads**: a file under a crate's `src/` is compiled
+whatever its extension, and a docs page may be read by a test (nest-rs-redis's
+e2e runs the ACL rules as printed). `deny.toml` is the dependency policy: no known
 vulnerable, unsound or unmaintained crate, no licence outside its list, nothing
 outside crates.io, no crate it bans; an exception names its advisory or crate
 and its reason. **A check belongs where only a change can turn it red**: the
 bans, licences and sources are `just lint`'s, while the advisories, which the
-database moves overnight, are `just audit`'s — run by `audit.yml` on a change
-to the tree (blocking), daily on `main`, and by `publish.yml` before a release.
+database moves overnight, are `just audit`'s, over every lockfile the
+repository owns — run by `audit.yml` on a change to a tree (blocking), daily on
+`main`, and by `publish.yml` before a release.
 `docs.yml` builds the site when
 `docs/` changes. The workflows stay hardened: actions pinned by SHA,
 `persist-credentials: false`, least permissions.

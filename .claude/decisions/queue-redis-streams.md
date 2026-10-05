@@ -249,3 +249,12 @@ The rewrite landed as planned, with these choices the plan left open:
   upgrade pages say to set `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`.
 - **The floor the docs claim is the oldest the suite passed on**: Redis 6.2.24
   and Valkey 9.1.2 at this landing, with 8.6.3 in the dev container.
+
+## 2026-10-05 — the floor is a CI job
+
+Amended by the owner: what CI does not run is not held. The floor the docs claim
+(Redis 6.2.24, Valkey 9.1.2) was proved by hand, on servers built from source,
+and "no server matrix job" left every later script change to be re-proved the
+same way or not at all. `ci.yml` now runs `just test redis` — nest-rs-redis's
+suites alone — once per server, each the official image as a service, the TLS
+server started from the same image; the claim and the matrix move in one change.

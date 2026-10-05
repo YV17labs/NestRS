@@ -322,7 +322,14 @@ pub(crate) fn remedy(error: &(dyn std::error::Error + 'static)) -> String {
 /// [`negotiation_failed`] cannot read it — a handshake of one's own can.
 pub(crate) fn handshake_shaped(error: &redis::RedisError) -> bool {
     std::error::Error::source(error)
-        .and_then(|source| source.downcast_ref::<io::Error>())
+        .and_then(|source| {
+            source.downcast_ref::<io::Error>().or_else(|| {
+                // `redis` keeps the io error behind an `Arc`.
+                source
+                    .downcast_ref::<std::sync::Arc<dyn std::error::Error + Send + Sync>>()
+                    .and_then(|shared| shared.downcast_ref::<io::Error>())
+            })
+        })
         .is_some_and(|source| source.kind() == io::ErrorKind::InvalidData)
 }
 
@@ -332,6 +339,13 @@ fn negotiation_error<'a>(
 ) -> Option<&'a rustls::Error> {
     let mut next = Some(error);
     while let Some(current) = next {
+        // `redis` keeps the error it wraps behind an `Arc`, whose own `source`
+        // skips it: look through the `Arc` before anything else.
+        let current = current
+            .downcast_ref::<std::sync::Arc<dyn std::error::Error + Send + Sync>>()
+            .map_or(current, |shared| {
+                &**shared as &(dyn std::error::Error + 'static)
+            });
         if let Some(refused) = current.downcast_ref::<rustls::Error>() {
             return Some(refused);
         }
@@ -583,7 +597,10 @@ mod tests {
         ));
         let dropped = redis::RedisError::from(io::Error::from(io::ErrorKind::ConnectionReset));
         let timed_out = redis::RedisError::from(io::Error::from(io::ErrorKind::TimedOut));
-        let answered = redis::RedisError::from((redis::ErrorKind::ResponseError, "ERR"));
+        let answered = redis::RedisError::from((
+            redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError),
+            "ERR",
+        ));
         assert!(handshake_shaped(&reopened), "{reopened}");
         assert!(!handshake_shaped(&dropped), "{dropped}");
         assert!(!handshake_shaped(&timed_out), "{timed_out}");

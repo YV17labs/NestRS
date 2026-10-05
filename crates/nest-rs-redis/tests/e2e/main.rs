@@ -59,7 +59,7 @@ fn redis_url() -> String {
 fn redis_address() -> String {
     redis::IntoConnectionInfo::into_connection_info(redis_url().as_str())
         .expect("the dev container Redis URL parses")
-        .addr
+        .addr()
         .to_string()
 }
 
@@ -642,14 +642,6 @@ async fn forget_user(user: &str) {
         .expect("ACL DELUSER");
 }
 
-/// The one command a documented rule leaves out on purpose: the client
-/// library's `CLIENT SETINFO`, which it sends on every connection and whose
-/// refusal it ignores. Redis 7.0 knows no such subcommand and refuses a rule
-/// naming it, so allowing it would cost the rule every server before 7.2. Its
-/// refusal reaches `ACL LOG` as `client|setinfo` from 7.2 on, and as `client` on
-/// Redis 6, which logs a command without its subcommand.
-const SETINFO: [&str; 2] = ["client|setinfo", "client"];
-
 /// Whether `event` carries Redis's refusal of a command or a key — the answer
 /// an ACL gives.
 fn refused_by_acl(event: &CapturedEvent) -> bool {
@@ -658,9 +650,9 @@ fn refused_by_acl(event: &CapturedEvent) -> bool {
         .is_some_and(|error| error.contains("NOPERM") || error.contains("no permissions"))
 }
 
-/// Redis denied `user` nothing but [`SETINFO`], which a documented rule leaves
-/// out, and the commands `besides` names: its own ACL log holds every denial,
-/// so a refusal the app swallowed shows there even when no line does.
+/// Redis denied `user` nothing but the commands `besides` names: its own ACL
+/// log holds every denial, so a refusal the app swallowed shows there even
+/// when no line does.
 async fn assert_redis_denied_nothing_but(user: &str, besides: &[&str]) {
     let entries: Vec<std::collections::HashMap<String, redis::Value>> = redis::cmd("ACL")
         .arg("LOG")
@@ -670,14 +662,14 @@ async fn assert_redis_denied_nothing_but(user: &str, besides: &[&str]) {
     let text = |entry: &std::collections::HashMap<String, redis::Value>, field: &str| {
         entry
             .get(field)
-            .and_then(|value| redis::from_redis_value::<String>(value).ok())
+            .and_then(|value| redis::from_redis_value_ref::<String>(value).ok())
             .unwrap_or_default()
     };
     let denied: Vec<String> = entries
         .iter()
         .filter(|entry| text(entry, "username") == user)
         .map(|entry| text(entry, "object"))
-        .filter(|object| !SETINFO.contains(&object.as_str()) && !besides.contains(&object.as_str()))
+        .filter(|object| !besides.contains(&object.as_str()))
         .collect();
     assert!(denied.is_empty(), "Redis denied {user}: {denied:?}");
 }

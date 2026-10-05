@@ -140,8 +140,7 @@ fn parse(line: &str) -> Option<(String, String)> {
 
 /// The commands sent to the confined database in `seen` by anyone but the
 /// test's own administration — the clients of Redis's `default` user still
-/// open — and by the scripts they ran, but the client library's `CLIENT
-/// SETINFO`, which no rule names ([`crate::SETINFO`]).
+/// open — and by the scripts they ran.
 async fn sent(seen: &Seen) -> BTreeSet<String> {
     let clients: String = redis::cmd("CLIENT")
         .arg("LIST")
@@ -163,7 +162,6 @@ async fn sent(seen: &Seen) -> BTreeSet<String> {
         .iter()
         .filter(|(client, _)| !administration.contains(client))
         .map(|(_, command)| command.clone())
-        .filter(|command| !crate::SETINFO.contains(&command.as_str()))
         .collect()
 }
 

@@ -190,7 +190,7 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
     );
     assert!(matches!(error, RedisError::Refused { .. }), "{error}");
     assert!(
-        answer(&error).contains("NOPERM"),
+        answer(&error).contains("no permissions to run the 'ping' command"),
         "the source says what Redis answered: {}",
         answer(&error),
     );

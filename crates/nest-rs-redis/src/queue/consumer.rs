@@ -147,9 +147,9 @@ impl RedisQueueConsumer {
                     return Err(reclaim_shape());
                 };
                 let entry: String =
-                    redis::from_redis_value(&entry).map_err(|_shape| reclaim_shape())?;
+                    redis::from_redis_value(entry).map_err(|_shape| reclaim_shape())?;
                 let count: u32 =
-                    redis::from_redis_value(&count).map_err(|_shape| reclaim_shape())?;
+                    redis::from_redis_value(count).map_err(|_shape| reclaim_shape())?;
                 Ok(self.delivery(entry, count, fields))
             })
             .collect()
@@ -540,7 +540,7 @@ fn entries(read: Value) -> Result<Vec<(String, Value)>, QueueError> {
             let (Some(fields), Some(id)) = (entry.pop(), entry.pop()) else {
                 return Err(shape());
             };
-            let id: String = redis::from_redis_value(&id).map_err(|_shape| shape())?;
+            let id: String = redis::from_redis_value(id).map_err(|_shape| shape())?;
             found.push((id, fields));
         }
     }

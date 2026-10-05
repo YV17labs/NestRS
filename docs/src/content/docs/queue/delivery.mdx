@@ -84,11 +84,6 @@ sends. An app that also rate-limits or fires scheduled jobs once gives the same
 user [the rate limiter's](/rate-limiting/#redis-shipped) and
 [the schedule's](/schedule/#the-keys) rules as well.
 
-The client library also sends `CLIENT SETINFO` on every connection and ignores
-its refusal; no rule names it, because Redis 7.0 knows no such subcommand and
-would refuse the whole rule. Redis 7.2 and later file that refusal in `ACL LOG` as
-`client|setinfo`, and Redis 6.2 as `client`.
-
 ## At least once, and the fence
 
 A worker reads its queue with `XREADGROUP`, which hands an entry over, records

@@ -513,7 +513,7 @@ async fn consumers(queue: &str) -> Vec<String> {
         .filter_map(|consumer| {
             consumer
                 .get("name")
-                .and_then(|name| redis::from_redis_value::<String>(name).ok())
+                .and_then(|name| redis::from_redis_value_ref::<String>(name).ok())
         })
         .collect()
 }

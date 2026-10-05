@@ -35,6 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use nest_rs_config::Namespaced;
+use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
 use redis::io::tcp::TcpSettings;
 use redis::io::tcp::socket2::TcpKeepalive;
@@ -147,7 +148,11 @@ impl TlsRefusals {
         tokio::spawn(async move {
             let attempt = tokio::time::timeout(
                 refusals.budget,
-                refusals.client.get_multiplexed_async_connection(),
+                refusals
+                    .client
+                    .get_multiplexed_async_connection_with_config(&connection_config(
+                        refusals.budget,
+                    )),
             )
             .await;
             if let Ok(Err(error)) = attempt
@@ -164,23 +169,19 @@ impl TlsRefusals {
 /// always clamped to what is left of the budget.
 const FIRST_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
-/// Ceiling for the doubling backoff, in the milliseconds `redis` takes it in.
-const MAX_RETRY_BACKOFF_MS: u64 = 2_000;
-
 /// Ceiling for the doubling backoff — a whole boot budget must still fit
 /// several attempts, each of which gets its own `warn`. The connection's own
 /// reconnect backoff takes the same ceiling.
-const MAX_RETRY_BACKOFF: Duration = Duration::from_millis(MAX_RETRY_BACKOFF_MS);
+const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
 /// The shortest the socket waits before it probes, or before it gives up on
 /// what it sent: the kernel counts the first in whole seconds and refuses zero.
 const LIVENESS_FLOOR: Duration = Duration::from_secs(1);
 
-/// How much each reconnect attempt's wait grows over the last. `redis`
-/// defaults to a hundredfold, from one second, which after two failures is a
-/// minute between attempts — a Redis back after a restart then waits out that
-/// minute before a single caller is answered.
-const RECONNECT_FACTOR: u64 = 2;
+/// How much each reconnect attempt's wait grows over the last: the boot's
+/// doubling, so a Redis back after a restart is reached within the boot's
+/// ceiling rather than a growing wait.
+const RECONNECT_FACTOR: f32 = 2.0;
 
 impl RedisConnection {
     /// Open the connection to the Redis `config` names and prove it answers,
@@ -233,7 +234,7 @@ impl RedisConnection {
             )
             .map_err(RedisError::Budget)?;
         let endpoint = address(&config.url);
-        let client = client(config, &endpoint)?;
+        let client = client(config, &endpoint, budget)?;
         // The budget was held to its range above, so an hour at most: no clock
         // overflows adding it.
         let deadline = Instant::now() + budget;
@@ -258,7 +259,7 @@ impl RedisConnection {
                         );
                     }
                     let refusals = matches!(
-                        client.get_connection_info().addr,
+                        client.get_connection_info().addr(),
                         ConnectionAddr::TcpTls { .. }
                     )
                     .then(|| {
@@ -299,7 +300,7 @@ impl RedisConnection {
                 Ok(Err(source)) if database_refused(&source) => {
                     return Err(RedisError::DatabaseRefused {
                         endpoint,
-                        database: client.get_connection_info().redis.db,
+                        database: client.get_connection_info().redis_settings().db(),
                         source,
                     });
                 }
@@ -476,7 +477,7 @@ const SELECT_REFUSED: &str = "Redis server refused to switch database";
 /// one transient answer it can meet is a server busy running a script or a
 /// module command — retried; anything else repeats, and fails at once.
 fn database_refused(error: &redis::RedisError) -> bool {
-    error.kind() == redis::ErrorKind::ResponseError
+    error.kind() == redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError)
         && error.to_string().starts_with(SELECT_REFUSED)
         && !error.detail().is_some_and(|detail| {
             let detail = detail.to_ascii_lowercase();
@@ -487,7 +488,11 @@ fn database_refused(error: &redis::RedisError) -> bool {
 /// The client the connection is opened from, and reopened from, so the URL's
 /// TLS and the material beside it reach every connection it opens. Nothing is
 /// dialled: each refusal here is one every attempt would repeat.
-fn client(config: &RedisConfig, endpoint: &str) -> Result<redis::Client, RedisError> {
+fn client(
+    config: &RedisConfig,
+    endpoint: &str,
+    budget: Duration,
+) -> Result<redis::Client, RedisError> {
     let invalid_url = |source: redis::RedisError| RedisError::InvalidUrl {
         endpoint: endpoint.to_owned(),
         source,
@@ -497,7 +502,15 @@ fn client(config: &RedisConfig, endpoint: &str) -> Result<redis::Client, RedisEr
         .as_str()
         .into_connection_info()
         .map_err(invalid_url)?;
-    let ConnectionAddr::TcpTls { host, insecure, .. } = &info.addr else {
+    // Every connection the client opens — the proof, the kept one, one it
+    // reopens, a blocking read's — learns through its socket that Redis is gone,
+    // and sends no `CLIENT SETINFO`, which an ACL user confined to a binding's
+    // commands is refused.
+    let redis = info.redis_settings().clone().set_skip_set_lib_name();
+    let info = info
+        .set_tcp_settings(liveness(budget))
+        .set_redis_settings(redis);
+    let ConnectionAddr::TcpTls { host, insecure, .. } = info.addr() else {
         if config.tls.is_set() {
             return Err(RedisError::PlaintextUrl {
                 endpoint: endpoint.to_owned(),
@@ -547,16 +560,43 @@ fn client(config: &RedisConfig, endpoint: &str) -> Result<redis::Client, RedisEr
 /// instance — answered the proof, refused the kept connection, and the boot
 /// spent its whole budget in the client's silent retries before blaming the
 /// network. The slot is released as the closed socket reaches the server, so
-/// the kept connection may still meet it taken once; its own retry is then the
-/// case it serves, and it lands inside the budget.
+/// the kept connection may still meet it taken once: its own `PING` then fails
+/// the attempt, and the next lands inside the budget.
 async fn prove(
     client: &redis::Client,
     budget: Duration,
 ) -> Result<ConnectionManager, redis::RedisError> {
-    let mut proof = client.get_multiplexed_async_connection().await?;
+    let mut proof = client
+        .get_multiplexed_async_connection_with_config(&connection_config(budget))
+        .await?;
     redis::cmd("PING").query_async::<()>(&mut proof).await?;
     drop(proof);
-    ConnectionManager::new_with_config(client.clone(), manager_config(budget)).await
+    // The kept connection is proved too: one that sends nothing on opening — no
+    // `AUTH`, no `SELECT` — meets a refusal Redis writes before it closes, a
+    // full `maxclients`, only at its first command. The manager reopens it on
+    // its own, so the proof is asked again of the same manager, within the
+    // attempt: a manager dropped mid-reopen would still take a slot.
+    let mut kept =
+        ConnectionManager::new_with_config(client.clone(), manager_config(budget)).await?;
+    let mut wait = FIRST_RETRY_BACKOFF;
+    loop {
+        match redis::cmd("PING").query_async::<()>(&mut kept).await {
+            Ok(()) => return Ok(kept),
+            Err(error) if refused(&error) || tls::negotiation_failed(&error) => return Err(error),
+            Err(_) => {
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(MAX_RETRY_BACKOFF);
+            }
+        }
+    }
+}
+
+/// A connection opened once, with no reopening: its dial bounded by the budget,
+/// and no reply timeout of the client's — the caller bounds what it waits on.
+fn connection_config(budget: Duration) -> AsyncConnectionConfig {
+    AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(budget))
+        .set_response_timeout(None)
 }
 
 /// How the kept connection reopens after Redis drops it: each attempt bounded
@@ -567,10 +607,11 @@ async fn prove(
 /// and a blocking command's wait is its own.
 fn manager_config(budget: Duration) -> ConnectionManagerConfig {
     ConnectionManagerConfig::new()
-        .set_connection_timeout(budget)
-        .set_factor(RECONNECT_FACTOR)
-        .set_max_delay(MAX_RETRY_BACKOFF_MS)
-        .set_tcp_settings(liveness(budget))
+        .set_connection_timeout(Some(budget))
+        .set_response_timeout(None)
+        .set_min_delay(FIRST_RETRY_BACKOFF)
+        .set_exponent_base(RECONNECT_FACTOR)
+        .set_max_delay(MAX_RETRY_BACKOFF)
 }
 
 /// How the socket learns that Redis is gone rather than slow, so a connection
@@ -624,7 +665,7 @@ const _: () = {
 /// when what precedes `://` is not a scheme and may be a credential.
 fn address(url: &str) -> String {
     match url.into_connection_info() {
-        Ok(info) => info.addr.to_string(),
+        Ok(info) => info.addr().to_string(),
         Err(_) => match url.split_once("://") {
             Some((scheme, _)) if is_scheme(scheme) => format!("{scheme}://<unparseable>"),
             _ => "<unparseable>".to_owned(),
@@ -708,7 +749,8 @@ mod tests {
         let config = config(url, Duration::from_secs(2));
         let endpoint = address(url);
         Arc::new(TlsRefusals {
-            client: client(&config, &endpoint).expect("the URL opens a client"),
+            client: client(&config, &endpoint, config.connect_timeout)
+                .expect("the URL opens a client"),
             endpoint,
             budget: config.connect_timeout,
             reported: AtomicBool::new(false),
@@ -812,40 +854,19 @@ mod tests {
         refusals.observe(&Err::<(), _>(redis::RedisError::from(
             std::io::Error::from(std::io::ErrorKind::TimedOut),
         )));
-        refusals.observe(&Err::<(), _>(redis::RedisError::from((
-            redis::ErrorKind::ResponseError,
-            "ERR",
-        ))));
+        refusals.observe(&Err::<(), _>(answer("ERR")));
         assert!(!refusals.diagnosing.load(Ordering::Relaxed));
         assert!(logs.find(crate::TARGET, REFUSED).is_empty());
     }
 
     /// An answer as Redis sends it, parsed as the client parses one.
     fn answer(line: &str) -> redis::RedisError {
-        let (code, detail) = line.split_once(' ').unwrap_or((line, ""));
-        match code {
-            "ERR" => redis::RedisError::from((
-                redis::ErrorKind::ResponseError,
-                "An error was signalled by the server",
-                detail.to_owned(),
-            )),
-            "LOADING" => redis::RedisError::from((
-                redis::ErrorKind::BusyLoadingError,
-                "An error was signalled by the server",
-                detail.to_owned(),
-            )),
-            "MASTERDOWN" => redis::RedisError::from((
-                redis::ErrorKind::MasterDown,
-                "An error was signalled by the server",
-                detail.to_owned(),
-            )),
-            "TRYAGAIN" => redis::RedisError::from((
-                redis::ErrorKind::TryAgain,
-                "An error was signalled by the server",
-                detail.to_owned(),
-            )),
-            code => redis::make_extension_error(code.to_owned(), Some(detail.to_owned())),
-        }
+        let value = redis::parse_redis_value(format!("-{line}\r\n").as_bytes())
+            .expect("a RESP error parses");
+        let redis::Value::ServerError(error) = value else {
+            panic!("a RESP error parses as a server error");
+        };
+        error.into()
     }
 
     /// Only an answer naming the deployment's own settings is a refusal; every
@@ -884,7 +905,7 @@ mod tests {
             answer("SOMEDAYCODE a code this client has never heard of"),
             answer("ERR max number of clients reached"),
             redis::RedisError::from((
-                redis::ErrorKind::ResponseError,
+                redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError),
                 "Redis server refused to switch database",
                 "Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE."
                     .to_owned(),
@@ -902,7 +923,7 @@ mod tests {
     /// server's code dropped, the server's text as the detail.
     fn select_refused(detail: &str) -> redis::RedisError {
         redis::RedisError::from((
-            redis::ErrorKind::ResponseError,
+            redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError),
             SELECT_REFUSED,
             detail.to_owned(),
         ))

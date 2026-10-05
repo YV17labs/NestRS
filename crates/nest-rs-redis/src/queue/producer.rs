@@ -115,10 +115,9 @@ impl JobProducer for RedisQueueProducer {
         match answer {
             redis::Value::Int(0) => Ok(()),
             redis::Value::Array(refused) => {
-                let held =
-                    redis::from_redis_value::<(usize, String)>(&redis::Value::Array(refused))
-                        .ok()
-                        .and_then(|(at, holder)| Some((unique_keys.get(at)?.clone(), holder)));
+                let held = redis::from_redis_value::<(usize, String)>(redis::Value::Array(refused))
+                    .ok()
+                    .and_then(|(at, holder)| Some((unique_keys.get(at)?.clone(), holder)));
                 let Some((key, holder)) = held else {
                     return Err(QueueError::backend(UnexpectedReply {
                         call: "the push",

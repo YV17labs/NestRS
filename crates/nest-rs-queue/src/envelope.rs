@@ -589,7 +589,8 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
 /// Strict, so a developer's payload that happens to carry a `v` and a
 /// `payload` is not taken for an envelope: `v` must be a non-negative whole
 /// number — `1` or a hand-rolled producer's `1.0` — `payload` must be present,
-/// and nothing may sit beside them but the envelope's own keys.
+/// and nothing may sit beside them but the envelope's own keys — unless `v` is
+/// newer than this release's, whose envelope may add keys of its own.
 ///
 /// **The job's identity keys must hold what the push writes** — `id` and
 /// `unique_key` a string, `attempt` a number, `trace_minted` a boolean — because `id` is a name a
@@ -602,7 +603,7 @@ fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
     /// as an `f64`.
     const TWO_TO_THE_64: f64 = 18_446_744_073_709_551_616.0;
 
-    if !map.contains_key(PAYLOAD) || !map.keys().all(|key| KEYS.contains(&key.as_str())) {
+    if !map.contains_key(PAYLOAD) {
         return None;
     }
     let ours = map.get(ID).is_none_or(Value::is_string)
@@ -615,7 +616,7 @@ fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
     let Value::Number(number) = map.get(VERSION)? else {
         return None;
     };
-    number.as_u64().or_else(|| {
+    let version = number.as_u64().or_else(|| {
         number
             .as_f64()
             .filter(|float| {
@@ -630,7 +631,9 @@ fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
                     && *float < TWO_TO_THE_64
             })
             .map(|float| float as u64)
-    })
+    })?;
+    let only_ours = map.keys().all(|key| KEYS.contains(&key.as_str()));
+    (only_ours || version > u64::from(crate::WIRE_FORMAT_VERSION)).then_some(version)
 }
 
 #[cfg(test)]

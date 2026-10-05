@@ -1096,6 +1096,31 @@ async fn attempt_newer(delivery: &mut Delivery) -> AttemptOutcome {
     consume::attempt(method("FlakyProcessor::flaky"), delivery, container).await
 }
 
+/// A newer release's envelope that adds a key of its own — what a later
+/// version may do, keeping `id` and the trace as they are spelled here — is
+/// still that release's job: handed back unread under its id, never opened as
+/// a foreign payload and run, nor dead-lettered under an id of its own.
+#[tokio::test]
+async fn a_newer_releases_job_carrying_a_key_this_release_never_wrote_is_handed_back() {
+    let id = fresh_job_id();
+    let mut stored = sealed_by_a_newer_release(&id);
+    stored["priority"] = json!(5);
+    let mut delivery = Delivery::new(
+        &FULL,
+        QueueName::new("transcode").expect("a valid name"),
+        stored.clone(),
+    );
+    assert_eq!(delivery.id().to_string(), id, "its id is read");
+    let runs = FLAKY_RUNS.load(Ordering::SeqCst);
+    let outcome = attempt_newer(&mut delivery).await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Defer { .. }),
+        "handed back unread: {outcome:?}"
+    );
+    assert_eq!(FLAKY_RUNS.load(Ordering::SeqCst), runs, "nothing ran");
+    assert_eq!(delivery.retry_envelope().into_json(), stored, "as stored");
+}
+
 /// A job a newer release sealed runs nothing here and spends no attempt while
 /// it is within the patience: it is handed back as it was stored, for a
 /// consumer of that release, under the id its push returned — and the delivery

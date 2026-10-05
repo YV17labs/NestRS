@@ -840,6 +840,7 @@ impl LongProcessor {
     async fn long(&self, job: LongCommand) -> anyhow::Result<()> {
         LONG.start(job.run);
         tokio::time::sleep(Duration::from_secs(6)).await;
+        LONG.finish(job.run);
         Ok(())
     }
 }
@@ -852,7 +853,9 @@ struct LongModule;
 
 /// An entry deleted by hand while a delivery holds it — no script deletes one
 /// still pending — is gone with its job: the renewal that meets it says so,
-/// naming the entry, rather than losing it in silence.
+/// naming the entry, rather than losing it in silence. A Redis before 7.0 keeps
+/// the entry pending and renews it, so the job ends as delivered and nothing is
+/// lost to say.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_entry_deleted_while_delivered_is_said() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -883,6 +886,19 @@ async fn an_entry_deleted_while_delivered_is_said() {
         .await
         .expect("XDEL by hand");
     let said = "queue entries deleted while delivered; their jobs are gone, and a unique key they held stays held until cancel_unique frees it";
+    if renews_a_deleted_entry().await {
+        crate::wait_until(Duration::from_secs(15), || LONG.finished(run) == 1).await;
+        replica.worker.shutdown().await.expect("clean shutdown");
+        assert!(logs.find(nest_rs_queue::TARGET, said).is_empty());
+        let kept: i64 = redis::cmd("HLEN")
+            .arg(crate::key_of(queue, "entries"))
+            .query_async(&mut crate::connect().await)
+            .await
+            .expect("HLEN");
+        assert_eq!(kept, 0, "the job ended, leaving no record");
+        crate::forget(queue).await;
+        return;
+    }
     for _ in 0..80 {
         if !logs.find(nest_rs_queue::TARGET, said).is_empty() {
             break;
@@ -894,6 +910,23 @@ async fn an_entry_deleted_while_delivered_is_said() {
     assert_eq!(line.level, "warn");
     assert_eq!(line.field("backend_ids").as_deref(), Some(entry.as_str()));
     crate::forget(queue).await;
+}
+
+/// Whether the server renews an entry deleted under its delivery as if it were
+/// still there — a Redis before 7.0, whose `XCLAIM` keeps it pending. Valkey
+/// reports the Redis version it is compatible with.
+async fn renews_a_deleted_entry() -> bool {
+    let info: String = redis::cmd("INFO")
+        .arg("server")
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("INFO server");
+    let major = info
+        .lines()
+        .find_map(|line| line.strip_prefix("redis_version:"))
+        .and_then(|version| version.split('.').next()?.parse::<u32>().ok())
+        .expect("the server reports its version");
+    major < 7
 }
 
 /// A Redis whose script cache was emptied — a restart, a `SCRIPT FLUSH` — still

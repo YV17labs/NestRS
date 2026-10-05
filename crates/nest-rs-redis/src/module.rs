@@ -22,7 +22,7 @@ use crate::{RedisConfig, RedisConnection};
 pub struct RedisModule;
 
 impl RedisModule {
-    /// `None` ⇒ load from `NESTRS_REDIS__*`; `Some(cfg)` pins the base those
+    /// `None` ⇒ load from `<PREFIX>_REDIS__*`; `Some(cfg)` pins the base those
     /// variables overlay, per field.
     pub fn for_root(config: impl Into<Option<RedisConfig>>) -> RedisSetup {
         RedisSetup {

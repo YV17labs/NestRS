@@ -195,9 +195,13 @@ mod tests {
     }
 
     /// A queue's keys share one hash tag, its name, so they share one slot —
-    /// and one queue's keys never prefix another's, whose name it prefixes.
+    /// and one queue's keys never prefix another's, whose name it prefixes. A
+    /// name holding a brace would end the tag inside it, so the port refuses one.
     #[test]
     fn a_queues_keys_share_its_hash_tag_and_no_other_queues() {
+        for braced in ["a{b", "a}b", "{audio}"] {
+            assert!(QueueName::new(braced).is_err(), "{braced} is refused");
+        }
         let audio = QueueKeys::new(&QueueName::new("audio").expect("a valid name"));
         let longer = QueueKeys::new(&QueueName::new("audio2").expect("a valid name"));
         assert_eq!(audio.jobs, "nestrs:queue:{audio}:jobs");

@@ -20,9 +20,8 @@ impl Delay {
     ///
     /// A bound on the *instant*, not on the delay, because the instant is what
     /// a backend stores: every store that keeps a timestamp represents one this
-    /// late, and Redis — which holds a job's records for a millisecond count
-    /// past it — refuses an expiry whose instant overflows its `i64`
-    /// milliseconds, which a delay alone within that range still reached.
+    /// late — Redis's milliseconds and a Lua number among them — which a delay
+    /// alone within that range would not hold to.
     pub const LATEST_DUE: Duration = Duration::from_millis(253_402_300_799_999);
 
     /// The instant the delay ends for a push made at `pushed_at`, refused with

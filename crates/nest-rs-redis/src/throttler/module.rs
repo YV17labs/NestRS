@@ -17,7 +17,7 @@ use crate::throttler::RedisThrottler;
 
 /// Cross-process rate-limit store. Import beside `ThrottlerModule::for_root`
 /// to share the counters across every instance of the app; the policy
-/// (`NESTRS_THROTTLER__*`) and the `ThrottlerGuard` stay the port's.
+/// (`<PREFIX>_THROTTLER__*`) and the `ThrottlerGuard` stay the port's.
 pub struct RedisThrottlerModule;
 
 impl Module for RedisThrottlerModule {

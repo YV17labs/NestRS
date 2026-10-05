@@ -654,8 +654,11 @@ fn refused_by_acl(event: &CapturedEvent) -> bool {
 /// log holds every denial, so a refusal the app swallowed shows there even
 /// when no line does.
 async fn assert_redis_denied_nothing_but(user: &str, besides: &[&str]) {
+    // Every entry Redis keeps, not the ten `ACL LOG` answers by default: a
+    // denial behind ten newer ones would pass unseen.
     let entries: Vec<std::collections::HashMap<String, redis::Value>> = redis::cmd("ACL")
         .arg("LOG")
+        .arg(i64::from(u32::MAX))
         .query_async(&mut connect().await)
         .await
         .expect("ACL LOG");

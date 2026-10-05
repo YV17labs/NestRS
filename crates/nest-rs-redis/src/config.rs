@@ -3,7 +3,7 @@
 //! Namespace `redis`, read off the path like every other config's. The
 //! connection is the crate's own subject — every binding folder (`queue/`,
 //! `worker/`, `throttler/`) shares it — so it lives at the crate root under the
-//! crate's word, `NESTRS_REDIS__*`, and the operator configures the resource
+//! crate's word, `<PREFIX>_REDIS__*`, and the operator configures the resource
 //! they provisioned rather than the capability that happened to ask first.
 
 use std::time::Duration;
@@ -50,7 +50,7 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
-/// Redis settings, settable via `NESTRS_REDIS__*` or pinned through
+/// Redis settings, settable via `<PREFIX>_REDIS__*` or pinned through
 /// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL and the
 /// private key are redacted in `Debug` output — the URL may embed credentials.
 #[config(namespace = "redis")]
@@ -65,13 +65,13 @@ pub struct RedisConfig {
     /// retries an unreachable endpoint on its own, so without a budget a wrong
     /// URL parks the process with an empty log — never healthy, never crashed —
     /// and an outage holds every caller. Read from
-    /// `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
+    /// `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
     /// refused outside, and in code anything above zero up to an hour; defaults
     /// to 10s.
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
     /// authorities of Mozilla's root program compiled into the client and
-    /// presents no certificate. Read from `NESTRS_REDIS__TLS_*` — see
+    /// presents no certificate. Read from `<PREFIX>_REDIS__TLS_*` — see
     /// [`RedisTls`].
     pub tls: RedisTls,
 }
@@ -98,7 +98,7 @@ impl Default for RedisConfig {
 
 impl Config for RedisConfig {
     /// The loopback URL is a dev convenience, so the *unpinned* baseline drops it
-    /// outside dev/test: an unset `NESTRS_REDIS__URL` then fails boot naming the
+    /// outside dev/test: an unset `<PREFIX>_REDIS__URL` then fails boot naming the
     /// variable instead of silently pointing every Redis binding at a
     /// non-existent local Redis (REDIS-Q1). It lives here rather than in
     /// `from_env` so it applies only where it is a default, never over a pinned
@@ -127,7 +127,7 @@ impl Config for RedisConfig {
     }
 }
 
-/// Resolve the Redis URL from the raw `NESTRS_REDIS__URL` value and the active
+/// Resolve the Redis URL from the raw `<PREFIX>_REDIS__URL` value and the active
 /// profile. Unset or blank falls back to the loopback default **only** in
 /// dev/test; in staging/production it aborts boot — a silent
 /// `redis://127.0.0.1/` there points the queue and the rate limiter at a

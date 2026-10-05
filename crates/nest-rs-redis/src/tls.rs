@@ -8,7 +8,7 @@
 //! it again for every connection it opens — every reconnection's included —
 //! blocking the runtime while it does, and fail the connection whenever the
 //! store could not be read, a configured authority notwithstanding. Naming the
-//! system's bundle in `NESTRS_REDIS__TLS_CA_CERT_FILE` trusts its authorities
+//! system's bundle in `<PREFIX>_REDIS__TLS_CA_CERT_FILE` trusts its authorities
 //! instead, read once.
 //!
 //! [`RedisTls`] changes what is trusted and what is presented — a private
@@ -42,12 +42,12 @@ pub struct RedisTls {
     /// PEM certificates of the authorities Redis's certificate must chain to,
     /// **replacing** the compiled-in ones — for a Redis a private authority
     /// signed, or the system's bundle, to trust the system's authorities. Read
-    /// from `NESTRS_REDIS__TLS_CA_CERT`, or the file
-    /// `NESTRS_REDIS__TLS_CA_CERT_FILE` names.
+    /// from `<PREFIX>_REDIS__TLS_CA_CERT`, or the file
+    /// `<PREFIX>_REDIS__TLS_CA_CERT_FILE` names.
     pub ca_cert: Option<Vec<u8>>,
     /// The certificate this process presents, for a Redis that requires one —
     /// its default once TLS is on (`tls-auth-clients yes`). Read from
-    /// `NESTRS_REDIS__TLS_CERT` and `NESTRS_REDIS__TLS_KEY`, or their `_FILE`
+    /// `<PREFIX>_REDIS__TLS_CERT` and `<PREFIX>_REDIS__TLS_KEY`, or their `_FILE`
     /// forms, both or neither.
     pub identity: Option<RedisTlsIdentity>,
 }

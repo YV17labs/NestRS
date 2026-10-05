@@ -230,3 +230,22 @@ The rewrite landed as planned, with these choices the plan left open:
   `ContainerBuilder::provide_declared_factory_after_both`; `after` took one type.
 - **A dead letter is filed back by one `EVAL` the delivery page prints**, run by
   a test as printed.
+
+## 2026-10-05 — corrections to the entries above
+
+- **Lists do not build the lease by hand.** BullMQ and Asynq take the lease in
+  the same script as the list move; what Streams give is the pending list's
+  owner and delivery count kept by Redis itself, which the fence reads. River
+  #1302 is a Postgres rescuer's stale snapshot, and Sidekiq #4611 was closed
+  without a root cause: neither is a list's lease race.
+- **Fencing fixed one of the incidents cited, not all.** River #1302 was fixed by
+  fencing (PR #1373); BullMQ #2258 by extending locks through the close (PR
+  #2259); Sidekiq #4611 never was. Oban's `attempted_at` fence (2.24.1) fixed
+  oban#1496, which the prior art lists.
+- **A 6.1 variable left set is not said at boot.** The owner's amendment of the
+  same day builds nothing for 6.x, so
+  `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` is read by nothing, in
+  silence — a namespace no config claims may be another binary's — and both
+  upgrade pages say to set `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`.
+- **The floor the docs claim is the oldest the suite passed on**: Redis 6.2.24
+  and Valkey 9.1.2 at this landing, with 8.6.3 in the dev container.

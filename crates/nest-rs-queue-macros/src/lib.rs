@@ -52,9 +52,10 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// The name follows the rule `QueueName` states, checked here at compile time.
-/// A queue per runtime key (`prefix = ..`) is refused, naming why: the Redis
-/// backend drains every queue from a list of its own that each replica polls, so
-/// a key that varies at runtime rides in the job instead.
+/// A queue per runtime key (`prefix = ..`) is refused, naming why: a backend
+/// drains every queue through a stream, a group or a subject of its own that
+/// each replica reads, so a key that varies at runtime rides in the job
+/// instead.
 ///
 /// The struct is re-emitted unchanged and gains `impl Queue` and
 /// `impl Destination`.

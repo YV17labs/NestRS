@@ -268,10 +268,10 @@ A value out of its bounds fails the boot, whether the environment set it or
 
 ## Limits
 
-- **Redis 6.2 or later, or Valkey.** Nothing here needs a later command: the
-  scripts run on Redis 6.2's streams, and every one they send is in Valkey's too.
-  The oldest version the docs claim is the oldest the suite passed on at the
-  release, recorded in the changelog.
+- **Redis 6.2.24 or later, or Valkey 9.1.2 or later** — the oldest the suite
+  passed on at the release, recorded in the changelog. Nothing here needs a later
+  command: the scripts run on Redis 6.2's streams, and every one they send is in
+  Valkey's too.
 - **No Redis Cluster yet.** A queue's keys share one hash slot, so the layout
   is a cluster's already; the connection is not a cluster client.
 - **No eviction of the queue's keys.** At least once covers what Redis kept: run

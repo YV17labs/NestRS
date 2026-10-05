@@ -11,7 +11,7 @@
 //!
 //! 1. no peer address at all (unix socket, or a proxy that hides it) ⇒
 //!    [`ClientOrigin::Unknown`];
-//! 2. the peer is not in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer *is* the
+//! 2. the peer is not in `<PREFIX>_HTTP__TRUSTED_PROXIES` ⇒ that peer *is* the
 //!    client ([`ClientOrigin::Peer`]) and the headers are ignored;
 //! 3. the peer is a trusted proxy ⇒ the forwarding headers are read, and the
 //!    client is the **rightmost** hop that is not itself a trusted proxy

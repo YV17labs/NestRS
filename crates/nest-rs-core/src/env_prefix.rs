@@ -55,7 +55,7 @@ impl EnvPrefix {
         RESOLVED.get_or_init(resolve)
     }
 
-    /// A framework-wide variable name: `ENV` ⇒ `NESTRS_ENV`, or `ACME_ENV`
+    /// A framework-wide variable name: `ENV` ⇒ `<PREFIX>_ENV`, or `ACME_ENV`
     /// under `NESTRS_ENV_PREFIX=ACME`.
     ///
     /// Namespaced config variables do **not** go through here — they carry a

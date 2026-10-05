@@ -289,7 +289,7 @@ executor for every job in the binary.
 The activation seam an app imports. A `DynamicModule` that seeds the
 connection at the factory phase, registers the interceptor, and binds the
 worker context to `dyn JobContext`. Every field of the config is settable
-from both the environment (`NESTRS_<NAMESPACE>__<KEY>`) and a pinned
+from both the environment (`<PREFIX>_<NAMESPACE>__<KEY>`) and a pinned
 struct — the framework-wide dual-path rule.
 
 ```rust title="crates/yourdb/src/module.rs"

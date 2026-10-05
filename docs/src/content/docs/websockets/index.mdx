@@ -152,7 +152,7 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | Cause | Code | What the client does |
 |---|---|---|
 | The shutdown signal, after the message it is answering | `1001 Going Away` | reconnects, to a replica still serving |
-| `NESTRS_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
+| `<PREFIX>_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
 | The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
 | A read failed, a message past the cap included | `1011 Internal Error` | reconnects |
 | `#[on_connect]` panicked | `1011 Internal Error` | reconnects |
@@ -175,7 +175,7 @@ A gateway owns its mount, so the version is part of that ownership: `version =
 message tables, while two gateways sharing a path *and* a version still fail boot
 naming both.
 
-Only the URI form selects a gateway. `NESTRS_HTTP__VERSIONING=header` rewrites
+Only the URI form selects a gateway. `<PREFIX>_HTTP__VERSIONING=header` rewrites
 controller paths in front of routing and never learns a self-mount's prefixes, so
 a versioned gateway stays at `/v1/ws` under every strategy — which is just as
 well, since a browser cannot set headers on a `WebSocket` handshake.

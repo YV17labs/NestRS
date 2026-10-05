@@ -36,7 +36,7 @@ pub const ENV_PREFIX_VAR: &str = context::ENV_PREFIX_VAR;
 ///
 /// The CLI's own suite asserts what a scaffold wrote with it, so a name the
 /// suite expects and a name the CLI writes are one derivation rather than a
-/// mirror of it: a literal `NESTRS_AUTHN__SECRET` in a test fails the moment
+/// mirror of it: a literal `<PREFIX>_AUTHN__SECRET` in a test fails the moment
 /// the suite runs under `NESTRS_ENV_PREFIX=ACME`, the run that proves a rename
 /// reaches everything.
 pub fn scaffolded_var(namespace: &str, key: &str) -> String {

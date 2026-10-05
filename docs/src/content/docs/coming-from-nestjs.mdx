@@ -53,7 +53,7 @@ resolver — carries across intact.
 | `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]` — `#[use_filters(...)]` is the *unconditional* mapper, not the typed catch |
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
-| `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `NESTRS_<NS>__<KEY>` |
+| `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `AppModule` |
 | `nest g resource users` | `nestrs g resource users` |
 | Runtime DI resolution | access graph checked at boot, with a named error |
@@ -136,12 +136,12 @@ module config is reachable both ways:
 
 1. **Pinned in code** — `Module::for_root(MyConfig { .. })`, type-checked by
    the compiler.
-2. **`NESTRS_<NAMESPACE>__<KEY>`** — one explicit line per variable in
+2. **`<PREFIX>_<NAMESPACE>__<KEY>`** — one explicit line per variable in
    `from_env`, so the file lists exactly which variables exist.
 
 The two compose **per field, not per struct**: the pinned struct is the *base*
 the environment overlays. Pinning `port` in `HttpConfig` leaves
-`NESTRS_HTTP__COMPRESSION` free to move, and neither path erases the other.
+`<PREFIX>_HTTP__COMPRESSION` free to move, and neither path erases the other.
 
 "The environment" here is the **real process environment only**. A `for_root`
 pin outranks a `.env` file committed beside the code; it does not outrank a

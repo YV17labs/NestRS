@@ -13,7 +13,7 @@ for a variable absent there, falls back to the `.env` cascade parsed into an
 in-crate map — reading never writes to the process environment. A variable
 present but empty in the process environment counts as unset and still keeps
 the `.env` value from being read. Swap it for anything that can answer
-"what's the value of `NESTRS_SEAORM__URL`?" and the same `Config`
+"what's the value of `<PREFIX>_SEAORM__URL`?" and the same `Config`
 struct loads from there — HashiCorp Vault, a K8s ConfigMap, AWS Parameter
 Store, an in-process map for tests.
 
@@ -26,7 +26,7 @@ pub trait ConfigSource: Send + Sync + 'static {
 ```
 
 One method. `var` is the fully-qualified name (e.g.
-`"NESTRS_SEAORM__URL"`) — namespacing happens in `ConfigService`, the
+`"<PREFIX>_SEAORM__URL"`) — namespacing happens in `ConfigService`, the
 source just answers lookups. Empty strings count as unset, same rule as
 `EnvSource`.
 
@@ -42,6 +42,7 @@ A Vault source that hits the API once at startup and caches the result:
 use std::collections::HashMap;
 use std::sync::Arc;
 use nest_rs::config::{ConfigService, ConfigSource};
+use nest_rs::core::EnvPrefix;
 
 pub struct VaultSource {
     snapshot: HashMap<String, String>,
@@ -53,7 +54,7 @@ impl VaultSource {
         let snapshot = response
             .data
             .into_iter()
-            .map(|(k, v)| (format!("NESTRS_{}", k.to_ascii_uppercase()), v))
+            .map(|(k, v)| (format!("{}_{}", EnvPrefix::current(), k.to_ascii_uppercase()), v))
             .collect();
         Ok(Self { snapshot })
     }
@@ -125,7 +126,7 @@ against a concurrent `getenv` on another thread, so no read path may write.
 One function publishes the cascade into the process environment:
 `Environment::init()`, which every scaffolded `main` calls on its first line.
 It exists for the consumers that only know `std::env::var` and never see a
-`ConfigService` — the framework's own `NESTRS_LOG*` setup,
+`ConfigService` — the framework's own `<PREFIX>_LOG*` setup,
 `OpenTelemetry::init`, your `migrate`/`seed` binaries. It writes set-if-absent
 (the real env still wins) and belongs at the top of `main` precisely because
 being single-threaded there is what makes the write sound.
@@ -139,7 +140,7 @@ What this means in practice:
   backend URLs through `std::env` before any `ConfigService` exists, so it calls
   `load_cascade` (the explicit form of what `Environment::init` does) once per
   process. The merge is bounded — set-if-absent, real env still wins, and
-  `.env.local` is skipped under `NESTRS_ENV=test` — and a `for_root` pin still
+  `.env.local` is skipped under `<PREFIX>_ENV=test` — and a `for_root` pin still
   outranks every cascade value. Reach for `with_source` (or `.provide(cfg)`)
   when a test must not see a committed `.env` at all: it decides where the
   values come from, which is the stronger guarantee.
@@ -149,7 +150,7 @@ What this means in practice:
 <Aside type="caution">
 The real hermeticity trap is the **cache**, not a write. The cascade is parsed
 once per process, and that first parse freezes both the working directory it
-read from and the `NESTRS_ENV` that selected the files. A test that changes
+read from and the `<PREFIX>_ENV` that selected the files. A test that changes
 either afterwards — `figment::Jail` moves the CWD — resolves against the
 *earlier* test's cascade. Prefer `ConfigService::with_vars` for config
 assertions: it answers from a map, so nothing is cached and nothing is shared.
@@ -157,7 +158,7 @@ assertions: it answers from a map, so nothing is cached and nothing is shared.
 
 ## What the source sees
 
-`var` is always the fully-qualified `NESTRS_<NS>__<KEY>` string. A few
+`var` is always the fully-qualified `<PREFIX>_<NS>__<KEY>` string. A few
 implications:
 
 - The source receives the **uppercased** namespace + key — the casing
@@ -176,6 +177,8 @@ implications:
 A dispatching source for two backends:
 
 ```rust title="apps/api/src/dispatch.rs"
+use nest_rs::config::{ConfigSource, EnvSource, var_name};
+
 pub struct Dispatch {
     vault: VaultSource,
     env: EnvSource,
@@ -183,7 +186,10 @@ pub struct Dispatch {
 
 impl ConfigSource for Dispatch {
     fn get(&self, var: &str) -> Option<String> {
-        if var.starts_with("NESTRS_SEAORM__") || var.starts_with("NESTRS_OAUTH__") {
+        let from_vault = ["seaorm", "oauth"]
+            .into_iter()
+            .any(|namespace| var.starts_with(&var_name(namespace, "")));
+        if from_vault {
             self.vault.get(var)
         } else {
             self.env.get(var)

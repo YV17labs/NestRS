@@ -1,7 +1,7 @@
 use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Setting, config};
 
 /// S3-compatible object storage configuration, read from the
-/// framework-namespaced `NESTRS_STORAGE__*` keys.
+/// framework-namespaced `<PREFIX>_STORAGE__*` keys.
 ///
 /// The defaults target a local S3-compatible server over plain HTTP in
 /// path-style addressing (the common shape for MinIO / RustFS in a dev
@@ -29,7 +29,7 @@ pub struct StorageConfig {
     /// Allow reaching the endpoint over plain `http://`. Convenient for a local
     /// MinIO / RustFS dev server, but a footgun in production where credentials
     /// would travel unencrypted — so it is **opt-in outside dev/test**
-    /// (`NESTRS_STORAGE__ALLOW_HTTP`), defaulting to `true` only in dev/test and
+    /// (`<PREFIX>_STORAGE__ALLOW_HTTP`), defaulting to `true` only in dev/test and
     /// `false` in staging/production (STORAGE-ST2).
     pub allow_http: bool,
 }
@@ -65,7 +65,7 @@ impl Default for StorageConfig {
 impl Config for StorageConfig {
     /// The unpinned baseline is profile-dependent, and both differences are
     /// security ones. Outside dev/test the dev sentinel credentials
-    /// (`nestrs`/`nestrs`) are dropped so an unset `NESTRS_STORAGE__ACCESS_KEY`
+    /// (`nestrs`/`nestrs`) are dropped so an unset `<PREFIX>_STORAGE__ACCESS_KEY`
     /// fails boot naming the variable rather than authenticating with a public
     /// default (STORAGE-ST1), and plain-HTTP is off so credentials never travel
     /// unencrypted by omission (STORAGE-ST2). It lives here rather than in

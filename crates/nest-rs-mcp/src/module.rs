@@ -9,14 +9,14 @@
 //! [`McpConfig::default`] (rmcp's own loopback-only posture) and reports
 //! whatever its hosts declare.
 //!
-//! [`McpConfig`] loads from `NESTRS_MCP__*` by default (importing `McpModule`
+//! [`McpConfig`] loads from `<PREFIX>_MCP__*` by default (importing `McpModule`
 //! is enough); [`McpModule::for_root`] supplies a base for those variables to
 //! overlay, so a field pinned in code is still overridable per field by the
 //! deployment (see `nest_rs_config::Config`).
 //!
 //! Identity is **not** config: a server's name and version are part of what the
 //! app *is*, the same way a GraphQL schema's root type is, so they are declared
-//! in code and carry no `NESTRS_MCP__*` twin. That is why [`McpOptions`] exists
+//! in code and carry no `<PREFIX>_MCP__*` twin. That is why [`McpOptions`] exists
 //! — the two declarations travel together into the one `for_root` seam instead
 //! of the identity arriving through a second call.
 
@@ -97,7 +97,7 @@ impl McpModule {
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct McpOptions {
-    /// The base `NESTRS_MCP__*` overlays, per field. `None` ⇒ the environment
+    /// The base `<PREFIX>_MCP__*` overlays, per field. `None` ⇒ the environment
     /// over [`McpConfig::default`]. It stays an `Option` because
     /// `nest_rs_config::Config::resolve` ranks the `.env` cascade *below* a
     /// pinned base and *above* the defaults — a bare `McpConfig` here would
@@ -178,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn for_root_pins_the_host_allowlist() {
         // `for_root(Some(cfg))` queues the resolving factory rather than
-        // providing the struct verbatim — that is what keeps `NESTRS_MCP__*`
+        // providing the struct verbatim — that is what keeps `<PREFIX>_MCP__*`
         // live for every field the call site did not pin — so the value
         // materializes in the AppBuilder's factory phase.
         let app = App::builder()

@@ -47,7 +47,7 @@ pub struct ApiModule;
 
 That's the whole opt-in. The module self-mounts both endpoints on the existing
 `HttpTransport` — same port, same CORS, no second server. `None` reads
-`NESTRS_OPENAPI__*` from the [`.env` cascade](/configuration/); pass an
+`<PREFIX>_OPENAPI__*` from the [`.env` cascade](/configuration/); pass an
 `OpenApiConfig` to pin it in code instead.
 
 ## What you get
@@ -58,7 +58,7 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
 - **`GET /api`** — a **bundled** Swagger UI. The assets ship inside the binary,
   so it works with no internet access and no CDN.
 - **`GET /api-json/v{n}`** — one document per API version, and only under
-  `NESTRS_HTTP__VERSIONING=header` or `media_type`. OpenAPI 3.1 keys operations
+  `<PREFIX>_HTTP__VERSIONING=header` or `media_type`. OpenAPI 3.1 keys operations
   by path, so two versions selected by a header cannot both be described at
   `/posts`. Under the default `uri` strategy the version is already in the path
   and `/api-json` describes every version at once. See
@@ -237,12 +237,12 @@ Six keys, all on the framework-wide dual path — the [`.env` cascade](/configur
 
 | Field | Env var | Default | Effect |
 |---|---|---|---|
-| `enabled` | `NESTRS_OPENAPI__ENABLED` | dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
-| `title` | `NESTRS_OPENAPI__TITLE` | the crate's name | The document's `info.title`. |
-| `version` | `NESTRS_OPENAPI__VERSION` | the crate's version | The document's `info.version`. |
-| `description` | `NESTRS_OPENAPI__DESCRIPTION` | none | The document's `info.description`. |
-| `emit_document` | `NESTRS_OPENAPI__EMIT_DOCUMENT` | `false` | Writes the document to `document_path` once at boot — the committed-artifact workflow the GraphQL SDL emit has. |
-| `document_path` | `NESTRS_OPENAPI__DOCUMENT_PATH` | `openapi.json` | Where `emit_document` writes. |
+| `enabled` | `<PREFIX>_OPENAPI__ENABLED` | dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
+| `title` | `<PREFIX>_OPENAPI__TITLE` | the crate's name | The document's `info.title`. |
+| `version` | `<PREFIX>_OPENAPI__VERSION` | the crate's version | The document's `info.version`. |
+| `description` | `<PREFIX>_OPENAPI__DESCRIPTION` | none | The document's `info.description`. |
+| `emit_document` | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `false` | Writes the document to `document_path` once at boot — the committed-artifact workflow the GraphQL SDL emit has. |
+| `document_path` | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `openapi.json` | Where `emit_document` writes. |
 
 The `info` block is the common case:
 
@@ -266,7 +266,7 @@ OpenApiModule::for_root(OpenApiConfig {
 })
 ```
 
-The pinned struct is the *base* `NESTRS_OPENAPI__*` overlays, field by field —
+The pinned struct is the *base* `<PREFIX>_OPENAPI__*` overlays, field by field —
 so the deployment can still override any one of them. See the
 [precedence chain](/configuration/#the-dual-path-rule).
 

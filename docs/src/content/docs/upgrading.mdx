@@ -38,7 +38,7 @@ left running until they drain the 6.x jobs (step 7).
 
 2. **Rename the fifteen OAuth variables.** A crate in a family puts the family
    first in its namespace, so the OAuth client and resource server read
-   `NESTRS_OAUTH__CLIENT__*` and `NESTRS_OAUTH__RESOURCE__*` — the same string as
+   `<PREFIX>_OAUTH__CLIENT__*` and `<PREFIX>_OAUTH__RESOURCE__*` — the same string as
    their paths, `nest_rs::oauth::client` and `nest_rs::oauth::resource`. One other
    variable moved, with the queue's worker: step 8 renames its drain window.
    Rename them wherever the deployment sets them: the
@@ -46,21 +46,21 @@ left running until they drain the 6.x jobs (step 7).
 
    | 6.x | 7.0 |
    |---|---|
-   | `NESTRS_OAUTH_CLIENT__CLIENT_ID` | `NESTRS_OAUTH__CLIENT__CLIENT_ID` |
-   | `NESTRS_OAUTH_CLIENT__CLIENT_SECRET` | `NESTRS_OAUTH__CLIENT__CLIENT_SECRET` |
-   | `NESTRS_OAUTH_CLIENT__AUTH_URL` | `NESTRS_OAUTH__CLIENT__AUTH_URL` |
-   | `NESTRS_OAUTH_CLIENT__TOKEN_URL` | `NESTRS_OAUTH__CLIENT__TOKEN_URL` |
-   | `NESTRS_OAUTH_CLIENT__REDIRECT_URL` | `NESTRS_OAUTH__CLIENT__REDIRECT_URL` |
-   | `NESTRS_OAUTH_CLIENT__USERINFO_URL` | `NESTRS_OAUTH__CLIENT__USERINFO_URL` |
-   | `NESTRS_OAUTH_CLIENT__SCOPES` | `NESTRS_OAUTH__CLIENT__SCOPES` |
-   | `NESTRS_OAUTH_RESOURCE__RESOURCE` | `NESTRS_OAUTH__RESOURCE__RESOURCE` |
-   | `NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS` | `NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS` |
-   | `NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED` | `NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED` |
-   | `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `NESTRS_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` |
-   | `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME` | `NESTRS_OAUTH__RESOURCE__RESOURCE_NAME` |
-   | `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `NESTRS_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` |
-   | `NESTRS_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `NESTRS_OAUTH__RESOURCE__RESOURCE_POLICY_URI` |
-   | `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `NESTRS_OAUTH__RESOURCE__RESOURCE_TOS_URI` |
+   | `<PREFIX>_OAUTH_CLIENT__CLIENT_ID` | `<PREFIX>_OAUTH__CLIENT__CLIENT_ID` |
+   | `<PREFIX>_OAUTH_CLIENT__CLIENT_SECRET` | `<PREFIX>_OAUTH__CLIENT__CLIENT_SECRET` |
+   | `<PREFIX>_OAUTH_CLIENT__AUTH_URL` | `<PREFIX>_OAUTH__CLIENT__AUTH_URL` |
+   | `<PREFIX>_OAUTH_CLIENT__TOKEN_URL` | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL` |
+   | `<PREFIX>_OAUTH_CLIENT__REDIRECT_URL` | `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL` |
+   | `<PREFIX>_OAUTH_CLIENT__USERINFO_URL` | `<PREFIX>_OAUTH__CLIENT__USERINFO_URL` |
+   | `<PREFIX>_OAUTH_CLIENT__SCOPES` | `<PREFIX>_OAUTH__CLIENT__SCOPES` |
+   | `<PREFIX>_OAUTH_RESOURCE__RESOURCE` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE` |
+   | `<PREFIX>_OAUTH_RESOURCE__AUTHORIZATION_SERVERS` | `<PREFIX>_OAUTH__RESOURCE__AUTHORIZATION_SERVERS` |
+   | `<PREFIX>_OAUTH_RESOURCE__SCOPES_SUPPORTED` | `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED` |
+   | `<PREFIX>_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `<PREFIX>_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` |
+   | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_NAME` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_NAME` |
+   | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` |
+   | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_POLICY_URI` |
+   | `<PREFIX>_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_TOS_URI` |
 
    Under a prefix of your own, the same holds with `ACME_` for `NESTRS_`. Every
    one of them — every namespaced variable, in fact — can now be given as a file
@@ -266,11 +266,11 @@ left running until they drain the 6.x jobs (step 7).
      A dashboard or an ACL written for the rate limiter's 6.x keys
      follows it to `nestrs:throttler:buckets:*`.
    - **TLS**: `rediss://` is verified against the URL's host.
-     `NESTRS_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
+     `<PREFIX>_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
      `TLS_KEY` a client certificate, each with its `_FILE` form, and `#insecure`
-     fails the boot — see the [Redis variables](/configuration/env-reference/#redis--nestrs_redis__).
+     fails the boot — see the [Redis variables](/configuration/env-reference/#redis--prefix_redis__).
    - **Shutdown** now ends within bounds you can read. HTTP stops waiting for
-     open connections once `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
+     open connections once `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
      seconds by default, where 6.x waited for every one: a request still running
      is dropped unanswered and a download is cut, while a stream with no end of
      its own — an `#[sse]` stream, an MCP session's `GET` stream — ends at the
@@ -412,12 +412,12 @@ left running until they drain the 6.x jobs (step 7).
 - **A Redis URL ending in `#insecure`** fails the boot — it
   ``asks to skip certificate verification (`#insecure`), which is refused`` —
   where 6.x never spoke TLS to Redis at all. Trust the authority that signed
-  Redis's certificate with `NESTRS_REDIS__TLS_CA_CERT` instead.
-- **Half a storage credential pair** — `NESTRS_STORAGE__ACCESS_KEY` without
+  Redis's certificate with `<PREFIX>_REDIS__TLS_CA_CERT` instead.
+- **Half a storage credential pair** — `<PREFIX>_STORAGE__ACCESS_KEY` without
   `SECRET_KEY`, or the reverse — fails the boot where 6.x paired it with a
   default. **An HMAC secret shorter than its hash** fails `JwtService::new`: a
   `JwtOptions` choosing HS384 needs 48 bytes, HS512 64. **An unparseable
-  `NESTRS_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
+  `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
   `OpenTelemetry::init` where 6.x kept the default.
 
 ## Reference

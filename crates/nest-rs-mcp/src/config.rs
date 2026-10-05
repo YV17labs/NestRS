@@ -20,7 +20,7 @@
 //! validation says so with an empty list.
 //!
 //! **The browser `Origin` half is not here** — it is the HTTP transport's CORS
-//! policy, `NESTRS_HTTP__CORS_ORIGINS`. rmcp offers its own `allowed_origins`
+//! policy, `<PREFIX>_HTTP__CORS_ORIGINS`. rmcp offers its own `allowed_origins`
 //! and the framework deliberately leaves it empty: poem rejects a disallowed
 //! `Origin` with `403` on *every* method (not just the preflight), the CORS
 //! layer wraps the whole route tree so a `#[mcp]` self-mount inherits it
@@ -30,7 +30,7 @@
 //! transport-wide one is the survivor because it also covers `/graphql`, `/ws`
 //! and every controller.
 //!
-//! Dual-path like every `nest-rs-*` config: settable via `NESTRS_MCP__*` env
+//! Dual-path like every `nest-rs-*` config: settable via `<PREFIX>_MCP__*` env
 //! vars **and** via the pinned struct passed to
 //! [`McpModule::for_root`](crate::McpModule::for_root), composing per field.
 
@@ -78,38 +78,38 @@ const SSE_RETRY: DurationBounds = DurationBounds::secs(
 pub struct McpConfig {
     /// Hostnames or `host:port` authorities accepted in the inbound `Host`
     /// header (anti-DNS-rebinding). Defaults to loopback only, so a public
-    /// deployment **must** name itself — `NESTRS_MCP__ALLOWED_HOSTS=mcp.example.com,mcp.example.com:8443`.
+    /// deployment **must** name itself — `<PREFIX>_MCP__ALLOWED_HOSTS=mcp.example.com,mcp.example.com:8443`.
     /// An empty list disables the check entirely and is reported at `warn` at
     /// mount time.
     pub allowed_hosts: Vec<String>,
     /// Keep sessions alive for protocol versions older than `2026-07-28`. Per
     /// SEP-2567 the `2026-07-28` revision is always served statelessly, so this
     /// only affects legacy clients. Read from
-    /// `NESTRS_MCP__LEGACY_SESSION_MODE`; defaults to `true`.
+    /// `<PREFIX>_MCP__LEGACY_SESSION_MODE`; defaults to `true`.
     pub legacy_session_mode: bool,
     /// Answer simple request/response operations with `application/json`
     /// instead of an SSE stream (the server still falls back to
     /// `text/event-stream` when a handler emits a notification first). Read
-    /// from `NESTRS_MCP__JSON_RESPONSE`; defaults to `false`.
+    /// from `<PREFIX>_MCP__JSON_RESPONSE`; defaults to `false`.
     pub json_response: bool,
     /// SSE keep-alive ping interval. `None` ⇒ no pings. Read from
-    /// `NESTRS_MCP__SSE_KEEP_ALIVE_SECS`, whole seconds from 1 to 3600 or `0`
+    /// `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS`, whole seconds from 1 to 3600 or `0`
     /// for none; defaults to 15s.
     pub sse_keep_alive: Option<Duration>,
     /// `retry:` interval advertised on SSE priming events. `None` ⇒ none. Read
-    /// from `NESTRS_MCP__SSE_RETRY_SECS`, whole seconds from 1 to 3600 or `0`
+    /// from `<PREFIX>_MCP__SSE_RETRY_SECS`, whole seconds from 1 to 3600 or `0`
     /// for none; defaults to 3s.
     pub sse_retry: Option<Duration>,
     /// Cap on a single POST body, enforced while streaming (independent of
     /// `Content-Length`); over it the client gets `413`. Read from
-    /// `NESTRS_MCP__MAX_REQUEST_BODY_BYTES`; defaults to 4 MiB.
+    /// `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES`; defaults to 4 MiB.
     #[validate(range(min = 1, message = "must be at least 1 byte"))]
     pub max_request_body_bytes: usize,
     /// Require per-request protocol metadata (`MCP-Protocol-Version` and
     /// `_meta.io.modelcontextprotocol/protocolVersion`) on stateless request
     /// POSTs, per SEP-2243. Rejects clients negotiated below `2026-07-28`, so
     /// turn it on together with a handler that advertises only `2026-07-28`
-    /// and later. Read from `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED`;
+    /// and later. Read from `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED`;
     /// defaults to `false`.
     pub stateless_protocol_metadata_required: bool,
 }
@@ -215,7 +215,7 @@ mod tests {
     }
 
     // The dual-path rule is framework-wide: a pinned `McpConfig` still takes
-    // its overrides per field from `NESTRS_MCP__*`.
+    // its overrides per field from `<PREFIX>_MCP__*`.
     #[test]
     fn env_overlays_the_pinned_base_per_field() {
         let pinned = McpConfig::default().with_allowed_hosts(["mcp.example.com"]);

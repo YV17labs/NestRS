@@ -308,7 +308,7 @@ impl OAuthClient {
     /// bound on its provider, 15 s. That stays under the
     /// [`AuthnGuard`](nest_rs_authn::AuthnGuard)'s
     /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (20 s) and
-    /// the HTTP edge's request timeout (`NESTRS_HTTP__REQUEST_TIMEOUT_SECS`,
+    /// the HTTP edge's request timeout (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`,
     /// 30 s by default), which must stay the larger: a provider that stops
     /// answering is then reported here, naming its endpoint, before either net
     /// replaces that with a sentence naming nothing but a strategy or a route.

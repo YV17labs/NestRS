@@ -6,7 +6,7 @@
 //! **It takes no configuration, and that is the design.** A provider is
 //! discovered from the link-time registry, and it carries its *own* `#[config]`
 //! — `GithubSocialConfig` is namespaced `social__github`, so the entry loads
-//! `NESTRS_SOCIAL__GITHUB__*` itself when the registry builds it. `SocialModule`
+//! `<PREFIX>_SOCIAL__GITHUB__*` itself when the registry builds it. `SocialModule`
 //! never learns which providers exist, so it has nothing to be configured
 //! *about*: a `for_root` here would be a module declaring config it does not
 //! own, and would have to erase the type of every provider's unrelated config

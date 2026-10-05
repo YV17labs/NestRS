@@ -29,7 +29,7 @@ pub(crate) const POOL_REMEDY: &str = "no `sea_orm::DatabaseConnection` in the co
 pub struct SeaOrmModule;
 
 impl SeaOrmModule {
-    /// `None` ⇒ load [`SeaOrmConfig`] from `NESTRS_SEAORM__*`; `Some(cfg)` pins
+    /// `None` ⇒ load [`SeaOrmConfig`] from `<PREFIX>_SEAORM__*`; `Some(cfg)` pins
     /// the base those variables overlay, per field.
     ///
     /// A pin is not a test hatch: the deployment's real environment still wins
@@ -69,7 +69,7 @@ impl DynamicModule for SeaOrmSetup {
     }
 }
 
-/// Open a standalone connection from `NESTRS_SEAORM__*`, resolving the same
+/// Open a standalone connection from `<PREFIX>_SEAORM__*`, resolving the same
 /// [`SeaOrmConfig`] the app's [`SeaOrmModule`] uses. The single connector for
 /// tools outside the DI container (`migrate`, `seed`) — a new config knob
 /// reaches them without editing each binary.

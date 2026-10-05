@@ -5,7 +5,7 @@ use nest_rs_core::EnvPrefix;
 
 use crate::source::real_env_var;
 
-/// Read from the reserved `<PREFIX>_ENV` (`NESTRS_ENV` by default). This is the
+/// Read from the reserved `<PREFIX>_ENV` (`<PREFIX>_ENV` by default). This is the
 /// one framework variable **outside** the `<PREFIX>_<DOMAIN>__<KEY>` scheme —
 /// it selects which `.env` files to load, so it must come from the real process
 /// environment, not a `.env` file.
@@ -41,7 +41,7 @@ impl Environment {
     /// 2. the same values are merged into the **process environment**
     ///    (set-if-absent — the real env always wins), so the many consumers
     ///    that only know `std::env::var` behave as the cascade says: the
-    ///    framework's own `NESTRS_LOG*` logging setup, `OpenTelemetry::init`,
+    ///    framework's own `<PREFIX>_LOG*` logging setup, `OpenTelemetry::init`,
     ///    and any `migrate`/`seed` binary of yours.
     ///
     /// # Threading
@@ -100,7 +100,7 @@ impl Environment {
         declare(real_env_var(&Self::var_name()).as_deref())
     }
 
-    /// The variable this reads — `NESTRS_ENV`, or `<PREFIX>_ENV` under
+    /// The variable this reads — `<PREFIX>_ENV`, or `<PREFIX>_ENV` under
     /// [`EnvPrefix::VAR`]. Public because a harness that
     /// must decide the environment before the framework does (`nest-rs-testing`)
     /// has to name the same variable, and a second literal there is exactly how
@@ -125,7 +125,7 @@ impl Environment {
     }
 }
 
-/// Classify a raw `NESTRS_ENV` value into an [`Environment`], returning
+/// Classify a raw `<PREFIX>_ENV` value into an [`Environment`], returning
 /// `Some(value)` in the second slot when the value was **set but
 /// unrecognized** (so the caller can surface it) and `None` when it was unset,
 /// empty, or an explicit development alias. Pure, so it is testable without
@@ -196,7 +196,7 @@ mod tests {
     }
 
     // The merge is what makes a raw `std::env::var` reader — the framework's own
-    // `NESTRS_LOG*` setup, a `migrate` binary — see the cascade at all, and it
+    // `<PREFIX>_LOG*` setup, a `migrate` binary — see the cascade at all, and it
     // is the whole reason `init` belongs at the top of `main`. Every other test
     // in this crate would still pass if that call vanished.
     #[test]

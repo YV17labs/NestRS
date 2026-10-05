@@ -11,7 +11,7 @@
 //! There is no per-provider `module.rs`: a social provider is not a DI provider,
 //! so it has nothing for a module of its own to own. The config in `config.rs`
 //! is a plain `#[config]` all the same, so it configures the way every other one
-//! does — `NESTRS_SOCIAL__<KEY>__*`, over whatever base the deployment resolved
+//! does — `<PREFIX>_SOCIAL__<KEY>__*`, over whatever base the deployment resolved
 //! for that namespace. Nothing about it is declared on
 //! [`SocialModule`](crate::SocialModule), which never learns the provider
 //! exists.

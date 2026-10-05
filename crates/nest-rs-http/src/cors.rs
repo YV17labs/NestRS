@@ -1,4 +1,4 @@
-//! CORS settings for the HTTP transport, settable both via `NESTRS_HTTP__CORS_*`
+//! CORS settings for the HTTP transport, settable both via `<PREFIX>_HTTP__CORS_*`
 //! env vars and pinned in code as `HttpConfig.cors`. The [`HttpModule`](crate::HttpModule)
 //! translates a [`HttpCors`] into poem's [`Cors`]
 //! middleware at boot.
@@ -83,7 +83,7 @@ impl HttpCors {
         Ok(())
     }
 
-    /// Overlay the `NESTRS_HTTP__CORS_*` keys onto `base` (the policy pinned in
+    /// Overlay the `<PREFIX>_HTTP__CORS_*` keys onto `base` (the policy pinned in
     /// code, if any). Returns `Ok(None)` when neither the environment nor `base`
     /// supplies an origin — no origins means no CORS layer.
     ///

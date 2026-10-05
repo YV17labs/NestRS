@@ -20,7 +20,7 @@ mod update;
 ///
 /// One spelling for every command that takes that flag — the fallback is the
 /// same decision each time, and four copies of it are four places a future
-/// `NESTRS_PROJECT` or a friendlier failure would have to be written.
+/// `<PREFIX>_PROJECT` or a friendlier failure would have to be written.
 #[expect(
     clippy::expect_used,
     reason = "a command with no working directory has nothing to resolve a project against"

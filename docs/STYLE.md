@@ -214,6 +214,11 @@ wrong, each filed by a reader following a page verbatim — check them on sight:
 - **A table claiming to be complete.** A `#[config]` key table lists every field, and names the
   profile when the struct's `defaults()` branches on it.
 - **A figure.** A count the landing or `/why/` states is one the repo still holds.
+- **A variable named for one deployment.** `NESTRS_ENV_PREFIX` renames every variable, so prose
+  and a code comment write `<PREFIX>_SEAORM__URL`, inside backticks (bare, MDX reads a tag); a
+  shell or `.env` block a reader copies, and output a binary prints, keep the default `NESTRS_`;
+  Rust builds a name (`var_name("seaorm", "URL")`). `NESTRS_ENV_PREFIX` and
+  `NESTRS_NO_BOOTSTRAP` keep their names everywhere.
 
 Internal links and their anchors are the build's: `starlight-links-validator` fails it on one that
 does not resolve, and a route that moved gets a `src/redirects.mjs` entry.

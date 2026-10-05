@@ -21,7 +21,7 @@
 //! ## Usage
 //!
 //! Import [`StorageModule`] at the composition root. It owns its
-//! [`StorageConfig`] (namespace `storage`, loaded from `NESTRS_STORAGE__*`) and
+//! [`StorageConfig`] (namespace `storage`, loaded from `<PREFIX>_STORAGE__*`) and
 //! registers [`Storage`] as an injectable provider:
 //!
 //! ```

@@ -1,7 +1,7 @@
 //! SeaORM for nestrs — the adapter that wraps `sea_orm`, whose URL scheme picks
 //! the engine (postgres, mysql, sqlite). One substrate and its bindings:
 //!
-//! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`NESTRS_SEAORM__*`)
+//! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
 //!   and opens the one `sea_orm::DatabaseConnection` every binding shares.
 //! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port: the
 //!   `DbContext` request interceptor, which binds each request to an ambient

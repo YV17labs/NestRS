@@ -13,7 +13,7 @@ use crate::{AuthnConfig, JwtService};
 pub struct AuthnModule;
 
 impl AuthnModule {
-    /// `None` ⇒ load [`AuthnConfig`] from `NESTRS_AUTHN__*`; `Some(cfg)` pins it
+    /// `None` ⇒ load [`AuthnConfig`] from `<PREFIX>_AUTHN__*`; `Some(cfg)` pins it
     /// in code. Either way the [`JwtService`] factory is registered.
     pub fn for_root(config: impl Into<Option<AuthnConfig>>) -> AuthnSetup {
         AuthnSetup {

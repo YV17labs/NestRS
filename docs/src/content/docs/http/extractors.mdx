@@ -193,7 +193,7 @@ forwarding header when that peer is a proxy you listed:
 
 1. No peer address at all (a unix socket, or a proxy that hides it) ⇒
    `0.0.0.0`, `forwarded = false`. The extractor never fails.
-2. The peer is **not** in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
+2. The peer is **not** in `<PREFIX>_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
    client, `forwarded = false`, and the headers are not read.
 3. The peer **is** a trusted proxy ⇒ the client is the **rightmost** hop that
    is not itself a trusted proxy, read from `Forwarded` (RFC 7239) first, then

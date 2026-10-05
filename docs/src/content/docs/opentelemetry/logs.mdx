@@ -193,9 +193,9 @@ INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=
 INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 ```
 
-**The target is the toggle.** `NESTRS_LOG=info,nest_rs::operation=off` silences the
+**The target is the toggle.** `<PREFIX>_LOG=info,nest_rs::operation=off` silences the
 whole family at once, which is why no edge carries a config flag for it.
-`NESTRS_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
+`<PREFIX>_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
 config rather than a deployment's filter — it is one edge's line, not the
 family's.
 
@@ -262,7 +262,7 @@ DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at
 ```
 
 Off by default — it widens every line and leaks source paths, so it stays out
-of production. Turn it on in `.env.development` (next to `NESTRS_LOG=debug`) so
+of production. Turn it on in `.env.development` (next to `<PREFIX>_LOG=debug`) so
 it is live while developing and off everywhere else, or pin it explicitly with
 `OpenTelemetryConfig::with_log_source_location(true)`.
 
@@ -285,7 +285,7 @@ need no collector to exist. That is the shape of the whole relationship: the
 observability stack **enriches** what is exported and never owns what this line
 can say.
 
-Toggle it with `NESTRS_HTTP__ACCESS_LOG=false`. That silences the line only —
+Toggle it with `<PREFIX>_HTTP__ACCESS_LOG=false`. That silences the line only —
 the trace is still started, still reported as `traceresponse`, and still carried
 into the response body, because everything else is filed under it.
 

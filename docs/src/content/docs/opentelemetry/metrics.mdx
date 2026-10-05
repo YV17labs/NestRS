@@ -66,7 +66,7 @@ attribute combination becomes a separate time series.
 Metrics batch on a
 [`PeriodicReader`](https://docs.rs/opentelemetry_sdk) and export through the
 same OTLP endpoint as the traces (set
-`NESTRS_OPENTELEMETRY__OTLP_ENDPOINT`). Without an endpoint, instrument
+`<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT`). Without an endpoint, instrument
 construction still works — `counter()` and friends return real handles, so
 wiring compiles and runs — but the meter comes from a `NoopMeterProvider` and
 every reading is **dropped**. The SDK says so once, at `Meter was obtained from
@@ -102,9 +102,9 @@ Every exported metric carries the service-level resource attributes built from
 `OpenTelemetryConfig`:
 
 - `service.name` — argument to `OpenTelemetry::init`
-- `service.version` — `NESTRS_OPENTELEMETRY__SERVICE_VERSION`
-- `deployment.environment.name` — `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT`
-- `service.instance.id` — `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
+- `service.version` — `<PREFIX>_OPENTELEMETRY__SERVICE_VERSION`
+- `deployment.environment.name` — `<PREFIX>_OPENTELEMETRY__SERVICE_ENVIRONMENT`
+- `service.instance.id` — `<PREFIX>_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
   fresh UUIDv7 per process by default, so restarts get distinct identities in
   the backend)
 

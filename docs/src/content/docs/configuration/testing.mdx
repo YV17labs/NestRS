@@ -13,7 +13,7 @@ wins over `ConfigModule::for_feature::<C>()`. Unit tests for a `Config`
 impl run inside a `figment::Jail` that scopes `std::env` mutations to
 the test, so neighboring tests stay hermetic.
 
-Both rely on a single guarantee: under `NESTRS_ENV=test`, the
+Both rely on a single guarantee: under `<PREFIX>_ENV=test`, the
 [`.env.local`](/configuration/env-cascade/#test-mode-is-hermetic) file is
 skipped, so a developer's personal secrets cannot leak in.
 
@@ -52,7 +52,7 @@ async fn issues_a_token_for_a_registered_client() {
 }
 ```
 
-The test never sets a `NESTRS_OAUTH__*` variable, doesn't depend on a
+The test never sets a `<PREFIX>_OAUTH__*` variable, doesn't depend on a
 committed `.env.test`, and produces the same result on any machine.
 
 ## Pinning through `for_root`
@@ -62,7 +62,7 @@ loads from the environment over the config's defaults, `Some(cfg)` makes `cfg`
 the **base** the environment overlays.
 
 <Aside type="caution">
-`for_root` is not a hermetic pin. A `NESTRS_<NS>__<KEY>` set in the ambient
+`for_root` is not a hermetic pin. A `<PREFIX>_<NS>__<KEY>` set in the ambient
 environment still wins, per field — that is [the dual-path
 rule](/configuration/#the-dual-path-rule), and it applies to test runs too. When
 a test must not read the environment at all, seed the value with `.provide()`
@@ -96,7 +96,7 @@ pub struct ApiModule;
 `ConfigModule::provide_feature`, which queues one resolving factory either way
 — the `Option` only decides what the environment overlays. Use this when the
 test module **owns** the binding (it composes the app) and an ambient
-`NESTRS_HTTP__*` overriding it is *welcome*; use `.provide()` when the value
+`<PREFIX>_HTTP__*` overriding it is *welcome*; use `.provide()` when the value
 must hold regardless of the environment.
 
 ## A test-specific source
@@ -107,22 +107,13 @@ isolate config loading from `std::env` entirely, build the
 and seed the loaded `Config`:
 
 ```rust title="crates/features/tests/integration/config.rs"
-use std::collections::HashMap;
 use std::sync::Arc;
-use nest_rs::config::{Config, ConfigService, ConfigSource};
+use nest_rs::config::{Config, ConfigService, MapSource, var_name};
 
-struct Map(HashMap<&'static str, &'static str>);
-
-impl ConfigSource for Map {
-    fn get(&self, var: &str) -> Option<String> {
-        self.0.get(var).map(|s| (*s).to_owned())
-    }
-}
-
-let source = Arc::new(Map(HashMap::from([
-    ("NESTRS_SEAORM__URL", "postgres://test/app"),
-    ("NESTRS_SEAORM__MAX_CONNECTIONS", "5"),
-])));
+let source = Arc::new(MapSource::from_iter([
+    (var_name("seaorm", "URL"), "postgres://test/app"),
+    (var_name("seaorm", "MAX_CONNECTIONS"), "5"),
+]));
 let env = ConfigService::with_source("seaorm", source);
 let cfg = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults()).unwrap();
 
@@ -134,14 +125,14 @@ let app = TestApp::builder()
 ```
 
 A custom source also decides *where* the values come from, so the test cannot
-pick up a stray `NESTRS_*` from the ambient environment — that is the whole
+pick up a stray `<PREFIX>_*` from the ambient environment — that is the whole
 point of reaching for one.
 
 It is **not** the case that a test leaves `std::env` untouched. No config *read*
 writes there, but `TestApp::builder()` calls `load_project_env`, which publishes
 the nearest project `.env` cascade set-if-absent — the harness needs backend
 URLs before any `ConfigService` exists. The merge is bounded (once per process,
-real env still wins, and `.env.local` is skipped under `NESTRS_ENV=test`), and a
+real env still wins, and `.env.local` is skipped under `<PREFIX>_ENV=test`), and a
 `for_root` pin still outranks every cascade value, but a test asserting on a
 variable a committed `.env` happens to define will read the file. Use
 `with_source` — or `.provide(cfg)` — when the test must not. See
@@ -157,6 +148,8 @@ the test closure and restores `std::env` on drop.
 ```rust title="crates/features/src/oauth/config.rs"
 #[cfg(test)]
 mod tests {
+    use nest_rs::config::var_name;
+
     use super::*;
 
     #[test]
@@ -164,7 +157,7 @@ mod tests {
     fn loads_clients_from_env() {
         figment::Jail::expect_with(|jail| {
             jail.set_env(
-                "NESTRS_OAUTH__CLIENTS",
+                var_name("oauth", "CLIENTS"),
                 r#"[{"client_id":"web","client_secret":"s","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
             );
             let cfg = OAuthConfig::load().expect("loads with clients");
@@ -191,9 +184,9 @@ This is the exact pattern `nest-rs-config`'s own tests use — see
 `#[allow(clippy::result_large_err)]` is for `Jail`'s fixed closure
 signature.
 
-## Default `NESTRS_ENV` in tests
+## Default `<PREFIX>_ENV` in tests
 
-`TestApp::builder()` sets `NESTRS_ENV=test` if nothing else has set it.
+`TestApp::builder()` sets `<PREFIX>_ENV=test` if nothing else has set it.
 Two consequences:
 
 - The `.env` cascade skips `.env.local` (per-machine secrets stay out of
@@ -202,7 +195,7 @@ Two consequences:
   mount, SDL emission doesn't fire, dev-only middleware unloads.
 
 A test that wants to assert prod behavior overrides this explicitly
-before building the app — `unsafe { std::env::set_var("NESTRS_ENV",
+before building the app — `unsafe { std::env::set_var("<PREFIX>_ENV",
 "production") }`. Set it before `TestApp::builder()` so the cascade
 loads the right files.
 

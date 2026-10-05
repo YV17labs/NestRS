@@ -7,7 +7,7 @@
 //! a chain running once **per representation**, inside whichever member the
 //! router's reference happened to match; for `_service` it showed as nothing at
 //! all — a `check_graphql` deny-all pool returned the endpoint's entire SDL,
-//! `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` notwithstanding, since that switch
+//! `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` notwithstanding, since that switch
 //! covers `__schema` and not this.
 //!
 //! A schema [`Extension`] is the one seam async-graphql leaves in front of a

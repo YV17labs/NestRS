@@ -30,7 +30,7 @@ use crate::error::AuthError;
 ///   endpoint, which bound — with a bare timeout. What stays above 15 s is the
 ///   strategy's own work: resolving the identity it was handed.
 /// - **Below the HTTP edge's own request timeout**
-///   (`NESTRS_HTTP__REQUEST_TIMEOUT_SECS`, 30 s by default), which answers `503`
+///   (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, 30 s by default), which answers `503`
 ///   with a line naming no strategy. Every edge authenticates the HTTP request it
 ///   begins with — a route, the GraphQL POST, the MCP POST, the WebSocket
 ///   upgrade — so that timeout covers all of them; staying under it makes a hung

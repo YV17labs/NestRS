@@ -83,7 +83,7 @@ something the route never sends.
 
 ### Configuration
 
-Two `NESTRS_HTTP__*` keys, both defaulting to something usable:
+Two `<PREFIX>_HTTP__*` keys, both defaulting to something usable:
 
 | Key | Default | What it does |
 |---|---|---|
@@ -98,10 +98,10 @@ framework's doing, not the decorator's: the same holds for any streaming body a
 handler returns.
 
 The ceiling is a **security** control, and the same one
-`NESTRS_WS__MAX_MESSAGE_BYTES` bounds an inbound frame at the protocol
+`<PREFIX>_WS__MAX_MESSAGE_BYTES` bounds an inbound frame at the protocol
 layer — 64 KiB by default, so buffering stops before a giant frame is
-fully read. `NESTRS_WS__MAX_CONNECTION_SECS` and
-`NESTRS_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
+fully read. `<PREFIX>_WS__MAX_CONNECTION_SECS` and
+`<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
 is authenticated once, when the request arrives, then emits with those
 privileges for as long as it lives — so without a ceiling it outlives an
 expired token, a logout, or a revoked grant. Reconnecting re-runs the guard
@@ -129,7 +129,7 @@ knowing whose bytes are queued.
 
 **At shutdown a stream ends at the signal.** A stream never finishes on its
 own, so holding it open would only spend the whole shutdown window
-(`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default) waiting for an end that
+(`<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default) waiting for an end that
 is not coming. The transport ends it the moment shutdown is asked for —
 cleanly, its last chunk written, so the client's `EventSource` reads an end and
 reconnects, to a replica still in the load balancer. Its `http.request` line

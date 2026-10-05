@@ -58,8 +58,8 @@ enum TlsSource {
 ///
 /// # Renewal without a restart
 ///
-/// Material read from files (`NESTRS_HTTP__TLS_CERT_FILE` +
-/// `NESTRS_HTTP__TLS_KEY_FILE`, or [`from_files`](Self::from_files)) is
+/// Material read from files (`<PREFIX>_HTTP__TLS_CERT_FILE` +
+/// `<PREFIX>_HTTP__TLS_KEY_FILE`, or [`from_files`](Self::from_files)) is
 /// **watched**: every [`reload_secs`](Self::with_reload_secs) — 60 by default,
 /// `0` to disable — the pair is re-read, and a pair that has changed, *settled*
 /// and can actually serve is swapped into the running `rustls` config. The
@@ -128,13 +128,13 @@ impl HttpTls {
     /// How often a file-sourced pair is re-read, in seconds, from 1 to 86400 (a
     /// day); `0` disables watching. Ignored by inline material, which has no
     /// source to watch. A value outside the range fails the boot naming
-    /// `NESTRS_HTTP__TLS_RELOAD_SECS`, as the variable's would.
+    /// `<PREFIX>_HTTP__TLS_RELOAD_SECS`, as the variable's would.
     pub fn with_reload_secs(mut self, secs: u64) -> Self {
         self.reload_secs = secs;
         self
     }
 
-    /// Read TLS material from `NESTRS_HTTP__TLS_CERT` / `NESTRS_HTTP__TLS_KEY`
+    /// Read TLS material from `<PREFIX>_HTTP__TLS_CERT` / `<PREFIX>_HTTP__TLS_KEY`
     /// (PEM inline) or their `_FILE` variants (path the transport loads), read
     /// through [`ConfigService::material`] — which refuses a half set both ways.
     /// `base` is what the field keeps when the environment configures neither

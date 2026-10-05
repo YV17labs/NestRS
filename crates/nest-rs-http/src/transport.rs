@@ -153,7 +153,7 @@ fn normalize_global_prefix(raw: &str) -> Option<String> {
 /// `"/x"` and `"/x/"` are two distinct owners here and one key inside poem. Left
 /// raw they pass the check that exists to catch exactly that, and poem panics
 /// during route assembly instead. Applied by [`HttpEndpointMeta::new`], so every
-/// self-mount — MCP, GraphQL (whose path is `NESTRS_GRAPHQL__PATH`, i.e.
+/// self-mount — MCP, GraphQL (whose path is `<PREFIX>_GRAPHQL__PATH`, i.e.
 /// deployment input), WS, OpenAPI — is canonical before anything compares it.
 pub fn normalize_mount_path(raw: &str) -> String {
     match normalize_global_prefix(raw) {
@@ -224,7 +224,7 @@ impl HttpTransport {
             // Fail-secure by default: when global guards are active, an
             // endpoint the transport cannot shape fails boot instead of
             // mounting unguarded. Opt out via `fail_secure_strict(false)` /
-            // `NESTRS_HTTP__FAIL_SECURE_STRICT=false`.
+            // `<PREFIX>_HTTP__FAIL_SECURE_STRICT=false`.
             fail_secure_strict: true,
             security_headers: crate::HttpSecurityHeaders::default(),
             compression: false,

@@ -25,7 +25,7 @@
 //! pinned in code alike, in the sentence every bounded duration of the
 //! framework is refused in.
 //!
-//! Dual-path like every `nest-rs-*` config: settable via `NESTRS_HEALTH__*` env
+//! Dual-path like every `nest-rs-*` config: settable via `<PREFIX>_HEALTH__*` env
 //! vars **and** via the pinned struct passed to
 //! [`HealthModule::for_root`](crate::HealthModule::for_root), composing per
 //! field.
@@ -89,7 +89,7 @@ pub struct HealthConfig {
     /// Wall-clock ceiling on **one** indicator. An indicator probing a dead
     /// peer (a hung TCP connect, a stalled query) reports `down` with an opaque
     /// reason at this point, and a `warn` on `nest_rs::health` names it.
-    /// Read from `NESTRS_HEALTH__INDICATOR_TIMEOUT_MS`, from 1 to 60000; defaults
+    /// Read from `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS`, from 1 to 60000; defaults
     /// to 750 ms.
     ///
     /// Indicators run concurrently, so this bounds the slowest one rather than
@@ -100,7 +100,7 @@ pub struct HealthConfig {
     /// Wall-clock ceiling on the **whole** probe response, whatever the
     /// indicator count. Indicators that have answered by then are reported as
     /// they answered; the rest are `down` with an opaque reason, and the probe
-    /// is `down` overall. Read from `NESTRS_HEALTH__PROBE_DEADLINE_MS`, from 1 to
+    /// is `down` overall. Read from `<PREFIX>_HEALTH__PROBE_DEADLINE_MS`, from 1 to
     /// 60000; defaults to 900 ms.
     pub probe_deadline_ms: u64,
 }
@@ -174,7 +174,7 @@ mod tests {
     }
 
     // The dual-path rule is framework-wide: a pinned `HealthConfig` still takes
-    // its overrides per field from `NESTRS_HEALTH__*`.
+    // its overrides per field from `<PREFIX>_HEALTH__*`.
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = HealthConfig::default()

@@ -1,6 +1,6 @@
 //! One structured event per request, on `nest_rs::operation`.
 //!
-//! The file keeps its name: it implements `NESTRS_HTTP__ACCESS_LOG`, and an
+//! The file keeps its name: it implements `<PREFIX>_HTTP__ACCESS_LOG`, and an
 //! access log is precisely what one edge's per-request line is. What the rename
 //! took away is the *family's* target wearing this edge's word — see
 //! [`nest_rs_core::operation_log::TARGET`].

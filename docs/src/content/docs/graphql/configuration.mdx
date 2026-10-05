@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-`GraphqlModule::for_root(None)` reads `NESTRS_GRAPHQL__*` from the
+`GraphqlModule::for_root(None)` reads `<PREFIX>_GRAPHQL__*` from the
 environment; `GraphqlModule::for_root(config)` pins a *base* those
 variables still overlay, field by field. Every field is settable both ways —
 pin host behaviour in code, leave secrets and per-environment toggles to env.
@@ -51,18 +51,18 @@ pub struct GraphqlConfig {
 
 | Field | Env var | Default | Effect |
 |---|---|---|---|
-| `path` | `NESTRS_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). |
-| `playground` | `NESTRS_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the offline playground HTML. |
-| `schema_path` | `NESTRS_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
-| `emit_sdl` | `NESTRS_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |
-| `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables. See [Query limits](/graphql/query-limits/). |
-| `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
-| `disable_introspection` | `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` | `true` | When `true`, the schema rejects introspection queries (production-safe). |
-| `max_batch_size` | `NESTRS_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
-| `max_connection` | `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |
-| `max_representations` | `NESTRS_GRAPHQL__MAX_REPRESENTATIONS` | `100` | Bound on the `representations` a federation `_entities` call may ask for in one request. `0` disables it. |
-| `strict_resolver_membership` | `NESTRS_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP` | `false` | When `true`, a resolver no imported module owns fails the boot instead of warning. |
-| `federation` | `NESTRS_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |
+| `path` | `<PREFIX>_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). |
+| `playground` | `<PREFIX>_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the offline playground HTML. |
+| `schema_path` | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
+| `emit_sdl` | `<PREFIX>_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |
+| `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth; `None` disables. See [Query limits](/graphql/query-limits/). |
+| `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
+| `disable_introspection` | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `true` | When `true`, the schema rejects introspection queries (production-safe). |
+| `max_batch_size` | `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
+| `max_connection` | `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |
+| `max_representations` | `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` | `100` | Bound on the `representations` a federation `_entities` call may ask for in one request. `0` disables it. |
+| `strict_resolver_membership` | `<PREFIX>_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP` | `false` | When `true`, a resolver no imported module owns fails the boot instead of warning. |
+| `federation` | `<PREFIX>_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |
 
 <Aside type="caution">
 **`playground = true` in production is a CVE.** It exposes the full
@@ -134,7 +134,7 @@ clients reading from a sandbox environment.
 <Aside type="tip">
 **Introspection is disabled by default** (`disable_introspection =
 true`). Flip it to `false` (or set
-`NESTRS_GRAPHQL__DISABLE_INTROSPECTION=false`) in a dev profile when a
+`<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`) in a dev profile when a
 client tool needs the schema. The playground toggle is independent:
 the playground needs introspection on to be useful, so enable both in
 `.env.development`.
@@ -165,11 +165,11 @@ relative to the working directory the app was launched from.
 
 Before shipping:
 
-- `NESTRS_GRAPHQL__PLAYGROUND` unset or `false`.
-- `NESTRS_GRAPHQL__EMIT_SDL` unset or `false` — production apps don't
+- `<PREFIX>_GRAPHQL__PLAYGROUND` unset or `false`.
+- `<PREFIX>_GRAPHQL__EMIT_SDL` unset or `false` — production apps don't
   rewrite their own SDL.
-- `NESTRS_GRAPHQL__MAX_DEPTH` set (a value of 15 fits most apps).
-- `NESTRS_GRAPHQL__MAX_COMPLEXITY` set after calibrating against
+- `<PREFIX>_GRAPHQL__MAX_DEPTH` set (a value of 15 fits most apps).
+- `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` set after calibrating against
   observed legitimate traffic. See [Query limits](/graphql/query-limits/).
 - `path` matches what your gateway / ingress routes to.
 - The SDL committed in git is the one the production binary serves

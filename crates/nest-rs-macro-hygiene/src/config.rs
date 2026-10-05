@@ -7,7 +7,7 @@
 
 use nest_rs::config::config;
 
-/// Minimal config. Every field is settable from `NESTRS_MACRO_HYGIENE__*` and from a
+/// Minimal config. Every field is settable from `<PREFIX>_MACRO_HYGIENE__*` and from a
 /// pinned base, per the dual-path rule.
 #[config(namespace = "macro_hygiene")]
 #[derive(Clone, Debug)]

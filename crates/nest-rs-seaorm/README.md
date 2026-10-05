@@ -1,6 +1,6 @@
 # nest-rs-seaorm
 
-SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers). Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features.
+SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`<PREFIX>_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers). Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 

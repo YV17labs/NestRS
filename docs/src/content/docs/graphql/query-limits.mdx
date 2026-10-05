@@ -26,8 +26,8 @@ traffic.
 
 | Limit | Catches | Config field | Env var |
 |---|---|---|---|
-| Depth | Recursive | `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` |
-| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` |
+| Depth | Recursive | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` |
+| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` |
 
 Both are on by default (`max_depth = 15`, `max_complexity = 2000`).
 Keep both — depth alone misses wide queries, complexity alone misses

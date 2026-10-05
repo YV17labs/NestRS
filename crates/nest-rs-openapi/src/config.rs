@@ -1,12 +1,12 @@
 //! [`OpenApiConfig`] — the OpenAPI document `info` block, populated from
-//! `NESTRS_OPENAPI__*` in the `.env` cascade.
+//! `<PREFIX>_OPENAPI__*` in the `.env` cascade.
 
 use std::path::PathBuf;
 
 use nest_rs_config::{Config, ConfigService, Environment, Result, config};
 
 /// The OpenAPI document's `info` block plus the master enable switch, settable
-/// via `NESTRS_OPENAPI__*` or pinned through
+/// via `<PREFIX>_OPENAPI__*` or pinned through
 /// [`OpenApiModule::for_root`](crate::OpenApiModule::for_root).
 #[config(namespace = "openapi")]
 #[derive(Clone, Debug)]
@@ -20,9 +20,9 @@ pub struct OpenApiConfig {
     /// public and unauthenticated, [`from_env`](Config::from_env) defaults it
     /// **OFF outside a dev/test profile** (HTTP-S5): a dev run keeps the docs on
     /// for ergonomics; staging/production must opt in with
-    /// `NESTRS_OPENAPI__ENABLED=true`, which is honored but logged loudly at
+    /// `<PREFIX>_OPENAPI__ENABLED=true`, which is honored but logged loudly at
     /// boot. When `false`, [`OpenApiModule`](crate::OpenApiModule) mounts neither
-    /// endpoint. A set-but-unparseable `NESTRS_OPENAPI__ENABLED` fails boot
+    /// endpoint. A set-but-unparseable `<PREFIX>_OPENAPI__ENABLED` fails boot
     /// naming the variable — it never silently falls back to on. (The struct
     /// `Default` stays `true` for the pinned-config / dev path.)
     pub enabled: bool,
@@ -35,7 +35,7 @@ pub struct OpenApiConfig {
     /// (Re)write [`document_path`](Self::document_path) with the built document
     /// once at boot — the OpenAPI analogue of the GraphQL SDL emit, so the
     /// committed `openapi.json` stays fresh as a side effect of a dev run.
-    /// Default `false`; the demo turns it on with `NESTRS_OPENAPI__EMIT_DOCUMENT=true`.
+    /// Default `false`; the demo turns it on with `<PREFIX>_OPENAPI__EMIT_DOCUMENT=true`.
     pub emit_document: bool,
     /// Where [`emit_document`](Self::emit_document) writes the JSON document,
     /// relative to the process working directory. Default `openapi.json`.
@@ -72,7 +72,7 @@ impl Config for OpenApiConfig {
         let d = base;
         let environment = Environment::from_env();
         // `flag` returns `Err` (naming the var) on a set-but-unparseable value,
-        // so a typo'd `NESTRS_OPENAPI__ENABLED` stays boot-fatal — it never
+        // so a typo'd `<PREFIX>_OPENAPI__ENABLED` stays boot-fatal — it never
         // silently falls back to on.
         let enabled = env.flag("ENABLED", d.enabled)?;
         if enabled && !docs_default_enabled(environment) {
@@ -157,7 +157,7 @@ mod tests {
     }
 
     // HTTP-S5: the public, unauthenticated docs default OFF outside a dev/test
-    // profile — a deployed binary that forgets `NESTRS_OPENAPI__ENABLED` must not
+    // profile — a deployed binary that forgets `<PREFIX>_OPENAPI__ENABLED` must not
     // publish its API surface.
     #[test]
     fn docs_default_off_outside_dev() {

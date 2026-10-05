@@ -167,7 +167,7 @@ brings up Rust, Postgres and Redis in one step.
 
 The container provisions the Rust toolchain and dev tooling (`just`, `bacon`,
 `cargo-nextest`, …), and brings up **Postgres** and **Redis** beside it with
-`NESTRS_SEAORM__URL` / `NESTRS_REDIS__URL` already pointed at them. `nestrs run dev`
+`<PREFIX>_SEAORM__URL` / `<PREFIX>_REDIS__URL` already pointed at them. `nestrs run dev`
 runs under `bacon` — every save triggers an incremental rebuild and a restart.
 The runnable apps live in their own workspace under [`demo/`](demo/) — `cd demo`
 first; that directory is where `nestrs run`, the `.env` cascade, and the

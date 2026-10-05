@@ -96,7 +96,7 @@ export NESTRS_AUTHN__PUBLIC_KEY="$(cat jwt.pub)"
 # NESTRS_AUTHN__PRIVATE_KEY is unset — the boot picks `eddsa_verify`
 ```
 
-Each key also reads from a file: `NESTRS_AUTHN__PUBLIC_KEY_FILE=/run/secrets/jwt.pub`
+Each key also reads from a file: `<PREFIX>_AUTHN__PUBLIC_KEY_FILE=/run/secrets/jwt.pub`
 names the path instead of carrying the PEM, which is the form a mounted secret
 takes.
 
@@ -107,12 +107,12 @@ is verify-only — no signing key configured")` — even a buggy resource
 server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
-boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY (or NESTRS_AUTHN__PRIVATE_KEY_FILE),
+boot loudly with `"<PREFIX>_AUTHN__PRIVATE_KEY (or <PREFIX>_AUTHN__PRIVATE_KEY_FILE),
 or private_key in an AuthnConfig or JwtOptions built in code, is set without
-NESTRS_AUTHN__PUBLIC_KEY (or NESTRS_AUTHN__PUBLIC_KEY_FILE), or public_key in an
+<PREFIX>_AUTHN__PUBLIC_KEY (or <PREFIX>_AUTHN__PUBLIC_KEY_FILE), or public_key in an
 AuthnConfig or JwtOptions built in code"`,
 and so does a private key beside the public key of another pair. A
-`NESTRS_AUTHN__SECRET` left beside either key fails the boot as well, naming
+`<PREFIX>_AUTHN__SECRET` left beside either key fails the boot as well, naming
 both — whether both come from the environment, from a `.env` file or from code,
 or the environment beside code; a config pinned in code stops `.env` being read
 for the namespace — so moving a service to EdDSA means removing its secret.
@@ -253,11 +253,11 @@ description of itself. Each is omitted from the served JSON when unset, as
 
 | Env var | Document member | What it says |
 |---|---|---|
-| `NESTRS_OAUTH__RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
-| `NESTRS_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
-| `NESTRS_OAUTH__RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
-| `NESTRS_OAUTH__RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
-| `NESTRS_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
+| `<PREFIX>_OAUTH__RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
+| `<PREFIX>_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
 
 §2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
 naming the fact that makes it impossible here: nothing signs a response, so
@@ -308,7 +308,7 @@ see [OAuth scopes](/security/authorization/scopes/). Make sure every
 scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
 telling clients to request something discovery never names.
 
-**`NESTRS_AUTHN__AUDIENCE` stops being optional.** On its own,
+**`<PREFIX>_AUTHN__AUDIENCE` stops being optional.** On its own,
 `AuthnConfig` treats it as a nice-to-have; under this module boot fails
 without it, naming the variable. The confused-deputy defence itself is
 not what the module adds — `JwtService` applies RFC 7519 §4.1.3 on every

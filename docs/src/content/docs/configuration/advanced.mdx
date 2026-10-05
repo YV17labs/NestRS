@@ -12,7 +12,7 @@ payload** (a JSON blob in one variable) and a **rule spanning the whole
 struct**. This is the real `OAuthConfig` from `features/oauth` (signs
 the OAuth clients accepted by `apps/auth`) — it needs both. Its name and its
 namespace are read off its path, as every config's are: `oauth/config.rs` is
-`OAuthConfig`, read from `NESTRS_OAUTH__*`.
+`OAuthConfig`, read from `<PREFIX>_OAUTH__*`.
 
 ```rust title="crates/features/src/oauth/config.rs (from the demo)"
 use nest_rs::config::{Config, ConfigService, config};
@@ -65,11 +65,11 @@ impl Config for OAuthConfig {
 ```
 
 - **`base` supplies the fallback, even for the structured field.** An unset
-  `NESTRS_OAUTH__CLIENTS` keeps `base.clients` rather than resetting to an
+  `<PREFIX>_OAUTH__CLIENTS` keeps `base.clients` rather than resetting to an
   empty list, so a deployment can override the org id without also wiping the
   clients a `for_root` pinned in code.
 - **`clients` is a JSON array in a single variable.** `env.json("CLIENTS")`
-  decodes it as the field's type, inline or through `NESTRS_OAUTH__CLIENTS_FILE`,
+  decodes it as the field's type, inline or through `<PREFIX>_OAUTH__CLIENTS_FILE`,
   and a value that does not decode fails the boot with `ConfigError::Decode`,
   naming whichever spelling was set, where the value failed, the kind of value
   found and the type expected — never the value, since a mistyped list of

@@ -97,15 +97,15 @@ pinned `OpenTelemetryConfig`.
 
 | Env var | Field | Default |
 |---|---|---|
-| `NESTRS_OPENTELEMETRY__SERVICE_NAME` | `service_name` | argument to `init` |
-| `NESTRS_OPENTELEMETRY__SERVICE_VERSION` | `service_version` | `None` |
-| `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT` | `deployment_environment` | `None` |
-| `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` | `service_instance_id` | fresh UUIDv7 per process |
-| `NESTRS_LOG` | `log_filter` | `info` (the framework-wide logging family) |
-| `NESTRS_LOG_FORMAT` | `log_format` | `text` in debug, `json` in release |
-| `NESTRS_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
-| `NESTRS_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
-| `NESTRS_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
+| `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` | `service_name` | argument to `init` |
+| `<PREFIX>_OPENTELEMETRY__SERVICE_VERSION` | `service_version` | `None` |
+| `<PREFIX>_OPENTELEMETRY__SERVICE_ENVIRONMENT` | `deployment_environment` | `None` |
+| `<PREFIX>_OPENTELEMETRY__SERVICE_INSTANCE_ID` | `service_instance_id` | fresh UUIDv7 per process |
+| `<PREFIX>_LOG` | `log_filter` | `info` (the framework-wide logging family) |
+| `<PREFIX>_LOG_FORMAT` | `log_format` | `text` in debug, `json` in release |
+| `<PREFIX>_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
+| `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
+| `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
 
 The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
 the subscriber stays console-only; the W3C propagator is still installed so
@@ -189,7 +189,7 @@ async fn users_list_returns_a_page() {
 ```
 
 `with_test_telemetry` calls `OpenTelemetry::init_for_tests` — a console-only
-init honouring `NESTRS_LOG` then `RUST_LOG` (default `warn` for noise control). It is
+init honouring `<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is
 idempotent; the first test to run wins, the rest no-op. It is gated by the
 `opentelemetry` feature on `nest-rs-testing`.
 

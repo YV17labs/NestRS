@@ -156,9 +156,9 @@ something that looks right and is not.
 ## Configuration
 
 A subscription socket captures its principal once, at the upgrade, and
-replays it for every item it pushes. `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
+replays it for every item it pushes. `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`
 bounds how long that may last — the same control, and the same default of
-four hours, that `NESTRS_WS__MAX_CONNECTION_SECS` applies to a gateway
+four hours, that `<PREFIX>_WS__MAX_CONNECTION_SECS` applies to a gateway
 socket. When it elapses the server ends the socket, so the peer
 re-upgrades, which re-runs the guard chain and re-checks the token's
 `exp`. Set it to `0` to disable the ceiling.

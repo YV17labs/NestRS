@@ -6,12 +6,12 @@
 //! subscriber in `main` *before* the app builds; this fallback detects it and
 //! steps aside. Configuration is env-only:
 //!
-//! - `NESTRS_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
+//! - `<PREFIX>_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
 //!   default `info`. Set-but-unparseable aborts boot, the same posture as
 //!   every other framework var.
-//! - `NESTRS_LOG_FORMAT` — `text` or `json`; defaults by build profile
+//! - `<PREFIX>_LOG_FORMAT` — `text` or `json`; defaults by build profile
 //!   (text in debug, JSON in release), unrecognized values keep the default.
-//! - `NESTRS_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
+//! - `<PREFIX>_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
 //!   event; off by default (widens every line, leaks source paths in prod).
 //!
 //! `NESTRS` is the default prefix; under

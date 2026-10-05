@@ -169,20 +169,20 @@ name, so a second line from the service would double-count every denial.
 ## Configuration
 
 `AuthnConfig` follows the framework-wide dual-path rule: every field is
-settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
+settable from `<PREFIX>_AUTHN__*` env vars **or** from a pinned struct
 passed to `AuthnModule::for_root(config)`.
 
 | Field | Env var | Notes |
 |-------|---------|-------|
-| `secret` | `NESTRS_AUTHN__SECRET` | HS256 shared secret |
-| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY`, or a path in `NESTRS_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
-| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY`, or a path in `NESTRS_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
-| `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30, at most 300 — RFC 7519 §4.1.4's "a few minutes" |
-| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
-| `issuer` | `NESTRS_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
-| `expires_in_secs` | `NESTRS_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600, from 1 to 2592000 (thirty days). Outside it — from the environment, a pinned `AuthnConfig` or a `JwtOptions` built in code — the boot fails naming the variable |
-| `explicit_typing` | `NESTRS_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for a legacy issuer minting plain `typ: JWT` |
-| `allow_any_audience` | `NESTRS_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
+| `secret` | `<PREFIX>_AUTHN__SECRET` | HS256 shared secret |
+| `private_key` | `<PREFIX>_AUTHN__PRIVATE_KEY`, or a path in `<PREFIX>_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
+| `public_key` | `<PREFIX>_AUTHN__PUBLIC_KEY`, or a path in `<PREFIX>_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
+| `leeway_secs` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30, at most 300 — RFC 7519 §4.1.4's "a few minutes" |
+| `audience` | `<PREFIX>_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
+| `issuer` | `<PREFIX>_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
+| `expires_in_secs` | `<PREFIX>_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600, from 1 to 2592000 (thirty days). Outside it — from the environment, a pinned `AuthnConfig` or a `JwtOptions` built in code — the boot fails naming the variable |
+| `explicit_typing` | `<PREFIX>_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for a legacy issuer minting plain `typ: JWT` |
+| `allow_any_audience` | `<PREFIX>_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
 
 `AuthnConfig::into_options` walks the three key fields and chooses a
 mode:
@@ -209,7 +209,7 @@ refusal names the settings that are set.
 **HS256** is fine when one binary both issues and verifies tokens.
 Symmetric — anyone with the secret can mint a token. Convenient for
 local development and single-process apps. Set
-`NESTRS_AUTHN__SECRET`.
+`<PREFIX>_AUTHN__SECRET`.
 
 **EdDSA** is the production posture for split deployments. The issuer
 holds the private PEM; every resource server holds the public PEM

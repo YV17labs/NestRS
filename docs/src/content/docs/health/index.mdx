@@ -130,7 +130,7 @@ logs without walking a list, and a vocabulary (`status`, `info`,
 
 ## Configuration
 
-Two ceilings bound a probe response, read from `NESTRS_HEALTH__*` or
+Two ceilings bound a probe response, read from `<PREFIX>_HEALTH__*` or
 pinned through `HealthModule::for_root` — dual-path, like every other
 module's config. The kubelet's `timeoutSeconds` defaults to **1**, and a
 probe that has not answered by then is scored a *failure*; on a liveness
@@ -166,7 +166,7 @@ pub struct ApiModule;
 <Aside type="caution">
 **The probe paths follow `global_prefix`.** A probe path is a contract
 with your orchestrator, but the routes are ordinary controller routes:
-under `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
+under `<PREFIX>_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
 `GET /api/v1/health/live`, and a manifest written from the unqualified
 path gets a `404` — which reads as a failed probe. A prefixed app logs
 one `warn` at boot naming the exact paths its probes answer on; point the

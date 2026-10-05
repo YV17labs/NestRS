@@ -4,7 +4,7 @@
 //! Both endpoints are **public** (`EdgePosture::Exempt`) — an enabled document is
 //! served to anyone. Gate it with [`OpenApiConfig::enabled`](crate::OpenApiConfig)
 //! (default `true` for local ergonomics): **production deployments should set
-//! `NESTRS_OPENAPI__ENABLED=false`** (or pin `OpenApiConfig { enabled: false, .. }`,
+//! `<PREFIX>_OPENAPI__ENABLED=false`** (or pin `OpenApiConfig { enabled: false, .. }`,
 //! or only import the module on an internal-facing app) so the schema is not
 //! published publicly. When disabled the module mounts neither endpoint and logs
 //! one boot event, so an imported-but-off module is never silently inert.
@@ -39,15 +39,15 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/*version";
 
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
 /// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with
-/// `OpenApiModule::for_root()`; configuration loads from `NESTRS_OPENAPI__*`.
+/// `OpenApiModule::for_root()`; configuration loads from `<PREFIX>_OPENAPI__*`.
 ///
-/// Both endpoints are public; set `NESTRS_OPENAPI__ENABLED=false` (or pin
+/// Both endpoints are public; set `<PREFIX>_OPENAPI__ENABLED=false` (or pin
 /// `OpenApiConfig { enabled: false, .. }`) to mount neither — see
 /// [`OpenApiConfig`].
 pub struct OpenApiModule;
 
 impl OpenApiModule {
-    /// Pass `None` to load [`OpenApiConfig`] from `NESTRS_OPENAPI__*`, or an
+    /// Pass `None` to load [`OpenApiConfig`] from `<PREFIX>_OPENAPI__*`, or an
     /// `OpenApiConfig` to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<OpenApiConfig>>) -> OpenApiSetup {
         OpenApiSetup {

@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn a_blank_audience_counts_as_missing() {
-        // `NESTRS_AUTHN__AUDIENCE=` in a `.env` reads as `Some("")` — a value
+        // `<PREFIX>_AUTHN__AUDIENCE=` in a `.env` reads as `Some("")` — a value
         // that would disable the check while looking configured.
         assert!(
             require_audience_binding(Some(&authn_with_audience(Some("  "))), &metadata()).is_err(),

@@ -96,7 +96,7 @@ impl McpMount {
         } else {
             // rmcp warns when it *rejects* a Host, but its message cannot name
             // the remedy: it knows the allowlist, not that this framework feeds
-            // it from `NESTRS_MCP__ALLOWED_HOSTS`. Recording the effective list
+            // it from `<PREFIX>_MCP__ALLOWED_HOSTS`. Recording the effective list
             // at mount is what turns that rejection from "why is my deployment
             // answering 403?" into one grep. Deliberately not a `warn`: the
             // loopback default is correct for the local server it protects, and

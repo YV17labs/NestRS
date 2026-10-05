@@ -16,7 +16,7 @@ back automatically, and the e2e baseline you add in
 ## The data layer in one import
 
 Two imports activate the SeaORM data layer, one per shape:
-`SeaOrmModule::for_root(None)` opens the pool from `NESTRS_SEAORM__URL`, and
+`SeaOrmModule::for_root(None)` opens the pool from `<PREFIX>_SEAORM__URL`, and
 `SeaOrmDatabaseModule` — a bare import beside it — registers the transaction
 interceptor and binds the worker context over that pool. The configuration
 uses the framework's dual-path rule — pin a value here or leave it
@@ -135,7 +135,7 @@ extend the workspace.
 ## Run Postgres
 
 `nestrs new` scaffolds a `compose.yml` with Postgres and Redis, and the
-committed `.env` already points `NESTRS_SEAORM__URL` at it. The credentials
+committed `.env` already points `<PREFIX>_SEAORM__URL` at it. The credentials
 are the **workspace** name, not the app's — a workspace scaffolded with
 `nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello`, whatever
 its apps are called. Bring the services up once:
@@ -150,7 +150,7 @@ INFO sea_orm_migration::migrator::exec: Applying migration 'm20260609_000000_cre
 INFO sea_orm_migration::migrator::exec: Migration 'm20260609_000000_create_post' has been applied
 ```
 
-`nestrs run db up` runs `Migrator::up` against `NESTRS_SEAORM__URL`. The
+`nestrs run db up` runs `Migrator::up` against `<PREFIX>_SEAORM__URL`. The
 binary resolves it through `connect_from_env`, which reads the same `.env`
 cascade the apps do — a tool and its app can never end up pointed at different
 databases.
@@ -177,14 +177,14 @@ INFO nest_rs::orm: connecting to database max_connections=None
 DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
 ```
 
-Those lines come from `.env.development`, which sets `NESTRS_LOG=debug`.
+Those lines come from `.env.development`, which sets `<PREFIX>_LOG=debug`.
 `connecting to database` is the only ORM boot line — the pool is lazy, so
 there is no "connected" confirmation to wait for; the first query is what
 proves the credentials.
 
 Every route is behind the guards you bound on the previous page, so it needs a
 bearer token. `nestrs g auth` wrote one route that mints them — signed with the
-`NESTRS_AUTHN__SECRET` it put in `.env`, and refusing to boot anywhere but
+`<PREFIX>_AUTHN__SECRET` it put in `.env`, and refusing to boot anywhere but
 development and test:
 
 ```bash frame="terminal"

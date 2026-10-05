@@ -83,7 +83,7 @@ impl TestApp {
 }
 
 /// Builder for a [`TestApp`]: mirrors [`AppBuilder`]'s registration surface and
-/// adds test-only provider overrides. Defaults `NESTRS_ENV=test` (hermetic) and
+/// adds test-only provider overrides. Defaults `<PREFIX>_ENV=test` (hermetic) and
 /// loads the project `.env` cascade so e2e picks up the devcontainer hostnames.
 pub struct TestAppBuilder {
     inner: AppBuilder,
@@ -93,7 +93,7 @@ pub struct TestAppBuilder {
 impl TestAppBuilder {
     fn new() -> Self {
         // Every e2e boot (any transport) sees the project's own `.env`.
-        // `load_project_env` also defaults `NESTRS_ENV=test` (set-if-absent)
+        // `load_project_env` also defaults `<PREFIX>_ENV=test` (set-if-absent)
         // *inside* its `Once`, so the invariant holds whichever entry point
         // ran first — see `env.rs`.
         crate::env::load_project_env();

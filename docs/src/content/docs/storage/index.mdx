@@ -37,7 +37,7 @@ cargo add nest-rs --features storage
 ## Wire it in
 
 `StorageModule` owns its `StorageConfig` (namespace `storage`, loaded
-from `NESTRS_STORAGE__*`) and registers `Storage` as a singleton
+from `<PREFIX>_STORAGE__*`) and registers `Storage` as a singleton
 provider. Import it where a feature needs storage:
 
 ```rust title="crates/features/src/media/module.rs"
@@ -55,7 +55,7 @@ storage shape.
 
 ## Configuration
 
-Every field is settable via `NESTRS_STORAGE__*` env **or** a pinned
+Every field is settable via `<PREFIX>_STORAGE__*` env **or** a pinned
 `StorageConfig` — the framework-wide dual-path config rule. Pin it at the
 composition root; the environment still overlays it per field, so a bucket
 in the source does not freeze the credentials against the deployment:
@@ -206,10 +206,10 @@ Ok(Response::builder().body(Body::from_bytes_stream(stream)))
 
 <Aside type="caution">
 `ALLOW_HTTP=false` — the staging/production default — refuses a plain-`http://`
-endpoint **at boot**, naming `NESTRS_STORAGE__ENDPOINT`. It covers presigned
+endpoint **at boot**, naming `<PREFIX>_STORAGE__ENDPOINT`. It covers presigned
 URLs too: signing is a local computation, so a plaintext endpoint would
 otherwise hand clients a working URL carrying the SigV4 signature. Point it at
-an `https://` endpoint, or set `NESTRS_STORAGE__ALLOW_HTTP=true` to opt in
+an `https://` endpoint, or set `<PREFIX>_STORAGE__ALLOW_HTTP=true` to opt in
 deliberately.
 </Aside>
 

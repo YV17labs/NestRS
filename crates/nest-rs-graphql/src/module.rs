@@ -23,7 +23,7 @@ use crate::subscription::SubscriptionEndpoint;
 ///
 /// [`GraphqlConfig::default`] keeps the playground + boot-time SDL emit
 /// **off** for production safety; a dev run opts them in via
-/// `NESTRS_GRAPHQL__PLAYGROUND=true` / `…__EMIT_SDL=true`.
+/// `<PREFIX>_GRAPHQL__PLAYGROUND=true` / `…__EMIT_SDL=true`.
 ///
 /// ```
 /// use nest_rs_core::module;
@@ -44,7 +44,7 @@ use crate::subscription::SubscriptionEndpoint;
 pub struct GraphqlModule;
 
 impl GraphqlModule {
-    /// Pass `None` to load [`GraphqlConfig`] from `NESTRS_GRAPHQL__*`, or a
+    /// Pass `None` to load [`GraphqlConfig`] from `<PREFIX>_GRAPHQL__*`, or a
     /// `GraphqlConfig` to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<GraphqlConfig>>) -> GraphqlSetup {
         GraphqlSetup {

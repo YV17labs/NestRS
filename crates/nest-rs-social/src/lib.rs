@@ -23,7 +23,7 @@
 //! discovering a provider is what loads its credentials; [`SocialModule`] takes
 //! no configuration at all, because it never learns which providers exist.
 //!
-//! | `NESTRS_SOCIAL__<KEY>__*`, over any base the provider's config resolved | Outcome |
+//! | `<PREFIX>_SOCIAL__<KEY>__*`, over any base the provider's config resolved | Outcome |
 //! |---|---|
 //! | complete | active |
 //! | absent entirely | inert, one boot `warn` — its routes 404 like an unknown key |

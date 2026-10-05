@@ -21,7 +21,7 @@
 //! Ignoring it entirely would break the case that matters — an infrastructure
 //! hop or a sibling service that is already tracing. So it is read on exactly
 //! the evidence [`ClientOrigin`] uses for
-//! `X-Forwarded-For`: the direct peer is in `NESTRS_HTTP__TRUSTED_PROXIES`. One
+//! `X-Forwarded-For`: the direct peer is in `<PREFIX>_HTTP__TRUSTED_PROXIES`. One
 //! list, one decision, and a deployment cannot end up believing a header for the
 //! client's address while disbelieving it for the trace, or the reverse.
 //!

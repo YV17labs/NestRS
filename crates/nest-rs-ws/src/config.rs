@@ -10,8 +10,8 @@
 //! window: the server closes the socket when it elapses, forcing a fresh upgrade
 //! (and with it a fresh authn/authz check).
 //!
-//! Dual-path like every `nest-rs-*` config: settable via `NESTRS_WS__*` env vars
-//! (`NESTRS_WS__MAX_CONNECTION_SECS`) **and** the pinned struct passed to
+//! Dual-path like every `nest-rs-*` config: settable via `<PREFIX>_WS__*` env vars
+//! (`<PREFIX>_WS__MAX_CONNECTION_SECS`) **and** the pinned struct passed to
 //! [`WsModule::for_root`](crate::WsModule::for_root). `0` (env) / `None` (struct)
 //! means **unlimited** — the pre-ceiling behaviour, kept opt-in preservable —
 //! and a value is held to a second at least and a day at most, the range every
@@ -52,14 +52,14 @@ pub struct WsConfig {
     /// server closes the socket through the normal disconnect path, so the peer
     /// must re-upgrade — re-running authn/authz and re-checking token `exp`.
     /// `None` ⇒ unlimited (the pre-ceiling behaviour). Read from
-    /// `NESTRS_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 (a day)
+    /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 (a day)
     /// or `0` for unlimited — refused outside, from the environment and from the
     /// pinned struct alike; defaults to 4 hours.
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
     /// WebSocket protocol layer (both `max_message_size` and `max_frame_size`)
     /// so buffering is bounded *before* a giant frame is fully read (WS-I1).
-    /// Read from `NESTRS_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
+    /// Read from `<PREFIX>_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
     #[validate(range(min = 1, message = "must be at least 1 byte"))]
     pub max_message_bytes: usize,
 }
@@ -101,7 +101,7 @@ mod tests {
     use super::*;
 
     // The dual-path rule is framework-wide, not an HTTP special case: a pinned
-    // `WsConfig` still takes its overrides per field from `NESTRS_WS__*`.
+    // `WsConfig` still takes its overrides per field from `<PREFIX>_WS__*`.
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = WsConfig {

@@ -7,11 +7,11 @@ pub enum OpenTelemetryError {
     /// Carries the underlying message.
     #[error("OpenTelemetry init failed: {0}")]
     Init(String),
-    /// A `NESTRS_OPENTELEMETRY__*` variable could not be read — both of its
+    /// A `<PREFIX>_OPENTELEMETRY__*` variable could not be read — both of its
     /// spellings set, or a `<KEY>_FILE` naming a file that cannot be read.
     #[error(transparent)]
     Config(#[from] nest_rs_config::ConfigError),
-    /// A set-but-unparseable log filter (`NESTRS_LOG`, or a
+    /// A set-but-unparseable log filter (`<PREFIX>_LOG`, or a
     /// `with_log_filter` builder value) aborts boot naming the bad directive
     /// rather than silently degrading to `info` — framework config contract:
     /// set-but-unparseable is an error, never a fallback.

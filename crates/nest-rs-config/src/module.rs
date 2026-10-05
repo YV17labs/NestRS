@@ -57,10 +57,10 @@ impl ConfigModule {
     /// **Both arms resolve through [`Config::resolve`]**, which is what makes
     /// the override per field. `Some` used to call
     /// [`ContainerBuilder::provide`], registering the struct verbatim and making
-    /// every `NESTRS_<NS>__*` variable in that namespace inert: pinning a port
+    /// every `<PREFIX>_<NS>__*` variable in that namespace inert: pinning a port
     /// with `..Default::default()` silently froze the fourteen other HTTP
-    /// fields, so a deployment setting `NESTRS_HTTP__PORT` or
-    /// `NESTRS_HTTP__TLS_CERT_FILE` got nothing and no warning. A test's seed
+    /// fields, so a deployment setting `<PREFIX>_HTTP__PORT` or
+    /// `<PREFIX>_HTTP__TLS_CERT_FILE` got nothing and no warning. A test's seed
     /// still wins over either arm — a seed short-circuits the factory.
     ///
     /// **They differ in one way, and only one: precedence in the queue.** A
@@ -191,7 +191,7 @@ impl DynamicModule for ConfigRootSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        // `Environment::from_env` reads `NESTRS_ENV` from the real process env;
+        // `Environment::from_env` reads `<PREFIX>_ENV` from the real process env;
         // dotenv values reach config reads lazily via `env_var` (the in-crate
         // map), so collect mutates no process state — no `set_var` on the boot
         // path that a spawned worker's `getenv` could race.

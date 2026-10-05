@@ -28,7 +28,7 @@ pub fn load_project_env() {
         // defaults (GraphQL playground, SDL emit) must see `test`. An explicit
         // value wins (e.g. CI asserting prod behaviour). The name comes from
         // `Environment` rather than a literal: under a custom prefix a hardcoded
-        // `NESTRS_ENV` here would set a variable the app never reads, and every
+        // `<PREFIX>_ENV` here would set a variable the app never reads, and every
         // test would silently run as `development`.
         let env_var = Environment::var_name();
         if std::env::var_os(&env_var).is_none() {

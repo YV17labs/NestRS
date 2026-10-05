@@ -168,7 +168,7 @@ endpoint, and the feature's GraphQL adapter for the operations.
 `GET /graphql` serves the playground **only when it is switched on** — it is
 off by default, so an unconfigured deployment exposes no interactive console
 and `GET /graphql` answers `405`. Turn it on for local work with
-`NESTRS_GRAPHQL__PLAYGROUND=true` (see
+`<PREFIX>_GRAPHQL__PLAYGROUND=true` (see
 [GraphQL configuration](/graphql/configuration/)).
 
 The schema itself is composed from every `#[resolver]` the access graph
@@ -242,7 +242,7 @@ panicking. The reference module's doc comment carries the rationale.
 
 For tooling, commit a `schema.graphql` alongside the binary. The
 framework writes one as a side effect of the dev run when
-`NESTRS_GRAPHQL__EMIT_SDL=1`. Add the path to `.gitignore` for prod
+`<PREFIX>_GRAPHQL__EMIT_SDL=1`. Add the path to `.gitignore` for prod
 builds, commit it for dev:
 
 ```bash frame="terminal"

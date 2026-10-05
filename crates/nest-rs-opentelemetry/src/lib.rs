@@ -1,7 +1,7 @@
 //! OpenTelemetry for nestrs.
 //!
 //! [`OpenTelemetry::init`] sets up `tracing` (console fmt always; OTLP exporter when the
-//! `otlp` feature is on and `NESTRS_OPENTELEMETRY__OTLP_ENDPOINT` is set). The returned
+//! `otlp` feature is on and `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` is set). The returned
 //! guard flushes on drop, so it must outlive `main`.
 //!
 //! [`OpenTelemetryModule`] provides the OTel meter. Everything else this crate

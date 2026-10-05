@@ -669,7 +669,7 @@ mod tests {
     }
 
     /// Hermetic: the process environment is handed in empty, so a shell that
-    /// exports `NESTRS_REDIS__URL` — the one a developer running this suite is
+    /// exports `<PREFIX>_REDIS__URL` — the one a developer running this suite is
     /// most likely to have — cannot answer for the cascade.
     #[test]
     fn the_cascade_is_consulted_from_the_starting_directory() {
@@ -864,11 +864,11 @@ mod tests {
     }
 
     /// A project that renamed its variables must be answered in its own names.
-    /// Reporting `NESTRS_SEAORM__URL: not set` there is worse than silence:
+    /// Reporting `<PREFIX>_SEAORM__URL: not set` there is worse than silence:
     /// it sends the reader to add a key the app will never read.
     ///
     /// Hermetic for the same reason as the cascade test above: the default name
-    /// is asserted *absent*, which a developer's own `NESTRS_SEAORM__URL` would
+    /// is asserted *absent*, which a developer's own `<PREFIX>_SEAORM__URL` would
     /// otherwise contradict from outside the test.
     #[test]
     fn a_custom_prefix_project_is_answered_in_its_own_variable_names() {

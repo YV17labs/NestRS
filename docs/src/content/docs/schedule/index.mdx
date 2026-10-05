@@ -433,7 +433,7 @@ replica — the thing the declaration exists to prevent. So:
 
 - **A claim Redis cannot answer skips the occurrence.** A Redis outage, a
   refused command, a claim that fails at the connection's budget
-  (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`) — each one is a `warn` on
+  (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`) — each one is a `warn` on
   `nest_rs::schedule`, `occurrence skipped: its lock could not be claimed`,
   carrying the job's `provider` and `method`, the `occurrence` and Redis's
   `error`. Every occurrence of the outage is said, and when Redis answers again
@@ -488,7 +488,7 @@ the `trace_id` of the run it fired, for an operator reading it during an
 incident; the lock decides on the key's existence alone.
 `SCAN 0 MATCH nestrs:schedule:claims:features:*` lists one crate's claims still
 held. The prefix is fixed rather than the deployment's: two deployments sharing
-a Redis are separated by the logical database in `NESTRS_REDIS__URL`.
+a Redis are separated by the logical database in `<PREFIX>_REDIS__URL`.
 
 A claim is one `SET … NX PX` and an overrun question one `EXISTS`; with the
 connection's `PING`, which proves it at boot, and the `SELECT` of the database

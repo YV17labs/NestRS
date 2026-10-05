@@ -1,6 +1,6 @@
 ---
 title: Env-var reference
-description: "Every NESTRS_* environment variable, by namespace — the dual-path rule means each one also has a pinned-struct field."
+description: "Every `<PREFIX>_*` environment variable, by namespace — the dual-path rule means each one also has a pinned-struct field."
 sidebar:
   order: 6
 ---
@@ -8,7 +8,7 @@ sidebar:
 Every framework module reads its config from a namespaced env prefix
 **and** from a pinned struct — the framework-wide **dual-path rule**
 ([Configuration](/configuration/#the-dual-path-rule)). The variable name is
-`NESTRS_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
+`<PREFIX>_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
 page lists the variables; each maps one-to-one to a field on the module's
 config struct, so anything here is also settable in code — and, because the
 override is per field, setting one here works even when the app pins its
@@ -20,7 +20,7 @@ with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG` — and the `NESTRS_`
 spellings resolve nothing.
 
 **Every namespaced variable can also be given as a file.**
-`NESTRS_<NAMESPACE>__<KEY>_FILE` names a file whose content is the value — the
+`<PREFIX>_<NAMESPACE>__<KEY>_FILE` names a file whose content is the value — the
 form a mounted secret takes, [read the same way for every key](/configuration/#configservice-api).
 The tables below name the `_FILE` spelling only where a key is usually given
 that way.
@@ -28,28 +28,28 @@ that way.
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the
 binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
-`NESTRS_HTTP__*`; `SeaOrmConfig` reads `NESTRS_SEAORM__*`; `RedisQueueConfig`
-(in `nest-rs-redis`'s `queue/` folder) reads `NESTRS_REDIS__QUEUE__*`;
-`GithubSocialConfig` reads `NESTRS_SOCIAL__GITHUB__*`. A crate in a family puts
+`<PREFIX>_HTTP__*`; `SeaOrmConfig` reads `<PREFIX>_SEAORM__*`; `RedisQueueConfig`
+(in `nest-rs-redis`'s `queue/` folder) reads `<PREFIX>_REDIS__QUEUE__*`;
+`GithubSocialConfig` reads `<PREFIX>_SOCIAL__GITHUB__*`. A crate in a family puts
 the family first: `OAuthClientConfig`, in `nest-rs-oauth-client`, reads
-`NESTRS_OAUTH__CLIENT__*` — the same string as its path,
+`<PREFIX>_OAUTH__CLIENT__*` — the same string as its path,
 `nest_rs::oauth::client`. So from any variable on
 this page you can name the type and the file that parse it, and from any
 `<X>Module::for_root` in a composition root you can name its variables: the
 vendor is in the variable exactly when it is in the type. That is also why there
-is no `NESTRS_DATABASE__URL` — the universal convention, but a word that names
+is no `<PREFIX>_DATABASE__URL` — the universal convention, but a word that names
 neither the crate nor the type, so a reader could not find the code from it.
 
-## Logging — `NESTRS_LOG*`
+## Logging — `<PREFIX>_LOG*`
 
 The baseline console logger is part of `nest-rs-core` — no module to
 import, no config struct. It reads two process-level variables:
 
 | Key | Meaning |
 |---|---|
-| `NESTRS_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
-| `NESTRS_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
-| `NESTRS_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
+| `<PREFIX>_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
+| `<PREFIX>_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
+| `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
 
 An app that installs its own subscriber first (e.g. through
 [OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only
@@ -57,7 +57,7 @@ activates when none is set. The same three variables drive the console
 layer of the [OpenTelemetry](/opentelemetry/) subscriber too, so log
 config survives adopting or dropping the observability stack.
 
-## `http` — `NESTRS_HTTP__*`
+## `http` — `<PREFIX>_HTTP__*`
 
 | Key | Meaning |
 |---|---|
@@ -89,7 +89,7 @@ config survives adopting or dropping the observability stack.
 | `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
 | `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
 
-## `seaorm` — `NESTRS_SEAORM__*`
+## `seaorm` — `<PREFIX>_SEAORM__*`
 
 The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`.
 The engine is in the URL's scheme (`postgres://`, `mysql://`, `sqlite://`) —
@@ -104,7 +104,7 @@ sea-orm picks it, the variable does not change.
 | `SQLX_LOGGING` | log SQL statements |
 | `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 
-## `redis` — `NESTRS_REDIS__*`
+## `redis` — `<PREFIX>_REDIS__*`
 
 The one Redis connection every Redis binding shares — the queue's producer and
 consumer, the rate-limit store and the schedule's occurrence lock — opened by
@@ -119,7 +119,7 @@ next restart.
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a Redis that requires one — its default under TLS (`tls-auth-clients yes`); `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 | `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error, then the most any command a caller waits on may take from end to end — a push, a rate-limit check, a command of your own — past which it fails as a timeout — and how long the socket waits, a second at the least, before it probes an idle Redis or gives up on bytes Redis never acknowledged. A queue worker's blocking read, on a connection of its own, waits its one second plus this budget; defaults to `10`; whole seconds from `1` to `3600` — an hour, past which a Redis silent that long is gone rather than slow — refused outside, and in code anything above zero up to an hour, a sub-second budget included. An app importing the queue or the rate limiter binding keeps it under their net, 20 seconds, and one importing the schedule binding under the scheduler's, 50 seconds — each would otherwise give up on a command still answering: the boot refuses one at or past it. Each boot attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes. Refused credentials and an ACL denying the connection's `PING` fail at once, and so does a database the server will not select — an index it does not have, an ACL user without `+select`, a server in cluster mode — named by the index the URL ends in; a Redis loading its dataset, busy running a script or failing over is retried within the budget, and one still not ready when it runs out fails naming its last answer |
 
-## `redis__queue` — `NESTRS_REDIS__QUEUE__*`
+## `redis__queue` — `<PREFIX>_REDIS__QUEUE__*`
 
 The Redis queue binding's own settings, read by a bare `RedisQueueModule` import
 or pinned through `RedisQueueModule::for_root`. Two segments because the config
@@ -130,7 +130,7 @@ exactly the stem `RedisQueueConfig` is named from.
 |---|---|
 | `LEASE_SECS` | how long a delivery holds its job without a renewal. The worker renews it every third of this while the attempt runs; once it lapses, the next worker that asks takes the job, so it is also how long a crashed replica's job waits before another runs it. Defaults to `30`; below `1` or above `3600` is rejected, and so is a lease of no more than one and a half times `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`: a renewal sent a third into the lease may wait out the whole budget, and would land after the lease lapsed |
 
-## `queue` — `NESTRS_QUEUE__*`
+## `queue` — `<PREFIX>_QUEUE__*`
 
 The queue port's worker settings, read once `QueueModule` is imported, and
 pinned through `QueueModule::for_root`. The port's own word, so the window
@@ -140,7 +140,7 @@ survives a swap of the backend underneath.
 |---|---|
 | `SHUTDOWN_TIMEOUT_SECS` | the drain window after a shutdown signal: running attempts finish inside it, less a reserve, and one still running as it closes is interrupted and its job handed back to the queue before it ends. Defaults to `20`, so the way down fits Kubernetes' default grace period; below `1` or above `3600` is rejected |
 
-## `storage` — `NESTRS_STORAGE__*`
+## `storage` — `<PREFIX>_STORAGE__*`
 
 | Key | Meaning |
 |---|---|
@@ -151,7 +151,7 @@ survives a swap of the backend underneath.
 | `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
 | `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
 
-## `opentelemetry` — `NESTRS_OPENTELEMETRY__*`
+## `opentelemetry` — `<PREFIX>_OPENTELEMETRY__*`
 
 | Key | Meaning |
 |---|---|
@@ -161,10 +161,10 @@ survives a swap of the backend underneath.
 | `METRIC_INTERVAL_SECS` | metric export period, from `1` to `3600` (default `60`; `0` is refused). Traces and logs export immediately — metrics wait for this flush |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
 
-The console layer reads the [`NESTRS_LOG*` family](#logging--nestrs_log)
+The console layer reads the [`<PREFIX>_LOG*` family](#logging--prefix_log)
 above — there are no OTel-specific log variables.
 
-## `authn` — `NESTRS_AUTHN__*`
+## `authn` — `<PREFIX>_AUTHN__*`
 
 JWT key material and validation for `nest-rs-authn`. A resource server sets only
 the verification side (`SECRET` **or** `PUBLIC_KEY`); the issuer app also sets the
@@ -183,7 +183,7 @@ at the next restart.
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds, `1` to `2592000` — thirty days (default `3600`) |
 | `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`) |
 
-## `oauth__client` — `NESTRS_OAUTH__CLIENT__*`
+## `oauth__client` — `<PREFIX>_OAUTH__CLIENT__*`
 
 The login flow's provider endpoints, read by `OAuthClientConfig` in
 `nest-rs-oauth-client`. Every field is required, so an unconfigured app fails
@@ -198,11 +198,11 @@ boot naming the field:
 | `USERINFO_URL` | provider endpoint the profile is fetched from |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
 
-## `oauth__resource` — `NESTRS_OAUTH__RESOURCE__*`
+## `oauth__resource` — `<PREFIX>_OAUTH__RESOURCE__*`
 
 `OAuthResourceModule` is what turns the app into a conformant OAuth 2.1
 resource server (RFC 9728) and what an MCP server needs. Importing it makes
-`NESTRS_AUTHN__AUDIENCE` **mandatory**: the boot fails without it rather than
+`<PREFIX>_AUTHN__AUDIENCE` **mandatory**: the boot fails without it rather than
 leaving the app unable to say which tokens are its own. (A token minted for
 *another named* audience is refused with or without the module — that is
 RFC 7519 §4.1.3. What the module adds is that a token carrying no `aud` at all
@@ -219,7 +219,7 @@ is refused too.)
 | `RESOURCE_POLICY_URI` | URL of this resource's privacy policy, advertised in the metadata document |
 | `RESOURCE_TOS_URI` | URL of this resource's terms of service, advertised in the metadata document |
 
-## `mcp` — `NESTRS_MCP__*`
+## `mcp` — `<PREFIX>_MCP__*`
 
 | Key | Meaning |
 |---|---|
@@ -231,7 +231,7 @@ is refused too.)
 | `MAX_REQUEST_BODY_BYTES` | cap on a single POST body, enforced while streaming — default 4 MiB |
 | `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
 
-## `social` — `NESTRS_SOCIAL__<PROVIDER>__*`
+## `social` — `<PREFIX>_SOCIAL__<PROVIDER>__*`
 
 One sub-namespace per provider (`GITHUB`, `GOOGLE`). Credentials decide the
 provider's fate: complete ⇒ active, absent ⇒ inert with a boot `warn`,
@@ -248,7 +248,7 @@ The endpoint URLs are provider constants, not config — see
 
 ## Other namespaces
 
-These read their own `NESTRS_<NAMESPACE>__*` keys. The rule is uniform: the
+These read their own `<PREFIX>_<NAMESPACE>__*` keys. The rule is uniform: the
 struct's field name uppercased is the key. Two namespaces are not spelled the
 way their section is, so the page is named rather than left to a search:
 
@@ -271,7 +271,7 @@ default in place and nothing said so. The boot now does, once per variable, at
 | Message | When | Fields |
 |---|---|---|
 | `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
-| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`NESTRS_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `NESTRS_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`NESTRS_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`NESTRS_SEAROM__URL`, `NESTRS_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
+| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
 
 Everything else stays silent, and that is the design. One `.env` serves several
 binaries, so a namespace this binary does not read, and that is no near miss of
@@ -280,13 +280,13 @@ variable for that reason. A namespace under six letters has no room for a typo
 that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), so
 only its separators and its case count; and a misspelled namespace still carries
 the key the deployment meant, which the near namespace reads, while another
-binary's variable carries its own — `NESTRS_OPENAI__API_KEY` beside a linked
+binary's variable carries its own — `<PREFIX>_OPENAI__API_KEY` beside a linked
 `openapi` names no key `openapi` reads, and stays silent. The framework's own
 namespaces are held apart from each other by the conformance suite. A key holding
 `__` under a namespace it does read is a sub-namespace another binary links —
 `redis__queue` under `redis` — reported only when it is a near miss of a key
-read here. The framework's process-level names, `NESTRS_LOG*`,
-`NESTRS_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
+read here. The framework's process-level names, `<PREFIX>_LOG*`,
+`<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
 
 The check runs where each config is read, against the keys its `from_env`
 actually asked for — the namespace's misspellings included, at that same read,
@@ -302,7 +302,7 @@ prints for a boot that kept a renamed variable.
 ## The `.env` cascade
 
 Values resolve highest-first: real env > pinned in `module.rs` >
-`.env.<NESTRS_ENV>.local` > `.env.local` > `.env.<NESTRS_ENV>` > `.env`. See
+`.env.<<PREFIX>_ENV>.local` > `.env.local` > `.env.<<PREFIX>_ENV>` > `.env`. See
 [the env cascade](/configuration/env-cascade/) for the files and
 [the dual-path rule](/configuration/#the-dual-path-rule) for where a pinned
 value sits.

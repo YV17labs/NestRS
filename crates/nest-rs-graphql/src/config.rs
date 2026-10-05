@@ -1,4 +1,4 @@
-//! [`GraphqlConfig`] — loaded from `NESTRS_GRAPHQL__*`. Every field defaults
+//! [`GraphqlConfig`] — loaded from `<PREFIX>_GRAPHQL__*`. Every field defaults
 //! production-safe (playground off, SDL emit off, depth/complexity limits on,
 //! introspection disabled); an `.env.development` opts the tooling in and an
 //! app's `module.rs` can pin tighter limits so `app.rs` carries no config
@@ -11,7 +11,7 @@ use nest_rs_config::{Config, ConfigService, DurationBounds, Result, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
-/// Four hours — the same default ceiling `NESTRS_WS__MAX_CONNECTION_SECS`
+/// Four hours — the same default ceiling `<PREFIX>_WS__MAX_CONNECTION_SECS`
 /// carries, because it is the same control on the same kind of socket.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
@@ -30,7 +30,7 @@ const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
 /// router's side, which is what a query plan turns into one such call.
 const DEFAULT_MAX_REPRESENTATIONS: usize = 100;
 
-/// GraphQL endpoint options, settable via `NESTRS_GRAPHQL__*` or pinned through
+/// GraphQL endpoint options, settable via `<PREFIX>_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
 /// defaults production-safe.
 #[config(namespace = "graphql")]
@@ -83,7 +83,7 @@ pub struct GraphqlConfig {
     /// ceiling the socket keeps those privileges after expiry, logout or
     /// revocation, for as long as the peer holds it open.
     ///
-    /// Read from `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
+    /// Read from `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
     /// 86400 (a day) or `0` for unlimited — refused outside, from the
     /// environment and from the pinned struct alike; defaults to 4 hours.
     ///
@@ -115,7 +115,7 @@ pub struct GraphqlConfig {
     /// `_service` answers, `_entities` does not exist, because the keys a router
     /// matches on come from the entity resolvers' own arguments.
     ///
-    /// Read from `NESTRS_GRAPHQL__FEDERATION`.
+    /// Read from `<PREFIX>_GRAPHQL__FEDERATION`.
     pub federation: bool,
     /// Maximum number of entity references one `_entities` call may carry.
     ///
@@ -132,7 +132,7 @@ pub struct GraphqlConfig {
     /// — a router that quietly received fewer entities than it asked for would
     /// render a page with holes and no way to tell why.
     ///
-    /// Read from `NESTRS_GRAPHQL__MAX_REPRESENTATIONS` (`0` ⇒ unlimited);
+    /// Read from `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` (`0` ⇒ unlimited);
     /// defaults to 100. Raise it for a router whose parent pages are larger than
     /// that; it costs nothing when no `_entities` reaches the schema.
     ///
@@ -154,7 +154,7 @@ pub struct GraphqlConfig {
     /// Default `false`, because a workspace shipping several binaries over one
     /// feature library legitimately links resolvers a given app does not serve.
     ///
-    /// Read from `NESTRS_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP`.
+    /// Read from `<PREFIX>_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP`.
     pub strict_resolver_membership: bool,
 }
 

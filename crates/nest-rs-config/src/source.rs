@@ -64,9 +64,9 @@ fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> 
 
 /// Read `name` from the **real** process environment only — no `.env` fallback.
 /// Empty counts as unset. Used where the value must come from the real env by
-/// contract: `NESTRS_ENV` selects which cascade files load, so it cannot itself
+/// contract: `<PREFIX>_ENV` selects which cascade files load, so it cannot itself
 /// be sourced from the cascade (and reading it via [`env_var`] would recurse
-/// into `dotenv_values`, which reads `NESTRS_ENV`).
+/// into `dotenv_values`, which reads `<PREFIX>_ENV`).
 #[expect(
     clippy::disallowed_methods,
     reason = "the config loader is the one reader of the process environment"
@@ -99,7 +99,7 @@ fn real_env_var_from(name: &str, read: Result<String, env::VarError>) -> Option<
 /// anything `Environment::init` merged in from a cascade file.
 ///
 /// `init` publishes the cascade set-if-absent so raw `std::env::var` consumers
-/// (`NESTRS_LOG*`, a `migrate` binary) behave as the cascade says. That merge
+/// (`<PREFIX>_LOG*`, a `migrate` binary) behave as the cascade says. That merge
 /// would otherwise promote every committed `.env` value into the deployment
 /// tier and silently outrank a `for_root` pin — the tier the docs place
 /// *above* every file. Subtracting the published names keeps the pin reachable
@@ -118,7 +118,7 @@ pub(crate) fn deployment_env_var(name: &str) -> Option<String> {
 /// [`ConfigService::with_source`](crate::ConfigService::with_source).
 pub trait ConfigSource: Send + Sync + 'static {
     /// Return the raw value for the fully-qualified variable name (e.g.
-    /// `"NESTRS_SEAORM__URL"`). Empty strings should be treated as unset.
+    /// `"<PREFIX>_SEAORM__URL"`). Empty strings should be treated as unset.
     fn get(&self, var: &str) -> Option<String>;
 
     /// The subset of [`get`](Self::get) that comes from the **deployment** —

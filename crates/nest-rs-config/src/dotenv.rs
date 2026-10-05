@@ -173,7 +173,7 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
 /// (set-if-absent — real env wins). This is the only path that mutates the
 /// process env; it exists for the consumers that read dotenv values through raw
 /// `std::env::var`, which no `ConfigService` serves: the framework's own
-/// `NESTRS_LOG*` setup, `OpenTelemetry::init`, a `migrate`/`seed` binary.
+/// `<PREFIX>_LOG*` setup, `OpenTelemetry::init`, a `migrate`/`seed` binary.
 ///
 /// Two sanctioned callers, both single-threaded before any task is spawned:
 /// [`Environment::init`](crate::Environment::init) at the top of `main`, and
@@ -193,7 +193,7 @@ pub(crate) fn publish_dotenv_values() {
 /// Names this process wrote into `std::env` **from a cascade file** — the real
 /// environment left them unset and a committed `.env` supplied the value.
 ///
-/// Publishing is what makes `NESTRS_LOG` and a `migrate` binary see the
+/// Publishing is what makes `<PREFIX>_LOG` and a `migrate` binary see the
 /// cascade, but it also erases the one distinction the documented precedence
 /// tier rests on: afterwards a bare `std::env::var` cannot tell a deployment
 /// variable from a file checked in beside the code. Recording the names

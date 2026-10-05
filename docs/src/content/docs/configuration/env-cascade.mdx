@@ -48,8 +48,8 @@ else is committed.
 ## The active environment
 
 The `<environment>` segment is the variant of `Environment`, read from
-the reserved `NESTRS_ENV` variable. This is the one framework variable
-**outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`
+the reserved `<PREFIX>_ENV` variable. This is the one framework variable
+**outside** the `<PREFIX>_<DOMAIN>__<KEY>` scheme — it selects which `.env`
 files to load, so it must come from the real process environment, not a
 `.env` file. Writing it into one is a **boot error** naming the fix, the
 same refusal `NESTRS_ENV_PREFIX` gets: the value arrives after the
@@ -66,7 +66,7 @@ pub enum Environment {
 }
 ```
 
-| `NESTRS_ENV` | Variant |
+| `<PREFIX>_ENV` | Variant |
 |--------------|---------|
 | unset, anything unrecognized | `Development` |
 | `test` | `Test` |
@@ -90,7 +90,7 @@ loads — that's where shared test defaults belong.
 .env              ← loaded
 ```
 
-If a test sets `NESTRS_ENV` to something else explicitly (CI asserting
+If a test sets `<PREFIX>_ENV` to something else explicitly (CI asserting
 prod behavior, for instance), the cascade follows that.
 
 ## When the load happens
@@ -102,7 +102,7 @@ Exactly once per process, on the first call that needs it:
   [custom `ConfigSource`](/configuration/sources/) never does; it supplies its
   own values.
 - **`ConfigModule::for_root()`** does *not* parse it. Its collect reads
-  `NESTRS_ENV` from the real environment and registers the resulting
+  `<PREFIX>_ENV` from the real environment and registers the resulting
   `Arc<Environment>`, which is what decides *which* files a later parse
   reads.
 - **`Environment::init()`** parses it **and merges it into `std::env`**
@@ -116,7 +116,7 @@ That last one is why the scaffold calls it on line one of `main`:
 let _environment = Environment::init();
 ```
 
-Without it, `NESTRS_LOG` / `NESTRS_LOG_FORMAT` / `NESTRS_LOG_SOURCE_LOCATION`
+Without it, `<PREFIX>_LOG` / `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION`
 in `.env.development` would be inert — the logging setup reads the process
 environment directly, long before a `ConfigService` exists. The same goes for
 any binary of yours that reads `std::env::var` at startup.
@@ -140,10 +140,12 @@ Inside the cascade and in real env vars, every configurable field
 follows the same scheme:
 
 ```
-NESTRS_<NAMESPACE>__<KEY>
+<PREFIX>_<NAMESPACE>__<KEY>
 ```
 
-- `NESTRS_` — fixed prefix.
+- `<PREFIX>_` — the deployment's prefix: `NESTRS` unless the process sets
+  `NESTRS_ENV_PREFIX`, which renames every variable
+  ([your own prefix](/configuration/#your-own-prefix)).
 - `<NAMESPACE>` — the namespace from `#[config(namespace = "…")]`,
   uppercased.
 - `__` — a double underscore separator (single underscores are reserved
@@ -152,7 +154,7 @@ NESTRS_<NAMESPACE>__<KEY>
   specific casing — `from_env` calls `env.get("…")` with whatever string
   you write.
 
-Examples:
+Examples, under the default prefix:
 
 ```text
 NESTRS_SEAORM__URL
@@ -163,8 +165,8 @@ NESTRS_HTTP__PORT
 
 A feature reads only **its own** namespace from `from_env`. To borrow a
 sibling variable (rare — see *own > borrowed > code default* on the
-[index](/configuration/)), call `env_var("NESTRS_<OTHER>__<KEY>")`
-directly.
+[index](/configuration/)), call `env_var(&var_name("<other>", "<KEY>"))`
+directly: `var_name` spells it under the deployment's prefix.
 
 ## Quoting rules inside `.env` files
 
@@ -202,5 +204,5 @@ that pulls from Vault, K8s, or AWS Parameter Store.
   with Vault or a K8s ConfigMap.
 - [Overriding in tests](/configuration/testing/) — seed pinned values,
   use `figment::Jail` for environment isolation.
-- [Env-var reference](/configuration/env-reference/) — every `NESTRS_*`
+- [Env-var reference](/configuration/env-reference/) — every `<PREFIX>_*`
   variable, by namespace.

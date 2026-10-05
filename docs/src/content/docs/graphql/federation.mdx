@@ -92,7 +92,7 @@ GraphqlModule::for_root(GraphqlConfig {
 })
 ```
 
-or `NESTRS_GRAPHQL__FEDERATION=true` — the same dual path every module config
+or `<PREFIX>_GRAPHQL__FEDERATION=true` — the same dual path every module config
 has. Default **off**.
 
 **The flag does not switch the federation surface on — the `#[entity]` does.**
@@ -166,7 +166,7 @@ Two consequences worth reading twice:
   multiplier on a pooled check is not a number the caller picks.
 
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
-**`_service` is not covered by `NESTRS_GRAPHQL__DISABLE_INTROSPECTION`** — that
+**`_service` is not covered by `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION`** — that
 switch gates `__schema`, and `_service`'s field is unconditionally visible. A
 subgraph with no guards therefore publishes its own SDL to anyone who can reach
 it, introspection disabled or not. Guards close that (above); the network is
@@ -191,5 +191,5 @@ no dependency to do the router's work.
   `#[entity]` follows in every respect but how it is reached.
 - [Authorization](/security/authorization/) — what the mandatory posture gates
   and masks.
-- [Configuration](/graphql/configuration/) — the rest of the `NESTRS_GRAPHQL__*`
+- [Configuration](/graphql/configuration/) — the rest of the `<PREFIX>_GRAPHQL__*`
   surface, including the introspection switch this one is not covered by.

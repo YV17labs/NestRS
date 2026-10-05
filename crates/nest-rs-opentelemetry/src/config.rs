@@ -81,7 +81,7 @@ pub struct OpenTelemetryConfig {
     /// wiring a meter, hitting a route and checking the collector is that the
     /// metrics half is broken. It was reachable neither from the env table nor
     /// from this struct, so there was no way to shorten it for a local run
-    /// either — hence this field, and `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS`
+    /// either — hence this field, and `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS`
     /// beside it.
     pub metric_interval: Duration,
 }
@@ -127,7 +127,7 @@ impl OpenTelemetryConfig {
             // Production output is OTLP/JSON; the human-readable pretty-print is
             // a dev affordance only. Default by build profile so a release deploy
             // that mounts `OpenTelemetryModule` emits JSON without needing
-            // `NESTRS_LOG_FORMAT` set (which still overrides).
+            // `<PREFIX>_LOG_FORMAT` set (which still overrides).
             log_format: LogFormat::by_profile(),
             log_source_location: false,
             otlp_endpoint: None,
@@ -136,7 +136,7 @@ impl OpenTelemetryConfig {
         }
     }
 
-    /// `service_name` is the default; `NESTRS_OPENTELEMETRY__SERVICE_NAME` overrides.
+    /// `service_name` is the default; `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` overrides.
     ///
     /// `Err`, naming the variable, when one cannot be read — both of its
     /// spellings set, or a `<KEY>_FILE` naming an unreadable file — or when
@@ -212,7 +212,7 @@ impl OpenTelemetryConfig {
     /// Dropping it to a few seconds is what makes a local collector setup
     /// verifiable in the time it takes to read the output. Held at
     /// [`OpenTelemetry::init_with`](crate::OpenTelemetry::init_with) to the
-    /// range `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS` is: a second to an
+    /// range `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS` is: a second to an
     /// hour.
     pub fn with_metric_interval(mut self, interval: Duration) -> Self {
         self.metric_interval = interval;
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(LogFormat::default(), LogFormat::Text);
     }
 
-    // `OpenTelemetryConfig::from_env` reads the `NESTRS_OPENTELEMETRY__*` keys
+    // `OpenTelemetryConfig::from_env` reads the `<PREFIX>_OPENTELEMETRY__*` keys
     // straight off the process env via `env_var`, so the tests isolate the env
     // with `figment::Jail` (the same approach `nest-rs-config` uses for its env
     // reads) — hermetic and serialized, no `unsafe { set_var }`. Vars a test

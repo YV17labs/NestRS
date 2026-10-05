@@ -82,7 +82,7 @@ use std::time::Instant;
 /// `<PREFIX>_LOG=info,nest_rs::operation=off` silences every edge's line at
 /// once, which is why no edge grows a `#[config]` field — and the `for_root`
 /// seam that one would oblige — to hold a boolean the filter already answers.
-/// `NESTRS_HTTP__ACCESS_LOG` predates the family and stays: it is an app's
+/// `<PREFIX>_HTTP__ACCESS_LOG` predates the family and stays: it is an app's
 /// pinned config rather than a deployment's filter, and it names one edge's
 /// line rather than the family's.
 ///

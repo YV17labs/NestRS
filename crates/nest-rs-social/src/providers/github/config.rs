@@ -7,7 +7,7 @@ use crate::registry::SocialProviderConfig;
 /// deployment config — the auth/token/userinfo endpoint URLs are provider
 /// constants (see `GithubSocialConfig::oauth2_config`).
 ///
-/// Dual-path (env `NESTRS_SOCIAL__GITHUB__*` **and** the pinned struct). No
+/// Dual-path (env `<PREFIX>_SOCIAL__GITHUB__*` **and** the pinned struct). No
 /// `Debug`: `client_secret` must not leak through a derived format.
 #[config(namespace = "social__github")]
 #[derive(Clone, Default)]

@@ -64,7 +64,7 @@ both scope the span to the future, not the thread.
 `traceparent` propagation is automatic on incoming HTTP requests — **behind a
 trusted proxy**. The transport, not this crate, decides whether an inbound
 `traceparent` may be believed: it is continued when the direct peer is in
-`NESTRS_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
+`<PREFIX>_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
 is what the specification defines a front gate to do. Without that gate any
 client could file its request into a trace of its choosing and set the `sampled`
 flag on traffic it generates. The response carries `traceresponse` so a caller
@@ -129,7 +129,7 @@ The request span and the access event both belong to `nest-rs-http`, and exist
 whether or not this crate is installed. What the interceptor adds is the parent
 from an inbound `traceparent` and the sampler's verdict — the access
 line reads that header, which is the whole of the coupling between the two.
-Toggle the line with `NESTRS_HTTP__ACCESS_LOG=false`; nothing about propagation
+Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
 
 ## Going further

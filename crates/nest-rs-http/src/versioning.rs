@@ -53,7 +53,7 @@ pub enum ApiVersioning {
 }
 
 impl ApiVersioning {
-    /// The spelling used in `NESTRS_HTTP__VERSIONING`.
+    /// The spelling used in `<PREFIX>_HTTP__VERSIONING`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Uri => "uri",

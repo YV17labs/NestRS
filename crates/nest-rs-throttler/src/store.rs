@@ -98,14 +98,14 @@ impl Decision {
 ///
 /// - **Above the store the framework ships over a network.** `RedisThrottler`
 ///   bounds every command at its connection's budget
-///   (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default): a healthy Redis
+///   (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default): a healthy Redis
 ///   answers in milliseconds, one reopening a dropped connection within that
 ///   budget, and one that cannot fails at it with its own sentence — the cause,
 ///   and the variable to change. The guard must not pre-empt any of the three,
 ///   or it would cut short an answer still coming and replace a named cause
 ///   with a bare timeout; twice the default budget leaves room for a
 ///   deployment that raised it.
-/// - **Below the HTTP edge's own request timeout** (`NESTRS_HTTP__REQUEST_TIMEOUT_SECS`,
+/// - **Below the HTTP edge's own request timeout** (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`,
 ///   30 s by default), which answers `503` with a line naming no store. A hung
 ///   store then reads the same on every edge — the guard's denial, and the
 ///   guard's line naming the store — rather than one way on HTTP and another on

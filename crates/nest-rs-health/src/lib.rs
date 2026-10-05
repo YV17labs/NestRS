@@ -9,7 +9,7 @@
 //! **Those paths are the mounted ones, not necessarily the served ones.** A
 //! probe route is an ordinary controller, so it sits under
 //! `HttpConfig::global_prefix` like every other: an app with
-//! `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` serves `GET /api/v1/health/live`, and a
+//! `<PREFIX>_HTTP__GLOBAL_PREFIX=/api/v1` serves `GET /api/v1/health/live`, and a
 //! Kubernetes manifest written from the unqualified path above gets a `404` —
 //! which the kubelet scores as a failed probe. Exempting the mount is not this
 //! crate's to give (the transport nests the whole assembled tree, self-mounts

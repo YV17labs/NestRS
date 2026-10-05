@@ -2,7 +2,7 @@
 //!
 //! `Storage` is built lazily on first use (see [`Storage`]), so the module only
 //! has to register the provider and feed it the config loaded from
-//! `NESTRS_STORAGE__*`.
+//! `<PREFIX>_STORAGE__*`.
 //!
 //! Importing the bare [`StorageModule`] declares the dependency and leaves the
 //! config to the environment; [`StorageModule::for_root`] supplies a base those
@@ -24,7 +24,7 @@ use crate::config::StorageConfig;
 pub struct StorageModule;
 
 impl StorageModule {
-    /// `None` ⇒ load [`StorageConfig`] from `NESTRS_STORAGE__*` over its
+    /// `None` ⇒ load [`StorageConfig`] from `<PREFIX>_STORAGE__*` over its
     /// defaults; `Some(cfg)` makes `cfg` the base those variables overlay.
     /// Either way [`Storage`] is provided, so this is a drop-in replacement for
     /// importing the bare [`StorageModule`].
@@ -66,7 +66,7 @@ mod tests {
     /// The seam this crate went without: a `#[config]` reachable only from the
     /// environment breaks the dual-path rule from the other side, and an app had
     /// no way to pin a bucket short of seeding the value — which would have
-    /// frozen every other `NESTRS_STORAGE__*` field against the deployment.
+    /// frozen every other `<PREFIX>_STORAGE__*` field against the deployment.
     #[tokio::test]
     async fn for_root_pins_the_config_and_still_provides_the_client() {
         let app = App::builder()

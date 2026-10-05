@@ -22,7 +22,7 @@
 //!
 //! | Config for the provider's namespace | Outcome |
 //! |---|---|
-//! | Complete — provided in DI, or `NESTRS_SOCIAL__<KEY>__*` | active |
+//! | Complete — provided in DI, or `<PREFIX>_SOCIAL__<KEY>__*` | active |
 //! | Absent entirely | **inert**, one boot `warn` |
 //! | Partial, or invalid | **boot fails**, naming the provider |
 

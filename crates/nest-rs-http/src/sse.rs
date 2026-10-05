@@ -11,9 +11,9 @@
 //! the request arrives, and then emits for as long as it likes: without a
 //! ceiling it keeps the caller's privileges after the bearer token has expired,
 //! the user has logged out, or the grant was revoked.
-//! `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS` bounds that, with the same 4-hour
+//! `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS` bounds that, with the same 4-hour
 //! default and the same `0` ⇒ unlimited spelling as
-//! `NESTRS_WS__MAX_CONNECTION_SECS` and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`.
+//! `<PREFIX>_WS__MAX_CONNECTION_SECS` and `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`.
 //!
 //! **What it bounds is *emission*, and the connection is a reported gap.** The
 //! deadline is composed into the response body, so it is evaluated whenever that

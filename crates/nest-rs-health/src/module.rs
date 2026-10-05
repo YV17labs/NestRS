@@ -1,6 +1,6 @@
 //! [`HealthModule`] — mounts the probe routes and resolves [`HealthConfig`].
 //!
-//! [`HealthConfig`] loads from `NESTRS_HEALTH__*` by default (importing
+//! [`HealthConfig`] loads from `<PREFIX>_HEALTH__*` by default (importing
 //! `HealthModule` is enough); [`HealthModule::for_root`] supplies a base for
 //! those variables to overlay, so a ceiling pinned in code is still overridable
 //! per field by the deployment (see `nest_rs_config::Config`).
@@ -28,7 +28,7 @@ use crate::service::HealthService;
 pub struct HealthModule;
 
 impl HealthModule {
-    /// `None` ⇒ load [`HealthConfig`] from `NESTRS_HEALTH__*` over its defaults;
+    /// `None` ⇒ load [`HealthConfig`] from `<PREFIX>_HEALTH__*` over its defaults;
     /// `Some(cfg)` makes `cfg` the base those variables overlay. Either way the
     /// probe routes are mounted, so this is a drop-in replacement for importing
     /// the bare [`HealthModule`].

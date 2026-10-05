@@ -34,7 +34,7 @@ pub struct OpenTelemetry {
 }
 
 impl OpenTelemetry {
-    /// Reads `NESTRS_OPENTELEMETRY__*`. Batch exporters are added only when an OTLP
+    /// Reads `<PREFIX>_OPENTELEMETRY__*`. Batch exporters are added only when an OTLP
     /// endpoint is set, but the tracer is always installed so `trace_id` and
     /// `traceparent` propagation work out of the box.
     pub fn init(service_name: impl Into<String>) -> Result<Self, OpenTelemetryError> {
@@ -42,7 +42,7 @@ impl OpenTelemetry {
     }
 
     /// Console-only init for tests. Idempotent; first call wins. No flush
-    /// guard. Log level honours `NESTRS_LOG` then `RUST_LOG`, default `warn`
+    /// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`
     /// (noise control) — an invalid directive falls through rather than
     /// failing a test run over log config.
     #[doc(hidden)]
@@ -157,7 +157,7 @@ impl OpenTelemetry {
 /// Parse an `EnvFilter` directive string, mapping a rejection to a named,
 /// boot-aborting error instead of silently falling back to `info`. A
 /// set-but-unparseable filter is a config error, never a degraded default —
-/// same posture as every other `NESTRS_*` var (set-but-invalid ⇒ `Err`).
+/// same posture as every other `<PREFIX>_*` var (set-but-invalid ⇒ `Err`).
 fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
     EnvFilter::try_new(spec).map_err(|source| OpenTelemetryError::InvalidLogFilter {
         value: spec.to_owned(),

@@ -1,4 +1,4 @@
-//! [`ThrottlerConfig`] — rate-limit settings populated from `NESTRS_THROTTLER__*`.
+//! [`ThrottlerConfig`] — rate-limit settings populated from `<PREFIX>_THROTTLER__*`.
 
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ const WINDOW: DurationBounds = DurationBounds::secs(
     },
 );
 
-/// Rate-limit settings, settable via `NESTRS_THROTTLER__*` or pinned through
+/// Rate-limit settings, settable via `<PREFIX>_THROTTLER__*` or pinned through
 /// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root).
 #[config(namespace = "throttler")]
 #[derive(Clone, Debug, Default)]
@@ -32,7 +32,7 @@ pub struct ThrottlerConfig {
     pub window_secs: Option<u64>,
 }
 
-// Trusted proxies live on `HttpConfig` (`NESTRS_HTTP__TRUSTED_PROXIES`), not
+// Trusted proxies live on `HttpConfig` (`<PREFIX>_HTTP__TRUSTED_PROXIES`), not
 // here: which reverse proxies a deployment believes decides who *every* request
 // is attributed to, the `ClientIp` extractor's answer as much as the bucket's.
 

@@ -130,7 +130,7 @@
 //! mounts that both boot and serve their own message tables, while two gateways
 //! sharing a path *and* a version still fail boot naming both.
 //!
-//! **A gateway is selected by URI only.** `NESTRS_HTTP__VERSIONING` rewrites
+//! **A gateway is selected by URI only.** `<PREFIX>_HTTP__VERSIONING` rewrites
 //! *controller* paths in front of routing, and the selector learns its prefixes
 //! from controllers alone — a self-mount is version-neutral to it. So under
 //! `header` or `media_type` a versioned gateway is still served at `/v1/ws`

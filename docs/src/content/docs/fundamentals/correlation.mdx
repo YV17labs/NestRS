@@ -64,7 +64,7 @@ Whoever **accepts** the work decides, and there are two answers: continue one
 that arrived with the work, or start one.
 
 An inbound `traceparent` is continued **only from a peer in
-`NESTRS_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
+`<PREFIX>_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
 against. From anyone else the trace is *restarted*, which is what the
 specification defines a front gate to do. Without that gate a public client could
 file its requests into a trace of its choosing and set the `sampled` flag on

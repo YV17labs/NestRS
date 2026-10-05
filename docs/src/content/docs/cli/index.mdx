@@ -31,7 +31,7 @@ Requires **Rust 1.97+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest`, `cargo-llvm-cov` — once.
 Run **`nestrs doctor`** after install to check the Rust toolchain and list
-optional `NESTRS_*` environment variables.
+optional `<PREFIX>_*` environment variables.
 
 ## Layout detection
 
@@ -149,7 +149,7 @@ feature already exists, rather than overwriting it.
 
 Ports: the CLI scans existing `apps/*/src/module.rs` and pins the next free one
 in code (same pattern as `auth` → 3001, `api` → 3002, …). Workspace `.env` files
-do **not** set `NESTRS_HTTP__PORT` — ports live in each app's `module.rs`:
+do **not** set `<PREFIX>_HTTP__PORT` — ports live in each app's `module.rs`:
 
 ```rust title="apps/api/src/module.rs"
 HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
@@ -349,7 +349,7 @@ Checks:
 
 - `rustc` ≥ 1.97 and `cargo` on `PATH`
 - whether the current directory sits inside a nestrs workspace
-- optional env vars (`NESTRS_SEAORM__URL`, `NESTRS_REDIS__URL`, …), read as an
+- optional env vars (`<PREFIX>_SEAORM__URL`, `<PREFIX>_REDIS__URL`, …), read as an
   app started in the same shell and directory would read them — the real
   environment over the `.env` cascade, inline or through `<NAME>_FILE`. A value
   the app would refuse at boot — a `_FILE` naming a file it cannot read, a

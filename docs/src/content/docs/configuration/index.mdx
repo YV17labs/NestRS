@@ -9,7 +9,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 Configuration in nestrs is a typed struct, one file per concern, mapped
-explicitly to `NESTRS_<NAMESPACE>__<KEY>` environment variables. The crate
+explicitly to `<PREFIX>_<NAMESPACE>__<KEY>` environment variables. The crate
 is hand-rolled (no figment at runtime): you write `from_env`, the framework
 loads it once at boot, validates it, and registers `Arc<MyConfig>` into
 the container. Consumers inject it like any other provider.
@@ -63,7 +63,7 @@ impl Config for PostsConfig {
 Three pieces do the heavy lifting:
 
 - **`#[config(namespace = "posts")]`** binds the struct to the
-  `NESTRS_POSTS__*` scheme. The macro wires the `Namespaced` trait — no
+  `<PREFIX>_POSTS__*` scheme. The macro wires the `Namespaced` trait — no
   manual constant to write. A namespace belongs to one struct: a second
   `#[config]` declaring it fails the boot naming both, so a variable always
   names the one type that reads it.
@@ -93,7 +93,7 @@ Every field a module's config exposes must be reachable two ways:
 
 1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
    programmatic, type-checked, comes from code.
-2. The `NESTRS_<NS>__<KEY>` environment variable, mapped explicitly in
+2. The `<PREFIX>_<NS>__<KEY>` environment variable, mapped explicitly in
    `from_env`.
 
 That is the framework-wide rule for every `nest-rs-*` module. An env-only
@@ -108,14 +108,14 @@ shape `nestrs new` scaffolds:
 HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
 ```
 
-pins the port as a *default* and leaves every `NESTRS_HTTP__*` key live.
-`NESTRS_HTTP__PORT=3555` moves the port; `NESTRS_HTTP__TLS_CERT_FILE` still
+pins the port as a *default* and leaves every `<PREFIX>_HTTP__*` key live.
+`<PREFIX>_HTTP__PORT=3555` moves the port; `<PREFIX>_HTTP__TLS_CERT_FILE` still
 turns on TLS. The `..Default::default()` does not freeze the other fields
 alongside the one you meant to set.
 
 Read "the environment" there as the **real process environment only**. Once a
 field is pinned, the `.env` cascade no longer reaches it — the same
-`NESTRS_HTTP__PORT=3555` moves the port when it is exported into the process
+`<PREFIX>_HTTP__PORT=3555` moves the port when it is exported into the process
 and is ignored when it sits in a committed `.env` file. That asymmetry is the
 whole point of the tier order below: a pin is a deliberate choice by the app's
 author, and a file committed next to the code must not undo it silently.
@@ -200,7 +200,7 @@ prefix. Every method is sync, and every one that reads a value returns a
 
 | Method                                         | Reads                                       |
 |------------------------------------------------|---------------------------------------------|
-| `env.get("KEY")?` → `Option<String>`           | `NESTRS_<NS>__KEY` as a raw string          |
+| `env.get("KEY")?` → `Option<String>`           | `<PREFIX>_<NS>__KEY` as a raw string          |
 | `env.parse::<T>("KEY")?` → `Option<T>`         | Same, parsed via `FromStr`                  |
 | `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
 | `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
@@ -209,7 +209,7 @@ prefix. Every method is sync, and every one that reads a value returns a
 | `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
 | `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
 | `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |
-| `env.spellings("KEY")` → `String`              | Both spellings, `NESTRS_<NS>__KEY (or NESTRS_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
+| `env.spellings("KEY")` → `String`              | Both spellings, `<PREFIX>_<NS>__KEY (or <PREFIX>_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
 
 **A duration is read through its bounds, never through `parse`.** Declare a
 `nest_rs_config::DurationBounds` beside the config with `DurationBounds::secs`
@@ -235,7 +235,7 @@ const WINDOW: DurationBounds = DurationBounds::secs(
 );
 ```
 
-**Every variable can be given as a file.** `NESTRS_<NS>__KEY_FILE=/run/secrets/key`
+**Every variable can be given as a file.** `<PREFIX>_<NS>__KEY_FILE=/run/secrets/key`
 supplies `KEY` from the file it names — the Docker and Kubernetes secrets
 convention, so a secret never has to sit in the process environment. The file
 must be a regular file of at most a mebibyte; for text, it must be UTF-8 and its
@@ -253,14 +253,14 @@ back the string alone, so a message built around it can only guess which
 spelling was set, and may quote a value a file held. `env.setting("KEY")?` keeps
 both: `setting.refuse(reason)` names the variable the deployment actually set,
 and `setting.shown()` renders the value when it was inline and
-`<the content of the file NESTRS_<NS>__KEY_FILE names>` when it was not.
+`<the content of the file <PREFIX>_<NS>__KEY_FILE names>` when it was not.
 `env.parse` refuses the same way, and drops the parser's own reason for a value
 read from a file, since that reason may quote its input.
 
 **A structured value is refused without its content, whichever spelling gave
 it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and
 a value that does not decode fails the boot saying where it failed, the kind of
-value found and the type expected — `invalid value for NESTRS_OAUTH__CLIENTS:
+value found and the type expected — `invalid value for <PREFIX>_OAUTH__CLIENTS:
 invalid type: a string, expected a sequence at line 1 column 76` — never the
 value itself, inline or not: a list of records is where a deployment writes
 credentials, such as each OAuth client's secret. Decode one through `env.json`
@@ -308,7 +308,7 @@ pub struct AppModule;
 ```
 
 - **`ConfigModule::for_root()`** registers `Arc<Environment>` — the active
-  profile, read from `NESTRS_ENV` — so a provider can inject it and branch. It
+  profile, read from `<PREFIX>_ENV` — so a provider can inject it and branch. It
   writes nothing to the process environment, and its position among the imports
   carries no meaning: every module's `collect` runs before any config factory.
   What makes the `.env` cascade readable is `Environment::init()` at the top of
@@ -396,7 +396,7 @@ Three things are worth knowing:
   `.env` file cannot carry it — it is read too late to have chosen itself. The
   framework aborts naming both values rather than let the rename silently not
   happen.
-- **It is a rename, not an alias.** Once set, `NESTRS_HTTP__PORT` is just
+- **It is a rename, not an alias.** Once set, `<PREFIX>_HTTP__PORT` is just
   another variable in the environment — inert. That is deliberate: a stale
   value silently winning is the failure mode a fallback would create.
 - **`RUST_LOG` keeps its name.** It belongs to the ecosystem, not to us — and
@@ -427,7 +427,7 @@ Hand-writing `from_env` (for custom validation, or a field carrying a structured
   isolate the environment, keep both suites hermetic.
 - [Advanced: hand-written `from_env`](/configuration/advanced/) — custom
   validation and nested config, when the derive is not enough.
-- [Env-var reference](/configuration/env-reference/) — every `NESTRS_*`
+- [Env-var reference](/configuration/env-reference/) — every `<PREFIX>_*`
   variable the framework reads, by namespace.
 
 ## Reference

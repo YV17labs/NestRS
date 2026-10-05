@@ -1,6 +1,6 @@
 ---
 title: HTTP configuration
-description: HttpConfig — host, port, TLS, CORS, the framework header — settable both via NESTRS_HTTP__* env vars and pinned in code.
+description: HttpConfig — host, port, TLS, CORS, the framework header — settable both via `<PREFIX>_HTTP__*` env vars and pinned in code.
 sidebar:
   order: 2
 ---
@@ -47,30 +47,30 @@ Real env always wins over the `.env` cascade.
 
 | Field | Env variable | Default | Pinned form |
 |-------|--------------|---------|-------------|
-| `host` | `NESTRS_HTTP__HOST` | `0.0.0.0` | `HttpConfig { host: "127.0.0.1".into(), ..Default::default() }` |
-| `port` | `NESTRS_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
-| `tls.cert` | `NESTRS_HTTP__TLS_CERT` (inline PEM) or `NESTRS_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
-| `tls.key`  | `NESTRS_HTTP__TLS_KEY` or `NESTRS_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
-| `cors.origins` | `NESTRS_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
-| `cors.methods` | `NESTRS_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
-| `cors.headers` | `NESTRS_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
-| `cors.exposed_headers` | `NESTRS_HTTP__CORS_EXPOSED` | empty | `exposed_headers: vec!["X-Total-Count".into()]` |
-| `cors.credentials` | `NESTRS_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
-| `cors.max_age` | `NESTRS_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
-| `server_header` | `NESTRS_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
-| `global_prefix` | `NESTRS_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
-| `max_body_bytes` | `NESTRS_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
-| `request_timeout` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
-| `shutdown_timeout` | `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
-| `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
-| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
-| `compression` | `NESTRS_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
+| `host` | `<PREFIX>_HTTP__HOST` | `0.0.0.0` | `HttpConfig { host: "127.0.0.1".into(), ..Default::default() }` |
+| `port` | `<PREFIX>_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
+| `tls.cert` | `<PREFIX>_HTTP__TLS_CERT` (inline PEM) or `<PREFIX>_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
+| `tls.key`  | `<PREFIX>_HTTP__TLS_KEY` or `<PREFIX>_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
+| `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
+| `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
+| `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
+| `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty | `exposed_headers: vec!["X-Total-Count".into()]` |
+| `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
+| `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
+| `server_header` | `<PREFIX>_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
+| `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
+| `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
+| `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
+| `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
+| `fail_secure_strict` | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
+| `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
+| `compression` | `<PREFIX>_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
 See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
 
 ## Serve HTTPS
 
-Setting **both** `NESTRS_HTTP__TLS_CERT[_FILE]` and `NESTRS_HTTP__TLS_KEY[_FILE]`
+Setting **both** `<PREFIX>_HTTP__TLS_CERT[_FILE]` and `<PREFIX>_HTTP__TLS_KEY[_FILE]`
 makes the transport serve over [rustls](https://docs.rs/rustls) (through
 poem's listener) instead of plain HTTP. Setting only one of the pair fails
 the boot — a half-configured TLS is a deployment mistake, not a silent
@@ -94,7 +94,7 @@ nestrs run dev api
 ### Renewal without a restart
 
 The two forms differ in one way that matters in production: **material read
-from files is watched.** Every `NESTRS_HTTP__TLS_RELOAD_SECS` seconds (60 by
+from files is watched.** Every `<PREFIX>_HTTP__TLS_RELOAD_SECS` seconds (60 by
 default, `0` to turn it off) the pair is re-read, and a renewed pair is swapped
 into the running rustls config. The listener is not rebuilt — the port stays
 bound, in-flight connections finish, and certbot's `--deploy-hook` needs no
@@ -114,7 +114,7 @@ apart** looks settled in between, and that pair is installed. Certbot and
 cert-manager both swap atomically (a new lineage directory plus a symlink, a
 remounted Secret), so this does not arise with either — but a hand-rolled hook
 that writes the two files in sequence should write them together, or set
-`NESTRS_HTTP__TLS_RELOAD_SECS` longer than the gap.
+`<PREFIX>_HTTP__TLS_RELOAD_SECS` longer than the gap.
 
 Inline PEM has no source to watch, so it is loaded once, as before.
 
@@ -248,7 +248,7 @@ everything else.
 
 `request_timeout` bounds how long one request may run, so a slow or stuck
 request can't tie up a connection indefinitely. Default `30` seconds;
-`NESTRS_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
+`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
 spelling every duration ceiling uses, so `0` never means "zero seconds":
 
 ```bash title=".env.production" frame="terminal"
@@ -447,5 +447,5 @@ NESTRS_HTTP__FAIL_SECURE_STRICT=false
 
 - [Controllers & routes](/http/controllers/) — write the handlers this
   transport serves.
-- [Configuration](/configuration/) — the framework-wide `NESTRS_<NS>__*`
+- [Configuration](/configuration/) — the framework-wide `<PREFIX>_<NS>__*`
   scheme and the `.env` cascade.

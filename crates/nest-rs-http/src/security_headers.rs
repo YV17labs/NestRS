@@ -1,6 +1,6 @@
 //! Default security response headers. Fail-secure posture: on by default, so a
 //! freshly-scaffolded app ships safe headers without having to remember them;
-//! every value is overridable via `NESTRS_HTTP__*` (the framework-wide dual-path
+//! every value is overridable via `<PREFIX>_HTTP__*` (the framework-wide dual-path
 //! config rule) or the pinned struct.
 //!
 //! # The family is [OWASP's list](https://owasp.org/www-project-secure-headers/),
@@ -142,7 +142,7 @@ struct ValueHeader<'a> {
 }
 
 impl HttpSecurityHeaders {
-    /// Read `NESTRS_HTTP__SECURITY_HEADERS` (master) plus one key per header,
+    /// Read `<PREFIX>_HTTP__SECURITY_HEADERS` (master) plus one key per header,
     /// overlaid onto `base`. Absent vars keep `base`'s value (the safe defaults
     /// unless the call site pinned something else); `off` drops that one
     /// header, and a blank value is refused.
@@ -177,7 +177,7 @@ impl HttpSecurityHeaders {
         };
         // Reject a set-but-invalid header value at boot, naming the env var
         // (HTTP-S4) — otherwise the response layer silently drops it and a
-        // stray char in `NESTRS_HTTP__HSTS` quietly removes HSTS in prod. One
+        // stray char in `<PREFIX>_HTTP__HSTS` quietly removes HSTS in prod. One
         // walk over the table, so a header added to it is validated by
         // arriving rather than by someone remembering the second call site.
         for entry in resolved.value_headers() {

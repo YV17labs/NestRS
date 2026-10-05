@@ -41,7 +41,7 @@ reason [The request flow](#the-request-flow) explains.
 ## Wire it in
 
 Each provider reads its credentials from the dual-path config
-(`NESTRS_SOCIAL__<PROVIDER>__*` env **or** a provided struct). Only the
+(`<PREFIX>_SOCIAL__<PROVIDER>__*` env **or** a provided struct). Only the
 client id, secret, and redirect URL are deployment config — the
 auth/token/userinfo endpoints are provider constants, and scopes
 default to each provider's canonical login set.
@@ -56,16 +56,16 @@ NESTRS_SOCIAL__GOOGLE__CLIENT_SECRET=…
 NESTRS_SOCIAL__GOOGLE__REDIRECT_URL=https://auth.example/social/google/callback
 ```
 
-`NESTRS_SOCIAL__GITHUB__SCOPES` and `NESTRS_SOCIAL__GOOGLE__SCOPES` take a
+`<PREFIX>_SOCIAL__GITHUB__SCOPES` and `<PREFIX>_SOCIAL__GOOGLE__SCOPES` take a
 comma-separated list and default to each provider's canonical login set, so
 neither is deployment config until you need more than sign-in.
 
 Three outcomes per provider, and no fourth:
 
-| Config for `NESTRS_SOCIAL__<PROVIDER>__*` | Outcome |
+| Config for `<PREFIX>_SOCIAL__<PROVIDER>__*` | Outcome |
 |---|---|
 | Complete | active |
-| Absent entirely | inert — one boot `warn` naming the provider and its `NESTRS_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so your `:provider` route answers `404` |
+| Absent entirely | inert — one boot `warn` naming the provider and its `<PREFIX>_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so your `:provider` route answers `404` |
 | Partial, or invalid | **boot fails**, naming the provider |
 
 Real credentials are a deployment's explicit intent, so a provider never
@@ -231,11 +231,11 @@ nest_rs::core::inventory::submit! {
 There is no module to write. A social provider is never `#[inject]`ed by
 type — it is reached through the registry as `Arc<dyn SocialProvider>` —
 so it has nothing for a module of its own to own. Adding the crate to
-`Cargo.toml` and setting `NESTRS_SOCIAL__ACME__*` is the whole wiring.
+`Cargo.toml` and setting `<PREFIX>_SOCIAL__ACME__*` is the whole wiring.
 
 ## Configuration
 
-Per provider, under `NESTRS_SOCIAL__<PROVIDER>__`: `CLIENT_ID`,
+Per provider, under `<PREFIX>_SOCIAL__<PROVIDER>__`: `CLIENT_ID`,
 `CLIENT_SECRET`, `REDIRECT_URL`, and optional `SCOPES` (a comma list;
 defaults to the provider's login set). The secret is secret-shaped —
 keep it out of committed config.

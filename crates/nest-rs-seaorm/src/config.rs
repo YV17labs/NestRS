@@ -1,9 +1,9 @@
 //! [`SeaOrmConfig`] — the crate's one `#[config]`: the pool every SeaORM
 //! binding shares. Namespace `seaorm`, read off the path like every other
 //! config's: the pool is the crate's own subject, so it lives at the crate root
-//! under the crate's word, and `NESTRS_SEAORM__URL` says which crate parses it.
+//! under the crate's word, and `<PREFIX>_SEAORM__URL` says which crate parses it.
 //! The `from_env` mapping below is the single source of truth for which
-//! `NESTRS_SEAORM__*` variable feeds each field.
+//! `<PREFIX>_SEAORM__*` variable feeds each field.
 
 use std::time::Duration;
 
@@ -33,7 +33,7 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
-/// settable via a `NESTRS_SEAORM__*` env var (see `from_env`) or pinned through
+/// settable via a `<PREFIX>_SEAORM__*` env var (see `from_env`) or pinned through
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 #[config(namespace = "seaorm")]
 #[derive(Clone, Default)]
@@ -61,24 +61,24 @@ pub struct SeaOrmConfig {
     /// non-transactional side effect (a queued job, an event, an object write).
     /// Retrying is the service's call, at a boundary it knows is replayable —
     /// [`retry_on_conflict`](crate::retry::retry_on_conflict).
-    /// `NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS`.
+    /// `<PREFIX>_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS`.
     pub observe_serialization_conflicts: bool,
 }
 
 impl Config for SeaOrmConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            url: env.get("URL")?.unwrap_or(base.url), //                NESTRS_SEAORM__URL
-            max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections), // NESTRS_SEAORM__MAX_CONNECTIONS
-            min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections), // NESTRS_SEAORM__MIN_CONNECTIONS
+            url: env.get("URL")?.unwrap_or(base.url),
+            max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections),
+            min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections),
             connect_timeout_secs: CONNECT_TIMEOUT
                 .read_optional(env, base.connect_timeout_secs.map(Duration::from_secs))?
-                .map(|read| read.value.as_secs()), //            NESTRS_SEAORM__CONNECT_TIMEOUT_SECS
-            sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?, // NESTRS_SEAORM__SQLX_LOGGING
+                .map(|read| read.value.as_secs()),
+            sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?,
             observe_serialization_conflicts: env.flag(
                 "OBSERVE_SERIALIZATION_CONFLICTS",
                 base.observe_serialization_conflicts,
-            )?, //                       NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS
+            )?,
         })
     }
 }

@@ -55,7 +55,7 @@ the framework's job.
 EdDSA splits the issuer's private key from every verifier's public
 key — see [Split deployment](/security/authentication/split-deployment/).
 Rotation, HSM integration, and secret-store wiring are not the
-framework's job. Treat `NESTRS_AUTHN__PRIVATE_KEY` as you would
+framework's job. Treat `<PREFIX>_AUTHN__PRIVATE_KEY` as you would
 treat any production secret: load it from a real secret store, never
 commit it, rotate on a schedule.
 
@@ -97,7 +97,7 @@ For a production app:
    masker is the second line for columns you *do* expose but restrict,
    covering them only when the field rule is `.fields([...])`.
 5. **CDN / WAF** in front for DDoS and bot defense.
-6. **Real secret store** for `NESTRS_AUTHN__PRIVATE_KEY`, OAuth secrets, DB
+6. **Real secret store** for `<PREFIX>_AUTHN__PRIVATE_KEY`, OAuth secrets, DB
    credentials.
 7. **TLS terminated** at the edge or at the app (`HttpConfig`).
 8. **Logging at the right level.** `nest_rs::authn` and `nest_rs::orm`

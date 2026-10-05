@@ -12,8 +12,8 @@
 //! a Cargo feature an embedder may switch off, so the crate that actually reads
 //! *every* `<PREFIX>_<NS>__<KEY>` boolean a deployment writes could not reach
 //! it and re-typed the eight words instead. One grammar, two spellings, and the
-//! day either grows `y` or `enabled` a deployment's `NESTRS_HTTP__COMPRESSION`
-//! and its `NESTRS_LOG_SOURCE_LOCATION` diverge with nothing to say so.
+//! day either grows `y` or `enabled` a deployment's `<PREFIX>_HTTP__COMPRESSION`
+//! and its `<PREFIX>_LOG_SOURCE_LOCATION` diverge with nothing to say so.
 
 /// `1`/`true`/`yes`/`on` ⇒ `true`, `0`/`false`/`no`/`off` ⇒ `false`, anything
 /// else ⇒ `None`. Case-insensitive, trimmed.

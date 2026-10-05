@@ -313,7 +313,7 @@ impl ConfigService {
     /// (`get` → [`var_name`]), so a fixture and the reader could disagree — and
     /// the disagreeing spelling was the shorter one, which 53 call sites in 16
     /// crates picked. Under `NESTRS_ENV_PREFIX=ACME` the reader looked for
-    /// `ACME_APP__PORT` while the fixture wrote `NESTRS_APP__PORT`, so 70 tests
+    /// `ACME_APP__PORT` while the fixture wrote `<PREFIX>_APP__PORT`, so 70 tests
     /// across the workspace failed — and the ones that did not fail passed by
     /// asserting nothing. Keying on `<KEY>` makes the wrong thing unspellable.
     ///

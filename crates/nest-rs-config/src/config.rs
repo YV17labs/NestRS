@@ -77,7 +77,7 @@ pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
 /// A module configured in code (`HttpModule::for_root(HttpConfig { port: 3000,
 /// ..Default::default() })`) hands that struct in as the **base**, not as the
 /// answer: [`resolve`](Self::resolve) still runs `from_env` over it, so
-/// `NESTRS_HTTP__TLS_CERT` reaches an app whose author only meant to pin the
+/// `<PREFIX>_HTTP__TLS_CERT` reaches an app whose author only meant to pin the
 /// port. The whole precedence chain is
 ///
 /// ```text

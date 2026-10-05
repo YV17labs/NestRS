@@ -2,7 +2,7 @@
 //! `AppModule.imports` and the framework attaches the
 //! [`HttpTransport`] at boot. Every option lives on
 //! [`HttpConfig`] (host + port + optional TLS), populated either by the
-//! `NESTRS_HTTP__*` env scheme or by the pinned struct.
+//! `<PREFIX>_HTTP__*` env scheme or by the pinned struct.
 
 use std::any::TypeId;
 
@@ -17,7 +17,7 @@ use crate::transport::HttpTransport;
 pub struct HttpModule;
 
 impl HttpModule {
-    /// `None` ⇒ load from `NESTRS_HTTP__*`; `Some(cfg)` pins in code.
+    /// `None` ⇒ load from `<PREFIX>_HTTP__*`; `Some(cfg)` pins in code.
     pub fn for_root(config: impl Into<Option<HttpConfig>>) -> HttpSetup {
         HttpSetup {
             pinned: config.into(),

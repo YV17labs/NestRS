@@ -134,7 +134,7 @@ www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/
 
 That is the first hop of the client's flow — rmcp implements the rest of it, so
 an MCP client reaches your authorization server without being configured with
-its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
+its address. `<PREFIX>_AUTHN__AUDIENCE` becomes mandatory under this module: see
 [split deployment](/security/authentication/split-deployment/)
 for why a resource server that skips it can be handed someone else's token.
 

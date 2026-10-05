@@ -14,7 +14,7 @@
 //! **And it makes audience validation mandatory.** The MCP authorization spec
 //! requires a server to verify that a token was issued *for it* — the defence
 //! against a confused deputy replaying a token minted for another service.
-//! `NESTRS_AUTHN__AUDIENCE` is optional in [`AuthnConfig`](nest_rs_authn::AuthnConfig) on its own; under this
+//! `<PREFIX>_AUTHN__AUDIENCE` is optional in [`AuthnConfig`](nest_rs_authn::AuthnConfig) on its own; under this
 //! module it is required, and boot fails naming it. That is the whole point of
 //! the capability: without it the well-known document advertises a resource
 //! identity the verifier never checks.
@@ -46,7 +46,7 @@ struct OAuthResourceHost;
 pub struct OAuthResourceModule;
 
 impl OAuthResourceModule {
-    /// `None` ⇒ load [`OAuthResourceConfig`] from `NESTRS_OAUTH__RESOURCE__*`;
+    /// `None` ⇒ load [`OAuthResourceConfig`] from `<PREFIX>_OAUTH__RESOURCE__*`;
     /// `Some(cfg)` makes `cfg` the base those variables overlay per field.
     pub fn for_root(config: impl Into<Option<OAuthResourceConfig>>) -> OAuthResourceSetup {
         OAuthResourceSetup {

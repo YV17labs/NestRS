@@ -1,12 +1,12 @@
 ---
 title: MCP configuration
-description: McpConfig and its NESTRS_MCP__* keys, plus how a failing operation answers a language model without leaking.
+description: McpConfig and its `<PREFIX>_MCP__*` keys, plus how a failing operation answers a language model without leaking.
 sidebar:
   order: 5
 ---
 
 `McpConfig` carries the streamable-HTTP options, dual-path like every
-`nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
+`nest-rs-*` config: `<PREFIX>_MCP__*` env vars over an optional pinned base.
 Importing `McpModule` is what resolves it; without the import every mount runs
 on the defaults.
 
@@ -31,11 +31,11 @@ McpModule::for_root(McpOptions {
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `NESTRS_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
-| `NESTRS_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
-| `NESTRS_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
-| `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
-| `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+| `<PREFIX>_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
+| `<PREFIX>_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
+| `<PREFIX>_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
+| `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
+| `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
 
 ## The host allowlist
 
@@ -55,7 +55,7 @@ effective allowlist is logged at `debug` when the endpoint mounts
 (`target: nest_rs::mcp`).
 
 The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
-CORS policy, `NESTRS_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
+CORS policy, `<PREFIX>_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
 wraps the whole route tree, and a disallowed `Origin` gets `403` on every
 method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
 too.

@@ -288,7 +288,7 @@ pub(crate) fn selects_per_request(container: &Container) -> bool {
 }
 
 /// How a document tells a caller to ask for an API version when the version is
-/// not in the path (`NESTRS_HTTP__VERSIONING=header` / `media_type`).
+/// not in the path (`<PREFIX>_HTTP__VERSIONING=header` / `media_type`).
 ///
 /// Under those strategies the address a client calls is the unversioned one —
 /// the URI form is a `404` — so the document keys on `#[controller(path = …)]`

@@ -1,5 +1,5 @@
 //! [`ThrottlerModule`] — the port's own seam. `ThrottlerModule::for_root(cfg)`
-//! resolves the policy ([`ThrottlerConfig`], `NESTRS_THROTTLER__*`), registers
+//! resolves the policy ([`ThrottlerConfig`], `<PREFIX>_THROTTLER__*`), registers
 //! the [`ThrottlerGuard`] that applies it, and binds the in-process
 //! [`InMemoryThrottler`] as the default `dyn ThrottlerStore` — an *ordinary*
 //! factory, so a vendor binding imported beside it (`nest_rs::redis::RedisThrottlerModule`)
@@ -26,7 +26,7 @@ use crate::throttle::{DEFAULT_THROTTLE, Throttle};
 pub struct ThrottlerModule;
 
 impl ThrottlerModule {
-    /// Pass `None` to load [`ThrottlerConfig`] from `NESTRS_THROTTLER__*`, or a
+    /// Pass `None` to load [`ThrottlerConfig`] from `<PREFIX>_THROTTLER__*`, or a
     /// [`ThrottlerConfig`] to pin as the base those variables overlay, per field.
     pub fn for_root(config: impl Into<Option<ThrottlerConfig>>) -> ThrottlerSetup {
         ThrottlerSetup {

@@ -3,7 +3,7 @@ use nest_rs_oauth_client::OAuthClientConfig;
 
 use crate::registry::SocialProviderConfig;
 
-/// Google OIDC deployment config. Dual-path (env `NESTRS_SOCIAL__GOOGLE__*`
+/// Google OIDC deployment config. Dual-path (env `<PREFIX>_SOCIAL__GOOGLE__*`
 /// **and** the pinned struct). No `Debug`: `client_secret` must not leak.
 #[config(namespace = "social__google")]
 #[derive(Clone, Default)]

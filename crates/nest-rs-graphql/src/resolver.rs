@@ -826,7 +826,7 @@ pub(crate) type DiscoveredSchema =
 ///
 /// `config.max_depth` and `config.max_complexity`, when set, become validation
 /// limits on every incoming query. Both default to unset to keep the change
-/// opt-in; production apps should pin them via `NESTRS_GRAPHQL__MAX_DEPTH` /
+/// opt-in; production apps should pin them via `<PREFIX>_GRAPHQL__MAX_DEPTH` /
 /// `__MAX_COMPLEXITY` or the pinned `GraphqlConfig`.
 pub(crate) fn build_schema(
     container: Container,

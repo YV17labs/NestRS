@@ -133,7 +133,7 @@ nestrs g auth
 ```
 
 That writes `crates/features/src/{identity,authn,authz}/`, adds the modules to
-the app, appends a development `NESTRS_AUTHN__SECRET` to `.env`, and gives you
+the app, appends a development `<PREFIX>_AUTHN__SECRET` to `.env`, and gives you
 `POST /auth/dev-token` — the route the next page gets its bearer token from.
 Then grant the ability — the policy starts empty, so `Post` needs a rule:
 

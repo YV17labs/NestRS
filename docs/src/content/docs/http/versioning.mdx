@@ -122,12 +122,12 @@ the controller's `Json<T>` shape differs. The service stays one.
 
 ## Let the caller state the version instead
 
-The URI is the default, not the only strategy. `NESTRS_HTTP__VERSIONING`
+The URI is the default, not the only strategy. `<PREFIX>_HTTP__VERSIONING`
 switches how a caller *selects* a version — and nothing about the controllers
 changes, because `#[controller(version = "2")]` remains the one place a version
 is **declared**:
 
-| `NESTRS_HTTP__VERSIONING` | The caller writes |
+| `<PREFIX>_HTTP__VERSIONING` | The caller writes |
 |---|---|
 | `uri` (default) | `GET /v2/posts` |
 | `header` | `GET /posts` + `X-API-Version: 2` |
@@ -163,13 +163,13 @@ Five behaviours worth knowing before you switch:
 - **A stated version beats an unversioned route at the same address; a default
   yields to it.** An explicit request is the strongest signal you can send, so it
   wins — otherwise a versioned controller would be unreachable wherever an
-  unversioned one shares its address. `NESTRS_HTTP__DEFAULT_VERSION` is the
+  unversioned one shares its address. `<PREFIX>_HTTP__DEFAULT_VERSION` is the
   weakest: the caller asked for nothing, so nothing moves under them. Self-mounted
   endpoints (`/graphql`, `/mcp`, `/api-json`, a WebSocket gateway) are neutral
   against both — each owns its path outright.
 - **An unknown version on a path that *has* versions is a `404`, never a
   fallback.** Quietly serving `v1` to a client that asked for `v9` is how a
-  client talks to the wrong API for a month. `NESTRS_HTTP__DEFAULT_VERSION`
+  client talks to the wrong API for a month. `<PREFIX>_HTTP__DEFAULT_VERSION`
   answers a caller who states none — a default *among versions*, never a rewrite
   of everything the app mounts, so every self-mounted endpoint (`/graphql`,
   `/mcp`, `/api-json`, `/health`) is served as written too.
@@ -179,9 +179,9 @@ Five behaviours worth knowing before you switch:
   validated first — alphanumerics, `.` and `-`, nothing longer than 32 bytes.
 - **The [OpenAPI document](/openapi/) follows the caller as well.** It names
   `/posts`, not `/v1/posts`, and each versioned operation gains the version as an
-  `in: header` parameter — your `NESTRS_HTTP__VERSION_HEADER`, or `Accept` with
+  `in: header` parameter — your `<PREFIX>_HTTP__VERSION_HEADER`, or `Accept` with
   its `version=` parameter — enumerating the versions that serve that path. The
-  parameter is `required` unless `NESTRS_HTTP__DEFAULT_VERSION` answers for a
+  parameter is `required` unless `<PREFIX>_HTTP__DEFAULT_VERSION` answers for a
   caller who states none.
 
 Because OpenAPI 3.1 keys operations by path, two versions of `/posts` cannot both
@@ -200,13 +200,13 @@ $ curl -s localhost:3000/api-json/v2 | jq '.paths."/posts".get.parameters[0]'
 
 `GET /api-json` serves the default version (every version, when the deployment
 names none), and Swagger UI at `/api` reads that one. A
-`NESTRS_HTTP__DEFAULT_VERSION` naming a version no controller declares **fails
+`<PREFIX>_HTTP__DEFAULT_VERSION` naming a version no controller declares **fails
 the boot**, listing the versions that do exist — an empty document is not a
 thing to publish quietly.
 
 Pick by what your consumers are: URL versioning is cacheable and greppable in a
 log; header and media-type versioning keep one URL per resource for its whole
-life. `NESTRS_HTTP__VERSIONING` means that is a deployment decision, not a
+life. `<PREFIX>_HTTP__VERSIONING` means that is a deployment decision, not a
 rewrite.
 
 ## Which transports have a version

@@ -78,10 +78,10 @@ resolves from any module that binds it, and nothing goes in a controller
 module's `providers`. Listing `ThrottlerGuard` there as well is a duplicate
 registration and fails the boot naming it.
 
-Passing `None` loads `ThrottlerConfig` from `NESTRS_THROTTLER__*`; the
+Passing `None` loads `ThrottlerConfig` from `<PREFIX>_THROTTLER__*`; the
 defaults (`60` requests per `60s` window) apply when nothing is set.
 Pass `Some(ThrottlerConfig { ... })` to pin the limit in code — the pinned
-value is the base `NESTRS_THROTTLER__*` overlays, field by field, on the same
+value is the base `<PREFIX>_THROTTLER__*` overlays, field by field, on the same
 dual-path rule the rest of the framework follows.
 
 ```bash frame="terminal"
@@ -140,7 +140,7 @@ A window must count something: `Throttle::new` refuses one under a
 millisecond — the Redis store's resolution — which in a `const` is a compile
 error and in `#[meta]` fails the boot at the route. A zero window reset every
 bucket on every hit, so the limiter let everything through at any limit.
-`NESTRS_THROTTLER__WINDOW_SECS=0`, or a pinned `window_secs: Some(0)`, fails the
+`<PREFIX>_THROTTLER__WINDOW_SECS=0`, or a pinned `window_secs: Some(0)`, fails the
 boot naming the variable for the same reason.
 
 ## What "per client" means
@@ -148,7 +148,7 @@ boot naming the variable for the same reason.
 The client key is the **direct peer IP** by default — every request
 coming from the same IP shares the same window. If the request arrives
 through a reverse proxy you have listed in
-`NESTRS_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost** hop that
+`<PREFIX>_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost** hop that
 is not itself a trusted proxy — from `Forwarded` (RFC 7239), else
 `X-Forwarded-For`, else `X-Real-IP` — and counts that as the client.
 
@@ -171,7 +171,7 @@ The rest of the rule:
 - A request with no peer addr (synthetic, in-process) is counted
   against a literal `"global"` bucket.
 
-The list is `NESTRS_HTTP__TRUSTED_PROXIES`, on the transport, not on the
+The list is `<PREFIX>_HTTP__TRUSTED_PROXIES`, on the transport, not on the
 throttler: which proxies a deployment believes decides who *every* request is
 attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
 as the rate-limit bucket's. One list, so the extractor and the bucket can never
@@ -223,14 +223,14 @@ use nest_rs::throttler::ThrottlerModule;
 
 #[module(imports = [
     ThrottlerModule::for_root(None),   // the policy and the guard — unchanged
-    RedisModule::for_root(None),       // the one RedisConnection (NESTRS_REDIS__URL)
+    RedisModule::for_root(None),       // the one RedisConnection (<PREFIX>_REDIS__URL)
     RedisThrottlerModule,              // the counters move to Redis
 ])]
 pub struct AppModule;
 ```
 
 Three lines, three shapes. `ThrottlerModule::for_root` stays exactly as it was:
-it owns the policy (`NESTRS_THROTTLER__*` — the limit and the window are the
+it owns the policy (`<PREFIX>_THROTTLER__*` — the limit and the window are the
 throttler's whatever store counts them) and the `ThrottlerGuard` that applies it.
 `RedisThrottlerModule` is a bare import that *declares* `RedisThrottler` as the
 `dyn ThrottlerStore`, which supersedes the port's in-process default wherever
@@ -244,7 +244,7 @@ The counter is one Lua script — `INCR`, read the TTL with `PTTL`, set it with
 `PEXPIRE` on the first hit — so it is atomic across replicas with no
 check-then-act race. A backend failure
 **denies**: a rate limiter that fails open is not a rate limiter. Each command is
-bounded by the connection's budget (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by
+bounded by the connection's budget (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by
 default), well inside the guard's own bound below — the boot refuses a budget at or
 past it — so an outage reaches the caller as Redis's own error, with its cause.
 
@@ -305,7 +305,7 @@ timeout covers.
 
 There is no `trusted_proxies` on the trait, and that is deliberate: a store
 counts hits, while **who** a hit belongs to is the transport's answer
-(`nest_rs_http::ClientOrigin`, configured by `NESTRS_HTTP__TRUSTED_PROXIES`).
+(`nest_rs_http::ClientOrigin`, configured by `<PREFIX>_HTTP__TRUSTED_PROXIES`).
 A backend that had to be told about proxies would be a second place the same
 question is answered.
 
@@ -325,7 +325,7 @@ downstream crate with their own store type.
 
 ## Going further
 
-- [Configuration](/configuration/) — `NESTRS_THROTTLER__*` follows the
+- [Configuration](/configuration/) — `<PREFIX>_THROTTLER__*` follows the
   same env → struct dual path every module uses.
 - [Guards](/fundamentals/guards/) — what `#[use_guards(ThrottlerGuard)]`
   binds, and why a global guard is the wrong shape here.

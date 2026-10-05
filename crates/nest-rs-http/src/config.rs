@@ -13,7 +13,7 @@ use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 3000;
 /// Default `#[sse]` stream ceiling: 4 hours — the same value
-/// `NESTRS_WS__MAX_CONNECTION_SECS` and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
+/// `<PREFIX>_WS__MAX_CONNECTION_SECS` and `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`
 /// default to, because it bounds the same stale-privilege window.
 const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 /// Default keep-alive comment interval on a `#[sse]` stream: 15 seconds, under
@@ -119,11 +119,11 @@ const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
 );
 
 /// HTTP transport options resolved at boot. Every field is settable both via
-/// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
+/// `<PREFIX>_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
 /// struct (passed to [`HttpModule::for_root`](crate::HttpModule::for_root)) —
 /// and the two compose **per field**: a pinned struct is the base the
-/// environment overlays, so pinning `port` leaves `NESTRS_HTTP__TLS_CERT_FILE`
-/// and every other `NESTRS_HTTP__*` key live. See [`Config`] for the full
+/// environment overlays, so pinning `port` leaves `<PREFIX>_HTTP__TLS_CERT_FILE`
+/// and every other `<PREFIX>_HTTP__*` key live. See [`Config`] for the full
 /// precedence chain.
 #[config(namespace = "http")]
 #[derive(Clone, Debug)]
@@ -133,30 +133,30 @@ pub struct HttpConfig {
     /// Listen port; defaults to `3000`.
     pub port: u16,
     /// PEM cert + key for HTTPS. `None` ⇒ plain HTTP. Picked up from
-    /// `NESTRS_HTTP__TLS_CERT[_FILE]` + `NESTRS_HTTP__TLS_KEY[_FILE]`.
+    /// `<PREFIX>_HTTP__TLS_CERT[_FILE]` + `<PREFIX>_HTTP__TLS_KEY[_FILE]`.
     pub tls: Option<HttpTls>,
     /// CORS policy. `None` ⇒ no CORS layer. Populated when
-    /// `NESTRS_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]).
+    /// `<PREFIX>_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]).
     pub cors: Option<HttpCors>,
     /// How a caller selects an API version. `uri` (the default) reads it from
     /// the path a `#[controller(version = …)]` mounts at; `header` and
     /// `media_type` resolve it per request instead. Read from
-    /// `NESTRS_HTTP__VERSIONING`.
+    /// `<PREFIX>_HTTP__VERSIONING`.
     pub versioning: ApiVersioning,
     /// The header [`ApiVersioning::Header`] reads. Defaults to
-    /// `X-API-Version`; read from `NESTRS_HTTP__VERSION_HEADER`. Ignored by the
+    /// `X-API-Version`; read from `<PREFIX>_HTTP__VERSION_HEADER`. Ignored by the
     /// other two strategies.
     pub version_header: String,
     /// The version served to a caller that states none. `None` (the default)
     /// leaves such a request on the unversioned routes. Read from
-    /// `NESTRS_HTTP__DEFAULT_VERSION`.
+    /// `<PREFIX>_HTTP__DEFAULT_VERSION`.
     pub default_version: Option<String>,
     /// `true` ⇒ emit `Server: nestrs/<version>` on every response.
     /// Defaults to `false` (production-safe — no framework fingerprint).
     /// Flip to `true` in `.env.development` to expose the version locally.
     pub server_header: bool,
     /// Mount every controller under a shared path prefix (e.g. `/api`). `None`
-    /// ⇒ no prefix. Read from `NESTRS_HTTP__GLOBAL_PREFIX`; normalization
+    /// ⇒ no prefix. Read from `<PREFIX>_HTTP__GLOBAL_PREFIX`; normalization
     /// (trim, drop empty/`"/"`, ensure leading `/`, strip trailing `/`) lives
     /// in [`HttpTransport::global_prefix`](crate::HttpTransport::global_prefix).
     pub global_prefix: Option<String>,
@@ -166,10 +166,10 @@ pub struct HttpConfig {
     /// an oversized `Content-Length` plus a streaming cap for chunked bodies. A
     /// per-route [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit)
     /// can pin a *tighter* cap under this ceiling. `None` ⇒ the default (2 MiB).
-    /// Read from `NESTRS_HTTP__MAX_BODY_BYTES`.
+    /// Read from `<PREFIX>_HTTP__MAX_BODY_BYTES`.
     ///
     /// `0` **fails the boot**, like its two nearest siblings
-    /// (`NESTRS_MCP__MAX_REQUEST_BODY_BYTES`, `NESTRS_WS__MAX_MESSAGE_BYTES`):
+    /// (`<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES`, `<PREFIX>_WS__MAX_MESSAGE_BYTES`):
     /// a zero-byte cap rejects every request that carries a body, which is a
     /// deployment nobody types on purpose and which reads as an outage rather
     /// than as a misconfiguration. Turning the cap *off* is not spelled here at
@@ -181,7 +181,7 @@ pub struct HttpConfig {
     /// aborted and the client gets `503 Service Unavailable` with a
     /// `Retry-After`, bounding how long a slow/stuck request ties up a
     /// connection. `None` ⇒ no timeout. Read from
-    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`, whole seconds from 1 to 3600 or `0`
+    /// `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, whole seconds from 1 to 3600 or `0`
     /// for no timeout — refused outside, from the environment and from the
     /// pinned struct alike; defaults to 30 seconds.
     ///
@@ -198,23 +198,23 @@ pub struct HttpConfig {
     /// `true` (the default) fails boot when global guards are registered and
     /// an endpoint the transport cannot shape (an imperative `mount(...)`)
     /// would bypass the guard pool; `false` downgrades to a `warn`. Read from
-    /// `NESTRS_HTTP__FAIL_SECURE_STRICT`.
+    /// `<PREFIX>_HTTP__FAIL_SECURE_STRICT`.
     pub fail_secure_strict: bool,
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
     /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS). On by
-    /// default; tune via `NESTRS_HTTP__SECURITY_HEADERS` (the master switch)
+    /// default; tune via `<PREFIX>_HTTP__SECURITY_HEADERS` (the master switch)
     /// and one key per header — see [`HttpSecurityHeaders`], which also
     /// carries the argument for the three members that ship off.
     pub security_headers: HttpSecurityHeaders,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
     /// request's `Accept-Encoding`. Off by default — leave it to the reverse
-    /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
+    /// proxy in most deployments; flip on with `<PREFIX>_HTTP__COMPRESSION=true`
     /// when the app terminates responses directly.
     pub compression: bool,
     /// Emit one access event per request on `nest_rs::operation` — method, path,
     /// status, byte-exact size, duration, client, `trace_id` and `span_id`, plus
     /// `actor_id` once an authn guard resolved a principal. **On by default**,
-    /// and read from `NESTRS_HTTP__ACCESS_LOG`.
+    /// and read from `<PREFIX>_HTTP__ACCESS_LOG`.
     ///
     /// It belongs to the transport rather than to `nest-rs-opentelemetry`
     /// because everything it reports is what *this* transport knows about a
@@ -228,7 +228,7 @@ pub struct HttpConfig {
     /// reads none of the three and every caller is identified by its transport
     /// peer, which is the only value a client cannot forge.
     ///
-    /// Name the balancer here (`NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2`)
+    /// Name the balancer here (`<PREFIX>_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2`)
     /// and both [`ClientIp`](crate::ClientIp) and the throttler's rate-limit
     /// bucket start resolving the real client behind it — one list, so the two
     /// can never disagree about who a request came from. An unparseable entry
@@ -249,14 +249,14 @@ pub struct HttpConfig {
     /// with those privileges for as long as it lives. Same reading, same
     /// 4-hour default, same range — one second to a day
     /// ([`MAX_CONNECTION_CEILING`]) — and same `0` ⇒ unlimited spelling as
-    /// `NESTRS_WS__MAX_CONNECTION_SECS` and
-    /// `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`. Read from
-    /// `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`; the `http` namespace because SSE
+    /// `<PREFIX>_WS__MAX_CONNECTION_SECS` and
+    /// `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`. Read from
+    /// `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`; the `http` namespace because SSE
     /// is a response shape of this transport rather than a module of its own.
     pub sse_max_connection: Option<Duration>,
     /// How often a `#[sse]` stream emits a keep-alive comment, so an idle
     /// stream is not dropped by an intermediary that sees no bytes. `None` ⇒
-    /// none sent. Read from `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS`, whole seconds
+    /// none sent. Read from `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS`, whole seconds
     /// from 1 to 3600 or `0` for none; defaults to 15 seconds.
     pub sse_keep_alive: Option<Duration>,
     /// How long the transport lets open connections finish after a shutdown
@@ -273,7 +273,7 @@ pub struct HttpConfig {
     /// cannot see inside the endpoint — so it ends with its handler or with the
     /// process, and the same line counts those apart, as `upgraded_open`.
     ///
-    /// Read from `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
+    /// Read from `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
     /// 3600 — refused outside, from the environment and from the pinned struct
     /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
     /// the half second `serve` gives what it stopped to unwind, the shutdown
@@ -411,7 +411,7 @@ fn version_header(env: &ConfigService, base: String) -> Result<String> {
     }
 }
 
-/// Parse `NESTRS_HTTP__TRUSTED_PROXIES` into addresses. A typo here silently
+/// Parse `<PREFIX>_HTTP__TRUSTED_PROXIES` into addresses. A typo here silently
 /// disables the trust it was meant to grant — the proxy would never match the
 /// peer and every caller behind it would collapse onto the balancer's address —
 /// so a bad entry fails the boot naming the variable and the offending value,
@@ -610,7 +610,7 @@ mod tests {
 
     // The finding: the scaffold writes `HttpConfig { port: 3000,
     // ..Default::default() }`, which used to freeze every field — a
-    // deployment setting `NESTRS_HTTP__PORT` or `NESTRS_HTTP__TLS_CERT_FILE` got
+    // deployment setting `<PREFIX>_HTTP__PORT` or `<PREFIX>_HTTP__TLS_CERT_FILE` got
     // silence. The overlay makes the pin a *base*: the env wins per field, and
     // the pin survives wherever the env is silent.
     #[test]
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn from_env_treats_blank_global_prefix_as_unset() {
-        // `NESTRS_HTTP__GLOBAL_PREFIX=` (or whitespace) must not pin an empty
+        // `<PREFIX>_HTTP__GLOBAL_PREFIX=` (or whitespace) must not pin an empty
         // prefix that the transport would still try to nest under.
         figment::Jail::expect_with(|jail| {
             jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "   ");

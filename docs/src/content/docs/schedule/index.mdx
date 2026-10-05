@@ -493,7 +493,7 @@ its URL names, that is every command a scheduler sends. A Redis user for it is
 this rule and nothing more:
 
 ```text title="Redis ACL — schedule"
-ACL SETUSER <user> on ><password> resetchannels ~nestrs:schedule:* +ping +select +set +exists
+ACL SETUSER <user> reset on ><password> ~nestrs:schedule:* +ping +select +set +exists
 ```
 
 An app that also queues or rate-limits gives the same user the rules of

@@ -253,7 +253,7 @@ database its URL names, a Redis user for the rate limiter is this rule and nothi
 more:
 
 ```text title="Redis ACL — rate limiter"
-ACL SETUSER <user> on ><password> resetchannels ~nestrs:throttler:* +ping +select +evalsha +script|load +incr +pttl +pexpire
+ACL SETUSER <user> reset on ><password> ~nestrs:throttler:* +ping +select +evalsha +script|load +incr +pttl +pexpire
 ```
 
 An app that also queues or fires scheduled jobs once gives the same user

@@ -62,19 +62,19 @@ the `SELECT` of the database its URL names, each role's user is one rule and
 nothing more. A producer pushes and cancels:
 
 ```text title="Redis ACL — producer"
-ACL SETUSER <user> on ><password> resetchannels ~nestrs:queue:* +ping +select +evalsha +script|load +time +hget +hset +hdel +xadd +xdel +xpending +zadd +zrem
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +evalsha +script|load +time +hget +hset +hdel +xadd +xdel +xpending +zadd +zrem
 ```
 
 A worker runs jobs, and pushes or cancels as well:
 
 ```text title="Redis ACL — worker"
-ACL SETUSER <user> on ><password> resetchannels ~nestrs:queue:* +ping +select +evalsha +script|load +xreadgroup +xgroup|create +xgroup|delconsumer +xinfo|consumers +xpending +xclaim +xack +xdel +xadd +xtrim +time +hget +hset +hdel +zadd +zrem +zrange +zrangebyscore +get +set +pttl
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +evalsha +script|load +xreadgroup +xgroup|create +xgroup|delconsumer +xinfo|consumers +xpending +xclaim +xack +xdel +xadd +xtrim +time +hget +hset +hdel +zadd +zrem +zrange +zrangebyscore +get +set +pttl
 ```
 
 A KEDA scaler reads a queue's length:
 
 ```text title="Redis ACL — KEDA"
-ACL SETUSER <user> on ><password> resetchannels ~nestrs:queue:* +xlen
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +xlen
 ```
 
 Each rule is held to what its role sends: the suite runs a producer and a worker

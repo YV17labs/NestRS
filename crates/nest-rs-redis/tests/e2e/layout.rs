@@ -355,3 +355,54 @@ async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
     assert!(written.is_err(), "KEDA writes nothing");
     crate::forget_user(&user).await;
 }
+
+/// Each page's rule replaces what a user it is run on held before: an operator
+/// reapplying it to a user granted more by hand — every key, every command —
+/// leaves that user with the rule alone, as the page promises.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_pages_rule_replaces_what_the_user_held_before() {
+    for (page, role) in [
+        (PAGE, "producer"),
+        (PAGE, "worker"),
+        (PAGE, "KEDA"),
+        ("rate-limiting/index.mdx", "rate limiter"),
+        ("schedule/index.mdx", "schedule"),
+    ] {
+        let user = crate::acl_user("nestrs-e2e-replaced");
+        let _: () = redis::cmd("ACL")
+            .arg("SETUSER")
+            .arg(&user)
+            .arg("on")
+            .arg(">nestrs-e2e-acl")
+            .arg("~*")
+            .arg("+@all")
+            .query_async(&mut crate::connect().await)
+            .await
+            .expect("a user holding everything");
+        let rule = crate::documented_acl(page, role)
+            .replace("<user>", &user)
+            .replace("<password>", "nestrs-e2e-acl");
+        let tokens: Vec<&str> = rule.split_whitespace().collect();
+        let _: () = redis::cmd(tokens[0])
+            .arg(&tokens[1..])
+            .query_async(&mut crate::connect().await)
+            .await
+            .unwrap_or_else(|error| panic!("{page}'s {role} rule applies: {error}"));
+        let rules: Vec<String> = redis::cmd("ACL")
+            .arg("GETUSER")
+            .arg(&user)
+            .query_async::<Vec<redis::Value>>(&mut crate::connect().await)
+            .await
+            .expect("ACL GETUSER")
+            .into_iter()
+            .filter_map(|value| redis::from_redis_value::<String>(value).ok())
+            .collect();
+        crate::forget_user(&user).await;
+        assert!(
+            !rules
+                .iter()
+                .any(|rule| rule.contains("~*") || rule.contains("+@all")),
+            "{page}'s {role} rule leaves what the user held before: {rules:?}",
+        );
+    }
+}

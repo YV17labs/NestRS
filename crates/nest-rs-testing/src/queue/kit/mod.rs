@@ -29,8 +29,36 @@ where
 /// One `#[test]` per case of the kit, each against `$backend` — an expression
 /// evaluated afresh in every test, building a [`KitBackend`].
 ///
-/// ```ignore
+/// ```
+/// # use std::time::Duration;
+/// # use nest_rs_queue::QueueName;
+/// # use nest_rs_testing::queue::KitBackend;
+/// # use nest_rs_testing::{TestApp, TestAppBuilder};
+/// # struct MyBackend;
+/// # impl MyBackend {
+/// #     fn new() -> Self {
+/// #         Self
+/// #     }
+/// # }
+/// # impl KitBackend for MyBackend {
+/// #     fn app(&self) -> TestAppBuilder {
+/// #         TestApp::builder()
+/// #     }
+/// #     fn lease(&self) -> Duration {
+/// #         Duration::from_secs(1)
+/// #     }
+/// #     async fn purge(&self, _: &QueueName) -> anyhow::Result<()> {
+/// #         Ok(())
+/// #     }
+/// #     async fn lapse(&self, _: &QueueName) -> anyhow::Result<()> {
+/// #         Ok(())
+/// #     }
+/// #     async fn take(&self, _: &QueueName) -> anyhow::Result<()> {
+/// #         Ok(())
+/// #     }
+/// # }
 /// nest_rs_testing::queue_kit!(MyBackend::new());
+/// # fn main() {}
 /// ```
 #[macro_export]
 macro_rules! queue_kit {

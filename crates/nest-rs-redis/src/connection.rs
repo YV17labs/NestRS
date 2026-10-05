@@ -688,7 +688,7 @@ fn client(
     // commands is refused.
     let redis = info.redis_settings().clone().set_skip_set_lib_name();
     let info = info
-        .set_tcp_settings(liveness(budget))
+        .set_tcp_settings(socket(budget))
         .set_redis_settings(redis);
     let ConnectionAddr::TcpTls { host, insecure, .. } = info.addr() else {
         if config.tls.is_set() {
@@ -792,6 +792,14 @@ fn manager_config(budget: Duration) -> ConnectionManagerConfig {
         .set_min_delay(FIRST_RETRY_BACKOFF)
         .set_exponent_base(RECONNECT_FACTOR)
         .set_max_delay(MAX_RETRY_BACKOFF)
+}
+
+/// How every socket the client opens is set: a command is written whole and
+/// waits on its answer, so Nagle's algorithm would only hold it back behind the
+/// previous one's acknowledgement (`TCP_NODELAY`, which `redis-rs` leaves off);
+/// and its [`liveness`].
+fn socket(budget: Duration) -> TcpSettings {
+    liveness(budget).set_nodelay(true)
 }
 
 /// How the socket learns that Redis is gone rather than slow, so a connection
@@ -1576,6 +1584,15 @@ mod tests {
                 "{budget:?}: {settings}"
             );
         }
+    }
+
+    /// A command leaves the socket when it is written, never held behind the
+    /// previous one's acknowledgement — and the socket keeps its liveness.
+    #[test]
+    fn every_socket_sends_a_command_when_it_is_written() {
+        let settings = socket(Duration::from_secs(10));
+        assert!(settings.nodelay(), "{settings:?}");
+        assert!(settings.keepalive().is_some(), "{settings:?}");
     }
 
     /// A command that never answers is failed at the budget, as a timeout the

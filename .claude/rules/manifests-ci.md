@@ -83,7 +83,7 @@ owning crate's suite is undocumented.
 
 - `demo/` is its own workspace (`publish = false` crates) and never joins the
   root `members`; nothing at the root builds or tests it, and `demo.yml` runs
-  its own recipe. `.cargo/config.toml`
+  its own recipes. `.cargo/config.toml`
   (mold) is inherited by `demo/`, never duplicated.
 - `rust-toolchain.toml` pins the channel as `major.minor`; each workspace's
   `rust-version`, the images, `nestrs doctor`, the docs and every scaffold move
@@ -98,8 +98,12 @@ owning crate's suite is undocumented.
 `just ci` is what `ci.yml` runs, recipe for recipe: fmt, clippy, each capability
 alone, the dependency policy, rustdoc, then every test against real Postgres,
 Redis and S3 — never a mock — and `just test redis` once more on each of the
-oldest Redis and Valkey the docs claim. `demo.yml` runs the demo's e2e suites
-on a change to the demo or to the framework it builds on. **A workflow skips
+oldest Redis and Valkey the docs claim. `demo.yml` runs the demo's own recipes
+— `just lint` with the tree's `nestrs lint`, and every suite — and `bench.yml`
+the benchmarks' `just lint`, each on a change to its tree or to the framework
+it builds on by path; `beta.yml` checks both workspaces on the beta toolchain
+weekly, so a rustc change that breaks a crate is seen before it is stable.
+**A workflow skips
 only what no build or test reads**: a file under a crate's `src/` is compiled
 whatever its extension, and a docs page may be read by a test (nest-rs-redis's
 e2e runs the ACL rules as printed). `deny.toml` is the dependency policy: no known

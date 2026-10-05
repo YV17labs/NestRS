@@ -7,9 +7,7 @@ use features::audio::{AudioQueue, AudioScheduleModule, TranscodeCommand};
 use features::testing::RedisDatabase;
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::{QueueModule, QueueWorker, processor};
-use nest_rs::redis::{
-    RedisModule, RedisQueueModule, RedisScheduleModule,
-};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::{ScheduleModule, Scheduler};
 use nest_rs::testing::TestApp;
 

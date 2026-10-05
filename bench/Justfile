@@ -3,6 +3,11 @@
 _default:
     @just --list
 
+# Formatting and clippy over the Rust benchmarks, warnings refused — what CI runs
+lint:
+    cd queue && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
+    cd sut/nestrs && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
+
 # Build every SUT (release / production build).
 build:
     cd sut/nestrs && cargo build --release

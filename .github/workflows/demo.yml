@@ -1,6 +1,7 @@
-# The demo's e2e suites — the queue's among them — against the framework it
-# builds on by path, on every change either side could break them with. The
-# demo is its own workspace with its own commands; this runs one of them.
+# The demo's checks — its lint, its suites in process and against Postgres,
+# Redis and S3 — against the framework it builds on by path, on every change
+# either side could break them with. The demo is its own workspace with its own
+# commands; this runs them.
 
 name: Demo
 
@@ -12,6 +13,7 @@ on:
       - 'crates/**'
       - 'Cargo.toml'
       - 'rust-toolchain.toml'
+      - 'clippy.toml'
       - '.cargo/**'
       - '.github/actions/**'
       - '.github/workflows/demo.yml'
@@ -32,8 +34,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  e2e:
-    name: demo e2e (Postgres, Redis, S3)
+  lint:
+    name: demo lint (clippy, fmt, nestrs lint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: demo-lint
+          workspaces: |
+            . -> target
+            demo -> target
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1
+      # `nestrs lint` is the CLI of this tree, not a released one.
+      - name: Build the nestrs CLI
+        run: |
+          cargo build --locked -p nest-rs-cli
+          echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - run: just lint
+        working-directory: demo
+
+  test:
+    name: demo test (unit, integration, doctests, e2e)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -83,5 +112,8 @@ jobs:
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-nextest@0.9,just@1
+      # One build: nextest compiles every suite whichever it runs.
+      - run: just test unit
+        working-directory: demo
       - run: just test e2e
         working-directory: demo

@@ -1,0 +1,55 @@
+# The Rust benchmarks build on the framework by path, so a change to it can
+# break them as much as a change to their own code: each is linted on either.
+# Running them is a measurement on a quiet host (bench/RUNBOOK.md), never CI's.
+
+name: Bench
+
+on:
+  push:
+    branches: [main, 'release/**']
+    paths: &tree
+      - 'bench/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'rust-toolchain.toml'
+      - 'clippy.toml'
+      - '.cargo/**'
+      - '.github/actions/**'
+      - '.github/workflows/bench.yml'
+      - '!**.md'
+      - 'crates/**/src/**'
+  pull_request:
+    paths: *tree
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: bench lint (fmt, clippy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: bench
+          workspaces: |
+            bench/queue -> target
+            bench/sut/nestrs -> target
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1
+      - run: just lint
+        working-directory: bench

@@ -13,13 +13,27 @@ inputs:
     description: The cargo workspaces whose target directories are cached (rust-cache's syntax).
     required: false
     default: '. -> target'
+  toolchain:
+    description: >-
+      A channel to build with instead of the pinned one (`beta`); every later
+      step of the job uses it.
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
-    - name: Install the pinned toolchain
+    - name: Install the toolchain
       shell: bash
-      run: rustup toolchain install --profile minimal
+      env:
+        TOOLCHAIN: ${{ inputs.toolchain }}
+      run: |
+        if [ -z "$TOOLCHAIN" ]; then
+          rustup toolchain install --profile minimal
+        else
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+        fi
 
     # .cargo/config.toml links with mold.
     - name: Install mold

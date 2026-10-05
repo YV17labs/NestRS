@@ -1,0 +1,44 @@
+# The framework and the demo against the next stable rustc, a release before
+# it ships: a language or library change that breaks a crate — as Rust 1.100's
+# never-type fallback broke apalis-redis — is seen here while it is still beta,
+# not by a user building nestrs on the new stable. The pin moves on its own
+# schedule; this only warns ahead of it.
+
+name: Beta
+
+on:
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: beta check (${{ matrix.workspace.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace:
+          - { name: framework, dir: '.', features: '--all-features' }
+          - { name: demo, dir: 'demo', features: '' }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: beta-${{ matrix.workspace.name }}
+          workspaces: '${{ matrix.workspace.dir }} -> target'
+          toolchain: beta
+      - run: cargo +beta check --locked --workspace --all-targets $FEATURES
+        working-directory: ${{ matrix.workspace.dir }}
+        env:
+          FEATURES: ${{ matrix.workspace.features }}

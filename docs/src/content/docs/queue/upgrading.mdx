@@ -8,26 +8,30 @@ sidebar:
 import { Steps } from '@astrojs/starlight/components';
 
 6.x kept a queue's jobs at the root of the keyspace, under the queue's bare
-name. 7.0 keeps them under `nestrs:queue:<queue>` and reads nothing 6.x left
-behind, so drain each queue with its 6.x workers before 7.0 workers take over.
+name. 7.0 keeps them on a Redis stream under `nestrs:queue:{<queue>}` and reads
+nothing 6.x left behind, so drain each queue with its 6.x workers before 7.0
+workers take over.
 
 <Steps>
 
-1. **Deploy the 7.0 producers.** They push under `nestrs:queue:<queue>`, which a
-   6.x worker never reads, so what they push waits for the last step.
+1. **Deploy the 7.0 producers.** They push under `nestrs:queue:{<queue>}`, which
+   a 6.x worker never reads, so what they push waits for the last step.
 
 2. **Keep the 6.x workers running** until the queue's 6.x keys are empty — the
    waiting list `<queue>:active`, the schedule `<queue>:scheduled` and the
    in-flight sets `<queue>:inflight:*`.
 
-3. **Replace the 6.x workers with 7.0 workers.**
+3. **Replace the 6.x workers with 7.0 workers.** A 7.0 worker imports
+   `QueueModule::for_root(None)` from `nest_rs::queue` where 6.x imported
+   `RedisWorkerModule::for_root(None)`.
 
 </Steps>
 
 ## Your code
 
 The producer's calls follow the port, which now mints each job's id and answers
-with a receipt, and a consumer's retries follow its budget:
+with a receipt; the worker is the port's, and a consumer's retries follow its
+budget:
 
 | 6.x | 7.0 |
 |---|---|
@@ -35,11 +39,15 @@ with a receipt, and a consumer's retries follow its budget:
 | `queue.push("audio", job)` | the queue's marker, as above; `push_json("audio", value, None)` for a queue this binary does not declare |
 | `queue.push_json(name, value)` | `queue.push_json(name, value, None)` |
 | `<AudioQueue as QueueName>::NAME` | `<AudioQueue as Queue>::NAME` — `QueueName` is now the checked name a backend receives |
+| `RedisWorkerModule::for_root(cfg)` | `QueueModule::for_root(cfg)` from `nest_rs::queue`, beside `RedisQueueModule`, which now binds the consumer too |
+| `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |
+| `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |
+| `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`; the lease is `<PREFIX>_REDIS__QUEUE__LEASE_SECS` — see [Configuration](/queue/delivery/#configuration) |
 | `concurrency` refused on `#[process]` | `concurrency = N`, per method and per replica — see [Concurrency and scaling](/queue/scaling/) |
-| a failed attempt re-run at once, in the worker | re-run after the port's backoff, filed on the queue's schedule — see [Retries and failure](/queue/retries-and-failure/) |
-| an attempt whose process died re-run at the same attempt, for free | counted: past `retries + 1` attempts the job is dead-lettered without running, so `retries = 0` is tried once, crash or not |
+| a failed attempt re-run at once, in the worker | re-run after the port's backoff, held back off the stream until due — see [Retries and failure](/queue/retries-and-failure/) |
+| an attempt whose process died re-run at the same attempt, for free | still re-run at the same attempt, with no retry spent — but past three deliveries that ended without an answer the job is dead-lettered without running; see [the stall limit](/queue/delivery/#crashes-and-the-stall-limit) |
 | a job a newer release pushed failed by an older worker, spending its retries | handed back as stored, due a minute later, with no attempt spent — and dead-lettered once it has waited a day unread, naming both versions |
-| a handler that relied on a job running once | an idempotent one: delivery is at least once, and the [delivery guard](/queue/delivery/#at-least-once-and-the-guard) keeps the common second delivery from running for one fixed span, and nothing past it |
+| a handler that relied on a job running once | an idempotent one: delivery is at least once — a second delivery comes once a lease lapses, and [the fence](/queue/delivery/#at-least-once-and-the-fence) drops what the first one writes after that |
 | a worker draining for 30 seconds | 20 by default, the hand-back reserve included — see [Shutdown](/queue/delivery/#shutdown) |
 | `push_many` failing with the error alone | `QueueError::PartiallyQueued` once the backend accepted part of it, carrying the receipts of the jobs already queued |
 | a driver sealing with `envelope::seal` and opening with `envelope::open` | the port seals before `enqueue` and `consume::attempt` opens — see [Writing a driver](/queue/writing-a-driver/); `Processor`, `check_duplicate_queue_claims` and the `tracing` re-export are gone with them |
@@ -52,10 +60,15 @@ The `None` is a `PushOptions`: a delay, a unique key — see
 - **A 6.x job left at the root never runs**: 7.0 does not read it. Start a 6.x
   worker again until the queue's 6.x keys are empty.
 - **A KEDA trigger still naming the 6.x list** reads zero forever and holds the
-  deployment at `minReplicaCount`. It names `nestrs:queue:<queue>:active` now —
-  see [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
+  deployment at `minReplicaCount`. It is a `redis-streams` trigger on
+  `nestrs:queue:{<queue>}:jobs` now — see
+  [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
+- **`<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` kept** is read by nothing,
+  and the boot does not name it, reading `redis__worker` as another binary's
+  namespace. Until it is renamed, the drain window is what `for_root` pins, or
+  the 20-second default.
 
 ## Going further
 
 - [Delivery on Redis](/queue/delivery/) — where a 7.0 queue keeps what.
-- [Concurrency and scaling](/queue/scaling/) — the trigger on the 7.0 list.
+- [Concurrency and scaling](/queue/scaling/) — the trigger on the 7.0 stream.

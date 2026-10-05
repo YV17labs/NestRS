@@ -93,8 +93,8 @@ globally on `App::builder()` or per controller / resolver / gateway.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue) | `queue` | Backend-agnostic job contract + `#[process]` registry | [Queue](/queue/) |
-| [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) | `redis` | Redis-backed producer and worker (via apalis) | [Queue wiring](/queue/wiring/) |
+| [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue) | `queue` | Backend-agnostic job contract, `#[process]` registry and the `QueueWorker` that runs it | [Queue](/queue/) |
+| [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) | `redis` | Redis-backed queue producer and consumer, on Redis Streams | [Queue wiring](/queue/wiring/) |
 | [`nest-rs-schedule`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-schedule) | `schedule` | Cron-style scheduled jobs — `#[scheduled]` + `ScheduleModule` | [Schedule](/schedule/) |
 | [`nest-rs-events`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-events) | `events` | Typed in-process event bus — `#[listeners]` / `#[on_event]` | [Events](/events/) |
 | [`nest-rs-worker`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-worker) | `worker` | Ambient job context seam for off-request transports | [Queue](/queue/) · [Writing a driver](/database/writing-a-driver/) |
@@ -114,7 +114,7 @@ globally on `App::builder()` or per controller / resolver / gateway.
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
 | [`nest-rs-cli`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-cli) | *(binary: `nestrs`)* | Scaffold workspaces, generate features, project health checks | [CLI](/cli/) |
-| [`nest-rs-testing`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-testing) | `testing` | In-process harness — boot the real DI graph, drive HTTP/GraphQL/MCP without a socket | [Testing](/testing/) |
+| [`nest-rs-testing`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-testing) | `testing` | In-process harness — boot the real DI graph, drive HTTP/GraphQL/MCP without a socket; its `queue` feature carries `queue_kit!`, the behaviour a queue driver runs against its backend | [Testing](/testing/) · [Writing a driver](/queue/writing-a-driver/) |
 
 ## Typical binary profiles
 

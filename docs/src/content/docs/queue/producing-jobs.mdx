@@ -135,7 +135,7 @@ a push can queue it twice unless it carries a unique key.
 on the call and fails it with `QueueError::Unanswered`, naming the queue and the
 call — which, like any failure to answer, may still have filed the job. It is a
 net under the backend, never its budget: on Redis each command a push sends
-waits at most `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so a
+waits at most `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so a
 Redis that stopped answering fails the push at that budget, with its own cause,
 well before the net. Twenty seconds stays under the HTTP edge's request timeout,
 so a push made inside a request fails with an error naming its queue while the
@@ -185,8 +185,9 @@ self.queue
 A delay needs a backend declaring `Capability::DelayedPush`. The Redis backend
 does; a backend that does not refuses the push with `QueueError::Unsupported`,
 naming itself, before anything is filed — a delay is never dropped in silence.
-On Redis the job waits on the queue's schedule and reaches the queue once due,
-whether or not a worker runs — see [Delivery on Redis](/queue/delivery/#delayed-jobs).
+On Redis the job waits off the stream, due on Redis's clock, and a running
+worker files it within a second of falling due — with none running, it waits —
+see [Delivery on Redis](/queue/delivery/#delayed-jobs).
 
 ## One job per key
 
@@ -225,13 +226,11 @@ pushes from queueing one piece of work twice. It does not make two replicas or
 two methods take turns at anything, and a job redelivered after its replica
 died runs again under the key it already holds.
 
-A unique key needs a backend declaring `Capability::UniquePush`. On Redis the
-key is claimed in the same step that reads it, before the job is filed, so
-pushes racing for one key queue one job. A push that never learns whether its
-job was queued — no answer from Redis, or a caller that dropped the push midway
-— holds the key for forty seconds at most rather than refusing retries for the
-job's whole keeping; how long a key whose job vanished holds out is on
-[Delivery on Redis](/queue/delivery/#what-a-job-keeps-and-for-how-long).
+A unique key needs a backend declaring `Capability::UniquePush`. On Redis a
+push is one script: it reads and claims the key in the step that files the job,
+so pushes racing for one key queue one job, and a push lands whole or not at
+all — a push that never learned its answer claimed the key with its job, or
+claimed nothing. See [Delivery on Redis](/queue/delivery/#unique-keys).
 
 ## Cancelling a job
 
@@ -259,9 +258,9 @@ keeps state. `cancel_unique(AudioQueue, key)` cancels the job holding a unique
 key instead, with the same answer.
 
 Cancelling needs a backend declaring `Capability::Cancellation`. On Redis a
-cancel leaves a tombstone beside the job rather than touching the queue's
-storage, written only while no attempt holds the job, and the delivery that
-meets it acknowledges the job without running it.
+cancel is one script: it removes a job still waiting — on the stream and not
+yet handed over, or held back — with everything it held, and answers `false`
+for one a delivery runs. See [Delivery on Redis](/queue/delivery/#cancels).
 
 ## The HTTP adapter
 

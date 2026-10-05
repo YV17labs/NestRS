@@ -28,8 +28,8 @@ that way.
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the
 binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
-`NESTRS_HTTP__*`; `SeaOrmConfig` reads `NESTRS_SEAORM__*`; `RedisWorkerConfig`
-(in `nest-rs-redis`'s `worker/` folder) reads `NESTRS_REDIS__WORKER__*`;
+`NESTRS_HTTP__*`; `SeaOrmConfig` reads `NESTRS_SEAORM__*`; `RedisQueueConfig`
+(in `nest-rs-redis`'s `queue/` folder) reads `NESTRS_REDIS__QUEUE__*`;
 `GithubSocialConfig` reads `NESTRS_SOCIAL__GITHUB__*`. A crate in a family puts
 the family first: `OAuthClientConfig`, in `nest-rs-oauth-client`, reads
 `NESTRS_OAUTH__CLIENT__*` — the same string as its path,
@@ -106,8 +106,8 @@ sea-orm picks it, the variable does not change.
 
 ## `redis` — `NESTRS_REDIS__*`
 
-The one Redis connection every Redis binding shares — the queue producer, the
-worker, the rate-limit store and the schedule's occurrence lock — opened by
+The one Redis connection every Redis binding shares — the queue's producer and
+consumer, the rate-limit store and the schedule's occurrence lock — opened by
 `RedisModule::for_root`. One connection, one variable: a throttler-only app sets
 the same `URL` a queue app does. The TLS material is read at boot, so a renewed file takes effect at the
 next restart.
@@ -117,21 +117,28 @@ next restart.
 | `URL` | Redis connection string — `rediss://` connects over TLS and verifies Redis's certificate for the URL's host; `#insecure`, which skips that, fails the boot |
 | `TLS_CA_CERT` | PEM certificates of the authorities Redis's certificate must chain to, replacing the authorities of Mozilla's root program compiled into the client — a private CA's, or the system's bundle to trust the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Beside a `redis://` URL, fails the boot |
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a Redis that requires one — its default under TLS (`tls-auth-clients yes`); `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
-| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error, then the most any command a caller waits on may take from end to end — a push, a rate-limit check, a command of your own — past which it fails as a timeout — and how long the socket waits, a second at the least, before it probes an idle Redis or gives up on bytes Redis never acknowledged, which is what ends a queue worker's fetch and admission: those two wait for their answer, since cutting them would strand what they claimed; defaults to `10`; whole seconds from `1` to `3600` — an hour, past which a Redis silent that long is gone rather than slow — refused outside, and in code anything above zero up to an hour, a sub-second budget included. Each boot attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes. Refused credentials and an ACL denying the connection's `PING` fail at once, and so does a database the server will not select — an index it does not have, an ACL user without `+select`, a server in cluster mode — named by the index the URL ends in; a Redis loading its dataset, busy running a script or failing over is retried within the budget, and one still not ready when it runs out fails naming its last answer |
+| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error, then the most any command a caller waits on may take from end to end — a push, a rate-limit check, a command of your own — past which it fails as a timeout — and how long the socket waits, a second at the least, before it probes an idle Redis or gives up on bytes Redis never acknowledged. A queue worker's blocking read, on a connection of its own, waits its one second plus this budget; defaults to `10`; whole seconds from `1` to `3600` — an hour, past which a Redis silent that long is gone rather than slow — refused outside, and in code anything above zero up to an hour, a sub-second budget included. Each boot attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes. Refused credentials and an ACL denying the connection's `PING` fail at once, and so does a database the server will not select — an index it does not have, an ACL user without `+select`, a server in cluster mode — named by the index the URL ends in; a Redis loading its dataset, busy running a script or failing over is retried within the budget, and one still not ready when it runs out fails naming its last answer |
 
-## `redis__worker` — `NESTRS_REDIS__WORKER__*`
+## `redis__queue` — `NESTRS_REDIS__QUEUE__*`
 
-The consumer binding's own settings, resolved by `RedisWorkerModule::for_root`.
-Two segments because the config sits in the crate's `worker/` folder: the
-crate's word, then the binding's — exactly the stem `RedisWorkerConfig` is named
-from.
+The Redis queue binding's own settings, read by a bare `RedisQueueModule` import
+or pinned through `RedisQueueModule::for_root`. Two segments because the config
+sits in the crate's `queue/` folder: the crate's word, then the binding's —
+exactly the stem `RedisQueueConfig` is named from.
 
 | Key | Meaning |
 |---|---|
-| `SHUTDOWN_TIMEOUT_SECS` | the drain window after a shutdown signal: running attempts finish inside it, and one still running as it closes is interrupted and its job handed back to the queue before it ends. Defaults to `20`, so the way down fits Kubernetes' default grace period; below `1` or above `3600` is rejected |
-| `ORPHAN_AFTER_SECS` | how long a replica may go without proving it is alive before its peers take the jobs it was running; it proves it every tenth of this, and never more often than once a second. Defaults to `300`; below `5` or above `86400` (a day) is rejected |
-| `LEASE_SECS` | how long a running attempt's claim on its job outlives its last renewal — a second delivery of the job waits it out rather than running beside it, and a crashed replica's job runs again once it lapses. Defaults to `30`; `0`, or more than half `ORPHAN_AFTER_SECS`, is rejected |
-| `POLL_INTERVAL_MS` | how often each method of a replica asks Redis for jobs while one of its permits is free, taking up to its `concurrency` each time — so a method's short jobs run at most `concurrency` per poll per replica, and every poll costs Redis a fetch and a sweep, jobs or none. Defaults to `100`; below `10`, or longer than `ORPHAN_AFTER_SECS`, is rejected |
+| `LEASE_SECS` | how long a delivery holds its job without a renewal. The worker renews it every third of this while the attempt runs; once it lapses, the next worker that asks takes the job, so it is also how long a crashed replica's job waits before another runs it. Defaults to `30`; below `1` or above `3600` is rejected |
+
+## `queue` — `NESTRS_QUEUE__*`
+
+The queue port's worker settings, read once `QueueModule` is imported, and
+pinned through `QueueModule::for_root`. The port's own word, so the window
+survives a swap of the backend underneath.
+
+| Key | Meaning |
+|---|---|
+| `SHUTDOWN_TIMEOUT_SECS` | the drain window after a shutdown signal: running attempts finish inside it, less a reserve, and one still running as it closes is interrupted and its job handed back to the queue before it ends. Defaults to `20`, so the way down fits Kubernetes' default grace period; below `1` or above `3600` is rejected |
 
 ## `storage` — `NESTRS_STORAGE__*`
 
@@ -277,7 +284,7 @@ binary's variable carries its own — `NESTRS_OPENAI__API_KEY` beside a linked
 `openapi` names no key `openapi` reads, and stays silent. The framework's own
 namespaces are held apart from each other by the conformance suite. A key holding
 `__` under a namespace it does read is a sub-namespace another binary links —
-`redis__worker` under `redis` — reported only when it is a near miss of a key
+`redis__queue` under `redis` — reported only when it is a near miss of a key
 read here. The framework's process-level names, `NESTRS_LOG*`,
 `NESTRS_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
 

@@ -201,9 +201,9 @@ by default they sum under the kill:
 own:
 
 - the HTTP transport's [shutdown window](/http/configuration/#shutdown),
-  `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s, then the half second;
-- the queue worker's [drain window](/queue/delivery/#configuration),
-  `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, 20 s, its hand-backs inside it;
+  `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s, then the half second;
+- the queue worker's [drain window](/queue/delivery/#shutdown),
+  `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, 20 s, its hand-backs inside it;
 - the scheduler's: a [scheduled tick](/schedule/) already running gets what a
   hook gets — five seconds, spent *before* the hooks so no tick runs through the
   cleanup it may depend on — and one still running then is stopped where it

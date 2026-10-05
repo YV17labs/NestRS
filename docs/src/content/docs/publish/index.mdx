@@ -83,7 +83,7 @@ unless it says otherwise — and Publish's processors are I/O, an S3 round-trip 
 one INSERT, so a pod draining thousands of jobs sits near 0% CPU and a
 CPU-driven autoscaler never fires. Queue depth is the signal that moves with the
 work, and [KEDA](https://keda.sh) is what reads it: the chart ships a trigger on
-each queue's `nestrs:queue:<queue>:active` list, disabled until you turn it on.
+each queue's `nestrs:queue:{<queue>}:jobs` stream, disabled until you turn it on.
 The chart's
 [README](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo#scaling-the-queue-worker)
 carries the trade-offs, including why replicas stop at one rather than zero.

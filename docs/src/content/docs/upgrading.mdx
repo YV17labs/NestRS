@@ -1,6 +1,6 @@
 ---
 title: Upgrading from 6.x to 7.0
-description: "The order that moves a 6.1 project to 7.0 — the manifest, fifteen renamed variables, the queue's calls and keys — and what the boot says when a step is missed."
+description: "The order that moves a 6.1 project to 7.0 — the manifest, sixteen renamed variables, the queue's calls and keys — and what the boot says when a step is missed."
 ---
 
 import { Steps } from '@astrojs/starlight/components';
@@ -39,8 +39,9 @@ left running until they drain the 6.x jobs (step 7).
 2. **Rename the fifteen OAuth variables.** A crate in a family puts the family
    first in its namespace, so the OAuth client and resource server read
    `NESTRS_OAUTH__CLIENT__*` and `NESTRS_OAUTH__RESOURCE__*` — the same string as
-   their paths, `nest_rs::oauth::client` and `nest_rs::oauth::resource`. No other
-   variable changed its name. Rename them wherever the deployment sets them: the
+   their paths, `nest_rs::oauth::client` and `nest_rs::oauth::resource`. One other
+   variable moved, with the queue's worker: step 8 renames its drain window.
+   Rename them wherever the deployment sets them: the
    `.env` files, the chart's values, the platform's secrets.
 
    | 6.x | 7.0 |
@@ -95,11 +96,12 @@ left running until they drain the 6.x jobs (step 7).
    - `retries = N` runs a failed attempt again **after a backoff** — one second
      after the first failure, doubling, at most five minutes — where 6.x ran it
      again at once. See [Retries and failure](/queue/retries-and-failure/).
-   - **An attempt whose process died spends the budget.** An OOM kill or a pod
-     killed mid-job counts as an attempt, so a job past `retries + 1` attempts is
-     dead-lettered without running, where 6.x ran it again at the same attempt
-     for free. `retries = 0` means tried once, crash or not: a method that relied
-     on a crash being retried declares `retries = 1`.
+   - **A delivery whose process died has a limit of its own.** An OOM kill or a
+     pod killed mid-job still spends no retry: the job runs again at the same
+     attempt, as in 6.x. But a job whose deliveries end that way three times in
+     a row is dead-lettered without running, where 6.x ran it again every
+     time. See
+     [Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit).
    - **A job a newer release pushed is handed back, not failed.** During a
      rolling deploy, a 7.0 worker meeting a job sealed by a later wire format
      runs nothing, spends no attempt and puts it back as stored, due a minute
@@ -110,10 +112,10 @@ left running until they drain the 6.x jobs (step 7).
      `throttle(limit, window)` and a `Checkpoint<S>` parameter; see
      [Concurrency and scaling](/queue/scaling/).
    - **Delivery is at least once, so a handler stays idempotent.** On Redis a
-     second delivery is handed back while the first runs the job, and
-     acknowledged without running once the job settled — for one fixed span,
-     and nothing past it: a redelivery after that span runs the job again. See
-     [At least once, and the guard](/queue/delivery/#at-least-once-and-the-guard).
+     job runs again only once a delivery's lease lapses — its worker crashed,
+     froze, or was cut off past the lease — and what the first delivery writes
+     after that lands nowhere. See
+     [At least once, and the fence](/queue/delivery/#at-least-once-and-the-fence).
    - A queue name is checked: 1 to 128 of `[A-Za-z0-9_.-]`. A name holding `:`
      or whitespace no longer compiles, so that queue takes a new name, and its
      6.x jobs are drained in step 7 under the old one.
@@ -173,6 +175,9 @@ left running until they drain the 6.x jobs (step 7).
    | the queue's `Processor` trait | nothing: a consumer is a `#[processor]` host and its `#[process]` methods |
    | `envelope::seal(payload)` and `envelope::open(value)` from the queue crate, in a driver | the port seals before `enqueue` and `consume::attempt` opens; the type is `Envelope` at the crate's root — see [Writing a driver](/queue/writing-a-driver/) |
    | `check_duplicate_queue_claims(&methods)` | `consume::discover`, which runs it |
+   | `RedisWorkerModule::for_root(cfg)`, from `nest_rs::redis` | `QueueModule::for_root(cfg)`, from `nest_rs::queue`, beside `RedisQueueModule`, which now binds the consumer too |
+   | `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |
+   | `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |
    | the queue crate's `tracing` re-export | a `tracing` dependency of your own |
    | `WsReply::payload_error(event, &error)` with any `Display` | the same with the `serde_json::Error`, which it reports without the value |
    | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
@@ -190,7 +195,7 @@ left running until they drain the 6.x jobs (step 7).
    | `report_inert_host!(target: …, what: …, origin: …)`, in an edge of your own | the same with `host:` — the host's `TypeId` — and `container:`, so the line names its cause |
    | a `ContestedDeclarationError { … }` pattern naming every field | the same with `first: _` and `second: _` — the two imports that made it — or ending in `..` |
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
-   | an `HttpConfig { … }` or `RedisWorkerConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout`, `RedisWorkerConfig` gains `orphan_after`, `lease` and `poll_interval` |
+   | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
 
    `.opaque()` now takes an owned error that converts into `Box<dyn Error +
    Send + Sync>`, so it logs the whole cause chain; an error type that was only
@@ -236,16 +241,19 @@ left running until they drain the 6.x jobs (step 7).
    ```
 
 7. **Drain each Redis queue's 6.x jobs.** 6.x kept a queue's jobs at the root of
-   the keyspace; 7.0 keeps them under `nestrs:queue:<queue>` and reads nothing
-   6.x left, so keep the 6.x workers running until those keys are empty —
-   [Upgrading queues from 6.x](/queue/upgrading/).
+   the keyspace; 7.0 keeps them on a stream under `nestrs:queue:{<queue>}` and
+   reads nothing 6.x left, so keep the 6.x workers running until those keys are
+   empty — [Upgrading queues from 6.x](/queue/upgrading/).
 
 8. **Update the deployment around Redis and shutdown.**
 
-   - **KEDA** reads `nestrs:queue:<queue>:active`: a trigger naming the 6.x list
-     reads zero forever. Keep `minReplicaCount: 1` on a queue that takes delayed
-     pushes or retries while no producer runs — they wait where no trigger
-     looks; see [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
+   - **KEDA** reads the stream's length now: a `redis-streams` trigger on
+     `nestrs:queue:{<queue>}:jobs`, with `streamLength` where a list trigger had
+     `listLength`, counting the jobs waiting and running. A trigger
+     naming the 6.x list reads zero forever. Keep `minReplicaCount: 1` on a queue
+     that takes delayed pushes or retries — they wait off the stream, and only a
+     running worker files them back; see
+     [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
    - **An ACL** confined to the framework's prefix now runs every Redis binding,
      and each page gives its rule whole — the commands a binding sends, those
      inside its Lua scripts included, since Redis checks them against the
@@ -268,10 +276,13 @@ left running until they drain the 6.x jobs (step 7).
      message it is answering, and a graphql-ws socket completes each
      subscription, then closes the same way. A socket a hand-built endpoint
      upgraded ends with its handler or the process; half a second more lets what
-     it stopped unwind. The worker hands back what still runs before
-     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes — **20 by default, down
-     from 30**, which did not fit the grace period with what follows it — and a
-     running attempt gets all of it but a reserve of one connection budget, so
+     it stopped unwind. The worker hands back what still runs before its drain
+     window closes — **20 by default, down from 30**, which did not fit the grace
+     period with what follows it, and read from
+     `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` where 6.x read
+     `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`: the window is the queue
+     port's now, so it survives a backend swap. A running attempt gets all of it
+     but a reserve of one connection budget, so
      10 seconds by default to finish where 6.x let it run the whole 30. A
      scheduled tick still running gets 5 seconds and is then stopped, where 6.x
      waited for it to end. The shutdown hooks — `OnModuleDestroy`,
@@ -310,38 +321,38 @@ left running until they drain the 6.x jobs (step 7).
      that panics answers its client a JSON-RPC internal error, where 6.x left it
      waiting for its own timeout; a WebSocket handler answers an error frame and
      the socket goes on, where 6.x lost the socket.
-   - **The worker fetches up to a method's `concurrency` per poll**, every
-     `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` (100 by default), so a busy replica
-     can hold that many jobs it has not started, out of a trigger's sight — size a
-     KEDA `listLength` per running slot; see
+   - **The worker asks for as many jobs as a method has permits free**, with a
+     blocking read a pushed job wakes at once: there is no poll to tune, and a
+     replica never holds a job it has not started; see
      [Fetching on Redis](/queue/scaling/#fetching-on-redis).
    - **Every duration has a range**, checked at boot whether it comes from the
      environment or is pinned in code, and a value outside it fails the boot
-     naming the variable: the worker's `ORPHAN_AFTER_SECS` from 5 seconds to a
-     day, `LEASE_SECS` from 1 second to half of it, `POLL_INTERVAL_MS` from 10
-     milliseconds to the orphan threshold and `SHUTDOWN_TIMEOUT_SECS` from 1
-     second to an hour; HTTP's `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600;
-     `NESTRS_AUTHN__EXPIRES_IN_SECS` from 1 second to thirty days and
-     `NESTRS_AUTHN__LEEWAY_SECS` from 0 to 300 seconds;
-     `NESTRS_REDIS__CONNECT_TIMEOUT_SECS` and `NESTRS_SEAORM__CONNECT_TIMEOUT_SECS`
-     from 1 second to an hour; `NESTRS_THROTTLER__WINDOW_SECS` from 1 second to a
-     day; `NESTRS_HEALTH__INDICATOR_TIMEOUT_MS` and `PROBE_DEADLINE_MS` from 1
-     millisecond to a minute; `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS` from 1
+     naming the variable: the queue's `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` and
+     `<PREFIX>_REDIS__QUEUE__LEASE_SECS` from 1 second to an hour; HTTP's
+     `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600;
+     `<PREFIX>_AUTHN__EXPIRES_IN_SECS` from 1 second to thirty days and
+     `<PREFIX>_AUTHN__LEEWAY_SECS` from 0 to 300 seconds;
+     `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` and `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`
+     from 1 second to an hour; `<PREFIX>_THROTTLER__WINDOW_SECS` from 1 second to a
+     day; `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS` and `PROBE_DEADLINE_MS` from 1
+     millisecond to a minute; `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS` from 1
      second to an hour, where `0` used to keep the default and now fails the
      boot. Where `0` is off it still is, and a value is held to a range:
-     `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` up to an hour; the connection ceilings
-     `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`, `NESTRS_WS__MAX_CONNECTION_SECS`
-     and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` up to a day;
-     `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS`, `NESTRS_MCP__SSE_KEEP_ALIVE_SECS` and
-     `NESTRS_MCP__SSE_RETRY_SECS` up to an hour; `NESTRS_HTTP__TLS_RELOAD_SECS`
+     `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` up to an hour; the connection ceilings
+     `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`, `<PREFIX>_WS__MAX_CONNECTION_SECS`
+     and `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` up to a day;
+     `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS`, `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` and
+     `<PREFIX>_MCP__SSE_RETRY_SECS` up to an hour; `<PREFIX>_HTTP__TLS_RELOAD_SECS`
      up to a day. In code, off is `None`: a pinned `Some(Duration::ZERO)` fails
      the boot, and so does a pinned value under a second where the floor is one.
      A value 6.x accepted there — a worker drain window of `0` or above an hour,
      a zero connect timeout or window, a token lifetime past thirty days, a
      connection ceiling past a day — has to move; see the
      [env-var reference](/configuration/env-reference/).
-   - **Redis 6.2 or later, and no Cluster** — the limits of apalis 0.7 the
-     [delivery page](/queue/delivery/#limits) states.
+   - **Redis 6.2 or later, or Valkey, and no Redis Cluster yet**: a queue's keys
+     share one hash slot already, but the connection is not a cluster client.
+     Run `noeviction` or a `volatile-*` policy, never `allkeys-*`, which can
+     evict a job — see the [delivery page](/queue/delivery/#limits).
 
 9. **Boot every app, and read its first lines.** A 7.0 boot names what it cannot
    use rather than falling back in silence. No `nest_rs::config` warning means
@@ -374,13 +385,16 @@ left running until they drain the 6.x jobs (step 7).
   Rename what the `suggestion` names. The report, and what it leaves silent, is
   described under
   [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
+- **The worker's drain window kept under
+  `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is the one renamed variable
+  the boot does not name: it reads `redis__worker` as another binary's
+  namespace, and the drain runs on what `for_root` pins, or the default.
+  Rename it as step 8 says.
 - **A 6.x job left at the root never runs**: 7.0 does not read it. Finish step 7.
-- **A bounded duration outside its range** — a poll under 10 ms, a drain window
+- **A bounded duration outside its range** — a zero lease, a drain window
   above an hour, a zero Redis connect timeout — fails the boot naming the
   variable and why the bound is there, whether the value came from the
-  environment or was pinned in code (then naming the field too); the poll's
-  refusal is quoted under
-  [Concurrency and scaling](/queue/scaling/#what-fails-if-you-get-it-wrong).
+  environment or was pinned in code (then naming the field too).
 - **Two `#[config]` structs declaring one namespace** fail the boot at the read
   of either, naming both (`ConfigError::SharedNamespace`), where 6.x let both read
   it. Give each its own namespace. Two imports binding one port, or pinning one

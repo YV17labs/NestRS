@@ -288,19 +288,20 @@ asserting on a fiction; use `EphemeralDatabase` instead.
 schedulers, or any binary without an HTTP surface. The four-phase build
 still runs, so the access-graph check still fires.
 
-```rust title="apps/api/tests/e2e/worker.rs"
+```rust title="apps/worker/tests/e2e/module.rs"
 let app = TestApp::builder()
-    .module::<RedisWorkerModule>()
+    .module::<WorkerModule>()
     .provide_arc(db.connection())
     .build_headless()
     .await?;
 ```
 
-Drive non-HTTP transports through `HeadlessApp::spawn_transport`.
+Drive non-HTTP transports through `HeadlessApp::spawn_transport` — the queue's
+is `nest_rs::queue::QueueWorker`.
 
 ### A worker drains its whole Redis database
 
-A `RedisWorker` takes every job on the queues its module declares, from
+A `QueueWorker` on Redis takes every job on the queues its module declares, from
 whoever filed it on the logical database its Redis URL names — your running
 `nestrs run dev`, another test's process, a job a previous run left behind.
 The queue names are your `#[queue]`s, so a test cannot rename them; what it
@@ -329,9 +330,9 @@ can own is the database. Two settings keep a suite apart:
       .await
       .expect("WorkerModule boots against the throwaway database and its own Redis database");
   let queue = worker
-      .spawn_transport(RedisWorker::new())
+      .spawn_transport(QueueWorker::new())
       .await
-      .expect("WorkerModule's RedisWorker configures against Redis");
+      .expect("WorkerModule's QueueWorker configures against Redis");
   ```
 
   `RedisDatabase` is the demo's list, in `features::testing`: an enum with one

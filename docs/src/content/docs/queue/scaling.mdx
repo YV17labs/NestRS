@@ -46,10 +46,10 @@ of its own, so a slow queue never takes another's. And it belongs to the
 replica: three replicas run up to three times `N`.
 
 A job holds its permit for its whole delivery, and a replica whose permits are
-all taken fetches nothing: the jobs it would have fetched stay in Redis, where a
-peer replica can take them. A replica with a permit free fetches a batch — see
-[Fetching on Redis](#fetching-on-redis) — so it may keep a few jobs it has not
-started yet, and never more than `concurrency` of them.
+all taken asks for nothing: the jobs stay in Redis, where a peer replica reads
+them. A replica asks only for as many jobs as it has permits free — see
+[Fetching on Redis](#fetching-on-redis) — so it never holds a job it has not
+started.
 
 `concurrency` is not a capability: every backend honours it, so a method runs
 the same bound whichever driver is underneath it.
@@ -60,72 +60,35 @@ The pool that caps a worker is the database's. An attempt is one transaction by
 default, and that transaction holds one connection from the job's first `Repo`
 call until it commits or rolls back. A replica whose methods all reach the
 database at the same moment wants as many connections as the sum of their
-`concurrency` values. Keep that sum within `NESTRS_SEAORM__MAX_CONNECTIONS`, or
+`concurrency` values. Keep that sum within `<PREFIX>_SEAORM__MAX_CONNECTIONS`, or
 the attempts past it wait for a connection — and one that waits past
-`NESTRS_SEAORM__CONNECT_TIMEOUT_SECS` fails, retryably. A method declared
+`<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS` fails, retryably. A method declared
 `transactional = false` borrows a connection per statement instead.
 
 Redis is not what bounds it: a replica reaches Redis over one multiplexed
-connection, and a running job holds none of its own.
+connection, plus one per method for its blocking read, and a running job holds
+none of its own.
 
 ### Fetching on Redis
 
-On Redis, each method of each replica asks for jobs once per poll, and only
-while one of its permits is free. One ask claims up to the method's
-`concurrency` in a single script — 799 at the most, see
-[Limits](/queue/delivery/#limits) — so a poll can fill every permit at once. The
-poll is `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` — 100 ms by default, 10 at
-the least and the orphan threshold at the most — or `poll_interval` pinned
-through `RedisWorkerModule::for_root`.
+On Redis, each method of each replica asks for as many jobs as it has permits
+free, with a blocking `XREADGROUP` on a connection of its own that waits at most
+a second. There is no poll: a job pushed while the read waits wakes it at once,
+so a method starts jobs as fast as its permits free, never `concurrency` per
+interval. Past what one replica's permits run, throughput is a higher
+`concurrency` or more replicas.
 
-**The ceiling is one fetch per poll, per replica.** A method whose
-jobs end within a poll runs at most `concurrency` of them per interval — about
-ten times its `concurrency` a second by default. Each poll lands a few
-milliseconds late, since apalis re-arms its timer once it notices the tick, so
-measured rates sit just under it. 500 no-op jobs, one replica, a local Redis
-8.6.3:
+**A delayed job or a retry reaches the stream within a second of falling due.**
+It waits off the stream, in `…:due`, until a running worker files it: each
+method of each replica runs an upkeep script at least once a second — sooner
+when the next job falls due sooner — and files up to a hundred due jobs per
+upkeep, so a burst of due retries is filed in steps rather than in one long
+script. See [Delayed jobs](/queue/delivery/#delayed-jobs).
 
-| `concurrency` | 100 ms poll | 25 ms poll |
-|---|---|---|
-| 1 | 9.4 jobs/s | 31.3 jobs/s |
-| 4 | 37.5 jobs/s | 125.5 jobs/s |
-| 16 | 146.7 jobs/s | 485.2 jobs/s |
-
-Past it, throughput is a shorter poll, a higher `concurrency`, or more replicas.
-
-**A busy replica holds at most `concurrency` jobs it has not started.** A fetch
-needs one free permit and may claim `concurrency` jobs, so the rest wait in the
-replica for its next free permits: `concurrency − 1` of them at most, or
-`concurrency` when Redis takes longer than a poll to answer. They sit in the
-replica's in-flight set — its peers cannot take them, a trigger reading
-`active` does not count them, and a replica that dies hands them over with its
-running jobs. For a method whose jobs run for minutes, that is minutes of
-waiting behind a busy replica while another sits idle, so keep its
-`concurrency` to what one replica should hold.
-
-**Held-back jobs reach the queue a hundred a second, or more.** A delayed push,
-a retry's next attempt and a job handed back wait on the schedule until a scan
-moves them onto `active`. Each method of each running worker scans once a
-second and moves up to a hundred due jobs per scan — its `concurrency` when that
-is more, 799 at the most — so a burst of due retries or hand-backs reaches
-`active`, and a trigger reading it, within seconds; the producer that filed
-delayed jobs moves up to a hundred a second too, while it has some ahead. The
-scan is one script a second per method per replica, which replaced apalis's own
-scan at that rate; apalis's, which moves one fetch's worth, now runs at its
-default of half a minute, as a backstop. So an idle method costs what it did:
-59.9 commands a second at the 100 ms default, measured on one Redis before the
-change and after it. A scan costs Redis in proportion to what it moves — one
-read of the schedule, one push of the ids, one trim — so a burst of 150 due jobs
-is two scripts, where one fetch's worth a second made it 150 at the default
-`concurrency`.
-
-**An idle method still costs Redis every poll**: a fetch and a sweep of silent
-peers, plus the worker's scan of the schedule each second and a heartbeat.
-Measured with `INFO commandstats` over ten seconds, one idle method on one
-replica sent about
-20 scripts a second at the 100 ms default — 58 commands, counting the ones the
-scripts run — and 140 scripts, 420 commands, at the 10 ms floor. Multiply by
-methods and replicas before you shorten the poll.
+**An idle method costs Redis a fixed few calls**: per method and per replica,
+one blocking read a second with a look for lapsed leases beside it, one upkeep
+script a second, and one sweep of the consumer group a minute. Multiply by
+methods and replicas to size what an idle deployment sends.
 
 ## Throttling starts
 
@@ -142,48 +105,41 @@ most its `concurrency` attempts at a time.
 - **A retry is an attempt like any other**, and counts against the limit. So
   does an attempt a drain interrupts: it started, and did whatever it did
   downstream before the cut.
-- **A job no attempt read is not a start.** One a newer release sealed goes back
-  unread during a rolling deploy, and gives its start back to the window that
-  counted it — never to the next one, should that window have ended meanwhile.
-- **An attempt over the limit is not an attempt.** It goes back to the schedule
-  for when the window ends, keeps its attempt number, costs the retry budget
-  nothing, and is never dropped.
+- **A start over the limit is never read.** The window is counted before a read
+  asks for jobs, and the read asks for no more than the window has left, so a
+  job past the limit stays where it waits, keeps its attempt number, costs the
+  retry budget nothing, and is never dropped.
 - **It limits the deployment.** On Redis the count is one key per queue,
-  incremented by the step that admits an attempt, so every replica counts against
-  one number and no two admissions race.
-- **A full window stops the fetch.** On Redis, the first attempt a window refuses
-  shuts that replica's fetch for the method until the window ends — the instant
-  the refusal read off the count's key. The backlog waits on the queue, where
-  peers and an autoscaler see it, rather than circling through the schedule, so
-  a window costs each replica one fetch of refusals — at most its `concurrency` —
-  whatever the backlog: a 10,000-job backlog under `limit = 1, window = "2s"`
-  and `concurrency = 4` cost 726 Redis calls in nine seconds where the worker
-  idles at 567, against some 8,700 when every poll fetched. Jobs the last fetch
-  brought wait in the replica and start once the window opens; a drain hands
-  them back.
+  counted in one script before each read, so every replica counts against one
+  number and no two reads race. A read gives back, while the window lasts, the
+  starts it counted and found no job for.
+- **A full window holds the reads.** Once the window is full, that replica's
+  reads for the method wait until it ends — the instant the count's key expires
+  — and say so at `debug`, `queue receive waits for its throttle's next window`.
+  The backlog waits on the stream, where peers and an autoscaler see it, and no
+  replica holds a job it read for a window to open.
 
 After 125 pushes to the method above on one replica, 120 started and the
-window's count had 42 seconds left; the next fetch's four were refused and wait
-on the schedule for it to end, and the fifth waits on the queue, which the
-replica stopped fetching from:
+window's count had 42 seconds left; the other five wait on the stream for it to
+end, and nothing was held back:
 
 ```text frame="terminal"
-$ redis-cli GET nestrs:queue:notifications:throttle
+$ redis-cli GET 'nestrs:queue:{notifications}:throttle'
 "120"
-$ redis-cli PTTL nestrs:queue:notifications:throttle
+$ redis-cli PTTL 'nestrs:queue:{notifications}:throttle'
 (integer) 42022
-$ redis-cli ZCARD nestrs:queue:notifications:scheduled
-(integer) 4
-$ redis-cli LLEN nestrs:queue:notifications:active
-(integer) 1
+$ redis-cli XLEN 'nestrs:queue:{notifications}:jobs'
+(integer) 5
+$ redis-cli ZCARD 'nestrs:queue:{notifications}:due'
+(integer) 0
 ```
 
 The Redis window is **fixed** and opens with its first start: the key expires
 `window` later, and the count starts again with the next start after that — the
 scheme the [HTTP rate limiter](/rate-limiting/) uses. Nothing exceeds the limit
 within one window, and starts on either side of a window's end can reach twice
-the limit within a short span. apalis schedules on whole seconds, so a window
-under a second still defers an attempt by one.
+the limit within a short span. The window is kept on Redis's clock, in
+milliseconds, so a window under a second holds as declared.
 
 A throttle needs a backend declaring `Capability::Throttle`. Redis declares it;
 on a backend that does not, the worker's boot fails naming the declaration, the
@@ -198,19 +154,18 @@ worker app — the unit the platform already schedules, meters and restarts:
 $ kubectl scale deploy/worker --replicas=6
 ```
 
-Every replica consumes under an id of its own, and no two of them receive the
-same job from the queue. A replica starting puts up to ten times each method's
-`concurrency` of its peers' in-flight jobs back on the queue — apalis does so on
-every start — and the delivery guard answers each of those second deliveries
-without running it: handed back while the job runs elsewhere, acknowledged once
-it settled. See [Delivery on Redis](/queue/delivery/).
+Every replica reads each queue as a consumer of its own in the queue's
+consumer group, and no two of them receive the same job. A replica starting
+takes nothing from its peers: it reads what waits on the stream, and a job moves
+to another replica only once its lease lapses. See
+[Delivery on Redis](/queue/delivery/#at-least-once-and-the-fence).
 
 ### On queue depth, with KEDA
 
 A worker whose jobs wait on I/O — a storage round-trip, one `INSERT` — sits near
 0% CPU however deep its backlog, so a CPU-driven autoscaler never fires. Queue
-depth is the signal that moves with the work: `nestrs:queue:<queue>:active` is
-the list a worker fetches from, and [KEDA](https://keda.sh)'s `redis` scaler
+depth is the signal that moves with the work: `nestrs:queue:{<queue>}:jobs` is
+the stream a worker reads, and [KEDA](https://keda.sh)'s `redis-streams` scaler
 reads its length.
 
 ```yaml title="worker-scaledobject.yaml"
@@ -224,47 +179,44 @@ spec:
   minReplicaCount: 1
   maxReplicaCount: 10
   triggers:
-    - type: redis
+    - type: redis-streams
       metadata:
         address: redis:6379
-        listName: nestrs:queue:audio:active
-        listLength: "5"
+        stream: "nestrs:queue:{audio}:jobs"
+        streamLength: "20"
 ```
 
-`listLength` is the backlog one replica is sized for: ten jobs waiting ask for
-two replicas. Declare one trigger per queue the worker drains, and KEDA follows
-the busiest. KEDA dials Redis itself, so `address` is `host:port` rather than the
-URL the framework reads; a password, TLS and a database index are the scaler's
-own metadata.
+`streamLength` is the backlog one replica is sized for, so it moves with the
+method's `concurrency`: at four at once, 20 is five jobs per running slot, and
+40 on the stream ask for two replicas. Declare one trigger per queue the worker
+drains, and KEDA follows the busiest. KEDA dials Redis itself, so `address` is
+`host:port` rather than the URL the framework reads; a password, TLS and a
+database index are the scaler's own metadata.
 
-**The trigger counts waiting jobs, never running ones.** A fetch takes a job off
-`active` as it claims it, so a job a replica runs — or has fetched and not yet
-started — is in that replica's in-flight set, and a replica busy with long jobs
-reads as idle once the list drains. KEDA then scales down, and the pod it stops
-drains: running attempts get the shutdown window, and what still runs when it
-closes is interrupted and handed back to the queue, to run again on another
-replica from the start — see [Shutdown](/queue/delivery/#shutdown). Nothing is
-lost, but the work done so far is, unless the method keeps a
+**The trigger counts waiting and running jobs.** The stream holds a job until it
+ends — its outcome deletes its entry — so a replica busy with long jobs still
+counts them, and the length falls only as jobs finish. Once the backlog drains,
+KEDA scales down, and the pod it stops drains: running attempts get the shutdown
+window, and what still runs when it closes is interrupted and handed back to the
+stream, to run again on another replica from the start — see
+[Shutdown](/queue/delivery/#shutdown). Nothing is lost, but the work done so far
+is, unless the method keeps a
 [checkpoint](/queue/retries-and-failure/#resuming-where-an-attempt-stopped). Pair the trigger with the settings
 that bound this: a scale-down stabilization window at least as long as a job
 runs (`advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.stabilizationWindowSeconds`
 on the `ScaledObject`, and a `cooldownPeriod` for the last replica), and a pod
 `terminationGracePeriodSeconds` at least 8.5 seconds above the drain window,
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` (20 by default) — the shutdown
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (20 by default) — the shutdown
 hooks and the telemetry flush follow the drain — raised as far as a job's length
 when jobs are long.
 
 <Aside type="caution">
 **Scaling to zero strands work the trigger cannot see.** A job held back — a
-delayed push, a retry waiting for its backoff — waits on
-`nestrs:queue:<queue>:scheduled`, and reaches the list the trigger reads only
-when something scans the schedule: every running worker does, once a second, and
-so does the producer that filed it, while it has delayed jobs of its own ahead.
-With no worker running, a delay pushed by a producer that exits first, and every
-retry, waits where no trigger looks — and so does a job a crashed replica held,
-until a replica starts. Keep `minReplicaCount: 1` unless every delayed push comes
-from a producer that outlives its delays and a retry can wait for the next job to
-wake the deployment.
+delayed push, a retry waiting for its backoff — waits in
+`nestrs:queue:{<queue>}:due`, off the stream the trigger reads, and only a
+running worker files it onto the stream once it falls due. With no worker
+running, every delayed job and every retry waits for the next push to wake the
+deployment. Keep `minReplicaCount: 1` unless they can.
 </Aside>
 
 ## What fails if you get it wrong
@@ -276,31 +228,28 @@ wake the deployment.
   `` #[process] `throttle` needs both `limit` and `window` — write `throttle(limit = 10, window = "1m")` ``.
 - `window = "60"` does not compile: the window takes a duration literal, and a
   number with no suffix is not one.
-- A poll under ten milliseconds fails the boot, from the environment or pinned
-  in code: `` invalid value for NESTRS_REDIS__WORKER__POLL_INTERVAL_MS: must be at
-  least 10 milliseconds — every poll costs Redis a fetch and a sweep per method
-  per replica, jobs or none … ``.
-- A trigger naming a list the worker does not fill reads zero forever and holds
-  the deployment at `minReplicaCount`, saying nothing.
+- A drain window under a second or above an hour fails the boot, from the
+  environment or pinned in code, naming
+  `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` and why the bound is there; so does a
+  lease out of the same range, naming `<PREFIX>_REDIS__QUEUE__LEASE_SECS`.
+- A trigger naming a stream the worker does not read — a key without its
+  braces, or a 6.x list — reads zero forever and holds the deployment at
+  `minReplicaCount`, saying nothing.
 
 ## Reference
 
 - `crates/nest-rs-queue/src/process_options.rs` — `ProcessOptions` and
   `Throttle`.
-- `crates/nest-rs-redis/src/worker/consumer.rs` — each method's permits, the
-  fetch of up to `concurrency` jobs per poll, each replica's id, and how many
-  due jobs its scan of the schedule moves.
-- `crates/nest-rs-redis/src/worker/config.rs` — the poll, and every bound.
-- `crates/nest-rs-redis/src/worker/lease.rs` — the throttle's window, counted in
-  the step that admits an attempt.
-- `crates/nest-rs-redis/src/promotion.rs` — one scan of a queue's schedule,
-  which both a worker and a producer run.
-- `crates/nest-rs-redis/src/queue/promoter.rs` — the producer moving the delayed
-  jobs it filed onto the list KEDA reads.
-- `crates/nest-rs-redis/tests/e2e/worker/consumer.rs`, `worker/lease.rs` and
-  `queue/promoter.rs` — both bounds, one poll filling every permit, the jobs a
-  busy replica holds, a burst of due jobs reaching that list within two scans,
-  and a delayed job reaching it with no worker running, against live Redis.
+- `crates/nest-rs-queue/src/worker.rs` — each method's permits, the read for as
+  many jobs as are free, and the upkeep's cadence.
+- `crates/nest-rs-redis/src/queue/consumer.rs` — the blocking read on its own
+  connection, the throttle counted before it, and the upkeep that files due
+  jobs.
+- `crates/nest-rs-redis/src/queue/scripts.rs` — the throttle's window, counted
+  and given back.
+- `crates/nest-rs-redis/tests/e2e/queue/consumer.rs` — the behaviour kit's
+  concurrency and delayed push, and a throttle across replicas, against live
+  Redis.
 
 ## Going further
 

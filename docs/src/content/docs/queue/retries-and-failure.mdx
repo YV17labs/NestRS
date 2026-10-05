@@ -37,8 +37,7 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 
 The panic is caught by the queue port itself, around the handler, which is
 what keeps the event inside the attempt's trace. Each delivery also runs on a
-task of its own, and apalis's `CatchPanicLayer` sits outside both as the
-backstop for a panic in apalis's own fetch path.
+task of its own, so the worker goes on to its next job.
 
 Rust's **default panic hook still prints its own `thread … panicked at …` line
 to stderr** first: catching an unwind does not replace the hook. That line
@@ -49,11 +48,15 @@ is the `job dead-lettered: handler panicked` event beneath it. Install
 ## The retry shape
 
 `retries = N` is `N + 1` attempts in all: the first try and `N` retries. The
-default is `0` — the job is tried once. An attempt that never returns counts
-too, on a backend that counts the attempts it starts (the Redis one does): a
-job whose attempt takes its process down — an abort, an OOM kill, a hang until
-the pod is killed — runs `N + 1` times, then is dead-lettered as
-`job dead-lettered: retry budget spent by attempts that never returned`.
+default is `0` — the job is tried once. The budget counts attempts that
+answered. A delivery that ends without an answer — its process killed, frozen
+or cut off past its lease — spends none: the job runs again at the attempt it
+was at. That has its own bound, the **stall limit**: a job whose deliveries end
+that way three times in a row (`STALL_LIMIT`) is taking its workers down — an
+abort, an OOM kill, a hang until the pod is killed — and is dead-lettered
+without running, as
+`job dead-lettered: its deliveries ended without an answer past the stall limit`.
+See [Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit).
 
 After attempt `n` fails, the job waits `min(5 min, 1 s · 2^(n − 1))` before
 attempt `n + 1`, scaled by a jitter between 0.8 and 1.2. The jitter is derived
@@ -74,11 +77,11 @@ The worker says how long it chose, on the line that reports the failure:
  WARN nest_rs::queue: job failed; will retry within the budget error=transcode failed retry_after_ms=1143 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
 ```
 
-On Redis the next attempt is filed on the queue's schedule for when the wait
-ends, and the worker that ran the failed attempt moves on: no permit is held
-while a job waits, and a shutdown during the wait loses nothing. apalis never
-retries on its own; its retry count would be a second budget, invisible to the
-method's.
+On Redis the next attempt waits off the stream, due on Redis's clock, until a
+running worker files it back — see [Delayed jobs](/queue/delivery/#delayed-jobs)
+— and the worker that ran the failed attempt moves on: no permit is held while
+a job waits, and a shutdown during the wait loses nothing. The port counts the
+budget once; the backend keeps no retry count of its own.
 
 A failure a retry cannot fix is **non-retryable** and dead-letters on the
 attempt it happens: a payload that does not deserialize, a pipe rejection, a
@@ -112,9 +115,9 @@ The method must declare `transactional = false`, and the decorator refuses a
 `Checkpoint` without it: a save reaches the backend at once, while a
 transactional attempt rolls its database work back when it fails, so the retry
 would resume past rows that were undone. A checkpoint needs a backend declaring
-`Capability::Checkpoint`; on Redis it is one key beside the job, kept for as
-long as the job's other records — see
-[Delivery on Redis](/queue/delivery/#what-a-job-keeps-and-for-how-long).
+`Capability::Checkpoint`; on Redis it is one field beside the job, written
+only by the delivery holding it and removed when the job ends — see
+[Delivery on Redis](/queue/delivery/#where-a-queue-lives).
 
 A store that does not answer within the port's net — `BACKEND_TIMEOUT`, twenty
 seconds — fails the attempt, retryably: the read before your method runs does
@@ -124,24 +127,29 @@ said at `warn` and the outcome stands.
 
 ## Where failed jobs go
 
-A dead-lettered job's id lands in the queue's `dead` set, and the reason in
-its `data::result` hash — both under the queue's namespace. The reason is the
-sentence the `job dead-lettered` line carries: the failure and every cause
-beneath it, a `.context(…)` included, with any decode failure said without its
-value:
+A dead-lettered job leaves one entry on the queue's
+`nestrs:queue:{<queue>}:dead` stream: its `job` id, its `record` as stored, and
+the `reason` — the sentence the `job dead-lettered` line carries: the failure
+and every cause beneath it, a `.context(…)` included, with any decode failure
+said without its value:
 
 ```bash frame="terminal"
-$ redis-cli ZRANGE nestrs:queue:audio:dead 0 -1
-01M3FANKWQCV095QBG19STWGT2
-
-$ redis-cli HGET nestrs:queue:audio:data::result 01M3FANKWQCV095QBG19STWGT2
-transcode failed
+$ redis-cli XRANGE 'nestrs:queue:{audio}:dead' - +
+1) 1) "1790442140102-0"
+   2) 1) "job"
+      2) "01a0deaa-cf96-70f8-a924-efd8fbbe3d38"
+      3) "record"
+      4) "{\"v\":1,…}"
+      5) "reason"
+      6) "transcode failed"
 ```
 
-The id there is apalis's record id — the job's lines report it as
-`backend_id`, beside the `job_id` the push returned. The framework does
-**not** ship a dead-letter routing layer: the dead set is the storage's, and
-inspecting or replaying it is an operational task.
+The `job` is the id the push returned; the job's lines name the stream entry
+each attempt ran from as `backend_id`. The stream keeps a week of dead letters
+and about the last 10,000. The framework does **not** ship a dead-letter
+routing layer: the dead letters are the storage's, and inspecting them is an
+operational task — filing one back, once its cause is fixed, is the one command
+under [Dead letters](/queue/delivery/#dead-letters).
 
 If you need richer dead-lettering — alerting, replay, archival — catch the
 `Err` in the method and republish the payload to a dedicated queue before
@@ -248,30 +256,31 @@ producers always seal.
 
 ## Limits
 
-- **The dead set is not routed anywhere.** Nothing alerts, replays or
-  archives on your behalf; wire the wrapper above if you need that.
+- **The dead letters are not routed anywhere.** Nothing alerts or archives on
+  your behalf, and the stream keeps a week of them; wire the wrapper above if
+  you need more.
 - **A retry replays the whole body.** The transaction bounds what an attempt
   leaves behind in the database, never an email sent or an API called before
   the failure — keep those behind an idempotency key.
-- **Delivery is at least once, so a handler is idempotent.** The delivery guard
-  answers the common second delivery without running it, for a fixed span; a
-  redelivery after that span, or one taken by a replica cut off from Redis for
-  longer than its lease, runs the job again. See
-  [Delivery on Redis](/queue/delivery/).
+- **Delivery is at least once, so a handler is idempotent.** A second delivery
+  comes only once a lease lapses — a worker that crashed, froze, or was cut off
+  from Redis for longer than its lease — and runs the job again, while every
+  write the first delivery makes after that lands nowhere. See
+  [At least once, and the fence](/queue/delivery/#at-least-once-and-the-fence).
 
 ## Reference
 
 - `crates/nest-rs-queue/src/consume.rs` — `attempt`: the budget, the backoff,
-  the events and the operation line.
+  the stall limit, the events and the operation line.
 - `crates/nest-rs-queue/src/backoff.rs` — the wait before each retry, and the
   waits pinned for one job.
 - `crates/nest-rs-queue/src/checkpoint.rs` — `Checkpoint<S>`, and the
   `CheckpointStore` a backend keeps it in.
-- `crates/nest-rs-redis/src/worker/delivery.rs` — how an outcome settles on
-  Redis: acknowledged, filed for later, or dead-lettered.
-- `crates/nest-rs-redis/tests/e2e/worker/delivery.rs` and `worker/checkpoint.rs`
-  — a retry after its backoff, a spent budget, a checkpoint across a retry and a
-  dead replica, against live Redis.
+- `crates/nest-rs-redis/src/queue/scripts.rs` — how an outcome settles on
+  Redis, fenced on its lease: acknowledged, filed for later, or dead-lettered.
+- `crates/nest-rs-redis/tests/e2e/queue/consumer.rs` — the behaviour kit's
+  retry, dead letter and stall limit, a dead letter's record, and a checkpoint
+  across a retry and a dead replica, against live Redis.
 
 ## Going further
 

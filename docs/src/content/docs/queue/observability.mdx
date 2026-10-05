@@ -17,14 +17,14 @@ service-level logs your `#[process]` method emits keep their own target
 
 | Target | What | Level |
 |---|---|---|
-| `nest_rs::queue` | Boot registration, per-attempt events, the reason a job failed, and what the Redis worker says about deliveries. | `debug` on job start, `warn` on a retryable failure, `error` on a dead-letter. |
+| `nest_rs::queue` | Boot registration, per-attempt events, the reason a job failed, and what the worker says about deliveries and leases. | `debug` on job start, `warn` on a retryable failure, `error` on a dead-letter. |
 | `nest_rs::operation` | One `queue.job` line per attempt — identity, `outcome`, `duration_ms`. Shared with every other edge. | `info`. |
-| `nest_rs::app` | Boot: `attached module-contributed transport transport="RedisWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
+| `nest_rs::app` | Boot: `attached module-contributed transport transport="QueueWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
 worker at `info` logs one `queue.job` line per attempt and, on failure, one
-event saying why — no per-poll noise.
+event saying why — no per-read noise.
 
 ## The per-attempt span
 
@@ -39,7 +39,7 @@ the attempt. Its attributes speak the messaging conventions:
 | `messaging.operation.name`, `messaging.operation.type` | `process`. |
 | `messaging.destination.name` | The queue, e.g. `audio`. |
 | `messaging.message.id` | The job's id — the one its push returned, the same across its attempts and redeliveries. |
-| `backend_id` | The backend's own id for the stored record — apalis's, on Redis. |
+| `backend_id` | The backend's own id for what it delivered — on Redis, the stream entry the attempt was read from, such as `1767225600000-0`. A retry is filed anew, so each attempt can carry its own. |
 | `processor` | The method, e.g. `AudioProcessor::transcode`. |
 | `attempt` | Which attempt this is, from `1`, counted by the queue port across retries. |
 | `continued_trace` | `true` when the attempt continues the producer's `traceparent`, `false` when this job started a trace of its own — on every attempt of it, however the backend files retries. |
@@ -61,7 +61,7 @@ a unit of work, carrying the job's identity, its `outcome` and its
 ```text frame="terminal"
 DEBUG nest_rs::queue: job started attempt=1 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
 DEBUG features::audio: transcoded file="track-1787069801760.mp3" derived_key="transcoded/track-1787069801760.mp3" trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
- INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf87-732d-9226-abd166aa514c backend_id="01M3FANKW8ER4N9CKF4KB2ZF7Y" attempt=1 outcome="ok" duration_ms=32.129 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
+ INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf87-732d-9226-abd166aa514c backend_id="1790442131336-0" attempt=1 outcome="ok" duration_ms=32.129 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
 ```
 
 A failure adds one event on `nest_rs::queue` saying **why** — at `warn`
@@ -76,21 +76,22 @@ new `span_id`:
 
 ```text frame="terminal"
  WARN nest_rs::queue: job failed; will retry within the budget error=transcode failed retry_after_ms=1143 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
- INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="01M3FANKWQCV095QBG19STWGT2" attempt=1 outcome="error" duration_ms=33.525 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
- INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="01M3FANKWQCV095QBG19STWGT2" attempt=2 outcome="error" duration_ms=31.659 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=734f481aeb53cb7e
+ INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="1790442131351-0" attempt=1 outcome="error" duration_ms=33.525 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
+ INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="1790442132894-0" attempt=2 outcome="error" duration_ms=31.659 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=734f481aeb53cb7e
 ERROR nest_rs::queue: job dead-lettered: retry budget spent error=transcode failed attempts=4 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a506bd5f6e799390
 ```
 
 An attempt its worker stops — the drain window closed on it, or the worker was
 torn down — is dropped where it waits and still files its line, with
 `outcome="cancelled"` and the time it ran; what happens to the job next is the
-worker's line to say, `job handed back to the queue` with `reason="shutdown"`
-on Redis. An attempt whose process died answers nothing, so it files no line; on a
-backend that counts the attempts it starts, the delivery that finds them past
-the budget dead-letters the job without running it, as
-`job dead-lettered: retry budget spent by attempts that never returned` at
-`error` with `unfinished` counting them, beside a `queue.job` line at the next
-attempt's number.
+worker's line to say, `job handed back to the queue` with `reason="shutdown"`.
+An attempt whose process died answers nothing, so it files no line and spends
+no retry. The delivery that finds the job past the stall limit — three
+deliveries that ended without an answer — dead-letters it without running it, as
+`job dead-lettered: its deliveries ended without an answer past the stall limit`
+at `error`, with `deliveries` and `stall_limit`, beside its `queue.job` line
+with `outcome="error"`; see
+[Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit).
 
 A job a newer release sealed runs nothing and files no `queue.job` line while it
 is handed back: the port says so once per delivery at `warn`,
@@ -105,48 +106,44 @@ at `error`, naming both versions, beside its `queue.job` line with
 See [Retries and failure](/queue/retries-and-failure/) for the policy behind
 `attempt`.
 
-## What the Redis worker says
+## What the worker says
 
-Beside each attempt, the Redis worker files a line when a job leaves a replica
-without an outcome, when the delivery guard answers for it, and when apalis
-itself reports trouble — all on `nest_rs::queue`, each carrying `queue` and
-either `job_id` or `worker`:
+Beside each attempt, the queue port's worker files a line when a job leaves a
+replica without an outcome, when a lease or an outcome does not reach the
+backend, and when the backend misbehaves — all on `nest_rs::queue`, most
+carrying `queue` and, for a job, `job_id`:
 
 | Message | Level | When |
 |---|---|---|
-| `queue worker started` / `queue worker stopped` | `info` | Once per method per replica, naming the id it consumes under. |
-| `job handed back to the queue` | `info` | A job goes back without an outcome — `reason` is `shutdown`, `leased elsewhere` or `guard unavailable`. |
-| `job delivered while another delivery runs it; handing it back` | `info` | A second delivery the lease sent back. |
-| `job delivered again after it settled; acknowledged without running` | `info` | A redelivery the settled mark absorbed. |
-| `job delivered after it was cancelled; acknowledged without running` | `info` | A delivery that met a cancel's tombstone. |
-| `job filed for its next attempt`, `job deferred to its throttle's next window`, `job handed back for a consumer of a newer release` | `debug` | A retry on the schedule, an attempt over its throttle, and a job a newer release sealed — which the port says at `warn`, naming both versions. |
-| `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …`, `job lease not dropped; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone); the last says, in `gives_back`, what the attempt was to give back and did not. |
-| `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | One of apalis's own calls failed, and it makes it again; a fetch whose connection failed under it may have claimed jobs, which wait in flight until a replica starts. |
-| `due jobs not moved onto the queue; retrying` | `warn` | Redis refused the worker's scan of the schedule; `retry_in_ms` says when it runs again. |
-| `job lease lost while its attempt runs; another delivery may run it too` | `error` | The attempt's lease lapsed under it. |
-| `job not handed back; …` | `error` | Redis refused a hand-back: apalis files the job's stored record again, due at once, and it runs again. |
-| `job acknowledgement lost; …` | `error` | A job stays in flight until a replica sweeps it, and runs again then if its settled mark has lapsed — delivery is at least once. |
-| `queue fetch met a record apalis cannot decode; …` | `error` | A fetch claimed a record apalis cannot read, and dropped its whole batch in flight — see [Delivery on Redis](/queue/delivery/#limits). |
-| `queue workers did not stop within the shutdown window; …` | `error` | The drain waited past its reserve — a Redis that stalled — and `cut` deliveries were left: each job stays in flight until a replica sweeps it, its attempt spent unless the give-back reached Redis. |
+| `job handed back to the queue` | `info` | A drain cut a running attempt, `reason="shutdown"`; its job is due at once for another replica. |
+| `queue receive waits for its throttle's next window` | `debug` | The method's throttle window is full; `window_left_ms` says how long this replica's reads wait. |
+| `job outcome not written: the delivery is no longer this worker's`, `job outcome not recorded yet; retrying` | `debug` | An outcome found its delivery gone once its lease was known lost or an earlier try had failed, or Redis has not answered it yet and it is tried again while the lease holds. |
+| `consumers of stopped workers removed from the queue's group`, `throttle starts counted and unused not given back; …` | `debug` | Redis's own upkeep: the minute's sweep of the consumer group, and a give-back that failed — which only throttles more. |
+| `queue receive failed; retrying`, `queue upkeep failed; retrying`, `job leases not renewed; retrying` | `warn` | A read, an upkeep or a renewal failed, and is tried again after a backoff from 250 ms to 5 s — see [When Redis is slow or gone](/queue/delivery/#when-redis-is-slow-or-gone). |
+| `job lease not renewed for a whole lease; its attempt is cut and the job handed back` | `warn` | No renewal reached Redis for a whole lease: the attempt is cut, and its job handed back, fenced. |
+| `job lease taken by another delivery; its attempt is cut, and the delivery holding the job decides it` | `warn` | Another worker took the job over once the lease lapsed: the attempt here is cut. |
+| `job outcome dropped: its lease lapsed and another worker holds its delivery` | `warn` | The attempt answered after its lease lapsed; the delivery now holding the job decides. |
+| `queue jobs still running as the shutdown window closes; interrupting them to hand their jobs back` | `warn` | The drain's patience ran out: what still runs is cut and handed back inside the reserve. |
+| `queue backend did not close cleanly`, `queue backend did not close within the settle; left as it was` | `warn` | The backend's own close, after the drain. |
+| `job outcome not confirmed; unless it was written, the job runs again once its lease lapses` | `error` | Redis did not answer an outcome before the lease would lapse. |
+| `queue workers did not stop within the shutdown window; a delivery cut here leaves its job to its lease, after which another worker runs it` | `error` | The drain waited past its reserve — a Redis that stalled — and `cut` deliveries were left to their lease. |
+| `queue backend handed over more deliveries than asked; …`, `queue backend answered a renewal with as many answers as it chose; …` | `error` | A backend broke the consumer contract — a driver's defect. |
+| `queue processor not run: its queue's name is refused` | `error` | A method whose queue name the boot should have refused — a defect, never a configuration. |
 
-A producer files lines of its own on the same target, among them `unique key
-claimed without its job confirmed queued; …` at `warn` when a push under a
-unique key never learned whether its job was queued, its `step` saying where, `due jobs not moved
-onto the queue; retrying` at `warn` when Redis refused its scan of the delayed
-jobs it filed, and `queued job cancelled` at `info` when a cancel answered
-`true`.
+A producer files lines of its own on the same target: `queued job cancelled`
+and `unique job cancelled` at `info` when a cancel answered `true`.
 
 ## What boot looks like
 
-Each active processor logs one `attached` line (from the transport) and one
-`registered queue processor` line carrying what it declared — its `retries`,
+The worker logs one `attached` line (from the transport), and each active
+processor one `registered queue processor` line carrying what it declared — its `retries`,
 its `concurrency`, and its throttle when it has one. A `#[process]` method that
 compiled in but whose provider isn't reachable from this app's module tree is
 skipped, and said once, at the level its cause earns. Your app's own code is a
 `warn`, with the `cause` and a `hint` naming its remedy:
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
+ INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
       this app's container processor=ReportJobs::weekly queue=reports
@@ -162,7 +159,7 @@ whose module this app does not import is another binary's, and is said at
 apps each binary links every other one's handlers, and a `warn` for each on every
 boot of a correct deployment would teach the reader to ignore the target. So when
 a handler in a shared crate does not run, read that target at `debug`
-(`NESTRS_LOG=info,nest_rs::queue=debug`). See [Wiring the worker](/queue/wiring/) for
+(`<PREFIX>_LOG=info,nest_rs::queue=debug`). See [Wiring the worker](/queue/wiring/) for
 the module-gating rule.
 
 <Aside type="caution">
@@ -179,8 +176,8 @@ RUST_LOG=info,nest_rs::queue=debug nestrs run dev worker
 ```
 
 `info` everywhere, `debug` on the queue path: adds the `job started`
-line per attempt, and each filing and deferral, on top of the `queue.job` line
-and any failure detail.
+line per attempt, and each wait on a throttle's window, on top of the
+`queue.job` line and any failure detail.
 
 ```bash
 RUST_LOG=nest_rs::queue=warn nestrs run dev worker

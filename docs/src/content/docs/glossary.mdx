@@ -170,8 +170,8 @@ deep on each.
   `#[gateway(path = "/ws")]` whose `#[subscribe_message]` methods
   handle WS events; self-mounts on `HttpTransport`.
 - **[Processor (queue)](/queue/)** — a provider whose `#[processor]` impl
-  block holds `#[process(queue = …)]` methods that consume jobs;
-  activated by importing `RedisWorkerModule`.
+  block holds `#[process(queue = …)]` methods that consume jobs; run by
+  the port's `QueueWorker` transport, attached by importing `QueueModule`.
 - **[Scheduler](/schedule/)** — the transport that drains
   `#[scheduled]` orchestrators; each method tagged with exactly one of
   `#[every]` / `#[cron]` / `#[after]`.

@@ -14,7 +14,7 @@ use tokio::time::timeout;
 
 use nest_rs::queue::Queue;
 
-use crate::command::{C1Queue, C16Queue};
+use crate::command::{C1Queue, C16Queue, R16Queue};
 
 const ANSWER_WITHIN: Duration = Duration::from_secs(10);
 
@@ -24,10 +24,23 @@ pub struct Admin {
 }
 
 /// The commands the bench itself sends, left out of what it reports.
-const OWN: [&str; 5] = ["info", "config", "select", "scan", "unlink"];
+const OWN: [&str; 6] = ["info", "config", "select", "scan", "unlink", "eval"];
 
 /// The queues the bench files jobs on: every key it owns is one of theirs.
-const QUEUES: [&str; 2] = [<C1Queue as Queue>::NAME, <C16Queue as Queue>::NAME];
+const QUEUES: [&str; 3] = [
+    <C1Queue as Queue>::NAME,
+    <C16Queue as Queue>::NAME,
+    <R16Queue as Queue>::NAME,
+];
+
+/// Files `ARGV[1]` entries on the stream `KEYS[1]` and hands them all to a
+/// consumer of the adapter's group that no replica is.
+const HOLD: &str = "redis.pcall('XGROUP', 'CREATE', KEYS[1], 'workers', '0', 'MKSTREAM')
+for at = 1, tonumber(ARGV[1]) do
+  redis.call('XADD', KEYS[1], '*', 'job', at, 'record', '{}')
+end
+redis.call('XREADGROUP', 'GROUP', 'workers', 'bench-holder', 'COUNT', ARGV[1], 'STREAMS', KEYS[1], '>')
+return 1";
 
 /// Keys read or deleted per round trip.
 const PAGE: &str = "1000";
@@ -37,6 +50,8 @@ const PAGE: &str = "1000";
 pub struct Counters {
     pub cpu: Duration,
     pub by_command: BTreeMap<String, u64>,
+    /// The microseconds Redis spent in each command.
+    pub usec: BTreeMap<String, u64>,
 }
 
 impl Admin {
@@ -100,6 +115,17 @@ impl Admin {
         Ok(())
     }
 
+    /// `held` jobs filed on `queue`'s stream and delivered to a consumer that
+    /// is no replica, so they sit in the group's pending list, none lapsed —
+    /// what deliveries running on other workers look like to a reclaim.
+    pub async fn hold(&self, queue: &str, held: u32) -> Result<()> {
+        let stream = format!("nestrs:queue:{{{queue}}}:jobs");
+        let held = held.to_string();
+        self.call(&["EVAL", HOLD, "1", stream.as_str(), held.as_str()])
+            .await?;
+        Ok(())
+    }
+
     /// Delete every key the bench's queues left, so each run starts with no job.
     pub async fn clear(&self) -> Result<()> {
         let own: Vec<String> = self
@@ -151,20 +177,25 @@ impl Admin {
                 .with_context(|| format!("INFO cpu's {name} is not a number"))
         };
         let cpu = Duration::from_secs_f64(seconds("used_cpu_user")? + seconds("used_cpu_sys")?);
-        let by_command = self
-            .text(&["INFO", "commandstats"])
-            .await?
-            .lines()
-            .filter_map(|line| {
-                let (name, rest) = line.strip_prefix("cmdstat_")?.split_once(':')?;
-                if OWN.contains(&name.split('|').next()?) {
-                    return None;
-                }
-                let calls = rest.split(',').find_map(|kv| kv.strip_prefix("calls="))?;
-                Some((name.to_string(), calls.parse().ok()?))
-            })
-            .collect();
-        Ok(Counters { cpu, by_command })
+        let stats = self.text(&["INFO", "commandstats"]).await?;
+        let stat = |key: &'static str| -> BTreeMap<String, u64> {
+            stats
+                .lines()
+                .filter_map(|line| {
+                    let (name, rest) = line.strip_prefix("cmdstat_")?.split_once(':')?;
+                    if OWN.contains(&name.split('|').next()?) {
+                        return None;
+                    }
+                    let value = rest.split(',').find_map(|kv| kv.strip_prefix(key))?;
+                    Some((name.to_string(), value.parse().ok()?))
+                })
+                .collect()
+        };
+        Ok(Counters {
+            cpu,
+            by_command: stat("calls="),
+            usec: stat("usec="),
+        })
     }
 
     async fn text(&self, args: &[&str]) -> Result<String> {

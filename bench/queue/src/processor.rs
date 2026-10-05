@@ -4,7 +4,7 @@ use anyhow::Result;
 use nest_rs::core::injectable;
 use nest_rs::queue::processor;
 
-use crate::command::{C1Queue, C16Queue, NoopCommand};
+use crate::command::{C1Queue, C16Queue, NoopCommand, R16Queue};
 use crate::probe::{Probe, Run, now_us};
 
 #[injectable]
@@ -31,6 +31,21 @@ pub struct C16Processor {
 #[processor]
 impl C16Processor {
     #[process(queue = C16Queue, concurrency = 16)]
+    async fn run(&self, job: NoopCommand) -> Result<()> {
+        record(&self.probe, &job);
+        Ok(())
+    }
+}
+
+#[injectable]
+pub struct R16Processor {
+    #[inject]
+    probe: Arc<Probe>,
+}
+
+#[processor]
+impl R16Processor {
+    #[process(queue = R16Queue, concurrency = 16, retries = 3)]
     async fn run(&self, job: NoopCommand) -> Result<()> {
         record(&self.probe, &job);
         Ok(())

@@ -1,12 +1,14 @@
-//! The four measurements. Each repeats its run `--runs` times with none of the
+//! The five measurements. Each repeats its run `--runs` times with none of the
 //! bench's keys left in Redis, and returns one table row per run.
 
 use std::time::Duration;
 
 use anyhow::Result;
+use nest_rs::queue::Queue;
 
 use crate::Bench;
 use crate::admin::Counters;
+use crate::command::C16Queue;
 use crate::fleet::{Fleet, Ledger};
 use crate::lane::Lane;
 use crate::probe::now_us;
@@ -45,7 +47,7 @@ pub async fn drain(bench: &Bench, lane: Lane, jobs: u32, replicas: usize) -> Res
     );
     for run in 1..=bench.runs {
         bench.admin.clear().await?;
-        lane.push_all(&bench.producer, jobs, PREFILL_PUSHERS)
+        lane.push_all(&bench.producer, jobs, PREFILL_PUSHERS, bench.pad)
             .await?;
         let before = bench.admin.counters().await?;
         let spawned_us = now_us();
@@ -100,7 +102,7 @@ pub async fn latency(bench: &Bench, lane: Lane, jobs: u32, rate: u32) -> Result<
         let started = tokio::time::Instant::now();
         for seq in 0..jobs {
             tick.tick().await;
-            lane.push(&*bench.producer, seq).await?;
+            lane.push(&*bench.producer, seq, bench.pad).await?;
         }
         let pushing = started.elapsed();
         fleet.until_complete(&mut ledger, RUN_WITHIN).await?;
@@ -133,7 +135,9 @@ pub async fn push(bench: &Bench, lane: Lane, jobs: u32, pushers: u32) -> Result<
     for run in 1..=bench.runs {
         bench.admin.clear().await?;
         let before = bench.admin.counters().await?;
-        let elapsed = lane.push_all(&bench.producer, jobs, pushers).await?;
+        let elapsed = lane
+            .push_all(&bench.producer, jobs, pushers, bench.pad)
+            .await?;
         let after = bench.admin.counters().await?;
         let commands = busiest(&before.by_command, &after.by_command);
         let per_push = f64::from(jobs);
@@ -185,6 +189,50 @@ pub async fn idle(bench: &Bench, secs: u64) -> Result<Table> {
         table.note(format!(
             "run {run}, Redis commands per second: {}",
             breakdown(&commands, window.as_secs_f64(), "/s", TOP)
+        ));
+    }
+    Ok(table)
+}
+
+/// `held` deliveries running on another worker — pending in the queue's group,
+/// none of them lapsed — and one replica with nothing else to do for `secs`:
+/// what its look for lapsed leases costs Redis. The Redis adapter's own: it
+/// builds the pending list in the stream its layout names.
+pub async fn reclaim(bench: &Bench, held: u32, secs: u64) -> Result<Table> {
+    let mut table = Table::new(
+        format!("Reclaim — {held} deliveries held elsewhere, 1 idle replica, {secs} s"),
+        &[
+            "Redis CPU ms/s",
+            "XPENDING µs/s",
+            "XPENDING calls/s",
+            "worker CPU ms",
+        ],
+    );
+    let window = Duration::from_secs(secs);
+    for run in 1..=bench.runs {
+        bench.admin.clear().await?;
+        bench.admin.hold(<C16Queue as Queue>::NAME, held).await?;
+        let mut fleet = Fleet::spawn(1, &bench.log)?;
+        let mut ledger = Ledger::new(0);
+        fleet.ready(&mut ledger).await?;
+        let (cpu_before, before) = (fleet.cpu()?, bench.admin.counters().await?);
+        tokio::time::sleep(window).await;
+        let (cpu_after, after) = (fleet.cpu()?, bench.admin.counters().await?);
+        fleet.stop(&mut ledger).await?;
+
+        let xpending = |counters: &Counters| counters.usec.get("xpending").copied().unwrap_or(0);
+        let calls = busiest(&before.by_command, &after.by_command)
+            .into_iter()
+            .find(|(name, _)| name == "xpending")
+            .map_or(0, |(_, calls)| calls);
+        table.run(vec![
+            ms(redis_cpu(&before, &after)) / window.as_secs_f64(),
+            xpending(&after).saturating_sub(xpending(&before)) as f64 / window.as_secs_f64(),
+            calls as f64 / window.as_secs_f64(),
+            ms(cpu_after.saturating_sub(cpu_before)),
+        ]);
+        table.note(format!(
+            "run {run}: {held} deliveries pending under another consumer"
         ));
     }
     Ok(table)

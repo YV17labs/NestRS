@@ -110,10 +110,13 @@ needs a Redis of its own.
 | `latency` | an idle worker, then 2 000 jobs at `--rate`/s: each push → its handler's start (p50/p90/p99/max) |
 | `push` | 5 000 single pushes from 1 or `--pushers` tasks, no worker |
 | `idle` | a worker with nothing to do for 30 s: Redis commands/s, worker CPU |
+| `reclaim` | 10 000 deliveries pending under a consumer no replica is, none lapsed, and 1 idle worker for 10 s: what its look for lapsed leases costs Redis. The Redis adapter's own — it files the pending list in the stream its layout names |
 
-The worker serves two queues, `bench-c1` and `bench-c16`, one
-`#[process]` each at concurrency 1 and 16, on the adapter's default
-settings. A replica is a child process, as a pod is; each reports every
+The worker serves three queues, `bench-c1`, `bench-c16` and `bench-r16`, one
+`#[process]` each at concurrency 1, 16 and 16 — `bench-r16` declaring three
+retries, so every attempt is one another may follow — on the adapter's default
+settings. `--pad N` gives every job N numbers of ballast, what a job carrying a
+list of ids weighs. A replica is a child process, as a pod is; each reports every
 handler run, and a job run twice is counted as a duplicate, never as a
 second job. Times are wall-clock microseconds compared across processes,
 so the bench runs on one host. `queue-bench --help` lists the flags;

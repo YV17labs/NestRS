@@ -1,5 +1,5 @@
 //! The nestrs job queue over Redis, measured through its public API alone:
-//! drain, latency, push throughput and idle cost. Every run deletes the keys the
+//! drain, latency, push throughput, idle cost and recovery's cost. Every run deletes the keys the
 //! bench's queues left, and the bench refuses a Redis holding anything else.
 
 mod admin;
@@ -32,8 +32,10 @@ usage: queue-bench <measurement> [--flag value]...
   latency  [--queue c16] [--jobs 2000] [--rate 200]     push at a steady rate to an idle worker
   push     [--queue c16] [--jobs 5000] [--pushers 1]    push throughput, no worker
   idle     [--secs 30]                                  what an idle worker costs
+  reclaim  [--held 10000] [--secs 10]                   recovery's cost while deliveries run elsewhere
 
   every measurement: [--runs 3] [--log warn] (the replicas' log filter)
+                     [--pad 0] (numbers of ballast in every job pushed)
   Redis is the app's own (<PREFIX>_REDIS__URL), and holds nothing but the bench's
   keys: the bench deletes them before every run and refuses a Redis holding more.";
 
@@ -43,6 +45,7 @@ pub struct Bench {
     pub producer: Arc<dyn JobProducer>,
     pub log: String,
     pub runs: usize,
+    pub pad: usize,
 }
 
 enum Measurement {
@@ -62,6 +65,10 @@ enum Measurement {
         pushers: u32,
     },
     Idle {
+        secs: u64,
+    },
+    Reclaim {
+        held: u32,
         secs: u64,
     },
 }
@@ -95,13 +102,18 @@ async fn main() -> Result<()> {
         "idle" => Measurement::Idle {
             secs: flags.take("secs", 30)?,
         },
+        "reclaim" => Measurement::Reclaim {
+            held: flags.take("held", 10_000)?,
+            secs: flags.take("secs", 10)?,
+        },
         _ => bail!("{USAGE}"),
     };
     let runs = flags.take("runs", 3)?;
     let log = flags.take_text("log", "warn");
+    let pad = flags.take("pad", 0)?;
     flags.done()?;
 
-    let bench = Bench::open(runs, log).await?;
+    let bench = Bench::open(runs, log, pad).await?;
     let report = match measurement {
         Measurement::Drain {
             lane,
@@ -117,6 +129,7 @@ async fn main() -> Result<()> {
             pushers,
         } => measure::push(&bench, lane, jobs, pushers).await?,
         Measurement::Idle { secs } => measure::idle(&bench, secs).await?,
+        Measurement::Reclaim { held, secs } => measure::reclaim(&bench, held, secs).await?,
     };
     bench.admin.clear().await?;
     println!(
@@ -128,7 +141,7 @@ async fn main() -> Result<()> {
 }
 
 impl Bench {
-    async fn open(runs: usize, log: String) -> Result<Self> {
+    async fn open(runs: usize, log: String, pad: usize) -> Result<Self> {
         let app = App::builder().module::<BenchModule>().build().await?;
         let config = app
             .container()
@@ -145,6 +158,7 @@ impl Bench {
             producer,
             log,
             runs,
+            pad,
         })
     }
 }

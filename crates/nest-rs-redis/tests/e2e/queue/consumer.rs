@@ -893,3 +893,27 @@ async fn an_entry_deleted_while_delivered_is_said() {
     assert_eq!(line.field("backend_ids").as_deref(), Some(entry.as_str()));
     crate::forget(queue).await;
 }
+
+/// A Redis whose script cache was emptied — a restart, a `SCRIPT FLUSH` — still
+/// runs the queue: each script is loaded again on its first `NOSCRIPT`, by the
+/// client, and the job pushed after the flush runs once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queue_runs_on_after_its_scripts_are_flushed() {
+    let queue = <PlainQueue as nest_rs_queue::Queue>::NAME;
+    let run = crate::this_run();
+    let replica = crate::replica::<PlainModule>().await;
+    let _: () = redis::cmd("SCRIPT")
+        .arg("FLUSH")
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("SCRIPT FLUSH");
+    replica
+        .producer
+        .push(PlainQueue, PlainCommand { run: run + 7 }, None)
+        .await
+        .expect("a push after the flush");
+    crate::wait_until(Duration::from_secs(10), || PLAIN.of(run + 7).len() == 1).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert_eq!(PLAIN.of(run + 7).len(), 1, "the job ran once");
+    assert_eq!(crate::filed(queue).await, 0, "and settled");
+}

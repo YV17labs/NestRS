@@ -609,10 +609,9 @@ async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisCon
 /// sends the first time Redis has not cached the script it calls.
 ///
 /// A run through the user cannot show it: a script some earlier run loaded is
-/// cached, the first `EVALSHA` answers, and no load is sent. Flushing the cache
-/// would show it and break every other test mid-call, so the permission is asked
-/// of a script of its own: the ACL checks the command, and a script's own
-/// commands only when it runs, which the run itself proves.
+/// cached, the first `EVALSHA` answers, and no load is sent. So the permission
+/// is asked of a script of its own: the ACL checks the command, and a script's
+/// own commands only when it runs, which the run itself proves.
 async fn assert_may_load_a_script(config: &RedisConfig) {
     let mut user = RedisConnection::connect(config)
         .await

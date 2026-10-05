@@ -40,6 +40,7 @@ impl Module for RedisScheduleModule {
                 let conn = container
                     .get::<RedisConnection>()
                     .ok_or_else(|| anyhow::anyhow!("RedisScheduleModule: {CONNECTION_REMEDY}"))?;
+                conn.answers_within(nest_rs_schedule::LOCK_TIMEOUT, "the scheduler")?;
                 Ok(Arc::new(RedisOccurrenceLock::new((*conn).clone())) as Arc<dyn OccurrenceLock>)
             },
         )

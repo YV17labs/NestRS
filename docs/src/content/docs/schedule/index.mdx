@@ -444,7 +444,10 @@ replica — the thing the declaration exists to prevent. So:
   it.** An occurrence goes stale ten seconds before its claim's hold ends — the
   margin two replicas' clocks may disagree by — and a claim not answered by then
   is abandoned and the occurrence skipped with a `warn`, `occurrence skipped: its
-  lock did not answer the claim before the occurrence went stale`. A replica that
+  lock did not answer the claim before the occurrence went stale`. At the
+  shortest hold, a minute, that is fifty seconds after the occurrence, so the
+  boot refuses a `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` of fifty or more: the
+  scheduler would abandon a claim Redis was still answering. A replica that
   reaches an occurrence that late, stalled by its platform or starved of CPU,
   skips it too: a peer's claim may already be forgotten, and firing could be the
   second time.

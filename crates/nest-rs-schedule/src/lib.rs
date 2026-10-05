@@ -41,7 +41,7 @@ pub mod unit;
 pub use error::OccurrenceLockError;
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
-pub use occurrence::{BACKEND_REMEDY, Occurrence, OccurrenceClaim, OccurrenceLock};
+pub use occurrence::{BACKEND_REMEDY, LOCK_TIMEOUT, Occurrence, OccurrenceClaim, OccurrenceLock};
 pub use replicas::Replicas;
 // Re-exported so `#[every]` / `#[cron]` / `#[after]` emit their
 // `JobTransaction` through this crate's own root, the way every other path the

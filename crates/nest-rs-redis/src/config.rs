@@ -68,8 +68,9 @@ pub struct RedisConfig {
     /// `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
     /// refused outside, and in code anything above zero up to an hour; defaults
     /// to 10s. A binding refuses the boot on a budget at or past its port's
-    /// net — the queue's and the rate limiter's are 20s — and the queue binding
-    /// on a lease of no more than one and a half budgets.
+    /// net — 20s for the queue's and the rate limiter's, 50s for the
+    /// scheduler's — and the queue binding on a lease of no more than one and a
+    /// half budgets.
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
     /// authorities of Mozilla's root program compiled into the client and

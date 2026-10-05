@@ -28,7 +28,7 @@ use crate::{
 /// fired the ones it overran, that following occurrence too ([`claim_hold`]): a
 /// minute is far past what NTP leaves, and short enough that the backend forgets
 /// a short job's keys soon after.
-const MIN_HOLD: Duration = Duration::from_secs(60);
+pub(crate) const MIN_HOLD: Duration = Duration::from_secs(60);
 
 /// How far two replicas' clocks may disagree while a stalled replica still skips,
 /// rather than fires a second time, an occurrence a peer claimed. The replica
@@ -36,7 +36,7 @@ const MIN_HOLD: Duration = Duration::from_secs(60);
 /// the backend's timer from an instant the peer read on its own: a replica
 /// reaching an occurrence this close to its hold's end skips it. NTP keeps
 /// clocks within milliseconds; this is the margin past it.
-const MAX_SKEW: Duration = Duration::from_secs(10);
+pub(crate) const MAX_SKEW: Duration = Duration::from_secs(10);
 
 /// The most overrun occurrences one report asks the lock about, all at once;
 /// past this many they are counted unchecked.
@@ -2798,5 +2798,24 @@ mod tests {
             );
         }
         assert_eq!(claim_hold(Duration::MAX), Duration::MAX, "saturates");
+    }
+
+    /// The net a binding holds its budget under is the wait an on-time claim
+    /// gets at the shortest hold, and no claim's hold gives it less.
+    #[test]
+    fn the_lock_timeout_is_the_shortest_wait_an_on_time_claim_gets() {
+        let net_ms = u64::try_from(crate::LOCK_TIMEOUT.as_millis()).expect("fits");
+        let instant_ms = 1_789_002_000_000;
+        assert_eq!(stale_at(instant_ms, MIN_HOLD) - instant_ms, net_ms);
+        for gap in [
+            Duration::from_millis(1),
+            Duration::from_secs(60),
+            Duration::from_secs(86_400),
+        ] {
+            assert!(
+                stale_at(instant_ms, claim_hold(gap)) - instant_ms >= net_ms,
+                "{gap:?}"
+            );
+        }
     }
 }

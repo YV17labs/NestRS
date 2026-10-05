@@ -35,6 +35,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::OccurrenceLockError;
+use crate::scheduler::{MAX_SKEW, MIN_HOLD};
 
 /// One occurrence of a job, as a replica claims it.
 ///
@@ -113,6 +114,17 @@ pub trait OccurrenceLock: Send + Sync + 'static {
     /// occurrences unclaimed.
     async fn claimed(&self, token: &str) -> Result<bool, OccurrenceLockError>;
 }
+
+/// The shortest the scheduler waits on an [`OccurrenceLock`] call: **50 seconds**,
+/// from the instant of an occurrence claimed for the shortest hold — a minute —
+/// to its going stale, the clock skew two replicas may carry (ten seconds)
+/// before the hold ends.
+///
+/// **The scheduler's net, never a backend's budget**, and a backend's budget sits
+/// below it: a command still answering when the net gives up is abandoned, and
+/// its occurrence skipped with the bare fact that it went stale rather than the
+/// backend's own cause. A binding refuses the boot on a budget at or past it.
+pub const LOCK_TIMEOUT: Duration = MIN_HOLD.saturating_sub(MAX_SKEW);
 
 /// The remedy the boot names when a job needs a lock and none is bound, or when
 /// two backends bind one — shared with every backend's binding, so the two

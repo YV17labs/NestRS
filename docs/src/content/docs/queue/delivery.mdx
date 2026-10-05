@@ -148,6 +148,12 @@ answer is lost may have ended the job all the same, which is why the line says
 | an outcome | tried again while the lease holds; past it, said, and left to its lease — the next delivery runs the job again unless the outcome landed | `job outcome not confirmed; unless it was written, the job runs again once its lease lapses`, `error` |
 | filing due jobs | they wait, and the next upkeep files them | `queue upkeep failed; retrying`, `warn` |
 
+**A failover is followed.** A failover demotes the primary under its open
+connections; the first that answers `READONLY` is opened again, once, through
+the URL's name — which now reaches the new primary — and says so at `warn`,
+`redis connection opened again: the server it reached answered as a read-only
+replica`. The writes refused meanwhile fail as any refused call does.
+
 A push, a cancel and a checkpoint's read or save fail within one budget too, as
 the connection's own failure, before the queue port's net — twenty seconds —
 gives up on the call; see

@@ -1,11 +1,19 @@
-//! The shared connection's boot, without a Redis: a scripted server that stays
-//! busy or refuses a `SELECT`, and the budget's place below the ports' nets.
+//! The shared connection, without a Redis: a scripted server that stays busy,
+//! refuses a `SELECT` or is demoted under its clients, and the budget's place
+//! below the ports' nets.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
-use crate::harness::connection::{NOT_READY, ScriptedRedis, answer, database_refused_at_once};
+use crate::harness::connection::{
+    NOT_READY, ScriptedRedis, answer, command_length, database_refused_at_once,
+};
 
 /// A Redis that stays not ready spends the budget and fails as one that
 /// answered — its last answer as the source, the budget to widen — never as an
@@ -80,5 +88,119 @@ fn the_connection_budget_answers_before_the_queue_port_and_the_throttler_give_up
             budget * 2 <= net,
             "{what} ({net:?}) leaves room for a budget raised to twice its default ({budget:?})"
         );
+    }
+}
+
+/// A primary demoted under a live connection — a failover behind a name that
+/// now reaches the new primary — answers every write `READONLY`. The connection
+/// is reopened at the first, so the writes after it reach the new primary
+/// rather than failing until the process restarts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connection_to_a_demoted_primary_is_reopened() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let server = DemotedRedis::start().await;
+    let mut conn = RedisConnection::connect(&RedisConfig {
+        url: server.url(),
+        connect_timeout: Duration::from_secs(2),
+        ..RedisConfig::default()
+    })
+    .await
+    .expect("the primary serves the boot");
+    server.demote();
+    let write = || redis::cmd("SET").arg("nestrs-demoted").arg("1").clone();
+    let refused = write()
+        .query_async::<()>(&mut conn)
+        .await
+        .expect_err("the demoted primary refuses the write");
+    assert_eq!(refused.code(), Some("READONLY"), "{refused}");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match write().query_async::<()>(&mut conn).await {
+            Ok(()) => break,
+            Err(error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "the connection still reaches the demoted primary: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    let said = logs.expect_one(
+        nest_rs_redis::TARGET,
+        "redis connection opened again: the server it reached answered as a read-only replica",
+    );
+    assert_eq!(said.level, "warn");
+}
+
+/// A primary demoted under its clients: until [`demote`](Self::demote), every
+/// connection is answered `+PONG`; after it, the connections it had accepted
+/// answer every command `READONLY`, as a demoted primary does, and the ones it
+/// accepts next answer `+PONG` again — the name now reaching the new primary.
+pub(crate) struct DemotedRedis {
+    addr: SocketAddr,
+    accepted: Arc<AtomicUsize>,
+    demoted_below: Arc<AtomicUsize>,
+}
+
+impl DemotedRedis {
+    pub(crate) async fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the server");
+        let addr = listener.local_addr().expect("the server's address");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let demoted_below = Arc::new(AtomicUsize::new(0));
+        let counting = Arc::clone(&accepted);
+        let demoting = Arc::clone(&demoted_below);
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let id = counting.fetch_add(1, Ordering::SeqCst);
+                let demoting = Arc::clone(&demoting);
+                tokio::spawn(async move {
+                    answer_as_its_role(client, id, &demoting).await;
+                });
+            }
+        });
+        Self {
+            addr,
+            accepted,
+            demoted_below,
+        }
+    }
+
+    pub(crate) fn url(&self) -> String {
+        format!("redis://{}/", self.addr)
+    }
+
+    /// Demote every connection accepted so far.
+    pub(crate) fn demote(&self) {
+        self.demoted_below
+            .store(self.accepted.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+}
+
+/// Answer each command connection `id` sends: `READONLY` once it is below the
+/// demotion, `+PONG` otherwise.
+async fn answer_as_its_role(mut client: TcpStream, id: usize, demoted_below: &AtomicUsize) {
+    let mut received = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        while let Some(length) = command_length(&received) {
+            received.drain(..length);
+            let reply: &[u8] = if id < demoted_below.load(Ordering::SeqCst) {
+                b"-READONLY You can't write against a read only replica.\r\n"
+            } else {
+                b"+PONG\r\n"
+            };
+            if client.write_all(reply).await.is_err() {
+                return;
+            }
+        }
+        match client.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => received.extend_from_slice(&chunk[..read]),
+        }
     }
 }

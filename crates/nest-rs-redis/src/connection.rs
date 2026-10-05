@@ -30,8 +30,8 @@
 //! the queue's module and set the queue's URL.
 
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use nest_rs_config::Namespaced;
@@ -71,16 +71,123 @@ pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered �
 /// `Script`, `INCR`, `GET`/`SET`, an atomic pipeline) are the intended traffic.
 #[derive(Clone)]
 pub struct RedisConnection {
-    manager: ConnectionManager,
-    /// How long a command waits for its answer.
+    /// The connection every clone shares.
+    kept: Arc<Kept>,
+    /// How long a command on this handle waits for its answer.
     budget: Duration,
-    /// The client the connection was opened from, which a
-    /// [`dedicated`](Self::dedicated) one is opened from too: same address,
-    /// same TLS material and verification.
+}
+
+/// What every clone of a connection shares: the manager its commands go
+/// through, and what opening it again needs.
+///
+/// **A connection answered `READONLY` is opened again.** A failover demotes the
+/// primary under its clients: the socket stays open, the name the URL dials now
+/// reaches the new primary, and `redis` reopens a connection only when its
+/// socket fails — so every write would fail until the process restarted. The
+/// first `READONLY` opens a manager afresh, once at a time, and every clone
+/// takes it for its next command.
+struct Kept {
+    /// The manager, and how many times it was opened again: a read-only answer
+    /// reopens only the manager that gave it, never its successor.
+    manager: RwLock<(u64, ConnectionManager)>,
+    /// The client the connection was opened from, which a reopened or
+    /// [`dedicated`](RedisConnection::dedicated) one is opened from too: same
+    /// address, same TLS material and verification.
     client: redis::Client,
+    endpoint: String,
+    /// The connect budget, which bounds opening the connection again.
+    budget: Duration,
     /// TLS refusals met reopening the connection — `None` over plaintext, where
     /// no handshake can be refused.
     refusals: Option<Arc<TlsRefusals>>,
+    reopening: AtomicBool,
+}
+
+impl Kept {
+    fn new(
+        manager: ConnectionManager,
+        client: redis::Client,
+        endpoint: String,
+        budget: Duration,
+        refusals: Option<Arc<TlsRefusals>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            manager: RwLock::new((0, manager)),
+            client,
+            endpoint,
+            budget,
+            refusals,
+            reopening: AtomicBool::new(false),
+        })
+    }
+
+    /// The manager commands go through now, and its opening.
+    fn manager(&self) -> (u64, ConnectionManager) {
+        self.manager
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Read what a command through the manager of `opening` met.
+    fn observe<T>(self: &Arc<Self>, opening: u64, outcome: &Result<T, redis::RedisError>) {
+        if let Some(refusals) = &self.refusals {
+            refusals.observe(outcome);
+        }
+        if let Err(error) = outcome
+            && error.code() == Some("READONLY")
+        {
+            self.reopen(opening);
+        }
+    }
+
+    /// Open the connection afresh, unless the manager of `opening` was replaced
+    /// already or an opening is under way.
+    fn reopen(self: &Arc<Self>, opening: u64) {
+        if self.manager().0 != opening || self.reopening.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let kept = Arc::clone(self);
+        tokio::spawn(async move {
+            let opened = bounded(
+                kept.budget,
+                ConnectionManager::new_with_config(
+                    kept.client.clone(),
+                    manager_config(kept.budget),
+                ),
+            )
+            .await;
+            match opened {
+                Ok(Ok(manager)) => {
+                    let mut kept_manager =
+                        kept.manager.write().unwrap_or_else(PoisonError::into_inner);
+                    // Replaced meanwhile: the read-only answer was its
+                    // predecessor's.
+                    if kept_manager.0 != opening {
+                        drop(kept_manager);
+                        kept.reopening.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                    *kept_manager = (opening + 1, manager);
+                    drop(kept_manager);
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        endpoint = %kept.endpoint,
+                        "redis connection opened again: the server it reached answered as a \
+                         read-only replica",
+                    );
+                }
+                Ok(Err(error)) | Err(error) => tracing::warn!(
+                    target: crate::TARGET,
+                    endpoint = %kept.endpoint,
+                    error = %nest_rs_core::error_message(&error),
+                    "redis connection answered as a read-only replica and not opened again; \
+                     the next read-only answer tries again",
+                ),
+            }
+            kept.reopening.store(false, Ordering::SeqCst);
+        });
+    }
 }
 
 /// Whether the connection has been refused by TLS since it last answered, and
@@ -265,17 +372,15 @@ impl RedisConnection {
                     .then(|| {
                         Arc::new(TlsRefusals {
                             client: client.clone(),
-                            endpoint,
+                            endpoint: endpoint.clone(),
                             budget,
                             reported: AtomicBool::new(false),
                             diagnosing: AtomicBool::new(false),
                         })
                     });
                     return Ok(Self {
-                        manager,
+                        kept: Kept::new(manager, client, endpoint, budget, refusals),
                         budget,
-                        client,
-                        refusals,
                     });
                 }
                 // The budget elapsed mid-attempt: one final warn so a hung DNS
@@ -349,14 +454,21 @@ impl RedisConnection {
     /// other caller. Its commands keep this one's budget until
     /// [`with_budget`](Self::with_budget) widens it.
     pub(crate) async fn dedicated(&self) -> Result<Self, redis::RedisError> {
+        let kept = &self.kept;
         let manager = bounded(
-            self.budget,
-            ConnectionManager::new_with_config(self.client.clone(), manager_config(self.budget)),
+            kept.budget,
+            ConnectionManager::new_with_config(kept.client.clone(), manager_config(kept.budget)),
         )
         .await??;
         Ok(Self {
-            manager,
-            ..self.clone()
+            kept: Kept::new(
+                manager,
+                kept.client.clone(),
+                kept.endpoint.clone(),
+                kept.budget,
+                kept.refusals.clone(),
+            ),
+            budget: self.budget,
         })
     }
 
@@ -378,12 +490,13 @@ impl RedisConnection {
 impl ConnectionLike for RedisConnection {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
-        let refusals = self.refusals.as_ref();
-        let call = self.manager.send_packed_command(cmd);
+        let kept = &self.kept;
         Box::pin(async move {
-            let outcome = bounded(budget, call).await?;
-            if let Some(refusals) = refusals {
-                refusals.observe(&outcome);
+            let (opening, mut manager) = kept.manager();
+            let outcome = bounded(budget, manager.send_packed_command(cmd)).await?;
+            kept.observe(opening, &outcome);
+            if outcome.as_ref().is_ok_and(read_only) {
+                kept.reopen(opening);
             }
             outcome
         })
@@ -396,19 +509,38 @@ impl ConnectionLike for RedisConnection {
         count: usize,
     ) -> RedisFuture<'a, Vec<Value>> {
         let budget = self.budget;
-        let refusals = self.refusals.as_ref();
-        let call = self.manager.send_packed_commands(pipeline, offset, count);
+        let kept = &self.kept;
         Box::pin(async move {
-            let outcome = bounded(budget, call).await?;
-            if let Some(refusals) = refusals {
-                refusals.observe(&outcome);
+            let (opening, mut manager) = kept.manager();
+            let outcome = bounded(
+                budget,
+                manager.send_packed_commands(pipeline, offset, count),
+            )
+            .await?;
+            kept.observe(opening, &outcome);
+            if outcome
+                .as_ref()
+                .is_ok_and(|replies| replies.iter().any(read_only))
+            {
+                kept.reopen(opening);
             }
             outcome
         })
     }
 
     fn get_db(&self) -> i64 {
-        self.manager.get_db()
+        self.kept.manager().1.get_db()
+    }
+}
+
+/// Whether a reply is a server's `READONLY` — `redis` hands a server's error
+/// back as a reply, and turns it into an error only once the caller reads it —
+/// or holds one, as a transaction's replies do.
+fn read_only(reply: &Value) -> bool {
+    match reply {
+        Value::ServerError(error) => error.code() == "READONLY",
+        Value::Array(replies) => replies.iter().any(read_only),
+        _ => false,
     }
 }
 

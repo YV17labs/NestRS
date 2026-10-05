@@ -139,7 +139,7 @@ async fn answer_every_command(mut client: TcpStream, line: &'static str) {
 
 /// The length of the first whole command in `bytes` — an array of bulk
 /// strings, the only form the client sends — or `None` until it has arrived.
-fn command_length(bytes: &[u8]) -> Option<usize> {
+pub(crate) fn command_length(bytes: &[u8]) -> Option<usize> {
     let header = |from: usize, marker: u8| -> Option<(usize, usize)> {
         if bytes.get(from) != Some(&marker) {
             return None;

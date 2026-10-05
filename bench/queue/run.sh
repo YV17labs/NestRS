@@ -25,9 +25,10 @@ measure drain --queue c16
 measure drain --queue c16 --replicas 4
 measure latency --queue c16 --rate 200
 measure latency --queue c16 --rate 100
-measure drain --queue c16 --pad 1000
-measure drain --queue r16 --pad 1000
 measure push --pushers 1
 measure push --pushers 16
 measure idle
 measure reclaim --held 10000
+measure reclaim --held 100000
+measure drain --queue c16 --pad 1000
+measure drain --queue r16 --pad 1000

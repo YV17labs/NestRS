@@ -55,8 +55,8 @@ pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
 /// handed back every minute is a rollout that stopped — its producers rolled
 /// back, its consumers never coming — and without a bound those jobs would wait
 /// forever, each warned about once a minute. Dead-lettered, each is said once,
-/// naming both versions, and its record stays in the dead set for a consumer of
-/// that release.
+/// naming both versions, and its record is kept with the dead letters — a week,
+/// on Redis — for a consumer of that release.
 pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How many deliveries of one record may end without an answer before the
@@ -613,7 +613,8 @@ fn waited_unread(delivery: &Delivery) -> Option<Duration> {
 const NEWER_RELEASE_REMEDY: &str = "a newer release sealed this job and only its consumers can \
      run it: finish rolling them forward, or, rolling back, keep one running until the queue \
      holds none of its jobs — a job still unread a day after it was first handed back is \
-     dead-lettered, naming both versions, and stays in the dead set for a consumer of that release";
+     dead-lettered, naming both versions, and kept with the dead letters for a consumer of that \
+     release";
 
 /// Hand back a job a newer release sealed: nothing runs, and the delivery says
 /// once, at `warn` and in the job's own trace when its envelope spells one as
@@ -904,8 +905,8 @@ async fn run(
                 nest_rs_core::operation_log::ERROR,
                 AttemptOutcome::DeadLetter(JobError::abort(format!(
                     "job sealed by wire-format version {version}, which this consumer (version \
-                     {supported}) cannot read, {why}; its record stays in the dead set for a \
-                     consumer of that release"
+                     {supported}) cannot read, {why}; its record is kept with the dead letters \
+                     for a consumer of that release"
                 ))),
             )
         }

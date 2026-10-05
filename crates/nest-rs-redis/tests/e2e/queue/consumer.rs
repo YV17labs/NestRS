@@ -772,3 +772,124 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     assert_eq!(crate::filed(queue).await, 0);
     crate::forget(queue).await;
 }
+
+// --- what the upkeep keeps tidy ------------------------------------------------------
+
+/// A dead letter older than a week goes at the next upkeep, whether or not
+/// another job dies: the stream is trimmed by age as the queue runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dead_letter_past_its_week_is_trimmed_by_the_upkeep() {
+    let queue = <PlainQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let eight_days_ago = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after 1970")
+        .saturating_sub(Duration::from_secs(8 * 24 * 60 * 60))
+        .as_millis();
+    let _: String = redis::cmd("XADD")
+        .arg(crate::key_of(queue, "dead"))
+        .arg(format!("{eight_days_ago}-0"))
+        .arg("job")
+        .arg("01890a5d-ac96-774b-bcce-b302099a8057")
+        .arg("record")
+        .arg("{}")
+        .arg("reason")
+        .arg("long ago")
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("an old dead letter");
+    let replica = crate::replica::<PlainModule>().await;
+    let dead = || async {
+        redis::cmd("XLEN")
+            .arg(crate::key_of(queue, "dead"))
+            .query_async::<i64>(&mut crate::connect().await)
+            .await
+            .expect("XLEN")
+    };
+    for _ in 0..60 {
+        if dead().await == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert_eq!(dead().await, 0, "the week-old dead letter went");
+    crate::forget(queue).await;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LongCommand {
+    run: u64,
+}
+
+static LONG: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-vanished", job = LongCommand)]
+struct LongQueue;
+
+#[injectable]
+#[derive(Default)]
+struct LongProcessor;
+
+#[processor]
+impl LongProcessor {
+    /// Long enough for several renewals, however loaded the machine.
+    #[process(queue = LongQueue)]
+    async fn long(&self, job: LongCommand) -> anyhow::Result<()> {
+        LONG.start(job.run);
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [LongProcessor],
+)]
+struct LongModule;
+
+/// An entry deleted by hand while a delivery holds it — no script deletes one
+/// still pending — is gone with its job: the renewal that meets it says so,
+/// naming the entry, rather than losing it in silence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_entry_deleted_while_delivered_is_said() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let queue = <LongQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let run = crate::this_run();
+    let replica = crate::replica::<LongModule>().await;
+    replica
+        .producer
+        .push(LongQueue, LongCommand { run }, None)
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(10), || LONG.of(run).len() == 1).await;
+    let pending: Vec<(String, String, u64, u64)> = redis::cmd("XPENDING")
+        .arg(crate::key_of(queue, "jobs"))
+        .arg(GROUP)
+        .arg("-")
+        .arg("+")
+        .arg(10)
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("XPENDING");
+    let entry = pending[0].0.clone();
+    let _: i64 = redis::cmd("XDEL")
+        .arg(crate::key_of(queue, "jobs"))
+        .arg(&entry)
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("XDEL by hand");
+    let said = "queue entries deleted while delivered; their jobs are gone, and a unique key they held stays held until cancel_unique frees it";
+    for _ in 0..80 {
+        if !logs.find(nest_rs_queue::TARGET, said).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    replica.worker.shutdown().await.expect("clean shutdown");
+    let line = logs.expect_one(nest_rs_queue::TARGET, said);
+    assert_eq!(line.level, "warn");
+    assert_eq!(line.field("backend_ids").as_deref(), Some(entry.as_str()));
+    crate::forget(queue).await;
+}

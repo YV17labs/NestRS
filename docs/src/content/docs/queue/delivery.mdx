@@ -241,8 +241,8 @@ the stream. The window's shape, and what it allows at its edges, is on
 A job dead-lettered — its retry budget spent, or past the stall limit — leaves
 an entry on `…:dead`: its `job` id, its `record` as it was stored, and the
 `reason` its line rendered, which quotes no payload value. The stream keeps a
-week of them and about the last 10,000 — Redis trims it by whole nodes, so a few
-more may stay — and nothing else of the job is left.
+week of them, trimmed at every upkeep, and about the last 10,000 — Redis trims
+it by whole nodes, so a few more may stay — and nothing else of the job is left.
 
 Filing a dead letter back, once its cause is fixed, is one command — the queue's
 dead letters, its stream and its job index as keys, the dead letter's id as the
@@ -284,6 +284,10 @@ A value out of its bounds fails the boot, whether the environment set it or
 - **A script that errors keeps what it wrote before the error.** Redis rolls
   nothing back; the rules above allow every command a script sends, and every key
   a script writes is the queue's own.
+- **Never delete or trim `…:jobs` by hand.** An entry deleted while a delivery
+  holds it takes its job with it, and a unique key it held stays held until
+  `cancel_unique` frees it; the worker says so at `warn`,
+  `queue entries deleted while delivered; …`, naming the entries.
 
 ## Reference
 

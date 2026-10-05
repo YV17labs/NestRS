@@ -16,13 +16,22 @@ use std::sync::LazyLock;
 
 use redis::Script;
 
-/// `now()`: Redis's clock, in milliseconds. A script calling it writes after
-/// it, which Redis 6.2 allows only once it replicates the writes rather than
-/// the script.
-macro_rules! now {
+/// Every script's first line: its writes are replicated as effects, not the
+/// script — which Redis 6.2 needs before a write that follows a command whose
+/// answer varies (`TIME`, `XPENDING`, `XINFO`), when a deployment turned
+/// `lua-replicate-commands` off. Later servers do it always, and take the call
+/// as a no-op.
+macro_rules! effects {
     () => {
         "redis.replicate_commands()
-local function now()
+"
+    };
+}
+
+/// `now()`: Redis's clock, in milliseconds.
+macro_rules! now {
+    () => {
+        "local function now()
   local t = redis.call('TIME')
   return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 end
@@ -121,6 +130,7 @@ end
 /// `ARGV`: how long the jobs are held back, in milliseconds (`0`: due now),
 /// then `job`, `record`, `unique key` (`''`: none) for each job.
 const PUSH: &str = concat!(
+    effects!(),
     now!(),
     file!(),
     "local after = tonumber(ARGV[1])
@@ -153,6 +163,7 @@ return 0
 /// `ARGV`: the group, the job's id (`''`: the job holding the unique key),
 /// the unique key (`''` beside an id).
 const CANCEL: &str = concat!(
+    effects!(),
     pending!(),
     forget!(),
     "local job = ARGV[2]
@@ -179,44 +190,58 @@ return 1
 );
 
 /// Take up to `ARGV[4]` deliveries whose lease lapsed — pending for at least
-/// `ARGV[3]` milliseconds without a renewal — for this worker: each as
-/// `{entry, delivery count, fields}`. An entry deleted under its pending line,
-/// which Redis 6.2 answers as a nil, is let go.
+/// `ARGV[3]` milliseconds without a renewal — for this worker: `{taken,
+/// vanished}`, each taken one as `{entry, delivery count, fields}`. An entry
+/// deleted under its pending line — by hand, since no script deletes one still
+/// pending — is let go and named in `vanished`: Redis 6.2 answers it as a nil,
+/// later servers drop it from the pending list and answer nothing.
 ///
 /// `KEYS`: jobs. `ARGV`: the group, this worker, the lease, the most to take.
-const RECLAIM: &str = r"
+const RECLAIM: &str = concat!(
+    effects!(),
+    r"
 local lapsed = redis.pcall('XPENDING', KEYS[1], ARGV[1], 'IDLE', ARGV[3], '-', '+', ARGV[4])
 if lapsed.err then
   if string.sub(lapsed.err, 1, 7) == 'NOGROUP' then
-    return {}
+    return {{}, {}}
   end
   return lapsed
 end
-local taken = {}
+local taken, vanished = {}, {}
 for _, line in ipairs(lapsed) do
   local entry = redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], ARGV[3], line[1])[1]
   if entry then
     taken[#taken + 1] = {entry[1], line[4] + 1, entry[2]}
-  elseif entry == false then
-    redis.call('XACK', KEYS[1], ARGV[1], line[1])
+  else
+    if entry == false then
+      redis.call('XACK', KEYS[1], ARGV[1], line[1])
+    end
+    vanished[#vanished + 1] = line[1]
   end
 end
-return taken
-";
+return {taken, vanished}
+",
+);
 
 /// Renew each delivery this worker still holds, without counting a delivery:
-/// one `1` (held) or `0` (lost) per delivery, in order.
+/// one `1` (held), `0` (lost) or `2` (its entry deleted under it, which later
+/// servers drop from the pending list as they claim it) per delivery, in order.
 ///
 /// `KEYS`: jobs. `ARGV`: the group, this worker, then `entry`, `count` for
 /// each delivery.
 const RENEW: &str = concat!(
+    effects!(),
     pending!(),
     holds!(),
     "local held = {}
 for at = 3, #ARGV, 2 do
   if holds(ARGV[at], ARGV[at + 1]) then
-    redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], 0, ARGV[at], 'JUSTID')
-    held[#held + 1] = 1
+    local claimed = redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], 0, ARGV[at], 'JUSTID')
+    if #claimed == 0 then
+      held[#held + 1] = 2
+    else
+      held[#held + 1] = 1
+    end
   else
     held[#held + 1] = 0
   end
@@ -236,6 +261,7 @@ return held
 /// the record filed is due in milliseconds, the record, the dead letter's
 /// reason, the most dead letters kept, how long one is kept in milliseconds.
 const SETTLE: &str = concat!(
+    effects!(),
     now!(),
     pending!(),
     holds!(),
@@ -271,15 +297,19 @@ return 1
 "
 );
 
-/// File up to `ARGV[1]` held-back jobs that fell due, and answer how long
-/// until the next one is due in milliseconds: `0` when more are due already,
-/// `-1` when none is held back.
+/// File up to `ARGV[1]` held-back jobs that fell due, trim the dead letters
+/// older than `ARGV[2]` milliseconds — a dead letter's age is kept here too,
+/// not only when another job dies — and answer how long until the next held
+/// job is due in milliseconds: `0` when more are due already, `-1` when none
+/// is held back.
 ///
-/// `KEYS`: jobs, entries, due, delayed, unique, claims, deferred.
+/// `KEYS`: jobs, entries, due, delayed, unique, claims, deferred, dead.
 const PROMOTE: &str = concat!(
+    effects!(),
     now!(),
     file!(),
     "local at = now()
+redis.call('XTRIM', KEYS[8], 'MINID', '~', string.format('%.0f', at - tonumber(ARGV[2])))
 local due = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', at, 'LIMIT', 0, ARGV[1])
 for _, job in ipairs(due) do
   local record = redis.call('HGET', KEYS[4], job)
@@ -306,7 +336,9 @@ return math.max(0, tonumber(next[2]) - at)
 /// is full. A window with no end — its key persisted by hand — is given one.
 ///
 /// `KEYS`: throttle.
-const ADMIT: &str = r"
+const ADMIT: &str = concat!(
+    effects!(),
+    r"
 local used = tonumber(redis.call('GET', KEYS[1]) or '0')
 local left = redis.call('PTTL', KEYS[1])
 if left < 0 then
@@ -318,13 +350,16 @@ if take <= 0 then
 end
 redis.call('SET', KEYS[1], used + take, 'PX', left)
 return {take, 0}
-";
+",
+);
 
 /// Give back up to `ARGV[1]` starts a receive counted and did not use, while
 /// their window lasts.
 ///
 /// `KEYS`: throttle.
-const RELEASE: &str = r"
+const RELEASE: &str = concat!(
+    effects!(),
+    r"
 local used = tonumber(redis.call('GET', KEYS[1]) or '0')
 local left = redis.call('PTTL', KEYS[1])
 local back = math.min(used, tonumber(ARGV[1]))
@@ -332,7 +367,8 @@ if back > 0 and left > 0 then
   redis.call('SET', KEYS[1], used - back, 'PX', left)
 end
 return back
-";
+",
+);
 
 /// Save a job's checkpoint while this worker still holds the delivery running
 /// it: `1` when written, `0` when not. The script that ends the job lets it go.
@@ -340,6 +376,7 @@ return back
 /// `KEYS`: jobs, checkpoints. `ARGV`: the group, this worker, the entry, its
 /// delivery count, the job, the state.
 const CHECKPOINT: &str = concat!(
+    effects!(),
     pending!(),
     holds!(),
     "if not holds(ARGV[3], ARGV[4]) then
@@ -355,7 +392,9 @@ return 1
 /// leaves behind. Answers how many went.
 ///
 /// `KEYS`: jobs. `ARGV`: the group, the silence.
-const SWEEP: &str = r"
+const SWEEP: &str = concat!(
+    effects!(),
+    r"
 local consumers = redis.pcall('XINFO', 'CONSUMERS', KEYS[1], ARGV[1])
 if consumers.err then
   return 0
@@ -372,20 +411,24 @@ for _, consumer in ipairs(consumers) do
   end
 end
 return gone
-";
+",
+);
 
 /// Remove this worker from the group, unless it still holds a delivery:
 /// `1` when it left.
 ///
 /// `KEYS`: jobs. `ARGV`: the group, this worker.
-const LEAVE: &str = r"
+const LEAVE: &str = concat!(
+    effects!(),
+    r"
 local held = redis.pcall('XPENDING', KEYS[1], ARGV[1], '-', '+', 1, ARGV[2])
 if held.err or #held > 0 then
   return 0
 end
 redis.call('XGROUP', 'DELCONSUMER', KEYS[1], ARGV[1], ARGV[2])
 return 1
-";
+",
+);
 
 /// Every script, built once per process: building one hashes its source.
 pub(crate) struct Scripts {

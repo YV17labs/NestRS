@@ -224,7 +224,7 @@ and the worker files one line per delivery at `warn`, in the trace the newer
 producer sealed:
 
 ```text
-WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 waited_ms=0 patience_ms=86400000 hint="a newer release sealed this job and only its consumers can run it: finish rolling them forward, or, rolling back, keep one running until the queue holds none of its jobs — a job still unread a day after it was first handed back is dead-lettered, naming both versions, and stays in the dead set for a consumer of that release" trace_id=4bf9… span_id=…
+WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 waited_ms=0 patience_ms=86400000 hint="a newer release sealed this job and only its consumers can run it: finish rolling them forward, or, rolling back, keep one running until the queue holds none of its jobs — a job still unread a day after it was first handed back is dead-lettered, naming both versions, and kept with the dead letters for a consumer of that release" trace_id=4bf9… span_id=…
 ```
 
 So during a rolling deploy jobs from the new producers wait, and the new
@@ -242,8 +242,8 @@ ERROR nest_rs::queue: job dead-lettered: a newer release sealed it, and none of 
 Rolling the producers back stops new such jobs and recovers none already
 sealed: those need a consumer of the release that sealed them. Keep one
 running until the queue holds none of them — a job it runs is cleared of its
-wait — or let them reach the dead set, where each keeps its record, naming both
-versions, for a consumer of that release. An **older** version — a `v: 1` job
+wait — or let them reach the dead letters, where each keeps its record a week,
+naming both versions, for a consumer of that release. An **older** version — a `v: 1` job
 met by a `v: 2` worker — is dead-lettered naming the direction of the gap,
 since a newer consumer reading an older shape is a decision the release that
 bumps the version makes, not a default.

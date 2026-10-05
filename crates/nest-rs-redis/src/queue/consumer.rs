@@ -122,10 +122,11 @@ impl RedisQueueConsumer {
     /// Up to `max` deliveries whose lease lapsed, taken for this worker.
     async fn reclaim(
         &self,
+        method: &'static ProcessMethod,
         drained: &Drained,
         max: u32,
     ) -> Result<Vec<Delivery<Lease>>, QueueError> {
-        let taken: Vec<Value> = SCRIPTS
+        let (taken, vanished): (Vec<Value>, Vec<String>) = SCRIPTS
             .reclaim
             .key(&drained.keys.jobs)
             .arg(GROUP)
@@ -135,6 +136,7 @@ impl RedisQueueConsumer {
             .invoke_async(&mut self.conn.clone())
             .await
             .map_err(QueueError::backend)?;
+        said_vanished(method, &vanished);
         taken
             .into_iter()
             .map(|taken| {
@@ -311,7 +313,7 @@ impl JobConsumer for RedisQueueConsumer {
             admitted = Some(taken);
         }
         let mut deliveries = if Drained::due(&drained.reclaimed, RECLAIM_EVERY) {
-            self.reclaim(drained, max).await?
+            self.reclaim(method, drained, max).await?
         } else {
             Vec::new()
         };
@@ -368,6 +370,13 @@ impl JobConsumer for RedisQueueConsumer {
                 expected: "one answer per lease",
             }));
         }
+        let vanished: Vec<&str> = held
+            .iter()
+            .zip(leases)
+            .filter(|(answer, _)| **answer == 2)
+            .map(|(_, lease)| lease.entry.as_str())
+            .collect();
+        said_vanished(method, &vanished);
         Ok(held.into_iter().map(hold).collect())
     }
 
@@ -430,7 +439,9 @@ impl JobConsumer for RedisQueueConsumer {
             .key(&keys.unique)
             .key(&keys.claims)
             .key(&keys.deferred)
+            .key(&keys.dead)
             .arg(PROMOTE_BATCH)
+            .arg(millis(DEAD_KEPT))
             .invoke_async(&mut self.conn.clone())
             .await
             .map_err(QueueError::backend)?;
@@ -550,6 +561,23 @@ fn entries(read: Value) -> Result<Vec<(String, Value)>, QueueError> {
 /// The millisecond an entry id was filed at, on Redis's clock.
 fn entry_millis(entry: &str) -> Option<u64> {
     entry.split_once('-').and_then(|(at, _)| at.parse().ok())
+}
+
+/// Say the entries of `method`'s queue deleted while a delivery held them —
+/// by hand, since no script deletes one still pending: their jobs are gone.
+fn said_vanished(method: &'static ProcessMethod, entries: &[impl AsRef<str>]) {
+    if entries.is_empty() {
+        return;
+    }
+    let backend_ids: Vec<&str> = entries.iter().map(AsRef::as_ref).collect();
+    tracing::warn!(
+        target: nest_rs_queue::TARGET,
+        queue = method.queue(),
+        vanished = backend_ids.len(),
+        backend_ids = %backend_ids.join(","),
+        "queue entries deleted while delivered; their jobs are gone, and a unique key they \
+         held stays held until cancel_unique frees it",
+    );
 }
 
 /// A fenced script's `1` or `0`.

@@ -1194,7 +1194,7 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience(
 /// rollout stopped, its producers rolled back — is dead-lettered rather than
 /// handed back forever: said once at `error`, naming both versions and the
 /// wait, with its unit line, in the job's own trace — and the dead letter's
-/// sentence names both versions too, for whoever reads the dead set.
+/// sentence names both versions too, for whoever reads the dead letters.
 #[tokio::test]
 async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_past_the_patience() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1217,7 +1217,7 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
     for named in [
         format!("wire-format version {newer}"),
         format!("(version {WIRE_FORMAT_VERSION})"),
-        "dead set".to_owned(),
+        "kept with the dead letters".to_owned(),
     ] {
         assert!(sentence.contains(&named), "{named:?} in {sentence}");
     }

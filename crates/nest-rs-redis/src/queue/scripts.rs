@@ -190,36 +190,50 @@ return 1
 );
 
 /// Take up to `ARGV[4]` deliveries whose lease lapsed — pending for at least
-/// `ARGV[3]` milliseconds without a renewal — for this worker: `{taken,
-/// vanished}`, each taken one as `{entry, delivery count, fields}`. An entry
-/// deleted under its pending line — by hand, since no script deletes one still
-/// pending — is let go and named in `vanished`: Redis 6.2 answers it as a nil,
-/// later servers drop it from the pending list and answer nothing.
+/// `ARGV[3]` milliseconds without a renewal — for this worker, from one page of
+/// at most `ARGV[6]` pending entries after `ARGV[5]`: `{taken, vanished, next}`,
+/// each taken one as `{entry, delivery count, fields}`, and `next` where the
+/// next look starts — the last entry read, or `-` once the page ran past the
+/// list's end. An entry deleted under its pending line — by hand, since no
+/// script deletes one still pending — is let go and named in `vanished`: Redis
+/// 6.2 answers it as a nil, later servers drop it from the pending list and
+/// answer nothing.
 ///
-/// `KEYS`: jobs. `ARGV`: the group, this worker, the lease, the most to take.
+/// `KEYS`: jobs. `ARGV`: the group, this worker, the lease, the most to take,
+/// where the page starts (`-`, or `(` and an entry), the page's length.
 const RECLAIM: &str = concat!(
     effects!(),
     r"
-local lapsed = redis.pcall('XPENDING', KEYS[1], ARGV[1], 'IDLE', ARGV[3], '-', '+', ARGV[4])
-if lapsed.err then
-  if string.sub(lapsed.err, 1, 7) == 'NOGROUP' then
-    return {{}, {}}
+local lines = redis.pcall('XPENDING', KEYS[1], ARGV[1], ARGV[5], '+', ARGV[6])
+if lines.err then
+  if string.sub(lines.err, 1, 7) == 'NOGROUP' then
+    return {{}, {}, '-'}
   end
-  return lapsed
+  return lines
 end
-local taken, vanished = {}, {}
-for _, line in ipairs(lapsed) do
-  local entry = redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], ARGV[3], line[1])[1]
-  if entry then
-    taken[#taken + 1] = {entry[1], line[4] + 1, entry[2]}
-  else
-    if entry == false then
-      redis.call('XACK', KEYS[1], ARGV[1], line[1])
+local lease, most = tonumber(ARGV[3]), tonumber(ARGV[4])
+local taken, vanished, last = {}, {}, nil
+for _, line in ipairs(lines) do
+  if #taken == most then
+    break
+  end
+  last = line[1]
+  if line[3] >= lease then
+    local entry = redis.call('XCLAIM', KEYS[1], ARGV[1], ARGV[2], ARGV[3], line[1])[1]
+    if entry then
+      taken[#taken + 1] = {entry[1], line[4] + 1, entry[2]}
+    else
+      if entry == false then
+        redis.call('XACK', KEYS[1], ARGV[1], line[1])
+      end
+      vanished[#vanished + 1] = line[1]
     end
-    vanished[#vanished + 1] = line[1]
   end
 end
-return {taken, vanished}
+if last == nil or (#lines < tonumber(ARGV[6]) and last == lines[#lines][1]) then
+  return {taken, vanished, '-'}
+end
+return {taken, vanished, last}
 ",
 );
 

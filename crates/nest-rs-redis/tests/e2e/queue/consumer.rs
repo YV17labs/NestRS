@@ -952,3 +952,127 @@ async fn a_queue_runs_on_after_its_scripts_are_flushed() {
     assert_eq!(PLAIN.of(run + 7).len(), 1, "the job ran once");
     assert_eq!(crate::filed(queue).await, 0, "and settled");
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PagedCommand {
+    run: u64,
+}
+
+#[queue(name = "nest-rs-redis-e2e-paged", job = PagedCommand)]
+struct PagedQueue;
+
+static PAGED: Runs = Runs::new();
+
+#[injectable]
+struct PagedProcessor;
+
+#[processor]
+impl PagedProcessor {
+    #[process(queue = PagedQueue, concurrency = 16, transactional = false)]
+    async fn run(&self, job: PagedCommand) -> anyhow::Result<()> {
+        PAGED.start(job.run);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        PAGED.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [PagedProcessor],
+)]
+struct PagedModule;
+
+/// A look for lapsed leases reads one page of a thousand pending entries, and
+/// the next look reads on from where it stopped: its cost to Redis is a page,
+/// however many deliveries run elsewhere. Two lapsed deliveries sit among a
+/// thousand running ones, the first in the first page and the second past it:
+/// the first look takes only the first, and a later one the second.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
+    let queue = <PagedQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let run = crate::this_run();
+    let (first, second, running) = (run, run + 1, run + 2);
+    let producer = crate::producer().await;
+    producer
+        .push(PagedQueue, PagedCommand { run: first }, None)
+        .await
+        .expect("the first lapsed job");
+    for _ in 0..1000 {
+        producer
+            .push(PagedQueue, PagedCommand { run: running }, None)
+            .await
+            .expect("a running job");
+    }
+    producer
+        .push(PagedQueue, PagedCommand { run: second }, None)
+        .await
+        .expect("the second lapsed job");
+    let jobs = crate::key_of(queue, "jobs");
+    let mut conn = crate::connect().await;
+    let _: redis::Value = redis::cmd("XGROUP")
+        .arg("CREATE")
+        .arg(&jobs)
+        .arg(GROUP)
+        .arg(0)
+        .query_async(&mut conn)
+        .await
+        .expect("the group");
+    let _: redis::Value = redis::cmd("XREADGROUP")
+        .arg("GROUP")
+        .arg(GROUP)
+        .arg("elsewhere")
+        .arg("COUNT")
+        .arg(2000)
+        .arg("STREAMS")
+        .arg(&jobs)
+        .arg(">")
+        .query_async(&mut conn)
+        .await
+        .expect("every job delivered to a worker elsewhere");
+    let entries: Vec<(String, Vec<String>)> = redis::cmd("XRANGE")
+        .arg(&jobs)
+        .arg("-")
+        .arg("+")
+        .query_async(&mut conn)
+        .await
+        .expect("XRANGE");
+    assert_eq!(entries.len(), 1002);
+    for entry in [&entries[0].0, &entries[1001].0] {
+        let _: redis::Value = redis::cmd("XCLAIM")
+            .arg(&jobs)
+            .arg(GROUP)
+            .arg("elsewhere")
+            .arg(0)
+            .arg(entry)
+            .arg("IDLE")
+            .arg(60_000)
+            .arg("JUSTID")
+            .query_async(&mut conn)
+            .await
+            .expect("its lease lapsed");
+    }
+
+    let app = TestApp::builder()
+        .provide(RedisQueueConfig {
+            lease: Duration::from_secs(30),
+        })
+        .module::<PagedModule>()
+        .build_headless()
+        .await
+        .expect("the worker app boots");
+    let worker = app
+        .spawn_transport(nest_rs_queue::QueueWorker::new())
+        .await
+        .expect("the worker starts");
+    crate::wait_until(Duration::from_secs(10), || PAGED.finished(first) == 1).await;
+    assert!(
+        PAGED.of(second).is_empty(),
+        "the delivery past the first page waits for the next look"
+    );
+    crate::wait_until(Duration::from_secs(10), || PAGED.finished(second) == 1).await;
+    worker.shutdown().await.expect("clean shutdown");
+    assert!(PAGED.of(running).is_empty(), "no running delivery is taken");
+    crate::forget(queue).await;
+}

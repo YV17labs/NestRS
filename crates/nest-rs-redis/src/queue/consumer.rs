@@ -40,10 +40,14 @@ const PROMOTE_BATCH: u32 = 100;
 /// replica is filed within it of falling due.
 const UPKEEP_MOST: Duration = Duration::from_secs(1);
 
-/// How often a queue's lapsed leases are looked for, at most: the look costs
-/// a pass over the deliveries running, and a lease lapses on a scale of
-/// seconds.
+/// How often a queue's lapsed leases are looked for, at most: a look costs a
+/// page of the deliveries running, and a lease lapses on a scale of seconds.
 const RECLAIM_EVERY: Duration = Duration::from_secs(1);
+
+/// The most pending entries one look reads — `XAUTOCLAIM`'s own bound at its
+/// default `COUNT` (100, scanning ten times it), so a look costs Redis that
+/// much whatever runs elsewhere, and a longer list is read a page per look.
+const RECLAIM_PAGE: u32 = 1000;
 
 /// How often a queue's group is swept of the consumers stopped replicas left.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
@@ -68,6 +72,9 @@ struct Drained {
     keys: QueueKeys,
     reading: AsyncMutex<Option<RedisConnection>>,
     reclaimed: Mutex<Option<Instant>>,
+    /// Where the next look for lapsed leases starts: `-`, or `(` and the last
+    /// entry the previous look read.
+    reclaim_from: Mutex<String>,
     swept: Mutex<Option<Instant>>,
 }
 
@@ -126,7 +133,12 @@ impl RedisQueueConsumer {
         drained: &Drained,
         max: u32,
     ) -> Result<Vec<Delivery<Lease>>, QueueError> {
-        let (taken, vanished): (Vec<Value>, Vec<String>) = self
+        let from = drained
+            .reclaim_from
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let (taken, vanished, next): (Vec<Value>, Vec<String>, String) = self
             .conn
             .invoke(
                 SCRIPTS
@@ -135,10 +147,20 @@ impl RedisQueueConsumer {
                     .arg(GROUP)
                     .arg(&self.name)
                     .arg(millis(self.lease))
-                    .arg(max),
+                    .arg(max)
+                    .arg(from)
+                    .arg(RECLAIM_PAGE),
             )
             .await
             .map_err(QueueError::backend)?;
+        *drained
+            .reclaim_from
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = if next == "-" {
+            next
+        } else {
+            format!("({next}")
+        };
         said_vanished(method, &vanished);
         taken
             .into_iter()
@@ -273,6 +295,7 @@ impl JobConsumer for RedisQueueConsumer {
                     keys,
                     reading: AsyncMutex::new(None),
                     reclaimed: Mutex::new(None),
+                    reclaim_from: Mutex::new(String::from("-")),
                     swept: Mutex::new(None),
                 }),
             );

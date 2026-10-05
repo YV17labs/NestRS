@@ -13,21 +13,31 @@ paths:
 Ports & Adapters is `architecture.md`; a port's extension contract and its nets
 are `container.md`. What a job's transaction promises is `data-layer.md`.
 
-## The port owns the attempt; the adapter owns the transport
+## The port runs the loop; the adapter owns the transport
 
-`nest-rs-queue` owns what a job attempt *is* — opening the envelope, continuing
-or minting the trace, the `queue.job` span and ambient scope, catching a panic,
-classifying the outcome (ok, retry, dead-letter, defer) within the method's
-retry budget, the wait before a retry, the events and the operation line — in
-`consume::attempt`, written and tested once. An adapter's consumer is a fetch
-loop that builds a `Delivery` per job, calls it, and translates the
-`AttemptOutcome` into its backend's vocabulary; `consume::discover` finds the
-`#[process]` methods, module-gated. **An adapter that opens a `queue.job` span or
-keeps a retry budget of its own has taken semantics it does not own**, and a
-second adapter copies nothing.
+`nest-rs-queue` owns what consuming a job *is*, written and tested once in its
+`QueueWorker`: discovery, module-gated; each method's permits and one task per
+delivery; the attempt — opening the envelope, continuing or minting the trace,
+the `queue.job` span and ambient scope, catching a panic, classifying the
+outcome within the method's retry budget, the wait before a retry, the events
+and the operation line; the lease's renewal; and the drain. An adapter
+implements `JobConsumer` — hand leased deliveries over, renew their leases, end
+each with one `Disposition` fenced on its lease — in its backend's vocabulary.
+**An adapter that opens a `queue.job` span, counts a budget, holds permits or
+drains on its own has taken semantics it does not own**, and a second adapter
+copies nothing. `nest_rs_testing::queue_kit!` holds every adapter to the
+contract (`.claude/decisions/queue-redis-streams.md`).
 
-- **`AttemptOutcome` is exhaustive on purpose**: a variant added later is a
-  compile error in every driver, not a job one of them drops.
+- **Two budgets, never one.** `retries` counts attempts that answered, in the
+  envelope; `STALL_LIMIT` counts deliveries that ended unanswered, off the
+  backend's delivery count, which every re-filing resets. A job past it is
+  dead-lettered without running.
+- **A lost lease cuts its attempt.** The backend answering `Lost`, or no
+  renewal confirmed for a whole lease, cuts the attempt (its line files
+  `cancelled`) and hands the job back fenced: the delivery holding it decides.
+- **A later backend declares what it lacks, never what it has.** `Disposition`
+  is non-exhaustive, and a variant added later reaches only a backend declaring
+  the capability that names it, so no driver changes behaviour under it.
 - **A job is named by the port.** The push mints a `JobId` (UUID v7) and seals it
   in the envelope; it keys everything kept about the job. A backend's own record
   id reaches a line only as `backend_id`. The wait before a retry is jittered by

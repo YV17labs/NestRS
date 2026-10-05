@@ -20,6 +20,9 @@ nest-rs-core.workspace = true
 # rooted at `::nest_rs_queue::*`, so the macro and the abstractions ship from
 # the same import root.
 nest-rs-queue-macros.workspace = true
+# `QueueConfig`, the drain window of the port's own worker, read like every
+# other module's settings.
+nest-rs-config.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 # Typed producer errors (`QueueError`) — the framework owns queue plumbing
@@ -45,13 +48,16 @@ uuid.workspace = true
 # answers fails the push, the cancel or the checkpoint at it, rather than holding
 # its caller for as long as it stays silent.
 tokio.workspace = true
+# The worker's shutdown token and the tracker its drain waits on.
+tokio-util.workspace = true
 
 [dev-dependencies]
 # `test-util` (not part of tokio's `full`) pauses time, so a backend that never
 # answers meets the net without the suite waiting its twenty seconds out.
 tokio = { workspace = true, features = ["test-util"] }
-# `consume`'s tests assert the events a job attempt files, not only its outcome.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `consume`'s tests assert the events a job attempt files, not only its outcome;
+# `queue` is the behaviour kit the worker's suite runs over an in-memory backend.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["queue"] }
 serde.workspace = true
 # The suite and the doc examples put `#[process]` on an `#[injectable]`
 # provider, the shape a real processor has.

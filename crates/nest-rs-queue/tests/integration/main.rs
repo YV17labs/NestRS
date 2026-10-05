@@ -23,9 +23,12 @@
 mod checkpoint;
 mod consume;
 mod inventory;
+#[path = "../harness/memory.rs"]
+mod memory;
 mod producer;
 mod queue;
 mod queue_name;
+mod worker;
 
 use std::any::TypeId;
 use std::sync::Mutex;

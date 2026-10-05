@@ -2925,6 +2925,7 @@ dependencies = [
  "async-trait",
  "futures-util",
  "nest-rs-codegen",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-pipes",
  "nest-rs-queue-macros",
@@ -2934,6 +2935,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]

@@ -30,6 +30,9 @@ graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
 # suite that never opens a socket should not link a client or turn poem's
 # non-default `websocket` feature on for the whole build.
 ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/websocket"]
+# The queue backend kit (`queue_kit!`): the behaviour a queue backend owes the
+# port's worker, as tests a driver runs against its own implementation.
+queue = ["dep:nest-rs-queue", "dep:serde"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -72,6 +75,10 @@ futures-util = { workspace = true, optional = true }
 # read from it rather than re-spelled here — a copy of a wire grammar drifts
 # silently, because nothing joins the two spellings.
 nest-rs-ws = { workspace = true, optional = true }
+# Behind `queue`: the port the kit runs its cases through, and the serde its
+# job derives.
+nest-rs-queue = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }

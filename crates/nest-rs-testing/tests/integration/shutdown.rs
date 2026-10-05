@@ -9,6 +9,7 @@ use std::time::Duration;
 use nest_rs_core::{SHUTDOWN_HOOKS_TIMEOUT, Transport};
 use nest_rs_http::HttpTransport;
 use nest_rs_opentelemetry::FLUSH_TIMEOUT;
+use nest_rs_queue::QueueWorker;
 use nest_rs_redis::RedisWorker;
 use nest_rs_schedule::Scheduler;
 
@@ -24,9 +25,10 @@ const STATED_WAY_DOWN: Duration = Duration::from_millis(28_500);
 /// Every transport a module can contribute, as it stands at its defaults. Each
 /// states its own bound through the required [`Transport::stop_bound`], so a
 /// row is the bound the transport answers for rather than a label beside it.
-fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
+fn transports() -> [(&'static str, Box<dyn Transport>); 4] {
     [
         ("HttpTransport", Box::new(HttpTransport::default())),
+        ("QueueWorker", Box::new(QueueWorker::default())),
         ("RedisWorker", Box::new(RedisWorker::default())),
         ("Scheduler", Box::new(Scheduler::default())),
     ]

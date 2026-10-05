@@ -14,17 +14,18 @@
 //! # Extension contract
 //!
 //! A backend is a `nest-rs-<storage>` crate that implements the two seams below
-//! and ships the three module shapes every adapter has (`<Vendor>Module::for_root`
-//! opening the connection, `<Vendor>QueueModule` binding the producer,
-//! `<Vendor>WorkerModule::for_root` contributing the worker transport).
+//! and binds both in one module, `<Vendor>QueueModule`, beside the
+//! `<Vendor>Module::for_root` opening its connection. The worker is the port's:
+//! an app runs jobs by importing [`QueueModule`], which attaches the
+//! [`QueueWorker`] to whichever backend is bound.
 //!
 //! 1. **Declare the backend once**: a `const` [`QueueBackend`] carrying the
 //!    backend's name (its `messaging.system`) and the [`Capabilities`] it honours.
 //!    Retries, one transaction per attempt and per-method concurrency are not
-//!    capabilities, because no backend may refuse them — but of the three, only
-//!    concurrency is yours to honour: the port counts the retry budget and times
-//!    its backoff, and the worker's `JobContext` owns the transaction. See
-//!    [`Capability`].
+//!    capabilities, because no backend may refuse them — and none is yours to
+//!    keep: the port counts the retry budget and times its backoff, the worker
+//!    holds each method's permits, and its `JobContext` owns the transaction.
+//!    See [`Capability`].
 //! 2. **File jobs**: implement [`JobProducer`] — `backend` returns the constant,
 //!    `enqueue` stores sealed [`Envelope`]s, each carrying the [`JobId`] the port
 //!    minted, which is the job's key everywhere the backend keeps something about
@@ -40,21 +41,19 @@
 //!    Bind it as `Arc<dyn JobProducer>` with
 //!    `ContainerBuilder::provide_declared_factory_after`, carrying
 //!    [`BACKEND_REMEDY`]: **two backends imported is a boot error naming both**.
-//! 3. **Run jobs**: a `Transport` whose `configure` calls
-//!    [`consume::discover`] with the constant — which refuses, at boot, every
-//!    `#[process]` declaration the backend lacks — and whose fetch loop builds a
-//!    [`Delivery`](consume::Delivery) per job and calls [`consume::attempt`],
-//!    translating the [`AttemptOutcome`](consume::AttemptOutcome): `Ok` into its
-//!    acknowledgement, `DeadLetter` into its dead letter, and `Retry { after }`
-//!    into the next attempt once `after` has passed — re-filing
-//!    [`Delivery::retry_envelope`](consume::Delivery::retry_envelope) when it
-//!    declares [`Capability::DelayedPush`], waiting in process and calling
-//!    `attempt` again when it does not — and `Defer { after }`, a job a newer
-//!    release sealed, into the stored record filed back unchanged, passing how
-//!    long it has waited unread when the storage can keep that
-//!    ([`Delivery::with_deferred_for`](consume::Delivery::with_deferred_for)).
-//!    It honours each method's `concurrency`, and opens no span of its own: the
-//!    attempt, its span, its events, its budget and its backoff are the port's.
+//! 3. **Run jobs**: implement [`JobConsumer`] — hand over leased
+//!    [`Delivery`]s, renew their leases, and end each delivery as its
+//!    [`Disposition`] says, fenced on its lease — and bind it as a
+//!    [`BoundConsumer`] the same way, carrying the same remedy. The worker owns
+//!    everything else: discovery, which refuses at boot every `#[process]`
+//!    declaration the backend lacks; each method's `concurrency`; the attempt,
+//!    its span, its events, its budget and its backoff; the renewal cadence;
+//!    the [`STALL_LIMIT`] on deliveries that end unanswered; and the drain. A
+//!    backend not declaring [`Capability::DelayedPush`] is never handed a wait
+//!    to keep: the worker waits in process. `nest_rs_testing::queue_kit!` runs
+//!    the behaviour every backend owes the worker — a worker dying between
+//!    receive and settle, a lease taken under a running attempt, the drain —
+//!    against yours.
 //!
 //! **Delivery is at least once, on every backend.** A storage that loses no job
 //! delivers some twice — a sweep after a crash, an acknowledgement lost — and a
@@ -82,11 +81,16 @@ mod backend;
 mod backoff;
 mod capability;
 mod checkpoint;
+mod config;
+mod consumer;
+mod delivery;
 mod destination;
+mod disposition;
 mod error;
 mod inventory;
 mod job;
 mod job_id;
+mod module;
 mod process_options;
 mod producer;
 mod push_options;
@@ -94,6 +98,7 @@ mod push_receipt;
 mod queue;
 mod queue_name;
 pub mod unit;
+mod worker;
 
 /// The port's half of consuming: discovery and one attempt at a job.
 pub mod consume;
@@ -108,12 +113,17 @@ mod envelope;
 pub use backend::{BACKEND_REMEDY, BACKEND_TIMEOUT, QueueBackend};
 pub use capability::{Capabilities, Capability};
 pub use checkpoint::{Checkpoint, CheckpointStore};
+pub use config::QueueConfig;
+pub use consume::STALL_LIMIT;
+pub use consumer::{Ask, BoundConsumer, JobConsumer, LeaseHold, Prepared, Received};
+pub use delivery::Delivery;
 // `CheckpointCell` is the type of a `pub` field on the exported `HandlerContext`,
 // so it is nameable whether or not it is re-exported — and unnameable is the
 // worse of the two. Hidden beside its peers, never shown.
 #[doc(hidden)]
 pub use checkpoint::CheckpointCell;
 pub use destination::Destination;
+pub use disposition::Disposition;
 pub use envelope::{Envelope, WIRE_FORMAT_VERSION};
 pub use error::{JobError, QueueError};
 pub use inventory::ProcessMethod;
@@ -121,12 +131,14 @@ pub use inventory::ProcessMethod;
 pub use inventory::{HandlerContext, JobHandler};
 pub use job::Job;
 pub use job_id::JobId;
+pub use module::{QueueModule, QueueSetup};
 pub use process_options::{ProcessOptions, Throttle};
 pub use producer::{ENQUEUE_BATCH, JobProducer, JobProducerExt};
 pub use push_options::{Delay, PushOptions};
 pub use push_receipt::PushReceipt;
 pub use queue::Queue;
 pub use queue_name::QueueName;
+pub use worker::QueueWorker;
 
 // Re-export `async_trait` so backends implement the async traits this crate
 // defines without depending on it directly.

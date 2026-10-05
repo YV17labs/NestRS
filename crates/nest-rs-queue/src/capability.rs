@@ -20,16 +20,11 @@ use std::fmt;
 /// and its backoff (`#[process(retries = N)]`), one transaction per attempt
 /// (`transactional`), and per-method concurrency (`concurrency = N`).
 ///
-/// **Who honours each is a different fact, and only the third answer is the
-/// backend.** The budget is the *port's* — [`consume::attempt`](crate::consume)
-/// counts it and says how long to wait before the next attempt, so an adapter
-/// never counts — and `transactional` is the *worker's*, honoured by whichever
-/// `JobContext` the container holds (`nest-rs-seaorm`'s, today), which is why
-/// the word appears nowhere in `nest-rs-redis`. A driver author reading one
-/// sentence for all three was being told to implement a retry loop that counts
-/// and a database transaction per attempt; what a backend actually owes here is
-/// `concurrency`, because any backend bounds in-process parallelism with a
-/// semaphore.
+/// **None of the three is the backend's to keep.** The budget is the port's —
+/// the attempt counts it and says how long to wait before the next — the
+/// permits behind `concurrency` are the port's worker's, and `transactional` is
+/// honoured by whichever `JobContext` the container holds (`nest-rs-seaorm`'s,
+/// today).
 ///
 /// Non-exhaustive: the port may name a capability later, and a backend that
 /// matches on this enum must not stop compiling the day it does — nor claim the

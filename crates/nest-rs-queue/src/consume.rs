@@ -64,6 +64,18 @@ pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
 /// that release.
 pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// How many deliveries of one record may end without an answer before the
+/// port dead-letters the job without running it.
+///
+/// An answer ends a record — the job completes, is dead-lettered, or is filed
+/// again for its next attempt — so every earlier delivery of the record a
+/// backend hands over ended without one: its worker was killed, froze, or lost
+/// the backend past its lease. The retry budget counts attempts that answered;
+/// this counts the ones that never did, so a job that takes its worker down
+/// stops after three tries instead of forever, and a job whose delivery merely
+/// went missing — a reply lost, a worker restarted — still runs.
+pub const STALL_LIMIT: u32 = 3;
+
 /// The boot's refusal of each declaration on `method` that `backend` does not
 /// honour — every one, so a method declaring two is refused once for each.
 pub(crate) fn unsupported_by<'a>(
@@ -92,6 +104,12 @@ pub fn discover(
     container: &Container,
     backend: &QueueBackend,
 ) -> anyhow::Result<Vec<&'static ProcessMethod>> {
+    check(reachable(container), backend)
+}
+
+/// The `#[process]` methods whose provider is reachable from the running app's
+/// root, with a boot `warn` for each that is linked but unreachable.
+pub(crate) fn reachable(container: &Container) -> Vec<&'static ProcessMethod> {
     let reachable = container.get::<ReachableProviders>();
     let mut methods: Vec<&'static ProcessMethod> = Vec::new();
     for entry in nest_rs_core::inventory::iter::<ProcessMethod>() {
@@ -109,7 +127,17 @@ pub fn discover(
         }
         methods.push(entry);
     }
+    methods
+}
 
+/// `methods`, once each is one `backend` can serve: the boot fails, naming every
+/// offender at once, on a queue name outside the rule, a throttle window under
+/// a millisecond, a declaration `backend` cannot honour, or two methods on one
+/// queue. Each method kept is announced.
+pub(crate) fn check(
+    methods: Vec<&'static ProcessMethod>,
+    backend: &QueueBackend,
+) -> anyhow::Result<Vec<&'static ProcessMethod>> {
     let mut refusals = Vec::new();
     for method in &methods {
         // A decorator's literals were checked at compile time; an entry built by
@@ -267,6 +295,8 @@ pub struct Delivery {
     /// How many attempts the backend saw start that never returned an answer —
     /// see [`Delivery::with_attempts_started`].
     unfinished: u32,
+    /// How many earlier deliveries of this record ended without an answer.
+    stalls: u32,
     /// How long the backend has handed the job back unread, when it keeps that
     /// — see [`Delivery::with_deferred_for`].
     deferred_for: Option<Duration>,
@@ -298,6 +328,7 @@ impl Delivery {
             id: identity.id.unwrap_or_else(JobId::mint),
             attempt: identity.attempt.unwrap_or(1),
             unfinished: 0,
+            stalls: 0,
             deferred_for: None,
             unique_key: identity.unique_key,
             backend_id: None,
@@ -331,6 +362,14 @@ impl Delivery {
     pub fn with_attempts_started(mut self, started: u32) -> Self {
         self.unfinished = started.saturating_sub(self.attempt);
         self.attempt = self.attempt.max(started);
+        self
+    }
+
+    /// How many times the backend handed this record over, this delivery
+    /// included: every earlier one ended without an answer, and past
+    /// [`STALL_LIMIT`] of them the job is dead-lettered without running.
+    pub(crate) fn with_delivery_count(mut self, count: u32) -> Self {
+        self.stalls = count.saturating_sub(1);
         self
     }
 
@@ -475,6 +514,9 @@ pub async fn attempt(
         (Some(version), _) => Input::Unread {
             version,
             waited: waited_unread(delivery),
+        },
+        _ if delivery.stalls >= STALL_LIMIT => Input::Stalled {
+            deliveries: delivery.stalls.saturating_add(1),
         },
         _ if spent => Input::Spent {
             unfinished: delivery.unfinished,
@@ -757,6 +799,12 @@ enum Input {
         /// How many attempts ended without an answer.
         unfinished: u32,
     },
+    /// Nothing: the record was handed over `deliveries` times, and every
+    /// delivery before this one ended without an answer — past [`STALL_LIMIT`].
+    Stalled {
+        /// How many times the record was handed over, this delivery included.
+        deliveries: u32,
+    },
     /// Nothing: a newer release sealed the job, and it has waited unread past
     /// [`NEWER_RELEASE_PATIENCE`] — or names no id, so no wait can be counted.
     Unread {
@@ -772,6 +820,8 @@ enum Unrun {
     /// The attempts the backend saw start spent the budget, `unfinished` of
     /// them without an answer.
     Spent { unfinished: u32 },
+    /// The record's deliveries past [`STALL_LIMIT`] ended without an answer.
+    Stalled { deliveries: u32 },
     /// A newer release sealed the job and it was not read in time.
     Unread {
         version: u64,
@@ -870,6 +920,7 @@ impl Drop for JobLine {
 /// | retryable `Err`, last attempt | `job dead-lettered: retry budget spent` (`error`) | `DeadLetter` |
 /// | **panic** | `job dead-lettered: handler panicked` (`error`) | `DeadLetter` |
 /// | budget spent by attempts that never returned | `job dead-lettered: retry budget spent by attempts that never returned` (`error`) | `DeadLetter` |
+/// | deliveries past [`STALL_LIMIT`] ended without an answer | `job dead-lettered: its deliveries ended without an answer past the stall limit` (`error`) | `DeadLetter` |
 /// | a newer release's, unread past the patience | `job dead-lettered: a newer release sealed it, and none of its consumers ran it in time` (`error`) | `DeadLetter` |
 ///
 /// The panic is caught **here** rather than left to a backend's panic layer,
@@ -894,6 +945,7 @@ async fn run(
         // is the attempt's outcome.
         Input::Refused(refused) => Ok(Ok(Err(refused))),
         Input::Spent { unfinished } => Err(Unrun::Spent { unfinished }),
+        Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
         Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
     };
     // Every terminal state, one detail event and one line. The detail says
@@ -922,6 +974,23 @@ async fn run(
                     "job sealed by wire-format version {version}, which this consumer (version \
                      {supported}) cannot read, {why}; its record stays in the dead set for a \
                      consumer of that release"
+                ))),
+            )
+        }
+        Err(Unrun::Stalled { deliveries }) => {
+            let unanswered = deliveries.saturating_sub(1);
+            tracing::error!(
+                target: TARGET,
+                deliveries,
+                stall_limit = STALL_LIMIT,
+                "job dead-lettered: its deliveries ended without an answer past the stall limit",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(JobError::abort(format!(
+                    "{unanswered} deliveries of the job ended without an answer — the process \
+                     running each was stopped, froze or lost the queue backend past its lease — \
+                     so it is dead-lettered without running"
                 ))),
             )
         }

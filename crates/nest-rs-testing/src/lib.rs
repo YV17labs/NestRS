@@ -44,6 +44,10 @@ pub mod graphql;
 #[cfg(feature = "ws")]
 pub mod ws;
 
+/// The queue backend kit (feature `queue`).
+#[cfg(feature = "queue")]
+pub mod queue;
+
 pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};

@@ -174,8 +174,8 @@ impl App {
     ///
     /// Every transport is contributed by an imported module via
     /// [`TransportContribution`] — `HttpModule` brings `HttpTransport`,
-    /// `ScheduleModule` brings `Scheduler`, `RedisWorkerModule` brings
-    /// `RedisWorker`. There is no imperative `.transport()` on `App` —
+    /// `ScheduleModule` brings `Scheduler`, `QueueModule` brings
+    /// `QueueWorker`. There is no imperative `.transport()` on `App` —
     /// `AppModule.imports` is the single composition seam.
     pub async fn run(self) -> Result<()> {
         let App { container } = self;
@@ -678,6 +678,56 @@ mod tests {
             .await
             .expect("the declared order is honoured");
         assert_eq!(app.container().get::<Second>().unwrap().0, 42);
+    }
+
+    // A binding with a config of its own over a shared connection reads two
+    // factory outputs, each from a module of its own.
+    struct Third(u32);
+    struct ThirdAfterBoth;
+    impl Module for ThirdAfterBoth {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_declared_factory_after_both::<Third, First, Second, _, _>(
+                "one declaration",
+                |c| async move {
+                    let first = c
+                        .get::<First>()
+                        .ok_or_else(|| anyhow!("First runs first"))?;
+                    let second = c
+                        .get::<Second>()
+                        .ok_or_else(|| anyhow!("Second runs first"))?;
+                    Ok(Third(first.0 + second.0))
+                },
+            )
+        }
+    }
+
+    struct SecondModule;
+    impl Module for SecondModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Second(1)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_factory_declared_after_two_others_runs_after_both_whatever_the_queue_order() {
+        for modules in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [2, 0, 1]] {
+            let mut app = App::builder();
+            for module in modules {
+                app = match module {
+                    0 => app.module::<ThirdAfterBoth>(),
+                    1 => app.module::<FirstModule>(),
+                    _ => app.module::<SecondModule>(),
+                };
+            }
+            let app = app.build().await.expect("the declared order is honoured");
+            assert_eq!(app.container().get::<Third>().unwrap().0, 42, "{modules:?}");
+        }
     }
 
     /// The portable form: a dependent names the `Arc<dyn Port>` a

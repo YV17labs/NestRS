@@ -304,7 +304,7 @@ const CONFINED_USER: &str = "nestrs-e2e-throttler";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_created_as_the_rate_limiting_page_says_counts_and_denies() {
     let user = crate::acl_user(CONFINED_USER);
-    let config = crate::documented_user("rate-limiting/index.mdx", &user, 0).await;
+    let config = crate::documented_user("rate-limiting/index.mdx", "rate limiter", &user, 0).await;
     crate::assert_may_load_a_script(&config).await;
     let conn = nest_rs_redis::RedisConnection::connect(&config)
         .await

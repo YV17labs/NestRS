@@ -59,7 +59,7 @@ pub(super) const WS: Dep = nest_rs(&["ws"]);
 pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);
 pub(super) const EVENTS: Dep = nest_rs(&["events"]);
 // `redis` implies `queue`: the abstractions and the Redis bindings
-// (`RedisModule`, `RedisQueueModule`, `RedisWorkerModule`) arrive together.
+// (`RedisModule`, `RedisQueueModule`) arrive together.
 pub(super) const REDIS: Dep = nest_rs(&["redis"]);
 pub(super) const MCP: Dep = nest_rs(&["mcp"]);
 pub(super) const AUTHN: Dep = nest_rs(&["authn"]);

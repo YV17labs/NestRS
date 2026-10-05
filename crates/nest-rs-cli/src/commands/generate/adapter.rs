@@ -282,7 +282,7 @@ fn host_module(transport: Transport) -> &'static str {
         Transport::Http | Transport::Ws => "nest_rs::http::HttpModule",
         Transport::Graphql => "nest_rs::graphql::GraphqlModule",
         Transport::Queue => {
-            "nest_rs::redis::RedisModule::for_root(None) + nest_rs::redis::RedisWorkerModule::for_root(None)"
+            "nest_rs::redis::RedisModule::for_root(None) + nest_rs::redis::RedisQueueModule + nest_rs::queue::QueueModule::for_root(None)"
         }
         Transport::Schedule => "nest_rs::schedule::ScheduleModule",
         Transport::Mcp => "nest_rs::http::HttpModule",

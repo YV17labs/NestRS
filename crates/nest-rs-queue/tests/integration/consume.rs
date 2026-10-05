@@ -1593,7 +1593,7 @@ async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
         QueueName::new("transcode").expect("a valid name"),
         json!({ "v": WIRE_FORMAT_VERSION, "id": JOB_ID, "payload": { "file": "id.wav" } }),
     )
-    .with_backend_id("apalis-7");
+    .with_backend_id("1767225600000-0");
     assert_eq!(delivery.id().to_string(), JOB_ID);
 
     let outcome = consume::attempt(
@@ -1606,13 +1606,13 @@ async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
 
     let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
     assert_eq!(span.field("messaging.message.id").as_deref(), Some(JOB_ID));
-    assert_eq!(span.field("backend_id").as_deref(), Some("apalis-7"));
+    assert_eq!(span.field("backend_id").as_deref(), Some("1767225600000-0"));
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
         nest_rs_queue::unit::JOB.name(),
     );
     assert_eq!(line.field("job_id").as_deref(), Some(JOB_ID));
-    assert_eq!(line.field("backend_id").as_deref(), Some("apalis-7"));
+    assert_eq!(line.field("backend_id").as_deref(), Some("1767225600000-0"));
 }
 
 /// A record no push of this release wrote names no id: the delivery mints one,

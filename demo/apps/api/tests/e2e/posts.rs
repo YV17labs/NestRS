@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use features::notifications::NotificationsQueueModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
+use nest_rs::queue::{QueueModule, QueueWorker};
+use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::TestApp;
 use poem::http::header;
@@ -181,7 +182,7 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
         SeaOrmDatabaseModule,
         RedisModule::for_root(None),
         RedisQueueModule,
-        RedisWorkerModule::for_root(None),
+        QueueModule::for_root(None),
         NotificationsQueueModule,
     ],
 )]
@@ -199,9 +200,9 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
         .await
         .expect("the notifications worker boots against the ephemeral DB and Redis");
     let worker_queue = worker
-        .spawn_transport(RedisWorker::new())
+        .spawn_transport(QueueWorker::new())
         .await
-        .expect("the worker's RedisWorker drains the notifications queue");
+        .expect("the worker's QueueWorker drains the notifications queue");
 
     let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
     let org_a = create_org(&app, &bootstrap, "NotifyAcme").await;
@@ -320,5 +321,5 @@ async fn publishing_a_post_notifies_the_org_through_the_worker() {
     worker_queue
         .shutdown()
         .await
-        .expect("the worker's RedisWorker stops cleanly");
+        .expect("the worker's QueueWorker stops cleanly");
 }

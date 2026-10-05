@@ -252,7 +252,7 @@ well. With the connection's `PING`, which proves it at boot, and the `SELECT` of
 database its URL names, a Redis user for the rate limiter is this rule and nothing
 more:
 
-```text title="Redis ACL"
+```text title="Redis ACL — rate limiter"
 ACL SETUSER <user> on ><password> resetchannels ~nestrs:throttler:* +ping +select +evalsha +script|load +incr +pttl +pexpire
 ```
 

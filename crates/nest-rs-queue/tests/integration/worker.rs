@@ -357,7 +357,7 @@ async fn a_settle_that_errs_is_retried_while_its_lease_holds() {
     assert!(
         logs.find(
             nest_rs_queue::TARGET,
-            "job outcome not recorded; the job runs again once its lease lapses",
+            "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
         )
         .is_empty()
     );
@@ -378,7 +378,7 @@ async fn a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease()
     // says so again.
     let said = logs.find(
         nest_rs_queue::TARGET,
-        "job outcome not recorded; the job runs again once its lease lapses",
+        "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
     );
     assert!(!said.is_empty(), "the lost outcome is said");
     assert!(said.iter().all(|line| line.level == "error"));

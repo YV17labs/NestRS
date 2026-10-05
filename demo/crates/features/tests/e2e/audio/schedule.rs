@@ -6,9 +6,9 @@ use anyhow::Result;
 use features::audio::{AudioQueue, AudioScheduleModule, TranscodeCommand};
 use features::testing::RedisDatabase;
 use nest_rs::core::{injectable, module};
-use nest_rs::queue::processor;
+use nest_rs::queue::{QueueModule, QueueWorker, processor};
 use nest_rs::redis::{
-    RedisModule, RedisQueueModule, RedisScheduleModule, RedisWorker, RedisWorkerModule,
+    RedisModule, RedisQueueModule, RedisScheduleModule,
 };
 use nest_rs::schedule::{ScheduleModule, Scheduler};
 use nest_rs::testing::TestApp;
@@ -58,7 +58,7 @@ impl CountingProcessor {
 struct ScheduleHarness;
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
     providers = [CountingProcessor],
 )]
 struct CountingWorkerHarness;
@@ -74,9 +74,9 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
         .await
         .expect("the counting worker boots against Redis");
     let worker_handle = worker
-        .spawn_transport(RedisWorker::new())
+        .spawn_transport(QueueWorker::new())
         .await
-        .expect("the RedisWorker drains the audio queue");
+        .expect("the QueueWorker drains the audio queue");
 
     let schedule = TestApp::builder()
         .module::<ScheduleHarness>()

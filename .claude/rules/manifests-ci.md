@@ -34,9 +34,9 @@ paths:
 - **Third-party versions live in `[workspace.dependencies]` only**; members
   write `dep = { workspace = true }`.
 - **Freshness**: a new crate has a release in about twelve months. One that
-  crosses the bar is flagged at its pin with the condition to move —
-  `apalis` / `apalis-redis` is the one kept past it. No fork, no vendoring, no
-  `[patch]` of a third-party crate: an upstream defect is reported upstream.
+  crosses the bar is flagged at its pin with the condition to move. No fork, no
+  vendoring, no `[patch]` of a third-party crate: an upstream defect is
+  reported upstream.
 - **Every third-party requirement is `major.minor`** (`"1.53"`, `"=2.0"`), in
   every manifest the repo owns or the CLI generates: the minor is the floor we
   build against, the patch is the publisher's. The majors that surface in the

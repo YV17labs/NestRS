@@ -1,14 +1,15 @@
-//! The queue port's producer half: [`RedisQueueProducer`] over the shared
-//! [`RedisConnection`](crate::RedisConnection), and the [`RedisQueueModule`]
-//! binding that registers it.
-//!
-//! One folder per port bound, like [`throttler`](crate::throttler) and
-//! [`worker`](crate::worker) beside it; what the three share — the connection
-//! and its config — sits at the crate root.
+//! The queue port's Redis binding: [`RedisQueueProducer`] files jobs, a
+//! consumer runs them under the port's worker, and [`RedisQueueModule`] binds
+//! both over the shared [`RedisConnection`](crate::RedisConnection). Every
+//! transition is one of [`scripts`]' Lua scripts.
 
+mod checkpoint;
+mod config;
+mod consumer;
 mod module;
 mod producer;
-mod promoter;
+mod scripts;
 
-pub use module::RedisQueueModule;
+pub use config::RedisQueueConfig;
+pub use module::{RedisQueueModule, RedisQueueSetup};
 pub use producer::RedisQueueProducer;

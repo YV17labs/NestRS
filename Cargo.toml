@@ -98,11 +98,8 @@ croner = "4.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 chrono-tz = "0.10"
 
-# Held at 0.7 until 7.0 drops apalis (.claude/decisions/queue-redis-streams.md): 1.0.0-rc.10
-# fixed apalis-redis#103, yet still errors on a worker re-registering within its threshold (#76).
-apalis = "0.7"
-apalis-redis = "0.7"
-# Must match apalis-redis's redis version.
+# Past the freshness bar, and its types are in `nest-rs-redis`'s API: 7.0 moves
+# it to 1.7 (.claude/decisions/queue-redis-streams.md).
 redis = { version = "0.32", default-features = false, features = [
     "aio",
     "connection-manager",
@@ -122,7 +119,6 @@ proc-macro-crate = "3.5"
 
 tempfile = "3.27"
 tokio-rustls = "0.26"
-tower = "0.5"
 libc = "0.2"
 
 # `=`: macro expansions call #[doc(hidden)] items semver does not cover.

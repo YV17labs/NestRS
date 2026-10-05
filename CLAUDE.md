@@ -1,7 +1,7 @@
 # CLAUDE.md — nestrs
 
 NestRS is a NestJS-style framework for Rust: modules, dependency injection and
-decorators (proc macros) over poem, sea-orm, async-graphql, rmcp and apalis.
+decorators (proc macros) over poem, sea-orm, async-graphql, rmcp and redis.
 Public repo: no machine-local paths or private references.
 
 This file is the map. The rules for a part of the tree live in
@@ -117,7 +117,6 @@ A name and its path say the same thing, and a name is judged in its set.
   (`decisions/forward-principal.md`).
 - **No TLS without verification**, in any client the framework opens.
 - **No queue promise stronger than at least once**; a handler is idempotent.
-- **No access to apalis's structures outside its public API.**
 
 ## Hard "no" — the project
 

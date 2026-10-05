@@ -11,7 +11,8 @@ use features::posts::{
 use features::testing::RedisDatabase;
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
+use nest_rs::queue::{QueueModule, QueueWorker};
+use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use nest_rs::worker::{JobContext, JobSettlement, JobTransaction};
@@ -36,7 +37,7 @@ struct PublishingHarness;
         SeaOrmDatabaseModule,
         RedisModule::for_root(None),
         RedisQueueModule,
-        RedisWorkerModule::for_root(None),
+        QueueModule::for_root(None),
         NotificationsQueueModule,
     ],
 )]
@@ -180,9 +181,9 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         .await
         .expect("the notifications worker boots against the same database and Redis");
     let draining = worker
-        .spawn_transport(RedisWorker::new())
+        .spawn_transport(QueueWorker::new())
         .await
-        .expect("the RedisWorker drains the notifications queue");
+        .expect("the QueueWorker drains the notifications queue");
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let mut seen = notifications(&conn).await;
@@ -195,7 +196,7 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
     draining
         .shutdown()
         .await
-        .expect("the worker's RedisWorker stops cleanly");
+        .expect("the worker's QueueWorker stops cleanly");
 
     assert_eq!(
         notifications(&conn).await,

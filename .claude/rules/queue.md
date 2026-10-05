@@ -72,64 +72,34 @@ contract (`.claude/decisions/queue-redis-streams.md`).
 ## Delivery is at least once
 
 `CLAUDE.md`'s hard "no" states the contract, and no rustdoc, line or page
-promises more; this is how the Redis backend keeps it.
+promises more; this is how the Redis backend keeps it, on Redis Streams
+(`.claude/decisions/queue-redis-streams.md`).
 
-- **The worker guards every delivery in keys of its own.** An attempt runs only
-  under the job's lease; its terminal outcome writes the settled mark and drops
-  the lease in one script; a delivery arriving while the lease is held is
-  **handed back, never acknowledged**; one arriving after the job settled is
-  acknowledged without running, answered as the first was, **while the mark
-  lasts**. The mark has one fixed span; a redelivery after it runs the job
-  again. **The guard may delay a job, never lose one**, and each step is one
-  script or one command (`.claude/decisions/queue-delivery-guard.md`).
-- **Nothing is kept forever, and nothing still owed lapses early.** A waiting
-  job's records live a fixed time past its due instant, renewed by every
-  delivery. A unique claim is held shorter until Redis confirms the filing, so a
-  push that never learns whether its job was queued does not block every retry
-  under the key — said at `warn`, erring toward at least once.
-- **apalis never retries, and never ends a job, on its own.** A dead letter is
-  apalis's `Abort`; a retry, a held lease, a throttle window and a shutdown
-  re-file the job on the schedule (scheduled first, out of flight second), never
-  a wait holding a permit. apalis's own attempt cap is lifted on every record the
-  adapter files (`LIFTED_CAP`), and a unit test pins the serde field names it is
-  written through.
-- **A shutdown stays inside `shutdown_timeout`.** The worker stops fetching,
-  lets attempts run for the window less a reserve, then interrupts and hands
-  each job back, due at once for another replica. An interrupted attempt **gives
-  its start back first**, the one write whose loss costs the job something;
-  nothing starts past the window; what the drain still waits on at its end is
-  said at `error`. The drain is the worker's own because apalis drops the
-  acknowledgement of a task ending while its worker drains. An interrupted
-  attempt files its line `cancelled` from the port.
-- **The Redis capabilities**, each in keys of its own and proved by its own e2e:
-  a delayed record is promoted by the producer that filed it and, at the
-  fetch's pace, by a worker for its own queue; a unique key is claimed
-  atomically before filing and released at settle or cancel — **at most once
-  over pushes, never a lock**; a cancel writes its tombstone only while no
-  attempt holds the lease, so `Ok(true)` means the job never starts; a throttle
-  is a fixed window per queue (no two replicas need agree on a clock, and a
-  window's edge can admit twice the limit, which the page says), and a refusal
-  shuts that replica's fetch for the method until the window ends; a checkpoint
-  is one key per job, cleared at its terminal outcome.
-
-## The apalis boundary
-
-apalis is the Redis job runtime the binding drives, not the port: no apalis
-type leaks, and a second backend implements the port without configuring apalis.
-The adapter crate is named for the storage a caller touches (`architecture.md`).
-
-- **apalis's structures are apalis's** (`CLAUDE.md`, hard "no"). The framework
-  reads and writes them only through apalis's public API, and files its own
-  records beside them under words apalis does not use. An apalis behaviour the framework cannot live with is
-  worked around in keys of its own and reported upstream.
-- **The fetch is apalis's**, and `buffer_size` and `poll_interval` are its only
-  levers short of a fork. The worker sizes the buffer to the method's
-  `concurrency`, capped where apalis's scripts stay safe (`MOST_PER_FETCH`), and
-  `poll_interval` stays under the orphan threshold, since apalis sweeps silent
-  peers on the poll. The ceiling this sets, and the idle cost of every poll, are
-  stated where the queue's scaling is documented.
-- **Redis Cluster is unsupported** — apalis's scripts touch keys across hash
-  slots — and the queue pages say so.
+- **Every transition is one script, fenced on the pending entry.** A write a
+  delivery makes — its outcome, a renewal, a checkpoint — first reads the
+  entry's owner and delivery count and writes nothing unless both are still
+  what the worker received; a reclaim bumps the count, a renewal never does.
+  The outcome, the filing of the job's next record and the release of what it
+  held are the one script, so there is no order between them to get wrong.
+- **No record outlives its job, and none needs an expiry.** The transition that
+  ends a job removes every record of it but its dead letter, so a job is never
+  delivered after it ended; a second delivery happens only once a lease lapsed
+  under a worker, and that worker's writes then land nowhere.
+- **Redis's clock decides when a job is due** (`TIME` in the script), never a
+  host's; the push measures a delay, the script anchors it.
+- **The floor is Redis 6.2, and every command is Valkey's too.** A later command
+  (`XACKDEL`, `XREADGROUP CLAIM`, `XNACK`) is an optimisation behind a check,
+  never the path. Recovery reads a bounded `XPENDING` page and `XCLAIM`s it:
+  `XAUTOCLAIM` answers 6.2's deleted entries as a nil with no id.
+- **One queue, one hash slot**: every key a script names is the queue's own.
+- **The Redis capabilities**, each proved by its own e2e: a delayed record waits
+  in `due` and is filed by any worker draining the queue; a unique key is
+  claimed in the script that files the job and released by the one that ends it
+  — **at most once over pushes, never a lock**; a cancel removes a job still
+  waiting, so `Ok(true)` means it never starts; a throttle is a fixed window per
+  queue counted before a read (a window's edge can admit twice the limit, which
+  the page says), a full one holding the replica's reads for the method; a
+  checkpoint is a field per job, written only by the delivery holding the job.
 
 ## The Redis connection
 
@@ -143,20 +113,19 @@ features because each pulls a port crate an app may not need.
   TLS settings, a refusal naming the deployment's own settings. **That list is an
   allow-list; every other answer is retried** within the connect budget, then
   fails naming the endpoint, never the URL, which may carry a password.
-- **Every command a caller waits on answers or fails within the budget.** A
-  command whose answer is the only record of what it claimed — the fetch, the
-  guard's admission — waits on the socket's liveness instead
-  (`RedisConnection::without_budget`, `container.md`). `nest-rs-redis` asserts
-  its default budget sits below every net it runs under.
+- **Every command a caller waits on answers or fails within the budget**, and
+  `nest-rs-redis` asserts its default budget sits below every net it runs under.
+  A blocking command gets a connection of its own from the same client
+  (`RedisConnection::dedicated`), bounded by its own wait plus the budget.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
   silently unused; verification is never an option (`CLAUDE.md`).
 - **The oldest Redis the docs claim is the oldest the e2e suite passed on at the
   release**, never one it has not run.
-- **Each binding's docs page prescribes its ACL rule whole** — its namespace,
-  the connection's commands, every command it or a script it runs sends,
-  apalis's included, and nothing else; one user per binding. Held by
-  `nest-rs-redis`'s e2e, which creates a user from the page's line verbatim and
-  reads `ACL LOG` for any denial.
+- **Each binding's docs page prescribes its ACL rule whole, per role** — its
+  namespace, the connection's commands, every command it or a script it runs
+  sends, and nothing else. Held by `nest-rs-redis`'s e2e, which creates each
+  user from the page's line verbatim, reads `ACL LOG` for any denial and, for
+  the queue, `MONITOR` for a command the rule allows and nothing sends.
 
 ## A key a datastore holds is a name an operator types
 
@@ -165,17 +134,17 @@ the naming law and is derived, not chosen:
 
 ```
 nestrs:<concern>:<structure>[:<member>]
-nestrs:queue:<queue>[:<structure>[:<job>]]
+nestrs:queue:{<queue>}:<structure>
 ```
 
 `<concern>` is the tail of the span target of the crate that **owns** the
 concern (`nest_rs::throttler` → `throttler`) — never `redis`, which writes them
-all and owns none. `<structure>` is one word, never the concern's own word again
-and never a word apalis uses inside a queue's namespace. `<member>` is what
-varies; a queue name holds no `:`. The queue puts its member first because
-apalis derives every structure from the one namespace it is handed per queue,
-so one queue is one prefix to `SCAN` and to scope an ACL. A key is the fourth
-surface of one derivation: crate, span target, `<PREFIX>_<CONCERN>__*`, key.
+all and owns none. `<structure>` is one word, never the concern's own word
+again. `<member>` is what varies; a queue name holds no `:` and no brace. The
+queue puts its member first, in a hash tag, so one queue is one prefix to
+`SCAN`, to scope an ACL, and one Cluster slot; a fact about one job is a field
+of a per-queue hash, never a key. A key is the fourth surface of one
+derivation: crate, span target, `<PREFIX>_<CONCERN>__*`, key.
 
 - **Every fixed part is a `const` opening with `nestrs:`**, declared by the crate
   that writes the key, and a varying key is built from exactly one such constant.

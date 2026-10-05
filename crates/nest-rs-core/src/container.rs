@@ -794,6 +794,32 @@ impl ContainerBuilder {
         )
     }
 
+    /// [`provide_declared_factory_after`](Self::provide_declared_factory_after)
+    /// for a factory that reads two other factories' outputs, `A` and `B` — a
+    /// binding with a config of its own over a shared connection is the shape.
+    pub fn provide_declared_factory_after_both<T, A, B, F, Fut>(
+        self,
+        remedy: &'static str,
+        factory: F,
+    ) -> Self
+    where
+        T: Any + Send + Sync,
+        A: Any,
+        B: Any,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue(
+            QueueSpec {
+                remedy: Some(remedy),
+                after: vec![TypeId::of::<A>(), TypeId::of::<B>()],
+                ..QueueSpec::default()
+            },
+            factory,
+            |builder, value| builder.provide(value),
+        )
+    }
+
     /// [`provide_factory_dyn`](Self::provide_factory_dyn) for a factory that
     /// reads another factory's output — `After` — from its snapshot. See
     /// [`provide_declared_factory_after`](Self::provide_declared_factory_after).

@@ -2,13 +2,14 @@
 //! is in `integration`, and the doubles both use in `harness`. One module per
 //! concern in `src/`: [`connection`] for the shared connection's boot, bound and
 //! recovery, [`tls`] for `rediss://`, [`throttler`] for the cross-process
-//! rate-limit store, [`layout`] for where a queue lives — its namespace, run by a
-//! user confined to the framework's keys — [`queue`] for the producer
-//! binding, [`worker`] for the consumer, [`correlation`] for the trace context
-//! that crosses the producer/consumer boundary, and [`schedule`] for the
-//! occurrence lock a job firing once across replicas claims through.
+//! rate-limit store, [`layout`] for where a queue lives — run by users confined
+//! to the framework's keys as the docs prescribe them — [`queue`] for the queue
+//! binding, its producer and its consumer under the port's worker, the
+//! behaviour kit every queue backend runs included, [`correlation`] for the
+//! trace context that crosses the producer/consumer boundary, and [`schedule`]
+//! for the occurrence lock a job firing once across replicas claims through.
 //!
-//! The URL comes from `NESTRS_REDIS__URL` (the dev container wires
+//! The URL comes from `<PREFIX>_REDIS__URL` (the dev container wires
 //! `redis://redis:6379`); unset, it falls back to that default. This file holds
 //! the suite's shared fixtures and nothing else.
 #![allow(
@@ -28,7 +29,6 @@ mod queue;
 mod schedule;
 mod throttler;
 mod tls;
-mod worker;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -36,9 +36,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::Transport;
+use nest_rs_queue::{QueueConfig, QueueWorker};
 use nest_rs_redis::{
-    RedisConfig, RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker,
-    RedisWorkerConfig,
+    RedisConfig, RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule,
+    RedisQueueProducer,
 };
 use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle};
 use tokio::net::{TcpListener, TcpStream};
@@ -78,14 +79,12 @@ fn redis_config() -> RedisConfig {
 /// The framework's are 9 to 15: the demo's suites run on the same Redis and
 /// hold 1 to 8, so a `FLUSHDB` here never reaches a job one of theirs filed.
 const DB_CONNECTION_DROP: u8 = 11;
-const DB_CONNECTION_RESET_MID_ATTEMPT: u8 = 10;
 const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
 const DB_TLS_FLUSH: u8 = 12;
 const DB_TLS_REFUSED_REOPEN: u8 = 13;
 /// Claims only: every scheduler the `schedule` tests boot claims here, so the
 /// key layout is asserted over the whole database.
 const DB_SCHEDULE: u8 = 14;
-const DB_UNIQUE_REFUSED: u8 = 15;
 
 // Two tests sharing a database meet each other's keys and connections, Redis
 // ships sixteen, and the demo holds the lower half: all three facts are checked
@@ -93,12 +92,10 @@ const DB_UNIQUE_REFUSED: u8 = 15;
 const _: () = {
     let dbs = [
         DB_CONFINED_TO_THE_PREFIX,
-        DB_CONNECTION_RESET_MID_ATTEMPT,
         DB_CONNECTION_DROP,
         DB_TLS_FLUSH,
         DB_TLS_REFUSED_REOPEN,
         DB_SCHEDULE,
-        DB_UNIQUE_REFUSED,
     ];
     let mut i = 0;
     while i < dbs.len() {
@@ -309,9 +306,9 @@ struct Replica {
     producer: RedisQueueProducer,
 }
 
-/// Boot the worker app `M` and start its worker — one replica. The app is
-/// leaked: the transport borrows the container it owns, the way a process would
-/// hold it.
+/// Boot the worker app `M` and start its worker — one replica, leasing for
+/// [`LEASE`] and draining within [`WINDOW`]. The app is leaked: the transport
+/// borrows the container it owns, the way a process would hold it.
 async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
     replica_of::<M>(TestApp::builder()).await
 }
@@ -319,7 +316,7 @@ async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
 /// [`replica`], reaching Redis as `redis` says whatever the environment says:
 /// the config is seeded, which freezes it against the deployment's variables —
 /// the hermetic-test hatch, for a suite that needs a database or a user of its
-/// own while `NESTRS_REDIS__URL` points every other one at the shared Redis.
+/// own while `<PREFIX>_REDIS__URL` points every other one at the shared Redis.
 async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
     replica_of::<M>(TestApp::builder().provide(redis)).await
 }
@@ -327,7 +324,7 @@ async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Re
 async fn replica_of<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
 ) -> Replica {
-    let app = builder
+    let app = brisk(builder)
         .module::<M>()
         .build_headless()
         .await
@@ -339,7 +336,7 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
             .expect("RedisQueueModule binds the producer"),
     );
     let worker = app
-        .spawn_transport(RedisWorker::default())
+        .spawn_transport(QueueWorker::new())
         .await
         .expect("the queue worker transport starts");
     Box::leak(Box::new(app));
@@ -347,8 +344,8 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
 }
 
 /// A replica whose transport can die without a shutdown: aborting `serve`
-/// drops the worker where it stands — its deliveries, their leases' renewals,
-/// its heartbeat — the way a killed process does.
+/// drops the worker where it stands — its deliveries and their leases'
+/// renewals — the way a killed process does.
 struct Mortal {
     serving: tokio::task::JoinHandle<anyhow::Result<()>>,
     producer: RedisQueueProducer,
@@ -365,7 +362,7 @@ impl Mortal {
 /// Boot the worker app `M` like [`replica`], and run its worker on a task a
 /// test can abort.
 async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
-    let app = TestApp::builder()
+    let app = brisk(TestApp::builder())
         .module::<M>()
         .build_headless()
         .await
@@ -376,7 +373,7 @@ async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
             .get::<RedisQueueProducer>()
             .expect("RedisQueueModule binds the producer"),
     );
-    let mut worker = RedisWorker::default();
+    let mut worker = QueueWorker::new();
     worker
         .configure(app.container())
         .await
@@ -386,16 +383,21 @@ async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
     Mortal { serving, producer }
 }
 
-/// The worker settings the guard's suites run under: a lease of two seconds, so
-/// a job a dead replica held is free again within a test, and the shortest
-/// orphan threshold accepted — polling as a deployment does by default.
-fn brisk() -> RedisWorkerConfig {
-    RedisWorkerConfig {
-        shutdown_timeout: Duration::from_secs(2),
-        orphan_after: Duration::from_secs(5),
-        lease: Duration::from_secs(2),
-        ..Default::default()
-    }
+/// The lease every replica of the suite holds its deliveries for: short, so a
+/// job a dead replica held is free again within a test.
+const LEASE: Duration = Duration::from_secs(1);
+
+/// The drain window every replica of the suite stops within.
+const WINDOW: Duration = Duration::from_secs(2);
+
+/// `builder` with the suite's lease and drain window seeded — seeded rather
+/// than pinned, so the suite's own variables cannot move them.
+fn brisk(builder: nest_rs_testing::TestAppBuilder) -> nest_rs_testing::TestAppBuilder {
+    builder
+        .provide(RedisQueueConfig { lease: LEASE })
+        .provide(QueueConfig {
+            shutdown_timeout: WINDOW,
+        })
 }
 
 /// Poll `ready` until it holds or `within` elapses — the wait a live worker's
@@ -419,42 +421,6 @@ fn this_run() -> u64 {
         .map(|since| since.as_nanos() as u64)
         .unwrap_or_default()
         ^ u64::from(std::process::id())
-}
-
-/// Leave for `queue` what an earlier run of the suite, killed mid-job, leaves
-/// behind: a job of that run in the in-flight set of a consumer that no longer
-/// beats, with no settled mark — the state a starting replica's sweep, or a
-/// running one's once the threshold passes, hands back to this run's replica.
-/// `payload` is the job's, carrying a marker no test of this run chose.
-///
-/// A test that counts every job its queue holds, rather than its own run's,
-/// counts this one too: calling it first is what proves a test does not. Names
-/// are apalis's, read off its `Config`, so the ghost sits where apalis looks.
-async fn ghost(queue: &str, payload: serde_json::Value) {
-    use apalis::prelude::{Request, Storage};
-
-    let apalis = apalis_redis::Config::default().set_namespace(&namespace(queue));
-    let mut storage: apalis_redis::RedisStorage<serde_json::Value, RedisConnection> =
-        apalis_redis::RedisStorage::new_with_config(connect().await, apalis.clone());
-    let filed = storage
-        .push_request(Request::new(serde_json::json!({
-            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
-            "payload": payload,
-        })))
-        .await
-        .expect("an earlier run's job, filed as apalis files one");
-    let id = filed.task_id.to_string();
-    let consumer = format!("{}:ghost-{}", apalis.inflight_jobs_set(), this_run());
-    let _: () = redis::pipe()
-        .lrem(apalis.active_jobs_list(), 0, &id)
-        .ignore()
-        .sadd(&consumer, &id)
-        .ignore()
-        .zadd(apalis.consumers_set(), &consumer, 0)
-        .ignore()
-        .query_async(&mut connect().await)
-        .await
-        .expect("the job in flight under a consumer long silent");
 }
 
 /// When each attempt at a run's job started — and, for the suites that care,
@@ -507,68 +473,53 @@ impl Runs {
     }
 }
 
-/// Whether `event` names the job `id`.
-fn names(event: &CapturedEvent, id: &nest_rs_queue::JobId) -> bool {
-    event.field("job_id").as_deref() == Some(id.to_string().as_str())
+/// The key of the structure `structure` of the queue named `queue` —
+/// `…:jobs`, `…:unique` — spelled from the layout the documentation states
+/// rather than reached, since the crate keeps its layout private: a test that
+/// read the constant could not notice it moving.
+fn key_of(queue: &str, structure: &str) -> String {
+    format!("nestrs:queue:{{{queue}}}:{structure}")
 }
 
-/// The namespace the queue named `queue` lives under — spelled here rather than
-/// reached, since the crate keeps its layout private: a test that read the
-/// constant could not notice it moving.
-fn namespace(queue: &str) -> String {
-    format!("nestrs:queue:{queue}")
-}
-
-/// The length of the list a worker fetches `queue`'s jobs from — the one an
+/// How many jobs of `queue` sit on its stream, waiting or running — what an
 /// autoscaler reads.
-async fn waiting(queue: &str) -> i64 {
-    let mut admin = connect().await;
-    redis::cmd("LLEN")
-        .arg(format!("{}:active", namespace(queue)))
-        .query_async(&mut admin)
-        .await
-        .expect("LLEN")
-}
-
-/// The key of `member` in the structure `structure` under the queue named
-/// `queue` — `…:unique:<key>`, `…:checkpoints:<job>` — spelled from the layout
-/// the documentation states, like [`namespace`].
-fn key_of(queue: &str, structure: &str, member: &str) -> String {
-    format!("{}:{structure}:{member}", namespace(queue))
-}
-
-/// How long `key` has left, in milliseconds: `-2` when it is gone, `-1` when it
-/// never lapses.
-async fn pttl(key: &str) -> i64 {
-    redis::cmd("PTTL")
-        .arg(key)
+async fn filed(queue: &str) -> i64 {
+    redis::cmd("XLEN")
+        .arg(key_of(queue, "jobs"))
         .query_async(&mut connect().await)
         .await
-        .expect("PTTL")
+        .expect("XLEN")
 }
 
-/// What `key` holds, if it is there.
-async fn read(key: &str) -> Option<String> {
-    redis::cmd("GET")
-        .arg(key)
+/// The field `field` of the hash `structure` of `queue`, if it is there.
+async fn field_of(queue: &str, structure: &str, field: &str) -> Option<String> {
+    redis::cmd("HGET")
+        .arg(key_of(queue, structure))
+        .arg(field)
         .query_async(&mut connect().await)
         .await
-        .expect("GET")
+        .expect("HGET")
 }
 
-/// Remove every key under the queue named `queue` — what a test that files jobs
-/// no worker drains leaves behind.
-async fn forget(queue: &str) {
-    let mut admin = connect().await;
-    let keys: Vec<String> = redis::cmd("KEYS")
-        .arg(format!("{}:*", namespace(queue)))
-        .query_async(&mut admin)
+/// Every key the queue named `queue` holds, sorted.
+async fn keys_of(queue: &str) -> Vec<String> {
+    let mut keys: Vec<String> = redis::cmd("KEYS")
+        .arg(key_of(queue, "*"))
+        .query_async(&mut connect().await)
         .await
         .expect("KEYS");
+    keys.sort();
+    keys
+}
+
+/// Remove every key of the queue named `queue` — what a test that files jobs
+/// no worker drains leaves behind.
+async fn forget(queue: &str) {
+    let keys = keys_of(queue).await;
     if !keys.is_empty() {
         let _: i64 = redis::cmd("DEL")
             .arg(&keys)
-            .query_async(&mut admin)
+            .query_async(&mut connect().await)
             .await
             .expect("DEL");
     }
@@ -598,32 +549,37 @@ async fn producer() -> RedisQueueProducer {
 /// secret.
 const ACL_PASSWORD: &str = "nestrs-e2e-acl";
 
-/// The one Redis ACL rule the docs page `page` prescribes: the line of its
-/// `` ```text title="Redis ACL" `` block, read from the page itself.
-fn documented_acl(page: &str) -> String {
+/// The Redis ACL rule the docs page `page` prescribes for `role`: the line of
+/// its `` ```text title="Redis ACL — <role>" `` block, read from the page
+/// itself.
+fn documented_acl(page: &str, role: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/src/content/docs")
         .join(page);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("the page {} reads: {error}", path.display()));
+    let fence = format!("```text title=\"Redis ACL — {role}\"");
     let mut blocks = text
         .lines()
         .zip(text.lines().skip(1))
-        .filter(|(fence, _)| fence.trim() == "```text title=\"Redis ACL\"")
+        .filter(|(line, _)| line.trim() == fence)
         .map(|(_, rule)| rule.trim().to_owned());
-    let rule = blocks
-        .next()
-        .unwrap_or_else(|| panic!("{page} prescribes a Redis ACL in a block titled `Redis ACL`"));
-    assert!(blocks.next().is_none(), "{page} prescribes one Redis ACL");
+    let rule = blocks.next().unwrap_or_else(|| {
+        panic!("{page} prescribes a Redis ACL in a block titled `Redis ACL — {role}`")
+    });
+    assert!(
+        blocks.next().is_none(),
+        "{page} prescribes one Redis ACL for {role}"
+    );
     rule
 }
 
-/// Create `user` exactly as the page `page` prescribes — its rule sent as it is
+/// Create `user` exactly as the page `page` prescribes for `role` — its rule sent as it is
 /// written, the `<user>` and `<password>` placeholders filled and nothing added
 /// — and answer the config that reaches database `db` as that user, so the user
 /// a test runs as is the one the page tells an operator to create.
-async fn documented_user(page: &str, user: &str, db: u8) -> RedisConfig {
-    let rule = documented_acl(page);
+async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisConfig {
+    let rule = documented_acl(page, role);
     let tokens: Vec<String> = rule
         .split_whitespace()
         .map(|token| {

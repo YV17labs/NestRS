@@ -6,8 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for nest-rs: one shared connection (RedisModule), and one binding per port over it — the queue producer (RedisQueueModule), the RedisWorker consumer transport (RedisWorkerModule), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`). The user-facing storage is Redis; apalis is an implementation detail."
-keywords = ["framework", "nestrs", "redis", "queue", "apalis"]
+description = "Redis for nest-rs: one shared connection (RedisModule), and one binding per port over it — the job queue on Redis Streams (RedisQueueModule), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`)."
+keywords = ["framework", "nestrs", "redis", "queue", "streams"]
 categories = ["asynchronous", "database"]
 
 # docs.rs builds default features only, so a feature-gated item, and every
@@ -25,8 +25,8 @@ nest-rs-core.workspace = true
 # code reaches both this crate's Redis types AND the abstractions through
 # the same import root by depending on `nest-rs-queue` + `nest-rs-redis`.
 nest-rs-queue.workspace = true
-# `RedisModule` owns `RedisConfig` (namespace `redis`, `NESTRS_REDIS__*`) and
-# `RedisWorkerModule` owns `RedisWorkerConfig` (namespace `redis__worker`).
+# `RedisModule` owns `RedisConfig` (namespace `redis`, `<PREFIX>_REDIS__*`) and
+# `RedisQueueModule` owns `RedisQueueConfig` (namespace `redis__queue`).
 nest-rs-config.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
@@ -38,17 +38,6 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-# `limit`: `WorkerBuilderExt::concurrency` is how the consumer bounds a
-# `#[process]` method to the `concurrency` it declares — apalis 0.7 keeps polling
-# while its fetched batch is still running, so the fetch buffer alone bounds
-# nothing. No `retry`: the retry budget is the queue port's, and an apalis retry
-# layer would be a second one, counted where the method's is not.
-apalis = { workspace = true, features = ["timeout", "catch-panic", "limit"] }
-apalis-redis.workspace = true
-# The traits of the layer that holds a throttled method's worker unready while
-# its window is full, so it stops fetching: apalis builds its worker from tower
-# and re-exports neither `Layer` nor `Service`. Already in the tree through it.
-tower.workspace = true
 # `throttler` feature only: the shared `dyn ThrottlerStore` seam + config types
 # reused verbatim (the guard is transport-agnostic; only the backing store
 # changes), running the atomic fixed-window Lua script over the shared
@@ -58,15 +47,12 @@ nest-rs-throttler = { workspace = true, optional = true }
 # `replicas = "one"` claims its occurrences through, and the remedy sentence
 # every lock binding shares.
 nest-rs-schedule = { workspace = true, optional = true }
-# The user-facing Redis surface (`redis::RedisError`, the `aio::ConnectionLike`
-# `RedisConnection` implements, the command API a caller runs on it) is named
-# through the `redis` crate directly — apalis-redis only re-exports these
-# types, and the promise is "apalis types never leak". Unconditional: already
-# in the tree via apalis-redis (same 0.32 workspace pin, so one connection
-# type); the direct dep costs nothing.
+# The client every binding runs on, and the user-facing Redis surface
+# (`redis::RedisError`, the `aio::ConnectionLike` `RedisConnection` implements,
+# the command API a caller runs on it).
 redis = { workspace = true }
-# The worker's identity per replica and per queue, and each delivery's lease
-# holder: UUID v7, so an id also says when its worker started.
+# Each worker's consumer name in a queue's group: UUID v7, so a name also says
+# when its worker started.
 uuid.workspace = true
 # `rediss://`: the process-default crypto provider `redis` builds its client
 # with, installed when the app chose none; the client-certificate check run
@@ -85,8 +71,9 @@ schedule = ["dep:nest-rs-schedule"]
 
 [dev-dependencies]
 # A dead-lettered job that logs nothing passes every outcome assertion —
-# `LogCapture` covers the event half of the worker's contract.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `LogCapture` covers the event half of the worker's contract; `queue` is the
+# behaviour kit every queue backend runs.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["queue"] }
 # Self dev-dependency: the suite runs with `throttler` and `schedule` on.
 nest-rs-redis = { path = ".", features = ["throttler", "schedule"] }
 nest-rs-core = { path = "../nest-rs-core" }
@@ -102,10 +89,9 @@ nest-rs-schedule = { path = "../nest-rs-schedule" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
-tower.workspace = true
-# The suite plays a peer's orphan sweep through apalis's own
-# `reenqueue_orphaned`, which takes its cutoff as a `chrono` instant.
-chrono.workspace = true
+# The suite reads `MONITOR` as a stream, to hold each documented ACL rule to
+# the commands its binding sends.
+futures-util.workspace = true
 # The TLS server side the tests put in front of the client: the dev container's
 # Redis speaks plaintext, so `rediss://` meets a rustls listener presenting the
 # fixture certificates — the unit tests' refusing one, the suite's proxy.

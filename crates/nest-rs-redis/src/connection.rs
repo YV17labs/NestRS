@@ -4,9 +4,8 @@
 //! read it from the container rather than opening a socket of their own.
 //!
 //! **It is a connection, not a factory of them.** It implements
-//! [`ConnectionLike`], so apalis takes it as the connection its storage runs on,
-//! the rate limiter runs its script on a clone, and a caller's own command runs
-//! on one too. Underneath is one `redis` [`ConnectionManager`]: one multiplexed
+//! [`ConnectionLike`], so the queue and the rate limiter run their scripts on a
+//! clone, and a caller's own command runs on one too. Underneath is one `redis` [`ConnectionManager`]: one multiplexed
 //! socket, reopened behind its callers when Redis drops it.
 //!
 //! **Every command a caller waits on answers or fails within the connect
@@ -16,16 +15,10 @@
 //! out arrives as a timeout (`redis::RedisError::is_timeout`). Without the bound
 //! an outage held every caller: the rate limiter's request, a push, a cancel.
 //!
-//! **Except the commands whose late answer is the only record of what they
-//! did.** A worker's fetch moves the ids it claims into its replica's in-flight
-//! set and answers with their records: cut at the budget, it still runs, and the
-//! jobs it claimed wait in the flight of a replica that never received them —
-//! never run, never swept while that replica lives. So the worker reaches
-//! Redis through [`RedisConnection::without_budget`], on the same socket, and
-//! waits for those answers however late; what ends a wait on a Redis that is
-//! gone is the socket itself — its keepalive, and on Linux its
-//! `TCP_USER_TIMEOUT`, both at the budget and never under a second
-//! ([`liveness`]) — and the client reopening it.
+//! **A blocking command gets a connection of its own**
+//! ([`RedisConnection::dedicated`]), opened from the same client: on the shared
+//! socket it would stall every other caller for as long as it blocks. The
+//! worker's read of a queue is one, bounded by its own wait plus the budget.
 //!
 //! **What the URL and [`RedisTls`](crate::RedisTls) say about TLS holds for every
 //! connection the client opens**, the ones it reopens behind its callers
@@ -67,7 +60,7 @@ pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered �
 /// not run: a command Redis was holding still runs once Redis answers again,
 /// and its late reply goes to nobody while the next command gets its own.
 ///
-/// Every holder multiplexes over one socket and one session — apalis and the
+/// Every holder multiplexes over one socket and one session — the queue and the
 /// rate limiter included. Redis answers one connection's commands in order, so a
 /// **blocking command** (`BLPOP`, `WAIT`, a `SUBSCRIBE`) stalls every holder for
 /// as long as it blocks, and fails at the budget besides; and a **command that
@@ -78,9 +71,12 @@ pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered �
 #[derive(Clone)]
 pub struct RedisConnection {
     manager: ConnectionManager,
-    /// How long a command waits for its answer — `None` on the handle
-    /// [`without_budget`](Self::without_budget) returns.
-    budget: Option<Duration>,
+    /// How long a command waits for its answer.
+    budget: Duration,
+    /// The client the connection was opened from, which a
+    /// [`dedicated`](Self::dedicated) one is opened from too: same address,
+    /// same TLS material and verification.
+    client: redis::Client,
     /// TLS refusals met reopening the connection — `None` over plaintext, where
     /// no handshake can be refused.
     refusals: Option<Arc<TlsRefusals>>,
@@ -141,7 +137,7 @@ impl TlsRefusals {
     ///
     /// It carries no unit of work's trace, deliberately: the refusal is the
     /// connection's, met by every holder alike, and the command that happened to
-    /// meet it first — a request, a job, one of apalis's own loops — is not the
+    /// meet it first — a request, a job, a worker's read — is not the
     /// one it belongs to, any more than the boot's connection lines are.
     fn diagnose(self: &Arc<Self>) {
         if self.reported.load(Ordering::Relaxed) || self.diagnosing.swap(true, Ordering::Relaxed) {
@@ -267,7 +263,7 @@ impl RedisConnection {
                     )
                     .then(|| {
                         Arc::new(TlsRefusals {
-                            client,
+                            client: client.clone(),
                             endpoint,
                             budget,
                             reported: AtomicBool::new(false),
@@ -276,7 +272,8 @@ impl RedisConnection {
                     });
                     return Ok(Self {
                         manager,
-                        budget: Some(budget),
+                        budget,
+                        client,
                         refusals,
                     });
                 }
@@ -346,25 +343,33 @@ impl RedisConnection {
 }
 
 impl RedisConnection {
-    /// This connection with no budget on its commands: on the same socket, each
-    /// waits for its answer however late it comes.
-    ///
-    /// For the commands whose answer is the only record of what they did — a
-    /// fetch, which claims jobs for the replica it answers, and the admission
-    /// that takes a job's lease, counts its start and its throttle — a timeout
-    /// that cuts them does not undo them: it strands what they claimed. A Redis
-    /// that is gone still ends the wait, through the socket's liveness and the
-    /// client's reconnect, never through a timer that cannot tell slow from gone.
-    pub(crate) fn without_budget(&self) -> Self {
+    /// A connection of its own to the same Redis, opened from the same client —
+    /// for a command that blocks, which on the shared socket would stall every
+    /// other caller. Its commands keep this one's budget until
+    /// [`with_budget`](Self::with_budget) widens it.
+    pub(crate) async fn dedicated(&self) -> Result<Self, redis::RedisError> {
+        let manager = bounded(
+            self.budget,
+            ConnectionManager::new_with_config(self.client.clone(), manager_config(self.budget)),
+        )
+        .await??;
+        Ok(Self {
+            manager,
+            ..self.clone()
+        })
+    }
+
+    /// This connection, each command waiting `budget` for its answer — a
+    /// blocking command's own wait, plus the budget.
+    pub(crate) fn with_budget(&self, budget: Duration) -> Self {
         Self {
-            budget: None,
+            budget,
             ..self.clone()
         }
     }
 
-    /// How long a command on this handle waits for its answer — `None` on the
-    /// one [`without_budget`](Self::without_budget) returns.
-    pub(crate) fn budget(&self) -> Option<Duration> {
+    /// How long a command on this handle waits for its answer.
+    pub(crate) fn budget(&self) -> Duration {
         self.budget
     }
 }
@@ -375,7 +380,7 @@ impl ConnectionLike for RedisConnection {
         let refusals = self.refusals.as_ref();
         let call = self.manager.send_packed_command(cmd);
         Box::pin(async move {
-            let outcome = within(budget, call).await?;
+            let outcome = bounded(budget, call).await?;
             if let Some(refusals) = refusals {
                 refusals.observe(&outcome);
             }
@@ -393,7 +398,7 @@ impl ConnectionLike for RedisConnection {
         let refusals = self.refusals.as_ref();
         let call = self.manager.send_packed_commands(pipeline, offset, count);
         Box::pin(async move {
-            let outcome = within(budget, call).await?;
+            let outcome = bounded(budget, call).await?;
             if let Some(refusals) = refusals {
                 refusals.observe(&outcome);
             }
@@ -403,18 +408,6 @@ impl ConnectionLike for RedisConnection {
 
     fn get_db(&self) -> i64 {
         self.manager.get_db()
-    }
-}
-
-/// `call` within `budget` when the handle has one, and waited for whole when
-/// it has none.
-async fn within<F: Future>(
-    budget: Option<Duration>,
-    call: F,
-) -> Result<F::Output, redis::RedisError> {
-    match budget {
-        Some(budget) => bounded(budget, call).await,
-        None => Ok(call.await),
     }
 }
 
@@ -570,8 +563,8 @@ async fn prove(
 /// by the budget, as the boot's are, and the backoff between attempts doubling
 /// to the boot's ceiling rather than `redis`'s hundredfold. The reply timeout
 /// stays off, because [`RedisConnection`] bounds every command itself — the
-/// wait for a reopened connection included, which that timeout would miss — and
-/// the commands it must not bound are the ones the timeout would strand too.
+/// wait for a reopened connection included, which that timeout would miss —
+/// and a blocking command's wait is its own.
 fn manager_config(budget: Duration) -> ConnectionManagerConfig {
     ConnectionManagerConfig::new()
         .set_connection_timeout(budget)
@@ -580,9 +573,8 @@ fn manager_config(budget: Duration) -> ConnectionManagerConfig {
         .set_tcp_settings(liveness(budget))
 }
 
-/// How the socket learns that Redis is gone rather than slow, so a command
-/// waiting without a budget ([`RedisConnection::without_budget`]) ends when it
-/// is: keepalive probes once the socket has been idle for the budget, and on
+/// How the socket learns that Redis is gone rather than slow, so a connection
+/// the client holds open is reopened when it is: keepalive probes once the socket has been idle for the budget, and on
 /// Linux a `TCP_USER_TIMEOUT` of the budget, which drops the socket when what
 /// was sent has gone unacknowledged that long — a network that swallows
 /// packets, a host that vanished. A Redis that is only slow — paused, forking,

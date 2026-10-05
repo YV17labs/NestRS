@@ -207,3 +207,26 @@ Amended the same day by the owner: 7.0 is a new version and builds nothing for
 6.x. The read-only 6.x detector goes with its tests and its upgrade procedure;
 the upgrade guide says to drain each queue with its 6.x workers before 7.0
 workers take over, and 7.0 reads no 6.x key.
+
+## 2026-10-05 — landed, and what the code taught
+
+The rewrite landed as planned, with these choices the plan left open:
+
+- **Reclaim happens in a read, for free permits only.** A worker takes a lapsed
+  lease over only when it asks for jobs, and only as many as it can start: one
+  taken in an upkeep with no permit to run it would lapse again, unrenewed, and
+  spend a stall of the job's.
+- **The group starts at the stream's first entry** (`XGROUP CREATE … 0
+  MKSTREAM`), so jobs pushed before any worker started are read; a read meeting
+  `NOGROUP` — the stream deleted by hand or flushed — makes it again.
+- **A worker's consumer name is a UUID v7**, it leaves each group when it stops
+  holding nothing, and a consumer holding nothing and silent for an hour is
+  swept, so a crashed replica leaves no consumer behind for long.
+- **The throttle sends `GET`, `PTTL` and `SET` only**, and a deferral reads with
+  `HGET`: each command a rule allows must be one a role sends, so the ACL lines
+  are exact, which the suite proves through `MONITOR`.
+- **The binding's consumer reads two factory outputs** — the connection and its
+  config — so `nest-rs-core` gained
+  `ContainerBuilder::provide_declared_factory_after_both`; `after` took one type.
+- **A dead letter is filed back by one `EVAL` the delivery page prints**, run by
+  a test as printed.

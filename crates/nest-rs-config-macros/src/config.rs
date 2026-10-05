@@ -135,7 +135,7 @@ fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
             lit.span(),
             "#[config] `namespace` must be a lowercase env-domain segment \
              (start with a letter, then lowercase letters, digits, or underscores), \
-             e.g. \"seaorm\" or \"redis__worker\"",
+             e.g. \"seaorm\" or \"redis__queue\"",
         ))
     }
 }

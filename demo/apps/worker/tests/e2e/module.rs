@@ -4,7 +4,8 @@ use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
 use features::testing::RedisDatabase;
 use nest_rs::core::module;
 use nest_rs::queue::JobProducerExt;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker};
+use nest_rs::queue::QueueWorker;
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs::schedule::Scheduler;
 use nest_rs::testing::{EphemeralDatabase, HeadlessApp, TestApp};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
@@ -51,9 +52,9 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
         .await
         .expect("WorkerModule boots against the throwaway database and its own Redis database");
     let queue = worker
-        .spawn_transport(RedisWorker::new())
+        .spawn_transport(QueueWorker::new())
         .await
-        .expect("WorkerModule's RedisWorker configures against Redis");
+        .expect("WorkerModule's QueueWorker configures against Redis");
 
     let suites = TestApp::builder()
         .module::<SuitesProducer>()
@@ -80,7 +81,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
     queue
         .shutdown()
         .await
-        .expect("WorkerModule's RedisWorker stops cleanly");
+        .expect("WorkerModule's QueueWorker stops cleanly");
 
     assert!(ran, "the worker ran the job enqueued on its own database");
     assert_eq!(

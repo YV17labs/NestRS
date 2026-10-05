@@ -882,7 +882,7 @@ impl<C: JobConsumer> MethodRun<C> {
                             job_id = job.map(tracing::field::display),
                             disposition = disposition.name(),
                             error = %error,
-                            "job outcome not recorded; the job runs again once its lease lapses",
+                            "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
                         );
                         break;
                     }

@@ -1,11 +1,11 @@
 # nest-rs-redis
 
-Redis as one integration home: `RedisModule` opens the one shared connection (`NESTRS_REDIS__*`; `rediss://` for TLS, always verified), and one binding per port sits beside it — `RedisQueueModule` (the portable `dyn JobProducer`, via apalis-redis), `RedisWorkerModule` (the `RedisWorker` consumer transport), `RedisThrottlerModule` (the rate-limit store shared across replicas), and `RedisScheduleModule` (the occurrence lock a scheduled job declared `replicas = "one"` claims through, so each occurrence fires on one replica). The user-facing storage is Redis; apalis is an implementation detail.
+Redis as one integration home: `RedisModule` opens the one shared connection (`<PREFIX>_REDIS__*`; `rediss://` for TLS, always verified), and one binding per port sits beside it — `RedisQueueModule` (the job queue on Redis Streams: the portable `dyn JobProducer`, and the consumer the queue port's worker runs), `RedisThrottlerModule` (the rate-limit store shared across replicas), and `RedisScheduleModule` (the occurrence lock a scheduled job declared `replicas = "one"` claims through, so each occurrence fires on one replica).
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 
 ```sh
-cargo add nest-rs --features redis                # connection + queue + worker
+cargo add nest-rs --features redis                # connection + queue
 cargo add nest-rs --features redis-throttler      # cross-process rate limiting
 cargo add nest-rs --features redis-schedule       # scheduled jobs that fire once across replicas
 ```

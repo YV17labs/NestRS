@@ -5,7 +5,7 @@ the cluster, and every app leaves this off by default.
 Why this exists at all when `autoscaling` above is simpler: a replica runs at
 most each `#[process]` method's `concurrency` attempts at once, and both demo
 processors spend them waiting on storage or the database, so CPU utilisation
-stays flat however deep the backlog gets. List length is the only signal that
+stays flat however deep the backlog gets. Stream length is the only signal that
 moves with the work.
 */}}
 {{- range $app, $_ := .Values.apps }}
@@ -37,7 +37,7 @@ spec:
     {{- range $cfg.keda.triggers }}
     - type: {{ .type }}
       metadata:
-        {{- if eq .type "redis" }}
+        {{- if eq .type "redis-streams" }}
         {{- if not (or (index .metadata "address") (index .metadata "addressFromEnv") (index .metadata "host")) }}
         address: {{ $.Values.keda.redis.address | quote }}
         {{- end }}

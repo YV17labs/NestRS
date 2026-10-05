@@ -140,7 +140,6 @@ schemars.workspace = true
 # test the Definition-of-done run never compiled, and raising any constant
 # passed the whole suite. Path-only, so publishing drags none of them.
 nest-rs-opentelemetry = { path = "../nest-rs-opentelemetry" }
-nest-rs-redis = { path = "../nest-rs-redis" }
 nest-rs-schedule = { path = "../nest-rs-schedule" }
 
 [lints]

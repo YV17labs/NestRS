@@ -215,20 +215,17 @@ apps:
     #    I/O (an S3 round-trip, one INSERT), so a pod draining a huge backlog
     #    sits near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling`
     #    on only if your own processor is genuinely CPU-bound.
-    # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
-    #    that matches all registered consumers — a scale-up puts its peers'
-    #    in-flight jobs back on the queue. Each job's lease makes that second
-    #    delivery wait out the first, and its settled mark usually drops it
-    #    after, so a scale-up mostly delays them. Usually: the queue is
+    # 2. A scale-up never moves a peer's jobs: a job changes hands only once
+    #    the lease of the worker holding it lapsed. The queue is still
     #    at-least-once, so a handler stays idempotent.
     autoscaling:
       enabled: false
     # Queue depth, the signal that actually reflects a backlog. Needs KEDA in
     # the cluster. `minReplicaCount: 1` on purpose — see `keda.redis` below.
-    # A trigger's `listLength` is the backlog one replica is sized for, so it
+    # A trigger's `streamLength` is the backlog one replica is sized for, so it
     # moves with the method's `concurrency`: a replica runs four transcodes at
-    # once, and 20 waiting is the same five per running transcode that 5 was
-    # when it ran one.
+    # once, and 20 on the stream is the same five per running transcode that 5
+    # was when it ran one.
     keda:
       enabled: false
       minReplicaCount: 1
@@ -236,14 +233,14 @@ apps:
       pollingInterval: 20
       cooldownPeriod: 300
       triggers:
-        - type: redis
+        - type: redis-streams
           metadata:
-            listName: nestrs:queue:audio:active
-            listLength: "20"
-        - type: redis
+            stream: "nestrs:queue:{audio}:jobs"
+            streamLength: "20"
+        - type: redis-streams
           metadata:
-            listName: nestrs:queue:notifications:active
-            listLength: "20"
+            stream: "nestrs:queue:{notifications}:jobs"
+            streamLength: "20"
 
 # --- KEDA ---------------------------------------------------------------------
 # KEDA connects to Redis itself, from the operator — not through the app's env.
@@ -251,12 +248,10 @@ apps:
 #
 # Why minReplicaCount defaults to 1 rather than 0: a job held back — a retry
 # waiting for its backoff, a delayed push — waits on
-# `nestrs:queue:<queue>:scheduled`, which the trigger does not read, and only a
-# running worker (or the producer that filed it, while it has delayed jobs
-# ahead) moves it onto the list the trigger reads. With no worker running, a
-# retry therefore waits for the next push to wake the deployment, and nothing
-# recovers the jobs a pod that died mid-job held. Every demo job retries. Set it
-# to 0 knowingly.
+# `nestrs:queue:{<queue>}:due`, which the trigger does not read, and only a
+# running worker files it on the stream the trigger reads. With no worker
+# running, a retry therefore waits for the next push to wake the deployment.
+# Every demo job retries. Set it to 0 knowingly.
 keda:
   redis:
     address: ""

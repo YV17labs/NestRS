@@ -1,17 +1,13 @@
-//! C2: `RedisQueueModule` must bind the **portable** producer name too.
-//!
-//! `/queue/producing-jobs/` tells a feature to inject `Arc<dyn JobProducer>`,
-//! and `/queue/writing-a-driver/` states the dyn binding as the contract every
-//! driver owes. The first-party Redis driver used to seed only the concrete
-//! type, so the documented portable form compiled and then died at boot with
-//! `unmet dependency: dyn JobProducer`. Both names must resolve from one
-//! connection — the one `RedisModule::for_root` opens.
+//! `RedisQueueModule` binds the **portable** names: `/queue/producing-jobs/`
+//! tells a feature to inject `Arc<dyn JobProducer>`, and the port's worker runs
+//! the `BoundConsumer` — both from the one connection `RedisModule::for_root`
+//! opens, whether the binding is a bare import or a `for_root`.
 
 use std::sync::Arc;
 
 use nest_rs_core::{App, module};
-use nest_rs_queue::{JobProducer, JobProducerExt};
-use nest_rs_redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
+use nest_rs_queue::{BoundConsumer, JobProducer, JobProducerExt};
+use nest_rs_redis::{RedisModule, RedisQueueConfig, RedisQueueModule, RedisQueueProducer};
 
 use crate::redis_config;
 
@@ -46,4 +42,30 @@ async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_
         .await
         .expect("the portable handle pushes onto the same connection");
     assert_eq!(receipt.queue().as_str(), "nest-rs-redis-e2e-portable");
+}
+
+#[module(imports = [
+    RedisModule::for_root(redis_config()),
+    RedisQueueModule,
+    RedisQueueModule::for_root(RedisQueueConfig { lease: std::time::Duration::from_secs(7) }),
+])]
+struct PinnedAndBareModule;
+
+/// A bare import and a `for_root` of the binding bind one producer and one
+/// consumer — the pin's config, never a contest between two bindings.
+#[tokio::test]
+async fn a_bare_import_beside_a_for_root_binds_once_with_the_pinned_config() {
+    let app = App::builder()
+        .module::<PinnedAndBareModule>()
+        .build()
+        .await
+        .expect("the two import sites boot as one binding");
+    assert!(app.container().get::<BoundConsumer>().is_some());
+    assert_eq!(
+        app.container()
+            .get::<RedisQueueConfig>()
+            .expect("the binding's config")
+            .lease,
+        std::time::Duration::from_secs(7),
+    );
 }

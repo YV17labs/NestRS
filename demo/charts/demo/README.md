@@ -62,7 +62,7 @@ from the framework's own source decide this:
 2. Kubernetes has no native queue-depth trigger. HPA reads CPU, memory, or an
    external metric that something else must publish — and `HPAScaleToZero` was
    alpha from 1.16 to 1.36. [KEDA](https://keda.sh) is the one moving part that
-   turns a list length into replicas.
+   turns a stream's length into replicas.
 
 ```yaml
 keda:
@@ -74,20 +74,21 @@ apps:
       enabled: true
 ```
 
-The triggers ship pre-wired to the demo's two queues. Each names the list a
-worker fetches from, `nestrs:queue:<queue>:active`, where `<queue>` is the name
-the `#[queue]` declaration gives it. Its `listLength` is the backlog one replica
-is sized for, so it moves with the method's `concurrency`: the audio trigger
-asks for a replica per 20 waiting because each one runs four transcodes at once.
+The triggers ship pre-wired to the demo's two queues, as `redis-streams`
+triggers on `streamLength`. Each names the stream a worker reads,
+`nestrs:queue:{<queue>}:jobs`, where `<queue>` is the name the `#[queue]`
+declaration gives it. Its `streamLength` is the backlog one replica is sized
+for, so it moves with the method's `concurrency`: the audio trigger asks for a
+replica per 20 on the stream because each one runs four transcodes at once.
 
-The trigger counts **waiting** jobs only. A fetch takes a job off `active`, so a
-replica busy with long transcodes reads as idle once the list drains, and KEDA
-may scale it down mid-job. The pod then drains: running jobs get the shutdown
-window, and what still runs when it closes is handed back to the queue and runs
-again, from the start, on another replica. Nothing is lost, but the work is
-done twice. Bound it with a scale-down stabilization window at least as long as
-a job — `keda.behavior`, rendered as the ScaledObject's
-`advanced.horizontalPodAutoscalerConfig.behavior`:
+The stream holds a job until it ends, so the trigger counts jobs **waiting and
+running**: a replica busy with long transcodes does not read as idle. KEDA can
+still scale a replica down mid-job when the backlog shrinks. The pod then
+drains: running jobs get the shutdown window, and what still runs when it closes
+is handed back to the queue and runs again, from the start, on another replica.
+Nothing is lost, but the work is done twice. Bound it with a scale-down
+stabilization window at least as long as a job — `keda.behavior`, rendered as
+the ScaledObject's `advanced.horizontalPodAutoscalerConfig.behavior`:
 
 ```yaml
 apps:
@@ -99,7 +100,7 @@ apps:
 ```
 
 — and keep `terminationGracePeriodSeconds` at least 8.5s above
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
 telemetry flush that follow the drain, raising both toward a job's
 length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
 
@@ -116,17 +117,14 @@ replica, whatever `maxReplicaCount` allows.
 Scale-to-zero is one value away and deliberately not the default:
 
 - a job held back — a retry waiting for its backoff, a delayed push — waits on
-  `nestrs:queue:<queue>:scheduled`, which the trigger does not read, and only a
-  running worker, or the producer that filed it while it has delayed jobs
-  ahead, moves it onto the list the trigger reads. Every demo job retries, so
-  at zero replicas a retry waits for the next push to wake the deployment;
-- at zero replicas nothing recovers the jobs a pod that died mid-job held,
-  until a replica starts.
+  `nestrs:queue:{<queue>}:due`, which the trigger does not read, and only a
+  running worker files it on the stream the trigger reads. Every demo job
+  retries, so at zero replicas a retry waits for the next push to wake the
+  deployment.
 
-A scale-up is safe either way: a worker start puts its peers' in-flight jobs
-back on the queue, each job's lease makes that second delivery wait out the
-first, and its settled mark then acknowledges it without running. The queue is
-still at least once, so the handlers stay idempotent. Set it to 0 knowing that.
+A scale-up is safe either way: a worker never takes a job a peer holds until
+that peer's lease lapsed. The queue is still at least once, so the handlers stay
+idempotent. Set it to 0 knowing that.
 
 ## Graceful shutdown
 

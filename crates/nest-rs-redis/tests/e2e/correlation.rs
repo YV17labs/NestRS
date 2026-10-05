@@ -13,17 +13,14 @@
 //! and no shared process required for the logs to say so.
 //!
 //! The in-process envelope tests cover the shape; only a live worker shows the
-//! context survives Redis, apalis and the dispatch.
+//! context survives Redis and the dispatch.
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
-use nest_rs_queue::{JobProducerExt, processor, queue};
-use nest_rs_redis::{
-    RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker,
-    RedisWorkerModule,
-};
+use nest_rs_queue::{JobProducerExt, QueueModule, QueueWorker, processor, queue};
+use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +38,7 @@ struct Observed {
 /// A map rather than one slot, and the queue is the reason: its name is a
 /// compile-time literal, so every run of this test shares one Redis queue with
 /// every run before it — including runs that were killed mid-job and left work
-/// in `:active`. A single slot recorded whichever job the consumer happened to
+/// on its stream. A single slot recorded whichever job the consumer happened to
 /// reach first, which on a dirty queue is a *previous* run's, carrying that
 /// run's trace and this run's actor (the literal is the same every time). The
 /// result was a failure that read exactly like a broken propagation and was
@@ -81,7 +78,7 @@ impl CorrelationProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, QueueModule::for_root(None)],
     providers = [CorrelationProcessor],
 )]
 struct CorrelationModule;
@@ -95,7 +92,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
         .expect("a worker boots against the dev container Redis");
     app.init().await.expect("init phases");
     let worker = app
-        .spawn_transport(RedisWorker::default())
+        .spawn_transport(QueueWorker::new())
         .await
         .expect("the queue worker transport starts");
 

@@ -34,7 +34,7 @@
 //! The conformance suite holds every namespace of both workspaces outside the
 //! namespace half of every other, so no binary of the tree reports a sibling's
 //! variables. The same reading makes a key holding `__` under a known namespace
-//! a sub-namespace some other binary links (`redis__worker` under `redis`),
+//! a sub-namespace some other binary links (`redis__queue` under `redis`),
 //! reported only when it is a near miss of a key read here.
 //!
 //! A name with no `__` after the prefix holds no namespace, so it is compared
@@ -348,7 +348,7 @@ fn environment_names() -> BTreeSet<String> {
 
 /// The variables under `namespace` that name a key nothing read.
 ///
-/// A variable a longer linked namespace owns (`redis__worker` under `redis`) is
+/// A variable a longer linked namespace owns (`redis__queue` under `redis`) is
 /// that namespace's to judge. A key holding `__` is a sub-namespace this binary
 /// does not link — another binary's — and is reported only as a near miss.
 fn unread_keys(

@@ -97,9 +97,7 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   `<PREFIX>_REDIS__URL` outranks a pin field by field and would move the app
   back onto the shared database, or around a proxy the test put in front of
   it.
-- **What a test files where nothing drains, it names uniquely and deletes** —
-  unless deleting means writing apalis's keys outside its API (`CLAUDE.md`,
-  hard "no"); then it stays.
+- **What a test files where nothing drains, it names uniquely and deletes.**
 
 ## Decisions that bite
 

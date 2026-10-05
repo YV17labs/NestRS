@@ -1,5 +1,6 @@
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
+use nest_rs::queue::QueueModule;
+use nest_rs::redis::{RedisModule, RedisQueueModule};
 
 use crate::probe::Probe;
 use crate::processor::{C1Processor, C16Processor};
@@ -10,7 +11,7 @@ use crate::processor::{C1Processor, C16Processor};
     imports = [
         RedisModule::for_root(None),
         RedisQueueModule,
-        RedisWorkerModule::for_root(None),
+        QueueModule::for_root(None),
     ],
     providers = [Probe, C1Processor, C16Processor],
 )]

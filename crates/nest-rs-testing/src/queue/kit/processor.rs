@@ -1,5 +1,6 @@
-//! [`QueueKitProcessor`] — one `#[process]` method per case's queue, each
-//! declaring what its case proves, all doing what the job's [`Act`] says.
+//! The kit's processors — one per case, each with one `#[process]` method on
+//! its case's queue, declaring what the case proves, all doing what the job's
+//! [`Act`] says.
 
 use std::time::Duration;
 
@@ -12,67 +13,39 @@ use super::command::{
 };
 use super::probe;
 
-/// The kit's processor.
-#[injectable]
-#[derive(Default)]
-pub(crate) struct QueueKitProcessor;
+/// One processor per case, each with the one method its case's queue needs,
+/// declaring what the case proves.
+macro_rules! processors {
+    ($($processor:ident: $method:ident on $queue:ident $(, $key:ident = $value:literal)*;)+) => {
+        $(
+            #[doc = concat!("The processor of the case on `", stringify!($queue), "`.")]
+            #[injectable]
+            #[derive(Default)]
+            pub(crate) struct $processor;
 
-#[processor]
-impl QueueKitProcessor {
-    #[process(queue = OnceQueue)]
-    async fn once(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(OnceQueue::NAME, job).await
-    }
+            #[processor]
+            impl $processor {
+                #[process(queue = $queue $(, $key = $value)*)]
+                async fn $method(&self, job: KitCommand) -> anyhow::Result<()> {
+                    act($queue::NAME, job).await
+                }
+            }
+        )+
+    };
+}
 
-    #[process(queue = ConcurrencyQueue, concurrency = 3)]
-    async fn concurrency(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(ConcurrencyQueue::NAME, job).await
-    }
-
-    #[process(queue = RetryQueue, retries = 1)]
-    async fn retry(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(RetryQueue::NAME, job).await
-    }
-
-    #[process(queue = BudgetQueue, retries = 1)]
-    async fn budget(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(BudgetQueue::NAME, job).await
-    }
-
-    #[process(queue = DeathQueue)]
-    async fn death(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(DeathQueue::NAME, job).await
-    }
-
-    #[process(queue = TakenQueue)]
-    async fn taken(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(TakenQueue::NAME, job).await
-    }
-
-    #[process(queue = StallQueue)]
-    async fn stall(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(StallQueue::NAME, job).await
-    }
-
-    #[process(queue = DrainQueue, concurrency = 2)]
-    async fn drain(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(DrainQueue::NAME, job).await
-    }
-
-    #[process(queue = RenewalQueue)]
-    async fn renewal(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(RenewalQueue::NAME, job).await
-    }
-
-    #[process(queue = DelayQueue)]
-    async fn delay(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(DelayQueue::NAME, job).await
-    }
-
-    #[process(queue = TraceQueue)]
-    async fn trace(&self, job: KitCommand) -> anyhow::Result<()> {
-        act(TraceQueue::NAME, job).await
-    }
+processors! {
+    OnceProcessor: once on OnceQueue;
+    ConcurrencyProcessor: concurrency on ConcurrencyQueue, concurrency = 3;
+    RetryProcessor: retry on RetryQueue, retries = 1;
+    BudgetProcessor: budget on BudgetQueue, retries = 1;
+    DeathProcessor: death on DeathQueue;
+    TakenProcessor: taken on TakenQueue;
+    StallProcessor: stall on StallQueue;
+    DrainProcessor: drain on DrainQueue, concurrency = 2;
+    RenewalProcessor: renewal on RenewalQueue;
+    DelayProcessor: delay on DelayQueue;
+    TraceProcessor: trace on TraceQueue;
 }
 
 /// Run one attempt at `job` on `queue` as its [`Act`] says, reporting it.

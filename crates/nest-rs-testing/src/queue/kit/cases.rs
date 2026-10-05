@@ -3,6 +3,7 @@
 //! the contract promises — read off what the jobs' attempts reported and the
 //! lines the port filed.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,7 +20,7 @@ use super::command::{
     Act, BudgetQueue, ConcurrencyQueue, DeathQueue, DelayQueue, DrainQueue, KitCommand, OnceQueue,
     RenewalQueue, RetryQueue, StallQueue, TakenQueue, TraceQueue,
 };
-use super::module::QueueKitModule;
+use super::module::CaseModule;
 use super::probe::{self, Attempt};
 use crate::{HeadlessApp, LogCapture};
 
@@ -381,11 +382,12 @@ pub async fn a_job_runs_in_the_trace_that_pushed_it<B: KitBackend>(backend: B, l
     assert_eq!(kit.attempts(TraceQueue::NAME, 0)[0].trace, pushed_in);
 }
 
-/// One case's run against one backend.
-struct Kit<B> {
+/// One case's run against one backend, on the queue `C` marks.
+struct Kit<B, C> {
     backend: B,
     logs: LogCapture,
     run: u64,
+    case: PhantomData<fn() -> C>,
 }
 
 /// A worker of a case: its app, its transport's task, and the producer of the
@@ -397,26 +399,31 @@ struct Worker {
     _app: HeadlessApp,
 }
 
-impl<B: KitBackend> Kit<B> {
+impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
     /// Start a case on `queue`'s marker, its storage emptied first.
-    async fn begin<Q: Queue>(backend: B, logs: LogCapture, _queue: Q) -> Self {
+    async fn begin(backend: B, logs: LogCapture, _queue: C) -> Self {
         backend
-            .purge(&queue_name::<Q>())
+            .purge(&queue_name::<C>())
             .await
             .expect("the backend purges the case's queue");
         let run = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX))
             .unwrap_or_default();
-        Self { backend, logs, run }
+        Self {
+            backend,
+            logs,
+            run,
+            case: PhantomData,
+        }
     }
 
-    /// A worker over the backend, draining within `window`.
+    /// A worker over the backend, draining the case's queue within `window`.
     async fn worker(&self, window: Duration) -> Worker {
         let app = self
             .backend
             .app()
-            .module::<QueueKitModule>()
+            .module::<C::Module>()
             .provide(QueueConfig {
                 shutdown_timeout: window,
             })

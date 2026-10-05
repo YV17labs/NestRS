@@ -125,8 +125,8 @@ alias (a hand-rolled `*Setup` only to queue more). **A module owning no config
 gets no `for_root`** (`SocialModule` discovers providers that carry their own).
 
 **A `#[config]`'s namespace is its stem, read and never chosen**, minus plural
-role folders and a product's container: `redis/src/worker/config.rs` →
-`<PREFIX>_REDIS__WORKER__*`, `social/src/providers/github/config.rs` →
+role folders and a product's container: `redis/src/queue/config.rs` →
+`<PREFIX>_REDIS__QUEUE__*`, `social/src/providers/github/config.rs` →
 `<PREFIX>_SOCIAL__GITHUB__*`, `features/src/oauth/config.rs` →
 `<PREFIX>_OAUTH__*`; `<PREFIX>_DATABASE__URL` names neither crate nor type. One
 namespace, one type; `Config` names a `#[config]` only (a nested struct is

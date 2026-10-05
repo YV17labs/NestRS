@@ -98,7 +98,8 @@ croner = "4.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 chrono-tz = "0.10"
 
-# Held at 0.7: apalis-redis 1.0 loses workers after an unclean exit (apalis-redis#103).
+# Held at 0.7 until 7.0 drops apalis (.claude/decisions/queue-redis-streams.md): 1.0.0-rc.10
+# fixed apalis-redis#103, yet still errors on a worker re-registering within its threshold (#76).
 apalis = "0.7"
 apalis-redis = "0.7"
 # Must match apalis-redis's redis version.

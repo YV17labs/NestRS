@@ -12,3 +12,6 @@ threshold, ran passes the stop waited out past its window, and still missed an
 acknowledgement lost during a pass: machinery buying a promise the queue does not
 make. It was removed by decision. A redelivery after the mark lapses runs the job
 again, and the handler is idempotent.
+
+Superseded (2026-10-05) by `queue-redis-streams.md`: on Streams every transition
+is fenced on the pending entry, so the guard, its lease and its settled mark go.

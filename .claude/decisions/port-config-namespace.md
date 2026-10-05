@@ -17,3 +17,12 @@ Three earlier tests were rejected, so none is re-proposed:
 - reading the namespace off the file's path alone — mechanical, and it does name
   the variable, but it decides nothing about where the field should have been
   declared. The contract decides where; the path then gives the name.
+
+Extended (2026-10-05): a port that runs a transport of its own owns the settings
+that transport reads, as `HttpModule` owns `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`.
+With the consume loop in nest-rs-queue, the drain window is `QueueConfig` →
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, and it survives a backend swap. The QUEUE
+namespace returns for the port's own transport only: a connection never files
+under it, and `<PREFIX>_QUEUE__URL` stays retired. `RedisWorkerConfig` went with
+the worker folder; the adapter example is now `RedisQueueConfig` →
+`<PREFIX>_REDIS__QUEUE__*`.

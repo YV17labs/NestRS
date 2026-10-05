@@ -147,6 +147,17 @@ pub trait ThrottlerStore: Send + Sync + 'static {
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+
+    /// Whether this store's counters live in this process's memory alone. One
+    /// whose counters leave it — shared by every replica, kept by a backend —
+    /// is handed each bucket's subject as an HMAC under the deployment's
+    /// [`pseudonym_key`](crate::ThrottlerConfig::pseudonym_key), never the
+    /// client's address or identity, and the boot refuses it without that key.
+    /// `false` unless a store says otherwise, so a store that does not say keeps
+    /// no client.
+    fn in_process(&self) -> bool {
+        false
+    }
 }
 
 struct Window {
@@ -307,6 +318,10 @@ impl InMemoryThrottler {
 impl ThrottlerStore for InMemoryThrottler {
     async fn hit(&self, key: &str, limit: Throttle) -> Decision {
         Self::hit(self, key, limit)
+    }
+
+    fn in_process(&self) -> bool {
+        true
     }
 }
 

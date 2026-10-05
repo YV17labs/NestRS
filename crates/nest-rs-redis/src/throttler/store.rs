@@ -42,9 +42,10 @@ use crate::RedisConnection;
 /// connection URL.
 pub(crate) const BUCKETS: &str = "nestrs:throttler:buckets";
 
-/// The key `subject`'s window is counted in. The subject is the port's —
-/// `nest_rs_throttler` joins its parts with U+001F, so a route pattern's `:`
-/// never reads as a level here.
+/// The key `subject`'s window is counted in. The subject is the port's: this
+/// store keeps its counters outside the process, so it is handed the subject's
+/// pseudonym — hex digits, never the client's address or identity — and a `:`
+/// never reaches it.
 fn bucket(subject: &str) -> String {
     format!("{BUCKETS}:{subject}")
 }
@@ -142,11 +143,10 @@ impl ThrottlerStore for RedisThrottler {
 mod tests {
     use super::*;
 
-    /// The port's subject follows the structure verbatim, its separators
-    /// included.
+    /// The port's subject — a pseudonym — follows the structure verbatim.
     #[test]
     fn a_bucket_carries_the_subject_verbatim() {
-        let subject = "http\u{1f}/users/:id\u{1f}203.0.113.7";
+        let subject = "3f9c0e7a51d24b8896c1f0aa7d42e913";
         assert_eq!(bucket(subject), format!("{BUCKETS}:{subject}"));
     }
 }

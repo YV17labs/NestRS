@@ -3125,6 +3125,7 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-graphql",

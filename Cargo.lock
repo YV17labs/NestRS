@@ -3151,6 +3151,7 @@ dependencies = [
  "anyhow",
  "async-graphql",
  "async-trait",
+ "aws-lc-rs",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-graphql",

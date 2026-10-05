@@ -62,11 +62,16 @@ impl RatedController {
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(60),
+            pseudonym_key: None,
         }),
     ],
     providers = [RatedController],
 )]
 struct RatedModule;
+
+/// The key the suite's stores outside the process count under — a fixture,
+/// never a secret.
+const PSEUDONYM_KEY: &str = "nest-rs-throttler integration pseudonym key";
 
 /// The documented global wiring: the throttler in the app's imports, the guard
 /// in `use_guards_global`, nothing on the controller.
@@ -264,6 +269,7 @@ impl StalledController {
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
         }),
         StalledStoreModule,
     ],
@@ -277,6 +283,7 @@ struct StalledHttpModule;
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(60),
             window_secs: Some(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
         }),
         SlowStoreModule,
     ],
@@ -373,6 +380,7 @@ fn one_per_minute() -> ThrottlerConfig {
     ThrottlerConfig {
         limit: Some(1),
         window_secs: Some(60),
+        pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
     }
 }
 

@@ -240,6 +240,24 @@ producer. You add a line to move the counters off-process and remove none. A
 second vendor binding beside it is a named boot failure, never a silent
 last-one-wins.
 
+**Redis never holds a client.** A bucket's subject — the route and the client's
+address, the field and the actor — is personal data, and Redis keeps what it
+counts where a replica, a backup or a `SCAN` reads it. So a store whose counters
+leave the process counts each bucket under a pseudonym: the first 128 bits of an
+HMAC-SHA256 of its subject, in hex (`nestrs:throttler:buckets:3f9c…`), keyed by
+`<PREFIX>_THROTTLER__PSEUDONYM_KEY`. Set it to the same 32 bytes or more on every
+replica, as a secret:
+
+```bash frame="terminal"
+NESTRS_THROTTLER__PSEUDONYM_KEY_FILE=/run/secrets/throttler-pseudonym-key   # openssl rand -base64 32
+```
+
+Without it the boot refuses, naming the store and the variable: replicas keyed
+apart would each count their own buckets in the shared store. Changing it starts
+every bucket afresh, which costs a window at most. A key under 32 bytes is
+refused too, without being repeated — HMAC-SHA256's key is as strong as its
+length up to the hash's size (RFC 2104 §3).
+
 The counter is one Lua script — `INCR`, read the TTL with `PTTL`, set it with
 `PEXPIRE` on the first hit — so it is atomic across replicas with no
 check-then-act race. A backend failure
@@ -281,7 +299,11 @@ impl ThrottlerStore for MyThrottler {
 ```
 
 A store counts and nothing else. Which limit a route runs under is the port's
-policy, carried by the guard; your binding is a bare module that *declares*
+policy, carried by the guard, and so is what a store may keep: `in_process`
+defaults to `false`, so your store is handed pseudonyms and the boot asks for
+`<PREFIX>_THROTTLER__PSEUDONYM_KEY`, as Redis's does. A store whose counters never
+leave the process — another in-memory one — returns `true` and is handed each
+subject as it is. Your binding is a bare module that *declares*
 your store as the `dyn ThrottlerStore`
 (`provide_declared_factory_after::<Arc<dyn ThrottlerStore>, YourConnection, _, _>(BACKEND_REMEDY, …)`)
 so it supersedes the in-process default and contests a second vendor's by name.

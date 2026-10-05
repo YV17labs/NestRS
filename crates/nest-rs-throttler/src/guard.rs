@@ -22,6 +22,7 @@ use nest_rs_mcp::McpOperationContext;
 #[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 
+use crate::pseudonym::PseudonymStore;
 use crate::store::{Decision, HIT_TIMEOUT, ThrottlerStore};
 use crate::throttle::Throttle;
 
@@ -126,8 +127,6 @@ fn rate_limited(retry_after: Duration) -> Denial {
 /// binding is what an app swaps — never the guard.
 #[injectable]
 pub struct ThrottlerGuard {
-    #[inject]
-    throttler: Arc<dyn ThrottlerStore>,
     /// The limit a route that pins no `#[meta(Throttle)]` runs under — the
     /// port's policy, resolved from `ThrottlerConfig` and registered by
     /// `ThrottlerModule::for_root`. It lives on the guard and not on the store
@@ -139,18 +138,37 @@ pub struct ThrottlerGuard {
     /// composition fails the boot naming `Throttle` instead.
     #[inject]
     default: Arc<Throttle>,
+    /// The store, as [`ThrottlerGuard::new`] prepared it. Injected so the
+    /// container's own constructor cannot fill it: no provider registers a
+    /// [`CountingStore`], so a guard built by any path but `new` fails the boot
+    /// rather than hand a store outside the process the client's address.
+    #[inject]
+    throttler: Arc<CountingStore>,
 }
+
+/// The store a guard counts in: the bound store itself when its counters stay
+/// in this process, behind its pseudonyms otherwise ([`PseudonymStore::wrap`]).
+pub(crate) struct CountingStore(Arc<dyn ThrottlerStore>);
 
 impl ThrottlerGuard {
     /// Build the guard over a store, with the default limit for routes that pin
-    /// none. `ThrottlerModule` uses it to register the guard as global
+    /// none, counting under pseudonyms when the store's counters leave this
+    /// process ([`PseudonymStore::wrap`] — refused without `pseudonym_key`).
+    /// `ThrottlerModule` uses it to register the guard as global
     /// infrastructure, so `#[use_guards(ThrottlerGuard)]` needs nothing in the
     /// controller module's `providers`.
-    pub fn new(throttler: Arc<dyn ThrottlerStore>, default: Throttle) -> Self {
-        Self {
-            throttler,
+    pub(crate) fn new(
+        throttler: Arc<dyn ThrottlerStore>,
+        default: Throttle,
+        pseudonym_key: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             default: Arc::new(default),
-        }
+            throttler: Arc::new(CountingStore(PseudonymStore::wrap(
+                throttler,
+                pseudonym_key,
+            )?)),
+        })
     }
 
     /// Count one hit for `key` under `limit` on the edge `transport` names,
@@ -167,7 +185,8 @@ impl ThrottlerGuard {
     /// first poll, so the default path pays neither the clock read nor the timer
     /// entry a bound costs.
     async fn count(&self, transport: &'static str, key: &str, limit: Throttle) -> Decision {
-        let mut hit = pin!(self.throttler.hit(key, limit));
+        let store = &*self.throttler.0;
+        let mut hit = pin!(store.hit(key, limit));
         if let Poll::Ready(decision) = poll_fn(|cx| Poll::Ready(hit.as_mut().poll(cx))).await {
             return decision;
         }
@@ -177,7 +196,7 @@ impl ThrottlerGuard {
                 tracing::warn!(
                     target: crate::TARGET,
                     transport,
-                    store = ThrottlerStore::name(&*self.throttler),
+                    store = ThrottlerStore::name(store),
                     waited_ms = u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
                     "throttler store did not answer within the guard's timeout; denying \
                      (fail-closed)",
@@ -500,9 +519,88 @@ fn warn_shared_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static 
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::net::{IpAddr, SocketAddr};
 
     use super::*;
+    use crate::DEFAULT_THROTTLE;
+
+    /// A store whose counters leave this process — what the trait presumes of
+    /// any store — recording every key it is handed.
+    #[derive(Default)]
+    struct Recording(parking_lot::Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl ThrottlerStore for Recording {
+        async fn hit(&self, key: &str, _limit: Throttle) -> Decision {
+            self.0.lock().push(key.to_owned());
+            Decision::allowed()
+        }
+    }
+
+    /// A request from `peer` — what poem's builder cannot set, so the parts are
+    /// assembled directly.
+    fn from_peer(peer: &str) -> Request {
+        use poem::Addr;
+        use poem::web::{LocalAddr, RemoteAddr};
+
+        let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
+        let (parts, ()) = poem::http::Request::new(()).into_parts();
+        Request::from_parts(
+            (
+                parts,
+                LocalAddr::default(),
+                RemoteAddr(Addr::socket(socket)),
+                poem::http::uri::Scheme::HTTP,
+            )
+                .into(),
+            poem::Body::empty(),
+        )
+    }
+
+    const KEY: &str = "a pseudonym key of at least 32 bytes, for tests";
+
+    /// A client's address is personal data, and a store outside this process
+    /// keeps what it is handed where a backup, a replica or a `SCAN` reads it:
+    /// the key it counts under carries neither the address nor the route, and
+    /// one client keeps one bucket.
+    #[tokio::test]
+    async fn a_client_address_never_reaches_a_store_outside_the_process() {
+        let store = Arc::new(Recording::default());
+        let guard = ThrottlerGuard::new(store.clone(), DEFAULT_THROTTLE, Some(KEY))
+            .expect("a store outside the process boots with a key");
+        for peer in ["203.0.113.7", "203.0.113.7", "203.0.113.8"] {
+            guard
+                .check_http(&mut from_peer(peer))
+                .await
+                .expect("a hit under the limit is allowed");
+        }
+        let keys = store.0.lock();
+        assert_eq!(keys.len(), 3, "{keys:?}");
+        assert!(
+            keys.iter()
+                .all(|key| !key.contains("203.0.113") && !key.contains('/')),
+            "{keys:?}"
+        );
+        assert_eq!(keys[0], keys[1], "one client, one bucket");
+        assert_ne!(keys[0], keys[2], "two clients, two buckets");
+    }
+
+    /// Without the key, replicas sharing the store would each count their own
+    /// buckets in it: the boot refuses, naming the variable and the store.
+    #[test]
+    fn a_store_outside_the_process_without_a_key_is_refused() {
+        let Err(refused) =
+            ThrottlerGuard::new(Arc::new(Recording::default()), DEFAULT_THROTTLE, None)
+        else {
+            panic!("a store outside the process must not run without a pseudonym key");
+        };
+        let said = refused.to_string();
+        assert!(
+            said.contains(&nest_rs_config::var_name("throttler", "PSEUDONYM_KEY"))
+                && said.contains("Recording"),
+            "{said}"
+        );
+    }
 
     fn ip(s: &str) -> IpAddr {
         s.parse().expect("test literal is an IP")

@@ -153,12 +153,16 @@ mod module {
 
     use crate::{redis_config, unique_key};
 
+    /// The key the suite's apps count under — a fixture, never a secret.
+    const PSEUDONYM_KEY: &str = "nest-rs-redis e2e throttler pseudonym key";
+
     /// A limit no default could produce, so the assertion below can only pass by
     /// way of this call.
     fn pinned_policy() -> ThrottlerSetup {
         ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(2),
             window_secs: Some(30),
+            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
         })
     }
 
@@ -207,6 +211,33 @@ mod module {
         assert!(
             !a.hit(&key, limit).await.allowed,
             "the third hit is denied — both apps counted against one budget",
+        );
+    }
+
+    #[module(imports = [
+        RedisThrottlerModule,
+        ThrottlerModule::for_root(None),
+        RedisModule::for_root(redis_config()),
+    ])]
+    struct KeylessThrottlerHost;
+
+    /// Redis keeps what it counts where a replica, a backup or a `SCAN` reads
+    /// it, so the binding counts under pseudonyms, and without the key every
+    /// replica shares there is none: the boot refuses, naming the variable.
+    #[tokio::test]
+    async fn the_redis_store_without_a_pseudonym_key_fails_the_boot() {
+        let Err(refused) = App::builder()
+            .module::<KeylessThrottlerHost>()
+            .build()
+            .await
+        else {
+            panic!("a Redis-backed throttler must not boot without a pseudonym key");
+        };
+        let said = format!("{refused:#}");
+        assert!(
+            said.contains(&nest_rs_config::var_name("throttler", "PSEUDONYM_KEY"))
+                && said.contains("RedisThrottler"),
+            "{said}"
         );
     }
 

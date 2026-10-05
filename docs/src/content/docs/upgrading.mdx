@@ -186,6 +186,7 @@ left running until they drain the 6.x jobs (step 7).
    | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
    | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
+   | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule::for_root` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
    | `JwtConfig`, from the authn crate | `nest_rs::authn::AuthnConfig`, with the same fields and variables |
    | `AuthError::Unavailable(detail)` | `AuthError::Unavailable { detail, retry_after }`, rendered `503` |
    | `env.seconds("KEY", base)` in a `from_env` | a `DurationBounds::secs(…)` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
@@ -265,6 +266,11 @@ left running until they drain the 6.x jobs (step 7).
      under `~nestrs:schedule:*`; an app running several gives one user each rule.
      A dashboard or an ACL written for the rate limiter's 6.x keys
      follows it to `nestrs:throttler:buckets:*`.
+   - **The rate limiter on Redis** counts each bucket under a pseudonym keyed by
+     `<PREFIX>_THROTTLER__PSEUDONYM_KEY`: set it, the same 32 bytes or more on
+     every replica, or the boot refuses. 6.x's buckets, named by the client's
+     address, expire with their window; see
+     [Redis, shipped](/rate-limiting/#redis-shipped).
    - **TLS**: `rediss://` is verified against the URL's host.
      `<PREFIX>_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
      `TLS_KEY` a client certificate, each with its `_FILE` form, and `#insecure`

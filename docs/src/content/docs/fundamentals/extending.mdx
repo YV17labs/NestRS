@@ -116,7 +116,10 @@ It follows from the contract; nothing is arbitrated.
 **A port owns a config namespace if and only if its contract requires you to
 honour one.** The throttler's does, so `<PREFIX>_THROTTLER__LIMIT` and
 `<PREFIX>_THROTTLER__WINDOW_SECS` survive a backend swap unchanged — they are the
-policy every store honours, and your store reads them through the shared seam.
+policy every store honours, and your store reads them through the shared seam. A
+store whose counters leave the process adds the port's
+`<PREFIX>_THROTTLER__PSEUDONYM_KEY`: the port, not the store, keys each bucket
+under a pseudonym before any store sees it.
 The queue's does too: its worker is the port's, so the drain window,
 `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, is the same on every backend.
 

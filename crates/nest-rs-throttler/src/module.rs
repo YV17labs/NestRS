@@ -90,7 +90,14 @@ impl DynamicModule for ThrottlerSetup {
                          `ThrottlerModule::for_root` binds the in-process default"
                     )
                 })?;
-                Ok(ThrottlerGuard::new(store, *default))
+                #[expect(
+                    clippy::expect_used,
+                    reason = "provide_feature queued the config's factory in this module's collect"
+                )]
+                let config = container
+                    .get::<ThrottlerConfig>()
+                    .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
+                ThrottlerGuard::new(store, *default, config.pseudonym_key.as_deref())
             },
         )
     }
@@ -116,6 +123,7 @@ mod tests {
         let cfg = ThrottlerConfig {
             limit: Some(5),
             window_secs: None,
+            pseudonym_key: None,
         };
         let t = resolve(&cfg);
         assert_eq!(t.limit(), 5);

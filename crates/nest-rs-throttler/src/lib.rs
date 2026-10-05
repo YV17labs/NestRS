@@ -21,6 +21,7 @@ pub const TARGET: &str = "nest_rs::throttler";
 mod config;
 mod guard;
 mod module;
+mod pseudonym;
 mod store;
 mod throttle;
 

@@ -49,6 +49,9 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # by 2027-01-31 and the server moves (`.claude/decisions/http-server.md`).
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 rustls = "0.23"
+# The one crypto provider (deny.toml bans ring), named directly only where a
+# primitive is used outside TLS and JWT: the throttler's HMAC.
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
 
 object_store = { version = "0.14", features = ["aws"] }
 http = "1.5"

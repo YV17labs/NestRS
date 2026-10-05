@@ -35,7 +35,7 @@ ws = ["dep:nest-rs-ws", "dep:serde_json", "nest-rs-guards/ws"]
 # `ThrottlerGuard` is `#[injectable]`; `ThrottlerModule` is a `DynamicModule`.
 nest-rs-core.workspace = true
 # `ThrottlerModule` owns its `#[config]` (`ThrottlerConfig`, namespace `throttler`),
-# loaded from `NESTRS_THROTTLER__*`.
+# loaded from `<PREFIX>_THROTTLER__*`.
 nest-rs-config.workspace = true
 # `ThrottlerGuard` plugs into the Layer System (RateLimit category).
 nest-rs-guards.workspace = true
@@ -54,6 +54,9 @@ anyhow.workspace = true
 # The guard's bound on a store's answer (`HIT_TIMEOUT`): a store that never
 # answers is denied at it rather than holding the request for good.
 tokio.workspace = true
+# HMAC-SHA256 of each bucket's subject before a store outside the process sees
+# it — already in every build through rustls.
+aws-lc-rs.workspace = true
 
 # Optional — one per edge whose `check_*` entry names its operation type. An
 # HTTP-only app compiles none of them.

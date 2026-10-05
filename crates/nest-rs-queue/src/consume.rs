@@ -11,6 +11,7 @@
 //! [`JobConsumer`](crate::JobConsumer), and the worker calls these. Public, and
 //! hidden, so this crate's suite drives an attempt without a worker.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -451,17 +452,17 @@ pub async fn attempt(
     let attempt = delivery.attempt;
     let retries = method.options().retries();
     let last = attempt > retries;
-    // Only an attempt another may follow needs its own copy of the stored value.
+    // The last attempt takes the stored value; one another may follow reads it.
     let message = if last {
-        std::mem::take(&mut delivery.message)
+        Cow::Owned(std::mem::take(&mut delivery.message))
     } else {
-        delivery.message.clone()
+        Cow::Borrowed(&delivery.message)
     };
     let (payload, inherited, minted_trace, unversioned, unusable) = match newer {
         // Past its patience: nothing is opened, and the job's own trace is
         // what its dead letter is filed in.
         Some(_) => (
-            Ok(Value::Null),
+            Ok(Cow::Owned(Value::Null)),
             envelope::newer_trace(&message),
             false,
             false,
@@ -684,10 +685,12 @@ pub async fn refuse(
     let named = queue.and_then(|raw| QueueName::new(raw.to_owned()).ok());
     let job_id = message.and_then(|message| envelope::identify(message).id);
     let continued = match (message, named.as_ref()) {
-        (Some(message), Some(name)) => match envelope::open(message.clone(), name.as_str()) {
-            Ok(Opened::Sealed { correlation, .. }) => correlation,
-            _ => None,
-        },
+        (Some(message), Some(name)) => {
+            match envelope::open(Cow::Borrowed(message), name.as_str()) {
+                Ok(Opened::Sealed { correlation, .. }) => correlation,
+                _ => None,
+            }
+        }
         _ => None,
     };
     let correlation = continued.unwrap_or_else(|| Correlation::minted(None));
@@ -732,9 +735,9 @@ pub async fn refuse(
 }
 
 /// What an attempt runs on.
-enum Input {
+enum Input<'a> {
     /// The payload the envelope carried, for the handler.
-    Payload(Value),
+    Payload(Cow<'a, Value>),
     /// Nothing: the envelope was refused, and this is why.
     Refused(JobError),
     /// Nothing: the record was handed over `deliveries` times, and every
@@ -862,7 +865,7 @@ impl Drop for JobLine {
 /// per-job span and every event below.
 async fn run(
     handler: JobHandler,
-    input: Input,
+    input: Input<'_>,
     context: HandlerContext,
     identity: JobIdentity,
     last: bool,
@@ -1017,12 +1020,12 @@ mod tests {
         }
     }
 
-    type Handler = std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
+    type Handler<'a> = std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + 'a>>;
 
     async fn run_payload(handler: JobHandler, last: bool) -> AttemptOutcome {
         run(
             handler,
-            Input::Payload(serde_json::json!({})),
+            Input::Payload(Cow::Owned(serde_json::json!({}))),
             context(),
             identity(1),
             last,
@@ -1036,7 +1039,7 @@ mod tests {
     /// the same shape a deserialization failure does.
     #[tokio::test]
     async fn a_panicking_handler_is_dead_lettered_with_an_event() {
-        fn boom(_job: Value, _context: HandlerContext) -> Handler {
+        fn boom(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { panic!("deliberate panic for panic-2") })
         }
 
@@ -1076,7 +1079,7 @@ mod tests {
     /// re-run it; the rejection's per-field detail rides the event as `errors`.
     #[tokio::test]
     async fn a_dead_lettered_pipe_rejection_logs_its_field_errors() {
-        fn rejected(_job: Value, _context: HandlerContext) -> Handler {
+        fn rejected(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async {
                 Err(
                     JobError::abort("validation failed").with_details(Some(serde_json::json!({
@@ -1110,7 +1113,7 @@ mod tests {
     /// field — an empty one reads as "checked, nothing found".
     #[tokio::test]
     async fn a_dead_letter_without_detail_logs_no_errors_field() {
-        fn bare(_job: Value, _context: HandlerContext) -> Handler {
+        fn bare(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::abort("missing field `id`")) })
         }
 
@@ -1129,13 +1132,13 @@ mod tests {
     /// The outcomes that are not panics, pinned against each other.
     #[tokio::test]
     async fn every_other_outcome_keeps_its_own_event() {
-        fn ok(_job: Value, _context: HandlerContext) -> Handler {
+        fn ok(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Ok(()) })
         }
-        fn fatal(_job: Value, _context: HandlerContext) -> Handler {
+        fn fatal(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::abort("missing field `id`")) })
         }
-        fn transient(_job: Value, _context: HandlerContext) -> Handler {
+        fn transient(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("upstream timed out")) })
         }
 
@@ -1172,7 +1175,7 @@ mod tests {
     /// job succeeding on attempt four every time falls over.
     #[tokio::test]
     async fn a_retryable_failure_with_budget_left_is_reported_before_it_runs_again() {
-        fn flaky(_job: Value, _context: HandlerContext) -> Handler {
+        fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
         }
 
@@ -1208,7 +1211,7 @@ mod tests {
     /// backend's own line, on another target.
     #[tokio::test]
     async fn a_failure_event_carries_every_cause_beneath_the_error() {
-        fn wrapped(_job: Value, _context: HandlerContext) -> Handler {
+        fn wrapped(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async {
                 Err(JobError::retry(crate::QueueError::backend(
                     std::io::Error::other("Job not found"),
@@ -1234,14 +1237,14 @@ mod tests {
     /// every backend logged while each counted the budget for itself.
     #[tokio::test]
     async fn a_retryable_failure_on_the_last_attempt_dead_letters_and_says_the_budget_is_spent() {
-        fn flaky(_job: Value, _context: HandlerContext) -> Handler {
+        fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
         }
 
         let logs = LogCapture::install();
         let result = run(
             flaky,
-            Input::Payload(serde_json::json!({})),
+            Input::Payload(Cow::Owned(serde_json::json!({}))),
             context(),
             identity(4),
             true,
@@ -1264,7 +1267,7 @@ mod tests {
     /// dead-letters like any deterministic failure.
     #[tokio::test]
     async fn a_refused_envelope_never_reaches_the_handler() {
-        fn unreachable_handler(_job: Value, _context: HandlerContext) -> Handler {
+        fn unreachable_handler(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
             Box::pin(async { panic!("the handler must not run on a refused envelope") })
         }
 

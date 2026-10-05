@@ -8,6 +8,7 @@
 //! the span, the panic catch and the classification, and nothing would say so.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -18,14 +19,30 @@ use crate::checkpoint::CheckpointCell;
 use crate::{Capabilities, Capability, JobError, ProcessOptions};
 
 /// The type-erased handler `#[processor]` emits for each `#[process]` method:
-/// deserializes the job payload, resolves the provider, runs the method inside
-/// the ambient `JobContext`. Internal ABI between the decorator and the port's
-/// attempt.
+/// deserializes the job payload ([`decode`]), resolves the provider, runs the
+/// method inside the ambient `JobContext`. Internal ABI between the decorator
+/// and the port's attempt.
+///
+/// The payload is borrowed from the stored record while another attempt may
+/// follow, and handed over on the last, so no attempt copies the record.
 #[doc(hidden)]
 pub type JobHandler = fn(
-    payload: serde_json::Value,
+    payload: Cow<'_, serde_json::Value>,
     context: HandlerContext,
-) -> Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
+) -> Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + '_>>;
+
+/// The job a handler runs, out of `payload`: moved out of it when the attempt
+/// was handed the value, read from it when the value stays the record's.
+/// Internal ABI.
+#[doc(hidden)]
+pub fn decode<T: serde::de::DeserializeOwned>(
+    payload: Cow<'_, serde_json::Value>,
+) -> Result<T, serde_json::Error> {
+    match payload {
+        Cow::Owned(value) => serde_json::from_value(value),
+        Cow::Borrowed(value) => T::deserialize(value),
+    }
+}
 
 /// What one attempt hands the handler besides the payload. Internal ABI.
 #[doc(hidden)]
@@ -136,3 +153,24 @@ impl std::fmt::Debug for ProcessMethod {
 }
 
 ::nest_rs_core::inventory::collect!(ProcessMethod);
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Clip {
+        file: String,
+    }
+
+    /// A job decodes the same from a payload it reads and one it takes.
+    #[test]
+    fn a_job_decodes_from_a_borrowed_payload_as_from_an_owned_one() {
+        let payload = serde_json::json!({ "file": "song.wav" });
+        let read: Clip = super::decode(Cow::Borrowed(&payload)).expect("decodes");
+        let taken: Clip = super::decode(Cow::Owned(payload)).expect("decodes");
+        assert_eq!(read, taken);
+    }
+}

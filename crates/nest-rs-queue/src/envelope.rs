@@ -6,6 +6,8 @@
 //! renders nowhere, and this one is the interop contract a third-party driver
 //! reads.
 
+use std::borrow::Cow;
+
 use nest_rs_core::{Correlation, TraceParent, TraceState};
 use serde_json::{Map, Value, json};
 
@@ -416,13 +418,13 @@ fn sealed_whole(value: &Value) -> Map<String, Value> {
 }
 
 /// What a stored value turned out to be.
-pub(crate) enum Opened {
+pub(crate) enum Opened<'a> {
     /// A current envelope: the developer's payload, and what to run it under —
     /// the trace it carried, continued; a trace minted for the actor it named
     /// when the trace context beside it was missing or unusable; `None` when it
     /// carried neither.
     Sealed {
-        payload: Value,
+        payload: Cow<'a, Value>,
         correlation: Option<Correlation>,
         /// The trace carried is the one a consumer minted at the job's first
         /// attempt, not the producer's: continuing it joins the job's own trace
@@ -437,11 +439,11 @@ pub(crate) enum Opened {
         unusable: Unusable,
     },
     /// A value that is no envelope at all, decoded as the payload itself.
-    Unversioned(Value),
+    Unversioned(Cow<'a, Value>),
 }
 
 /// The shape, never the payload.
-impl std::fmt::Debug for Opened {
+impl std::fmt::Debug for Opened<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Sealed {
@@ -532,12 +534,12 @@ impl Unusable {
 /// The producer is trusted here, and only here: an envelope was written by *our
 /// own* push into infrastructure the deployment owns, which is what makes
 /// continuing its trace sound where an arbitrary HTTP caller's header is not.
-pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
-    let Value::Object(mut map) = value else {
+pub(crate) fn open<'a>(value: Cow<'a, Value>, queue: &str) -> Result<Opened<'a>, JobError> {
+    let Value::Object(map) = value.as_ref() else {
         return Ok(Opened::Unversioned(value));
     };
-    let Some(version) = envelope_version(&map) else {
-        return Ok(Opened::Unversioned(Value::Object(map)));
+    let Some(version) = envelope_version(map) else {
+        return Ok(Opened::Unversioned(value));
     };
     let current = u64::from(WIRE_FORMAT_VERSION);
     if version > current {
@@ -560,35 +562,32 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
             "unsupported job wire-format version {version} on queue `{queue}`; {remedy}",
         )));
     }
-    let payload = map.remove(PAYLOAD).unwrap_or(Value::Null);
-    let traceparent = map.remove(TRACEPARENT);
+    let traceparent = map.get(TRACEPARENT);
     let parent = traceparent
-        .as_ref()
         .and_then(Value::as_str)
         .and_then(TraceParent::parse);
-    let tracestate = map.remove(TRACESTATE);
+    let tracestate = map.get(TRACESTATE);
     let state = tracestate
-        .as_ref()
         .and_then(Value::as_str)
         .map(TraceState::adopt)
         .unwrap_or_default();
-    let minted = map.remove(TRACE_MINTED) == Some(Value::Bool(true)) && parent.is_some();
-    let actor = map.remove(ACTOR_ID);
-    let actor_id = actor.as_ref().and_then(usable_actor);
+    let minted = map.get(TRACE_MINTED) == Some(&Value::Bool(true)) && parent.is_some();
+    let actor = map.get(ACTOR_ID);
+    let actor_id = actor.and_then(usable_actor);
     // The job's identity was read by `identify` when the delivery was made; it
     // is looked at here only to say which of its keys the delivery did without.
     let unusable = Unusable {
-        id: map.remove(ID).is_some_and(|id| usable_id(&id).is_none()),
+        id: map.get(ID).is_some_and(|id| usable_id(id).is_none()),
         attempt: map
-            .remove(ATTEMPT)
-            .is_some_and(|attempt| usable_attempt(&attempt).is_none()),
+            .get(ATTEMPT)
+            .is_some_and(|attempt| usable_attempt(attempt).is_none()),
         traceparent: traceparent.is_some() && parent.is_none(),
         // A vendor state means something only beside the trace it rides with.
-        tracestate: parent.is_some() && tracestate.as_ref().is_some_and(unusable_tracestate),
+        tracestate: parent.is_some() && tracestate.is_some_and(unusable_tracestate),
         actor_id: actor.is_some() && actor_id.is_none(),
         unique_key: map
-            .remove(UNIQUE_KEY)
-            .is_some_and(|key| usable_unique_key(&key).is_none()),
+            .get(UNIQUE_KEY)
+            .is_some_and(|key| usable_unique_key(key).is_none()),
     };
     // The actor is **inherited, never re-derived**: a worker holds no credential
     // and cannot authenticate anyone, so what the enqueue knew is the only
@@ -599,6 +598,17 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
     let correlation = match parent {
         Some(parent) => Some(Correlation::continued(parent, state, actor_id)),
         None => actor_id.map(|actor| Correlation::minted(Some(actor))),
+    };
+    let payload = match value {
+        Cow::Borrowed(value) => value
+            .get(PAYLOAD)
+            .map_or(Cow::Owned(Value::Null), Cow::Borrowed),
+        Cow::Owned(mut value) => Cow::Owned(
+            value
+                .get_mut(PAYLOAD)
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        ),
     };
     Ok(Opened::Sealed {
         payload,
@@ -664,8 +674,8 @@ fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
 mod tests {
     use super::*;
 
-    fn opened(value: Value) -> Opened {
-        open(value, "audio").expect("opens")
+    fn opened(value: Value) -> Opened<'static> {
+        open(Cow::Owned(value), "audio").expect("opens")
     }
 
     fn under<F: std::future::Future>(
@@ -684,7 +694,7 @@ mod tests {
         assert!(!format!("{sealed:?}").contains("SECRET"), "{sealed:?}");
         let opened = opened(sealed.into_json());
         assert!(!format!("{opened:?}").contains("SECRET"), "{opened:?}");
-        let foreign = Opened::Unversioned(secret);
+        let foreign = Opened::Unversioned(Cow::Owned(secret));
         assert!(!format!("{foreign:?}").contains("SECRET"), "{foreign:?}");
     }
 
@@ -701,8 +711,31 @@ mod tests {
         else {
             panic!("a sealed job opens as sealed");
         };
-        assert_eq!(opened, payload);
+        assert_eq!(*opened, payload);
         assert!(correlation.is_some(), "and the context travelled with it");
+    }
+
+    /// An attempt another may follow reads the payload where the stored record
+    /// holds it, rather than a copy of the record; the last takes it.
+    #[test]
+    fn a_borrowed_record_opens_to_its_payload_in_place() {
+        let stored = seal(json!({ "file": "song.wav" }), JobId::mint(), None).into_json();
+        let Ok(Opened::Sealed {
+            payload: Cow::Borrowed(read),
+            ..
+        }) = open(Cow::Borrowed(&stored), "audio")
+        else {
+            panic!("a borrowed record opens to a borrowed payload");
+        };
+        assert!(std::ptr::eq(read, &stored[PAYLOAD]));
+        let Ok(Opened::Sealed {
+            payload: Cow::Owned(taken),
+            ..
+        }) = open(Cow::Owned(stored.clone()), "audio")
+        else {
+            panic!("an owned record opens to an owned payload");
+        };
+        assert_eq!(taken, stored[PAYLOAD]);
     }
 
     /// The whole point of the boundary crossing: the consumer runs inside the
@@ -819,7 +852,7 @@ mod tests {
             let Opened::Unversioned(value) = opened(bare.clone()) else {
                 panic!("{bare} is not an envelope");
             };
-            assert_eq!(value, bare, "nothing is reshaped");
+            assert_eq!(*value, bare, "nothing is reshaped");
         }
     }
 
@@ -840,7 +873,7 @@ mod tests {
             else {
                 panic!("{envelope} is an envelope");
             };
-            assert_eq!(payload, json!({ "clip": 1 }));
+            assert_eq!(*payload, json!({ "clip": 1 }));
             assert!(correlation.is_none(), "{envelope}");
         }
     }
@@ -850,7 +883,7 @@ mod tests {
     #[test]
     fn another_version_is_refused_naming_the_direction_of_the_release_gap() {
         let newer = open(
-            json!({ "v": u64::from(WIRE_FORMAT_VERSION) + 99, "payload": {} }),
+            Cow::Owned(json!({ "v": u64::from(WIRE_FORMAT_VERSION) + 99, "payload": {} })),
             "audio",
         )
         .expect_err("a newer version is refused");
@@ -864,7 +897,7 @@ mod tests {
 
         // Version 1 is the first this crate wrote, so 0 was never a release's:
         // the remedy cannot be to pin a consumer at it.
-        let foreign = open(json!({ "v": 0, "payload": {} }), "audio")
+        let foreign = open(Cow::Owned(json!({ "v": 0, "payload": {} })), "audio")
             .expect_err("a version below the first is refused")
             .to_string();
         assert!(
@@ -1089,7 +1122,7 @@ mod tests {
             let Opened::Sealed { payload, .. } = opened(json.clone()) else {
                 panic!("{json} is an envelope");
             };
-            assert_eq!(payload, json!({ "clip": 1 }), "the payload is kept whole");
+            assert_eq!(*payload, json!({ "clip": 1 }), "the payload is kept whole");
         }
     }
 

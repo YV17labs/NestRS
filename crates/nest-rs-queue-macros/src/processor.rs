@@ -292,17 +292,17 @@ fn emit_method(
         #[doc(hidden)]
         #[allow(non_snake_case)]
         fn #handler_ident(
-            __payload: ::nest_rs_queue::serde_json::Value,
+            __payload: ::std::borrow::Cow<'_, ::nest_rs_queue::serde_json::Value>,
             __context: ::nest_rs_queue::HandlerContext,
         ) -> ::std::pin::Pin<
             ::std::boxed::Box<
                 dyn ::std::future::Future<
                     Output = ::std::result::Result<(), ::nest_rs_queue::JobError>,
-                > + ::std::marker::Send,
+                > + ::std::marker::Send + '_,
             >,
         > {
             ::std::boxed::Box::pin(async move {
-                let __deser: #deser_ty = match ::nest_rs_queue::serde_json::from_value(__payload) {
+                let __deser: #deser_ty = match ::nest_rs_queue::decode(__payload) {
                     ::std::result::Result::Ok(j) => j,
                     ::std::result::Result::Err(e) => {
                         // Deterministic: the same bytes never deserialize on

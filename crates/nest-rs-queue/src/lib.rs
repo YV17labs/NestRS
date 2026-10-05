@@ -129,7 +129,7 @@ pub use envelope::{Envelope, WIRE_FORMAT_VERSION};
 pub use error::{JobError, QueueError};
 pub use inventory::ProcessMethod;
 #[doc(hidden)]
-pub use inventory::{HandlerContext, JobHandler};
+pub use inventory::{HandlerContext, JobHandler, decode};
 pub use job::Job;
 pub use job_id::JobId;
 pub use module::{QueueModule, QueueSetup};

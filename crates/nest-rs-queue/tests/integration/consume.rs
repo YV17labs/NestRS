@@ -1307,9 +1307,12 @@ async fn a_newer_release_job_naming_no_id_is_dead_lettered_at_once() {
 
 // --- discovery -----------------------------------------------------------------
 
-type Handled = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
+type Handled<'a> = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + 'a>>;
 
-fn never_runs(_payload: serde_json::Value, _context: HandlerContext) -> Handled {
+fn never_runs(
+    _payload: std::borrow::Cow<'_, serde_json::Value>,
+    _context: HandlerContext,
+) -> Handled<'_> {
     Box::pin(async { Ok(()) })
 }
 

@@ -13,6 +13,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      redis-tls:
+        condition: service_healthy
       rustfs:
         condition: service_healthy
 
@@ -43,6 +45,33 @@ services:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # A Redis speaking TLS alone, presenting the suite's service certificate:
+  # nest-rs-redis's e2e runs a queue against it, every connection verified.
+  redis-tls:
+    image: redis:8.6.3
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6380"
+      - --tls-cert-file
+      - /tls/tls_service.pem
+      - --tls-key-file
+      - /tls/tls_service.key.pem
+      - --tls-ca-cert-file
+      - /tls/tls_service_ca.pem
+      - --tls-auth-clients
+      - "no"
+    volumes:
+      - ../crates/nest-rs-redis/tests/harness/fixtures:/tls:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--cacert", "/tls/tls_service_ca.pem", "-p", "6380", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

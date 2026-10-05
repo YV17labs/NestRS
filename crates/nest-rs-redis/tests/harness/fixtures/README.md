@@ -1,8 +1,8 @@
 # TLS fixtures
 
-Throwaway material for the suites' TLS proxy (`tests/harness/tls.rs`) and the
-TLS unit tests, generated once with `openssl` and committed so the suites need
-no toolchain beyond cargo:
+Throwaway material for the suites' TLS proxy (`tests/harness/tls.rs`), the TLS
+Redis service and the TLS unit tests, generated once with `openssl` and
+committed so the suites need no toolchain beyond cargo:
 
 - `tls_ca.pem` — a self-signed CA the tests pin as the trust anchor. Its key was
   discarded after signing the three leaves below.
@@ -13,6 +13,11 @@ no toolchain beyond cargo:
   for `redis.invalid` only: trusted, and issued for a name the tests never dial.
 - `tls_client.pem` / `tls_client.key.pem` — a client certificate under the same
   CA, for the mutual-TLS case.
+- `tls_service_ca.pem` — a second self-signed CA, its key discarded too, for the
+  TLS Redis the suite runs against: the dev container's `redis-tls` service, and
+  CI's.
+- `tls_service.pem` / `tls_service.key.pem` — the leaf that Redis presents, for
+  `redis-tls`, `localhost` and `127.0.0.1`.
 
 These keys protect nothing. They are not valid for any real name, and nothing
 outside this crate's tests reads them.

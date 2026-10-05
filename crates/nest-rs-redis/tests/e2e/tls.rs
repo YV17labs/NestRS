@@ -1,15 +1,23 @@
-//! `rediss://` against a live Redis. The dev container's Redis speaks plaintext,
-//! so each test puts a TLS-terminating proxy in front of it, presenting a
-//! certificate the fixtures' test authority signed — `fixtures/README.md` says
-//! what each file is.
+//! `rediss://` against a live Redis. Most tests put a TLS-terminating proxy in
+//! front of the dev container's plaintext Redis, presenting a certificate the
+//! fixtures' test authority signed, so a test can refuse or swap what it
+//! presents; the queue runs against a Redis speaking TLS itself — the dev
+//! container's `redis-tls`, or the one `<PREFIX>_E2E__REDIS_TLS_URL` names. The
+//! fixtures' `README.md` says what each file is.
 
 use std::time::{Duration, Instant};
+
+use nest_rs_core::{injectable, module};
+use nest_rs_queue::{JobProducerExt, QueueModule, processor, queue};
+use nest_rs_redis::{RedisModule, RedisQueueModule};
+use serde::{Deserialize, Serialize};
 
 use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisError, RedisThrottler, RedisTls, RedisTlsIdentity,
 };
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
+use crate::Runs;
 use crate::harness::AT_ONCE;
 use crate::harness::tls::{AUTHORITY, TlsProxy, config, trusting_the_test_authority};
 
@@ -163,4 +171,105 @@ async fn a_certificate_refused_after_the_boot_is_reported_once_when_the_connecti
         "and what is wrong with the certificate: {:?}",
         event.fields
     );
+}
+
+/// The authority that signed the TLS Redis's certificate.
+const SERVICE_AUTHORITY: &[u8] = include_bytes!("../harness/fixtures/tls_service_ca.pem");
+
+/// The suite's TLS Redis, which speaks `rediss://` alone: the dev container's
+/// `redis-tls`, or the one `<PREFIX>_E2E__REDIS_TLS_URL` names — CI's.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the suite targets the TLS Redis the environment names"
+)]
+fn tls_redis_url() -> String {
+    std::env::var(nest_rs_config::var_name("e2e", "REDIS_TLS_URL"))
+        .unwrap_or_else(|_| "rediss://redis-tls:6380".to_owned())
+}
+
+/// The TLS Redis, trusting the authority that signed its certificate.
+fn tls_redis(ca_cert: Option<&[u8]>) -> RedisConfig {
+    RedisConfig {
+        url: tls_redis_url(),
+        tls: RedisTls {
+            ca_cert: ca_cert.map(<[u8]>::to_vec),
+            identity: None,
+        },
+        ..RedisConfig::default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SealedCommand {
+    run: u64,
+}
+
+static SEALED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-tls", job = SealedCommand)]
+struct SealedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct SealedProcessor;
+
+#[processor]
+impl SealedProcessor {
+    #[process(queue = SealedQueue)]
+    async fn run(&self, job: SealedCommand) -> anyhow::Result<()> {
+        SEALED.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
+    providers = [SealedProcessor],
+)]
+struct SealedModule;
+
+/// A queue runs end to end against a Redis speaking TLS itself: the push and
+/// the settle on the shared connection, and the worker's blocking read on a
+/// connection of its own, each a handshake verified against the configured
+/// authority — the server has no plaintext port to fall back to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
+    let run = crate::this_run();
+    let replica = crate::replica_on::<SealedModule>(tls_redis(Some(SERVICE_AUTHORITY))).await;
+    replica
+        .producer
+        .push(SealedQueue, SealedCommand { run }, None)
+        .await
+        .expect("a push over TLS");
+    crate::wait_until(Duration::from_secs(10), || SEALED.of(run).len() == 1).await;
+    let mut admin = RedisConnection::connect(&tls_redis(Some(SERVICE_AUTHORITY)))
+        .await
+        .expect("an administration connection over TLS");
+    let clients: String = redis::cmd("CLIENT")
+        .arg("LIST")
+        .query_async(&mut admin)
+        .await
+        .expect("CLIENT LIST");
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    assert_eq!(SEALED.of(run).len(), 1, "the job ran once over TLS");
+    assert!(
+        clients
+            .lines()
+            .any(|client| client.contains("cmd=xreadgroup")),
+        "the worker's read holds a connection of its own to the TLS Redis: {clients}",
+    );
+}
+
+/// The same Redis, its authority not configured: the certificate chains to no
+/// root the client trusts, and the boot fails at once naming what to set —
+/// verification is never skipped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_redis_speaking_tls_under_an_authority_not_trusted_fails_the_boot_at_once() {
+    let started = Instant::now();
+    let Err(error) = RedisConnection::connect(&tls_redis(None)).await else {
+        panic!("a certificate no trusted authority signed must not connect");
+    };
+    assert!(started.elapsed() < AT_ONCE, "took {:?}", started.elapsed());
+    assert!(matches!(error, RedisError::TlsRefused { .. }), "{error}");
 }

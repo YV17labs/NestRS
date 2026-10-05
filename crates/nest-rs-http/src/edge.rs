@@ -55,7 +55,7 @@ use poem::{Body, Endpoint, IntoResponse, PathPattern, Request, Response, Result}
 use tracing::Instrument;
 
 use crate::access_log::{AccessLog, Unanswered};
-use crate::client_ip::{ClientIp, ClientOrigin};
+use crate::client_ip::ClientOrigin;
 use crate::drain::Drain;
 use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
@@ -451,7 +451,6 @@ where
         // client origin is resolved first because the id's gate reads it: one
         // proxy list, one trust decision, two consumers.
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
-        let client = ClientIp::from(origin);
         let correlation = trace_context::resolve(&req, origin);
         let user_agent = trace_context::user_agent(&req);
         // The operation span, opened here and **not** gated on anything. It is
@@ -459,7 +458,7 @@ where
         // the `actor_id` field the authn guard records into — a span that only
         // exists when an observability crate is installed makes both of those
         // optional, which is the defect this replaces.
-        let span = trace_context::request_span(&req, &correlation, &client, origin, user_agent);
+        let span = trace_context::request_span(&req, &correlation, origin, user_agent);
         // Kept because `req` is about to be consumed and the span's name needs it
         // once the router has answered — one clone of a `Method`, which is an
         // enum for every standard verb.
@@ -467,9 +466,7 @@ where
         // Opened before the request is consumed, because only the request can
         // answer what it was. `None` when the line is off — one `Option`, and
         // nothing else on the path pays for a disabled access log.
-        let log = self
-            .access_log
-            .then(|| AccessLog::open(&req, client, user_agent));
+        let log = self.access_log.then(|| AccessLog::open(&req, user_agent));
         // Where the endpoint the router reaches notes the route it matched, for
         // the one request whose response cannot carry it out: one dropped before
         // it answers (`matched`).

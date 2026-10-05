@@ -25,9 +25,9 @@
 //! `option forwardfor` successor, and every intermediary that follows the RFC
 //! rather than the convention it replaced. Reading only the de-facto pair meant
 //! that behind such a proxy **every caller resolved to the balancer**: one
-//! rate-limit bucket for the entire internet, the balancer's address on every
-//! access line and span, and — because the peer is still trusted —
-//! `traceparent` continued for a client the transport could not identify.
+//! rate-limit bucket for the entire internet, the balancer's address in every
+//! `ClientIp`, and — because the peer is still trusted — `traceparent`
+//! continued for a client the transport could not identify.
 //!
 //! So all three are read, in the order of their authority: `Forwarded`, then
 //! `X-Forwarded-For`, then `X-Real-IP`. The trust gate above is the same for
@@ -49,11 +49,12 @@
 //!
 //! # Two consumers, one answer
 //!
-//! [`ClientIp`] (observational: logging, geolocation hints, sampling keys) and
-//! the throttler's rate-limit bucket must not disagree about who the caller is
-//! — a request rate-limited as one address and logged as another is
-//! unauditable. Both go through [`ClientOrigin::of`], so the deployment
-//! declares its proxies once, in `HttpConfig`.
+//! [`ClientIp`] (observational: geolocation hints, sampling keys) and the
+//! throttler's rate-limit bucket must not disagree about who the caller is — a
+//! request rate-limited as one address and served as another is unauditable.
+//! Both go through [`ClientOrigin::of`], so the deployment declares its proxies
+//! once, in `HttpConfig`. Neither writes the address on a line or a span: it is
+//! personal data.
 //!
 //! Treat the result as observational, never as an authentication or
 //! authorization input: the peer is trustworthy, the hop behind it is only as
@@ -203,17 +204,16 @@ impl ClientOrigin {
         //
         // So a disagreement degrades to `TrustedProxy`: the caller is behind
         // our infrastructure and is not identifiable, which is what a rate-limit
-        // bucket, an access line and a `traceparent` decision all need to be
+        // bucket and a `traceparent` decision both need to be
         // told rather than guessed at. Reported, because a deployment emitting
         // both is a misconfiguration whichever header is the honest one.
         match (standard.client, de_facto.client) {
             (Some(standard_client), Some(de_facto_client))
                 if standard_client != de_facto_client =>
             {
+                // The proxy is named; the addresses it relayed are personal data.
                 tracing::warn!(
                     target: crate::target::HTTP,
-                    forwarded = %standard_client,
-                    x_forwarded_for = %de_facto_client,
                     peer = %peer,
                     "forwarding headers disagree about the client — neither is believed",
                 );
@@ -433,7 +433,7 @@ mod tests {
     /// unknown headers through can send a `Forwarded` of its own. Preferring
     /// RFC 7239 unconditionally let that spoof outrank the hop the proxy itself
     /// wrote — so a disagreement is refused rather than resolved, and it is the
-    /// **rate-limit bucket, the access line and the `traceparent` decision**
+    /// **rate-limit bucket and the `traceparent` decision**
     /// that would otherwise have taken the caller's word.
     #[test]
     fn two_forwarding_headers_that_disagree_are_both_refused() {
@@ -460,11 +460,19 @@ mod tests {
             "forwarding headers disagree about the client — neither is believed",
         );
         assert_eq!(reported.level, "warn");
-        assert_eq!(reported.field("forwarded").as_deref(), Some("198.51.100.9"));
-        assert_eq!(
-            reported.field("x_forwarded_for").as_deref(),
-            Some("203.0.113.7"),
-        );
+        // The proxy that sent them is infrastructure and named; what they claim
+        // of the client is an address, and stays off the line.
+        assert_eq!(reported.field("peer").as_deref(), Some("10.0.0.1"));
+        for claimed in ["198.51.100.9", "203.0.113.7"] {
+            assert!(
+                reported
+                    .fields
+                    .values()
+                    .all(|value| !value.contains(claimed)),
+                "{:?}",
+                reported.fields
+            );
+        }
         drop(logs);
 
         // Agreement is not a disagreement: one deployment, two spellings of the

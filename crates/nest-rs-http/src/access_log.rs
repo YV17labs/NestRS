@@ -7,8 +7,8 @@
 //!
 //! # Why the transport owns this
 //!
-//! Everything the line carries — method, path, status, duration, client, user
-//! agent, and the request's [`Correlation`](nest_rs_core::Correlation) — is what *this* transport knows
+//! Everything the line carries — method, path, status, duration, user agent,
+//! and the request's [`Correlation`](nest_rs_core::Correlation) — is what *this* transport knows
 //! about a request it served. None of it needs a collector, a propagator or an
 //! exporter, so none of it may depend on one being mounted: an access log is how
 //! an operator answers "what did this deployment do", and that question does not
@@ -80,7 +80,6 @@ use nest_rs_core::RequestContinuation;
 use poem::Request;
 use poem::http::{Method, Uri};
 
-use crate::client_ip::ClientIp;
 use crate::matched::MatchedRoute;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
@@ -90,7 +89,6 @@ pub(crate) struct AccessLog {
     /// Cloned rather than formatted: `Uri`'s path is a `Bytes` slice, so this is
     /// a refcount bump and the path is read back without allocating.
     uri: Uri,
-    client: ClientIp,
     user_agent: Option<String>,
     start: Instant,
 }
@@ -98,14 +96,13 @@ pub(crate) struct AccessLog {
 impl AccessLog {
     /// Snapshot what only the *request* can answer, before it is consumed.
     ///
-    /// `client` and `user_agent` are passed in rather than read here because the
-    /// operation span needs the same answers: reading twice would be two chances
-    /// for the span and the line to disagree about who called.
-    pub(crate) fn open(req: &Request, client: ClientIp, user_agent: Option<&str>) -> Self {
+    /// `user_agent` is passed in rather than read here because the operation
+    /// span needs the same answer: reading twice would be two chances for the
+    /// span and the line to disagree about who called.
+    pub(crate) fn open(req: &Request, user_agent: Option<&str>) -> Self {
         Self {
             method: req.method().clone(),
             uri: req.uri().clone(),
-            client,
             // Owned rather than borrowed: the `HeaderValue`'s bytes are a slice
             // of hyper's shared read buffer, which holding would pin until the
             // response body ends.
@@ -146,11 +143,6 @@ impl AccessLog {
             path = self.uri.path(),
             status,
             bytes,
-            client_ip = %self.client.ip,
-            // Whether the address came from a proxy header or from the peer.
-            // Two very different confidences, and an incident query that cannot
-            // tell them apart is reading a number it should not trust.
-            forwarded = self.client.forwarded,
             user_agent = self.user_agent.as_deref(),
         );
     }
@@ -176,8 +168,6 @@ impl AccessLog {
             started: self.start,
             method = %self.method,
             path = self.uri.path(),
-            client_ip = %self.client.ip,
-            forwarded = self.client.forwarded,
             user_agent = self.user_agent.as_deref(),
         );
     }
@@ -260,7 +250,7 @@ mod tests {
 
     fn held() -> (AccessLog, RequestContinuation) {
         let req = Request::builder().uri_str("/reports").finish();
-        let log = AccessLog::open(&req, ClientIp::unknown(), Some("curl/8"));
+        let log = AccessLog::open(&req, Some("curl/8"));
         let continuation = RequestContinuation::new(None, Correlation::minted(None));
         (log, continuation)
     }

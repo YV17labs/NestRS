@@ -51,7 +51,7 @@ use nest_rs_core::{Correlation, TraceParent, TraceState};
 use poem::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use poem::{Request, Response};
 
-use crate::client_ip::{ClientIp, ClientOrigin};
+use crate::client_ip::ClientOrigin;
 
 /// The W3C request header carrying the trace and the caller's span.
 pub const TRACEPARENT_HEADER: HeaderName = HeaderName::from_static("traceparent");
@@ -202,7 +202,6 @@ impl std::fmt::Write for Cursor<'_> {
 pub(crate) fn request_span(
     req: &Request,
     correlation: &Correlation,
-    client: &ClientIp,
     origin: ClientOrigin,
     user_agent: Option<&str>,
 ) -> tracing::Span {
@@ -227,7 +226,8 @@ pub(crate) fn request_span(
         // also why a 404 is observed at all — and a 404 matched no route, so the
         // field staying empty is the answer rather than a gap.
         http.route = tracing::field::Empty,
-        client.address = %client.ip,
+        // No `client.address`: the conventions recommend it, and an address is
+        // personal data a collector would keep.
         user_agent.original = user_agent.unwrap_or_default(),
         // What the caller *claimed*, recorded whether or not it was believed —
         // so a restarted trace still says which trace it declined to join, and a

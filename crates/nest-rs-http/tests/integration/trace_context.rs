@@ -97,6 +97,19 @@ async fn the_span_reports_the_route_template_and_the_path_separately() {
     );
 }
 
+/// The span names no client: an address is personal data, and a span is kept by
+/// whatever collector receives it.
+#[tokio::test]
+async fn the_span_carries_no_client_address() {
+    let logs = LogCapture::install();
+    let client = boot::<OrgsModule>().await;
+
+    client.get("/orgs/acme/members/42").send().await;
+
+    let span = logs.expect_span("nest_rs::http", "http.request");
+    assert_eq!(span.field("client.address"), None, "{:?}", span.fields);
+}
+
 /// `tracing` fixes a span's name to a literal, so one name would have to serve
 /// every route and a trace list would render the whole deployment as a single
 /// line. `otel.name` is the override an exporter reads.

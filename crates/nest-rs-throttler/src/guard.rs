@@ -218,14 +218,12 @@ impl Guard for ThrottlerGuard {
         if decision.allowed {
             return Ok(());
         }
-        // Route and client as two fields, never the composite store key: an
-        // operator filtering 429s by client address should not have to split a
-        // value on U+001F, and "never hand-format columns" is the rule.
+        // The route alone, never the store key: the key holds the client's
+        // address, personal data no line carries.
         tracing::warn!(
             target: crate::TARGET,
             transport = transport::HTTP,
             route = %route,
-            client = %ip,
             retry_after = retry_after_secs(decision.retry_after),
             "rate limit exceeded",
         );
@@ -348,7 +346,7 @@ impl Guard for ThrottlerGuard {
             target: crate::TARGET,
             transport = transport::WS,
             event = %event,
-            client = %connection,
+            connection,
             retry_after = retry_after_secs(decision.retry_after),
             "rate limit exceeded",
         );
@@ -407,8 +405,8 @@ impl std::fmt::Display for ClientId {
 /// resolutions that collapse every caller into one bucket.
 ///
 /// The resolution itself — peer, trusted-proxy gate, rightmost non-trusted hop —
-/// lives in `nest_rs_http::ClientOrigin`, so a `429` and the log line explaining
-/// it always name the same caller.
+/// lives in `nest_rs_http::ClientOrigin`, so a bucket and the `ClientIp`
+/// extractor always attribute a request to the same caller.
 impl From<ClientOrigin> for ClientId {
     fn from(origin: ClientOrigin) -> Self {
         match origin {

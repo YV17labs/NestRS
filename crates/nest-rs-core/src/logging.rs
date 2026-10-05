@@ -333,7 +333,7 @@ impl fmt::Write for LineSafeWriter<'_, '_> {
 /// already bitten:
 ///
 /// - a span's fields belong to the *span*, so rendering them put an HTTP
-///   request's method, path, client address and user agent on every line a
+///   request's method, path and user agent on every line a
 ///   service below it emitted — a service's line stopped being about what the
 ///   service did;
 /// - `tracing` renders a whole scope, so a nested unit of work — an MCP

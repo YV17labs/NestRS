@@ -111,8 +111,10 @@ installed: the span itself, its W3C trace context, the `traceresponse` response
 header, and the access log. The span carries the OTel HTTP semantic-convention attributes:
 `http.request.method`, `url.path` (the addressed path), `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size`, `client.address` and
-`user_agent.original`.
+`http.response.status_code`, `http.response.body.size` and
+`user_agent.original`. It carries no `client.address`, which the conventions
+recommend: a client's address is personal data, and a collector keeps what it
+receives — no access line carries it either.
 
 It is named `{method} {route}` through `otel.name`. `tracing` fixes a span
 name to a literal, and one literal for every route makes a trace list

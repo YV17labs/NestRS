@@ -102,11 +102,9 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     denied.assert_status(StatusCode::TOO_MANY_REQUESTS);
     denied.assert_header_exist("retry-after");
 
-    // The `429` tells the client it was throttled; only the event says *whose*
-    // bucket filled. A rate-limit denial ranks with the security events an
-    // incident queries, so the route and the caller are two fields —
-    // never the composite store key, which an operator would have to split on
-    // U+001F to filter by either half.
+    // The `429` tells the client it was throttled; the event tells the operator
+    // which route's bucket filled — never the composite store key, which holds
+    // the client's address, personal data a log line does not carry.
     let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
     assert_eq!(event.level, "warn");
     assert!(
@@ -116,9 +114,10 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
         "the event names the route on its own field, got {:?}",
         event.fields,
     );
-    assert!(
-        event.field("client").is_some(),
-        "the event names the caller on its own field, got {:?}",
+    assert_eq!(
+        event.field("client"),
+        None,
+        "the event names no client address, got {:?}",
         event.fields,
     );
     assert!(
@@ -746,12 +745,13 @@ mod ws {
             event.fields,
         );
         assert_eq!(
-            event.field("client").as_deref(),
+            event.field("connection").as_deref(),
             Some(client.id().to_string()).as_deref(),
-            "…and the connection as the caller half — the peer address that \
-             keyed the upgrade is gone by the time a message runs, got {:?}",
+            "…and the connection the bucket is keyed on, a number this process \
+             minted for the socket — never the peer's address, got {:?}",
             event.fields,
         );
+        assert_eq!(event.field("client"), None, "got {:?}", event.fields);
         assert!(event.field("retry_after").is_some());
     }
 

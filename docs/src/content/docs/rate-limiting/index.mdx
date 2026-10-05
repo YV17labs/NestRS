@@ -174,8 +174,10 @@ The rest of the rule:
 The list is `NESTRS_HTTP__TRUSTED_PROXIES`, on the transport, not on the
 throttler: which proxies a deployment believes decides who *every* request is
 attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
-as the rate-limit bucket's. One list, so a `429` and the log line explaining it
-can never name different callers.
+as the rate-limit bucket's. One list, so the extractor and the bucket can never
+attribute a request to different callers. No log line names that caller: the
+`rate limit exceeded` warning carries the route and the wait, and a client's
+address is personal data a line does not hold.
 
 <Aside type="caution">
 Trust the proxy header **only** when the request arrived through a

@@ -7,6 +7,7 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+mod access_log;
 mod allow;
 mod body_limit;
 mod compression;

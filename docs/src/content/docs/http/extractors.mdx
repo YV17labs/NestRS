@@ -215,14 +215,15 @@ infrastructure wrote; a caller can only prepend, and a prepended entry lands to
 the left of it. Keying on the leftmost hop is the spoofable rule.
 
 <Aside type="caution">
-Treat the result as **observational** (logging, geolocation hints, sampling
-keys), never as an authn or authz input. The peer is trustworthy; the hop behind
+Treat the result as **observational** (geolocation hints, sampling keys),
+never as an authn or authz input — and as personal data: the framework writes it
+on no line and no span, and a line of yours holding it holds personal data. The peer is trustworthy; the hop behind
 it is only as trustworthy as the proxy that wrote it — list an ingress here only
 if it strips and rewrites the client's own forwarding headers.
 
 The [throttler](/rate-limiting/) resolves the client through this same
 mechanism, from this same list, so a request is never rate-limited as one
-address and logged as another.
+address and handed to a handler as another.
 </Aside>
 
 ## `Scoped<T>` — resolve a request-scoped provider

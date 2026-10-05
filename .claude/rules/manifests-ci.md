@@ -111,7 +111,8 @@ database moves overnight, are `just audit`'s, over every lockfile the
 repository owns — run by `audit.yml` on a change to a tree (blocking), daily on
 `main`, and by `publish.yml` before a release.
 `docs.yml` builds the site when
-`docs/` changes. The workflows stay hardened: actions pinned by SHA,
+`docs/` changes. The workflows stay hardened: actions pinned by SHA, a local
+action referenced `$/` (`decisions/self-repository-actions.md`),
 `persist-credentials: false`, least permissions.
 
 ## Release

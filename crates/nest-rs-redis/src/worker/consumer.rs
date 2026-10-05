@@ -81,8 +81,6 @@ use super::gate::ThrottleGate;
 use super::lease::Leases;
 use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
-use crate::error::LegacyLayoutError;
-use crate::legacy_layout::{self, LegacyLayout};
 use crate::promotion::{self, Promotion};
 use crate::{RedisConnection, RedisWorkerConfig, layout};
 
@@ -133,10 +131,9 @@ impl Transport for RedisWorker {
 
         // Fail fast at boot if methods exist but no connection is seeded.
         if !self.methods.is_empty() {
-            let connection = container.get::<RedisConnection>().with_context(|| {
+            container.get::<RedisConnection>().with_context(|| {
                 format!("RedisWorker found #[processor]s but {CONNECTION_REMEDY}")
             })?;
-            refuse_legacy_jobs(&connection, &self.methods).await?;
         }
 
         // A factory output `RedisWorkerModule::for_root` resolved; a worker
@@ -242,47 +239,6 @@ impl Transport for RedisWorker {
     /// back, so it is the whole of the worker's stop.
     fn stop_bound(&self) -> Duration {
         self.config.shutdown_timeout
-    }
-}
-
-/// Refuse to serve a queue that still holds jobs under the 6.x layout, naming
-/// every such queue and what to do — a worker started beside them would leave
-/// them waiting with nothing to say so.
-async fn refuse_legacy_jobs(conn: &RedisConnection, methods: &[&ProcessMethod]) -> Result<()> {
-    let mut refused = Vec::new();
-    for method in methods {
-        let queue = QueueName::new(method.queue())?;
-        match LegacyLayout::read(conn, &queue).await {
-            Ok(found) if found.is_empty() => {}
-            Ok(found) => refused.push(
-                LegacyLayoutError {
-                    queue: queue.to_string(),
-                    keys: found.held().join(", "),
-                    namespace: layout::namespace(&queue),
-                }
-                .to_string(),
-            ),
-            // A user scoped to the framework's prefix cannot read the root, and
-            // could not have written the 6.x layout either — but another could
-            // have, so the gap is said rather than passed over.
-            Err(error) if legacy_layout::outside_the_acl(&error) => tracing::warn!(
-                target: nest_rs_queue::TARGET,
-                queue = %queue,
-                error = %nest_rs_core::error_message(&error),
-                "6.x key layout not checked: the connection's ACL does not reach it; drain any 6.x \
-                 jobs on this database before relying on this worker",
-            ),
-            Err(error) => {
-                return Err(anyhow::Error::new(error).context(format!(
-                    "RedisWorker could not check queue `{queue}` for jobs under the 6.x key layout"
-                )));
-            }
-        }
-    }
-    if refused.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("{}", refused.join("\n")))
     }
 }
 

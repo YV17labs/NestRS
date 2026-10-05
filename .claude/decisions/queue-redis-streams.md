@@ -202,3 +202,8 @@ finished job (Oban #1496, fixed by fencing on `attempted_at` in 2.24.1; River
 River MPL-2.0, Sidekiq LGPL-3.0 and commercial, apalis MIT. bullmq-official, an
 MIT Rust port, was weighed and refused: it is a list design with exact pins and no
 Cluster.
+
+Amended the same day by the owner: 7.0 is a new version and builds nothing for
+6.x. The read-only 6.x detector goes with its tests and its upgrade procedure;
+the upgrade guide says to drain each queue with its 6.x workers before 7.0
+workers take over, and 7.0 reads no 6.x key.

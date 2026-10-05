@@ -58,7 +58,8 @@ lists.
   shared code; `nest-rs-cli` is the `nestrs` binary.
 - `demo/` — the "Publish" product, its own workspace on the framework by path,
   driven with `nestrs run`. Nothing at the root builds or tests it.
-- `bench/` — a standalone benchmark against NestJS. `docs/` — nestrs.dev.
+- `bench/` — standalone benchmarks: HTTP against NestJS, and the job queue over
+  Redis (`bench/queue/`). `docs/` — nestrs.dev.
   `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
 
 ```bash
@@ -116,8 +117,7 @@ A name and its path say the same thing, and a name is judged in its set.
   (`decisions/forward-principal.md`).
 - **No TLS without verification**, in any client the framework opens.
 - **No queue promise stronger than at least once**; a handler is idempotent.
-- **No access to apalis's structures outside its public API**, but the read-only
-  6.x check in `nest-rs-redis/src/legacy_layout.rs`.
+- **No access to apalis's structures outside its public API.**
 
 ## Hard "no" — the project
 

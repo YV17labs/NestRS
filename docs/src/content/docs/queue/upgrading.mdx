@@ -1,118 +1,28 @@
 ---
 title: Upgrading queues from 6.x
-description: "Moving a queue's jobs out of the 6.x key layout — drained by a 6.x worker, or renamed under nestrs:queue — and the calls a producer changes."
+description: "Draining a queue's 6.x jobs before 7.0 takes over, and the calls a producer changes."
 sidebar:
   order: 7
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components';
 
-6.x handed apalis each queue's bare name as its namespace, so a 6.x deployment
-keeps a queue's jobs at the root of the keyspace. 7.0 keeps them under
-`nestrs:queue:<queue>` and reads nothing else, so jobs left at the root would
-wait forever without a word. A 7.0 worker serving such a queue refuses to start
-instead, and names them:
-
-```text frame="terminal"
-$ nestrs run dev worker
- INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
-Error: queue `audio` still holds jobs under the 6.x key layout (…), which this worker never reads, so it does not start beside them. Drain them first: run a 6.x worker until those keys are gone. Or move them, with every worker of the queue stopped and before anything is pushed under `nestrs:queue:audio`: …
-```
-
-The parenthesis counts every 6.x job left, by the key it sits under: waiting on
-the queue's list, held back for later on its schedule — a delayed push, a
-retry's next attempt — and in flight in the sets its 6.x workers registered. A
-7.0 producer pushing to the queue says the same once, at `warn`, and pushes
-where 7.0 reads.
-
-The check is the one place the framework reads apalis's structures itself,
-because apalis's own calls count no schedule: under the queue's bare name it
-reads each name's type, then counts what a structure of that type holds —
-`TYPE`, then `LLEN`, `ZCARD`, `ZRANGE` or `SCARD` — and never writes. A key of
-another type at one of those names, an application's own, is not taken for
-jobs and hides none beside it: the boot names it at `warn`, with what it holds,
-and leaves it alone.
-
-There are two ways out, chosen per queue. **Drain** keeps the queue running and
-delays what is pushed meanwhile. **Move** takes a short stop and leaves nothing
-behind.
-
-## Drain
-
-Nothing stops: the 6.x workers finish what they hold while the new code comes
-up around them.
+6.x kept a queue's jobs at the root of the keyspace, under the queue's bare
+name. 7.0 keeps them under `nestrs:queue:<queue>` and reads nothing 6.x left
+behind, so drain each queue with its 6.x workers before 7.0 workers take over.
 
 <Steps>
 
 1. **Deploy the 7.0 producers.** They push under `nestrs:queue:<queue>`, which a
    6.x worker never reads, so what they push waits for the last step.
 
-2. **Keep the 6.x workers running** until the queue's 6.x jobs are gone —
-   waiting, held back and in flight. A job held back for later keeps the drain
-   waiting until it is due.
+2. **Keep the 6.x workers running** until the queue's 6.x keys are empty — the
+   waiting list `<queue>:active`, the schedule `<queue>:scheduled` and the
+   in-flight sets `<queue>:inflight:*`.
 
-3. **Replace the 6.x workers with 7.0 workers.** The boot is the check: a 7.0
-   worker starts once nothing is left, and refuses, naming what is, otherwise.
-
-</Steps>
-
-A 6.x worker that stops while jobs run leaves them in flight even on a clean
-stop: apalis 0.7 drops the acknowledgement of a job that finishes while its
-worker drains. The 7.0 boot then names the in-flight set alone. Start one 6.x
-worker again — every 6.x replica shared one worker id, so its first act is to
-put those jobs back on the queue — and stop it once the queue is idle. Those
-jobs may have completed already: 6.x keeps no mark of a finished job.
-
-## Move
-
-The jobs change place with the workers stopped, and 7.0 runs them from where
-they now are. It needs every worker of the queue stopped, 6.x and 7.0 alike, and
-nothing pushed under `nestrs:queue:<queue>` yet.
-
-<Steps>
-
-1. **Stop the queue's workers and pause its producers**, then check that
-   nothing is under the namespace yet — this prints nothing:
-
-   ```bash
-   redis-cli --scan --pattern 'nestrs:queue:audio:*'
-   ```
-
-2. **Rename every structure of the queue under its namespace**, the in-flight
-   set among them, then register that set as a consumer, so the first sweep of a
-   7.0 worker puts its jobs back on the queue. For the queue `audio`:
-
-   ```bash
-   for s in active scheduled data data::result done dead failed signal consumers inflight:audio; do
-     redis-cli RENAMENX "audio:$s" "nestrs:queue:audio:$s"
-   done
-   redis-cli ZADD nestrs:queue:audio:consumers 0 nestrs:queue:audio:inflight:audio
-   ```
-
-   `RENAMENX` answers `1` for each structure it moved, and
-   `ERR no such key` for one the queue never had. It is the form of `RENAME`
-   that refuses to overwrite, so a structure 7.0 already wrote answers `0`
-   rather than losing what it holds.
-
-3. **Start one 7.0 worker, then the producers.** Its sweeps put the jobs the
-   6.x worker was running back on the queue, and a job held back for later runs
-   when it is due:
-
-   ```text frame="terminal"
-    INFO nest_rs::queue: queue worker started queue="audio" worker="01a0deaa-c93b-74dd-b345-7b4cf2a53f3c"
-   ```
-
-4. **Scale out once the moved jobs have run.**
+3. **Replace the 6.x workers with 7.0 workers.**
 
 </Steps>
-
-<Aside type="caution">
-**A moved job has no job id.** 6.x sealed jobs without one, so each delivery of
-a moved job runs under an id minted for that delivery, and the
-[delivery guard](/queue/delivery/#at-least-once-and-the-guard) cannot recognise a
-second one. A replica starting while a moved job runs puts it back on the queue,
-and it runs twice — which is why one replica drains them first.
-</Aside>
 
 ## Your code
 
@@ -139,33 +49,11 @@ The `None` is a `PushOptions`: a delay, a unique key — see
 
 ## What fails if you get it wrong
 
-- **A 7.0 worker started beside 6.x jobs** refuses to start, as above. Nothing
-  is lost; finish either way out first.
-- **A Move after 7.0 pushed under the namespace** is what the scan in the first
-  step exists to stop. `RENAMENX` would refuse the structures 7.0 already wrote
-  and move the others, which can leave job ids in one place and their records in
-  another. When the scan prints anything, drain instead: a 6.x worker empties the
-  root while the 7.0 producers go on pushing under the namespace.
-- **Scaling out before the moved jobs ran** can run one of them twice — see the
-  caution above.
-- **A Redis user confined to `nestrs:queue:*`**, as the
-  [queue's ACL rule](/queue/delivery/#where-a-queue-lives) confines it, cannot
-  read the root, so the check cannot run. The worker says
-  `6.x key layout not checked: the connection's ACL does not reach it; drain any 6.x jobs on this database before relying on this worker`
-  at `warn` and starts: run the upgrade with a user that reaches the queue's bare
-  name and may send `TYPE`, `LLEN`, `ZCARD`, `ZRANGE` and `SCARD` there.
+- **A 6.x job left at the root never runs**: 7.0 does not read it. Start a 6.x
+  worker again until the queue's 6.x keys are empty.
 - **A KEDA trigger still naming the 6.x list** reads zero forever and holds the
   deployment at `minReplicaCount`. It names `nestrs:queue:<queue>:active` now —
   see [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
-
-## Reference
-
-- `crates/nest-rs-redis/src/legacy_layout.rs` — the 6.x check, which reads the
-  structures apalis kept under the queue's bare name, typed and read-only.
-- `crates/nest-rs-redis/src/error.rs` — the boot's refusal.
-- `crates/nest-rs-redis/tests/e2e/layout.rs` — the refusal, and this page's Move
-  run against a layout written the way 6.x wrote it: a job waiting, one held
-  back, and one in flight on a replica that died.
 
 ## Going further
 

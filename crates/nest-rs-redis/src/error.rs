@@ -194,31 +194,3 @@ pub enum RedisError {
         source: Option<redis::RedisError>,
     },
 }
-
-/// A queue this worker serves still holds jobs under the 6.x key layout — at the
-/// root of the keyspace, under the queue's bare name, where a 7.0 worker never
-/// looks. Starting beside them would leave them waiting with nothing to say so,
-/// which is why the boot refuses instead and names the two ways out.
-///
-/// Not public: it reaches the operator as the boot's error, and nothing matches
-/// on it.
-#[derive(Debug, Error)]
-#[error(
-    "queue `{queue}` still holds jobs under the 6.x key layout ({keys}), which this worker never \
-     reads, so it does not start beside them. Drain them first: run a 6.x worker until those keys \
-     are gone. Or move them, with every worker of the queue stopped and before anything is pushed \
-     under `{namespace}`: `RENAMENX` each of the queue's 6.x keys to the same structure under \
-     `{namespace}` — the in-flight set takes one step more, listed with the rest on the queue \
-     documentation's \"Upgrading queues from 6.x\" page. If those keys are an application's \
-     own rather than a 6.x queue's, rename them out of the way instead: moved under \
-     `{namespace}`, they would be read as jobs"
-)]
-pub(crate) struct LegacyLayoutError {
-    /// The queue whose jobs wait under the old layout.
-    pub(crate) queue: String,
-    /// What the old layout holds: each structure, and how many jobs wait there
-    /// — comma-separated.
-    pub(crate) keys: String,
-    /// Where the queue lives now.
-    pub(crate) namespace: String,
-}

@@ -1,7 +1,5 @@
 //! Where a queue lives in Redis: the namespace every queue's records sit under,
-//! shared by the producer that files them and the worker that runs them. The
-//! 6.x layout it replaced, which neither side may ignore, is
-//! [`LegacyLayout`](crate::legacy_layout::LegacyLayout)'s.
+//! shared by the producer that files them and the worker that runs them.
 //!
 //! **One namespace per queue, under the framework's prefix.** apalis derives a
 //! queue's structures from the namespace it is handed — `<namespace>:active`,

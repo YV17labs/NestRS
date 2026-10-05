@@ -12,9 +12,8 @@ on something you can check. The
 [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/7.0.md) says why each
 change was made; this page says what to do about it.
 
-You need the 6.1 project building, and — for a queue on Redis — either a short
-stop of its workers or a 6.x worker you can leave running while the new code
-rolls out (step 7).
+You need the 6.1 project building, and — for a queue on Redis — its 6.x workers
+left running until they drain the 6.x jobs (step 7).
 
 <Steps>
 
@@ -116,8 +115,8 @@ rolls out (step 7).
      and nothing past it: a redelivery after that span runs the job again. See
      [At least once, and the guard](/queue/delivery/#at-least-once-and-the-guard).
    - A queue name is checked: 1 to 128 of `[A-Za-z0-9_.-]`. A name holding `:`
-     or whitespace no longer compiles, so that queue takes a new name — and its
-     6.x jobs are drained in step 7 rather than moved.
+     or whitespace no longer compiles, so that queue takes a new name, and its
+     6.x jobs are drained in step 7 under the old one.
 
    A scheduled job that should fire on one replica rather than all of them can
    now say so with `replicas = "one"`, beside `RedisScheduleModule`: each
@@ -236,12 +235,10 @@ rolls out (step 7).
    let transactional = nest_rs_codegen::transactional_value(JobDecorator::Every, &meta.value)?;
    ```
 
-7. **Move each Redis queue's jobs out of the 6.x layout.** 6.x kept a queue's
-   jobs at the root of the keyspace; 7.0 keeps them under `nestrs:queue:<queue>`
-   and reads nothing else. Before any 7.0 worker serves a queue, either drain it
-   with a 6.x worker or move its keys —
-   [Upgrading queues from 6.x](/queue/upgrading/) is the procedure for both, and
-   the 7.0 worker's boot refuses to start while 6.x jobs wait.
+7. **Drain each Redis queue's 6.x jobs.** 6.x kept a queue's jobs at the root of
+   the keyspace; 7.0 keeps them under `nestrs:queue:<queue>` and reads nothing
+   6.x left, so keep the 6.x workers running until those keys are empty —
+   [Upgrading queues from 6.x](/queue/upgrading/).
 
 8. **Update the deployment around Redis and shutdown.**
 
@@ -256,9 +253,7 @@ rolls out (step 7).
      under `~nestrs:queue:*`, [the rate limiter](/rate-limiting/#redis-shipped)
      under `~nestrs:throttler:*` and [a schedule's claims](/schedule/#the-keys)
      under `~nestrs:schedule:*`; an app running several gives one user each rule.
-     The 6.x check in step 7 reads the root — `TYPE`, `LLEN`, `ZCARD`,
-     `ZRANGE` and `SCARD` on the queue's bare name — so run the upgrade with a
-     user that reaches it. A dashboard or an ACL written for the rate limiter's 6.x keys
+     A dashboard or an ACL written for the rate limiter's 6.x keys
      follows it to `nestrs:throttler:buckets:*`.
    - **TLS**: `rediss://` is verified against the URL's host.
      `NESTRS_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
@@ -354,10 +349,7 @@ rolls out (step 7).
    a namespace with other separators, in another case or one misspelled segment
    away; a namespace nowhere near any the app reads is taken for another
    binary's and stays silent, so check the names the app should read against
-   the [env-var reference](/configuration/env-reference/). A worker that starts
-   has found no 6.x jobs waiting, held back or in flight under the queues it
-   serves — or said, at `warn`, that its ACL kept it from looking, as
-   [Upgrading queues from 6.x](/queue/upgrading/) shows. A host the app links
+   the [env-var reference](/configuration/env-reference/). A host the app links
    but never reaches — a scheduled method, a `#[process]` method, a listener, a
    lifecycle hook, a health indicator — is a `warn` naming its `cause` and the
    remedy when it is this app's own code, and a `debug` line when it belongs to
@@ -382,9 +374,7 @@ rolls out (step 7).
   Rename what the `suggestion` names. The report, and what it leaves silent, is
   described under
   [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
-- **A 7.0 worker started beside 6.x jobs** refuses to start, naming the keys that
-  still hold them and both ways out; nothing is lost. Finish step 7 — the refusal
-  is quoted on [Upgrading queues from 6.x](/queue/upgrading/).
+- **A 6.x job left at the root never runs**: 7.0 does not read it. Finish step 7.
 - **A bounded duration outside its range** — a poll under 10 ms, a drain window
   above an hour, a zero Redis connect timeout — fails the boot naming the
   variable and why the bound is there, whether the value came from the
@@ -426,13 +416,12 @@ rolls out (step 7).
   `#[queue]` and `#[process]` refusal, pinned.
 - `crates/nest-rs-schedule-macros/src/scheduled.rs` — `transactional_value`
   called with the `JobDecorator` it words for, as step 6 writes it.
-- `crates/nest-rs-redis/src/error.rs` — the boot's refusals: a 6.x layout, an
-  `#insecure` URL, TLS that cannot work.
+- `crates/nest-rs-redis/src/error.rs` — the boot's refusals: an `#insecure`
+  URL, TLS that cannot work.
 
 ## Going further
 
-- [Upgrading queues from 6.x](/queue/upgrading/) — draining or moving a queue's
-  jobs, run end to end by the Redis e2e suite.
+- [Upgrading queues from 6.x](/queue/upgrading/) — draining a queue's 6.x jobs.
 - [Env-var reference](/configuration/env-reference/) — every variable 7.0 reads.
 - [Delivery on Redis](/queue/delivery/) — where a 7.0 queue keeps what, and what
   it guarantees.

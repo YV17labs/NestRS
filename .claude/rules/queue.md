@@ -109,20 +109,9 @@ type leaks, and a second backend implements the port without configuring apalis.
 The adapter crate is named for the storage a caller touches (`architecture.md`).
 
 - **apalis's structures are apalis's** (`CLAUDE.md`, hard "no"). The framework
-  reads and writes them only through apalis's public API, names one only through
-  `apalis_redis::Config`'s getters — `disallowed-methods` in `clippy.toml`
-  outside `legacy_layout.rs` — and files its own records beside them under words
-  apalis does not use. An apalis behaviour the framework cannot live with is
+  reads and writes them only through apalis's public API, and files its own
+  records beside them under words apalis does not use. An apalis behaviour the framework cannot live with is
   worked around in keys of its own and reported upstream.
-- **The 6.x layout is refused, read typed and read-only.** 6.x jobs sit where a
-  7.x worker never looks, so the worker refuses to start while one holds a job,
-  naming each structure and both ways out (drain with 6.x workers, or move with
-  `RENAMENX`); the producer warns once per queue instead, so a drain-first rollout
-  is not blocked. The check reads exactly the names apalis's getters derive —
-  never a `SCAN`, a write or a script; a key of another type there is left
-  alone and named in one `warn`; `NOPERM` is said, never read as empty. Held by
-  review and a test under a read-only ACL; the move the docs print is one a
-  test runs.
 - **The fetch is apalis's**, and `buffer_size` and `poll_interval` are its only
   levers short of a fork. The worker sizes the buffer to the method's
   `concurrency`, capped where apalis's scripts stay safe (`MOST_PER_FETCH`), and

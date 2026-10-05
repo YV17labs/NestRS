@@ -45,16 +45,14 @@
 //!
 //! **A call fails within one connection budget of Redis going silent.** Each
 //! command is bounded by the connection, and no call sends a second one after a
-//! command that got no answer: the 6.x check runs beside the filing rather than
-//! in front of it, and a filing that timed out leaves what it opened to lapse.
+//! command that got no answer, and a filing that timed out leaves what it opened
+//! to lapse.
 //! So a silent Redis reaches the caller as the connection's own failure, with
 //! its cause, before the port's net (`nest_rs_queue::BACKEND_TIMEOUT`) gives up
 //! on the call — and when the net is what ends one, the call is dropped where it
 //! stands, which leaves nothing its failure would not: marks that lapse, and
 //! records already filed, already watched by the promoter.
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use apalis::prelude::{Request, Storage};
@@ -69,7 +67,6 @@ use super::promoter::Promoter;
 use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second, uncapped_context};
 use crate::layout::{self, CANCELLED, CHECKPOINTS, KEPT_PAST_DUE, LEASES, OPEN, job_key, millis};
-use crate::legacy_layout::{self, LegacyLayout};
 
 /// How long a unique key is claimed before its job is confirmed queued: twice
 /// the port's net. Every call the port makes is dropped at the net
@@ -148,8 +145,8 @@ return 1
 
 /// The producer a feature pushes through. Bound by
 /// [`RedisQueueModule`](crate::RedisQueueModule) under both its own name and
-/// `Arc<dyn JobProducer>`; a `Clone` shares the underlying connection, the
-/// delayed records it watches and the queues it has checked.
+/// `Arc<dyn JobProducer>`; a `Clone` shares the underlying connection and the
+/// delayed records it watches.
 ///
 /// It honours every capability the crate's backend declaration names: a delay,
 /// a unique key, a cancel by receipt or by unique key.
@@ -157,10 +154,6 @@ return 1
 pub struct RedisQueueProducer {
     conn: RedisConnection,
     promoter: Promoter,
-    /// The queues whose 6.x keys this producer has looked for — once per queue
-    /// per process, so the check costs one round trip the first time and never
-    /// again.
-    checked: Arc<Mutex<HashSet<QueueName>>>,
     claim: Script,
     keep: Script,
     close: Script,
@@ -173,7 +166,6 @@ impl RedisQueueProducer {
         Self {
             conn,
             promoter: Promoter::default(),
-            checked: Arc::default(),
             claim: Script::new(CLAIM),
             keep: Script::new(KEEP),
             close: Script::new(CLOSE),
@@ -185,23 +177,6 @@ impl RedisQueueProducer {
     /// worker draining it reads.
     fn storage(&self, queue: &QueueName) -> RedisStorage<serde_json::Value, RedisConnection> {
         RedisStorage::new_with_config(self.conn.clone(), layout::config(queue))
-    }
-
-    /// Say once per queue when jobs still wait under the 6.x layout: this push
-    /// lands where a 7.0 worker reads, and those do not. The worker refuses to
-    /// start beside them; a producer has nothing to refuse — its push is right —
-    /// so it warns, and keeps pushing.
-    async fn look_for_legacy_jobs(&self, queue: &QueueName) {
-        let first = self
-            .checked
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(queue.clone());
-        if !first {
-            return;
-        }
-        let found = LegacyLayout::read(&self.conn, queue).await;
-        report_legacy_check(queue, found.map(|found| found.held()));
     }
 
     /// File `envelopes` on `queue` as `options` say: open their records, then
@@ -465,36 +440,6 @@ fn answered(error: &redis::RedisError) -> bool {
     !error.is_io_error()
 }
 
-/// What the producer's one look at the 6.x layout says: jobs waiting there at
-/// `warn`, since no 7.0 worker will run them; a check the ACL refused as detail,
-/// since a user confined to the framework's keys could not have written them;
-/// any other refusal at `warn`, since those jobs would then go unnoticed.
-fn report_legacy_check(queue: &QueueName, outcome: Result<Vec<String>, redis::RedisError>) {
-    match outcome {
-        Ok(keys) if keys.is_empty() => {}
-        Ok(keys) => tracing::warn!(
-            target: nest_rs_queue::TARGET,
-            queue = %queue,
-            keys = %keys.join(", "),
-            namespace = %layout::namespace(queue),
-            "jobs wait under the 6.x key layout; a 7.0 worker does not run them — drain them \
-             with a 6.x worker, or move them under the queue's namespace",
-        ),
-        Err(error) if legacy_layout::outside_the_acl(&error) => tracing::debug!(
-            target: nest_rs_queue::TARGET,
-            queue = %queue,
-            error = %nest_rs_core::error_message(&error),
-            "6.x key layout not checked: the connection's ACL does not reach it",
-        ),
-        Err(error) => tracing::warn!(
-            target: nest_rs_queue::TARGET,
-            queue = %queue,
-            error = %nest_rs_core::error_message(&error),
-            "6.x key layout not checked; jobs waiting there would go unnoticed",
-        ),
-    }
-}
-
 /// A unique key a push claimed and could not let go of: the push failed, and
 /// a push under the key is refused, naming `job`, until the claim lapses or a
 /// `cancel_unique` frees it.
@@ -611,14 +556,7 @@ impl JobProducer for RedisQueueProducer {
         envelopes: Vec<Envelope>,
         options: &PushOptions,
     ) -> Result<(), QueueError> {
-        // Beside the filing, not in front of it: the check only ever warns, and
-        // ahead of the filing it would spend a second budget on a Redis that
-        // stopped answering — the first push to each queue then waiting two.
-        let (_, filed) = tokio::join!(
-            self.look_for_legacy_jobs(queue),
-            self.file(queue, envelopes, options),
-        );
-        filed
+        self.file(queue, envelopes, options).await
     }
 
     async fn remove(&self, queue: &QueueName, id: &JobId) -> Result<bool, QueueError> {
@@ -651,34 +589,6 @@ mod tests {
     use nest_rs_testing::LogCapture;
 
     use super::*;
-
-    /// A check Redis refused for any reason but the ACL is a `warn`: the jobs it
-    /// was looking for would otherwise wait with nothing to say so. One the ACL
-    /// refused is detail, and a check that found nothing says nothing.
-    #[test]
-    fn a_6x_check_redis_refuses_is_said_and_one_the_acl_refuses_is_detail() {
-        let logs = LogCapture::install();
-        let audio = QueueName::new("audio").expect("a valid name");
-        report_legacy_check(&audio, Ok(Vec::new()));
-        report_legacy_check(
-            &audio,
-            Err(redis::RedisError::from(std::io::Error::other("timed out"))),
-        );
-        report_legacy_check(
-            &audio,
-            Err(redis::make_extension_error(
-                "NOPERM".to_owned(),
-                Some("this user has no permissions to access one of the keys".to_owned()),
-            )),
-        );
-        let unchecked = logs.expect_one(
-            nest_rs_queue::TARGET,
-            "6.x key layout not checked; jobs waiting there would go unnoticed",
-        );
-        assert_eq!(unchecked.level, "warn");
-        assert_eq!(unchecked.field("error").as_deref(), Some("timed out"));
-        assert_eq!(logs.events().len(), 2, "the empty check said nothing");
-    }
 
     /// Only an answer says a filing did not run: a refusal Redis sent back
     /// closes what the push opened, while a timeout, a reset or a refused dial

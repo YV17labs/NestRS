@@ -18,8 +18,7 @@
 //! under a key of its own, and forgets what it filed.
 //!
 //! And a push through a Redis gone silent fails within one connection budget,
-//! with the connection's own cause — the first push to a queue included, whose
-//! 6.x check runs beside its filing — so the port's net never answers first.
+//! with the connection's own cause, so the port's net never answers first.
 
 use std::time::{Duration, Instant};
 
@@ -431,9 +430,7 @@ async fn cancellation_answers_true_once_for_a_waiting_job_and_false_for_one_neve
 
 /// A push through a Redis gone silent fails at the connection's budget as the
 /// connection's own failure, naming the variable that sets it — within one
-/// budget, although it is this process's first push to the queue and so runs
-/// the 6.x check too: the check runs beside the filing, where in front of it
-/// the push would wait out two budgets, and the port's net could answer first.
+/// budget, before the port's net could answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
     let proxy = crate::DarkeningProxy::start().await;

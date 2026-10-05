@@ -85,8 +85,7 @@ At boot:
    its `#[process]` methods into the reachable set.
 6. `RedisWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
    keeps only the methods whose provider is reachable, refuses what the
-   backend cannot honour, and logs each one; it also refuses to start while a
-   queue it serves still holds jobs under the 6.x key layout. `serve` runs one
+   backend cannot honour, and logs each one. `serve` runs one
    apalis worker per method on a shared `Monitor`, each under an id of its own.
 
 ## The producer-only app

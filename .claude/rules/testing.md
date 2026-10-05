@@ -107,7 +107,7 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   that re-types `"posts:read audio:transcode"` passes while the policy and the
   deployment drift apart; one that reads the constant fails the day they do.
 - **A procedure the docs hand an operator is run by a test, as printed** —
-  a move, a drain, anything that changes data an operator cannot get back.
+  anything that changes data an operator cannot get back.
 - **nextest is the runner, with no configuration**: `just test` runs every
   test and the doctests.
 - **A doc example is compiled, and run unless it serves forever**: a fragment

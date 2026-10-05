@@ -129,14 +129,9 @@ either `job_id` or `worker`:
 | `queue fetch met a record apalis cannot decode; …` | `error` | A fetch claimed a record apalis cannot read, and dropped its whole batch in flight — see [Delivery on Redis](/queue/delivery/#limits). |
 | `queue workers did not stop within the shutdown window; …` | `error` | The drain waited past its reserve — a Redis that stalled — and `cut` deliveries were left: each job stays in flight until a replica sweeps it, its attempt spent unless the give-back reached Redis. |
 
-At boot, a key at a 6.x queue name holding something other than the structure
-6.x kept there is said at `warn`, its `keys` naming each with what it holds —
-`a key at a 6.x queue name holds what 6.x never kept there; …` — and left
-alone. A producer files lines of its own on the same target, among them
-`jobs wait under the 6.x key layout; …` once per queue at `warn` — see
-[Upgrading queues from 6.x](/queue/upgrading/) — `unique key claimed without
-its job confirmed queued; …` at `warn` when a push under a unique key never
-learned whether its job was queued, its `step` saying where, `due jobs not moved
+A producer files lines of its own on the same target, among them `unique key
+claimed without its job confirmed queued; …` at `warn` when a push under a
+unique key never learned whether its job was queued, its `step` saying where, `due jobs not moved
 onto the queue; retrying` at `warn` when Redis refused its scan of the delayed
 jobs it filed, and `queued job cancelled` at `info` when a cancel answered
 `true`.

@@ -47,7 +47,6 @@ mod config;
 mod connection;
 mod error;
 mod layout;
-mod legacy_layout;
 mod module;
 mod promotion;
 mod queue;

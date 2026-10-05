@@ -2,9 +2,8 @@
 //! is in `integration`, and the doubles both use in `harness`. One module per
 //! concern in `src/`: [`connection`] for the shared connection's boot, bound and
 //! recovery, [`tls`] for `rediss://`, [`throttler`] for the cross-process
-//! rate-limit store, [`layout`] for where a queue lives — its namespace, the 6.x
-//! layout a worker refuses to start beside and the documented move out of it,
-//! and a user confined to the framework's keys — [`queue`] for the producer
+//! rate-limit store, [`layout`] for where a queue lives — its namespace, run by a
+//! user confined to the framework's keys — [`queue`] for the producer
 //! binding, [`worker`] for the consumer, [`correlation`] for the trace context
 //! that crosses the producer/consumer boundary, and [`schedule`] for the
 //! occurrence lock a job firing once across replicas claims through.

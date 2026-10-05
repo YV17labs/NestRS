@@ -74,10 +74,7 @@ ACL SETUSER <user> on ><password> resetchannels ~nestrs:queue:* +ping +select +e
 
 An app that also rate-limits or fires scheduled jobs once gives the same user
 [the rate limiter's](/rate-limiting/#redis-shipped) and
-[the schedule's](/schedule/#the-keys) rules as well. The one check this rule
-refuses is the 6.x one, which reads the queue's bare name at the root of the
-keyspace: the worker says at `warn` that it could not look, and
-[Upgrading queues from 6.x](/queue/upgrading/) runs it with a user that can.
+[the schedule's](/schedule/#the-keys) rules as well.
 
 The client library also sends `CLIENT SETINFO` on every connection and ignores
 its refusal; no rule names it, because Redis 7.0 knows no such subcommand and
@@ -404,8 +401,6 @@ that.
 
 - `crates/nest-rs-redis/src/layout.rs` — the namespace, every key the
   framework keeps beside it, and the week they are kept.
-- `crates/nest-rs-redis/src/legacy_layout.rs` — the 6.x check, and the one read
-  of apalis's structures the framework makes itself.
 - `crates/nest-rs-redis/src/queue/producer.rs` — the unique claim, and the cancel.
 - `crates/nest-rs-redis/src/worker/lease.rs` — the lease, the settled mark, the
   tombstone a delivery meets, and the throttle.
@@ -420,5 +415,5 @@ that.
 ## Going further
 
 - [Retries and failure](/queue/retries-and-failure/) — the budget, the backoff and the dead set.
-- [Upgrading queues from 6.x](/queue/upgrading/) — moving jobs out of the layout 6.x left at the root.
+- [Upgrading queues from 6.x](/queue/upgrading/) — draining the jobs 6.x left at the root.
 - [Observability](/queue/observability/) — every line a delivery files.

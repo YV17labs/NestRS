@@ -60,10 +60,32 @@ async fn a_script_redis_never_keeps_fails_after_a_bounded_number_of_loads() {
     assert_eq!(server.loads(), 3, "the loads are bounded");
 }
 
+/// The binding's producer has its scripts loaded at boot, so the first push
+/// is one round trip, not a refused call, a load and the call again.
+#[tokio::test]
+async fn the_bindings_producer_loads_its_scripts_at_boot() {
+    let server = ForgetfulRedis::start(0).await;
+    let redis = RedisConfig {
+        url: format!("redis://{}/", server.addr),
+        connect_timeout: Duration::from_secs(2),
+        ..RedisConfig::default()
+    };
+    nest_rs_core::App::builder()
+        .module::<ProducerModule>()
+        .provide(redis)
+        .build()
+        .await
+        .expect("the binding boots");
+
+    assert_eq!(server.loads(), 2, "the push's script and the cancel's");
+}
+
+#[nest_rs_core::module(imports = [nest_rs_redis::RedisModule::for_root(None), nest_rs_redis::RedisQueueModule])]
+struct ProducerModule;
+
 /// A server whose first `lost` script loads are flushed as soon as they land:
 /// it answers a script call `NOSCRIPT` until a load is kept and `1` after,
-/// answers a load with the digest the last call named — the one the client
-/// checks — and `PONG`s the rest.
+/// answers a load with the script's digest, and `PONG`s the rest.
 struct ForgetfulRedis {
     addr: SocketAddr,
     loads: Arc<AtomicUsize>,
@@ -104,19 +126,16 @@ impl ForgetfulRedis {
 async fn forget(mut client: TcpStream, lost: usize, loads: Arc<AtomicUsize>) {
     let mut received = Vec::new();
     let mut chunk = [0u8; 4096];
-    let mut digest = Vec::new();
     loop {
         while let Some(length) = command_length(&received) {
             let command = received.drain(..length).collect::<Vec<_>>();
             let reply = match argument(&command, 0).to_ascii_uppercase().as_slice() {
                 b"EVALSHA" if loads.load(Ordering::SeqCst) > lost => b":1\r\n".to_vec(),
-                b"EVALSHA" => {
-                    digest = argument(&command, 1).to_vec();
-                    b"-NOSCRIPT No matching script. Please use EVAL.\r\n".to_vec()
-                }
+                b"EVALSHA" => b"-NOSCRIPT No matching script. Please use EVAL.\r\n".to_vec(),
                 b"SCRIPT" => {
                     loads.fetch_add(1, Ordering::SeqCst);
-                    [b"$40\r\n", digest.as_slice(), b"\r\n"].concat()
+                    let code = String::from_utf8_lossy(bulk(&command, 2));
+                    format!("$40\r\n{}\r\n", redis::Script::new(&code).get_hash()).into_bytes()
                 }
                 _ => b"+PONG\r\n".to_vec(),
             };
@@ -131,8 +150,36 @@ async fn forget(mut client: TcpStream, lost: usize, loads: Arc<AtomicUsize>) {
     }
 }
 
+/// Argument `at` of the whole command `bytes` holds, as sent — a script spans
+/// lines.
+fn bulk(bytes: &[u8], at: usize) -> &[u8] {
+    let mut rest = bytes;
+    let Some(count) = header(&mut rest) else {
+        return &[];
+    };
+    for index in 0..count {
+        let Some(length) = header(&mut rest) else {
+            return &[];
+        };
+        let (body, tail) = rest.split_at(length.min(rest.len()));
+        if index == at {
+            return body;
+        }
+        rest = tail.get(2..).unwrap_or_default();
+    }
+    &[]
+}
+
+/// The number a `*` or `$` header at the front of `rest` holds, past it.
+fn header(rest: &mut &[u8]) -> Option<usize> {
+    let end = rest.windows(2).position(|pair| pair == b"\r\n")?;
+    let number = std::str::from_utf8(rest.get(1..end)?).ok()?.parse().ok();
+    *rest = &rest[end + 2..];
+    number
+}
+
 /// Argument `at` of the whole command `bytes` holds, read as a line — every
-/// argument this server reads is one.
+/// argument this server reads by line is one.
 fn argument(bytes: &[u8], at: usize) -> &[u8] {
     bytes
         .split(|&byte| byte == b'\n')

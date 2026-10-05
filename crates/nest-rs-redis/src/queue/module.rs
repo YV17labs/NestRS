@@ -43,7 +43,9 @@ impl RedisQueueModule {
                         .get::<RedisConnection>()
                         .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
                     conn.answers_within(BACKEND_TIMEOUT, "the queue port")?;
-                    Ok(RedisQueueProducer::new((*conn).clone()))
+                    let producer = RedisQueueProducer::new((*conn).clone());
+                    producer.load_scripts().await?;
+                    Ok(producer)
                 },
             )
             .provide_declared_factory_after::<Arc<dyn JobProducer>, RedisQueueProducer, _, _>(

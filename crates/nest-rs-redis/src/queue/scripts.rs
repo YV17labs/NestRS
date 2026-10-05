@@ -476,6 +476,11 @@ pub(crate) static SCRIPTS: LazyLock<Scripts> = LazyLock::new(|| Scripts {
 
 impl Scripts {
     /// Every script a worker runs, to load before its first delivery.
+    /// The scripts a producer runs, loaded when its binding boots.
+    pub(crate) fn producer(&self) -> [&Script; 2] {
+        [&self.push, &self.cancel]
+    }
+
     pub(crate) fn consumer(&self) -> [&Script; 9] {
         [
             &self.reclaim,

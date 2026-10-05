@@ -13,6 +13,8 @@
 //! none. **A cancel is one script too**: it removes a job still waiting and
 //! everything it held, and refuses one a delivery runs.
 
+use std::collections::HashMap;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -26,6 +28,11 @@ use crate::backend::BACKEND;
 use crate::error::UnexpectedReply;
 use crate::layout::{GROUP, QueueKeys, millis};
 
+/// The most queues whose keys a producer keeps spelled: a name pushed to past
+/// them — the raw push takes any — has its keys spelled at each call instead,
+/// so names read from input cannot grow the producer without bound.
+const KEYS_KEPT: usize = 1024;
+
 /// The producer a feature pushes through. Bound by
 /// [`RedisQueueModule`](crate::RedisQueueModule) under both its own name and
 /// `Arc<dyn JobProducer>`; a `Clone` shares the underlying connection.
@@ -35,17 +42,55 @@ use crate::layout::{GROUP, QueueKeys, millis};
 #[derive(Clone)]
 pub struct RedisQueueProducer {
     conn: RedisConnection,
+    keys: Arc<KeptKeys>,
+}
+
+/// Every key of each queue pushed to, spelled once, for at most [`KEYS_KEPT`]
+/// queues.
+#[derive(Default)]
+struct KeptKeys(RwLock<HashMap<QueueName, Arc<QueueKeys>>>);
+
+impl KeptKeys {
+    fn of(&self, queue: &QueueName) -> Arc<QueueKeys> {
+        if let Some(keys) = self
+            .0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(queue)
+        {
+            return Arc::clone(keys);
+        }
+        let keys = Arc::new(QueueKeys::new(queue));
+        let mut kept = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        if kept.len() < KEYS_KEPT {
+            kept.insert(queue.clone(), Arc::clone(&keys));
+        }
+        keys
+    }
 }
 
 impl RedisQueueProducer {
     /// A producer over the app's shared connection (reused, never reopened).
     pub fn new(conn: RedisConnection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            keys: Arc::default(),
+        }
+    }
+
+    /// Load the scripts a push and a cancel run, so the first of each is one
+    /// round trip rather than a refused call, a load and the call again.
+    pub(crate) async fn load_scripts(&self) -> Result<(), redis::RedisError> {
+        let mut conn = self.conn.clone();
+        for script in SCRIPTS.producer() {
+            script.load_async(&mut conn).await?;
+        }
+        Ok(())
     }
 
     /// Cancel the job `job` names, or the one holding the unique key `key`.
     async fn cancel(&self, queue: &QueueName, job: &str, key: &str) -> Result<bool, QueueError> {
-        let keys = QueueKeys::new(queue);
+        let keys = self.keys.of(queue);
         let cancelled: i64 = self
             .conn
             .invoke(
@@ -94,7 +139,7 @@ impl JobProducer for RedisQueueProducer {
                 .filter(|wait| !wait.is_zero())
                 .map_or(0, millis),
         };
-        let keys = QueueKeys::new(queue);
+        let keys = self.keys.of(queue);
         let mut push = SCRIPTS.push.key(&keys.jobs);
         push.key(&keys.entries)
             .key(&keys.due)
@@ -143,5 +188,29 @@ impl JobProducer for RedisQueueProducer {
 
     async fn remove_unique(&self, queue: &QueueName, key: &str) -> Result<bool, QueueError> {
         self.cancel(queue, "", key).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue(name: impl Into<String>) -> QueueName {
+        QueueName::new(name.into()).expect("a valid name")
+    }
+
+    /// A queue's keys are spelled once, and a name past the bound — the raw
+    /// push takes any — is spelled per call rather than kept.
+    #[test]
+    fn a_queues_keys_are_spelled_once_and_no_more_queues_are_kept_than_the_bound() {
+        let kept = KeptKeys::default();
+        let orders = queue("orders");
+        assert!(Arc::ptr_eq(&kept.of(&orders), &kept.of(&orders)));
+        for at in 1..KEYS_KEPT {
+            kept.of(&queue(format!("queue-{at}")));
+        }
+        let past = queue("past-the-bound");
+        assert!(!Arc::ptr_eq(&kept.of(&past), &kept.of(&past)));
+        assert!(Arc::ptr_eq(&kept.of(&orders), &kept.of(&orders)));
     }
 }

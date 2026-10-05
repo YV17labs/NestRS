@@ -493,3 +493,121 @@ async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     assert_eq!(said.level, "error");
     assert_eq!(said.field("queue").as_deref(), Some("nestrs-worker-boot"));
 }
+
+/// A consumer over `memory` whose renewals never answer — a backend gone
+/// silent under the leases it handed over.
+struct Silent {
+    inner: crate::memory::MemoryConsumer,
+}
+
+impl nest_rs_queue::JobConsumer for Silent {
+    type Lease = crate::memory::MemoryLease;
+
+    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
+        self.inner.backend()
+    }
+
+    async fn prepare(
+        &self,
+        methods: &[&'static nest_rs_queue::ProcessMethod],
+    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
+        self.inner.prepare(methods).await
+    }
+
+    async fn receive(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        ask: nest_rs_queue::Ask,
+    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        self.inner.receive(method, ask).await
+    }
+
+    async fn renew(
+        &self,
+        _method: &'static nest_rs_queue::ProcessMethod,
+        _leases: &[&Self::Lease],
+    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
+        std::future::pending().await
+    }
+
+    async fn settle(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        disposition: nest_rs_queue::Disposition<'_>,
+    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
+        self.inner.settle(method, lease, disposition).await
+    }
+
+    async fn maintain(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
+        self.inner.maintain(method).await
+    }
+}
+
+#[queue(name = "nestrs-worker-long", job = WorkerCommand)]
+struct LongQueue;
+
+#[injectable]
+#[derive(Default)]
+struct LongProcessor;
+
+#[processor]
+impl LongProcessor {
+    #[process(queue = LongQueue)]
+    async fn run(&self, _job: WorkerCommand) -> anyhow::Result<()> {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Ok(())
+    }
+}
+
+#[module(providers = [LongProcessor])]
+struct LongModule;
+
+/// A renewal the backend never answers holds no lease past its end: the
+/// attempt is cut once its lease lapses, as one no renewal confirmed — not
+/// once the port's net gives up on the renewal, long after the backend let
+/// another delivery take the job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let memory = Memory::new(&DELAYING, LEASE);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<LongModule>()
+        .provide(BoundConsumer::new(Silent {
+            inner: memory.consumer(),
+        }))
+        .provide_dyn(Arc::clone(&producer))
+        .provide(nest_rs_queue::QueueConfig {
+            shutdown_timeout: Duration::from_secs(1),
+        })
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    nest_rs_queue::JobProducerExt::push(&*producer, LongQueue, WorkerCommand { seq: 0 }, None)
+        .await
+        .expect("a push");
+    let cut = "job lease not renewed for a whole lease; its attempt is cut and the job handed back";
+    let deadline = std::time::Instant::now() + LEASE * 4;
+    while logs.find(nest_rs_queue::TARGET, cut).is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the attempt runs on past its {LEASE:?} lease while the renewal waits out the port's \
+             {:?} net",
+            nest_rs_queue::BACKEND_TIMEOUT,
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+}

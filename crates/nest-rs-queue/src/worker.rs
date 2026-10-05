@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::panic::AssertUnwindSafe;
+use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -586,12 +587,20 @@ impl<C: JobConsumer> MethodRun<C> {
             if !held.is_empty() {
                 let leases: Vec<&C::Lease> = held.iter().map(|(_, lease)| &**lease).collect();
                 let asked = Instant::now();
-                match within(
+                let mut renewal = pin!(within(
                     BACKEND_TIMEOUT,
                     self.shared.consumer.renew(self.method, &leases),
-                )
-                .await
-                {
+                ));
+                // A renewal still waiting on the backend holds no lease past its
+                // end: the backend lets another delivery take it then.
+                let answer = loop {
+                    let lapse = self.first_lapse();
+                    tokio::select! {
+                        answer = &mut renewal => break answer,
+                        () = sleep_until_some(lapse) => self.lapse_unconfirmed(),
+                    }
+                };
+                match answer {
                     Ok(Ok(answers)) => {
                         retry = FIRST_RETRY;
                         not_before = Instant::now() + RENEWAL_SPACING;
@@ -1037,6 +1046,16 @@ impl<C: JobConsumer> MethodRun<C> {
         }
     }
 
+    /// When the first lease [`lapse_unconfirmed`](Self::lapse_unconfirmed)
+    /// would cut lapses, if any is held.
+    fn first_lapse(&self) -> Option<Instant> {
+        self.lock()
+            .values()
+            .filter(|held| !held.settling && !held.lost.is_cancelled())
+            .map(|held| held.confirmed + held.leased_for)
+            .min()
+    }
+
     /// When the next lease falls due for renewal — a third of its length after
     /// its last confirmation, so two renewals can fail before it lapses — or
     /// [`IDLE_RENEWAL`] from now when none is held.
@@ -1046,6 +1065,14 @@ impl<C: JobConsumer> MethodRun<C> {
             .map(|held| held.confirmed + held.leased_for / 3)
             .min()
             .unwrap_or_else(|| Instant::now() + IDLE_RENEWAL)
+    }
+}
+
+/// Sleep until `at`, or forever when there is no instant to wait for.
+async fn sleep_until_some(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending().await,
     }
 }
 

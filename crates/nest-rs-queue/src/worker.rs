@@ -22,11 +22,13 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use nest_rs_core::{Container, SHUTDOWN_SETTLE_TIMEOUT, Transport, error_message};
 use serde_json::Value;
@@ -400,6 +402,20 @@ enum Waited {
     Lost,
 }
 
+/// A delivery's lease, taken off the renewed ones however its task ends — a
+/// panic included — so no lease is renewed for a delivery that is gone, holding
+/// its job for as long as the worker lives.
+struct Released<C: JobConsumer> {
+    run: Arc<MethodRun<C>>,
+    token: u64,
+}
+
+impl<C: JobConsumer> Drop for Released<C> {
+    fn drop(&mut self) {
+        self.run.lock().remove(&self.token);
+    }
+}
+
 impl<C: JobConsumer> MethodRun<C> {
     /// Ask for as many deliveries as permits are free, until the stop.
     async fn receive(self: Arc<Self>) {
@@ -496,11 +512,24 @@ impl<C: JobConsumer> MethodRun<C> {
     /// Run `delivery` on a task of its own, which dies with the worker.
     fn spawn(&self, delivery: impl Future<Output = ()> + Send + 'static) {
         let killed = self.shared.killed.clone();
+        let queue = self.queue.clone();
         self.shared.deliveries.spawn(async move {
             tokio::select! {
                 biased;
                 () = killed.cancelled() => {}
-                () = delivery => {}
+                ended = AssertUnwindSafe(delivery).catch_unwind() => {
+                    // The attempt catches its handler's panics, so this one is
+                    // the backend's or the worker's own.
+                    if let Err(panic) = ended {
+                        nest_rs_core::contained_panic!(
+                            target: TARGET,
+                            panic.as_ref(),
+                            "queue delivery panicked outside its attempt; its job is left to its \
+                             lease",
+                            queue = %queue,
+                        );
+                    }
+                }
             }
         });
     }
@@ -613,6 +642,10 @@ impl<C: JobConsumer> MethodRun<C> {
         } = delivery;
         let lease = Arc::new(lease);
         let (token, lost) = self.hold(Arc::clone(&lease), leased_for);
+        let _released = Released {
+            run: Arc::clone(&self),
+            token,
+        };
         let record = match record {
             Ok(record) => record,
             Err(why) => {

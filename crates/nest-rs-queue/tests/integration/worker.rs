@@ -384,3 +384,112 @@ async fn a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease()
     assert!(said.iter().all(|line| line.level == "error"));
     assert_eq!(said[0].field("disposition").as_deref(), Some("complete"));
 }
+
+/// A consumer over `memory` whose first settle panics — a backend's defect,
+/// met inside a delivery's task, outside any attempt.
+struct PanicsOnce {
+    inner: crate::memory::MemoryConsumer,
+    panicked: std::sync::atomic::AtomicBool,
+}
+
+impl nest_rs_queue::JobConsumer for PanicsOnce {
+    type Lease = crate::memory::MemoryLease;
+
+    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
+        self.inner.backend()
+    }
+
+    async fn prepare(
+        &self,
+        methods: &[&'static nest_rs_queue::ProcessMethod],
+    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
+        self.inner.prepare(methods).await
+    }
+
+    async fn receive(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        ask: nest_rs_queue::Ask,
+    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        self.inner.receive(method, ask).await
+    }
+
+    async fn renew(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        leases: &[&Self::Lease],
+    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
+        self.inner.renew(method, leases).await
+    }
+
+    async fn settle(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+        lease: &Self::Lease,
+        disposition: nest_rs_queue::Disposition<'_>,
+    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
+        assert!(
+            self.panicked
+                .swap(true, std::sync::atomic::Ordering::SeqCst),
+            "the backend's first settle panics",
+        );
+        self.inner.settle(method, lease, disposition).await
+    }
+
+    async fn maintain(
+        &self,
+        method: &'static nest_rs_queue::ProcessMethod,
+    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
+        self.inner.maintain(method).await
+    }
+}
+
+/// A delivery whose task panics outside its attempt — here in the backend's
+/// settle — stops renewing its lease, so the lease lapses and the job runs
+/// again: renewed for a task that is gone, it was held for as long as the
+/// worker lived.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let lease = Duration::from_millis(500);
+    let memory = Memory::new(&DELAYING, lease);
+    let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
+    let app = TestApp::builder()
+        .module::<BootModule>()
+        .provide(BoundConsumer::new(PanicsOnce {
+            inner: memory.consumer(),
+            panicked: std::sync::atomic::AtomicBool::new(false),
+        }))
+        .provide_dyn(Arc::clone(&producer))
+        .build_headless()
+        .await
+        .expect("the app boots");
+    let mut worker = QueueWorker::new();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the worker configures");
+    let stop = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(worker).serve(stop.clone()));
+    nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
+        .await
+        .expect("a push");
+    let deadline = std::time::Instant::now() + lease * 10;
+    tokio::time::sleep(lease).await;
+    while memory.held("nestrs-worker-boot") > 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let held = memory.held("nestrs-worker-boot");
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    assert_eq!(
+        held, 0,
+        "the job ran again once its lease lapsed, and settled"
+    );
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "queue delivery panicked outside its attempt; its job is left to its lease",
+    );
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("queue").as_deref(), Some("nestrs-worker-boot"));
+}

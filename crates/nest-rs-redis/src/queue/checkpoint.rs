@@ -42,9 +42,8 @@ impl RedisCheckpoint {
         }
     }
 
-    /// Write `state` (`None`: clear it) while this delivery holds the job.
-    async fn write(&self, state: Option<Vec<u8>>) -> Result<(), QueueError> {
-        let operation = if state.is_some() { "save" } else { "clear" };
+    /// Write `state` while this delivery holds the job.
+    async fn write(&self, state: Vec<u8>) -> Result<(), QueueError> {
         let written: i64 = SCRIPTS
             .checkpoint
             .key(&self.jobs)
@@ -54,8 +53,7 @@ impl RedisCheckpoint {
             .arg(&self.lease.entry)
             .arg(self.lease.count)
             .arg(&self.job)
-            .arg(operation)
-            .arg(state.unwrap_or_default())
+            .arg(state)
             .invoke_async(&mut self.conn.clone())
             .await
             .map_err(QueueError::backend)?;
@@ -83,10 +81,6 @@ impl CheckpointStore for RedisCheckpoint {
     }
 
     async fn save(&self, state: Value) -> Result<(), QueueError> {
-        self.write(Some(serde_json::to_vec(&state)?)).await
-    }
-
-    async fn clear(&self) -> Result<(), QueueError> {
-        self.write(None).await
+        self.write(serde_json::to_vec(&state)?).await
     }
 }

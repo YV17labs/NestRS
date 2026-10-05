@@ -465,13 +465,4 @@ impl CheckpointStore for MemoryCheckpoint {
         queue.checkpoints.insert(self.job.clone(), state);
         Ok(())
     }
-
-    async fn clear(&self) -> Result<(), QueueError> {
-        self.memory
-            .lock()
-            .queue(&self.queue)
-            .checkpoints
-            .remove(&self.job);
-        Ok(())
-    }
 }

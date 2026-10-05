@@ -82,9 +82,9 @@ const KEYS: [&str; 9] = [
 /// ```
 ///
 /// `id` is the job's [`JobId`], minted by the push, and `attempt` the attempt a
-/// delivery of this record runs, from 1 — a backend re-filing a job for a later
-/// attempt files the record [`Delivery::retry_envelope`](crate::consume::Delivery::retry_envelope)
-/// hands it, which carries the next number. `unique_key` is present when the push
+/// delivery of this record runs, from 1 — the port files a job for a later
+/// attempt with the record [`Disposition::Retry`](crate::Disposition::Retry)
+/// carries, which holds the next number. `unique_key` is present when the push
 /// declared one. A record without `id` or `attempt` is still an envelope: it
 /// runs under an id minted for its delivery, as attempt 1.
 ///
@@ -129,7 +129,7 @@ const KEYS: [&str; 9] = [
 /// they are spelled as this version spells them. It hands the job back unread
 /// under that id, files its lines in that trace, and counts the job's wait
 /// unread against that id — dead-lettering it a day after its first hand-back
-/// ([`NEWER_RELEASE_PATIENCE`](crate::consume::NEWER_RELEASE_PATIENCE)), and at
+/// ([`NEWER_RELEASE_PATIENCE`](crate::NEWER_RELEASE_PATIENCE)), and at
 /// once when it names no id it can read. So a later version keeps those three
 /// keys and their spelling, whatever else it changes.
 ///

@@ -98,21 +98,24 @@ mod queue_name;
 pub mod unit;
 mod worker;
 
-/// The port's half of consuming: discovery and one attempt at a job.
+/// What one attempt at a job is, run by [`QueueWorker`]. Not a driver's seam —
+/// a backend implements [`JobConsumer`] — and hidden: public only so this
+/// crate's suite drives an attempt without a worker.
+#[doc(hidden)]
 pub mod consume;
 // The wire envelope a job travels in, sealed and opened by this crate alone. A
 // private module with its type re-exported flat, like every other type here:
 // `seal` and `open` are `pub(crate)`, so the module path reached nothing a
 // caller may call and only offered `Envelope` and `WIRE_FORMAT_VERSION` a second
-// spelling. `consume` and `unit` stay `pub mod` because their principal exports
-// are a procedure and a constant, read as `consume::attempt` and `unit::JOB`.
+// spelling. `unit` stays `pub mod` because its principal export is a constant,
+// read as `unit::JOB`.
 mod envelope;
 
 pub use backend::{BACKEND_REMEDY, BACKEND_TIMEOUT, QueueBackend};
 pub use capability::{Capabilities, Capability};
 pub use checkpoint::{Checkpoint, CheckpointStore};
 pub use config::QueueConfig;
-pub use consume::STALL_LIMIT;
+pub use consume::{NEWER_RELEASE_PATIENCE, NEWER_RELEASE_WAIT, STALL_LIMIT};
 pub use consumer::{Ask, BoundConsumer, JobConsumer, LeaseHold, Prepared, Received};
 pub use delivery::Delivery;
 // `CheckpointCell` is the type of a `pub` field on the exported `HandlerContext`,

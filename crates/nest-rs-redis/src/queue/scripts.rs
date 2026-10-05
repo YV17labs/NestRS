@@ -334,22 +334,18 @@ end
 return back
 ";
 
-/// Save (`ARGV[6]` = `save`) or clear (`clear`) a job's checkpoint while this
-/// worker still holds the delivery running it: `1` when written, `0` when not.
+/// Save a job's checkpoint while this worker still holds the delivery running
+/// it: `1` when written, `0` when not. The script that ends the job lets it go.
 ///
 /// `KEYS`: jobs, checkpoints. `ARGV`: the group, this worker, the entry, its
-/// delivery count, the job, the operation, the state.
+/// delivery count, the job, the state.
 const CHECKPOINT: &str = concat!(
     pending!(),
     holds!(),
     "if not holds(ARGV[3], ARGV[4]) then
   return 0
 end
-if ARGV[6] == 'save' then
-  redis.call('HSET', KEYS[2], ARGV[5], ARGV[7])
-else
-  redis.call('HDEL', KEYS[2], ARGV[5])
-end
+redis.call('HSET', KEYS[2], ARGV[5], ARGV[6])
 return 1
 "
 );

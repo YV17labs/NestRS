@@ -18,12 +18,12 @@ pub const BACKEND_REMEDY: &str = "Import exactly one queue backend's binding —
 /// [`enqueue`](crate::JobProducer::enqueue), a cancel's
 /// [`remove`](crate::JobProducer::remove) or
 /// [`remove_unique`](crate::JobProducer::remove_unique), a checkpoint's
-/// [`load`](crate::CheckpointStore::load), [`save`](crate::CheckpointStore::save)
-/// or [`clear`](crate::CheckpointStore::clear). Past it the port stops waiting,
+/// [`load`](crate::CheckpointStore::load) or
+/// [`save`](crate::CheckpointStore::save), and every
+/// [`JobConsumer`](crate::JobConsumer) call. Past it the port stops waiting,
 /// drops the call where it stands, and answers [`QueueError::Unanswered`],
-/// naming the queue and the call: a push or a cancel fails to its caller, a
-/// checkpoint's read or save fails the attempt, retryably, and a checkpoint's
-/// clear at the job's end is said at `warn`, the outcome standing.
+/// naming the queue and the call: a push or a cancel fails to its caller, and a
+/// checkpoint's read or save fails the attempt, retryably.
 ///
 /// **A net, never a backend's budget.** A backend bounds each round trip it
 /// makes, so an outage reaches the caller as the backend's own failure — its

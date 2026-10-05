@@ -1,481 +1,227 @@
 ---
 title: Writing a queue driver
-description: "A backend-agnostic scaffold for a queue driver — the traits you implement, the inventory you drain, with storage-specific code marked as your own."
+description: "Plug a storage into the queue port: declare the backend, file jobs, hand them to the port's worker under a lease, and prove it with the behaviour kit."
 sidebar:
   order: 7
 ---
 
-The [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue)
-crate is a seam: a `JobProducer` trait on the push side, a link-time
-`ProcessMethod` inventory + a wire envelope on the consume side, a
-`Transport` slot the framework drives at boot, and a `QueueBackend` constant
-saying what your storage honours beyond what every backend owes. The seam names no storage
-and no worker runtime — Redis, NATS JetStream, SQS, RabbitMQ, an
-in-process channel, a Postgres queue table all plug in the same way.
-This page gives you the **shape** of a driver, not its implementation:
-the traits you implement, the registry you drain, with `// your code
-here` markers where the storage-specific work lands. The reference impl
-is [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis)
-(apalis on Redis) — read it once when a placeholder is unclear.
-
-## Install
-
-```bash frame="terminal"
-cargo add nest-rs --features queue
-```
-
-The contract without a backend: `redis` would pull the first-party producer and worker, which is what you are replacing.
-
-## What you'll implement
-
-- A `QueueBackend` constant: your backend's name and the capabilities it
-  honours.
-- A `JobProducer` impl: file the envelopes the port sealed on your storage —
-  and take one back, if you declare cancellation.
-- A `Transport` impl: a receive loop that calls the port's
-  `consume::attempt` and translates its outcome into your backend's
-  ack / re-file / dead-letter.
-- Three modules, three shapes — the substrate (`<Vendor>Module::for_root`),
-  the producer binding (bare), the worker binding (`for_root`).
-
-A driver lives in a `nest-rs-<technology>` crate that depends on
-`nest-rs-core`, `nest-rs-queue`, plus whatever your storage and runtime
-need. An app picks a driver by importing its module instead of
-`nest-rs-redis`.
-
-## The wire envelope
-
-The one binding rule across backends — the port seals it at the push,
-the port opens it in `consume::attempt`, the storage in between only moves
-JSON.
-
-```json
-{
-  "v": 1,
-  "id": "01a0de3f-2231-75cf-a401-78dfcb3ecc7d",
-  "attempt": 1,
-  "payload": <user job as JSON>,
-  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-  "tracestate": "rojo=00f067aa0ba902b7",
-  "actor_id": "01a0…",
-  "unique_key": "track-1.mp3"
-}
-```
-
-`id` is the job's id, minted by the port at the push and the same on every
-attempt; key your backend's records by it, never by an id of your own.
-`attempt` is the attempt the record is for, and a record the port hands back
-for a retry carries the next one. `unique_key` is present only when the push
-declared one. A record re-filed for a later attempt of a job whose trace its
-first attempt had to mint also carries `"trace_minted": true`, so the attempts
-after it join that trace without claiming a link to the enqueue.
-
-You never write that shape, nor read it: the port seals it at the push — the
-id, the trace context, the unique key — and hands your producer sealed
-`Envelope`s, and `consume::attempt` opens it again. A queue is the one hop
-that crosses a **process**, so a hand-rolled wrapper would silently cost every
-job its link back to the request that enqueued it — see
-[Correlation](/fundamentals/correlation/).
-
-`consume::attempt` checks the version before anything runs — not the handler
-`#[process]` emits, which only ever sees an opened payload — so the one step a
-driver must not skip is the one it cannot: every attempt goes through the port.
-An **older** version is refused and dead-lettered, naming which way the release
-gap runs. A **newer** one is never read: the attempt answers
-`AttemptOutcome::Defer`, and the record goes back to your storage unchanged for
-a consumer of that release — for a day after its first hand-back at the most
-(`consume::NEWER_RELEASE_PATIENCE`), past which the port dead-letters it naming
-both versions.
-
-## Step 1 — The backend and the producer
-
-Declare what your backend is once, as a constant every site reads. The name is
-its `messaging.system` on every job span; the capabilities are the optional
-ones it honours, one by one:
-
-```rust title="crates/yourqueue/src/backend.rs"
-use nest_rs::queue::{Capabilities, Capability, QueueBackend};
-
-pub(crate) static BACKEND: QueueBackend = QueueBackend::new(
-    "yourqueue",
-    Capabilities::NONE.with(Capability::DelayedPush),
-);
-```
-
-| Capability | What a push or a method declares | What your backend then owes |
-|---|---|---|
-| `DelayedPush` | `PushOptions::with_delay` | hold the job until the instant, and re-file a retry for later |
-| `UniquePush` | `PushOptions::with_unique` | refuse a second job under a held key with `QueueError::UniqueKeyHeld`, and let go of the key at the job's outcome |
-| `Cancellation` | `cancel`, `cancel_unique` | `remove` and `remove_unique`: `true` only for a job no attempt has started |
-| `Throttle` | `#[process(throttle(..))]` | count the method's attempt starts across every replica, and hold back the ones over the limit |
-| `Checkpoint` | a `Checkpoint<_>` parameter | a `CheckpointStore` per job that outlives its delivery |
-
-Everything you do not declare, the port refuses before your code sees it — at
-the push, at the cancel, or at the worker's boot for a `#[process]` key — with a
-sentence naming your backend. Declaring one you do not keep is the silent
-failure those refusals exist to prevent.
-
-The producer files what the port sealed. The port has already checked the
-queue's name, refused every option your backend does not declare, minted each
-job's id and sealed its envelope; it answers the caller with the receipts
-itself.
-
-```rust title="crates/yourqueue/src/queue/producer.rs"
-use nest_rs::queue::{Envelope, JobProducer, PushOptions, QueueBackend, QueueError, QueueName, async_trait};
-
-use crate::backend::BACKEND;
-
-#[derive(Clone)]
-pub struct YourQueueProducer {
-    // your storage handle — a pool, an SQS client, a NATS connection…
-}
-
-#[async_trait]
-impl JobProducer for YourQueueProducer {
-    fn backend(&self) -> &'static QueueBackend {
-        &BACKEND
-    }
-
-    async fn enqueue(
-        &self,
-        queue: &QueueName,
-        envelopes: Vec<Envelope>,
-        options: &PushOptions,
-    ) -> Result<(), QueueError> {
-        for envelope in envelopes {
-            let id = envelope.id().clone();
-            let record = envelope.into_json();
-            // Your code: store `record` on `queue`, keyed by `id` — held back
-            // until `options.delay()` ends when there is one.
-        }
-        Ok(())
-    }
-}
-```
-
-`push`, `push_many`, `cancel` and `cancel_unique` are the port's, on
-`JobProducerExt`, over any producer — no extra code on your side. A backend
-declaring `Cancellation` also overrides `remove` (and `remove_unique` beside
-`UniquePush`); one that declares it and does not is told so, as the driver
-defect it is.
-
-**The port waits twenty seconds for any answer.** It hands `enqueue` a hundred
-envelopes at most (`ENQUEUE_BATCH`), and waits `BACKEND_TIMEOUT` for the answer
-to every call it makes — `enqueue`, `remove`, `remove_unique`, and a
-`CheckpointStore`'s `load`, `save` and `clear` — then drops the call where it
-stands and answers the caller `QueueError::Unanswered`, naming the queue. That
-is a net, not your budget: bound each round trip well inside it, so an outage
-reaches the caller as your failure with its cause — the Redis adapter's
-connection fails a command at ten seconds by default — and keep nothing a
-dropped call would have had to undo.
-
-## Step 2 — The worker (Transport)
-
-The worker is a `nest_rs::core::Transport`: the framework calls `configure`
-with the assembled container at boot, then `serve` with a cancellation token,
-and reads `stop_bound` — required, no default — as the longest `serve` takes to
-return once that token fires, which the boot line adds to the way down.
-**Two calls into the port do everything that is not your storage's.**
-`consume::discover` drains the `#[process]` inventory — module-gated,
-duplicate-checked, announced — and refuses at boot every declaration your
-backend does not honour. `consume::attempt` runs one attempt: it opens the
-envelope, continues or mints the trace, opens the `queue.job` span and the
-ambient scope, catches a panic, spends or ends the retry budget, clears a
-checkpoint at the job's end, and files the events and the `nest_rs::operation`
-line. You never restate any of that: an adapter that opens a `queue.job` span of
-its own has taken semantics it does not own.
-Stopping an attempt is dropping its future — a drain whose window closed on it,
-say — and the port still files its line, with `outcome="cancelled"`; what your
-driver owes is the job, handed back.
-
-What your code owns is the **transport**: how records arrive (block-pop,
-subscribe, long-poll, `ReceiveMessage`), and the translation of an
-`AttemptOutcome` into your backend's vocabulary. Those are storage decisions.
-
-One contract is *not* a storage decision: a `#[process]` method runs at most
-[its declared `concurrency`](/queue/scaling/#concurrency) at once per replica,
-one by default. Bound each method in your receive loop, the way
-`nest-rs-redis` does, so a handler behaves the same whichever driver is
-underneath it.
-
-```rust title="crates/yourqueue/src/worker/consumer.rs"
-use nest_rs::core::{Container, Transport};
-use nest_rs::queue::consume::{self, AttemptOutcome, Delivery};
-use nest_rs::queue::{ProcessMethod, QueueName, async_trait};
-use tokio_util::sync::CancellationToken;
-
-use crate::backend::BACKEND;
-
-pub struct YourWorker {
-    methods: Vec<&'static ProcessMethod>,
-    container: Option<Container>,
-}
-
-#[async_trait]
-impl Transport for YourWorker {
-    async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
-        self.methods = consume::discover(container, &BACKEND)?;
-        self.container = Some(container.clone());
-        Ok(())
-    }
-
-    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
-        let container = self.container.expect("configure runs before serve");
-        for method in self.methods {
-            let (container, cancel) = (container.clone(), cancel.clone());
-            let queue = QueueName::new(method.queue())?;
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => break,
-                        record = /* your_receive(&queue) */ => {
-                            let mut delivery = Delivery::new(&BACKEND, queue.clone(), record);
-                            match consume::attempt(method, &mut delivery, container.clone()).await {
-                                AttemptOutcome::Ok => { /* ack */ }
-                                AttemptOutcome::Retry { after } => {
-                                    /* re-file delivery.retry_envelope() for `after`, then ack */
-                                }
-                                AttemptOutcome::DeadLetter(error) => { /* dead-letter */ let _ = error; }
-                                AttemptOutcome::Defer { after } => {
-                                    /* re-file delivery.retry_envelope() — the record as stored — for `after`, then ack */
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-        Ok(())
-    }
-
-    fn stop_bound(&self) -> std::time::Duration {
-        /* the longest `serve` takes to return once `cancel` fires */
-    }
-}
-```
-
-The retry budget and its backoff are the port's: `Retry { after }` says the
-budget holds another attempt and how long to wait before it, and the
-`Delivery` already counts it. A backend declaring `DelayedPush` re-files
-`delivery.retry_envelope()` to become available once `after` has passed, then
-acknowledges this delivery; one without it waits `after` itself — giving up
-the wait, never the job, at shutdown — and calls `attempt` again with the same
-delivery. `DeadLetter` is final: a deterministic failure, or the last attempt
-of the budget. `Defer { after }` is a job a newer release sealed, which this
-consumer cannot read: nothing ran, no attempt is spent, and
-`delivery.retry_envelope()` is the stored record unchanged — re-file it for
-`after`, a minute, and acknowledge this delivery, so a rolling deploy leaves
-the job for a replica of the newer release instead of losing it. The match is
-exhaustive on purpose: an outcome added later is a compile error in your loop,
-not a job your driver drops.
-
-How long a newer release's job may wait is the port's to bound, and the wait is
-the driver's to keep. When your storage can keep one instant per job, record the
-first hand-back answering `Defer` — and only the first of an unbroken run —
-clear it when a delivery reads the job or the job settles, and pass how long ago
-it was: `Delivery::with_deferred_for(waited)`, zero when there is none. A storage
-that keeps none leaves the port to count from the job's push, read off its id,
-which charges a job pushed with a delay for its delay: one falling due during a
-rolling deploy a day after its push is then dead-lettered on its first meeting
-with an older consumer. The Redis driver keeps the instant in Redis's own
-milliseconds, so no two hosts' clocks are compared.
-
-The envelope counts the attempts that answered, never one whose process died
-under it — an abort, an OOM kill, a pod killed mid-job — so a job that takes
-its worker down would be delivered at the same attempt forever. When your
-storage can count the attempts it starts per job, pass the count:
-`Delivery::with_attempts_started(n)`, this delivery's start included. The port
-runs the later of the two, and dead-letters a job whose count is past the
-budget without running it. Count a start when the attempt is admitted, and take
-it back when you hand the job back without an answer — cut by a drain, or a
-`Defer` — since that attempt never returned. A throttle's start is taken back for a `Defer`
-alone, and only inside the window that counted it: a drained attempt ran, and
-did whatever it did downstream before the cut. A storage that cannot count leaves the loop open, and its
-page says so. A record your storage cannot route to any method goes through
-`consume::refuse`, which files the dead-letter the way an attempt would — a
-record *your* code holds: one it fetched and could not decode, or one naming a
-queue no method serves. A library that decodes inside its own fetch never hands
-you the record it choked on, and then there is nothing to refuse: the Redis
-driver is in that case, because apalis-redis 0.7.4 drops a fetched batch at its
-first undecodable record, and it says so in a line of its own and on its
-[Delivery](/queue/delivery/#limits) page. Owning the fetch is the only way to do
-better, so a driver whose library allows it decodes record by record.
-
-A method whose options declare a checkpoint needs its store on the delivery —
-`Delivery::with_checkpoint(store)`, one `CheckpointStore` per job, keyed by
-`delivery.id()`.
-
-## Step 3 — The modules
-
-Three modules, three shapes — the same three every adapter in the framework
-has, so an app that has read `nest-rs-redis`'s composition root has read yours:
-
-| Shape | Yours | Role | Variables |
-|---|---|---|---|
-| `<Vendor>Module::for_root(cfg)` | `NatsModule::for_root(None)` | opens the one connection every binding in your crate shares | `NESTRS_NATS__*` |
-| `<Vendor><Port>Module` (bare) | `NatsQueueModule` | binds `Arc<dyn JobProducer>` over that connection | — |
-| `<Vendor><Port>Module::for_root(cfg)` | `NatsWorkerModule::for_root(None)` | contributes the `Transport`; its own settings, if any | `NESTRS_NATS__WORKER__*` |
-
-The layout follows: `src/config.rs`, `src/connection.rs`, `src/module.rs` at the
-crate root; `queue/producer.rs` + `queue/module.rs`; `worker/consumer.rs` +
-`worker/config.rs` + `worker/module.rs`. A namespace is the stem of its path —
-`nats` at the root, `nats__worker` in the binding folder — which is what keeps
-your variables findable from your types and your types from your variables.
-
-```rust title="the three modules — substrate, producer, consumer"
-use std::any::TypeId;
-use std::sync::Arc;
-
-use nest_rs::config::{ConfigModule, ConfigSetup};
-use nest_rs::core::{ContainerBuilder, DynamicModule, Module, TransportContribution};
-use nest_rs::queue::JobProducer;
-
-/// The substrate: opens `YourConnection` from `YourConfig` (env + pinned).
-pub struct YourModule;
-
-impl YourModule {
-    pub fn for_root(config: impl Into<Option<YourConfig>>) -> YourSetup {
-        YourSetup { pinned: config.into() }
-    }
-}
-
-pub struct YourSetup {
-    pinned: Option<YourConfig>,
-}
-
-impl DynamicModule for YourSetup {
-    fn module() -> TypeId {
-        TypeId::of::<YourModule>()
-    }
-
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder.provide_factory::<YourConnection, _, _>(|container| async move {
-            let config = container.get::<YourConfig>().expect("resolved above");
-            YourConnection::connect(&config).await
-        })
-    }
-}
-
-/// The producer binding — bare. Runs *after* the connection's factory, so
-/// `imports` order stays a readability choice, and **declares** the portable
-/// name: a second queue backend imported beside it fails the boot, naming the
-/// port and `BACKEND_REMEDY`.
-pub struct YourQueueModule;
-
-impl Module for YourQueueModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder { builder }
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-        builder
-            .provide_factory_after::<YourQueueProducer, YourConnection, _, _>(|container| async move {
-                let conn = container
-                    .get::<YourConnection>()
-                    .ok_or_else(|| anyhow::anyhow!("import YourModule::for_root(None) beside YourQueueModule"))?;
-                Ok(YourQueueProducer::new((*conn).clone()))
-            })
-            .provide_declared_factory_after::<Arc<dyn JobProducer>, YourQueueProducer, _, _>(
-                nest_rs::queue::BACKEND_REMEDY,
-                |container| async move {
-                    let producer = container
-                        .get::<YourQueueProducer>()
-                        .ok_or_else(|| anyhow::anyhow!("YourQueueProducer is resolved first"))?;
-                    Ok(producer as Arc<dyn JobProducer>)
-                },
-            )
-    }
-}
-
-/// The consumer binding. Contributes the `Transport`; `for_root` because it
-/// owns settings of its own (`YourWorkerConfig`, namespace `<vendor>__worker`).
-pub struct YourWorkerModule;
-
-impl YourWorkerModule {
-    pub fn for_root(config: impl Into<Option<YourWorkerConfig>>) -> YourWorkerSetup {
-        ConfigModule::setup(config)
-    }
-}
-
-pub type YourWorkerSetup = ConfigSetup<YourWorkerModule, YourWorkerConfig>;
-
-impl Module for YourWorkerModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "YourWorker",
-            build: |_| Ok(Box::new(YourWorker { methods: Vec::new(), container: None })),
-        })
-    }
-}
-```
-
-Every field of `YourConfig` is settable both via `NESTRS_<NAMESPACE>__<KEY>`
-and pinned in code — the framework-wide dual-path rule.
-
-## Step 4 — Using the integration
-
-Application code stays put. The swap is three lines in the app's
-`module.rs`, and they read like `nest-rs-redis`'s:
-
-```rust title="two binaries, one integration"
-// Producer-only API binary:
-#[module(imports = [YourModule::for_root(None), YourQueueModule, /* features */])]
-pub struct ApiModule;
-
-// Worker binary (consumes too):
-#[module(imports = [
-    YourModule::for_root(None),
-    YourQueueModule,
-    YourWorkerModule::for_root(None),
-    /* features that ship #[processor]s */
-])]
-pub struct WorkerModule;
-```
-
-The `#[processor] impl ...` blocks in user code are unchanged — same
-impl, same `#[process(queue = <Name>Queue)]`, same method signatures — and the
-features that enqueue inject `Arc<dyn JobProducer>`, so they never knew which
-backend they were on.
-
-## Ephemeral vs durable backends
-
-The same three traits cover both shapes:
-
-- **Ephemeral** (in-memory channels, in-process pub/sub): jobs vanish
-  on restart, no cross-process delivery. Useful for tests and local CLIs
-  where the queue's lifetime equals the process's.
-- **Durable** (Redis, Postgres, SQS, RabbitMQ, NATS JetStream): retries,
-  visibility timeouts, dead-letter queues. Your driver decides how to
-  expose those — the framework takes no position.
-
-No tradeoff is hidden. Both shapes plug into the same `JobProducer` and
-`Transport`.
-
-## What you don't get for free
-
-The framework gives you the contract — the envelope, the attempt, the retry
-budget and its backoff, the capability refusals, the `Transport` slot, the
-`JobContext` ambient executor for handlers that touch a DB. **How your storage
-delivers — at least once or at most once, how it holds a job back, which
-redeliveries it answers without running and for how long, where a dead letter
-goes, how long anything you keep for a job lives** — is your driver's contract
-with its storage. A handler is written for at least once whichever you choose:
-the framework promises no more. Decide it deliberately, and write it on the driver's own page, the
-way [Delivery on Redis](/queue/delivery/) does for `nest-rs-redis`.
-
-## Reference
-
-- [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
-  the reference impl; read its `backend.rs` (every capability declared),
-  `connection.rs` + `module.rs` (the shared connection), `queue/producer.rs` +
-  `queue/module.rs` (the producer, the unique claim and the cancel) and
-  `worker/consumer.rs` + `worker/delivery.rs` + `worker/module.rs` (the
-  transport) whenever a placeholder above needs a concrete shape.
-- [`crates/nest-rs-queue/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-queue/README.md) —
-  the extension contract, the `ProcessMethod` registry, the envelope spec.
-- [Database driver](/database/writing-a-driver/) — the analogous scaffold
-  for the data layer, same shape, same seams.
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A queue driver connects the queue port to a storage — a broker, a stream, a
+database table. The port owns what consuming a job *is*: the attempt, its
+retry budget and backoff, the trace, each method's permits, the lease's
+renewal, the drain. Its `QueueWorker` runs all of it on every backend, so a
+driver only moves records and keeps leases. At the end of this page your
+backend runs every `#[process]` method an app declares, and the port's
+behaviour kit proves it keeps the contract. You need a crate,
+`nest-rs-<storage>`, depending on `nest-rs-queue`, with `nest-rs-testing` and
+its `queue` feature as a dev-dependency.
+
+Every excerpt below is lifted from `nest-rs-queue`'s in-memory test backend or
+from the Redis binding, so each compiles and runs in the framework's suite.
+
+<Steps>
+
+1. **Declare the backend.** One `QueueBackend` constant names your storage — its
+   OpenTelemetry `messaging.system` — and each optional capability it honours,
+   one at a time, never `Capabilities::ALL`:
+
+   ```rust title="from nest-rs-queue's test backend"
+   pub(crate) static DELAYING: QueueBackend = QueueBackend::new(
+       "memory",
+       Capabilities::NONE
+           .with(Capability::DelayedPush)
+           .with(Capability::Checkpoint),
+   );
+   ```
+
+   The retry budget, one transaction per attempt and a method's `concurrency`
+   are not capabilities: the port keeps all three on every backend. Checkpoint:
+   a method declaring `throttle(..)` on this backend fails the boot, naming the
+   capability and the backend.
+
+2. **File jobs.** Implement `JobProducer`. The port has refused every option
+   your backend does not declare, minted each job's id and sealed each
+   envelope; store the record as the bytes it gives you, keyed by
+   `envelope.id()`, and never read inside it:
+
+   ```rust title="from nest-rs-queue's test backend, abridged"
+   #[async_trait]
+   impl JobProducer for Memory {
+       fn backend(&self) -> &'static QueueBackend {
+           self.inner.backend
+       }
+
+       async fn enqueue(
+           &self,
+           queue: &QueueName,
+           envelopes: Vec<Envelope>,
+           options: &PushOptions,
+       ) -> Result<(), QueueError> {
+           // …
+           for envelope in envelopes {
+               let entry = state.entry(envelope.into_json().to_string().into_bytes());
+               // …
+           }
+           // …
+       }
+   }
+   ```
+
+   A backend declaring `Cancellation` implements `remove`, and `remove_unique`
+   beside `UniquePush`. The port waits `BACKEND_TIMEOUT` — twenty seconds — for
+   each call, then gives up on it: bound your own round trips well inside that,
+   so an outage reaches the caller as your error, with its cause. Checkpoint: a
+   push answers a receipt naming the job.
+
+3. **Hand jobs over under a lease.** Implement `JobConsumer`. The worker asks;
+   your storage answers in the backend's own words:
+
+   | Call | What it owes |
+   |---|---|
+   | `prepare` | Ready the storage for the methods, once, at boot, and say how long a call takes to answer at most. |
+   | `receive` | At most `ask.max` deliveries, waiting at most `ask.wait` for the first — each **leased in the step that hands it over**, with its delivery count: 1 the first time, one more each time it is handed over again. |
+   | `renew` | Extend each lease still yours, **without counting a delivery**; one `LeaseHold` per lease, in order. |
+   | `settle` | End one delivery as its `Disposition` says, **in the step that checks the lease is still yours** — and answer `Lost`, writing nothing, when it is not. |
+   | `maintain`, `close`, `checkpoint` | Optional: upkeep while nothing runs (a delayed record falling due), letting go at the end of the drain, and a checkpoint store for a backend declaring `Checkpoint`. |
+
+   The fence on `settle` is the heart of it. A worker whose lease lapsed — frozen,
+   or cut off from the storage — must write nothing once another delivery holds
+   the job:
+
+   ```rust title="from nest-rs-queue's test backend, abridged"
+   async fn settle(
+       &self,
+       _method: &'static ProcessMethod,
+       lease: &MemoryLease,
+       disposition: Disposition<'_>,
+   ) -> Result<LeaseHold, QueueError> {
+       let mut state = self.memory.lock();
+       if !state.queue(&lease.queue).holds(lease) {
+           return Ok(LeaseHold::Lost);
+       }
+       // …
+       match disposition {
+           Disposition::Complete => { /* … */ }
+           Disposition::Retry { after, record, .. } | Disposition::Defer { after, record, .. } => {
+               refile(&mut state, record, after);
+           }
+           Disposition::Requeue { record, .. } => refile(&mut state, record, Duration::ZERO),
+           Disposition::DeadLetter { reason, record, .. } => { /* … */ }
+           other => panic!("a disposition the in-memory backend was not written for: {other:?}"),
+       }
+       // …
+       Ok(LeaseHold::Held)
+   }
+   ```
+
+   `Complete` and `DeadLetter` end the job: let every record of it go — its
+   unique key and its checkpoint with it — and keep a dead letter with the
+   value-free `reason`. `Retry`, `Defer` and `Requeue` file the record given,
+   due once `after` passed, and a record filed again starts its delivery count
+   over. A backend without `DelayedPush` is never handed a wait: the port waits
+   in process. `Disposition` is non-exhaustive, and a variant added later goes
+   only to a backend declaring the capability that names it. Checkpoint: a
+   delivery the worker never settles comes back once its lease lapses, with its
+   count one higher.
+
+4. **Bind both in one module.** `<Vendor>QueueModule` binds the producer as
+   `Arc<dyn JobProducer>` and the consumer as `BoundConsumer`, each a
+   **declaration** carrying `BACKEND_REMEDY`, so a second backend imported beside
+   yours fails the boot naming both:
+
+   ```rust title="from nest-rs-redis's queue binding, abridged"
+   builder
+       .provide_declared_factory_after::<Arc<dyn JobProducer>, RedisQueueProducer, _, _>(
+           BACKEND_REMEDY,
+           |container| async move {
+               // …
+           },
+       )
+       .provide_declared_factory_after_both::<BoundConsumer, RedisConnection, RedisQueueConfig, _, _>(
+           BACKEND_REMEDY,
+           |container| async move {
+               // …
+               Ok(BoundConsumer::new(RedisQueueConsumer::new(
+                   (*conn).clone(),
+                   config.lease,
+               )))
+           },
+       )
+   ```
+
+   An app running jobs imports `QueueModule::for_root(None)` beside your module;
+   one only pushing does not. Checkpoint: the worker app's boot logs
+   `attached module-contributed transport transport="QueueWorker"`.
+
+5. **Run the behaviour kit.** Implement `KitBackend` — an app reaching your
+   storage, the lease it holds deliveries for, and three hooks on the storage —
+   and let `queue_kit!` write one test per case:
+
+   ```rust title="from nest-rs-queue's suite, abridged"
+   impl KitBackend for MemoryKit {
+       fn app(&self) -> nest_rs_testing::TestAppBuilder {
+           let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
+           TestApp::builder()
+               .provide(BoundConsumer::new(self.memory.consumer()))
+               .provide_dyn(producer)
+       }
+
+       fn lease(&self) -> Duration {
+           LEASE
+       }
+
+       async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
+           // …
+       }
+
+       async fn lapse(&self, queue: &QueueName) -> anyhow::Result<()> {
+           // …
+       }
+
+       async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
+           // …
+       }
+   }
+
+   mod delaying {
+       use super::MemoryKit;
+
+       nest_rs_testing::queue_kit!(MemoryKit::delaying());
+   }
+   ```
+
+   `purge` empties a queue, `lapse` makes every lease on it lapse with its
+   holder and count unchanged, and `take` hands every delivery to another holder
+   that lapses at once — what a frozen worker meets. Checkpoint: eleven tests
+   pass, among them a worker dying mid-attempt, a lease taken under a running
+   attempt, the stall limit and the drain.
+
+</Steps>
+
+<Aside type="caution">
+**Delivery is at least once, and no driver promises more.** A storage that loses
+no job delivers some twice — a lease that lapsed under a frozen worker, an
+acknowledgement lost — and a `#[process]` handler is idempotent.
+</Aside>
+
+## What fails if you get it wrong
+
+- **A settle that does not check its lease** lets two outcomes land for one job:
+  the kit's case for a lease taken under a running attempt fails.
+- **A renewal that counts a delivery** spends the stall limit on a job that
+  answered every time: once its worker dies after a few renewals, the next
+  delivery is past `STALL_LIMIT` and dead-letters it without running.
+- **A receive handing over more than it was asked** keeps no permit for the
+  extra: the worker hands them back and says `queue backend handed over more
+  deliveries than asked; …` at `error`.
+- **A second backend imported** fails the boot, its message ending in
+  `BACKEND_REMEDY`.
+- **A capability declared and not honoured** passes the boot and fails the kit:
+  a delayed push the backend files at once runs before its delay.
 
 ## Going further
 
-- [Wiring](/queue/wiring/) — the producer/worker module split a driver plugs into.
-- [Retries and failure](/queue/retries-and-failure/) — the retry budget your driver owns.
-- [Database driver](/database/writing-a-driver/) — the analogous data-layer scaffold.
+- [Delivery on Redis](/queue/delivery/) — the reference driver: one Lua script per transition, each fenced.
+- [Retries and failure](/queue/retries-and-failure/) — what the port does with each outcome.
+- [Observability](/queue/observability/) — the lines the port files for every backend.

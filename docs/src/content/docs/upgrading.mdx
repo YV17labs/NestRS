@@ -173,8 +173,10 @@ left running until they drain the 6.x jobs (step 7).
    | `OpenTelemetryConfig::from_env(name)` | `OpenTelemetryConfig::from_env(name)?` |
    | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
    | the queue's `Processor` trait | nothing: a consumer is a `#[processor]` host and its `#[process]` methods |
-   | `envelope::seal(payload)` and `envelope::open(value)` from the queue crate, in a driver | the port seals before `enqueue` and `consume::attempt` opens; the type is `Envelope` at the crate's root — see [Writing a driver](/queue/writing-a-driver/) |
-   | `check_duplicate_queue_claims(&methods)` | `consume::discover`, which runs it |
+   | `envelope::seal(payload)` and `envelope::open(value)` from the queue crate, in a driver | the port seals before `enqueue` and opens in its worker; the type is `Envelope` at the crate's root — see [Writing a driver](/queue/writing-a-driver/) |
+   | a driver's own worker `Transport`, its fetch loop and its retries | a `JobConsumer` bound as a `BoundConsumer`: the port's `QueueWorker` runs the loop, the attempt and the drain — see [Writing a driver](/queue/writing-a-driver/) |
+   | `CheckpointStore::clear` | nothing: the backend lets a job's checkpoint go in the settle that ends the job |
+   | `check_duplicate_queue_claims(&methods)` | nothing: the port's worker refuses two methods on one queue at boot |
    | `RedisWorkerModule::for_root(cfg)`, from `nest_rs::redis` | `QueueModule::for_root(cfg)`, from `nest_rs::queue`, beside `RedisQueueModule`, which now binds the consumer too |
    | `RedisWorkerConfig { shutdown_timeout }` | `QueueConfig { shutdown_timeout }`; the lease is `RedisQueueModule::for_root(RedisQueueConfig { lease })` |
    | `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |

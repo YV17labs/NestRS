@@ -1,12 +1,11 @@
 //! [`ProcessMethod`] — the link-time entry `#[processor]` submits for each
 //! `#[process]` method, and the one way a backend reaches the method.
 //!
-//! A backend reads what a method declares — its queue, its options, what it
-//! needs from the backend — and hands each job to
-//! [`consume::attempt`](crate::consume::attempt), which is the only code that
-//! runs the method. The handler it calls is not part of the public surface for
-//! that reason: an adapter calling it directly would skip the envelope, the
-//! span, the panic catch and the classification, and nothing would say so.
+//! The port's [`QueueWorker`](crate::QueueWorker) reads what a method declares
+//! — its queue, its options, what it needs from the backend — and is the only
+//! code that runs the method. The handler it calls is not part of the public
+//! surface for that reason: code calling it directly would skip the envelope,
+//! the span, the panic catch and the classification, and nothing would say so.
 
 use std::any::TypeId;
 use std::future::Future;
@@ -20,8 +19,8 @@ use crate::{Capabilities, Capability, JobError, ProcessOptions};
 
 /// The type-erased handler `#[processor]` emits for each `#[process]` method:
 /// deserializes the job payload, resolves the provider, runs the method inside
-/// the ambient `JobContext`. Internal ABI between the decorator and
-/// [`consume::attempt`](crate::consume::attempt).
+/// the ambient `JobContext`. Internal ABI between the decorator and the port's
+/// attempt.
 #[doc(hidden)]
 pub type JobHandler = fn(
     payload: serde_json::Value,
@@ -39,10 +38,9 @@ pub struct HandlerContext {
 
 /// A `#[process]` method, as its decorator declared it.
 ///
-/// A backend drains these at boot through
-/// [`consume::discover`](crate::consume::discover), which module-gates them and
-/// refuses a declaration the backend cannot honour, and runs each job through
-/// [`consume::attempt`](crate::consume::attempt).
+/// The port's [`QueueWorker`](crate::QueueWorker) drains these at boot,
+/// module-gated, refusing a declaration the backend cannot honour, and runs
+/// each job's attempt.
 pub struct ProcessMethod {
     origin: &'static str,
     name: &'static str,

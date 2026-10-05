@@ -12,16 +12,15 @@
 //! decorator refuses a `Checkpoint<_>` parameter unless the method declares
 //! `transactional = false`.
 //!
-//! **Gone with the job.** The port clears a job's checkpoint when the job
-//! reaches its terminal outcome — it completed, or it dead-lettered — and a
-//! backend clears it when it cancels the job; a retry, on this delivery or a
-//! later one, keeps it.
+//! **Gone with the job.** The backend lets a job's checkpoint go in the step
+//! that ends the job — completed, dead-lettered or cancelled
+//! ([`Disposition`](crate::Disposition)); a retry, on this delivery or a later
+//! one, keeps it.
 //!
 //! **Never waited on past [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT).** A
 //! store silent past the net fails the call with
 //! [`QueueError::Unanswered`], naming the job's queue: a read fails the
-//! attempt, retryably, and so does a save the method returns with `?`; a clear
-//! at the job's end is said at `warn`, since the outcome is already decided.
+//! attempt, retryably, and so does a save the method returns with `?`.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -48,10 +47,6 @@ pub trait CheckpointStore: Send + Sync + 'static {
     /// Replace the job's saved state. It lasts through the job's retries and a
     /// redelivery after a crash, and goes when the job does.
     async fn save(&self, state: Value) -> Result<(), QueueError>;
-
-    /// Remove the job's saved state. Called by the port once the job reached
-    /// its terminal outcome, so no delivery of it can read the state again.
-    async fn clear(&self) -> Result<(), QueueError>;
 }
 
 /// One delivery's checkpoint: the backend's store, and the latest state read or
@@ -97,12 +92,6 @@ impl CheckpointCell {
         )
         .await?;
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(Some(state));
-        Ok(())
-    }
-
-    pub(crate) async fn clear(&self) -> Result<(), QueueError> {
-        bounded(&self.queue, "CheckpointStore::clear", self.store.clear()).await?;
-        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
         Ok(())
     }
 }
@@ -233,11 +222,6 @@ mod tests {
 
         async fn save(&self, state: Value) -> Result<(), QueueError> {
             *self.saved.lock().expect("lock") = Some(state);
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), QueueError> {
-            *self.saved.lock().expect("lock") = None;
             Ok(())
         }
     }

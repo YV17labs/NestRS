@@ -216,7 +216,7 @@ so you don't have to think about them separately:
 ## Wire-format mismatch
 
 A processor reads only payloads it understands. The wire envelope carries a
-version, and the port checks it in `consume::attempt`, before the handler runs.
+version, and the port checks it before the handler runs.
 A future release that bumps `WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker
 leave `v: 2` jobs unread rather than misinterpret them: the job goes back to the
 queue exactly as it was stored, due again in a minute, with no attempt spent,
@@ -232,7 +232,7 @@ workers run them as they come up — under the id their push returned, which the
 line names. **A rollout that stopped does not hand its jobs back forever.**
 `waited_ms` counts from the job's first hand-back — never from its push, so a
 job pushed with a delay is not charged for the delay — and a job still unread a
-day later (`consume::NEWER_RELEASE_PATIENCE`) is dead-lettered, once, at
+day later (`NEWER_RELEASE_PATIENCE`) is dead-lettered, once, at
 `error`:
 
 ```text

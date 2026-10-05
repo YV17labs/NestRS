@@ -50,7 +50,7 @@ budget:
 | a handler that relied on a job running once | an idempotent one: delivery is at least once — a second delivery comes once a lease lapses, and [the fence](/queue/delivery/#at-least-once-and-the-fence) drops what the first one writes after that |
 | a worker draining for 30 seconds | 20 by default, the hand-back reserve included — see [Shutdown](/queue/delivery/#shutdown) |
 | `push_many` failing with the error alone | `QueueError::PartiallyQueued` once the backend accepted part of it, carrying the receipts of the jobs already queued |
-| a driver sealing with `envelope::seal` and opening with `envelope::open` | the port seals before `enqueue` and `consume::attempt` opens — see [Writing a driver](/queue/writing-a-driver/); `Processor`, `check_duplicate_queue_claims` and the `tracing` re-export are gone with them |
+| a driver sealing with `envelope::seal` and opening with `envelope::open`, and running its own worker | the port seals before `enqueue` and runs the worker, the attempt and the drain over the driver's `JobConsumer` — see [Writing a driver](/queue/writing-a-driver/); `Processor`, `check_duplicate_queue_claims`, `CheckpointStore::clear` and the `tracing` re-export are gone with them |
 
 The `None` is a `PushOptions`: a delay, a unique key — see
 [Producing jobs](/queue/producing-jobs/).

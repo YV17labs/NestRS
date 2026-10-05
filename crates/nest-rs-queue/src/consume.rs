@@ -1,20 +1,15 @@
-//! The port's half of consuming — what a job attempt *is*, written once for
-//! every adapter.
+//! What a job attempt *is*, written once for every backend and run by the
+//! port's [`QueueWorker`](crate::QueueWorker): discovery, which drains the
+//! `#[process]` inventory module-gated and refuses two methods on one queue and
+//! any declaration the backend cannot honour, and [`attempt`](crate::consume::attempt), which opens the
+//! envelope, continues or mints the trace, opens the `queue.job` span and the
+//! ambient scope, catches a panic, spends or ends the retry budget and says how
+//! long to wait before the next attempt, and files the events and the
+//! `nest_rs::operation` line.
 //!
-//! [`discover`](crate::consume::discover) drains the `#[process]` inventory the way
-//! every backend must: module-gated, with the inert-host `warn`, refusing two
-//! methods on one queue and any declaration the backend cannot honour.
-//! [`attempt`](crate::consume::attempt) runs one attempt
-//! the way every backend must: it opens the envelope, continues or mints the
-//! trace, opens the `queue.job` span and the ambient scope, catches a panic,
-//! spends or ends the retry budget and says how long to wait before the next
-//! attempt, clears a checkpoint at the job's end, and files the events and the
-//! `nest_rs::operation` line. What it returns is an
-//! [`AttemptOutcome`](crate::consume::AttemptOutcome), and an
-//! adapter's consumer is a fetch loop that calls it and translates that into its
-//! backend's vocabulary — an acknowledgement, a re-filed record, a dead letter; a
-//! NATS consumer's `ack`/`nak`/`term`. Nothing in here names a backend; nothing
-//! in an adapter restates what is here.
+//! Not a driver's seam: a backend implements
+//! [`JobConsumer`](crate::JobConsumer), and the worker calls these. Public, and
+//! hidden, so this crate's suite drives an attempt without a worker.
 
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
@@ -292,9 +287,6 @@ pub struct Delivery {
     id: JobId,
     /// The attempt the next call to [`attempt`] runs.
     attempt: u32,
-    /// How many attempts the backend saw start that never returned an answer —
-    /// see [`Delivery::with_attempts_started`].
-    unfinished: u32,
     /// How many earlier deliveries of this record ended without an answer.
     stalls: u32,
     /// How long the backend has handed the job back unread, when it keeps that
@@ -327,7 +319,6 @@ impl Delivery {
             queue,
             id: identity.id.unwrap_or_else(JobId::mint),
             attempt: identity.attempt.unwrap_or(1),
-            unfinished: 0,
             stalls: 0,
             deferred_for: None,
             unique_key: identity.unique_key,
@@ -343,25 +334,6 @@ impl Delivery {
     /// [`JobId`] as `backend_id`, never in its place.
     pub fn with_backend_id(mut self, backend_id: impl Into<String>) -> Self {
         self.backend_id = Some(backend_id.into());
-        self
-    }
-
-    /// How many attempts at this job the backend has seen start, this
-    /// delivery's included — for a backend that can count them per job.
-    ///
-    /// The envelope counts only the attempts that answered: a retry files the
-    /// next attempt's number, and an attempt whose process died — an abort, an
-    /// OOM kill, a hang until the pod was killed — files nothing, so the job
-    /// comes back at the attempt it was at, and would come back forever. With
-    /// the backend's count, the delivery runs the later of the two, so an
-    /// attempt that never returned spends the budget as a failed one does, and
-    /// a job past it is dead-lettered without running, saying how many never
-    /// returned. A backend counts a start when an attempt is admitted, and takes
-    /// it back when it hands the job back without an answer — cut by a drain,
-    /// or unread — since that attempt never returned.
-    pub fn with_attempts_started(mut self, started: u32) -> Self {
-        self.unfinished = started.saturating_sub(self.attempt);
-        self.attempt = self.attempt.max(started);
         self
     }
 
@@ -445,10 +417,9 @@ impl Delivery {
 /// the port's: a retryable failure is [`AttemptOutcome::Retry`] while the
 /// attempt is within `retries` re-runs of the first — and the delivery counts
 /// the next one — and [`AttemptOutcome::DeadLetter`] on the last, so an adapter
-/// never counts, and every backend spends a budget alike. A delivery already
-/// past its last attempt — the backend saw attempts start that never returned
-/// ([`Delivery::with_attempts_started`]) — is dead-lettered without running.
-/// When the job reaches its terminal outcome, its checkpoint is cleared.
+/// never counts, and every backend spends a budget alike. A delivery past
+/// [`STALL_LIMIT`] deliveries that ended without an answer is dead-lettered
+/// without running.
 ///
 /// A job sealed by a newer release runs nothing: the delivery says so once, at
 /// `warn`, naming both versions, and the answer is [`AttemptOutcome::Defer`] —
@@ -480,9 +451,6 @@ pub async fn attempt(
     let attempt = delivery.attempt;
     let retries = method.options().retries();
     let last = attempt > retries;
-    // Attempts that never returned spent the budget before this one: nothing
-    // runs, and the job is dead-lettered saying so.
-    let spent = attempt > retries.saturating_add(1);
     // Only an attempt another may follow needs its own copy of the stored value.
     let message = if last {
         std::mem::take(&mut delivery.message)
@@ -517,9 +485,6 @@ pub async fn attempt(
         },
         _ if delivery.stalls >= STALL_LIMIT => Input::Stalled {
             deliveries: delivery.stalls.saturating_add(1),
-        },
-        _ if spent => Input::Spent {
-            unfinished: delivery.unfinished,
         },
         (None, Ok(payload)) => Input::Payload(payload),
         (None, Err(refused)) => Input::Refused(refused),
@@ -624,14 +589,7 @@ pub async fn attempt(
                 );
             }
         }
-        let job_id = identity.job_id.clone();
-        let outcome = run(method.handler(), input, context, identity, last, retry_after).await;
-        if !matches!(outcome, AttemptOutcome::Retry { .. })
-            && let Some(checkpoints) = checkpoints
-        {
-            clear_checkpoint(&checkpoints, &job_id).await;
-        }
-        outcome
+        run(method.handler(), input, context, identity, last, retry_after).await
     })
     .instrument(span)
     .await;
@@ -691,20 +649,6 @@ async fn defer_newer(delivery: &mut Delivery, version: u64, waited: Duration) ->
 /// `duration` in whole milliseconds, for a line's field.
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-/// Clear the checkpoint of a job that reached its terminal outcome. A failure
-/// is said and survived: the outcome is decided, and a checkpoint left behind
-/// names a job id no push will mint again.
-async fn clear_checkpoint(checkpoints: &CheckpointCell, job_id: &JobId) {
-    if let Err(error) = checkpoints.clear().await {
-        tracing::warn!(
-            target: TARGET,
-            job_id = %job_id,
-            error = %nest_rs_core::error_message(&error),
-            "job checkpoint not cleared at its terminal outcome",
-        );
-    }
 }
 
 /// Settle a job `backend` fetched and can deliver to no method — a record it
@@ -792,12 +736,6 @@ enum Input {
     Payload(Value),
     /// Nothing: the envelope was refused, and this is why.
     Refused(JobError),
-    /// Nothing: the attempts the backend saw start spent the budget, and
-    /// `unfinished` of them never returned an answer.
-    Spent {
-        /// How many attempts ended without an answer.
-        unfinished: u32,
-    },
     /// Nothing: the record was handed over `deliveries` times, and every
     /// delivery before this one ended without an answer — past [`STALL_LIMIT`].
     Stalled {
@@ -816,9 +754,6 @@ enum Input {
 
 /// Why an attempt ran nothing.
 enum Unrun {
-    /// The attempts the backend saw start spent the budget, `unfinished` of
-    /// them without an answer.
-    Spent { unfinished: u32 },
     /// The record's deliveries past [`STALL_LIMIT`] ended without an answer.
     Stalled { deliveries: u32 },
     /// A newer release sealed the job and it was not read in time.
@@ -918,7 +853,6 @@ impl Drop for JobLine {
 /// | retryable `Err`, budget left | `job failed; will retry within the budget` (`warn`) | `Retry` |
 /// | retryable `Err`, last attempt | `job dead-lettered: retry budget spent` (`error`) | `DeadLetter` |
 /// | **panic** | `job dead-lettered: handler panicked` (`error`) | `DeadLetter` |
-/// | budget spent by attempts that never returned | `job dead-lettered: retry budget spent by attempts that never returned` (`error`) | `DeadLetter` |
 /// | deliveries past [`STALL_LIMIT`] ended without an answer | `job dead-lettered: its deliveries ended without an answer past the stall limit` (`error`) | `DeadLetter` |
 /// | a newer release's, unread past the patience | `job dead-lettered: a newer release sealed it, and none of its consumers ran it in time` (`error`) | `DeadLetter` |
 ///
@@ -943,7 +877,6 @@ async fn run(
         // An envelope of another version never reaches the handler: the refusal
         // is the attempt's outcome.
         Input::Refused(refused) => Ok(Ok(Err(refused))),
-        Input::Spent { unfinished } => Err(Unrun::Spent { unfinished }),
         Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
         Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
     };
@@ -990,22 +923,6 @@ async fn run(
                     "{unanswered} deliveries of the job ended without an answer — the process \
                      running each was stopped, froze or lost the queue backend past its lease — \
                      so it is dead-lettered without running"
-                ))),
-            )
-        }
-        Err(Unrun::Spent { unfinished }) => {
-            let spent = attempt.saturating_sub(1);
-            tracing::error!(
-                target: TARGET,
-                attempts = spent,
-                unfinished,
-                "job dead-lettered: retry budget spent by attempts that never returned",
-            );
-            (
-                nest_rs_core::operation_log::ERROR,
-                AttemptOutcome::DeadLetter(JobError::abort(format!(
-                    "{spent} attempt(s) spent the retry budget, {unfinished} of them ending \
-                     without an answer: the process running each stopped before it returned"
                 ))),
             )
         }
@@ -1340,81 +1257,6 @@ mod tests {
                 .is_empty(),
             "no retry is promised on the attempt that has none left",
         );
-    }
-
-    /// A backend's count of attempts started stands in for the attempts that
-    /// never returned: the delivery runs the later of the envelope's attempt
-    /// and that count, and knows how many ended without an answer. A count
-    /// behind the envelope — a backend that lost it — changes nothing.
-    #[test]
-    fn a_delivery_runs_the_later_of_the_envelopes_attempt_and_the_backends_count() {
-        static COUNTING: QueueBackend = QueueBackend::new("counting", crate::Capabilities::NONE);
-        let stored = |attempt: u32| {
-            serde_json::json!({
-                "v": crate::WIRE_FORMAT_VERSION,
-                "id": "01890a5d-ac96-774b-bcce-b302099a8057",
-                "attempt": attempt,
-                "payload": {},
-            })
-        };
-        let queue = || QueueName::new("audio").expect("a valid name");
-
-        let crashed = Delivery::new(&COUNTING, queue(), stored(1)).with_attempts_started(3);
-        assert_eq!(crashed.attempt(), 3);
-        assert_eq!(
-            crashed.unfinished, 2,
-            "two attempts started and never returned"
-        );
-
-        let answered = Delivery::new(&COUNTING, queue(), stored(2)).with_attempts_started(2);
-        assert_eq!(answered.attempt(), 2);
-        assert_eq!(answered.unfinished, 0);
-
-        let behind = Delivery::new(&COUNTING, queue(), stored(4)).with_attempts_started(1);
-        assert_eq!(behind.attempt(), 4);
-        assert_eq!(behind.unfinished, 0);
-    }
-
-    /// Attempts that never returned spent the budget: nothing runs, the job is
-    /// dead-lettered, and both the event and the dead-letter's sentence say how
-    /// many never returned — the one fact an operator needs to look for a crash
-    /// rather than a failure.
-    #[tokio::test]
-    async fn a_budget_spent_by_attempts_that_never_returned_dead_letters_without_running() {
-        fn unreachable_handler(_job: Value, _context: HandlerContext) -> Handler {
-            Box::pin(async { panic!("the handler must not run once the budget is spent") })
-        }
-
-        let logs = LogCapture::install();
-        let result = run(
-            unreachable_handler,
-            Input::Spent { unfinished: 2 },
-            context(),
-            identity(3),
-            true,
-            Duration::from_secs(1),
-        )
-        .await;
-        let AttemptOutcome::DeadLetter(error) = result else {
-            panic!("a spent budget dead-letters, got {result:?}")
-        };
-        assert!(!error.retryable);
-        assert!(
-            error
-                .to_string()
-                .contains("2 of them ending without an answer"),
-            "{error}"
-        );
-        let said = logs.expect_one(
-            TARGET,
-            "job dead-lettered: retry budget spent by attempts that never returned",
-        );
-        assert_eq!(said.level, "error");
-        assert_eq!(said.field("unfinished").as_deref(), Some("2"));
-        assert_eq!(said.field("attempts").as_deref(), Some("2"));
-        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB.name());
-        assert_eq!(line.field("outcome").as_deref(), Some("error"));
-        assert_eq!(line.field("attempt").as_deref(), Some("3"));
     }
 
     /// An envelope of another version is refused before the handler runs, and

@@ -18,7 +18,7 @@
 //! | `…:deferred` | hash | job → when a newer release's job was first handed back unread | that hand-back | a delivery that reads it |
 //! | `…:checkpoints` | hash | job → its saved progress | a save | the job ends |
 //! | `…:throttle` | string | the starts counted in the current window | the window's first start | the window ends |
-//! | `…:dead` | stream | one entry per dead letter: `job`, `record`, `reason` | the job dead-letters | 7 days or 10,000 entries |
+//! | `…:dead` | stream | one entry per dead letter: `job`, `record`, `reason`, and `unique` when it held a key | the job dead-letters | 7 days or 10,000 entries |
 //!
 //! **No record outlives its job.** Every transition is one script that writes
 //! what the job's next state needs and removes what it no longer does, so a job

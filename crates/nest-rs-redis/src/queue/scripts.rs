@@ -275,7 +275,8 @@ return held
 
 /// End one delivery this worker still holds, as the port's disposition says:
 /// `1` when written, `0` when the delivery is no longer this worker's and
-/// nothing was.
+/// nothing was. A dead letter keeps the unique key its job held, which filing it
+/// back takes again.
 ///
 /// `KEYS`: jobs, entries, due, delayed, unique, claims, deferred,
 /// checkpoints, dead.
@@ -299,8 +300,14 @@ local job, way = ARGV[5], ARGV[6]
 if way == 'complete' then
   forget(job)
 elseif way == 'dead' then
-  redis.call('XADD', KEYS[9], 'MAXLEN', '~', ARGV[10], '*',
-    'job', job, 'record', ARGV[8], 'reason', ARGV[9])
+  local key = redis.call('HGET', KEYS[6], job)
+  if key then
+    redis.call('XADD', KEYS[9], 'MAXLEN', '~', ARGV[10], '*',
+      'job', job, 'record', ARGV[8], 'reason', ARGV[9], 'unique', key)
+  else
+    redis.call('XADD', KEYS[9], 'MAXLEN', '~', ARGV[10], '*',
+      'job', job, 'record', ARGV[8], 'reason', ARGV[9])
+  end
   redis.call('XTRIM', KEYS[9], 'MINID', '~', string.format('%.0f', now() - tonumber(ARGV[11])))
   forget(job)
 elseif way == 'retry' then

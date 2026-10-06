@@ -365,6 +365,7 @@ async fn every_pages_rule_replaces_what_the_user_held_before() {
         (PAGE, "producer"),
         (PAGE, "worker"),
         (PAGE, "KEDA"),
+        (PAGE, "operator"),
         ("rate-limiting/index.mdx", "rate limiter"),
         ("schedule/index.mdx", "schedule"),
     ] {

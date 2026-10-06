@@ -46,7 +46,7 @@ id a push returns — never a key of its own.
 | `…:deferred` | hash | When a job a newer release sealed was first handed back unread | a delivery reads it |
 | `…:checkpoints` | hash | The progress each job saved | the job ends |
 | `…:throttle` | string | The starts counted in the current throttle window | the window ends |
-| `…:dead` | stream | One entry per dead letter — `job`, `record`, `reason` | 7 days, or 10,000 entries |
+| `…:dead` | stream | One entry per dead letter — `job`, `record`, `reason`, and `unique` when it held a key | 7 days, or 10,000 entries |
 
 **No record outlives its job.** Every transition writes what the job's next
 state needs and removes what it no longer does, in the one script that makes the
@@ -246,18 +246,34 @@ the stream. The window's shape, and what it allows at its edges, is on
 ## Dead letters
 
 A job dead-lettered — its retry budget spent, or past the stall limit — leaves
-an entry on `…:dead`: its `job` id, its `record` as it was stored, and the
-`reason` its line rendered, which quotes no payload value. The stream keeps a
-week of them, trimmed at every upkeep, and about the last 10,000 — Redis trims
-it by whole nodes, so a few more may stay — and nothing else of the job is left.
+an entry on `…:dead`: its `job` id, its `record` as it was stored, the
+`reason` its line rendered, which quotes no payload value, and the `unique` key
+it held, if any. The stream keeps a week of them, trimmed at every upkeep, and
+about the last 10,000 — Redis trims it by whole nodes, so a few more may stay —
+and nothing else of the job is left.
+
+The record is the job as it was pushed: its payload, its trace context, and the
+`actor_id` the push was served for when somebody was authenticated. So a dead
+letter holds what the payload and the actor hold, for up to a week, where a
+backup or a replica of Redis reads it too; a deployment's retention policy
+covers `…:dead`, and `XDEL` removes one dead letter.
 
 Filing a dead letter back, once its cause is fixed, is one command — the queue's
-dead letters, its stream and its job index as keys, the dead letter's id as the
-argument. It files the record on the stream as it was stored, so the job runs
-once more as the attempt it died on:
+dead letters, its stream, its job index and its two unique-key hashes as keys,
+the dead letter's id as the argument. It files the record on the stream as it
+was stored, so the job runs once more as the attempt it died on, and takes its
+unique key again; when another job took the key meanwhile, it files nothing and
+names that job, since two jobs under one key would break what the key promises:
 
 ```bash
-redis-cli EVAL "local e = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1])[1] if not e then return false end local f = {} for i = 1, #e[2], 2 do f[e[2][i]] = e[2][i + 1] end local id = redis.call('XADD', KEYS[2], '*', 'job', f.job, 'record', f.record) redis.call('HSET', KEYS[3], f.job, id) redis.call('XDEL', KEYS[1], ARGV[1]) return id" 3 'nestrs:queue:{audio}:dead' 'nestrs:queue:{audio}:jobs' 'nestrs:queue:{audio}:entries' 1767225600000-0
+redis-cli EVAL "redis.replicate_commands() local e = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1])[1] if not e then return false end local f = {} for i = 1, #e[2], 2 do f[e[2][i]] = e[2][i + 1] end if f.unique then local holder = redis.call('HGET', KEYS[4], f.unique) if holder and holder ~= f.job then return redis.error_reply('its unique key is held by job ' .. holder) end redis.call('HSET', KEYS[4], f.unique, f.job) redis.call('HSET', KEYS[5], f.job, f.unique) end local id = redis.call('XADD', KEYS[2], '*', 'job', f.job, 'record', f.record) redis.call('HSET', KEYS[3], f.job, id) redis.call('XDEL', KEYS[1], ARGV[1]) return id" 5 'nestrs:queue:{audio}:dead' 'nestrs:queue:{audio}:jobs' 'nestrs:queue:{audio}:entries' 'nestrs:queue:{audio}:unique' 'nestrs:queue:{audio}:claims' 1767225600000-0
+```
+
+An operator runs it as a user of their own, which this rule allows and nothing
+more:
+
+```text title="Redis ACL — operator"
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +eval +xrange +hget +hset +xadd +xdel
 ```
 
 ## Configuration

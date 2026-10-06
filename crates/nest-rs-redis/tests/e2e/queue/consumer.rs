@@ -209,6 +209,11 @@ async fn a_job_that_ended_leaves_no_record_but_its_dead_letter() {
     assert_eq!(record["payload"]["run"], run + 1, "the record as stored");
     let reason = field("reason");
     assert!(reason.contains("the upstream refused the job"), "{reason}");
+    assert_eq!(
+        field("unique"),
+        "doomed",
+        "the unique key it held, to take again"
+    );
     assert!(
         !reason.contains(&(run + 1).to_string()),
         "no payload value: {reason}"
@@ -770,9 +775,10 @@ impl RefiledProcessor {
 )]
 struct RefiledModule;
 
-/// The script the delivery page prints to file a dead letter back, read off
-/// the page as an operator copies it.
-fn documented_refile() -> String {
+/// The command the delivery page prints to file a dead letter back, read off
+/// the page as an operator copies it: its script, and its keys — printed for
+/// the queue `audio` — for `queue`.
+fn documented_refile(queue: &str) -> (String, Vec<String>) {
     let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/src/content/docs/queue/delivery.mdx");
     let text = std::fs::read_to_string(&page).expect("the delivery page reads");
@@ -780,8 +786,38 @@ fn documented_refile() -> String {
         .lines()
         .find(|line| line.starts_with("redis-cli EVAL \""))
         .expect("the delivery page prints the command that files a dead letter back");
-    let script = &line["redis-cli EVAL \"".len()..];
-    script[..script.find('"').expect("the script is quoted")].to_owned()
+    let quoted = &line["redis-cli EVAL \"".len()..];
+    let end = quoted.find('"').expect("the script is quoted");
+    let mut rest = quoted[end + 1..].split_whitespace();
+    let count: usize = rest
+        .next()
+        .and_then(|count| count.parse().ok())
+        .expect("the command gives its number of keys");
+    let keys = rest
+        .take(count)
+        .map(|key| {
+            key.trim_matches('\'')
+                .replace("{audio}", &format!("{{{queue}}}"))
+        })
+        .collect();
+    (quoted[..end].to_owned(), keys)
+}
+
+/// File the dead letter `entry` of `queue` back with the page's command, over
+/// `conn`.
+async fn refile(
+    conn: &mut nest_rs_redis::RedisConnection,
+    queue: &str,
+    entry: &str,
+) -> redis::RedisResult<Option<String>> {
+    let (script, keys) = documented_refile(queue);
+    redis::cmd("EVAL")
+        .arg(script)
+        .arg(keys.len())
+        .arg(keys)
+        .arg(entry)
+        .query_async(conn)
+        .await
 }
 
 /// A dead letter filed back with the page's command runs once more, as the
@@ -818,14 +854,7 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     assert_eq!(letters.len(), 1, "the job dead-lettered");
 
     FIXED.store(true, std::sync::atomic::Ordering::SeqCst);
-    let refiled: Option<String> = redis::cmd("EVAL")
-        .arg(documented_refile())
-        .arg(3)
-        .arg(crate::key_of(queue, "dead"))
-        .arg(crate::key_of(queue, "jobs"))
-        .arg(crate::key_of(queue, "entries"))
-        .arg(&letters[0].0)
-        .query_async(&mut crate::connect().await)
+    let refiled = refile(&mut crate::connect().await, queue, &letters[0].0)
         .await
         .expect("the page's command runs");
     assert!(refiled.is_some(), "it filed the dead letter back");
@@ -837,6 +866,88 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     assert!(dead().await.is_empty(), "the dead letter is gone");
     assert_eq!(crate::filed(queue).await, 0);
     crate::forget(queue).await;
+}
+
+/// The ACL user the refile test creates from the page, and removes.
+const OPERATOR_USER: &str = "nestrs-e2e-queue-operator";
+
+/// The page's command, run as a user created from the page's operator rule, files
+/// a dead letter back under the unique key its job held — taking it again — and
+/// refuses one whose key another job took meanwhile, naming that job and filing
+/// nothing, since two jobs under one key would break the key's promise. Redis
+/// denies the user nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_letter_filed_back_takes_its_unique_key_again_or_names_its_holder() {
+    let queue = format!("nestrs-e2e-refile-unique-{}", crate::this_run());
+    let user = crate::acl_user(OPERATOR_USER);
+    let config = crate::documented_user("queue/delivery.mdx", "operator", &user, 0).await;
+    let mut operator = nest_rs_redis::RedisConnection::connect(&config)
+        .await
+        .expect("the page's user passes the boot's proof");
+    let dead = crate::key_of(&queue, "dead");
+    let letter = |job: &'static str, key: &'static str| {
+        let dead = dead.clone();
+        async move {
+            redis::cmd("XADD")
+                .arg(dead)
+                .arg("*")
+                .arg("job")
+                .arg(job)
+                .arg("record")
+                .arg("{}")
+                .arg("reason")
+                .arg("the upstream is down")
+                .arg("unique")
+                .arg(key)
+                .query_async::<String>(&mut crate::connect().await)
+                .await
+                .expect("a dead letter under a unique key")
+        }
+    };
+    let freed = "01890a5d-ac96-774b-bcce-b302099a8057";
+    let taken = "01890a5d-ac96-774b-bcce-b302099a8058";
+    let holder = "01890a5d-ac96-774b-bcce-b302099a8059";
+
+    let entry = letter(freed, "invoice-7").await;
+    let filed = refile(&mut operator, &queue, &entry)
+        .await
+        .expect("a dead letter whose key is free is filed back");
+    assert_eq!(
+        crate::field_of(&queue, "unique", "invoice-7")
+            .await
+            .as_deref(),
+        Some(freed),
+        "its job holds its key again",
+    );
+    assert_eq!(
+        crate::field_of(&queue, "claims", freed).await.as_deref(),
+        Some("invoice-7")
+    );
+    assert_eq!(crate::field_of(&queue, "entries", freed).await, filed);
+
+    let _: i64 = redis::cmd("HSET")
+        .arg(crate::key_of(&queue, "unique"))
+        .arg("invoice-8")
+        .arg(holder)
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("another job took the key");
+    let entry = letter(taken, "invoice-8").await;
+    let refused = refile(&mut operator, &queue, &entry)
+        .await
+        .expect_err("a dead letter whose key another job holds is refused");
+    crate::forget_user(&user).await;
+    assert!(refused.to_string().contains(holder), "{refused}");
+    assert_eq!(crate::field_of(&queue, "entries", taken).await, None);
+    assert_eq!(crate::filed(&queue).await, 1, "nothing more was filed");
+    let kept: i64 = redis::cmd("XLEN")
+        .arg(&dead)
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("XLEN");
+    assert_eq!(kept, 1, "the refused dead letter stays");
+    crate::assert_redis_denied_nothing_but(&user, &[]).await;
+    crate::forget(&queue).await;
 }
 
 // --- what the upkeep keeps tidy ------------------------------------------------------

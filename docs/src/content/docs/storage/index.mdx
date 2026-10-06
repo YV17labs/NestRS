@@ -83,10 +83,25 @@ authenticating with a public default.
 | `BUCKET` | `nestrs` | target bucket |
 | `FORCE_PATH_STYLE` | `true` | `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
 | `ALLOW_HTTP` | `true`, **`false` outside dev/test** | reach the endpoint over plain `http://` — see the caution below |
+| `OPERATION_TIMEOUT_SECS` | `15` | the most a call waits for S3's answer, retries included |
+| `READ_TIMEOUT_SECS` | `30` | the most a transfer waits for its next bytes |
 
 So a staging or production deployment poses three keys at minimum: an
 `https://` `ENDPOINT` (the default is plain HTTP and refused there),
 `ACCESS_KEY` and `SECRET_KEY`.
+
+### How long a call waits
+
+The two bounds are the AWS SDK's. A call waits for S3's answer within
+`OPERATION_TIMEOUT_SECS`, every retry included, and past it fails with its
+own error, `S3 did not answer within 15s, the budget
+<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
+HTTP edge's 30-second timeout answers a bare `503` in its place. An upload's
+body is part of its request: `put_bytes` moves within the budget, and
+`put_stream` ships 5 MiB parts that each do, so a body of any size moves in
+parts. A download's body is a transfer and is never cut for its size: one
+that stops moving for `READ_TIMEOUT_SECS` is cut and resumed from the byte it
+stopped at, while `object_store`'s retries last — three minutes from the call.
 
 ## Presigned uploads
 

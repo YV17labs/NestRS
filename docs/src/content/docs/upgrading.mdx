@@ -199,6 +199,7 @@ left running until they drain the 6.x jobs (step 7).
    | a `ContestedDeclarationError { … }` pattern naming every field | the same with `first: _` and `second: _` — the two imports that made it — or ending in `..` |
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
    | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
+   | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout` and `read_timeout` |
 
    `.opaque()` now takes an owned error that converts into `Box<dyn Error +
    Send + Sync>`, so it logs the whole cause chain; an error type that was only

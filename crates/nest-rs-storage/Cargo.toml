@@ -37,7 +37,9 @@ thiserror.workspace = true
 tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# `test-util` stops the clock once a silent store has taken the connection, so
+# the budget is waited out without the suite waiting it.
+tokio = { workspace = true, features = ["test-util"] }
 # The integration test signs a PUT, uploads raw bytes over HTTP, then reads
 # them back — it needs an independent HTTP client.
 reqwest.workspace = true
@@ -52,6 +54,11 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # `object_store::MultipartUpload` is an `#[async_trait]` trait, so a test double
 # for it has to be written under the same attribute.
 async-trait.workspace = true
+# The nets a call can run under: the authentication guard's around a strategy
+# injecting `Storage`, and the HTTP edge's default request timeout, which the
+# default operation budget sits below.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-http = { path = "../nest-rs-http" }
 
 [lints]
 workspace = true

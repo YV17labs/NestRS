@@ -65,17 +65,17 @@
 //! - [`Storage::list`] — the objects under a prefix, streamed as
 //!   [`ObjectEntry`] values.
 //!
-//! ## Known gap: the client's bounds are `object_store`'s
+//! ## How long a call waits
 //!
-//! A call waits on S3 within `object_store`'s defaults, none chosen here: 5 s
-//! to connect, 30 s per attempt with the body's transfer inside it — a
-//! [`get_stream`](Storage::get_stream) read for longer is cut and resumed by
-//! range, for 3 minutes at most — and retries for up to 3 minutes. That sits
-//! past the HTTP edge's request timeout, so a silent S3 under a handler is said
-//! as the edge's bare `503`. No port's net reaches the client in any shipped
-//! composition, and one budget cannot both bound a silent S3 and let a body of
-//! any size move, so it declares no `nest_rs_core::Budget` until it owns a
-//! bound on an answer apart from one on a transfer.
+//! Two bounds, named for the AWS SDK's: a call waits for S3's answer within
+//! [`StorageConfig::operation_timeout`], every retry included — an upload's body
+//! is part of its request, so [`put_stream`](Storage::put_stream) ships parts
+//! that each fit it — and past it fails as its own error, naming the budget. A
+//! download's body is a transfer, never cut for its size: one that stalls past
+//! [`StorageConfig::read_timeout`] is cut and resumed from where it stopped,
+//! within `object_store`'s retries (3 minutes from the call). The operation
+//! timeout is the client's `nest_rs_core::Budget`, so the boot refuses it at or
+//! past a net reaching the client.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

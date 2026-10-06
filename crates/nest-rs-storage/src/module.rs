@@ -47,9 +47,82 @@ pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
 mod tests {
     use std::sync::Arc;
 
-    use nest_rs_core::App;
+    use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
+    use nest_rs_core::{App, BudgetPastNetError, injectable};
+    use nest_rs_http::async_trait;
+    use nest_rs_http::poem::Request;
 
     use super::*;
+
+    /// A strategy that injects the client, as one reading a key it keeps in a
+    /// bucket does.
+    #[injectable]
+    struct StorageStrategy {
+        #[inject]
+        #[expect(
+            dead_code,
+            reason = "injected only so the strategy's code reaches the client"
+        )]
+        storage: Arc<Storage>,
+    }
+
+    #[async_trait]
+    impl Strategy for StorageStrategy {
+        type Principal = ();
+
+        async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+            Err(AuthError::MissingCredentials)
+        }
+    }
+
+    #[module(
+        imports = [StorageModule],
+        providers = [StorageStrategy, AuthnGuard<StorageStrategy>],
+    )]
+    struct GuardedStorageModule;
+
+    #[tokio::test]
+    async fn an_operation_budget_at_the_net_of_a_guard_injecting_the_client_fails_the_boot() {
+        let Err(refused) = App::builder()
+            .provide(StorageConfig {
+                operation_timeout: AUTHENTICATE_TIMEOUT,
+                ..StorageConfig::default()
+            })
+            .module::<GuardedStorageModule>()
+            .build()
+            .await
+        else {
+            panic!("a client waiting as long as the guard must not boot");
+        };
+        let refused = refused
+            .downcast::<BudgetPastNetError>()
+            .unwrap_or_else(|other| panic!("not a budget refusal: {other:#}"));
+        assert_eq!(
+            (refused.resource, refused.port, refused.budget),
+            (
+                "the object store",
+                "the authentication guard",
+                AUTHENTICATE_TIMEOUT
+            )
+        );
+        assert!(
+            refused.setting.contains(&nest_rs_config::var_name(
+                "storage",
+                "OPERATION_TIMEOUT_SECS"
+            )),
+            "{refused}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_default_client_boots_beside_the_authentication_guard() {
+        App::builder()
+            .provide(StorageConfig::default())
+            .module::<GuardedStorageModule>()
+            .build()
+            .await
+            .expect("the default budget sits under every net");
+    }
 
     /// Pinned bucket for the test below, as a real import site.
     fn pinned_storage() -> StorageSetup {

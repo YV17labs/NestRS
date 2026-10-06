@@ -150,6 +150,8 @@ survives a swap of the backend underneath.
 | `BUCKET` | target bucket |
 | `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
 | `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
+| `OPERATION_TIMEOUT_SECS` | the most a call waits for S3's answer, every retry included — an upload's body is part of its request, and `put_stream` moves each 5 MiB part within it; past it the call fails as its own error naming this variable. Defaults to `15`; whole seconds from `1` to `3600`, refused outside. An app whose authentication strategy injects `Storage` keeps it under the guard's 20 seconds: the boot refuses one at or past it |
+| `READ_TIMEOUT_SECS` | the most a transfer waits for its next bytes: a download that stalls longer is cut and resumed from where it stopped, one that moves is never cut whatever its size. Each attempt's wait for S3 to take a request and answer is held to it too. Defaults to `30`; whole seconds from `1` to `3600`, refused outside |
 
 ## `opentelemetry` — `<PREFIX>_OPENTELEMETRY__*`
 

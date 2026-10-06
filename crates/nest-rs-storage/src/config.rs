@@ -1,4 +1,40 @@
-use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Setting, config};
+use std::time::Duration;
+
+use nest_rs_config::{
+    Bound, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor, Setting, config,
+};
+
+/// How long a call waits for S3's answer by default: under the authentication
+/// guard's 20-second net and the HTTP edge's 30-second request timeout, so a
+/// silent store is said as its own error beneath both.
+const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
+
+/// How long a transfer waits for its next bytes by default — object_store's
+/// whole-attempt bound before this one replaced it.
+const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
+
+/// The operation budget's range, the variable that sets it, and why.
+pub(crate) const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "OPERATION_TIMEOUT_SECS",
+    "StorageConfig::operation_timeout",
+    Floor::AboveZero("a zero budget gives up on every call before S3 is asked"),
+    Bound {
+        count: 60 * 60,
+        why: "the budget bounds every call a caller waits on, and an S3 silent for an hour is \
+              gone rather than slow",
+    },
+);
+
+/// The read bound's range, the variable that sets it, and why.
+pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "READ_TIMEOUT_SECS",
+    "StorageConfig::read_timeout",
+    Floor::AboveZero("a zero bound cuts every transfer before its first bytes"),
+    Bound {
+        count: 60 * 60,
+        why: "a transfer that moved nothing for an hour is a dead connection, not a slow one",
+    },
+);
 
 /// S3-compatible object storage configuration, read from the
 /// framework-namespaced `<PREFIX>_STORAGE__*` keys.
@@ -32,6 +68,25 @@ pub struct StorageConfig {
     /// (`<PREFIX>_STORAGE__ALLOW_HTTP`), defaulting to `true` only in dev/test and
     /// `false` in staging/production (STORAGE-ST2).
     pub allow_http: bool,
+    /// The most a call waits for S3's answer, every retry included — the AWS
+    /// SDK's operation timeout. An upload's body is part of its request, so
+    /// [`put_bytes`](crate::Storage::put_bytes) moves within it, and
+    /// [`put_stream`](crate::Storage::put_stream) moves each part within it; a
+    /// download's body is a transfer, held by [`read_timeout`](Self::read_timeout)
+    /// instead. Past it the call fails as S3's own error, naming the budget. Read
+    /// from `<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS`, whole seconds from 1 to
+    /// 3600, and in code anything above zero up to an hour; defaults to 15s. The
+    /// boot refuses it at or past a net reaching the client — the
+    /// authentication guard's 20s when its strategy injects [`Storage`](crate::Storage).
+    pub operation_timeout: Duration,
+    /// The most a transfer waits for its next bytes — the AWS SDK's read
+    /// timeout: a download that stalls longer is cut, and resumed from where it
+    /// stopped while object_store's retries last; one that moves is never cut,
+    /// whatever its size. Each attempt's wait for S3 to take its request and
+    /// answer is held to it too. Read from `<PREFIX>_STORAGE__READ_TIMEOUT_SECS`,
+    /// whole seconds from 1 to 3600, and in code anything above zero up to an
+    /// hour; defaults to 30s.
+    pub read_timeout: Duration,
 }
 
 impl std::fmt::Debug for StorageConfig {
@@ -44,6 +99,8 @@ impl std::fmt::Debug for StorageConfig {
             .field("bucket", &self.bucket)
             .field("force_path_style", &self.force_path_style)
             .field("allow_http", &self.allow_http)
+            .field("operation_timeout", &self.operation_timeout)
+            .field("read_timeout", &self.read_timeout)
             .finish()
     }
 }
@@ -58,6 +115,8 @@ impl Default for StorageConfig {
             bucket: "nestrs".into(),
             force_path_style: true,
             allow_http: true,
+            operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
+            read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
         }
     }
 }
@@ -98,6 +157,8 @@ impl Config for StorageConfig {
             bucket: env.get("BUCKET")?.unwrap_or(d.bucket),
             force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
             allow_http,
+            operation_timeout: OPERATION_TIMEOUT.read(env, d.operation_timeout)?.value,
+            read_timeout: READ_TIMEOUT.read(env, d.read_timeout)?.value,
         })
     }
 }
@@ -418,6 +479,79 @@ mod tests {
                 )),
                 "names {missing}: {err}"
             );
+        }
+    }
+
+    /// A call waits on S3 under the authentication guard's net when a strategy
+    /// injects the client, and under the HTTP edge's deadline in a handler: the
+    /// default budget sits below both defaults, so a silent store answers with
+    /// its own error, never theirs.
+    #[test]
+    fn the_default_operation_budget_sits_below_every_net_a_call_runs_under() {
+        let budget = StorageConfig::default().operation_timeout;
+        assert!(budget < nest_rs_authn::AUTHENTICATE_TIMEOUT, "{budget:?}");
+        let request = nest_rs_http::HttpConfig::default()
+            .request_timeout
+            .expect("the edge bounds a request by default");
+        assert!(budget < request, "{budget:?}");
+    }
+
+    #[test]
+    fn the_timeouts_read_whole_seconds_over_a_pinned_base() {
+        let cfg = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [("OPERATION_TIMEOUT_SECS", "5"), ("READ_TIMEOUT_SECS", "7")],
+            ),
+            StorageConfig::default(),
+        )
+        .expect("both in range");
+        assert_eq!(
+            (cfg.operation_timeout, cfg.read_timeout),
+            (Duration::from_secs(5), Duration::from_secs(7))
+        );
+    }
+
+    /// Off is not a setting for either: a zero budget gives up before S3 is
+    /// asked, a zero read bound cuts every transfer — refused from the
+    /// environment by variable, and pinned in code by field.
+    #[test]
+    fn a_zero_timeout_is_refused_naming_its_variable_or_its_field() {
+        let zero_operation = StorageConfig {
+            operation_timeout: Duration::ZERO,
+            ..StorageConfig::default()
+        };
+        let zero_read = StorageConfig {
+            read_timeout: Duration::ZERO,
+            ..StorageConfig::default()
+        };
+        for (key, field, pinned) in [
+            (
+                "OPERATION_TIMEOUT_SECS",
+                "StorageConfig::operation_timeout",
+                zero_operation,
+            ),
+            (
+                "READ_TIMEOUT_SECS",
+                "StorageConfig::read_timeout",
+                zero_read,
+            ),
+        ] {
+            let read = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(key, "0")]),
+                StorageConfig::default(),
+            )
+            .expect_err("zero is refused")
+            .to_string();
+            assert!(
+                read.contains(&nest_rs_config::var_name("storage", key)),
+                "{read}"
+            );
+
+            let pinned = StorageConfig::from_env(&unset(), pinned)
+                .expect_err("a zero pin is refused")
+                .to_string();
+            assert!(pinned.contains(field), "{pinned}");
         }
     }
 

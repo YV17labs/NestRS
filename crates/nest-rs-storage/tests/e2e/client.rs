@@ -519,3 +519,106 @@ async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() 
     );
     eprintln!("put_stream(cancelled) {key} -> parts discarded");
 }
+
+/// A TCP proxy to the store whose first connection forwards `forwarded` bytes
+/// of the answer and then holds still, the socket open — a transfer stalled
+/// mid-body. Every later connection is forwarded whole. Returns the address
+/// and the count of connections it took.
+async fn stalling_proxy(
+    upstream: String,
+    forwarded: usize,
+) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the proxy");
+    let addr = listener.local_addr().expect("the proxy's address");
+    let taken = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taken);
+    tokio::spawn(async move {
+        loop {
+            let (client, _) = listener.accept().await.expect("accept");
+            let first = counted.fetch_add(1, Ordering::SeqCst) == 0;
+            let server = tokio::net::TcpStream::connect(&upstream)
+                .await
+                .expect("reach the store");
+            let (mut client_read, mut client_write) = client.into_split();
+            let (mut server_read, mut server_write) = server.into_split();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy(&mut client_read, &mut server_write).await;
+            });
+            tokio::spawn(async move {
+                if !first {
+                    let _ = tokio::io::copy(&mut server_read, &mut client_write).await;
+                    return;
+                }
+                let mut sent = 0;
+                let mut buffer = vec![0; 8 * 1024];
+                while sent < forwarded {
+                    let read = server_read.read(&mut buffer[..(forwarded - sent).min(8 * 1024)]);
+                    let Ok(n @ 1..) = read.await else { return };
+                    if client_write.write_all(&buffer[..n]).await.is_err() {
+                        return;
+                    }
+                    sent += n;
+                }
+                std::future::pending::<()>().await;
+                drop((server_read, client_write));
+            });
+        }
+    });
+    (addr, taken)
+}
+
+/// A download whose bytes stop is cut at the read bound and resumed from where
+/// it stopped, so the caller gets the whole object — never cut by its size,
+/// never held by a stall for longer than the bound.
+#[tokio::test]
+async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
+    let direct = storage();
+    ensure_bucket(&direct, &reqwest::Client::new()).await;
+    let key = unique("stalled.bin");
+    let body: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+    direct
+        .put_bytes(&key, body.clone(), "application/octet-stream")
+        .await
+        .expect("put_bytes");
+
+    let mut config = StorageConfig::default();
+    let upstream = nest_rs_config::ConfigService::for_namespace("storage")
+        .get("ENDPOINT")
+        .expect("a readable storage endpoint")
+        .unwrap_or(config.endpoint.clone());
+    let upstream = upstream
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned();
+    let (proxy, connections) = stalling_proxy(upstream, 64 * 1024).await;
+    config.endpoint = format!("http://{proxy}");
+    config.read_timeout = Duration::from_secs(1);
+    let proxied = Storage::new(Arc::new(config));
+
+    let started = std::time::Instant::now();
+    let got = tokio::time::timeout(Duration::from_secs(10), proxied.get_bytes(&key))
+        .await
+        .expect("a stall is cut at the read bound, not waited out")
+        .expect("the download resumes and completes");
+    assert_eq!(
+        got.as_ref(),
+        body.as_slice(),
+        "the resumed body is the object"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        connections.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the stalled transfer was resumed on a connection of its own"
+    );
+
+    direct.delete(&key).await.expect("delete");
+}

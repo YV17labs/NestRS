@@ -1,18 +1,22 @@
+use std::any::TypeId;
+use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use http::Method;
-use nest_rs_core::{TaskContext, injectable};
+use nest_rs_core::{
+    Budget, Container, ContainerBuilder, Discoverable, ProviderResidency, TaskContext,
+};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path;
 use object_store::signer::Signer;
 use object_store::{
-    Attribute, Attributes, MultipartUpload, ObjectStore, ObjectStoreExt, PutMultipartOptions,
-    PutOptions, PutPayload,
+    Attribute, Attributes, ClientOptions, MultipartUpload, ObjectStore, ObjectStoreExt,
+    PutMultipartOptions, PutOptions, PutPayload,
 };
 
-use crate::config::StorageConfig;
+use crate::config::{OPERATION_TIMEOUT, READ_TIMEOUT, StorageConfig};
 use crate::error::{Result, StorageError};
 
 /// Bytes buffered before a multipart part is shipped. S3 requires every part
@@ -39,11 +43,49 @@ pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 ///
 /// The client is constructed once on first use via [`OnceLock`] so the provider
 /// stays cheap to inject and the (synchronous) builder cost is paid lazily.
-#[injectable]
+///
+/// Every call waits on S3 within [`StorageConfig::operation_timeout`], and a
+/// transfer for its next bytes within [`StorageConfig::read_timeout`].
 pub struct Storage {
-    #[inject]
     config: Arc<StorageConfig>,
     store: OnceLock<AmazonS3>,
+}
+
+// Registered by hand rather than by `#[injectable]` for what the decorator
+// cannot say: the client's budget, held under every net reaching it.
+impl Discoverable for Storage {
+    fn dependencies() -> Vec<TypeId> {
+        vec![TypeId::of::<StorageConfig>()]
+    }
+
+    fn dependency_names() -> Vec<&'static str> {
+        vec!["StorageConfig"]
+    }
+
+    fn injected() -> Vec<TypeId> {
+        Self::dependencies()
+    }
+
+    fn injected_names() -> Vec<&'static str> {
+        Self::dependency_names()
+    }
+
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        let storage = Self::from_container(&builder.snapshot());
+        builder.provide(storage).provide_meta(Budget::of::<Self>(
+            "the object store",
+            format!(
+                "{}, or `{}` in code",
+                nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
+                OPERATION_TIMEOUT.field(),
+            ),
+            |storage| Some(storage.config.operation_timeout),
+        ))
+    }
+}
+
+impl ProviderResidency for Storage {
+    const SINGLETON: bool = true;
 }
 
 impl Storage {
@@ -57,6 +99,19 @@ impl Storage {
             config,
             store: OnceLock::new(),
         }
+    }
+
+    /// Construct this provider by resolving its config from the container —
+    /// what the register phase calls, not by hand.
+    pub fn from_container(container: &Container) -> Self {
+        #[expect(
+            clippy::expect_used,
+            reason = "the register phase builds a provider only once its `dependencies` are registered"
+        )]
+        let config = container
+            .get::<StorageConfig>()
+            .expect("Storage.config: no provider registered for this dependency");
+        Self::new(config)
     }
 
     /// The S3 driver, built once on first use. Returns [`StorageError::Init`]
@@ -78,16 +133,39 @@ impl Storage {
                 endpoint: self.config.endpoint.clone(),
             });
         }
+        // A config handed to `new` skipped `from_env`, and the ranges with it.
+        for (bounds, value) in [
+            (OPERATION_TIMEOUT, self.config.operation_timeout),
+            (READ_TIMEOUT, self.config.read_timeout),
+        ] {
+            bounds
+                .check("storage", bounds.field(), value)
+                .map_err(|source| {
+                    StorageError::Init(object_store::Error::Generic {
+                        store: "S3",
+                        source: Box::new(source),
+                    })
+                })?;
+        }
+        // One `ClientOptions` value: `with_client_options` replaces the whole
+        // set, so a builder call made before it would be undone.
+        let options = ClientOptions::new()
+            // Opt-in plain-HTTP (default on in dev/test, off in prod — STORAGE-ST2)
+            // so a RustFS/MinIO dev server is reachable while production refuses
+            // to send credentials over an unencrypted endpoint by omission.
+            .with_allow_http(self.config.allow_http)
+            // object_store's default bounds each attempt whole, its body
+            // included, which cut a download for its size; a stall is bounded
+            // instead, and a call by the operation budget above it.
+            .with_timeout_disabled()
+            .with_read_timeout(self.config.read_timeout);
         let built = AmazonS3Builder::new()
+            .with_client_options(options)
             .with_endpoint(&self.config.endpoint)
             .with_region(&self.config.region)
             .with_access_key_id(&self.config.access_key)
             .with_secret_access_key(&self.config.secret_key)
             .with_bucket_name(&self.config.bucket)
-            // Opt-in plain-HTTP (default on in dev/test, off in prod — STORAGE-ST2)
-            // so a RustFS/MinIO dev server is reachable while production refuses
-            // to send credentials over an unencrypted endpoint by omission.
-            .with_allow_http(self.config.allow_http)
             // `force_path_style` ⇒ path-style addressing, i.e. *not*
             // virtual-hosted-style.
             .with_virtual_hosted_style_request(!self.config.force_path_style)
@@ -109,8 +187,7 @@ impl Storage {
     async fn presigned_url(&self, method: Method, key: &str, expires: Duration) -> Result<String> {
         let label = method.to_string();
         let url = self
-            .store()?
-            .signed_url(method, &Path::from(key), expires)
+            .answered(self.store()?.signed_url(method, &Path::from(key), expires))
             .await
             .map_err(|source| StorageError::Presign {
                 method: label,
@@ -140,7 +217,7 @@ impl Storage {
     /// need the mime type should keep the value they supplied at
     /// upload-request time rather than relying on `head`.
     pub async fn head(&self, key: &str) -> Result<Option<ObjectMetadata>> {
-        match self.store()?.head(&Path::from(key)).await {
+        match self.answered(self.store()?.head(&Path::from(key))).await {
             Ok(meta) => Ok(Some(ObjectMetadata {
                 byte_size: meta.size as i64,
             })),
@@ -155,8 +232,7 @@ impl Storage {
     /// clones cheaply — so the body is never copied on the way out.
     pub async fn get_bytes(&self, key: &str) -> Result<Bytes> {
         let result = self
-            .store()?
-            .get(&Path::from(key))
+            .answered(self.store()?.get(&Path::from(key)))
             .await
             .map_err(StorageError::Get)?;
         result.bytes().await.map_err(StorageError::Get)
@@ -176,8 +252,7 @@ impl Storage {
     ) -> Result<impl futures_util::Stream<Item = Result<Bytes>> + Send + 'static + use<>> {
         use futures_util::StreamExt;
         let result = self
-            .store()?
-            .get(&Path::from(key))
+            .answered(self.store()?.get(&Path::from(key)))
             .await
             .map_err(StorageError::Get)?;
         Ok(result
@@ -202,17 +277,30 @@ impl Storage {
     ) -> Result<impl futures_util::Stream<Item = Result<ObjectEntry>> + Send + 'static + use<>>
     {
         use futures_util::StreamExt;
-        Ok(self
-            .store()?
-            .list(Some(&Path::from(prefix)))
-            .map(|meta| match meta {
-                Ok(meta) => Ok(ObjectEntry {
-                    key: meta.location.as_ref().to_string(),
-                    byte_size: meta.size as i64,
-                    last_modified: meta.last_modified.into(),
-                }),
-                Err(e) => Err(StorageError::List(e)),
-            }))
+        let budget = self.config.operation_timeout;
+        // An entry is either on a page already fetched or the answer to the
+        // next page's request, so each one waits for S3 within the budget.
+        let pages = self.store()?.list(Some(&Path::from(prefix)));
+        let entries = Box::pin(futures_util::stream::unfold(
+            Some(pages),
+            move |pages| async move {
+                let mut pages = pages?;
+                let entry = match bounded(budget, pages.next()).await {
+                    Ok(None) => return None,
+                    Ok(Some(entry)) => entry,
+                    Err(unanswered) => return Some((Err(unanswered), None)),
+                };
+                Some((entry, Some(pages)))
+            },
+        ));
+        Ok(entries.map(|meta| match meta {
+            Ok(meta) => Ok(ObjectEntry {
+                key: meta.location.as_ref().to_string(),
+                byte_size: meta.size as i64,
+                last_modified: meta.last_modified.into(),
+            }),
+            Err(e) => Err(StorageError::List(e)),
+        }))
     }
 
     /// Upload bytes (e.g. a media worker writes a WebP variant).
@@ -232,10 +320,12 @@ impl Storage {
             attributes,
             ..Default::default()
         };
-        self.store()?
-            .put_opts(&Path::from(key), bytes.into().into(), opts)
-            .await
-            .map_err(StorageError::Put)?;
+        self.answered(
+            self.store()?
+                .put_opts(&Path::from(key), bytes.into().into(), opts),
+        )
+        .await
+        .map_err(StorageError::Put)?;
         Ok(())
     }
 
@@ -270,12 +360,17 @@ impl Storage {
             attributes,
             ..Default::default()
         };
+        let budget = self.config.operation_timeout;
         let mut upload = UploadGuard::new(
-            self.store()?
-                .put_multipart_opts(&Path::from(key), opts)
-                .await
-                .map_err(StorageError::Put)?,
+            bounded(
+                budget,
+                self.store()?.put_multipart_opts(&Path::from(key), opts),
+            )
+            .await
+            .and_then(|created| created)
+            .map_err(StorageError::Put)?,
             key,
+            budget,
         );
 
         let mut stream = std::pin::pin!(stream);
@@ -297,11 +392,10 @@ impl Storage {
             // The chunks are shipped as they are rather than re-split to an
             // exact size: `PutPayload` is a list of `Bytes`, so a part costs no
             // copy, and S3 only bounds a part from below.
-            if let Err(e) = upload
+            let part = upload
                 .get()
-                .put_part(PutPayload::from_iter(pending.drain(..)))
-                .await
-            {
+                .put_part(PutPayload::from_iter(pending.drain(..)));
+            if let Err(e) = bounded(budget, part).await.and_then(|shipped| shipped) {
                 upload.abort().await;
                 return Err(StorageError::Put(e));
             }
@@ -310,11 +404,13 @@ impl Storage {
 
         // The tail ships even when empty: a multipart upload with no part at all
         // is rejected on completion, so a zero-byte stream still needs one.
-        if let Err(e) = upload.get().put_part(PutPayload::from_iter(pending)).await {
+        let tail = upload.get().put_part(PutPayload::from_iter(pending));
+        if let Err(e) = bounded(budget, tail).await.and_then(|shipped| shipped) {
             upload.abort().await;
             return Err(StorageError::Put(e));
         }
-        if let Err(e) = upload.get().complete().await {
+        let completed = bounded(budget, upload.get().complete()).await;
+        if let Err(e) = completed.and_then(|completed| completed.map(drop)) {
             upload.abort().await;
             return Err(StorageError::Put(e));
         }
@@ -329,11 +425,43 @@ impl Storage {
     /// a retention policy or a GDPR erasure — a seam the docs describe as
     /// internal.
     pub async fn delete(&self, key: &str) -> Result<()> {
-        match self.store()?.delete(&Path::from(key)).await {
+        match self.answered(self.store()?.delete(&Path::from(key))).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(StorageError::Delete(e)),
         }
     }
+
+    /// `call`'s answer, or S3's error once the operation budget elapses.
+    async fn answered<T>(
+        &self,
+        call: impl Future<Output = object_store::Result<T>>,
+    ) -> object_store::Result<T> {
+        bounded(self.config.operation_timeout, call)
+            .await
+            .and_then(|answer| answer)
+    }
+}
+
+/// `call`'s output, or once `budget` elapses the error `object_store` gives for
+/// a store's own failure, naming the budget and what sets it — as the timeout
+/// object_store reports for an attempt reads.
+async fn bounded<F: Future>(budget: Duration, call: F) -> object_store::Result<F::Output> {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "Elapsed carries nothing the timeout's own message does not say"
+    )]
+    tokio::time::timeout(budget, call)
+        .await
+        .map_err(|_| object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "S3 did not answer within {budget:?}, the budget {} sets",
+                    nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
+                ),
+            )),
+        })
 }
 
 /// Holds a multipart upload so that **not finishing** is an outcome the store
@@ -365,14 +493,17 @@ struct UploadGuard {
     /// guaranteed to be dropped on the task that owned it, and the span the
     /// abort belongs to is the one that opened the upload either way.
     context: TaskContext,
+    /// How long the abort waits for S3, as every other call of the upload does.
+    budget: Duration,
 }
 
 impl UploadGuard {
-    fn new(upload: Box<dyn MultipartUpload>, key: &str) -> Self {
+    fn new(upload: Box<dyn MultipartUpload>, key: &str, budget: Duration) -> Self {
         Self {
             upload: Some(upload),
             key: key.to_owned(),
             context: TaskContext::current(),
+            budget,
         }
     }
 
@@ -391,7 +522,7 @@ impl UploadGuard {
     /// emitting their event synchronously and a test can still assert on it.
     async fn abort(&mut self) {
         if let Some(mut upload) = self.upload.take() {
-            abort_upload(&mut upload, &self.key).await;
+            abort_upload(&mut upload, &self.key, self.budget).await;
         }
     }
 
@@ -408,6 +539,7 @@ impl Drop for UploadGuard {
         };
         let key = std::mem::take(&mut self.key);
         let context = self.context.clone();
+        let budget = self.budget;
         // Only reachable from inside the runtime the upload was driven by, but
         // a `Drop` has no way to prove that — and panicking in a destructor
         // while unwinding a cancellation would replace a billing leak with a
@@ -431,7 +563,9 @@ impl Drop for UploadGuard {
         if let Ok(handle) = runtime {
             // The abort is the outcome half of the event pair above, so it is
             // filed under the same unit of work.
-            handle.spawn(context.carry(async move { abort_upload(&mut upload, &key).await }));
+            handle.spawn(context.carry(async move {
+                abort_upload(&mut upload, &key, budget).await;
+            }));
         }
     }
 }
@@ -450,8 +584,11 @@ impl Drop for UploadGuard {
 /// surface. This event is what an operator reads under a billing surprise, and
 /// what the e2e suite asserts on to keep the abort from being refactored away
 /// silently.
-async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str) {
-    match upload.abort().await {
+async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str, budget: Duration) {
+    match bounded(budget, upload.abort())
+        .await
+        .and_then(|aborted| aborted)
+    {
         Ok(()) => tracing::debug!(
             target: crate::TARGET,
             key,
@@ -538,6 +675,7 @@ mod tests {
             drop(UploadGuard::new(
                 Box::new(NeverUploaded(Arc::clone(&aborted))),
                 "uploads/abandoned",
+                Duration::from_secs(1),
             ));
             assert!(
                 !aborted.load(Ordering::SeqCst),
@@ -578,6 +716,7 @@ mod tests {
         drop(UploadGuard::new(
             Box::new(NeverUploaded(Arc::clone(&aborted))),
             "uploads/cancelled",
+            Duration::from_secs(1),
         ));
         // The abort is spawned, so it lands on a later poll rather than in the
         // `drop`. Yield until it does — bounded, so a branch that never issues
@@ -673,6 +812,109 @@ mod tests {
                 "got {err:?}",
             );
         }
+    }
+
+    /// An S3 that accepts every connection and never answers — a process
+    /// wedged behind a healthy socket. The clock stops once the first
+    /// connection is accepted: the handshake was made in real time, and what is
+    /// left to wait is the budget, which a stopped clock waits out for free.
+    async fn silent_store() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let addr = listener.local_addr().expect("a bound address");
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.expect("accept");
+                if held.is_empty() {
+                    tokio::time::pause();
+                }
+                held.push(socket);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    type Call = fn(Storage) -> futures_util::future::BoxFuture<'static, Result<()>>;
+
+    /// Every call that waits on S3, each on a store of its own, since a second
+    /// connection made on a stopped clock races the clock's jump.
+    const CALLS: [(&str, Call); 7] = [
+        ("head", |s| {
+            Box::pin(async move { s.head("k").await.map(drop) })
+        }),
+        ("get_bytes", |s| {
+            Box::pin(async move { s.get_bytes("k").await.map(drop) })
+        }),
+        ("get_stream", |s| {
+            Box::pin(async move { s.get_stream("k").await.map(drop) })
+        }),
+        ("list", |s| {
+            Box::pin(async move {
+                use futures_util::StreamExt;
+                s.list("")?.next().await.transpose().map(drop)
+            })
+        }),
+        ("put_bytes", |s| {
+            Box::pin(async move { s.put_bytes("k", Bytes::new(), "text/plain").await })
+        }),
+        ("put_stream", |s| {
+            Box::pin(async move {
+                s.put_stream("k", "text/plain", futures_util::stream::empty())
+                    .await
+            })
+        }),
+        ("delete", |s| Box::pin(async move { s.delete("k").await })),
+    ];
+
+    #[tokio::test]
+    async fn every_call_s3_never_answers_fails_at_the_operation_budget_naming_it() {
+        let budget = StorageConfig::default().operation_timeout;
+        for (name, call) in CALLS {
+            let storage = client(&silent_store().await, true);
+            let sent = tokio::time::Instant::now();
+            let refused = tokio::time::timeout(budget * 2, call(storage))
+                .await
+                .unwrap_or_else(|_| panic!("{name}: no answer within twice the budget"))
+                .expect_err("a store that never answers returns nothing");
+            let chain = nest_rs_core::error_message(&refused);
+            // The handshake before the clock stopped took real time.
+            let waited = sent.elapsed();
+            assert!(
+                waited >= budget && waited < budget + Duration::from_secs(1),
+                "{name}: {waited:?}"
+            );
+            assert!(
+                chain.contains(&format!(
+                    "S3 did not answer within {budget:?}, the budget {} sets",
+                    nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
+                )),
+                "{name}: {chain}"
+            );
+            tokio::time::resume();
+        }
+    }
+
+    /// A config handed to `new` skipped the read that holds its ranges, so the
+    /// client holds them where it is built, before a zero budget fails every
+    /// call as a timeout S3 never had.
+    #[tokio::test]
+    async fn a_hand_built_client_refuses_a_zero_budget_naming_its_field() {
+        let storage = Storage::new(Arc::new(StorageConfig {
+            operation_timeout: Duration::ZERO,
+            ..Default::default()
+        }));
+        let refused = storage
+            .head("k")
+            .await
+            .expect_err("refused before any call");
+        assert!(matches!(refused, StorageError::Init(_)), "{refused:?}");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(
+            chain.contains("StorageConfig::operation_timeout"),
+            "{chain}"
+        );
     }
 
     // G13: the streaming page shows `Body::from_bytes_stream(stream)` fed

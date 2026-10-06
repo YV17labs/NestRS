@@ -23,14 +23,22 @@ inputs:
 runs:
   using: composite
   steps:
+    # The channel reaches `GITHUB_ENV` so that rust-cache keys on it too, and
+    # only once it holds nothing but a channel's or a version's characters.
     - name: Install the toolchain
       shell: bash
       env:
         TOOLCHAIN: ${{ inputs.toolchain }}
-      run: |
+      run: | # zizmor: ignore[github-env]
         if [ -z "$TOOLCHAIN" ]; then
           rustup toolchain install --profile minimal
         else
+          case "$TOOLCHAIN" in
+            *[!A-Za-z0-9._-]*)
+              echo "::error::the toolchain input is a channel or a version: letters, digits, '.', '_' and '-'"
+              exit 1
+              ;;
+          esac
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
         fi

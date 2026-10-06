@@ -63,7 +63,7 @@ lists.
   `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
 
 ```bash
-just lint   # fmt, clippy, each capability alone, dependency policy
+just lint   # fmt, workflows, clippy, each capability alone, dependency policy
 just test   # every test (nextest) + doctests, against Postgres, Redis and S3
 just doc    # rustdoc, private items included, warnings denied
 just ci     # every check CI runs: lint, docs and tests

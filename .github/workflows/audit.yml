@@ -1,9 +1,10 @@
-# Every Cargo dependency tree the repository owns — the framework's, the
-# demo's and the benchmarks' — against the RustSec advisory database; the npm
-# trees are not read yet (.claude/decisions/npm-lockfile-advisories.md). An
+# Every dependency tree the repository owns against the advisory databases:
+# the Cargo ones — the framework's, the demo's and the benchmarks' — through
+# cargo-deny and RustSec, the npm ones — the docs' and the NestJS SUTs' — through
+# osv-scanner and OSV (.claude/decisions/npm-lockfile-advisories.md). An
 # advisory is published without a change here, so it is checked where it can
-# be acted on: blocking on a change to the tree, daily on `main`, and before a
-# release (`publish.yml`) — never on a change that did not touch the tree.
+# be acted on: blocking on a change to a tree, daily on `main`, and before a
+# release (`publish.yml`) — never on a change that did not touch one.
 
 name: Audit
 
@@ -13,7 +14,10 @@ on:
     paths: &tree
       - '**/Cargo.lock'
       - '**/Cargo.toml'
+      - '**/package-lock.json'
+      - '**/package.json'
       - 'deny.toml'
+      - 'osv-scanner.toml'
       - 'Justfile'
       - '.github/workflows/audit.yml'
   pull_request:
@@ -30,7 +34,7 @@ concurrency:
 
 jobs:
   advisories:
-    name: advisories (cargo-deny)
+    name: advisories (cargo-deny, osv-scanner)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -45,5 +49,5 @@ jobs:
         run: rustup toolchain install --profile minimal
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: just@1,cargo-deny@0.20
+          tool: just@1,cargo-deny@0.20,osv-scanner@2.6
       - run: just audit

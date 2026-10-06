@@ -1,0 +1,18 @@
+# What `just audit` reads in the npm lockfiles and does not act on: each entry
+# names the advisory, why it stays and until when, so it expires rather than
+# outlives its reason (.claude/decisions/npm-lockfile-advisories.md).
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2027-01-06T00:00:00Z
+reason = "braces <= 3.0.3 in docs/, through starlight-llms-txt and micromatch: no release patches it, and the build expands only the globs its own configuration writes"
+
+[[IgnoredVulns]]
+id = "GHSA-238p-pmpm-9mq7"
+ignoreUntil = 2027-01-06T00:00:00Z
+reason = "katex 0.16 in docs/, through astro-mermaid and mermaid, whose 12.1.0 still requires ^0.16: it renders the site's own diagrams, and the advisory needs a prototype pollution already in the page"
+
+[[IgnoredVulns]]
+id = "GHSA-rj75-hqrm-r3gf"
+ignoreUntil = 2027-01-06T00:00:00Z
+reason = "postcss-selector-parser 6 in docs/, through @expressive-code/core 0.44.2, which still requires postcss-nested ^6: it parses the site's own selectors, at build"

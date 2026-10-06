@@ -34,3 +34,22 @@ the advisory, its reason and an `ignoreUntil`, so it expires rather than
 outlives its reason. `just audit` would run it over the npm lockfiles beside
 cargo-deny over the Cargo ones; `audit.yml` would watch `**/package-lock.json`
 and `**/package.json`.
+
+## 2026-10-06 — validated, and landed
+
+The owner validated osv-scanner. `just audit` runs `osv-scanner scan source
+--config osv-scanner.toml` over every `package-lock.json` git tracks, beside
+cargo-deny; `audit.yml` and `publish.yml` install it through the pinned
+`taiki-e/install-action` (2.6), the dev container fetches the release by
+version and checks its digest, and `audit.yml` also watches
+`**/package-lock.json`, `**/package.json` and `osv-scanner.toml`.
+
+Its first run found two advisories published on 2026-10-05, after the
+`npm audit` pass, both in `docs/` and neither fixed by a release their parents'
+ranges allow: GHSA-238p-pmpm-9mq7 (katex < 0.18.2, through `astro-mermaid` →
+`mermaid`, whose 12.1.0 still requires `^0.16.47`) and GHSA-rj75-hqrm-r3gf
+(postcss-selector-parser < 7.1.6, through `@expressive-code/core` 0.44.2's
+`postcss-nested ^6`). Both process the site's own content, so each is an
+`[[IgnoredVulns]]` entry with its reason, until 2027-01-06 like braces. Refused:
+an npm `overrides` forcing either across its parent's major — a fix the parent
+never ran against, for an advisory the site does not reach.

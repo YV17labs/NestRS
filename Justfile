@@ -8,17 +8,19 @@ _default:
 fmt:
     cargo fmt --all
 
-# Formatting, clippy, each capability alone, and the dependency policy
+# Formatting, the workflows' hardening, clippy, each capability alone, and the dependency policy
 lint:
     cargo fmt --all --check
     cargo deny check bans licenses sources
+    actionlint
+    zizmor --offline --quiet .github
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
     cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going
 
 # Each lockfile is read as committed: one its manifests outgrew fails rather than
 # being resolved again. An ignore is judged in the framework's tree, where it is
 # decided: a tree that does not reach the crate says nothing about it.
-# Every Cargo lockfile the repository owns against the advisory database, which moves without a change here
+# Every lockfile the repository owns against the advisory databases, which move without a change here
 audit:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -26,6 +28,11 @@ audit:
     for lock in $(git ls-files '*/Cargo.lock'); do
         cargo deny --locked --manifest-path "$(dirname "$lock")/Cargo.toml" check advisories --allow advisory-not-detected
     done
+    lockfiles=()
+    for lock in $(git ls-files '*package-lock.json'); do
+        lockfiles+=(--lockfile "$lock")
+    done
+    osv-scanner scan source --config osv-scanner.toml "${lockfiles[@]}"
 
 # Tests, one recipe per kind; `just test` runs them all
 mod test

@@ -38,7 +38,7 @@ jobs:
           cache-key: beta-${{ matrix.workspace.name }}
           workspaces: '${{ matrix.workspace.dir }} -> target'
           toolchain: beta
-      - run: cargo +beta check --locked --workspace --all-targets $FEATURES
+      - run: cargo +beta check --locked --workspace --all-targets ${FEATURES:+"$FEATURES"}
         working-directory: ${{ matrix.workspace.dir }}
         env:
           FEATURES: ${{ matrix.workspace.features }}

@@ -111,14 +111,17 @@ vulnerable, unsound or unmaintained crate, no licence outside its list, nothing
 outside crates.io, no crate it bans; an exception names its advisory or crate
 and its reason. **A check belongs where only a change can turn it red**: the
 bans, licences and sources are `just lint`'s, while the advisories, which the
-database moves overnight, are `just audit`'s, over every Cargo lockfile the
-repository owns — run by `audit.yml` on a change to a tree (blocking), daily on
-`main`, and by `publish.yml` before a release; the npm lockfiles wait on a
-scanner that records an exception (`decisions/npm-lockfile-advisories.md`).
-`docs.yml` builds the site when `docs/` changes. The workflows stay hardened:
+database moves overnight, are `just audit`'s, over every lockfile the
+repository owns, Cargo's through cargo-deny and npm's through osv-scanner, an
+exception an `osv-scanner.toml` entry with its reason and `ignoreUntil`
+(`decisions/npm-lockfile-advisories.md`) — run by `audit.yml` on a change to a
+tree (blocking), daily on `main`, and by `publish.yml` before a release.
+`docs.yml` builds the site when `docs/` changes. The workflows stay hardened —
 actions pinned by SHA, a local action referenced `$/`
 (`decisions/self-repository-actions.md`), `persist-credentials: false`, least
-permissions.
+permissions — held by zizmor's offline audits and actionlint in `just lint`
+(`decisions/workflow-lint.md`); an exception is a `# zizmor: ignore[…]` beside
+its reason.
 
 ## Release
 

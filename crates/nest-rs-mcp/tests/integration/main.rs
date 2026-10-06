@@ -23,7 +23,7 @@ mod registry;
 mod scope;
 
 use std::net::TcpListener as StdTcpListener;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nest_rs_core::{App, Module, Transport};
 use nest_rs_http::{HttpConfig, HttpTransport};
@@ -70,15 +70,19 @@ pub(crate) async fn serve_on_loopback<M: Module + 'static>(window: Duration) -> 
 }
 
 impl Serving {
-    /// Ask for shutdown and return how long `serve` took to come back.
+    /// Ask for shutdown with the clock paused — nothing reads a socket
+    /// meanwhile — and return how long `serve` took to come back on that clock.
     pub(crate) async fn stop(self) -> Duration {
-        let asked = Instant::now();
+        tokio::time::pause();
+        let asked = tokio::time::Instant::now();
         self.cancel.cancel();
         self.task
             .await
             .expect("serve does not panic")
             .expect("serve stops cleanly");
-        asked.elapsed()
+        let took = asked.elapsed();
+        tokio::time::resume();
+        took
     }
 }
 

@@ -132,7 +132,10 @@ async fn a_batch_still_running_when_the_transport_stops_is_dropped_with_it() {
         .expect("the request is sent");
     SLOW_BATCH_STARTED.notified().await;
 
+    // The window passes on paused time: nothing reads the connection meanwhile.
+    tokio::time::pause();
     app.shutdown().await.expect("the transport stops cleanly");
+    tokio::time::resume();
 
     assert!(
         SLOW_BATCH_DROPPED.load(std::sync::atomic::Ordering::SeqCst)

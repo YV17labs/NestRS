@@ -54,6 +54,9 @@ poem = { workspace = true, features = ["test"] }
 # `Transport::serve` takes the token that asks it to stop — what the shutdown
 # suite drives a real transport with.
 tokio-util.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time while a transport stops
+# and nothing reads a socket, so its window costs the suite nothing.
+tokio = { workspace = true, features = ["test-util"] }
 # Holds `McpIdentity`'s fields against the answers `#[mcp]`'s grammar gives
 # (`identity.rs`): the grammar lives here because a proc-macro crate exports
 # nothing a test can call.

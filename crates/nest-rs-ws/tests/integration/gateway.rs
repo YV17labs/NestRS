@@ -1217,10 +1217,12 @@ async fn a_message_round_trips_over_a_real_upgrade() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+/// The floor every connection ceiling is held to: a second.
+const CEILING: Duration = Duration::from_secs(1);
+
 #[module(
     imports = [WsModule, WsModule::for_root(WsConfig {
-        // The floor every connection ceiling is held to: a second.
-        max_connection: Some(Duration::from_secs(1)),
+        max_connection: Some(CEILING),
         ..WsConfig::default()
     })],
     providers = [SocketGateway],
@@ -1242,6 +1244,11 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
         .expect("a pinned ceiling boots");
 
     let mut socket = app.socket("/socket").connect().await;
+    // The ceiling passes on paused time, while nothing reads: its Close waits
+    // buffered for the read below, back on the real clock.
+    tokio::time::pause();
+    tokio::time::sleep(CEILING + Duration::from_millis(1)).await;
+    tokio::time::resume();
     let (code, reason) = socket.expect_close().await;
     assert_eq!(
         code,
@@ -1534,11 +1541,14 @@ impl LeavingGateway {
     }
 }
 
+/// The shutdown window of [`LeavingModule`]'s transport.
+const WINDOW: Duration = Duration::from_secs(1);
+
 #[module(
     imports = [
         WsModule,
         nest_rs_ws::nest_rs_http::HttpModule::for_root(nest_rs_ws::nest_rs_http::HttpConfig {
-            shutdown_timeout: Duration::from_secs(1),
+            shutdown_timeout: WINDOW,
             ..Default::default()
         }),
     ],
@@ -1631,16 +1641,16 @@ async fn a_message_still_running_at_the_window_is_dropped_and_files_cancelled() 
     socket.send("stuck", serde_json::Value::Null).await;
     STUCK_STARTED.notified().await;
 
-    let asked = std::time::Instant::now();
+    // The window passes on paused time: nothing reads the socket meanwhile.
+    tokio::time::pause();
+    let asked = tokio::time::Instant::now();
     app.shutdown().await.expect("the transport stops cleanly");
     let took = asked.elapsed();
+    tokio::time::resume();
 
     assert!(
-        took >= Duration::from_secs(1)
-            && took
-                < Duration::from_secs(1)
-                    + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
-                    + Duration::from_secs(1),
+        took >= WINDOW
+            && took < WINDOW + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT + Duration::from_secs(1),
         "the message held the window, and nothing past it — took {took:?}",
     );
     let line = logs.expect_one(
@@ -1858,10 +1868,13 @@ async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
     let app = leaving_app().await;
     let mut socket = app.socket("/leaving").connect().await;
     socket.send("flood", serde_json::Value::Null).await;
-    // Never read again: the replies fill both kernel buffers and park the writer.
+    // Never read again: the replies fill both kernel buffers and park the
+    // writer. On paused time, which moves only once it is parked, through the
+    // window too.
+    tokio::time::pause();
     tokio::time::sleep(Duration::from_millis(500)).await;
-
     app.shutdown().await.expect("the transport stops cleanly");
+    tokio::time::resume();
 
     let cut = logs.expect_one(
         nest_rs_ws::nest_rs_http::target::HTTP,

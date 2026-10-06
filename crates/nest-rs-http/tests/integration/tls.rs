@@ -139,6 +139,15 @@ async fn ping_until_ok(host: &str, port: u16, within: Duration) -> Option<String
     }
 }
 
+/// Let the watcher take `ticks` intervals on paused time, and pick up what
+/// settled meanwhile. No request is in flight while the clock is paused, so no
+/// timer but the watcher's is passed over.
+async fn watch(ticks: u32) {
+    tokio::time::pause();
+    tokio::time::sleep(Duration::from_secs(RELOAD_SECS) * ticks).await;
+    tokio::time::resume();
+}
+
 /// A configured transport over the material on disk, not yet served.
 async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> HttpTransport {
     let tls = HttpTls::from_files(material.cert(), material.key())
@@ -185,6 +194,7 @@ async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
 
     // Renew in place. Nothing restarts, nothing rebinds.
     material.write(CERT_B, KEY_B);
+    watch(3).await;
 
     let body = ping_until_ok(HOST_B, port, Duration::from_secs(10)).await;
     assert_eq!(
@@ -234,6 +244,7 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
     assert_eq!(opened.text().await.ok().as_deref(), Some("pong"));
 
     material.write(CERT_B, KEY_B);
+    watch(3).await;
 
     // The swap has landed once a *fresh* handshake is answered under leaf B…
     assert_eq!(
@@ -278,7 +289,7 @@ async fn watching_off_keeps_serving_the_certificate_it_booted_with() {
         Some("pong"),
     );
     material.write(CERT_B, KEY_B);
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    watch(3).await;
     assert!(
         ping(HOST_B, port).await.is_err(),
         "watching is off, so the renewal is not picked up",
@@ -341,7 +352,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
     // An empty certificate — a truncate that stalls, or a writer that creates
     // before it writes. It parses as a chain holding nothing.
     material.write(b"", KEY_A);
-    tokio::time::sleep(Duration::from_secs(3 * RELOAD_SECS)).await;
+    watch(3).await;
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(5))
             .await
@@ -352,7 +363,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
 
     // A mismatched pair: leaf B's certificate, leaf A's key.
     material.write(CERT_B, KEY_A);
-    tokio::time::sleep(Duration::from_secs(3 * RELOAD_SECS)).await;
+    watch(3).await;
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(5))
             .await
@@ -368,6 +379,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
     // A pair that *does* correspond still lands, so the refusals above did not
     // leave the watcher stuck on the material it rejected.
     material.write(CERT_B, KEY_B);
+    watch(3).await;
     assert_eq!(
         ping_until_ok(HOST_B, port, Duration::from_secs(10))
             .await

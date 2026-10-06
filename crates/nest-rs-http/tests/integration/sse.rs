@@ -129,7 +129,7 @@ async fn the_events_reach_the_client_with_their_type_and_id() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_connection_ceiling_closes_a_stream_that_never_ends() {
     let client = boot::<FeedModule>().await;
     // The whole assertion is that this returns at all. `stream::pending()`
@@ -229,12 +229,18 @@ async fn a_peer_that_stops_reading_still_holds_its_socket_past_the_ceiling() {
         .expect("the request is sent");
     socket.flush().await.expect("the request is flushed");
 
-    // Well past the ceiling, without reading a byte.
+    // Well past the ceiling, without reading a byte — on paused time, since
+    // nothing waits meanwhile but the transport on its parked write.
+    tokio::time::pause();
     tokio::time::sleep(CEILING * 2).await;
+    tokio::time::resume();
     let mut buf = [0_u8; 1024];
     let still_there = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut buf)).await;
     cancel.cancel();
+    // The parked write holds the shutdown too: paused again, as nothing reads.
+    tokio::time::pause();
     let _ = tokio::time::timeout(Duration::from_secs(5), serving).await;
+    tokio::time::resume();
 
     assert!(
         matches!(still_there, Ok(Ok(n)) if n > 0),

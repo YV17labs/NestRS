@@ -60,6 +60,9 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["ws"] }
 # resolved `WsConfig`, the lifetime ceiling, the writer task, the registry
 # entry's cleanup, the close frames — exists only inside a real connection.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["ws"] }
+# `test-util` (not part of tokio's `full`) pauses time while nothing reads a
+# socket, so a lifetime ceiling or a shutdown window costs the suite nothing.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

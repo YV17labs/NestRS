@@ -500,10 +500,12 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
+/// The floor every connection ceiling is held to: a second.
+const CEILING: Duration = Duration::from_secs(1);
+
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        // The floor every connection ceiling is held to: a second.
-        max_connection: Some(Duration::from_secs(1)),
+        max_connection: Some(CEILING),
         ..GraphqlConfig::default()
     }),
     TickModule,
@@ -519,6 +521,11 @@ async fn the_lifetime_ceiling_completes_the_subscriptions_and_closes_going_away(
     let mut socket = graphql_ws(&app).connect().await;
     subscribe(&mut socket, "subscription { ticks { seq } }").await;
     running(&state).await;
+    // The ceiling passes on paused time, while nothing reads: what it sends
+    // waits buffered for the reads below, back on the real clock.
+    tokio::time::pause();
+    tokio::time::sleep(CEILING + Duration::from_millis(1)).await;
+    tokio::time::resume();
 
     let completed = next_message(&mut socket).await;
     let (code, reason) = socket.expect_close().await;

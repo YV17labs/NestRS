@@ -24,16 +24,14 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 quote! { builder = <#path as ::nest_rs_core::Module>::register(builder); }
             }
             // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
-            // The collect phase already built the value and parked it at this site,
-            // so register consumes *that* value; the fallback closure only runs on
-            // the synchronous `App::new` path, which has no collect phase. Either
-            // way the expression is evaluated exactly once (CORE-I9).
-            other => quote! {
+            // The collect phase built the value and parked it at this site, so
+            // register consumes *that* value: the expression is written, and
+            // evaluated, once (CORE-I9).
+            _ => quote! {
                 builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
                     builder,
                     ::std::any::TypeId::of::<#name>(),
                     #at,
-                    || #other,
                 );
             },
         };

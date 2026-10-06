@@ -158,10 +158,10 @@ pub trait Module {
 ///
 /// `#[module(imports = [Foo::for_root(opts)])]` builds the value in the
 /// [`collect`] phase and parks it on the [`ContainerBuilder`], so [`register`]
-/// consumes *that* value rather than re-running the expression; an import whose
-/// collect never ran builds it in `register` instead. Both phases therefore see
-/// the same value, and a `for_root` that is not idempotent still behaves (it
-/// runs once).
+/// consumes *that* value rather than re-running the expression — a `#[module]`
+/// registered before any collect phase collects itself first. Both phases
+/// therefore see the same value, and a `for_root` that is not idempotent still
+/// behaves (it runs once).
 ///
 /// Because the value outlives its construction site, an implementor must be
 /// `Send + 'static` to be usable from `#[module(imports = [...])]`.

@@ -101,7 +101,7 @@ fn a_dynamic_import_is_evaluated_once_on_the_sync_path() {
 
     assert!(
         app.container().get::<Installed>().is_some(),
-        "the fallback path must still register the dynamic module",
+        "the synchronous path registers the dynamic module",
     );
     assert_eq!(
         BUILDS.load(Ordering::SeqCst),
@@ -232,4 +232,34 @@ async fn a_module_registered_without_its_collect_fails_the_boot_naming_what_it_o
         .downcast_ref::<LateFactoryError>()
         .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
     assert!(late.type_name.ends_with("Opened"), "{late:?}");
+}
+
+#[module(imports = [TaggingSetup("claimed")])]
+struct ClaimedModule;
+
+/// An importer that marks `ClaimedModule` collected without running its
+/// `collect`, then registers it.
+struct ClaimsCollectModule;
+
+impl Module for ClaimsCollectModule {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        <ClaimedModule as Module>::register(builder)
+    }
+
+    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
+        builder.mark_collected(TypeId::of::<ClaimedModule>());
+        builder
+    }
+}
+
+#[test]
+fn a_dynamic_import_whose_module_was_marked_collected_unrun_fails_the_boot_naming_it() {
+    let Err(refused) = App::new::<ClaimsCollectModule>() else {
+        panic!("the module's imports were never collected");
+    };
+    let refused = format!("{refused:#}");
+    assert!(
+        refused.starts_with("`TaggingSetup(..)` at `imports[0]` of `ClaimedModule`"),
+        "{refused}"
+    );
 }

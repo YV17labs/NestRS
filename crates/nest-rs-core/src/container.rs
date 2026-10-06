@@ -739,37 +739,20 @@ impl ContainerBuilder {
     }
 
     /// Register phase for one dynamic import: consume the value the collect
-    /// phase parked at this site, or build one from `fallback` when nothing
-    /// parked one — which `#[module]` never leaves, since its `register`
-    /// collects the module first when no phase did — and then run its
-    /// `collect` here too, so the import contributes the same thing either way
-    /// as far as synchronously is possible. Either way the import expression
-    /// runs exactly once.
+    /// phase parked at this site. `#[module]`'s `register` collects the module
+    /// first when no phase did, so a value is always parked — unless something
+    /// marked the module collected without running its `collect`, which is
+    /// refused naming the import.
     ///
     /// **Internal ABI** — emitted by `#[module]`, lockstep with
     /// `nest-rs-core-macros`; do not call by hand.
     #[doc(hidden)]
-    pub fn register_dynamic_import<D, F>(
-        mut self,
-        module: TypeId,
-        index: usize,
-        fallback: F,
-    ) -> Self
-    where
-        D: DynamicModule + Send + 'static,
-        F: FnOnce() -> D,
-    {
+    pub fn register_dynamic_import(mut self, module: TypeId, index: usize) -> Self {
         match self.dynamic_registrars.remove(&(module, index)) {
             Some(registrar) => registrar(self),
             None => {
-                // No collect phase ran, so run it here: its synchronous half
-                // (`ConfigRootSetup` registering `Environment`) would otherwise
-                // be skipped without a trace. Anything it queues as an async
-                // factory stays queued, which is exactly what lets the boot
-                // refuse instead of booting the hole (`LateFactoryError`).
-                let value = fallback();
-                let builder = value.collect(self);
-                value.register(builder)
+                let site = self.declaring_site();
+                self.refuse(crate::error::UncollectedImportError { site })
             }
         }
     }

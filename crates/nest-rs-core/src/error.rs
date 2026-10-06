@@ -6,8 +6,8 @@
 //! `ContestedDeclarationError`, `UnresolvedFactoryError`, `LateFactoryError` and
 //! `FactoryCycleError` are constructed only in [`app`](crate::app), by the
 //! registration and factory phases, `ProviderCycleError` by the `#[module]`
-//! expansion's register phase, and `BudgetPastNetError` by the budget check the
-//! boot ends on. Filed
+//! expansion's register phase, `UncollectedImportError` by a dynamic import's
+//! register, and `BudgetPastNetError` by the budget check the boot ends on. Filed
 //! under `access.rs` the file's name was a claim about all of them and false
 //! for half: from the type a reader derived the wrong file, and from the file
 //! they were offered errors its own pass never raises.
@@ -249,6 +249,21 @@ pub struct FactoryCycleError {
 pub struct LateFactoryError {
     /// The type whose factory was queued too late to run.
     pub type_name: &'static str,
+}
+
+/// A `#[module]`'s dynamic import reached the register phase with no value its
+/// collect phase built: something marked the module collected without running
+/// its `Module::collect`, which builds each dynamic import. Raised by the
+/// register phase rather than leaving the import out.
+#[derive(Debug, Error)]
+#[error(
+    "{site} reached the register phase uncollected: its module was marked collected without \
+     running its `Module::collect`, which builds every dynamic import — call that `collect` \
+     instead of `ContainerBuilder::mark_collected` for a module `#[module]` expands"
+)]
+pub(crate) struct UncollectedImportError {
+    /// The import, as a boot error names its site.
+    pub(crate) site: String,
 }
 
 /// Providers of one module each wait on another of them, injected by its

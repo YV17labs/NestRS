@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
@@ -84,31 +85,42 @@ struct ProducerModule;
 )]
 struct WorkerModule;
 
-/// What `MONITOR` showed reaching the suite's confined database: each
-/// command, as an ACL rule names it, with the client that sent it — `lua` for
-/// a command a script ran. The producer and the worker run one after the other,
-/// so what one phase saw is one role's.
-type Seen = Arc<Mutex<Vec<(String, String)>>>;
+/// What `MONITOR` showed reaching the suite's confined database. The producer
+/// and the worker run one after the other, so what one phase saw is one role's.
+#[derive(Default)]
+struct Seen {
+    /// Each command, as an ACL rule names it, with the client that sent it —
+    /// `lua` for a command a script ran.
+    commands: Mutex<Vec<(String, String)>>,
+    /// How many [`BARRIER`]s the reader has passed.
+    barriers: AtomicUsize,
+}
 
-/// Start reading `MONITOR` into a list, until the returned task is aborted.
-async fn monitor() -> (Seen, tokio::task::JoinHandle<()>) {
+/// What [`sent`] echoes on the confined database: Redis streams to `MONITOR`
+/// in the order it runs commands, so once the reader passed it, it read every
+/// command a phase ran.
+const BARRIER: &str = "nestrs-e2e-monitor-barrier";
+
+/// Start reading `MONITOR`, until the returned task is aborted. Every command
+/// run once it answers is streamed.
+async fn monitor() -> (Arc<Seen>, tokio::task::JoinHandle<()>) {
     let monitor = redis::Client::open(crate::redis_url())
         .expect("the admin URL")
         .get_async_monitor()
         .await
         .expect("a monitor connection, which sends MONITOR");
-    let seen: Seen = Arc::default();
+    let seen = Arc::new(Seen::default());
     let filling = Arc::clone(&seen);
     let reading = tokio::spawn(async move {
         let mut lines = monitor.into_on_message::<String>();
         while let Some(line) = lines.next().await {
-            if let Some(command) = parse(&line) {
-                filling.lock().await.push(command);
+            if line.contains(BARRIER) {
+                filling.barriers.fetch_add(1, Ordering::SeqCst);
+            } else if let Some(command) = parse(&line) {
+                filling.commands.lock().await.push(command);
             }
         }
     });
-    // MONITOR answers before it streams: give it a beat to be in place.
-    tokio::time::sleep(Duration::from_millis(100)).await;
     (seen, reading)
 }
 
@@ -140,8 +152,18 @@ fn parse(line: &str) -> Option<(String, String)> {
 
 /// The commands sent to the confined database in `seen` by anyone but the
 /// test's own administration — the clients of Redis's `default` user still
-/// open — and by the scripts they ran.
-async fn sent(seen: &Seen) -> BTreeSet<String> {
+/// open — and by the scripts they ran, once the reader caught up with what
+/// `admin`, on that database, ran last.
+async fn sent(seen: &Seen, admin: &mut RedisConnection) -> BTreeSet<String> {
+    let passed = seen.barriers.load(Ordering::SeqCst);
+    let _: String = redis::cmd("ECHO")
+        .arg(BARRIER)
+        .query_async(admin)
+        .await
+        .expect("ECHO");
+    let caught_up = || seen.barriers.load(Ordering::SeqCst) > passed;
+    crate::wait_until(Duration::from_secs(10), caught_up).await;
+    assert!(caught_up(), "MONITOR streams what ran before the barrier");
     let clients: String = redis::cmd("CLIENT")
         .arg("LIST")
         .query_async(&mut crate::connect().await)
@@ -157,7 +179,8 @@ async fn sent(seen: &Seen) -> BTreeSet<String> {
                 .map(str::to_owned)
         })
         .collect();
-    seen.lock()
+    seen.commands
+        .lock()
         .await
         .iter()
         .filter(|(client, _)| !administration.contains(client))
@@ -253,10 +276,12 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
             .await
             .expect("a push");
     }
-    let producer_sent = sent(&seen).await;
-    seen.lock().await.clear();
+    let producer_sent = sent(&seen, &mut admin).await;
+    seen.commands.lock().await.clear();
 
-    // The worker alone: its boot, every job to its end, and its stop.
+    // The worker alone: its boot, every job to its end, and its stop — which
+    // waits for each delivery's settle, the dead letter after the last attempt
+    // failed included.
     let worker = crate::replica_on::<WorkerModule>(as_worker).await;
     crate::wait_until(Duration::from_secs(30), || {
         [0, 1, 3, 4, 5]
@@ -265,6 +290,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
             && CONFINED.of(run + 2).len() == 2
     })
     .await;
+    worker.worker.shutdown().await.expect("clean shutdown");
     let dead: i64 = redis::cmd("XLEN")
         .arg(crate::key_of(
             <ConfinedQueue as nest_rs_queue::Queue>::NAME,
@@ -273,8 +299,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         .query_async(&mut admin)
         .await
         .expect("XLEN");
-    worker.worker.shutdown().await.expect("clean shutdown");
-    let worker_sent = sent(&seen).await;
+    let worker_sent = sent(&seen, &mut admin).await;
     reading.abort();
 
     crate::assert_redis_denied_nothing_but(&producer_user, &[]).await;

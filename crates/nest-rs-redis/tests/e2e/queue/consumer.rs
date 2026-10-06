@@ -841,11 +841,37 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
 
 // --- what the upkeep keeps tidy ------------------------------------------------------
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrimCommand {
+    run: u64,
+}
+
+#[queue(name = "nestrs-e2e-dead-trim", job = TrimCommand)]
+struct TrimQueue;
+
+#[injectable]
+#[derive(Default)]
+struct TrimProcessor;
+
+#[processor]
+impl TrimProcessor {
+    #[process(queue = TrimQueue)]
+    async fn trim(&self, _job: TrimCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [TrimProcessor],
+)]
+struct TrimModule;
+
 /// A dead letter older than a week goes at the next upkeep, whether or not
 /// another job dies: the stream is trimmed by age as the queue runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dead_letter_past_its_week_is_trimmed_by_the_upkeep() {
-    let queue = <PlainQueue as nest_rs_queue::Queue>::NAME;
+    let queue = <TrimQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let eight_days_ago = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -864,7 +890,7 @@ async fn a_dead_letter_past_its_week_is_trimmed_by_the_upkeep() {
         .query_async(&mut crate::connect().await)
         .await
         .expect("an old dead letter");
-    let replica = crate::replica::<PlainModule>().await;
+    let replica = crate::replica::<TrimModule>().await;
     let dead = || async {
         redis::cmd("XLEN")
             .arg(crate::key_of(queue, "dead"))
@@ -993,14 +1019,44 @@ async fn renews_a_deleted_entry() -> bool {
     major < 7
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FlushedCommand {
+    run: u64,
+}
+
+static FLUSHED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-script-flush", job = FlushedCommand)]
+struct FlushedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct FlushedProcessor;
+
+#[processor]
+impl FlushedProcessor {
+    #[process(queue = FlushedQueue)]
+    async fn flushed(&self, job: FlushedCommand) -> anyhow::Result<()> {
+        FLUSHED.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [FlushedProcessor],
+)]
+struct FlushedModule;
+
 /// A Redis whose script cache was emptied — a restart, a `SCRIPT FLUSH` — still
 /// runs the queue: each script is loaded again on its first `NOSCRIPT`, by the
 /// client, and the job pushed after the flush runs once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queue_runs_on_after_its_scripts_are_flushed() {
-    let queue = <PlainQueue as nest_rs_queue::Queue>::NAME;
+    let queue = <FlushedQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<PlainModule>().await;
+    let replica = crate::replica::<FlushedModule>().await;
     let _: () = redis::cmd("SCRIPT")
         .arg("FLUSH")
         .query_async(&mut crate::connect().await)
@@ -1008,13 +1064,14 @@ async fn a_queue_runs_on_after_its_scripts_are_flushed() {
         .expect("SCRIPT FLUSH");
     replica
         .producer
-        .push(PlainQueue, PlainCommand { run: run + 7 }, None)
+        .push(FlushedQueue, FlushedCommand { run }, None)
         .await
         .expect("a push after the flush");
-    crate::wait_until(Duration::from_secs(10), || PLAIN.of(run + 7).len() == 1).await;
+    crate::wait_until(Duration::from_secs(10), || FLUSHED.of(run).len() == 1).await;
     replica.worker.shutdown().await.expect("clean shutdown");
-    assert_eq!(PLAIN.of(run + 7).len(), 1, "the job ran once");
+    assert_eq!(FLUSHED.of(run).len(), 1, "the job ran once");
     assert_eq!(crate::filed(queue).await, 0, "and settled");
+    crate::forget(queue).await;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

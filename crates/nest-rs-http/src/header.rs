@@ -546,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn a_rejection_never_echoes_the_header_value() {
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code, reason = "the binding is what is under test, and it fails")]
+        #[expect(dead_code, reason = "the binding is what is under test, and it fails")]
         struct Auth {
             #[serde(rename = "X-Api-Key")]
             key: u64,
@@ -572,7 +572,7 @@ mod tests {
             Slow,
         }
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code, reason = "the binding is what is under test, and it fails")]
+        #[expect(dead_code, reason = "the binding is what is under test, and it fails")]
         struct Prefs {
             #[serde(rename = "X-Mode")]
             mode: Mode,
@@ -595,7 +595,7 @@ mod tests {
     #[tokio::test]
     async fn a_non_utf8_value_is_reported_against_its_header() {
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code, reason = "the binding is what is under test, and it fails")]
+        #[expect(dead_code, reason = "the binding is what is under test, and it fails")]
         struct Opaque {
             #[serde(rename = "X-Blob")]
             blob: String,

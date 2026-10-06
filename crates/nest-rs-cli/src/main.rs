@@ -1,5 +1,4 @@
-#![allow(
-    clippy::print_stdout,
+#![expect(
     clippy::print_stderr,
     reason = "a command-line tool's output is its interface; tracing is for the apps it scaffolds"
 )]

@@ -71,7 +71,9 @@ impl<S: Strategy> ProviderResidency for AuthnGuard<S> {
 }
 
 impl<S: Strategy> AuthnGuard<S> {
-    /// Construct with an already-resolved strategy (container or tests).
+    /// Construct with an already-resolved strategy (container or tests). A
+    /// guard built by hand and seeded declares no net: the boot holds budgets
+    /// under the net of a guard the container builds.
     pub fn new(strategy: Arc<S>) -> Self {
         Self { strategy }
     }

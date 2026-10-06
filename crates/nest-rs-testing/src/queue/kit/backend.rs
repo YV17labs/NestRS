@@ -12,8 +12,10 @@ use crate::TestAppBuilder;
 pub trait KitBackend: Send + Sync + 'static {
     /// Whether the backend lives in this process, so each case runs on paused
     /// time: its waits cost nothing, and a loaded machine moves none of its
-    /// instants. A backend over a live service keeps the real clock, the one
-    /// the service's own leases and delays run on.
+    /// instants. Such a backend keeps its leases and delays on tokio's clock
+    /// (`tokio::time::Instant`), which the pause moves — on `std::time` they
+    /// would never lapse. A backend over a live service keeps the real clock,
+    /// the one the service's own leases and delays run on.
     const IN_PROCESS: bool = false;
 
     /// A test app reaching this backend — its connection, and the binding of

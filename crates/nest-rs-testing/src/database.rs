@@ -127,10 +127,9 @@ impl Drop for EphemeralDatabase {
 
 static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// How long a query on the fixture's pool waits for a connection — an app's own
-/// pool's default — where sqlx would wait 30 s, past the authentication
-/// guard's net: the boot refuses a pool at a net's edge, so a seeded fixture
-/// waits as an app's pool does.
+/// How long a query on the fixture's pool waits for a connection, where sqlx
+/// would wait 30 s, past the authentication guard's net — which the boot holds
+/// a seeded pool under like any other, so this one stays below every net.
 const POOL_BUDGET: Duration = Duration::from_secs(10);
 
 /// Five minutes — past this a [`PREFIX`]`*` database is an orphan, not in use

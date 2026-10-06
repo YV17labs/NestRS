@@ -103,17 +103,19 @@ async fn a_redis_requiring_a_client_certificate_is_handed_the_configured_one() {
 }
 
 /// A certificate refused after the boot — a renewal that installed another
-/// host's certificate — is reported at `warn` with what to change, once, when
-/// the connection reopens against it. The client reopens the connection
-/// silently, so without the line each caller's command would just fail, and
-/// nothing would name the cause.
+/// host's certificate — is reported at `warn` with what to change, once, as
+/// soon as a command meets the dropped connection. The client reopens the
+/// connection silently and retries for seconds, cutting each caller at its
+/// budget meanwhile, so without the line each caller would read a Redis too
+/// slow to answer, and nothing would name the cause.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_certificate_refused_after_the_boot_is_reported_once_when_the_connection_reopens() {
+async fn a_certificate_refused_after_the_boot_is_reported_once_as_the_connection_drops() {
     const REFUSED: &str = "redis refused a reopened tls connection";
+    let budget = Duration::from_secs(1);
     let logs = nest_rs_testing::LogCapture::install_global();
     let proxy = TlsProxy::start(Some(crate::redis_address()), None).await;
     let conn = RedisConnection::connect(&RedisConfig {
-        connect_timeout: Duration::from_secs(2),
+        connect_timeout: budget,
         ..config(
             proxy.url_on(crate::DB_TLS_REFUSED_REOPEN),
             trusting_the_test_authority(),
@@ -132,12 +134,19 @@ async fn a_certificate_refused_after_the_boot_is_reported_once_when_the_connecti
         "the drop reaches the app's connection"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(45);
-    while logs.find(nest_rs_redis::TARGET, REFUSED).is_empty() && Instant::now() < deadline {
-        let _ = redis::cmd("PING")
-            .query_async::<()>(&mut conn.clone())
-            .await;
+    let met = Instant::now();
+    let _ = redis::cmd("PING")
+        .query_async::<()>(&mut conn.clone())
+        .await;
+    while logs.find(nest_rs_redis::TARGET, REFUSED).is_empty() && met.elapsed() < budget * 4 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert!(
+        met.elapsed() < budget,
+        "reported before a caller's budget ran out, not once the client stopped retrying: \
+         took {:?}",
+        met.elapsed()
+    );
     for _ in 0..2 {
         assert!(
             redis::cmd("PING")

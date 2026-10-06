@@ -313,26 +313,6 @@ pub(crate) fn remedy(error: &(dyn std::error::Error + 'static)) -> String {
     }
 }
 
-/// Whether a command's error has the shape a refused handshake takes once the
-/// connection is reopened after the boot: an `InvalidData` io error, which
-/// tokio-rustls makes of every rustls failure and `redis` makes of nothing.
-///
-/// Only the shape: `redis` hands the callers of a connection it could not reopen
-/// the *text* of why, so rustls's reason is not in the error and
-/// [`negotiation_failed`] cannot read it — a handshake of one's own can.
-pub(crate) fn handshake_shaped(error: &redis::RedisError) -> bool {
-    std::error::Error::source(error)
-        .and_then(|source| {
-            source.downcast_ref::<io::Error>().or_else(|| {
-                // `redis` keeps the io error behind an `Arc`.
-                source
-                    .downcast_ref::<std::sync::Arc<dyn std::error::Error + Send + Sync>>()
-                    .and_then(|shared| shared.downcast_ref::<io::Error>())
-            })
-        })
-        .is_some_and(|source| source.kind() == io::ErrorKind::InvalidData)
-}
-
 /// The rustls error a failed negotiation carries, when `error` is one.
 fn negotiation_error<'a>(
     error: &'a (dyn std::error::Error + 'static),
@@ -585,26 +565,6 @@ mod tests {
         assert!(!negotiation_failed(&dropped), "{dropped}");
         assert!(!negotiation_failed(&local), "{local}");
         assert!(!negotiation_failed(&rejected_here), "{rejected_here}");
-    }
-
-    /// The shape a refused handshake leaves once `redis` has turned it into
-    /// text is read as one, and what an outage or a refusal leaves is not.
-    #[test]
-    fn a_handshake_refused_after_the_boot_is_told_by_its_shape() {
-        let reopened = redis::RedisError::from(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Reconnecting failed: invalid peer certificate: UnknownIssuer",
-        ));
-        let dropped = redis::RedisError::from(io::Error::from(io::ErrorKind::ConnectionReset));
-        let timed_out = redis::RedisError::from(io::Error::from(io::ErrorKind::TimedOut));
-        let answered = redis::RedisError::from((
-            redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError),
-            "ERR",
-        ));
-        assert!(handshake_shaped(&reopened), "{reopened}");
-        assert!(!handshake_shaped(&dropped), "{dropped}");
-        assert!(!handshake_shaped(&timed_out), "{timed_out}");
-        assert!(!handshake_shaped(&answered), "{answered}");
     }
 
     /// Each way a handshake fails sends the operator to the setting that fixes

@@ -207,10 +207,13 @@ impl Kept {
 /// cause. And what reaches those callers is the refusal's *text*: `redis` hands
 /// every caller waiting on a reopened connection a copy of the error it met, and
 /// copies an io error by its message, so rustls's reason is gone by the time a
-/// command fails. The first command failing with the shape a refused handshake
-/// leaves therefore starts one handshake of the connection's own, whose error
-/// still carries rustls's reason, and a refusal it meets is reported at `warn`
-/// with what to change — once, until a command answers again.
+/// command fails — and only once its retries are spent, seconds after the drop,
+/// each caller cut at its budget meanwhile. The first command failing on the
+/// socket — the drop itself, a budget waited out on the reopening, the shape a
+/// refused handshake leaves — therefore starts one handshake of the
+/// connection's own, whose error still carries rustls's reason, and a refusal it
+/// meets is reported at `warn` with what to change — once, until a command
+/// answers again.
 struct TlsRefusals {
     /// The client the connection is opened from, so the diagnosing handshake
     /// is the one the client keeps failing: same address, same material.
@@ -230,7 +233,7 @@ impl TlsRefusals {
                 }
             }
             Err(error) if tls::negotiation_failed(error) => self.report(error),
-            Err(error) if tls::handshake_shaped(error) => self.diagnose(),
+            Err(error) if error.is_io_error() => self.diagnose(),
             Err(_) => {}
         }
     }
@@ -247,9 +250,11 @@ impl TlsRefusals {
         }
     }
 
-    /// One handshake at a time, and none while the refusal stands reported. It
-    /// runs beside the command that asked for it, which has failed already and
-    /// must not wait on a second handshake past its budget.
+    /// One handshake per budget at most, and none while the refusal stands
+    /// reported: a Redis that is down fails every command on the socket, and
+    /// each would otherwise send it one more connection. It runs beside the
+    /// command that asked for it, which has failed already and must not wait on
+    /// a second handshake past its budget.
     ///
     /// It carries no unit of work's trace, deliberately: the refusal is the
     /// connection's, met by every holder alike, and the command that happened to
@@ -261,6 +266,7 @@ impl TlsRefusals {
         }
         let refusals = Arc::clone(self);
         tokio::spawn(async move {
+            let started = tokio::time::Instant::now();
             let attempt = tokio::time::timeout(
                 refusals.budget,
                 refusals
@@ -275,6 +281,7 @@ impl TlsRefusals {
             {
                 refusals.report(&error);
             }
+            tokio::time::sleep_until(started + refusals.budget).await;
             refusals.diagnosing.store(false, Ordering::Relaxed);
         });
     }
@@ -939,7 +946,12 @@ mod tests {
     /// it — so rustls has its process-default provider when the record
     /// handshakes.
     fn refusals(url: &str) -> Arc<TlsRefusals> {
-        let config = config(url, Duration::from_secs(2));
+        refusals_within(url, Duration::from_secs(2))
+    }
+
+    /// [`refusals`] under `budget`.
+    fn refusals_within(url: &str, budget: Duration) -> Arc<TlsRefusals> {
+        let config = config(url, budget);
         let endpoint = address(url);
         Arc::new(TlsRefusals {
             client: client(&config, &endpoint, config.connect_timeout)
@@ -1037,18 +1049,48 @@ mod tests {
         );
     }
 
-    /// An error with no handshake in it — a dropped connection, a timeout, an
-    /// answer — sends no handshake after one, and reports nothing.
+    /// An answer is Redis's, and sends no handshake; a failure on the socket —
+    /// the drop a refused reopening starts with, a budget waited out on the
+    /// reopening — sends one, one per budget at most, and a peer that refuses
+    /// the connection rather than its certificate is reported as nothing.
     #[tokio::test]
-    async fn an_error_no_handshake_left_sends_no_handshake_to_learn_it() {
+    async fn a_failure_on_the_socket_sends_one_handshake_per_budget_and_an_answer_none() {
         let logs = nest_rs_testing::LogCapture::install();
-        let refusals = refusals("rediss://127.0.0.1:9/");
-        refusals.observe(&connection_dropped());
-        refusals.observe(&Err::<(), _>(redis::RedisError::from(
-            std::io::Error::from(std::io::ErrorKind::TimedOut),
-        )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a listener");
+        let addr = listener.local_addr().expect("the listener's address");
+        let budget = Duration::from_millis(300);
+        let refusals = refusals_within(&format!("rediss://{addr}/"), budget);
+
         refusals.observe(&Err::<(), _>(answer("ERR")));
-        assert!(!refusals.diagnosing.load(Ordering::Relaxed));
+        assert!(!refusals.diagnosing.load(Ordering::Relaxed), "an answer");
+
+        let timed_out = || {
+            Err::<(), _>(redis::RedisError::from(std::io::Error::from(
+                std::io::ErrorKind::TimedOut,
+            )))
+        };
+        let accepted = |listener: tokio::net::TcpListener| async move {
+            let mut count = 0;
+            while let Ok(Ok((socket, _))) =
+                tokio::time::timeout(Duration::from_millis(100), listener.accept()).await
+            {
+                drop(socket);
+                count += 1;
+            }
+            (count, listener)
+        };
+        refusals.observe(&connection_dropped());
+        refusals.observe(&timed_out());
+        refusals.observe(&connection_dropped());
+        let (count, listener) = accepted(listener).await;
+        assert_eq!(count, 1, "one handshake for the three failures");
+
+        tokio::time::sleep(budget).await;
+        refusals.observe(&timed_out());
+        let (count, _) = accepted(listener).await;
+        assert_eq!(count, 1, "and one more once the budget has passed");
         assert!(logs.find(crate::TARGET, REFUSED).is_empty());
     }
 

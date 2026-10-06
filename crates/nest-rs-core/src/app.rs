@@ -1147,6 +1147,29 @@ mod tests {
         assert_eq!(app.container().get::<Late>().map(|late| late.0), Some(7));
     }
 
+    // A pin made in `register`: the value its type already holds is the
+    // default's, not the one the pin chose.
+    struct DeclaresLateModule;
+    impl Module for DeclaresLateModule {
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Late(7)) })
+        }
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_declared_factory("pin it in `collect`", |_| async { Ok(Late(1)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declaration_queued_in_register_fails_the_boot_though_its_type_is_present() {
+        let Err(refused) = App::builder().module::<DeclaresLateModule>().build().await else {
+            panic!("the pinned value would be dropped for the default's");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert!(late.type_name.ends_with("Late"), "{late:?}");
+    }
+
     struct Refused;
     struct RefusingModule;
     impl Module for RefusingModule {

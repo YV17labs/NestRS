@@ -233,8 +233,9 @@ pub struct FactoryCycleError {
 /// A module queued an async factory during the register phase, once the
 /// collect phase every factory is queued in had ended: no boot drains it, so
 /// the value would never exist. Raised by both boot paths as the register
-/// phase ends; a factory whose output is already present is discarded, as the
-/// factory phase discards it.
+/// phase ends; a default whose output is already present is discarded, as the
+/// factory phase discards it, while a declaration is refused all the same — the
+/// value present is not the one it chose.
 ///
 /// The usual cause is a [`DynamicModule`](crate::DynamicModule) whose `collect`
 /// leaves out its module's own [`Module::collect`](crate::Module::collect): the

@@ -1091,12 +1091,15 @@ impl ContainerBuilder {
 
     /// The first type a factory still queued would provide and nothing does —
     /// read as the register phase ends, when no boot drains the queue again.
-    /// One whose output is present is passed over, as the factory phase passes
-    /// it over.
+    /// A default whose output is present is passed over, as the factory phase
+    /// passes it over; a declaration never is, since the value present is not
+    /// the one it chose.
     pub(crate) fn late_factory_name(&self) -> Option<&'static str> {
         self.factories
             .iter()
-            .find(|queued| !self.contains(queued.id()))
+            .find(|queued| {
+                !self.contains(queued.id()) || self.declared_factories.contains_key(&queued.id())
+            })
             .map(|queued| queued.name)
     }
 

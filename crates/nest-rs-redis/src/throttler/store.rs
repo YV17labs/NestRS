@@ -52,6 +52,12 @@ fn bucket(subject: &str) -> String {
 
 /// Atomic fixed-window step. Returns `{count, ttl_ms}` in one round-trip:
 ///
+/// - its writes replicate as effects, as every queue script's do: Redis 6.2
+///   refuses a write after `PTTL` otherwise, when a deployment turned
+///   `lua-replicate-commands` off.
+/// - a window in its last millisecond (`PTTL` `0`) has ended, as the
+///   in-memory store's does at `start + window`, so `PEXPIRE … 0` deletes it
+///   and this hit opens the next one.
 /// - `INCR` opens or advances the window counter.
 /// - the window's expiry is (re)armed only when the key has none
 ///   (`PTTL < 0` — a just-created key, or one that somehow lost its TTL), which
@@ -59,6 +65,10 @@ fn bucket(subject: &str) -> String {
 /// - `PTTL` returns the remaining window in ms, so the guard's `Retry-After` is
 ///   the true time to reset, not a fixed guess.
 const WINDOW_SCRIPT: &str = r"
+redis.replicate_commands()
+if redis.call('PTTL', KEYS[1]) == 0 then
+  redis.call('PEXPIRE', KEYS[1], 0)
+end
 local count = redis.call('INCR', KEYS[1])
 local ttl = redis.call('PTTL', KEYS[1])
 if ttl < 0 then

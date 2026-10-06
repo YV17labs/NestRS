@@ -74,6 +74,42 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     );
 }
 
+/// A hit in a window's last millisecond, whose time to live Redis answers `0`,
+/// opens the next window, as the in-memory store does at a window's end, rather
+/// than being counted into the window that ends and denied for a whole new one.
+/// Each window is full, ending in a few milliseconds set by hand, while the hits
+/// ask for a long one: a denial longer than those milliseconds came from the
+/// ending window. Many rounds, so some hit lands in a last millisecond.
+#[tokio::test]
+async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
+    let limit = Throttle::new(1, Duration::from_secs(30));
+    let ending = Duration::from_millis(3);
+    let conn = connect().await;
+    let store = RedisThrottler::new(conn.clone());
+    for round in 0..20 {
+        let subject = unique_key("last-millisecond");
+        let _: () = redis::cmd("SET")
+            .arg(bucket(&subject))
+            .arg(1)
+            .arg("PX")
+            .arg(ending.as_millis() as u64)
+            .query_async(&mut conn.clone())
+            .await
+            .expect("a full window ending soon");
+        loop {
+            let decision = store.hit(&subject, limit).await;
+            if decision.allowed {
+                break;
+            }
+            assert!(
+                decision.retry_after <= ending,
+                "round {round}: a window ending in {ending:?} denied for {:?}",
+                decision.retry_after,
+            );
+        }
+    }
+}
+
 /// Two distinct client keys never share a budget.
 #[tokio::test]
 async fn distinct_keys_have_independent_budgets() {

@@ -356,7 +356,9 @@ return math.max(0, tonumber(next[2]) - at)
 /// Count up to `ARGV[3]` starts into the throttle window — opened for
 /// `ARGV[2]` milliseconds by its first start — within its limit `ARGV[1]`:
 /// `{starts counted, 0}`, or `{0, milliseconds until the window ends}` when it
-/// is full. A window with no end — its key persisted by hand — is given one.
+/// is full. A window in its last millisecond has ended — Redis answers its time
+/// to live `0`, which no expiry may be — and one with no end, its key persisted
+/// by hand, is given one.
 ///
 /// `KEYS`: throttle.
 const ADMIT: &str = concat!(
@@ -364,7 +366,7 @@ const ADMIT: &str = concat!(
     r"
 local used = tonumber(redis.call('GET', KEYS[1]) or '0')
 local left = redis.call('PTTL', KEYS[1])
-if left < 0 then
+if left <= 0 then
   used, left = 0, tonumber(ARGV[2])
 end
 local take = math.min(tonumber(ARGV[1]) - used, tonumber(ARGV[3]))

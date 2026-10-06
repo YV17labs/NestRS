@@ -410,6 +410,70 @@ async fn a_throttle_caps_starts_per_window_across_replicas() {
     crate::forget(queue).await;
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BriskCommand {
+    run: u64,
+}
+
+static BRISK: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-throttle-edge", job = BriskCommand)]
+struct BriskQueue;
+
+#[injectable]
+#[derive(Default)]
+struct BriskProcessor;
+
+#[processor]
+impl BriskProcessor {
+    #[process(queue = BriskQueue, throttle(limit = 1000, window = "2ms"), transactional = false)]
+    async fn brisk(&self, job: BriskCommand) -> anyhow::Result<()> {
+        BRISK.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [BriskProcessor],
+)]
+struct BriskModule;
+
+/// A receive counted into a window in its last millisecond, with room left in
+/// it, starts its job rather than failing: Redis answers that window's time to
+/// live as `0`, which no expiry may be. Every receive here asks for one start of
+/// a thousand, so a window never fills and each one ends with room left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_throttle_window_in_its_last_millisecond_opens_the_next() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let queue = <BriskQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let run = crate::this_run();
+    let replica = crate::replica::<BriskModule>().await;
+    let jobs = 300;
+    replica
+        .producer
+        .push_many(BriskQueue, (0..jobs).map(|_| BriskCommand { run }), None)
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(20), || BRISK.of(run).len() == jobs).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    let failed: Vec<_> = logs
+        .find(nest_rs_queue::TARGET, "queue receive failed; retrying")
+        .into_iter()
+        .filter_map(|line| line.field("error"))
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "{} receives failed, the first: {:?}",
+        failed.len(),
+        failed.first(),
+    );
+    assert_eq!(BRISK.of(run).len(), jobs, "every job ran");
+    crate::forget(queue).await;
+}
+
 // --- a cancel while a delivery runs --------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

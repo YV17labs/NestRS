@@ -260,7 +260,9 @@ length up to the hash's size (RFC 2104 §3).
 
 The counter is one Lua script — `INCR`, read the TTL with `PTTL`, set it with
 `PEXPIRE` on the first hit — so it is atomic across replicas with no
-check-then-act race. A backend failure
+check-then-act race. A window in its last millisecond, whose TTL Redis answers
+`0`, has ended: the script deletes it with `PEXPIRE … 0`, so that hit opens the
+next window, as it would in process. A backend failure
 **denies**: a rate limiter that fails open is not a rate limiter. Each command is
 bounded by the connection's budget (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by
 default), well inside the guard's own bound below — the boot refuses a budget at or

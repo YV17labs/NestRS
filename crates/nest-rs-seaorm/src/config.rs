@@ -50,7 +50,9 @@ pub struct SeaOrmConfig {
     /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
     pub min_connections: Option<u32>,
     /// How long to wait for a connection before failing, in whole seconds, from
-    /// 1 to 3600; `None` waits 10 s.
+    /// 1 to 3600; `None` waits 10 s. `Repo` reaches the pool from any unit of
+    /// work, so the boot refuses a budget at or past the net of a guard around
+    /// developer code — the authentication guard's 20 s.
     pub connect_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.

@@ -425,6 +425,29 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
     order
 }
 
+/// Every key `root`'s code reaches through `#[inject]`, at any depth, `root`
+/// included: each declared provider registering a key in the set adds what it
+/// injects. A key no module declares — a seed, a factory output — ends its
+/// branch, since nothing records what it holds. Pure over its inputs.
+pub(crate) fn injection_closure(
+    descriptors: &[&ModuleDescriptor],
+    root: TypeId,
+) -> HashSet<TypeId> {
+    let mut reached = HashSet::from([root]);
+    let mut stack = vec![root];
+    while let Some(key) = stack.pop() {
+        let declared = descriptors.iter().flat_map(|d| d.providers);
+        for provider in declared.filter(|p| (p.provides)() == key || (p.provider)() == key) {
+            for dependency in (provider.injects)() {
+                if reached.insert(dependency) {
+                    stack.push(dependency);
+                }
+            }
+        }
+    }
+    reached
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,5 +861,37 @@ mod tests {
             validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
                 .expect_err("the `google` key must not satisfy a `github` dependency");
         assert_eq!(err.key, "github");
+    }
+
+    #[test]
+    fn the_injection_closure_follows_every_declared_injection_and_stops_at_what_none_declares() {
+        let users = users_module();
+        let billing = ModuleDescriptor {
+            module: || TypeId::of::<BillingMod>(),
+            name: "BillingModule",
+            imports: &[|| TypeId::of::<UsersMod>()],
+            providers: &[ProviderDescriptor {
+                name: "BillingService",
+                provides: || TypeId::of::<BillingService>(),
+                provider: || TypeId::of::<BillingService>(),
+                injects: billing_deps,
+                inject_names: billing_names,
+                injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
+            }],
+        };
+        let descriptors = [&billing, &users];
+        assert_eq!(
+            injection_closure(&descriptors, TypeId::of::<BillingService>()),
+            HashSet::from([
+                TypeId::of::<BillingService>(),
+                TypeId::of::<UsersService>(),
+                TypeId::of::<Db>(),
+            ])
+        );
+        assert_eq!(
+            injection_closure(&descriptors, TypeId::of::<OrgsResolver>()),
+            HashSet::from([TypeId::of::<OrgsResolver>()])
+        );
     }
 }

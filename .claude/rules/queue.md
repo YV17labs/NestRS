@@ -114,9 +114,10 @@ features because each pulls a port crate an app may not need.
   allow-list; every other answer is retried** within the connect budget, then
   fails naming the endpoint, never the URL, which may carry a password.
 - **Every command a caller waits on answers or fails within the budget**, and
-  the budget sits below every net it runs under: a binding refuses the boot on
-  a budget at or past its port's net, and the queue binding on a lease a renewal
-  sent a third in cannot outlast the budget in.
+  the budget sits below every net it runs under: each binding declares its
+  port's net over the connection, so the boot refuses a budget at or past it,
+  and the queue binding refuses a lease a renewal sent a third in cannot outlast
+  the budget in.
   A blocking command gets a connection of its own from the same client
   (`RedisConnection::dedicated`), bounded by its own wait plus the budget.
 - **TLS material beside a plaintext URL fails the boot**, since it would go

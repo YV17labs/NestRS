@@ -24,6 +24,7 @@ use crate::error::{
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
+use crate::net::check_budgets;
 use crate::transport::{Transport, TransportContribution};
 use crate::way_down::{WayDown, watch_signals};
 
@@ -538,8 +539,9 @@ impl AppBuilder {
 
 /// The boot's last pass, shared by both paths: the access graph checked over
 /// what registered — imperatively-provided values and scoped or transient
-/// factories included, which the declarative graph cannot see — then the seeds
-/// the transports read off it. The link-time registry is read once.
+/// factories included, which the declarative graph cannot see — then every
+/// budget against the nets reaching it, and the seeds the transports read off
+/// it. The link-time registry is read once.
 fn seal(
     builder: ContainerBuilder,
     roots: &[(TypeId, &'static str)],
@@ -557,6 +559,7 @@ fn seal(
     )
     .map_err(AccessError::into_anyhow)?;
     validate_keyed_access_graph(&descriptors, &ids, global_keyed)?;
+    check_budgets(&builder, &descriptors)?;
     let order = provider_order(&descriptors, &ids);
     let reachable = ReachableProviders(reachable_provider_ids(&order, global));
     let composition = Composition::from_descriptors(&descriptors, roots);

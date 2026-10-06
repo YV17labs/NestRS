@@ -70,18 +70,21 @@ async fn a_bare_import_beside_a_for_root_binds_once_with_the_pinned_config() {
     );
 }
 
+// The lease leaves a renewal room under the budget, so the net is the one
+// refusal: the lease's own is the consumer factory's, and runs first.
 #[module(imports = [
     RedisModule::for_root(nest_rs_redis::RedisConfig {
         connect_timeout: nest_rs_queue::BACKEND_TIMEOUT,
         ..redis_config()
     }),
-    RedisQueueModule,
+    RedisQueueModule::for_root(RedisQueueConfig { lease: std::time::Duration::from_secs(31) }),
 ])]
 struct PatientProducerModule;
 
 /// A budget at the queue port's net would let the port give up on a push still
-/// answering, and fail it without its cause: the binding refuses it at boot —
-/// a producer-only app included — naming both durations and the variable.
+/// answering, and fail it without its cause: the binding declares the net over
+/// the connection, so the boot refuses it — a producer-only app included —
+/// naming both durations and the variable.
 #[tokio::test]
 async fn a_budget_at_the_queue_ports_net_fails_the_boot() {
     let Err(refused) = App::builder()
@@ -91,12 +94,15 @@ async fn a_budget_at_the_queue_ports_net_fails_the_boot() {
     else {
         panic!("a budget at the queue port's net must not boot");
     };
-    let said = format!("{refused:#}");
-    assert!(
-        said.contains("the queue port")
-            && said.contains(&format!("{:?}", nest_rs_queue::BACKEND_TIMEOUT))
-            && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
-        "{said}"
+    let refused = crate::budget_past_net(refused);
+    assert_eq!(
+        (refused.resource, refused.port, refused.budget, refused.net),
+        (
+            "the Redis connection",
+            "the queue port",
+            nest_rs_queue::BACKEND_TIMEOUT,
+            nest_rs_queue::BACKEND_TIMEOUT
+        )
     );
 }
 

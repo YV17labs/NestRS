@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Module};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Module, Net};
 use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer};
 
 use super::consumer::RedisQueueConsumer;
@@ -34,15 +34,16 @@ impl RedisQueueModule {
 
     /// The producer and the consumer, each bound under the port's type and
     /// declared, so a second queue backend imported beside this one fails the
-    /// boot naming both ([`BACKEND_REMEDY`]).
+    /// boot naming both ([`BACKEND_REMEDY`]); and the port's net over the
+    /// connection, which the boot holds the connection's budget under.
     fn bind(builder: ContainerBuilder) -> ContainerBuilder {
         builder
+            .provide_meta(Net::over::<RedisConnection>("the queue port", BACKEND_TIMEOUT))
             .provide_factory_after::<RedisQueueProducer, RedisConnection, _, _>(
                 |container| async move {
                     let conn = container
                         .get::<RedisConnection>()
                         .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
-                    conn.answers_within(BACKEND_TIMEOUT, "the queue port")?;
                     let producer = RedisQueueProducer::new((*conn).clone());
                     producer.load_scripts().await?;
                     Ok(producer)

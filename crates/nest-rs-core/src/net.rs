@@ -1,0 +1,107 @@
+//! [`Net`] — what a port waits on a call before it gives up — and the order the
+//! boot holds between nets and the [`Budget`]s they reach.
+
+use std::any::{Any, TypeId};
+use std::collections::HashSet;
+use std::time::Duration;
+
+use crate::access::{ModuleDescriptor, injection_closure};
+use crate::budget::Budget;
+use crate::container::ContainerBuilder;
+use crate::error::BudgetPastNetError;
+
+/// What a port waits on a call before it gives up and answers in its own
+/// terms: a guard denies, a push fails, a claim skips its occurrence.
+///
+/// A net is the framework's bound on a backend that stopped bounding itself,
+/// never the backend's budget: a resource still fails within its own
+/// [`Budget`], with its cause, and a net at or under it would cut that answer
+/// short and say a bare timeout instead. So the boot refuses every budget at
+/// or past a net that reaches it ([`BudgetPastNetError`]). Declared as
+/// metadata (`builder.provide_meta(Net::over::<R>(…))`) by whoever arms it,
+/// in one of two reaches.
+#[derive(Debug)]
+pub struct Net {
+    port: &'static str,
+    wait: Duration,
+    reach: Reach,
+}
+
+/// Which budgets a net reaches.
+#[derive(Clone, Copy, Debug)]
+enum Reach {
+    /// The one resource a binding handed the port.
+    Over(TypeId),
+    /// Whatever a provider's code reaches: what it injects, transitively, and
+    /// every ambient resource.
+    Around(TypeId),
+}
+
+impl Net {
+    /// The net `port` waits `wait` under, over the resource `R` a binding hands
+    /// it — the queue port's over the Redis connection its binding holds.
+    ///
+    /// `port` names it in a sentence, before "'s net" (`"the queue port"`).
+    pub fn over<R: Any>(port: &'static str, wait: Duration) -> Self {
+        Self {
+            port,
+            wait,
+            reach: Reach::Over(TypeId::of::<R>()),
+        }
+    }
+
+    /// The net `port` waits `wait` under around the provider `P`'s code — a
+    /// guard around its strategy. It reaches every budget read off a provider
+    /// `P` injects, through any depth of `#[inject]`, and every
+    /// [ambient](Budget::ambient) one.
+    pub fn around<P: Any>(port: &'static str, wait: Duration) -> Self {
+        Self {
+            port,
+            wait,
+            reach: Reach::Around(TypeId::of::<P>()),
+        }
+    }
+}
+
+/// Refuse the first budget at or past a net reaching it, nets and budgets in
+/// declaration order, each budget read off the provider `builder` holds.
+/// `descriptors` say what a provider injects, which a net around it follows.
+pub(crate) fn check_budgets(
+    builder: &ContainerBuilder,
+    descriptors: &[&ModuleDescriptor],
+) -> Result<(), BudgetPastNetError> {
+    let budgets: Vec<&Budget> = builder.attached_meta::<Budget>().collect();
+    let mut nets = builder.attached_meta::<Net>().peekable();
+    if budgets.is_empty() || nets.peek().is_none() {
+        return Ok(());
+    }
+    let container = builder.snapshot();
+    for net in nets {
+        let injected = match net.reach {
+            Reach::Over(_) => HashSet::new(),
+            Reach::Around(provider) => injection_closure(descriptors, provider),
+        };
+        for budget in &budgets {
+            let reached = match net.reach {
+                Reach::Over(resource) => budget.provider() == resource,
+                Reach::Around(_) => budget.is_ambient() || injected.contains(&budget.provider()),
+            };
+            if !reached {
+                continue;
+            }
+            let Some(wait) = budget.wait(&container) else {
+                continue;
+            };
+            if wait >= net.wait {
+                return Err(BudgetPastNetError {
+                    resource: budget.resource(),
+                    budget: wait,
+                    port: net.port,
+                    net: net.wait,
+                    setting: budget.setting().to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
+}

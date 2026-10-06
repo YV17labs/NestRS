@@ -60,25 +60,6 @@ pub enum RedisError {
     #[error(transparent)]
     Budget(nest_rs_config::ConfigError),
 
-    /// The connect budget at or past the net a port waits on each command
-    /// with. The port would stop waiting first, so a command still answering
-    /// would be cut and its cause replaced by a bare timeout; it fails that way
-    /// at every boot, so the binding refuses it.
-    #[error(
-        "the Redis budget ({budget:?}) must be shorter than {port}'s net ({net:?}), which would \
-         otherwise give up on a command still answering and lose its cause: lower \
-         {timeout_var}, or `RedisConfig::connect_timeout` in code",
-        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
-    )]
-    BudgetPastNet {
-        /// The connect budget.
-        budget: std::time::Duration,
-        /// The port's net.
-        net: std::time::Duration,
-        /// The port, as a sentence names it.
-        port: &'static str,
-    },
-
     /// A queue lease the connect budget leaves no renewal room in: the port
     /// renews a third into the lease, and the renewal may wait out the budget,
     /// so the two thirds left must outlast it or the lease lapses while Redis

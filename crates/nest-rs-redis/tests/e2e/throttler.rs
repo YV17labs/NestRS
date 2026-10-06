@@ -288,8 +288,9 @@ mod module {
     struct PatientThrottlerHost;
 
     /// A budget at the guard's net would let the guard give up on a hit still
-    /// answering, and deny without its cause: the binding refuses it at boot,
-    /// naming both durations and the variable to lower.
+    /// answering, and deny without its cause: the binding declares the net over
+    /// the connection, so the boot refuses it, naming both durations and the
+    /// variable to lower.
     #[tokio::test]
     async fn a_budget_at_the_guards_net_fails_the_boot() {
         let Err(refused) = App::builder()
@@ -299,12 +300,14 @@ mod module {
         else {
             panic!("a budget at the guard's net must not boot");
         };
-        let said = format!("{refused:#}");
-        assert!(
-            said.contains("the rate limiter's guard")
-                && said.contains(&format!("{:?}", nest_rs_throttler::HIT_TIMEOUT))
-                && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
-            "{said}"
+        let refused = crate::budget_past_net(refused);
+        assert_eq!(
+            (refused.resource, refused.port, refused.net),
+            (
+                "the Redis connection",
+                "the rate limiter",
+                nest_rs_throttler::HIT_TIMEOUT
+            )
         );
     }
 }

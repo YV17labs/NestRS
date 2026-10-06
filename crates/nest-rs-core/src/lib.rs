@@ -19,9 +19,10 @@
 //! runtime. The boot walks the module tree from the root and fails with a
 //! named error before any transport starts: [`AccessGraphError`] when a provider reaches across a
 //! module boundary no `import` covers, [`MissingDependencyError`] when a
-//! dependency no module provides would otherwise panic at first resolution. A
-//! misconfigured import is a startup error naming the fix, not a `Cannot
-//! resolve` on the first request. `#[use_guards]` / `#[use_filters]` /
+//! dependency no module provides would otherwise panic at first resolution,
+//! [`BudgetPastNetError`] when a resource's [`Budget`] reaches past a [`Net`]
+//! that waits on it. A misconfigured import is a startup error naming the fix,
+//! not a `Cannot resolve` on the first request. `#[use_guards]` / `#[use_filters]` /
 //! `#[use_interceptors]` are checked the same way.
 //!
 //! # Scopes and lifecycle
@@ -72,6 +73,7 @@
 pub mod access;
 mod answer;
 pub mod app;
+mod budget;
 pub mod container;
 pub(crate) mod cycle_guard;
 pub mod discoverable;
@@ -87,6 +89,7 @@ pub mod lifecycle;
 #[cfg(feature = "logging")]
 pub mod logging;
 pub mod module;
+mod net;
 mod opaque;
 pub mod operation_log;
 pub mod panic;
@@ -109,6 +112,7 @@ pub use access::{
 #[doc(hidden)]
 pub use answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
 pub use app::{App, AppBuilder};
+pub use budget::Budget;
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, is_framework_owned,
@@ -118,9 +122,9 @@ pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
-    AccessGraphError, ContestedDeclarationError, DecodeError, DuplicateProviderError,
-    FactoryCycleError, KeyedDependencyError, MissingDependencyError, ScopeViolationError,
-    UnresolvedFactoryError,
+    AccessGraphError, BudgetPastNetError, ContestedDeclarationError, DecodeError,
+    DuplicateProviderError, FactoryCycleError, KeyedDependencyError, MissingDependencyError,
+    ScopeViolationError, UnresolvedFactoryError,
 };
 pub use error_message::{boxed_error, error_message};
 pub use identifier::UUID_V7_REQUIRED;
@@ -130,6 +134,7 @@ pub use lifecycle::{
     LifecycleHook, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT,
 };
 pub use module::{DynamicModule, Module};
+pub use net::Net;
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;
 pub use request_scope::{

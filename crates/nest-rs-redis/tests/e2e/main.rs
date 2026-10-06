@@ -74,6 +74,21 @@ fn redis_config() -> RedisConfig {
     }
 }
 
+/// The boot's refusal of a Redis budget at a net reaching it, its setting
+/// naming the variable a deployment lowers.
+fn budget_past_net(refused: anyhow::Error) -> nest_rs_core::BudgetPastNetError {
+    let refused = refused
+        .downcast::<nest_rs_core::BudgetPastNetError>()
+        .unwrap_or_else(|other| panic!("not a budget refusal: {other:#}"));
+    assert!(
+        refused
+            .setting
+            .contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+        "{refused}"
+    );
+    refused
+}
+
 /// The budget the suite's connections hold a command to: under two thirds of
 /// [`LEASE`], or the queue binding refuses the boot.
 const BUDGET: Duration = Duration::from_millis(500);

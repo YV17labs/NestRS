@@ -1,13 +1,14 @@
 //! Every error the boot can fail with, and [`DecodeError`] — the one error the
 //! kernel lends every edge rather than raises.
 //!
-//! They are here rather than beside the pass that raises them because four of
-//! the nine are not the access graph's at all — `DuplicateProviderError`,
+//! They are here rather than beside the pass that raises them because half of
+//! them are not the access graph's at all — `DuplicateProviderError`,
 //! `ContestedDeclarationError`, `UnresolvedFactoryError` and `FactoryCycleError`
 //! are constructed only in [`app`](crate::app), by the registration and factory
-//! phases. Filed under `access.rs` the file's name was a claim about all nine
-//! and false for four: from the type a reader derived the wrong file, and from
-//! the file they were offered errors its own pass never raises.
+//! phases, and `BudgetPastNetError` by the budget check the boot ends on. Filed
+//! under `access.rs` the file's name was a claim about all of them and false
+//! for half: from the type a reader derived the wrong file, and from the file
+//! they were offered errors its own pass never raises.
 //!
 //! This is the role table's own row — *domain error → `error.rs`* — and eleven
 //! `nest-rs-*` crates already carry one; the kernel was the outlier.
@@ -225,6 +226,32 @@ pub struct UnresolvedFactoryError {
 pub struct FactoryCycleError {
     /// The types whose factories wait on each other.
     pub type_names: Vec<&'static str>,
+}
+
+/// A resource's [`Budget`](crate::Budget) at or past the [`Net`](crate::Net) of
+/// a port that waits on it. Raised by the boot's last pass, once every
+/// provider is built and each budget can be read off its own.
+///
+/// The port would stop waiting first: a call the resource was still answering
+/// would be cut, and its cause — which endpoint, which bound — replaced by the
+/// port's bare timeout. It would fail that way on every outage, so the boot
+/// refuses it rather than let the first incident discover it.
+#[derive(Debug, Error)]
+#[error(
+    "{resource}'s budget ({budget:?}) must be shorter than {port}'s net ({net:?}), which would \
+     otherwise give up on a call still answering and lose its cause: lower {setting}"
+)]
+pub struct BudgetPastNetError {
+    /// The resource, as a sentence names it.
+    pub resource: &'static str,
+    /// What the resource waits, at most, for one answer.
+    pub budget: std::time::Duration,
+    /// The port whose net reaches the resource, as a sentence names it.
+    pub port: &'static str,
+    /// What the port waits before it gives up.
+    pub net: std::time::Duration,
+    /// What lowers the budget: the variable, and the field that pins it in code.
+    pub setting: String,
 }
 
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider

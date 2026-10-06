@@ -1,12 +1,13 @@
 //! Per-route guard that runs a [`Strategy`] and attaches the principal.
 
+use std::any::TypeId;
 use std::future::{Future as _, poll_fn};
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
 
 use nest_rs_core::trace_context::field;
-use nest_rs_core::{Layer, injectable};
+use nest_rs_core::{Container, ContainerBuilder, Discoverable, Layer, Net, ProviderResidency};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, RejectedCredential, async_trait};
@@ -30,17 +31,62 @@ const TRANSPORT: &str = "http";
 /// `#[public]` route it authenticates opportunistically but never rejects.
 ///
 /// It waits for the strategy no longer than [`AUTHENTICATE_TIMEOUT`]: a
-/// strategy silent past it is denied on every route, `#[public]` included.
-#[injectable]
+/// strategy silent past it is denied on every route, `#[public]` included. So
+/// the boot refuses every budget the strategy's code can reach at or past it
+/// (`nest_rs_core::BudgetPastNetError`).
 pub struct AuthnGuard<S: Strategy> {
-    #[inject]
     strategy: Arc<S>,
+}
+
+// Registered by hand rather than by `#[injectable]` for what the decorator
+// cannot say: the net around its strategy, declared by each app that runs it.
+impl<S: Strategy> Discoverable for AuthnGuard<S> {
+    fn dependencies() -> Vec<TypeId> {
+        vec![TypeId::of::<S>()]
+    }
+
+    fn dependency_names() -> Vec<&'static str> {
+        vec![std::any::type_name::<S>()]
+    }
+
+    fn injected() -> Vec<TypeId> {
+        Self::dependencies()
+    }
+
+    fn injected_names() -> Vec<&'static str> {
+        Self::dependency_names()
+    }
+
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        let guard = Self::from_container(&builder.snapshot());
+        builder.provide(guard).provide_meta(Net::around::<S>(
+            "the authentication guard",
+            AUTHENTICATE_TIMEOUT,
+        ))
+    }
+}
+
+impl<S: Strategy> ProviderResidency for AuthnGuard<S> {
+    const SINGLETON: bool = true;
 }
 
 impl<S: Strategy> AuthnGuard<S> {
     /// Construct with an already-resolved strategy (container or tests).
     pub fn new(strategy: Arc<S>) -> Self {
         Self { strategy }
+    }
+
+    /// Construct this provider by resolving its strategy from the container —
+    /// what the register phase calls, not by hand.
+    pub fn from_container(container: &Container) -> Self {
+        #[expect(
+            clippy::expect_used,
+            reason = "the register phase builds a provider only once its `dependencies` are registered"
+        )]
+        let strategy = container
+            .get::<S>()
+            .expect("AuthnGuard.strategy: no provider registered for this dependency");
+        Self::new(strategy)
     }
 
     /// Run the strategy on `req`, waiting no longer than

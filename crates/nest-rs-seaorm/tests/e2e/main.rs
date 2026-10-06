@@ -16,6 +16,7 @@ mod graphql;
 mod interceptor;
 mod lazy;
 mod lifecycle_hooks;
+mod module;
 mod public_visitor;
 mod relational_authz;
 mod scope;

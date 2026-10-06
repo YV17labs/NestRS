@@ -2,10 +2,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement,
+};
 use sea_orm_migration::MigratorTrait;
 
 use crate::env::load_project_env;
@@ -63,7 +65,9 @@ impl EphemeralDatabase {
         }
 
         let url = swap_database(admin_url, &name);
-        let connection = Database::connect(&url).await?;
+        let mut options = ConnectOptions::new(url.clone());
+        options.connect_timeout(POOL_BUDGET);
+        let connection = Database::connect(options).await?;
         M::up(&connection, None).await?;
 
         Ok(Self {
@@ -122,6 +126,12 @@ impl Drop for EphemeralDatabase {
 }
 
 static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// How long a query on the fixture's pool waits for a connection — an app's own
+/// pool's default — where sqlx would wait 30 s, past the authentication
+/// guard's net: the boot refuses a pool at a net's edge, so a seeded fixture
+/// waits as an app's pool does.
+const POOL_BUDGET: Duration = Duration::from_secs(10);
 
 /// Five minutes — past this a [`PREFIX`]`*` database is an orphan, not in use
 /// by a concurrent sibling.

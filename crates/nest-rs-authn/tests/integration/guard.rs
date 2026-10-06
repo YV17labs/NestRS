@@ -643,3 +643,103 @@ mod ws {
         );
     }
 }
+
+/// The guard declares its net around its strategy, so the boot holds every
+/// budget the strategy's code can reach under `AUTHENTICATE_TIMEOUT` — the
+/// guard would otherwise deny a request the store was still answering, its
+/// cause lost — and leaves alone what that code cannot reach.
+mod nets {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};
+    use nest_rs_core::{App, Budget, BudgetPastNetError, injectable, module};
+    use poem::Request;
+
+    /// A store a strategy resolves identities in, waiting what it holds for an
+    /// answer.
+    struct IdentityStore(Duration);
+
+    fn store_budget() -> Budget {
+        Budget::of::<IdentityStore>("the identity store", "IDENTITY_STORE_WAIT", |store| {
+            Some(store.0)
+        })
+    }
+
+    #[injectable]
+    struct StoreBackedStrategy {
+        #[inject]
+        #[expect(
+            dead_code,
+            reason = "injected only so the strategy's code reaches the store"
+        )]
+        store: Arc<IdentityStore>,
+    }
+
+    #[async_trait]
+    impl Strategy for StoreBackedStrategy {
+        type Principal = ();
+
+        async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+            Err(AuthError::MissingCredentials)
+        }
+    }
+
+    type StoreBackedGuard = AuthnGuard<StoreBackedStrategy>;
+
+    #[module(providers = [StoreBackedStrategy, StoreBackedGuard])]
+    struct StoreBackedModule;
+
+    #[injectable]
+    struct LocalStrategy;
+
+    #[async_trait]
+    impl Strategy for LocalStrategy {
+        type Principal = ();
+
+        async fn authenticate(&self, _req: &mut Request) -> Result<(), AuthError> {
+            Err(AuthError::MissingCredentials)
+        }
+    }
+
+    type LocalGuard = AuthnGuard<LocalStrategy>;
+
+    #[module(providers = [LocalStrategy, LocalGuard])]
+    struct LocalModule;
+
+    #[tokio::test]
+    async fn a_budget_the_strategy_reaches_at_the_guards_net_fails_the_boot() {
+        let Err(refused) = App::builder()
+            .provide(IdentityStore(AUTHENTICATE_TIMEOUT))
+            .provide_meta(store_budget())
+            .module::<StoreBackedModule>()
+            .build()
+            .await
+        else {
+            panic!("a store the strategy waits on at the guard's net must not boot");
+        };
+        let refused = refused
+            .downcast::<BudgetPastNetError>()
+            .unwrap_or_else(|other| panic!("not a budget refusal: {other:#}"));
+        assert_eq!(
+            (refused.resource, refused.port, refused.net),
+            (
+                "the identity store",
+                "the authentication guard",
+                AUTHENTICATE_TIMEOUT
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_budget_the_strategy_cannot_reach_is_left_alone() {
+        App::builder()
+            .provide(IdentityStore(AUTHENTICATE_TIMEOUT * 2))
+            .provide_meta(store_budget())
+            .module::<LocalModule>()
+            .build()
+            .await
+            .expect("a strategy reaching no store boots beside a slow one");
+    }
+}

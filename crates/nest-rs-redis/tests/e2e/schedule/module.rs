@@ -23,11 +23,13 @@ async fn a_budget_at_the_schedulers_net_fails_the_boot() {
     let Err(refused) = App::builder().module::<PatientLockModule>().build().await else {
         panic!("a budget at the scheduler's net must not boot");
     };
-    let said = format!("{refused:#}");
-    assert!(
-        said.contains("the scheduler")
-            && said.contains(&format!("{:?}", nest_rs_schedule::LOCK_TIMEOUT))
-            && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
-        "{said}"
+    let refused = crate::budget_past_net(refused);
+    assert_eq!(
+        (refused.resource, refused.port, refused.net),
+        (
+            "the Redis connection",
+            "the scheduler",
+            nest_rs_schedule::LOCK_TIMEOUT
+        )
     );
 }

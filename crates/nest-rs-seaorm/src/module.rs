@@ -10,10 +10,11 @@
 //! name.
 
 use std::any::TypeId;
+use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
-use sea_orm::{Database, DatabaseConnection};
+use nest_rs_core::{Budget, ContainerBuilder, DynamicModule};
+use sea_orm::{Database, DatabaseConnection, DatabaseConnectionType};
 
 use crate::SeaOrmConfig;
 
@@ -54,7 +55,19 @@ impl DynamicModule for SeaOrmSetup {
         TypeId::of::<SeaOrmModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, mut builder: ContainerBuilder) -> ContainerBuilder {
+        if builder.mark_collected(TypeId::of::<SeaOrmModule>()) {
+            // Ambient: `Repo` reaches the pool from whatever unit of work runs,
+            // whether or not the code there injects it.
+            builder = builder.provide_meta(Budget::ambient::<DatabaseConnection>(
+                "the SeaORM pool",
+                format!(
+                    "{}, or `SeaOrmConfig::connect_timeout_secs` in code",
+                    nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"),
+                ),
+                acquire_budget,
+            ));
+        }
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
             #[expect(
@@ -66,6 +79,19 @@ impl DynamicModule for SeaOrmSetup {
                 .expect("SeaOrmConfig is resolved by ConfigModule::provide_feature");
             connect(&config).await
         })
+    }
+}
+
+/// How long a query waits for a connection from `db`'s pool; `None` for a
+/// connection holding no pool.
+fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
+    match db.inner {
+        DatabaseConnectionType::SqlxPostgresPoolConnection(_) => Some(
+            db.get_postgres_connection_pool()
+                .options()
+                .get_acquire_timeout(),
+        ),
+        _ => None,
     }
 }
 

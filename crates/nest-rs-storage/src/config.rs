@@ -73,7 +73,9 @@ pub struct StorageConfig {
     /// [`put_bytes`](crate::Storage::put_bytes) moves within it, and
     /// [`put_stream`](crate::Storage::put_stream) moves each part within it; a
     /// download's body is a transfer, held by [`read_timeout`](Self::read_timeout)
-    /// instead. Past it the call fails as S3's own error, naming the budget. Read
+    /// instead. Retries stop once half of it is spent, so a call whose attempts
+    /// keep failing ends on S3's error and its cause; past it a call S3 never
+    /// answered fails as S3's own error, naming the budget. Read
     /// from `<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS`, whole seconds from 1 to
     /// 3600, and in code anything above zero up to an hour; defaults to 15s. The
     /// boot refuses it at or past a net reaching the client — the

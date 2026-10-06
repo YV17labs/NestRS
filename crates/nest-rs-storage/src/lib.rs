@@ -78,10 +78,11 @@
 //! timeout is the client's `nest_rs_core::Budget`, so the boot refuses it at or
 //! past a net reaching the client.
 //!
-//! A call the budget cuts fails naming the budget and nothing of the attempts
-//! before it: `object_store` keeps an attempt's cause only in the error its own
-//! retries end on, and says each retry and its cause at `info` on
-//! `object_store::client::retry` — the lines to read beside the cut.
+//! A call whose attempts keep failing ends on S3's own error and its last
+//! cause before the budget does: `object_store` stops retrying once half the
+//! budget is spent. Only a call S3 never answers reaches the budget, and a
+//! download whose body stops — stalled, or broken past `object_store`'s own
+//! resumption — is resumed from where it stopped, said at `warn`.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

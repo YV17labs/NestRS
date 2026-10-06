@@ -1,5 +1,5 @@
 //! A download's body: bounded by its stall while its reader waits, never by its
-//! size, and resumed from where it stopped.
+//! size, and resumed from where it stopped, however long it runs.
 //!
 //! The bound is this crate's, not the HTTP client's: reqwest's read timeout
 //! keeps running between two reads of a body, so it cuts a reader that pauses
@@ -23,11 +23,13 @@ use crate::error::{Result, StorageError};
 /// The object at `path` from the answer `first` S3 gave, read within
 /// `read_timeout` per wait for its next bytes.
 ///
-/// A body silent that long while its reader waits is cut and resumed with a
-/// ranged `GET` of what is still owed, fenced on the object's `ETag` so a
-/// version written since is refused rather than spliced in; each resume waits
-/// for S3's answer within `operation_timeout`. A resumed body that stalls
-/// before its first byte fails the download, naming the bound.
+/// A body silent that long while its reader waits, or broken past
+/// `object_store`'s own resumption, is resumed with a ranged `GET` of what is
+/// still owed, said at `warn`, and fenced on the object's `ETag` so a version
+/// written since is refused rather than spliced in; each resume waits for S3's
+/// answer within `operation_timeout`. A resumed body that stops before its
+/// first byte fails the download on what stopped it — a stall naming the
+/// bound.
 pub(crate) fn download(
     store: AmazonS3,
     path: Path,
@@ -61,8 +63,8 @@ struct Transfer {
     /// The bytes not yet read, as offsets into the object.
     owed: Range<u64>,
     body: BoxStream<'static, object_store::Result<Bytes>>,
-    /// Whether a stall now is resumed: the first body's always, a resumed
-    /// body's once it sent a byte.
+    /// Whether a body stopping now is resumed: the first body always, a
+    /// resumed one once it sent a byte.
     resumable: bool,
     read_timeout: Duration,
     operation_timeout: Duration,
@@ -73,29 +75,36 @@ impl Transfer {
     /// object is read or the download failed.
     async fn next(mut self) -> Option<(Result<Bytes>, Option<Self>)> {
         loop {
-            match tokio::time::timeout(self.read_timeout, self.body.next()).await {
+            let stopped = match tokio::time::timeout(self.read_timeout, self.body.next()).await {
                 Ok(Some(Ok(chunk))) => {
                     self.owed.start += chunk.len() as u64;
                     self.resumable = true;
                     return Some((Ok(chunk), Some(self)));
                 }
-                Ok(Some(Err(error))) => return Some((Err(StorageError::Get(error)), None)),
                 Ok(None) => return None,
                 Err(_) if self.owed.is_empty() => return None,
-                Err(_) => {
-                    if let Err(error) = self.resume().await {
-                        return Some((Err(StorageError::Get(error)), None));
-                    }
-                }
+                Ok(Some(Err(error))) => error,
+                Err(_) => stalled(self.read_timeout),
+            };
+            if let Err(error) = self.resume(stopped).await {
+                return Some((Err(StorageError::Get(error)), None));
             }
         }
     }
 
-    /// Replace a stalled body with S3's answer for what is still owed.
-    async fn resume(&mut self) -> object_store::Result<()> {
+    /// Replace a body that stopped on `stopped` with S3's answer for what is
+    /// still owed — or end the download on `stopped` when a resumed body
+    /// stopped before its first byte, or no `ETag` fences a resume.
+    async fn resume(&mut self, stopped: object_store::Error) -> object_store::Result<()> {
         let (true, Some(e_tag)) = (self.resumable, self.e_tag.clone()) else {
-            return Err(stalled(self.read_timeout));
+            return Err(stopped);
         };
+        tracing::warn!(
+            target: crate::TARGET,
+            key = self.path.as_ref(),
+            error = %nest_rs_core::error_message(&stopped),
+            "download resumed where its body stopped",
+        );
         let options = GetOptions {
             if_match: Some(e_tag),
             range: Some(GetRange::Bounded(self.owed.clone())),

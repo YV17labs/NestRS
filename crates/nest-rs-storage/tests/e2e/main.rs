@@ -80,19 +80,34 @@ fn unique(label: &str) -> String {
     format!("e2e-{}-{}-{}", std::process::id(), nanos, label)
 }
 
-/// What a [`proxy`] does with one connection's bytes.
+/// What a [`proxy`] does with one connection's bytes: everything, at once,
+/// unless a field says otherwise.
+#[derive(Clone, Copy, Default)]
+struct Carry {
+    /// The caller's bytes, this many every 10 ms — an upload moving slowly.
+    request_pace: Option<usize>,
+    /// The store's bytes, this many every 10 ms — a download moving slowly.
+    answer_pace: Option<usize>,
+    /// Where the store's answer stops, and what the connection does then.
+    answer_ends: Option<(Until, Then)>,
+}
+
+/// How far a [`proxy`] carries the store's answer.
 #[derive(Clone, Copy)]
-enum Carry {
-    /// Both ways, whole.
-    Whole,
-    /// The store's first `n` bytes, then nothing more, the socket open — a
-    /// transfer stalled mid-body.
-    AnswerUpTo(usize),
-    /// The store's answer up to the end of its headers, then nothing more — a
-    /// body stalled before its first byte.
-    AnswerHeadersOnly,
-    /// The caller's bytes, `n` every 10 ms — an upload moving slowly.
-    RequestAt(usize),
+enum Until {
+    /// Its first `n` bytes, headers included.
+    Bytes(usize),
+    /// Its headers, and not a byte of its body.
+    BodyStarts,
+}
+
+/// What a [`proxy`] connection does once its answer stopped.
+#[derive(Clone, Copy)]
+enum Then {
+    /// Holds still, the socket open — a transfer stalled.
+    Hold,
+    /// Closes on the caller — a connection broken mid-body.
+    Close,
 }
 
 /// A TCP proxy to the store carrying its `n`th connection, from 0, as
@@ -124,50 +139,66 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
             let (mut client_read, mut client_write) = client.into_split();
             let (mut server_read, mut server_write) = server.into_split();
             tokio::spawn(async move {
-                let Carry::RequestAt(pace) = carry else {
-                    let _ = tokio::io::copy(&mut client_read, &mut server_write).await;
-                    return;
-                };
-                let mut buffer = vec![0; pace];
-                while let Ok(read @ 1..) = client_read.read(&mut buffer).await {
-                    if server_write.write_all(&buffer[..read]).await.is_err() {
-                        return;
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
+                let _ = paced(
+                    &mut client_read,
+                    &mut server_write,
+                    carry.request_pace,
+                    None,
+                )
+                .await;
             });
             tokio::spawn(async move {
-                if matches!(carry, Carry::Whole | Carry::RequestAt(_)) {
-                    let _ = tokio::io::copy(&mut server_read, &mut client_write).await;
-                    return;
+                let ended = paced(
+                    &mut server_read,
+                    &mut client_write,
+                    carry.answer_pace,
+                    carry.answer_ends.map(|(until, _)| until),
+                )
+                .await;
+                if ended && matches!(carry.answer_ends, Some((_, Then::Hold))) {
+                    std::future::pending::<()>().await;
                 }
-                let mut seen = Vec::new();
-                let mut buffer = vec![0; 8 * 1024];
-                loop {
-                    let Ok(read @ 1..) = server_read.read(&mut buffer).await else {
-                        return;
-                    };
-                    let sent = seen.len();
-                    seen.extend_from_slice(&buffer[..read]);
-                    let end = match carry {
-                        Carry::AnswerUpTo(n) => Some(n),
-                        _ => seen
-                            .windows(4)
-                            .position(|window| window == b"\r\n\r\n")
-                            .map(|at| at + 4),
-                    };
-                    let upto = end.map_or(seen.len(), |end| end.min(seen.len()));
-                    if upto > sent && client_write.write_all(&seen[sent..upto]).await.is_err() {
-                        return;
-                    }
-                    if end.is_some_and(|end| seen.len() >= end) {
-                        break;
-                    }
-                }
-                std::future::pending::<()>().await;
                 drop((server_read, client_write));
             });
         }
     });
     (addr, taken)
+}
+
+/// Copy `from` into `to`, `pace` bytes every 10 ms when set, up to `until`.
+/// Answers whether it stopped there, rather than at the end of `from` or a
+/// failed write.
+async fn paced(
+    from: &mut tokio::net::tcp::OwnedReadHalf,
+    to: &mut tokio::net::tcp::OwnedWriteHalf,
+    pace: Option<usize>,
+    until: Option<Until>,
+) -> bool {
+    let mut carried = Vec::new();
+    let mut buffer = vec![0; pace.unwrap_or(8 * 1024)];
+    loop {
+        let Ok(read @ 1..) = from.read(&mut buffer).await else {
+            return false;
+        };
+        let sent = carried.len();
+        carried.extend_from_slice(&buffer[..read]);
+        let end = match until {
+            None => None,
+            Some(Until::Bytes(n)) => Some(n),
+            Some(Until::BodyStarts) => carried
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|at| at + 4),
+        };
+        let upto = end.map_or(carried.len(), |end| end.min(carried.len()));
+        if upto > sent && to.write_all(&carried[sent..upto]).await.is_err() {
+            return false;
+        }
+        if end.is_some_and(|end| carried.len() >= end) {
+            return true;
+        }
+        if pace.is_some() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
 }

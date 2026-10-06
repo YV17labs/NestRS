@@ -96,16 +96,20 @@ The two bounds are the AWS SDK's. A call waits for S3's answer within
 `OPERATION_TIMEOUT_SECS`, every retry included, and past it fails with its
 own error, `the call did not end within 15s, every retry included — the budget
 <PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
-HTTP edge's 30-second timeout answers a bare `503` in its place. That error
-says nothing of the attempts before the cut: `object_store` logs each retry
-and its cause at `info` on `object_store::client::retry`. An upload's
+HTTP edge's 30-second timeout answers a bare `503` in its place. That error is
+for an S3 that never answers: a call whose attempts keep failing stops
+retrying once half the budget is spent and fails on S3's own error, its last
+cause included. An upload's
 body is part of its request: `put_bytes` moves within the budget, and
 `put_stream` ships 5 MiB parts that each do, so a body of any size moves in
 parts. A download's body is a transfer, never cut for its size nor for its
 reader's pauses — a slow client behind a streamed response: one that sends
 nothing for `READ_TIMEOUT_SECS` while it is read is cut and resumed from the
 byte it stopped at, provided the object is still the version it started on, and
-fails naming the variable when the resumed body sends nothing within it.
+fails naming the variable when the resumed body sends nothing within it. A
+connection that breaks mid-body is resumed the same way, however long the
+download has run; each resume is a `warn` on `nest_rs::storage` naming the key
+and what stopped the body.
 
 ## Presigned uploads
 

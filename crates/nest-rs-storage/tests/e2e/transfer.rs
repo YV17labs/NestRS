@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use nest_rs_storage::{Storage, StorageConfig};
 
-use crate::{Carry, ensure_bucket, proxied, proxy, storage, unique};
+use crate::{Carry, Then, Until, ensure_bucket, proxied, proxy, storage, unique};
 
 /// A megabyte no two offsets of which share a byte pattern for long, stored
 /// under a key of its own.
@@ -38,12 +38,9 @@ fn reading_within(read_timeout: Duration) -> StorageConfig {
 #[tokio::test]
 async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
     let (direct, key, body) = stored("stalled.bin").await;
-    let (proxy, connections) = proxy(|n| {
-        if n == 0 {
-            Carry::AnswerUpTo(64 * 1024)
-        } else {
-            Carry::Whole
-        }
+    let (proxy, connections) = proxy(|n| Carry {
+        answer_ends: (n == 0).then_some((Until::Bytes(64 * 1024), Then::Hold)),
+        ..Carry::default()
     })
     .await;
     let bound = Duration::from_millis(300);
@@ -74,7 +71,7 @@ async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
 #[tokio::test]
 async fn a_reader_pausing_past_the_read_bound_is_never_cut() {
     let (direct, key, body) = stored("paused.bin").await;
-    let (proxy, connections) = proxy(|_| Carry::Whole).await;
+    let (proxy, connections) = proxy(|_| Carry::default()).await;
     let proxied = proxied(proxy, reading_within(Duration::from_millis(200)));
 
     let mut stream = pin!(proxied.get_stream(&key).await.expect("get_stream"));
@@ -105,12 +102,13 @@ async fn a_reader_pausing_past_the_read_bound_is_never_cut() {
 #[tokio::test]
 async fn a_resumed_download_stalled_before_its_first_byte_fails_naming_the_read_bound() {
     let (direct, key, _) = stored("stalled-again.bin").await;
-    let (proxy, connections) = proxy(|n| {
-        if n == 0 {
-            Carry::AnswerUpTo(64 * 1024)
+    let (proxy, connections) = proxy(|n| Carry {
+        answer_ends: Some(if n == 0 {
+            (Until::Bytes(64 * 1024), Then::Hold)
         } else {
-            Carry::AnswerHeadersOnly
-        }
+            (Until::BodyStarts, Then::Hold)
+        }),
+        ..Carry::default()
     })
     .await;
     let proxied = proxied(proxy, reading_within(Duration::from_millis(300)));
@@ -147,6 +145,54 @@ async fn an_empty_object_reads_as_no_bytes() {
         assert!(chunk.expect("an empty body reads").is_empty());
     }
     assert!(stream.next().await.is_none(), "an ended stream stays ended");
+
+    direct.delete(&key).await.expect("delete");
+}
+
+/// A body whose connection breaks once `object_store`'s own resumption is
+/// spent — half the operation budget after the call — is resumed from where it
+/// stopped, and the break is said: a long download outlives its connections.
+#[tokio::test]
+async fn a_download_broken_past_the_retries_is_resumed_and_says_so() {
+    let (direct, key, body) = stored("broken.bin").await;
+    let budget = Duration::from_secs(1);
+    // 16 KiB every 10 ms: the 960 KiB before the break take over half the budget.
+    let (proxy, connections) = proxy(|n| Carry {
+        answer_pace: (n == 0).then_some(16 * 1024),
+        answer_ends: (n == 0).then_some((Until::Bytes(960 * 1024), Then::Close)),
+        ..Carry::default()
+    })
+    .await;
+    let proxied = proxied(
+        proxy,
+        StorageConfig {
+            operation_timeout: budget,
+            ..StorageConfig::default()
+        },
+    );
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let got = proxied
+        .get_bytes(&key)
+        .await
+        .expect("the download resumes past the break");
+    assert_eq!(
+        got.as_ref(),
+        body.as_slice(),
+        "the resumed body is the object"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 2, "one resume");
+    let resumed = logs.expect_one(
+        nest_rs_storage::TARGET,
+        "download resumed where its body stopped",
+    );
+    assert_eq!(resumed.level, "warn");
+    assert_eq!(resumed.field("key").as_deref(), Some(key.as_str()));
+    assert!(
+        resumed
+            .field("error")
+            .is_some_and(|error| !error.is_empty())
+    );
 
     direct.delete(&key).await.expect("delete");
 }

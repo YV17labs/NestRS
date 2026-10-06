@@ -12,18 +12,39 @@ use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path;
 use object_store::signer::Signer;
 use object_store::{
-    Attribute, Attributes, ClientOptions, MultipartUpload, ObjectStore, ObjectStoreExt,
-    PutMultipartOptions, PutOptions, PutPayload,
+    Attribute, Attributes, BackoffConfig, ClientOptions, MultipartUpload, ObjectStore,
+    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, RetryConfig,
 };
 
 use crate::config::{OPERATION_TIMEOUT, READ_TIMEOUT, StorageConfig};
 use crate::error::{Result, StorageError};
 use crate::transfer::download;
 
-/// How long opening a connection to S3 waits: `object_store`'s default, held
-/// here so it stays below the default operation budget, which retries a dial
-/// that timed out within it.
+/// The longest a dial to S3 waits: `object_store`'s default.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How `object_store` retries within the operation budget `budget`: it stops
+/// once half of it is spent and never backs off more than an eighth, so a call
+/// whose attempts keep failing ends on S3's own error and its cause before the
+/// budget cuts it — only a call S3 never answers reaches the budget.
+fn retries_within(budget: Duration) -> RetryConfig {
+    let max_backoff = budget / 8;
+    RetryConfig {
+        backoff: BackoffConfig {
+            init_backoff: BackoffConfig::default().init_backoff.min(max_backoff),
+            max_backoff,
+            ..BackoffConfig::default()
+        },
+        retry_timeout: budget / 2,
+        ..RetryConfig::default()
+    }
+}
+
+/// The longest a dial waits within the operation budget `budget`: a quarter of
+/// it at most, so the attempt after the last backoff fails within the budget.
+fn dial_within(budget: Duration) -> Duration {
+    CONNECT_TIMEOUT.min(budget / 4)
+}
 
 /// Bytes buffered before a multipart part is shipped. S3 requires every part
 /// but the last to be at least 5 MiB, so a smaller value would make
@@ -166,9 +187,10 @@ impl Storage {
             // by the operation budget above it, and a download's stall by
             // `download`, never by reqwest's read timeout (`transfer.rs`).
             .with_timeout_disabled()
-            .with_connect_timeout(CONNECT_TIMEOUT);
+            .with_connect_timeout(dial_within(self.config.operation_timeout));
         let built = AmazonS3Builder::new()
             .with_client_options(options)
+            .with_retry(retries_within(self.config.operation_timeout))
             .with_endpoint(&self.config.endpoint)
             .with_region(&self.config.region)
             .with_access_key_id(&self.config.access_key)
@@ -669,8 +691,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_dial_that_timed_out_is_retried_within_the_default_operation_budget() {
-        assert!(CONNECT_TIMEOUT < StorageConfig::default().operation_timeout);
+    fn the_last_retry_fails_within_the_budget_whatever_the_budget() {
+        for budget in [
+            Duration::from_millis(1),
+            Duration::from_secs(1),
+            StorageConfig::default().operation_timeout,
+            Duration::from_secs(60 * 60),
+        ] {
+            let retries = retries_within(budget);
+            assert!(retries.backoff.init_backoff <= retries.backoff.max_backoff);
+            assert!(
+                retries.retry_timeout + retries.backoff.max_backoff + dial_within(budget) < budget,
+                "{budget:?}"
+            );
+        }
     }
 
     /// A multipart upload that talks to nothing but records whether it was
@@ -926,6 +960,30 @@ mod tests {
                 "the call did not end within {budget:?}, every retry included — the budget {} sets",
                 nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
             )) && !chain.contains("did not answer"),
+            "{chain}"
+        );
+    }
+
+    /// Every attempt fails at once — nothing listens on the store's port — so
+    /// the call ends on S3's own error and its cause, before the budget would
+    /// cut it and say only that it elapsed.
+    #[tokio::test]
+    async fn a_call_whose_attempts_keep_failing_ends_on_their_cause_before_the_budget() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("a port nothing listens on once its listener is dropped");
+        let budget = Duration::from_secs(1);
+        let storage = Storage::new(Arc::new(StorageConfig {
+            endpoint: format!("http://{closed}"),
+            operation_timeout: budget,
+            ..StorageConfig::default()
+        }));
+        let started = tokio::time::Instant::now();
+        let refused = storage.head("k").await.expect_err("nothing listens");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(started.elapsed() < budget, "{:?}", started.elapsed());
+        assert!(
+            !chain.contains("did not end within") && chain.contains("retries"),
             "{chain}"
         );
     }

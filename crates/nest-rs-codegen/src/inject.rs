@@ -554,6 +554,16 @@ pub fn dependency_names_method(dep_names: &[TokenStream2]) -> TokenStream2 {
     }
 }
 
+/// `Discoverable::injected_optional` — each `#[inject] Option<Arc<…>>` field,
+/// emitted for every scope, as [`injected_method`] is.
+pub fn injected_optional_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
+            ::std::vec![ #(#opt_keys),* ]
+        }
+    }
+}
+
 /// `Discoverable::optional_dependencies` — orders an eager provider after an
 /// optional dep the same module supplies, while still building it (with
 /// `None`) when no provider supplies one.

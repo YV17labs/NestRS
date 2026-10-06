@@ -64,15 +64,36 @@ impl Net {
 }
 
 /// Refuse the first budget at or past a net reaching it, nets and budgets in
-/// declaration order, each budget read off the provider `builder` holds.
-/// `descriptors` say what a provider injects, which a net around it follows.
+/// declaration order, each budget read off the provider `builder` holds —
+/// `only` those of the providers it names, or every one. `descriptors` are the
+/// modules the app reaches, whose injections a net around a provider follows.
+///
+/// A resource declared twice — by the module opening it and by a binding over
+/// it — is one budget, ambient if either declaration is.
 pub(crate) fn check_budgets(
     builder: &ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
+    only: Option<&[TypeId]>,
 ) -> Result<(), BudgetPastNetError> {
-    let budgets: Vec<&Budget> = builder.attached_meta::<Budget>().collect();
-    let mut nets = builder.attached_meta::<Net>().peekable();
-    if budgets.is_empty() || nets.peek().is_none() {
+    let nets: Vec<&Net> = builder.attached_meta::<Net>().collect();
+    if nets.is_empty() {
+        return Ok(());
+    }
+    let mut budgets: Vec<(&Budget, bool)> = Vec::new();
+    for budget in builder.attached_meta::<Budget>() {
+        match budgets
+            .iter_mut()
+            .find(|(seen, _)| seen.provider() == budget.provider())
+        {
+            Some((_, ambient)) => *ambient |= budget.is_ambient(),
+            None => budgets.push((budget, budget.is_ambient())),
+        }
+    }
+    budgets.retain(|(budget, _)| {
+        builder.contains(budget.provider())
+            && only.is_none_or(|providers| providers.contains(&budget.provider()))
+    });
+    if budgets.is_empty() {
         return Ok(());
     }
     let container = builder.snapshot();
@@ -81,10 +102,10 @@ pub(crate) fn check_budgets(
             Reach::Over(_) => HashSet::new(),
             Reach::Around(provider) => injection_closure(descriptors, provider),
         };
-        for budget in &budgets {
+        for (budget, ambient) in &budgets {
             let reached = match net.reach {
                 Reach::Over(resource) => budget.provider() == resource,
-                Reach::Around(_) => budget.is_ambient() || injected.contains(&budget.provider()),
+                Reach::Around(_) => *ambient || injected.contains(&budget.provider()),
             };
             if !reached {
                 continue;

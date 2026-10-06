@@ -40,6 +40,14 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` dependency, reported for
+    /// every scope as [`injected`](Discoverable::injected) is — what the
+    /// provider's code reaches when the dependency is there, which a
+    /// [`Net`](crate::Net) around it follows.
+    fn injected_optional() -> Vec<TypeId> {
+        Vec::new()
+    }
+
     /// [`ProviderKey`](crate::ProviderKey) of each **keyed** `#[inject(key = "…")]` dependency,
     /// recorded for the access-graph keyed check. Kept apart from
     /// [`injected`](Discoverable::injected) — a keyed dependency is validated
@@ -594,6 +602,7 @@ mod tests {
                         also_provides: only_itself,
                         injects: nothing,
                         inject_names: no_names,
+                        injects_optional: nothing,
                         injects_keyed: no_keyed,
                     }],
                 },
@@ -608,6 +617,7 @@ mod tests {
                         also_provides: only_itself,
                         injects: nothing,
                         inject_names: no_names,
+                        injects_optional: nothing,
                         injects_keyed: no_keyed,
                     }],
                 },

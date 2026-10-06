@@ -6,7 +6,8 @@ use syn::Expr;
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_keyed_method, injected_method,
-    injected_names_method, optional_dependencies_method, parse_provider_host,
+    injected_names_method, injected_optional_method, optional_dependencies_method,
+    parse_provider_host,
 };
 
 pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -47,6 +48,7 @@ pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     // name a missing dependency of a lazily-built scoped/transient provider.
     let injected_names = injected_names_method(&dep_names);
     let injected_keyed = injected_keyed_method(&keyed_dep_keys);
+    let injected_optional = injected_optional_method(&opt_keys);
 
     // What the container will hold under this type, stated for **every** scope:
     // a missing impl is fillable by hand, and omitting it is how a
@@ -120,6 +122,7 @@ pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
             #injected
             #injected_names
             #injected_keyed
+            #injected_optional
 
             #register_fn
         }

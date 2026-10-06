@@ -1,11 +1,13 @@
 //! Covers `src/net.rs` — the boot refuses every budget at or past a net that
 //! reaches it, and only those: a net over a resource reaches that resource's
 //! budget alone, a net around a provider's code what the code injects at any
-//! depth and every ambient resource.
+//! depth, optionally or not, through the bindings the app imports, and every
+//! ambient resource — and it refuses as soon as the budget's resource exists.
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use nest_rs_core::{
     App, Budget, BudgetPastNetError, ContainerBuilder, Module, Net, injectable, module,
 };
@@ -195,4 +197,172 @@ fn the_synchronous_boot_refuses_it_too() {
         error.downcast_ref::<BudgetPastNetError>().is_some(),
         "{error:#}"
     );
+}
+
+#[injectable]
+struct OptionalStrategy {
+    #[inject]
+    #[expect(
+        dead_code,
+        reason = "injected only so the strategy's code reaches the pool"
+    )]
+    pool: Option<Arc<Pool>>,
+}
+
+#[module(providers = [OptionalStrategy])]
+struct OptionalModule;
+
+#[tokio::test]
+async fn a_net_around_a_provider_reaches_what_it_injects_optionally() {
+    let refused = refusal(
+        App::builder()
+            .provide(Pool(NET))
+            .provide_meta(pool_budget())
+            .provide_meta(Net::around::<OptionalStrategy>("the test guard", NET))
+            .module::<OptionalModule>()
+            .build()
+            .await,
+    );
+    assert_eq!(refused.port, "the test guard");
+}
+
+trait Store: Send + Sync {}
+
+#[injectable]
+struct LocalStore;
+
+impl Store for LocalStore {}
+
+#[injectable]
+struct PooledStore {
+    #[inject]
+    #[expect(
+        dead_code,
+        reason = "injected only so the store's code reaches the pool"
+    )]
+    pool: Arc<Pool>,
+}
+
+impl Store for PooledStore {}
+
+#[module(providers = [LocalStore as dyn Store])]
+struct LocalStoreModule;
+
+// Linked into the suite beside `LocalStoreModule`, binding the same key.
+#[module(providers = [PooledStore as dyn Store])]
+struct PooledStoreModule;
+
+#[injectable]
+struct StoreStrategy {
+    #[inject]
+    #[expect(
+        dead_code,
+        reason = "injected only so the strategy's code reaches the store"
+    )]
+    store: Arc<dyn Store>,
+}
+
+#[module(imports = [LocalStoreModule], providers = [StoreStrategy])]
+struct LocalStoreApp;
+
+#[module(imports = [PooledStoreModule], providers = [StoreStrategy])]
+struct PooledStoreApp;
+
+#[tokio::test]
+async fn a_net_around_a_provider_follows_the_binding_the_app_imports() {
+    let refused = refusal(
+        App::builder()
+            .provide(Pool(NET))
+            .provide_meta(pool_budget())
+            .provide_meta(Net::around::<StoreStrategy>("the test guard", NET))
+            .module::<PooledStoreApp>()
+            .build()
+            .await,
+    );
+    assert_eq!(refused.port, "the test guard");
+}
+
+#[tokio::test]
+async fn a_net_around_a_provider_never_follows_a_binding_another_composition_imports() {
+    App::builder()
+        .provide(Pool(NET * 2))
+        .provide_meta(pool_budget())
+        .provide_meta(Net::around::<StoreStrategy>("the test guard", NET))
+        .module::<LocalStoreApp>()
+        .build()
+        .await
+        .expect("the store this app binds never waits on the pool");
+}
+
+/// Reads the pool from its snapshot, and fails saying it ran.
+struct Dependent;
+
+/// Opens the pool past the net over it, then a factory that reads the pool.
+struct OpeningModule;
+
+impl Module for OpeningModule {
+    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+            .provide_meta(pool_budget())
+            .provide_meta(Net::over::<Pool>("the test port", NET))
+            .provide_factory(|_| async { Ok(Pool(NET)) })
+            .provide_factory_after::<Dependent, Pool, _, _>(|_| async {
+                Err(anyhow!("the factory after the pool ran"))
+            })
+    }
+
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
+}
+
+/// The refusal comes as soon as the pool exists, before a factory reading it
+/// does its own work and fails on something else first.
+#[tokio::test]
+async fn a_budget_is_refused_once_its_resource_is_built_before_the_factories_after_it() {
+    let refused = refusal(App::builder().module::<OpeningModule>().build().await);
+    assert_eq!(refused.port, "the test port");
+}
+
+/// Queues a factory that fails, as one doing I/O would.
+struct FailingFactoryModule;
+
+impl Module for FailingFactoryModule {
+    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+            .provide_meta(pool_budget())
+            .provide_meta(Net::over::<Pool>("the test port", NET))
+            .provide_factory::<Dependent, _, _>(|_| async { Err(anyhow!("a factory ran")) })
+    }
+
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
+}
+
+#[tokio::test]
+async fn a_seeded_resources_budget_is_refused_before_any_factory_runs() {
+    let refused = refusal(
+        App::builder()
+            .provide(Pool(NET))
+            .module::<FailingFactoryModule>()
+            .build()
+            .await,
+    );
+    assert_eq!(refused.port, "the test port");
+}
+
+#[tokio::test]
+async fn a_budget_declared_twice_is_held_by_its_ambient_declaration() {
+    let refused = refusal(
+        App::builder()
+            .provide(Pool(NET))
+            .provide_meta(pool_budget())
+            .provide_meta(ambient_pool_budget())
+            .provide_meta(Net::around::<LocalStrategy>("the test guard", NET))
+            .module::<LocalModule>()
+            .build()
+            .await,
+    );
+    assert_eq!(refused.port, "the test guard");
 }

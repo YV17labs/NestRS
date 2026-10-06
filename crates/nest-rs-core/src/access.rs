@@ -64,6 +64,9 @@ pub struct ProviderDescriptor {
     /// error. May be shorter than `injects` (a provider that emits no names
     /// falls back to a placeholder); never longer.
     pub inject_names: fn() -> Vec<&'static str>,
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` field: no boot check holds
+    /// it, but a [`Net`](crate::Net) around the provider follows it.
+    pub injects_optional: fn() -> Vec<TypeId>,
     /// Each **keyed** `#[inject(key = "…")]` field, validated against the
     /// global keyed set. Empty for providers with no keyed dependency.
     pub injects_keyed: fn() -> Vec<KeyedDependency>,
@@ -425,10 +428,12 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
     order
 }
 
-/// Every key `root`'s code reaches through `#[inject]`, at any depth, `root`
-/// included: each declared provider registering a key in the set adds what it
-/// injects. A key no module declares — a seed, a factory output — ends its
-/// branch, since nothing records what it holds. Pure over its inputs.
+/// Every key `root`'s code reaches through `#[inject]`, optional or not, at
+/// any depth, `root` included: each provider `descriptors` declare under a key
+/// in the set adds what it injects. A key no module declares — a seed, a
+/// factory output — ends its branch, since nothing records what it holds.
+/// Pure over its inputs; the caller passes the modules its app reaches, so a
+/// binding another composition imports is never followed.
 pub(crate) fn injection_closure(
     descriptors: &[&ModuleDescriptor],
     root: TypeId,
@@ -438,7 +443,10 @@ pub(crate) fn injection_closure(
     while let Some(key) = stack.pop() {
         let declared = descriptors.iter().flat_map(|d| d.providers);
         for provider in declared.filter(|p| (p.provides)() == key || (p.provider)() == key) {
-            for dependency in (provider.injects)() {
+            for dependency in (provider.injects)()
+                .into_iter()
+                .chain((provider.injects_optional)())
+            {
                 if reached.insert(dependency) {
                     stack.push(dependency);
                 }
@@ -446,6 +454,22 @@ pub(crate) fn injection_closure(
         }
     }
     reached
+}
+
+/// The descriptors of the modules `roots` reach along their imports, in no
+/// particular order.
+pub(crate) fn reachable_descriptors<'a>(
+    descriptors: &[&'a ModuleDescriptor],
+    roots: &[TypeId],
+) -> Vec<&'a ModuleDescriptor> {
+    let by_id: HashMap<TypeId, &ModuleDescriptor> =
+        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+    let reached = reachable(roots, &by_id);
+    descriptors
+        .iter()
+        .copied()
+        .filter(|d| reached.contains(&(d.module)()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -504,6 +528,7 @@ mod tests {
                 provider: || TypeId::of::<UsersService>(),
                 injects: users_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -547,6 +572,7 @@ mod tests {
                     provider: || TypeId::of::<UsersService>(),
                     injects: no_deps,
                     inject_names: no_names,
+                    injects_optional: no_deps,
                     injects_keyed: no_keyed_deps,
                     also_provides: provides_only_itself,
                 },
@@ -556,6 +582,7 @@ mod tests {
                     provider: || TypeId::of::<AppGuard>(),
                     injects: billing_deps,
                     inject_names: no_names,
+                    injects_optional: no_deps,
                     injects_keyed: no_keyed_deps,
                     also_provides: provides_only_itself,
                 },
@@ -584,6 +611,7 @@ mod tests {
                 provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -617,6 +645,7 @@ mod tests {
                 provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -664,6 +693,7 @@ mod tests {
                 provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: billing_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -701,6 +731,7 @@ mod tests {
                 provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -745,6 +776,7 @@ mod tests {
                 provider: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -768,6 +800,7 @@ mod tests {
                 provider: || TypeId::of::<OrgsResolver>(),
                 injects: no_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -822,6 +855,7 @@ mod tests {
                 provider: || TypeId::of::<UsersService>(),
                 injects: no_deps,
                 inject_names: no_names,
+                injects_optional: no_deps,
                 injects_keyed: github_dep,
                 also_provides: provides_only_itself,
             }],
@@ -876,6 +910,7 @@ mod tests {
                 provider: || TypeId::of::<BillingService>(),
                 injects: billing_deps,
                 inject_names: billing_names,
+                injects_optional: no_deps,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],

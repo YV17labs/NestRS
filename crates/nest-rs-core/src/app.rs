@@ -13,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, provider_order,
-    reachable_provider_ids, validate_access_graph, validate_keyed_access_graph,
+    reachable_descriptors, reachable_provider_ids, validate_access_graph,
+    validate_keyed_access_graph,
 };
 use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Registrar};
@@ -121,8 +122,10 @@ impl App {
         // outside the declarative graph is not misreported as unmet.
         // Keyed providers are configured imperatively; the sync path seeds none
         // up front, so any keyed dependency here is genuinely unmet.
+        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
         let builder = seal(
             builder,
+            &descriptors,
             &[(TypeId::of::<M>(), root)],
             &global,
             &HashSet::new(),
@@ -482,6 +485,15 @@ impl AppBuilder {
         // Before any factory runs: two import sites declared the same type and
         // one would have to lose silently.
         check_contested_declarations(&builder)?;
+        let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
+        let roots: Vec<(TypeId, &'static str)> =
+            modules.iter().map(|h| (h.type_id, h.name)).collect();
+        let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
+        let reached = reachable_descriptors(&descriptors, &ids);
+        // A budget is refused as soon as its resource exists — a seed now, a
+        // factory's output once it ran — before a factory after it does its own
+        // I/O and fails on something else first.
+        check_budgets(&builder, &reached, None)?;
         // A factory whose output type a seed already supplies is skipped, so a
         // seed wins over a module's `for_root` factory — the path a test takes
         // to boot against a pre-built resource. Otherwise the next to run is
@@ -508,6 +520,7 @@ impl AppBuilder {
             }
             let register = (queued.factory)(builder.snapshot()).await?;
             builder = register(builder);
+            check_budgets(&builder, &reached, Some(&queued.provides))?;
         }
         // `ReachableProviders` is seeded after register but counts as global
         // infrastructure for the access graph, so it must be in `global` up
@@ -528,9 +541,7 @@ impl AppBuilder {
         }
 
         check_duplicate_providers(&builder)?;
-        let roots: Vec<(TypeId, &'static str)> =
-            modules.iter().map(|h| (h.type_id, h.name)).collect();
-        let builder = seal(builder, &roots, &global, &global_keyed)?;
+        let builder = seal(builder, &descriptors, &roots, &global, &global_keyed)?;
         Ok(App {
             container: builder.build(),
         })
@@ -540,29 +551,30 @@ impl AppBuilder {
 /// The boot's last pass, shared by both paths: the access graph checked over
 /// what registered — imperatively-provided values and scoped or transient
 /// factories included, which the declarative graph cannot see — then every
-/// budget against the nets reaching it, and the seeds the transports read off
-/// it. The link-time registry is read once.
+/// budget against the nets reaching it, those `register` declared included,
+/// and the seeds the transports read off it. `descriptors` is the link-time
+/// registry, read once per boot.
 fn seal(
     builder: ContainerBuilder,
+    descriptors: &[&ModuleDescriptor],
     roots: &[(TypeId, &'static str)],
     global: &HashSet<TypeId>,
     global_keyed: &HashSet<ProviderKey>,
 ) -> Result<ContainerBuilder> {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
     let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
     validate_access_graph(
-        &descriptors,
+        descriptors,
         &ids,
         global,
         &builder.registered_ids(),
         &builder.scoped_or_transient_ids(),
     )
     .map_err(AccessError::into_anyhow)?;
-    validate_keyed_access_graph(&descriptors, &ids, global_keyed)?;
-    check_budgets(&builder, &descriptors)?;
-    let order = provider_order(&descriptors, &ids);
+    validate_keyed_access_graph(descriptors, &ids, global_keyed)?;
+    check_budgets(&builder, &reachable_descriptors(descriptors, &ids), None)?;
+    let order = provider_order(descriptors, &ids);
     let reachable = ReachableProviders(reachable_provider_ids(&order, global));
-    let composition = Composition::from_descriptors(&descriptors, roots);
+    let composition = Composition::from_descriptors(descriptors, roots);
     Ok(builder
         .provide(reachable)
         .provide(ProviderOrder::new(order))

@@ -13,7 +13,7 @@ use syn::{ItemStruct, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
-    from_container_method, injected_method, optional_dependencies_method,
+    from_container_method, injected_method, injected_optional_method, optional_dependencies_method,
 };
 
 /// `#[interceptor]`'s one key.
@@ -115,6 +115,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
     let dependency_names = dependency_names_method(&dep_names);
     let optional_dependencies = optional_dependencies_method(&opt_keys);
     let injected = injected_method(&dep_keys);
+    let injected_optional = injected_optional_method(&opt_keys);
 
     quote! {
         #item
@@ -128,6 +129,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
             #dependency_names
             #optional_dependencies
             #injected
+            #injected_optional
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

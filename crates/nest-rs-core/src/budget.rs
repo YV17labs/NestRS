@@ -10,11 +10,14 @@ use crate::Container;
 /// client for a reply. Past it the resource fails with its own error and its
 /// cause.
 ///
-/// The module that opens the resource declares it at collect
-/// (`builder.provide_meta(Budget::of::<R>(…))`), and the boot reads it off the
-/// provider the container holds once every factory ran — a seeded one too, so
-/// a test that hands in its own pool is held to that pool's budget. A budget
-/// whose provider was never built is not held at all.
+/// Declared at collect (`builder.provide_meta(Budget::of::<R>(…))`) by the
+/// module that opens the resource and by each binding that hands it to a port
+/// or reaches it from every unit of work, so a resource seeded without its
+/// module is held too; declared twice, it is one budget, ambient if either
+/// declaration is. The boot reads it off the provider the container holds, as
+/// soon as that provider exists — a seed before any factory runs, a factory's
+/// output once that factory ran. A budget whose provider was never built is
+/// not held at all.
 pub struct Budget {
     resource: &'static str,
     setting: String,

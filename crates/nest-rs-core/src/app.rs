@@ -95,6 +95,18 @@ impl App {
         // nothing ever asked the module what it would have built.
         let root = std::any::type_name::<M>();
         let builder = M::collect(Container::builder().enter_root(root)).leave_import();
+        // Before the queue check, and for the same reason the async path runs it
+        // before any factory: a contested declaration is a fact that **survives
+        // the remedy the queue check prescribes**. `UnresolvedFactoryError` says
+        // "boot with `App::builder()…` instead", so reporting it first hands the
+        // developer an edit whose only outcome is a second, different boot
+        // failure — while the framework already held the fact that explains it.
+        // A refusal lands at the earliest site that can see the fact.
+        check_contested_declarations(&builder)?;
+        // Nothing drains the queue on this path, so anything a module queued as
+        // an async factory would never exist — refused before `register`, which
+        // builds providers from those outputs and would panic on the hole.
+        check_no_queued_factories(&builder)?;
         let builder = M::register(builder.enter_root(root)).leave_import();
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
@@ -105,17 +117,9 @@ impl App {
             TypeId::of::<Composition>(),
         ]);
         check_duplicate_providers(&builder)?;
-        // Before the queue check, and for the same reason the async path runs it
-        // before any factory: a contested declaration is a fact that **survives
-        // the remedy the queue check prescribes**. `UnresolvedFactoryError` says
-        // "boot with `App::builder()…` instead", so reporting it first hands the
-        // developer an edit whose only outcome is a second, different boot
-        // failure — while the framework already held the fact that explains it.
-        // A refusal lands at the earliest site that can see the fact.
+        // Again for what `register` queued: a dynamic import with no parked
+        // value collects there.
         check_contested_declarations(&builder)?;
-        // `collect` ran but nothing drains the queue on this path, so anything a
-        // module queued as an async factory would never exist — refuse rather
-        // than boot a container with the hole in it.
         check_no_queued_factories(&builder)?;
         // The actual registered set (singletons + scoped/transient factories +
         // imperatively-provided values) — consulted so a dependency provided
@@ -810,6 +814,121 @@ mod tests {
             err.downcast_ref::<UnresolvedFactoryError>().is_some(),
             "{err}"
         );
+    }
+
+    // A static module whose `register` reads what its own `collect` queued —
+    // a binding building its interceptor over the pool its factory checked.
+    struct ReadsItsFactoryModule;
+    impl Module for ReadsItsFactoryModule {
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            ConfigModule::collect(builder)
+        }
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            DoublerModule::register(builder)
+        }
+    }
+
+    #[test]
+    fn the_synchronous_boot_refuses_a_queued_factory_before_a_register_reads_its_output() {
+        let err = match App::new::<ReadsItsFactoryModule>() {
+            Ok(_) => panic!("a queued factory cannot be drained synchronously"),
+            Err(e) => e,
+        };
+        let unresolved = err
+            .downcast_ref::<UnresolvedFactoryError>()
+            .unwrap_or_else(|| panic!("not the queue refusal: {err:#}"));
+        assert!(unresolved.type_name.ends_with("Config"), "{unresolved:?}");
+    }
+
+    // Every `for_root` queues its config, then a factory reading it, in one
+    // `collect`; a bare import and a pinned one of the same module both do.
+    struct Connection(u32);
+    fn connect(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.provide_factory(|c| async move {
+            let config = c
+                .get::<Config>()
+                .ok_or_else(|| anyhow!("Config is queued ahead of the factory reading it"))?;
+            Ok(Connection(config.0))
+        })
+    }
+    struct BareSetup;
+    impl Module for BareSetup {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            connect(builder.provide_factory(|_| async { Ok(Config(1)) }))
+        }
+    }
+    struct PinnedSetup;
+    impl Module for PinnedSetup {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            connect(
+                builder.provide_declared_factory("one declaration", |_| async { Ok(Config(7)) }),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declaration_takes_the_slot_of_the_default_it_displaces() {
+        for pinned_first in [false, true] {
+            let app = if pinned_first {
+                App::builder().module::<PinnedSetup>().module::<BareSetup>()
+            } else {
+                App::builder().module::<BareSetup>().module::<PinnedSetup>()
+            };
+            let app = app
+                .build()
+                .await
+                .unwrap_or_else(|e| panic!("pinned first: {pinned_first}: {e:#}"));
+            assert_eq!(app.container().get::<Connection>().unwrap().0, 7);
+        }
+    }
+
+    struct ReadsBothModule;
+    impl Module for ReadsBothModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory_dyn_after_both::<PortImpl, dyn Port, First, Second, _, _>(
+                |c| async move {
+                    let first = c
+                        .get::<First>()
+                        .ok_or_else(|| anyhow!("First runs first"))?;
+                    let second = c
+                        .get::<Second>()
+                        .ok_or_else(|| anyhow!("Second runs first"))?;
+                    Ok(PortImpl(first.0 + second.0))
+                },
+                |p| Arc::new(p) as Arc<dyn Port>,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dyn_factory_declared_after_two_others_runs_after_both_and_binds_both_names() {
+        for modules in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [2, 0, 1]] {
+            let mut app = App::builder();
+            for module in modules {
+                app = match module {
+                    0 => app.module::<ReadsBothModule>(),
+                    1 => app.module::<FirstModule>(),
+                    _ => app.module::<SecondModule>(),
+                };
+            }
+            let app = app.build().await.expect("the declared order is honoured");
+            assert_eq!(
+                app.container().get::<PortImpl>().unwrap().0,
+                42,
+                "{modules:?}"
+            );
+            let port = app.container().get_dyn::<dyn Port>().expect("the dyn side");
+            assert_eq!(port.value(), 42, "{modules:?}");
+        }
     }
 
     #[tokio::test]

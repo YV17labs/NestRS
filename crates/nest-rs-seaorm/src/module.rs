@@ -18,12 +18,12 @@ use sea_orm::{Database, DatabaseConnection, DatabaseConnectionType};
 
 use crate::SeaOrmConfig;
 
-/// What every binding says when the pool is missing — one sentence, every site,
-/// so a reader who forgot the substrate is told the same thing by whichever
-/// binding noticed first.
-pub(crate) const POOL_REMEDY: &str = "no `sea_orm::DatabaseConnection` in the container — import \
-                                      `SeaOrmModule::for_root(None)`, which opens the one pool \
-                                      every SeaORM binding shares";
+/// What every binding says when the pool or its config is missing — one
+/// sentence, every site, so a reader who forgot the substrate is told the same
+/// thing by whichever binding noticed first.
+pub(crate) const SUBSTRATE_REMEDY: &str = "import `SeaOrmModule::for_root(None)`, which resolves \
+                                           `SeaOrmConfig` and opens the one pool every SeaORM \
+                                           binding shares";
 
 /// The SeaORM substrate. Import [`SeaOrmModule::for_root`] once, then the
 /// bindings your app needs beside it — they share the pool it opens.

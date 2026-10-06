@@ -849,6 +849,36 @@ impl ContainerBuilder {
         )
     }
 
+    /// [`provide_factory_dyn_after`](Self::provide_factory_dyn_after) for a
+    /// factory that reads two other factories' outputs, `A` and `B` — a binding
+    /// checking both halves of the substrate it is imported beside is the shape.
+    pub fn provide_factory_dyn_after_both<T, D, A, B, F, Fut>(
+        self,
+        factory: F,
+        bind: fn(T) -> Arc<D>,
+    ) -> Self
+    where
+        T: Any + Clone + Send + Sync,
+        D: ?Sized + Send + Sync + 'static,
+        A: Any,
+        B: Any,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue(
+            QueueSpec {
+                also: vec![TypeId::of::<Arc<D>>()],
+                after: vec![TypeId::of::<A>(), TypeId::of::<B>()],
+                ..QueueSpec::default()
+            },
+            factory,
+            move |builder, value| {
+                let dynamic = bind(value.clone());
+                builder.provide(value).provide_dyn(dynamic)
+            },
+        )
+    }
+
     /// The factory-queue protocol every public form shares: box the future,
     /// await it in the factory phase, and hand the awaited value to `install`,
     /// which decides under which name(s) it registers. What differs between the
@@ -893,17 +923,25 @@ impl ContainerBuilder {
                 Ok(registrar)
             })
         });
-        if remedy.is_some() {
-            self.factories.retain(|queued| queued.id() != id);
-        }
         let mut provides = vec![id];
         provides.extend(also);
-        self.factories.push(QueuedFactory {
+        let queued = QueuedFactory {
             name,
             provides,
             after,
             factory: boxed,
-        });
+        };
+        // A declaration takes the slot of the default it displaces: a factory
+        // queued after that default reads its output, and would otherwise run
+        // first.
+        let displaced = remedy.and(self.factories.iter().position(|q| q.id() == id));
+        match displaced {
+            Some(slot) => {
+                self.factories.retain(|q| q.id() != id);
+                self.factories.insert(slot, queued);
+            }
+            None => self.factories.push(queued),
+        }
         self
     }
 

@@ -3025,6 +3025,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "inventory",
+ "nest-rs-authn",
  "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",

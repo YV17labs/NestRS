@@ -127,6 +127,8 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 # `cargo clippy --workspace --all-targets` never saw those 176 published
 # lines and only `demo/` (a separate workspace) built them.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
+# The pool's default budget is pinned below the authentication guard's net.
+nest-rs-authn = { path = "../nest-rs-authn" }
 
 [lints]
 workspace = true

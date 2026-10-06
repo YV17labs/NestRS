@@ -32,6 +32,11 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
+/// The acquire budget when none is set — Redis's — below every net a query waits
+/// under: the authentication guard's 20 s and the HTTP edge's 30 s, which sqlx's
+/// own 30 s reached, so a pool that ran dry was said as the net's timeout.
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
 /// settable via a `<PREFIX>_SEAORM__*` env var (see `from_env`) or pinned through
 /// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
@@ -45,7 +50,7 @@ pub struct SeaOrmConfig {
     /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
     pub min_connections: Option<u32>,
     /// How long to wait for a connection before failing, in whole seconds, from
-    /// 1 to 3600; `None` uses the default.
+    /// 1 to 3600; `None` waits 10 s.
     pub connect_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
@@ -108,9 +113,10 @@ impl SeaOrmConfig {
         if let Some(n) = self.min_connections {
             opts.min_connections(n);
         }
-        if let Some(secs) = self.connect_timeout_secs {
-            opts.connect_timeout(Duration::from_secs(secs));
-        }
+        opts.connect_timeout(
+            self.connect_timeout_secs
+                .map_or(DEFAULT_CONNECT_TIMEOUT, Duration::from_secs),
+        );
         opts.sqlx_logging(self.sqlx_logging);
         opts
     }
@@ -153,7 +159,23 @@ mod tests {
         let opts = pinned("postgres://localhost/app").connect_options();
         assert_eq!(opts.get_max_connections(), None);
         assert_eq!(opts.get_min_connections(), None);
-        assert_eq!(opts.get_connect_timeout(), None);
+    }
+
+    /// A query waits for a pooled connection under the authentication guard's
+    /// net when a strategy resolves an identity, and under the HTTP edge's
+    /// request timeout in a handler: the default budget sits below both, so an
+    /// exhausted pool answers with its own error, never the net's.
+    #[test]
+    fn the_default_budget_sits_below_every_net_a_query_runs_under() {
+        let budget = pinned("postgres://localhost/app")
+            .connect_options()
+            .get_connect_timeout()
+            .expect("a budget of the framework's, not sqlx's 30 s");
+        assert!(budget < nest_rs_authn::AUTHENTICATE_TIMEOUT, "{budget:?}");
+        let request = nest_rs_http::HttpConfig::default()
+            .request_timeout
+            .expect("the edge bounds a request by default");
+        assert!(budget < request, "{budget:?}");
     }
 
     #[test]

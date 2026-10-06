@@ -100,7 +100,7 @@ sea-orm picks it, the variable does not change.
 | `URL` | database connection string |
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
-| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, from `1` to `3600` (unset ⇒ SeaORM default) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
+| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, from `1` to `3600` (unset ⇒ `10`, below the authentication guard's 20-second net and the HTTP request timeout, so a pool that runs dry answers with its own error) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
 | `SQLX_LOGGING` | log SQL statements |
 | `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 

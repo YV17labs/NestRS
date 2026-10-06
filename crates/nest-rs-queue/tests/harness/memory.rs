@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use nest_rs_queue::{
     Ask, Capabilities, Capability, CheckpointStore, Delivery, Disposition, Envelope, JobConsumer,
@@ -17,6 +17,7 @@ use nest_rs_queue::{
 };
 use serde_json::Value;
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 /// The in-memory backend that files a record due later and keeps checkpoints.
 pub(crate) static DELAYING: QueueBackend = QueueBackend::new(

@@ -31,8 +31,10 @@ graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
 # non-default `websocket` feature on for the whole build.
 ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/websocket"]
 # The queue backend kit (`queue_kit!`): the behaviour a queue backend owes the
-# port's worker, as tests a driver runs against its own implementation.
-queue = ["dep:nest-rs-queue", "dep:serde"]
+# port's worker, as tests a driver runs against its own implementation. tokio's
+# `test-util` (not part of `full`) is what pauses time under a backend running
+# in process.
+queue = ["dep:nest-rs-queue", "dep:serde", "tokio/test-util"]
 
 [dependencies]
 nest-rs-core.workspace = true

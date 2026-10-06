@@ -26,7 +26,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::FutureExt as _;
@@ -35,6 +35,7 @@ use nest_rs_core::{Container, SHUTDOWN_SETTLE_TIMEOUT, Transport, error_message}
 use serde_json::Value;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -577,7 +578,7 @@ impl<C: JobConsumer> MethodRun<C> {
             tokio::select! {
                 () = until.cancelled() => return,
                 () = self.holding.notified() => continue,
-                () = tokio::time::sleep_until(due.into()) => {}
+                () = tokio::time::sleep_until(due) => {}
             }
             let held: Vec<(u64, Arc<C::Lease>)> = self
                 .lock()
@@ -1071,7 +1072,7 @@ impl<C: JobConsumer> MethodRun<C> {
 /// Sleep until `at`, or forever when there is no instant to wait for.
 async fn sleep_until_some(at: Option<Instant>) {
     match at {
-        Some(at) => tokio::time::sleep_until(at.into()).await,
+        Some(at) => tokio::time::sleep_until(at).await,
         None => std::future::pending().await,
     }
 }

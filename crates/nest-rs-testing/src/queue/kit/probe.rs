@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use super::command::KitCommand;
 

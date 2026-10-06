@@ -38,6 +38,8 @@ impl MemoryKit {
 }
 
 impl KitBackend for MemoryKit {
+    const IN_PROCESS: bool = true;
+
     fn app(&self) -> nest_rs_testing::TestAppBuilder {
         let producer: Arc<dyn JobProducer> = Arc::new(self.memory.clone());
         TestApp::builder()
@@ -154,7 +156,7 @@ async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
 
 /// With no method reachable the worker needs no backend: it starts, idles, and
 /// stops at once on the signal.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_worker_with_nothing_to_run_idles_and_stops_at_once() {
     let app = TestApp::builder()
         .module::<EmptyModule>()
@@ -204,9 +206,9 @@ async fn boot_worker(
 
 /// Wait until `done` holds, for at most ten seconds.
 async fn until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !done() {
-        assert!(std::time::Instant::now() < deadline, "{what}");
+        assert!(tokio::time::Instant::now() < deadline, "{what}");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -214,7 +216,7 @@ async fn until(what: &str, mut done: impl FnMut() -> bool) {
 /// A record that is not JSON is dead-lettered on its own, kept as stored, with
 /// a reason that says where it failed and never what it held — and the job
 /// filed beside it runs; once both ended, the queue holds nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_record_that_is_not_json_is_dead_lettered_alone_without_its_value() {
     let memory = Memory::new(&DELAYING, LEASE);
     let queue = "nestrs-worker-boot";
@@ -338,8 +340,8 @@ async fn settle_failing(failures: u32, within: Duration) -> Memory {
     nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
         .await
         .expect("a push");
-    let deadline = std::time::Instant::now() + within;
-    while memory.held("nestrs-worker-boot") > 0 && std::time::Instant::now() < deadline {
+    let deadline = tokio::time::Instant::now() + within;
+    while memory.held("nestrs-worker-boot") > 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     stop.cancel();
@@ -349,7 +351,7 @@ async fn settle_failing(failures: u32, within: Duration) -> Memory {
 
 /// A settle that errs is tried again while the lease holds: two failures, then
 /// the job's outcome lands, and nothing says it was lost.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_settle_that_errs_is_retried_while_its_lease_holds() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = settle_failing(2, Duration::from_secs(5)).await;
@@ -365,7 +367,7 @@ async fn a_settle_that_errs_is_retried_while_its_lease_holds() {
 
 /// A settle that keeps failing past the lease is given up, said at `error`, and
 /// the job left to its lease — never reported as settled.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = settle_failing(u32::MAX, SETTLE_LEASE * 2).await;
@@ -448,7 +450,7 @@ impl nest_rs_queue::JobConsumer for PanicsOnce {
 /// settle — stops renewing its lease, so the lease lapses and the job runs
 /// again: renewed for a task that is gone, it was held for as long as the
 /// worker lived.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let lease = Duration::from_millis(500);
@@ -474,9 +476,9 @@ async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 0 }, None)
         .await
         .expect("a push");
-    let deadline = std::time::Instant::now() + lease * 10;
+    let deadline = tokio::time::Instant::now() + lease * 10;
     tokio::time::sleep(lease).await;
-    while memory.held("nestrs-worker-boot") > 0 && std::time::Instant::now() < deadline {
+    while memory.held("nestrs-worker-boot") > 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let held = memory.held("nestrs-worker-boot");
@@ -570,7 +572,7 @@ struct LongModule;
 /// attempt is cut once its lease lapses, as one no renewal confirmed — not
 /// once the port's net gives up on the renewal, long after the backend let
 /// another delivery take the job.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
     let logs = nest_rs_testing::LogCapture::install_global();
     let memory = Memory::new(&DELAYING, LEASE);
@@ -598,10 +600,10 @@ async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
         .await
         .expect("a push");
     let cut = "job lease not renewed for a whole lease; its attempt is cut and the job handed back";
-    let deadline = std::time::Instant::now() + LEASE * 4;
+    let deadline = tokio::time::Instant::now() + LEASE * 4;
     while logs.find(nest_rs_queue::TARGET, cut).is_empty() {
         assert!(
-            std::time::Instant::now() < deadline,
+            tokio::time::Instant::now() < deadline,
             "the attempt runs on past its {LEASE:?} lease while the renewal waits out the port's \
              {:?} net",
             nest_rs_queue::BACKEND_TIMEOUT,

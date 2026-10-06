@@ -5,7 +5,7 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::{Correlation, Transport, current_trace_id, operation_log, with_request_scope};
 use nest_rs_queue::{
@@ -13,6 +13,7 @@ use nest_rs_queue::{
     QueueConfig, QueueName, QueueWorker, TARGET, unit,
 };
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::KitBackend;

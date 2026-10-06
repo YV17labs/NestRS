@@ -10,20 +10,31 @@ mod processor;
 
 pub use backend::KitBackend;
 
-/// Run one case on a runtime of its own, with the global log capture its
-/// assertions read installed first.
-pub fn run<F, Fut>(case: F)
+/// Run one case against the backend `backend` builds, on a runtime of its own —
+/// paused when the backend lives in this process
+/// ([`KitBackend::IN_PROCESS`]) — with the global log capture its assertions
+/// read installed first.
+pub fn run<B, F, Fut>(backend: impl FnOnce() -> B, case: F)
 where
-    F: FnOnce(crate::LogCapture) -> Fut,
+    B: KitBackend,
+    F: FnOnce(B, crate::LogCapture) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
     let logs = crate::LogCapture::install_global();
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .enable_all()
-        .build()
+    let runtime = if B::IN_PROCESS {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+    };
+    runtime
         .expect("a runtime for the kit's case")
-        .block_on(case(logs));
+        .block_on(case(backend(), logs));
 }
 
 /// One `#[test]` per case of the kit, each against `$backend` — an expression
@@ -81,7 +92,7 @@ macro_rules! queue_kit {
         $(
             #[test]
             fn $case() {
-                $crate::queue::run(|logs| $crate::queue::cases::$case($backend, logs));
+                $crate::queue::run(|| $backend, $crate::queue::cases::$case);
             }
         )+
     };

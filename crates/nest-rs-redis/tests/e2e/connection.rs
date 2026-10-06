@@ -47,7 +47,7 @@ async fn refused_at_once(url: String, case: &str) -> RedisError {
 /// the timeout.
 #[tokio::test]
 async fn credentials_redis_refuses_fail_the_boot_at_once_naming_them() {
-    let url = crate::redis_url().replacen("://", "://:nestrs-e2e-wrong-secret@", 1);
+    let url = crate::url_as(&crate::redis_url(), "", "nestrs-e2e-wrong-secret");
     let error = refused_at_once(url, "a password Redis does not accept").await;
     assert!(
         answer(&error).contains("authentication failed"),
@@ -115,6 +115,39 @@ fn a_database_of_a_tests_own_keeps_what_the_suites_url_carries() {
     }
 }
 
+#[test]
+fn a_user_of_a_tests_own_replaces_the_credentials_the_suites_url_carries() {
+    for (url, user, password, the_user) in [
+        (
+            "redis://redis:6379",
+            "app",
+            "pw",
+            "redis://app:pw@redis:6379",
+        ),
+        ("redis://redis:6379", "", "pw", "redis://:pw@redis:6379"),
+        (
+            "rediss://:secret@cache:6380/1?protocol=resp3",
+            "app",
+            "pw",
+            "rediss://app:pw@cache:6380/1?protocol=resp3",
+        ),
+        (
+            "redis://default:secret@redis:6379",
+            "app",
+            "pw",
+            "redis://app:pw@redis:6379",
+        ),
+        (
+            "redis://redis:6379/1#replica@east",
+            "app",
+            "pw",
+            "redis://app:pw@redis:6379/1#replica@east",
+        ),
+    ] {
+        assert_eq!(crate::url_as(url, user, password), the_user, "{url}");
+    }
+}
+
 /// config-1r2: an ACL user without `+select` on a URL naming a database — the
 /// common least-privilege shape — was retried for the whole budget, because the
 /// client drops the `NOPERM` from a refused `SELECT`, and then reported as a
@@ -142,10 +175,10 @@ async fn an_acl_denying_select_fails_the_boot_at_once_naming_the_index() {
         .expect("ACL SETUSER");
 
     // Refused at the `SELECT`, so the index reaches no key: any but 0 sends one.
-    let url = crate::redis_url_on(crate::DB_CONFINED_TO_THE_PREFIX).replacen(
-        "://",
-        &format!("://{user}:{SECRET}@"),
-        1,
+    let url = crate::url_as(
+        &crate::redis_url_on(crate::DB_CONFINED_TO_THE_PREFIX),
+        &user,
+        SECRET,
     );
     let outcome = tokio::time::timeout(
         AT_ONCE * 2,
@@ -196,7 +229,7 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
         .await
         .expect("ACL SETUSER");
 
-    let url = crate::redis_url().replacen("://", &format!("://{user}:{SECRET}@"), 1);
+    let url = crate::url_as(&crate::redis_url(), &user, SECRET);
     let started = Instant::now();
     let outcome = RedisConnection::connect(&config(url)).await;
     let took = started.elapsed();

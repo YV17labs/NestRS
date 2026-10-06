@@ -158,6 +158,20 @@ fn url_on(url: &str, db: u8) -> String {
     format!("{}/{db}{}", &url[..path], &url[rest..])
 }
 
+/// `url` connecting as `user` with `password`, any credentials it carried
+/// replaced: the userinfo is the authority up to its last `@`, and the
+/// authority ends at the first `/`, `?` or `#` after `//` (RFC 3986 §3.2).
+fn url_as(url: &str, user: &str, password: &str) -> String {
+    let authority = url.find("//").map_or(0, |at| at + 2);
+    let end = url[authority..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |at| authority + at);
+    let host = url[authority..end]
+        .rfind('@')
+        .map_or(authority, |at| authority + at + 1);
+    format!("{}{user}:{password}@{}", &url[..authority], &url[host..])
+}
+
 /// [`redis_config`] on database `db`.
 fn redis_config_on(db: u8) -> RedisConfig {
     RedisConfig {
@@ -679,7 +693,7 @@ async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisCon
         .await
         .unwrap_or_else(|error| panic!("Redis takes {page}'s rule `{rule}`: {error}"));
     RedisConfig {
-        url: redis_url_on(db).replacen("://", &format!("://{user}:{ACL_PASSWORD}@"), 1),
+        url: url_as(&redis_url_on(db), user, ACL_PASSWORD),
         ..redis_config()
     }
 }

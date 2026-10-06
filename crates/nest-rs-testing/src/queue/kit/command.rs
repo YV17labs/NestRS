@@ -31,35 +31,35 @@ pub(crate) enum Act {
     ParkAlways,
 }
 
-#[queue(name = "nestrs-kit-once", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-once", job = KitCommand)]
 pub(crate) struct OnceQueue;
 
-#[queue(name = "nestrs-kit-concurrency", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-concurrency", job = KitCommand)]
 pub(crate) struct ConcurrencyQueue;
 
-#[queue(name = "nestrs-kit-retry", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-retry", job = KitCommand)]
 pub(crate) struct RetryQueue;
 
-#[queue(name = "nestrs-kit-budget", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-budget", job = KitCommand)]
 pub(crate) struct BudgetQueue;
 
-#[queue(name = "nestrs-kit-death", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-death", job = KitCommand)]
 pub(crate) struct DeathQueue;
 
-#[queue(name = "nestrs-kit-taken", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-taken", job = KitCommand)]
 pub(crate) struct TakenQueue;
 
-#[queue(name = "nestrs-kit-stall", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-stall", job = KitCommand)]
 pub(crate) struct StallQueue;
 
-#[queue(name = "nestrs-kit-drain", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-drain", job = KitCommand)]
 pub(crate) struct DrainQueue;
 
-#[queue(name = "nestrs-kit-renewal", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-renewal", job = KitCommand)]
 pub(crate) struct RenewalQueue;
 
-#[queue(name = "nestrs-kit-delay", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-delay", job = KitCommand)]
 pub(crate) struct DelayQueue;
 
-#[queue(name = "nestrs-kit-trace", job = KitCommand)]
+#[queue(name = "nestrs-e2e-kit-trace", job = KitCommand)]
 pub(crate) struct TraceQueue;

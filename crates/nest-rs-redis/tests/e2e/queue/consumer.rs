@@ -90,7 +90,7 @@ impl KitBackend for RedisKit {
     }
 
     async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
-        Self::idle(queue, Some("nestrs-kit-ghost")).await
+        Self::idle(queue, Some("nestrs-e2e-kit-ghost")).await
     }
 }
 
@@ -1290,7 +1290,7 @@ struct PagedCommand {
     run: u64,
 }
 
-#[queue(name = "nest-rs-redis-e2e-paged", job = PagedCommand)]
+#[queue(name = "nestrs-e2e-paged", job = PagedCommand)]
 struct PagedQueue;
 
 static PAGED: Runs = Runs::new();

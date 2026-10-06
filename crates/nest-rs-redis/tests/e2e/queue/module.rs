@@ -32,16 +32,20 @@ async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_
          by hand-coercing the concrete type",
     );
 
-    // A live producer, not an empty registration.
+    // A live producer, not an empty registration — on a queue nothing drains,
+    // so it is named for this run and deleted.
+    let queue = format!("nestrs-e2e-portable-{}", crate::this_run());
     let receipt = producer
-        .push_json(
-            "nest-rs-redis-e2e-portable",
-            serde_json::json!({ "probe": true }),
-            None,
-        )
+        .push_json(&queue, serde_json::json!({ "probe": true }), None)
         .await
         .expect("the portable handle pushes onto the same connection");
-    assert_eq!(receipt.queue().as_str(), "nest-rs-redis-e2e-portable");
+    assert_eq!(receipt.queue().as_str(), queue);
+    crate::forget(&queue).await;
+    assert_eq!(
+        crate::filed(&queue).await,
+        0,
+        "the probe left nothing behind"
+    );
 }
 
 #[module(imports = [

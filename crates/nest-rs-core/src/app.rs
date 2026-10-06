@@ -534,14 +534,13 @@ impl AppBuilder {
                 .into());
             };
             let queued = pending.remove(index);
-            if builder.contains(queued.id()) {
-                if let Some(derive) = queued.derive {
-                    builder = derive(builder);
-                }
-                continue;
+            if !builder.contains(queued.id()) {
+                let register = (queued.factory)(builder.snapshot()).await?;
+                builder = register(builder);
             }
-            let register = (queued.factory)(builder.snapshot()).await?;
-            builder = register(builder);
+            for derive in queued.derives {
+                builder = derive(builder);
+            }
             check_budgets(&builder, &reached, Some(&queued.provides))?;
         }
         // `ReachableProviders` is seeded after register but counts as global
@@ -1000,6 +999,68 @@ mod tests {
         );
     }
 
+    // An import site's choice of the concrete type a dyn factory binds.
+    struct DeclaresPortImplModule;
+    impl Module for DeclaresPortImplModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_declared_factory::<PortImpl, _, _>("one declaration", |_| async {
+                Ok(PortImpl(8))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declared_concrete_type_is_what_a_dyn_factory_binds_its_trait_object_to() {
+        for declared_first in [true, false] {
+            // The dependent comes first: it waits on the trait object only if
+            // the entry building the declared type says it binds it.
+            let app = App::builder().module::<ReadsPortModule>();
+            let app = if declared_first {
+                app.module::<DeclaresPortImplModule>()
+                    .module::<BindsPortModule>()
+            } else {
+                app.module::<BindsPortModule>()
+                    .module::<DeclaresPortImplModule>()
+            };
+            let app = app
+                .build()
+                .await
+                .unwrap_or_else(|e| panic!("declared first: {declared_first}: {e:#}"));
+            let container = app.container();
+            assert_eq!(container.get::<PortImpl>().map(|p| p.0), Some(8));
+            assert_eq!(
+                container.get_dyn::<dyn Port>().map(|p| p.value()),
+                Some(8),
+                "declared first: {declared_first}"
+            );
+            assert_eq!(container.get::<ReadsPort>().map(|r| r.0), Some(9));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dyn_factory_whose_concrete_type_is_declared_still_contests_its_trait_object() {
+        for declared_first in [true, false] {
+            let app = App::builder().module::<BindsPortOtherwiseModule>();
+            let app = if declared_first {
+                app.module::<DeclaresPortImplModule>()
+                    .module::<BindsPortModule>()
+            } else {
+                app.module::<BindsPortModule>()
+                    .module::<DeclaresPortImplModule>()
+            };
+            let Err(refused) = app.build().await else {
+                panic!("declared first: {declared_first}: one binding would be dropped");
+            };
+            let contested = refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+            assert_eq!(contested.type_name, std::any::type_name::<Arc<dyn Port>>());
+        }
+    }
+
     // The same binding queued by two importers that do not dedupe it.
     struct BindsPortAgainModule;
     impl Module for BindsPortAgainModule {
@@ -1334,6 +1395,32 @@ mod tests {
             .downcast_ref::<LateFactoryError>()
             .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
         assert!(late.type_name.ends_with("Late"), "{late:?}");
+    }
+
+    // A dyn binding made in `register`, over a concrete type an import declared.
+    struct BindsDeclaredPortLateModule;
+    impl Module for BindsDeclaredPortLateModule {
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            DeclaresPortImplModule::collect(builder)
+        }
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            BindsPortModule::collect(builder)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dyn_binding_queued_in_register_over_a_declared_type_fails_the_boot() {
+        let Err(refused) = App::builder()
+            .module::<BindsDeclaredPortLateModule>()
+            .build()
+            .await
+        else {
+            panic!("the trait object would be left unbound");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert!(late.type_name.ends_with("PortImpl"), "{late:?}");
     }
 
     struct Refused;

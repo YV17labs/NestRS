@@ -127,10 +127,9 @@ pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send
 /// what another's factory consumes.
 ///
 /// `provides` is every key the entry registers once it runs — the concrete `T`
-/// and, for a `provide_factory_dyn`, the `Arc<dyn D>` beside it — because a
-/// dependent names whichever of the two it injects. It used to be the concrete
-/// id alone, so `_after::<X, Arc<dyn Port>>` — the portable form a consumer is
-/// told to write — matched nothing pending and ran first, silently.
+/// and each `Arc<dyn D>` bound off it, a superseded default's included —
+/// because a dependent names whichever it injects: `_after::<X, Arc<dyn Port>>`
+/// is the portable form a consumer is told to write.
 pub(crate) struct QueuedFactory {
     pub(crate) name: &'static str,
     pub(crate) provides: Vec<TypeId>,
@@ -138,9 +137,9 @@ pub(crate) struct QueuedFactory {
     /// Whether an import site chose `T`, so a value already present is not
     /// the one it declared.
     pub(crate) declared: bool,
-    /// What the entry still registers when `T` is present and its factory is
-    /// skipped: the trait object a dyn binding derives from that `T`.
-    pub(crate) derive: Option<Registrar>,
+    /// The trait objects bound off `T` once it is present, whoever built it:
+    /// this entry's factory, a seed, or the declaration that superseded it.
+    pub(crate) derives: Vec<Registrar>,
     pub(crate) factory: BoxedFactory,
 }
 
@@ -179,7 +178,7 @@ struct QueueSpec {
     /// Set when the call is a **declaration** — an import site chose this value
     /// — carrying the sentence `ContestedDeclarationError` appends.
     remedy: Option<&'static str>,
-    /// The trait object `install` binds besides `T`, for a dyn binding.
+    /// The trait object bound off `T`, for a dyn binding.
     binds: Option<DynBinding>,
     /// The factory outputs this one reads from its snapshot.
     after: Vec<TypeId>,
@@ -190,7 +189,7 @@ struct QueueSpec {
 struct DynBinding {
     id: TypeId,
     name: &'static str,
-    /// Binds it off the `T` already present when the factory is skipped.
+    /// Binds it off the `T` present, whoever built it.
     derive: Registrar,
 }
 
@@ -391,15 +390,6 @@ pub(crate) fn build_transient(
     factory(scope)
     // `_guard` drops here — pops the stack even if `factory` panics and the
     // value path above is skipped.
-}
-
-/// A dyn factory's output under both its names.
-fn install_dyn<T, D>(builder: ContainerBuilder, value: T, bind: fn(T) -> Arc<D>) -> ContainerBuilder
-where
-    T: Any + Clone + Send + Sync,
-    D: ?Sized + Send + Sync + 'static,
-{
-    install_dyn_only(builder.provide(value.clone()), value, bind)
 }
 
 /// The trait object a dyn binding makes of `value`. One already bound — a
@@ -791,7 +781,7 @@ impl ContainerBuilder {
     /// [`provide_declared_factory`](Self::provide_declared_factory) — fails the
     /// boot ([`ContestedDeclarationError`](crate::ContestedDeclarationError)),
     /// and a port's default of it is superseded. A seeded `Arc<D>` keeps its
-    /// binding; a seeded `T` is what `bind` binds.
+    /// binding; a seeded `T`, or one an import declared, is what `bind` binds.
     pub fn provide_factory_dyn<T, D, F, Fut>(self, factory: F, bind: fn(T) -> Arc<D>) -> Self
     where
         T: Any + Clone + Send + Sync,
@@ -805,7 +795,7 @@ impl ContainerBuilder {
                 ..QueueSpec::default()
             },
             factory,
-            move |builder, value| install_dyn(builder, value, bind),
+            |builder, value| builder.provide(value),
         )
     }
 
@@ -946,7 +936,7 @@ impl ContainerBuilder {
                 ..QueueSpec::default()
             },
             factory,
-            move |builder, value| install_dyn(builder, value, bind),
+            |builder, value| builder.provide(value),
         )
     }
 
@@ -963,17 +953,11 @@ impl ContainerBuilder {
     {
         let QueueSpec {
             remedy,
-            binds,
+            mut binds,
             after,
         } = spec;
         let id = TypeId::of::<T>();
         let name = std::any::type_name::<T>();
-        // A default never displaces a declaration, whichever order they arrive
-        // in — this and the displacement below make the outcome
-        // order-independent.
-        if remedy.is_none() && self.declared_factories.contains_key(&id) {
-            return self;
-        }
         // What the entry declares: `T` when an import site chose it, and the
         // trait object it binds.
         let mut declares = Vec::new();
@@ -1011,6 +995,22 @@ impl ContainerBuilder {
                 }
             }
         }
+        // A default never displaces a declaration, whichever order they arrive
+        // in — this and the displacement below make the outcome
+        // order-independent. What it binds off `T` binds off the declared one.
+        if remedy.is_none() && self.declared_factories.contains_key(&id) {
+            let Some(binding) = binds else {
+                return self;
+            };
+            if let Some(declarer) = self.factories.iter_mut().find(|q| q.provides.contains(&id)) {
+                declarer.provides.push(binding.id);
+                declarer.derives.push(binding.derive);
+                return self;
+            }
+            // Past the factory phase nothing builds `T` again: queued, the
+            // binding is refused as late rather than lost.
+            binds = Some(binding);
+        }
         let boxed: BoxedFactory = Box::new(move |container| {
             Box::pin(async move {
                 let value = factory(container).await?;
@@ -1018,29 +1018,35 @@ impl ContainerBuilder {
                 Ok(registrar)
             })
         });
-        let mut provides = vec![id];
-        let mut derive = None;
-        if let Some(binding) = binds {
-            provides.push(binding.id);
-            derive = Some(binding.derive);
-        }
-        let queued = QueuedFactory {
+        let mut queued = QueuedFactory {
             name,
-            provides,
+            provides: vec![id],
             after,
             declared: remedy.is_some(),
-            derive,
+            derives: Vec::new(),
             factory: boxed,
         };
+        if let Some(binding) = binds {
+            queued.provides.push(binding.id);
+            queued.derives.push(binding.derive);
+        }
         // A declaration takes the slot of the default it displaces: a factory
         // queued after that default reads its output, and would otherwise run
-        // first.
+        // first. What the default bound off `T` it binds off the declared one.
         let displaced = |q: &QueuedFactory| declares.iter().any(|&(key, ..)| q.id() == key);
-        match self.factories.iter().position(displaced) {
-            Some(slot) => {
-                self.factories.retain(|q| !displaced(q));
-                self.factories.insert(slot, queued);
+        let slot = self.factories.iter().position(displaced);
+        let mut kept = Vec::with_capacity(self.factories.len());
+        for q in std::mem::take(&mut self.factories) {
+            if displaced(&q) {
+                queued.provides.extend(q.provides.into_iter().skip(1));
+                queued.derives.extend(q.derives);
+            } else {
+                kept.push(q);
             }
+        }
+        self.factories = kept;
+        match slot {
+            Some(slot) => self.factories.insert(slot, queued),
             None => self.factories.push(queued),
         }
         self

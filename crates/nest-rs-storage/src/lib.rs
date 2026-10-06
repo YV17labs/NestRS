@@ -71,9 +71,10 @@
 //! [`StorageConfig::operation_timeout`], every retry included — an upload's body
 //! is part of its request, so [`put_stream`](Storage::put_stream) ships parts
 //! that each fit it — and past it fails as its own error, naming the budget. A
-//! download's body is a transfer, never cut for its size: one that stalls past
-//! [`StorageConfig::read_timeout`] is cut and resumed from where it stopped,
-//! within `object_store`'s retries (3 minutes from the call). The operation
+//! download's body is a transfer, never cut for its size nor for its reader's
+//! pauses: one that sends nothing for [`StorageConfig::read_timeout`] while it
+//! is read is cut and resumed from where it stopped, and fails naming the bound
+//! when the resumed body sends nothing within it. The operation
 //! timeout is the client's `nest_rs_core::Budget`, so the boot refuses it at or
 //! past a net reaching the client.
 //!
@@ -98,6 +99,7 @@ mod client;
 mod config;
 mod error;
 mod module;
+mod transfer;
 
 #[doc(hidden)]
 pub use client::MULTIPART_PART_SIZE;

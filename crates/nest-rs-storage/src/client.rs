@@ -18,6 +18,12 @@ use object_store::{
 
 use crate::config::{OPERATION_TIMEOUT, READ_TIMEOUT, StorageConfig};
 use crate::error::{Result, StorageError};
+use crate::transfer::download;
+
+/// How long opening a connection to S3 waits: `object_store`'s default, held
+/// here so it stays below the default operation budget, which retries a dial
+/// that timed out within it.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bytes buffered before a multipart part is shipped. S3 requires every part
 /// but the last to be at least 5 MiB, so a smaller value would make
@@ -45,7 +51,8 @@ pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 /// stays cheap to inject and the (synchronous) builder cost is paid lazily.
 ///
 /// Every call waits on S3 within [`StorageConfig::operation_timeout`], and a
-/// transfer for its next bytes within [`StorageConfig::read_timeout`].
+/// download, while it is read, for its next bytes within
+/// [`StorageConfig::read_timeout`].
 pub struct Storage {
     config: Arc<StorageConfig>,
     store: OnceLock<AmazonS3>,
@@ -155,10 +162,11 @@ impl Storage {
             // to send credentials over an unencrypted endpoint by omission.
             .with_allow_http(self.config.allow_http)
             // object_store's default bounds each attempt whole, its body
-            // included, which cut a download for its size; a stall is bounded
-            // instead, and a call by the operation budget above it.
+            // included, which cuts a download for its size. A call is bounded
+            // by the operation budget above it, and a download's stall by
+            // `download`, never by reqwest's read timeout (`transfer.rs`).
             .with_timeout_disabled()
-            .with_read_timeout(self.config.read_timeout);
+            .with_connect_timeout(CONNECT_TIMEOUT);
         let built = AmazonS3Builder::new()
             .with_client_options(options)
             .with_endpoint(&self.config.endpoint)
@@ -228,14 +236,25 @@ impl Storage {
 
     /// Download an object's full bytes (e.g. a media worker reads the original).
     ///
-    /// Returns `object_store`'s `Bytes` directly — an `Arc`-backed buffer that
-    /// clones cheaply — so the body is never copied on the way out.
+    /// Returns [`Bytes`] — an `Arc`-backed buffer that clones cheaply — so the
+    /// body is never copied on the way out, nor at all when S3 sends it whole.
     pub async fn get_bytes(&self, key: &str) -> Result<Bytes> {
-        let result = self
-            .answered(self.store()?.get(&Path::from(key)))
-            .await
-            .map_err(StorageError::Get)?;
-        result.bytes().await.map_err(StorageError::Get)
+        use futures_util::StreamExt;
+        let (size, body) = self.transfer(key).await?;
+        let mut body = std::pin::pin!(body);
+        let Some(first) = body.next().await.transpose()? else {
+            return Ok(Bytes::new());
+        };
+        let Some(second) = body.next().await.transpose()? else {
+            return Ok(first);
+        };
+        let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or_default());
+        bytes.extend_from_slice(&first);
+        bytes.extend_from_slice(&second);
+        while let Some(chunk) = body.next().await {
+            bytes.extend_from_slice(&chunk?);
+        }
+        Ok(Bytes::from(bytes))
     }
 
     /// Stream an object's bytes chunk by chunk instead of buffering the whole
@@ -250,14 +269,34 @@ impl Storage {
         &self,
         key: &str,
     ) -> Result<impl futures_util::Stream<Item = Result<Bytes>> + Send + 'static + use<>> {
-        use futures_util::StreamExt;
-        let result = self
-            .answered(self.store()?.get(&Path::from(key)))
+        Ok(self.transfer(key).await?.1)
+    }
+
+    /// The object at `key`'s size, and its bytes as S3 sends them.
+    async fn transfer(
+        &self,
+        key: &str,
+    ) -> Result<(
+        u64,
+        impl futures_util::Stream<Item = Result<Bytes>> + Send + 'static + use<>,
+    )> {
+        let store = self.store()?;
+        let path = Path::from(key);
+        let first = self
+            .answered(store.get(&path))
             .await
             .map_err(StorageError::Get)?;
-        Ok(result
-            .into_stream()
-            .map(|chunk| chunk.map_err(StorageError::Get)))
+        let size = first.range.end - first.range.start;
+        Ok((
+            size,
+            download(
+                store.clone(),
+                path,
+                first,
+                self.config.read_timeout,
+                self.config.operation_timeout,
+            ),
+        ))
     }
 
     /// List the objects stored under `prefix`, one entry at a time.
@@ -439,7 +478,10 @@ impl Storage {
 /// `call`'s output, or once `budget` elapses the error `object_store` gives for
 /// a store's own failure, naming the budget and what sets it — as the timeout
 /// object_store reports for an attempt reads.
-async fn bounded<F: Future>(budget: Duration, call: F) -> object_store::Result<F::Output> {
+pub(crate) async fn bounded<F: Future>(
+    budget: Duration,
+    call: F,
+) -> object_store::Result<F::Output> {
     #[expect(
         clippy::map_err_ignore,
         reason = "Elapsed carries nothing the timeout's own message does not say"
@@ -625,6 +667,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
+
+    #[test]
+    fn a_dial_that_timed_out_is_retried_within_the_default_operation_budget() {
+        assert!(CONNECT_TIMEOUT < StorageConfig::default().operation_timeout);
+    }
 
     /// A multipart upload that talks to nothing but records whether it was
     /// aborted.

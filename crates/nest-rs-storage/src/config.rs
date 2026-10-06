@@ -79,11 +79,11 @@ pub struct StorageConfig {
     /// boot refuses it at or past a net reaching the client — the
     /// authentication guard's 20s when its strategy injects [`Storage`](crate::Storage).
     pub operation_timeout: Duration,
-    /// The most a transfer waits for its next bytes — the AWS SDK's read
-    /// timeout: a download that stalls longer is cut, and resumed from where it
-    /// stopped while object_store's retries last; one that moves is never cut,
-    /// whatever its size. Each attempt's wait for S3 to take its request and
-    /// answer is held to it too. Read from `<PREFIX>_STORAGE__READ_TIMEOUT_SECS`,
+    /// The most a download waits for its next bytes while it is read — the AWS
+    /// SDK's read timeout: one that stalls longer is cut and resumed from where
+    /// it stopped, fenced on the object's `ETag`, and fails naming this bound if
+    /// the resumed body sends nothing within it; one that moves, or whose reader
+    /// pauses, is never cut. Read from `<PREFIX>_STORAGE__READ_TIMEOUT_SECS`,
     /// whole seconds from 1 to 3600, and in code anything above zero up to an
     /// hour; defaults to 30s.
     pub read_timeout: Duration,

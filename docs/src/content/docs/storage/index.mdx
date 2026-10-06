@@ -84,7 +84,7 @@ authenticating with a public default.
 | `FORCE_PATH_STYLE` | `true` | `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
 | `ALLOW_HTTP` | `true`, **`false` outside dev/test** | reach the endpoint over plain `http://` — see the caution below |
 | `OPERATION_TIMEOUT_SECS` | `15` | the most a call waits for S3's answer, retries included |
-| `READ_TIMEOUT_SECS` | `30` | the most a transfer waits for its next bytes |
+| `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
 
 So a staging or production deployment poses three keys at minimum: an
 `https://` `ENDPOINT` (the default is plain HTTP and refused there),
@@ -101,9 +101,11 @@ says nothing of the attempts before the cut: `object_store` logs each retry
 and its cause at `info` on `object_store::client::retry`. An upload's
 body is part of its request: `put_bytes` moves within the budget, and
 `put_stream` ships 5 MiB parts that each do, so a body of any size moves in
-parts. A download's body is a transfer and is never cut for its size: one
-that stops moving for `READ_TIMEOUT_SECS` is cut and resumed from the byte it
-stopped at, while `object_store`'s retries last — three minutes from the call.
+parts. A download's body is a transfer, never cut for its size nor for its
+reader's pauses — a slow client behind a streamed response: one that sends
+nothing for `READ_TIMEOUT_SECS` while it is read is cut and resumed from the
+byte it stopped at, provided the object is still the version it started on, and
+fails naming the variable when the resumed body sends nothing within it.
 
 ## Presigned uploads
 

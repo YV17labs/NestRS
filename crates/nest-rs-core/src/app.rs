@@ -816,6 +816,21 @@ mod tests {
         assert_eq!(app.container().get::<ReadsPort>().unwrap().0, 42);
     }
 
+    #[tokio::test]
+    async fn a_seeded_trait_object_wins_over_the_binding_a_factory_makes_of_it() {
+        let app = App::builder()
+            .provide_dyn::<dyn Port>(Arc::new(PortImpl(7)))
+            .module::<BindsPortModule>()
+            .build()
+            .await
+            .expect("the factory still builds the concrete type nobody seeded");
+        assert_eq!(
+            app.container().get_dyn::<dyn Port>().map(|p| p.value()),
+            Some(7)
+        );
+        assert_eq!(app.container().get::<PortImpl>().map(|p| p.0), Some(41));
+    }
+
     #[test]
     fn the_synchronous_boot_refuses_a_static_modules_queued_factory() {
         // `App::new` has no factory phase; a static module whose `collect`

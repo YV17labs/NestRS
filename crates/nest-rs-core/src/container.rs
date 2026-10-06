@@ -348,6 +348,23 @@ pub(crate) fn build_transient(
     // value path above is skipped.
 }
 
+/// A dyn factory's output under both its names. A trait object already bound
+/// when the factory runs — a seed — wins over the factory's binding of it, as a
+/// seed of `T` wins over the factory itself.
+fn install_dyn<T, D>(builder: ContainerBuilder, value: T, bind: fn(T) -> Arc<D>) -> ContainerBuilder
+where
+    T: Any + Clone + Send + Sync,
+    D: ?Sized + Send + Sync + 'static,
+{
+    let seeded = builder.contains(TypeId::of::<Arc<D>>());
+    let builder = builder.provide(value.clone());
+    if seeded {
+        builder
+    } else {
+        builder.provide_dyn(bind(value))
+    }
+}
+
 /// Mutable staging area for the container: providers, metadata and scoped
 /// factories accumulate here across the build phases, then [`build`](Self::build)
 /// freezes them into an immutable [`Container`].
@@ -705,7 +722,8 @@ impl ContainerBuilder {
     /// the documented portable form.
     ///
     /// `bind` receives a clone, so `T`'s `Clone` must share the underlying
-    /// resource (a pooled or multiplexed handle), not duplicate it.
+    /// resource (a pooled or multiplexed handle), not duplicate it. A seeded
+    /// `Arc<D>` keeps its binding: the factory then provides `T` alone.
     pub fn provide_factory_dyn<T, D, F, Fut>(self, factory: F, bind: fn(T) -> Arc<D>) -> Self
     where
         T: Any + Clone + Send + Sync,
@@ -719,10 +737,7 @@ impl ContainerBuilder {
                 ..QueueSpec::default()
             },
             factory,
-            move |builder, value| {
-                let dynamic = bind(value.clone());
-                builder.provide(value).provide_dyn(dynamic)
-            },
+            move |builder, value| install_dyn(builder, value, bind),
         )
     }
 
@@ -863,10 +878,7 @@ impl ContainerBuilder {
                 ..QueueSpec::default()
             },
             factory,
-            move |builder, value| {
-                let dynamic = bind(value.clone());
-                builder.provide(value).provide_dyn(dynamic)
-            },
+            move |builder, value| install_dyn(builder, value, bind),
         )
     }
 
@@ -893,10 +905,7 @@ impl ContainerBuilder {
                 ..QueueSpec::default()
             },
             factory,
-            move |builder, value| {
-                let dynamic = bind(value.clone());
-                builder.provide(value).provide_dyn(dynamic)
-            },
+            move |builder, value| install_dyn(builder, value, bind),
         )
     }
 

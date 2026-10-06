@@ -144,7 +144,7 @@ struct UnboundRoot;
 /// The crate is what keeps two apps of one deployment apart: keyed on
 /// `Provider:method` alone, an API's and a worker's own `MaintenanceTasks::sweep`
 /// claimed each other's occurrences through the lock they share.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     let declared = declared();
     assert_eq!(declared.replicas, Replicas::One);
@@ -196,7 +196,7 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
 /// `key = "…"` reaches the lock verbatim, a level per `::`: the job renamed
 /// from `billing::InvoiceTasks::close_day` claims under the identity it had, so
 /// replicas built before the rename and after it claim the same occurrences.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn a_pinned_job_claims_under_the_key_it_declares() {
     let app = TestApp::builder()
         .module::<PinnedRoot>()

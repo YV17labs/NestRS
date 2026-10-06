@@ -42,7 +42,7 @@ struct TasksModule;
 #[module(imports = [TasksModule, ScheduleModule])]
 struct AppRoot;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(start_paused = true)]
 async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
     let counter = Arc::new(Counter(AtomicUsize::new(0)));
     let app = App::builder()

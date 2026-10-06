@@ -684,7 +684,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                         // fired — and they are said, as a job firing once says it.
                         let skipped = ticks_skipped_between(previous, deadline, period);
                         if skipped > 0 {
-                            let now_ms = epoch_millis(SystemTime::now());
+                            let now_ms = epoch_millis(wall_clock());
                             let since_ms =
                                 u64::try_from(previous.elapsed().as_millis()).unwrap_or(u64::MAX);
                             let overrun = Overrun {
@@ -706,12 +706,12 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
             // The last instant this loop reached: at boot, the multiple of the
             // period at or before the clock, which is not due, so the first one
             // reached is the next.
-            let mut last_ms = aligned_at_or_before(epoch_millis(SystemTime::now()), period_ms);
+            let mut last_ms = aligned_at_or_before(epoch_millis(wall_clock()), period_ms);
             loop {
                 let wait = Duration::from_millis(
                     last_ms
                         .saturating_add(period_ms)
-                        .saturating_sub(epoch_millis(SystemTime::now())),
+                        .saturating_sub(epoch_millis(wall_clock())),
                 );
                 tokio::select! {
                     biased;
@@ -719,7 +719,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                     _ = sleep(wait) => {}
                 }
                 // Chosen on the clock the timer woke to, as a cron job's is below.
-                let now_ms = epoch_millis(SystemTime::now());
+                let now_ms = epoch_millis(wall_clock());
                 let instant_ms = interval_reached(last_ms, now_ms, period_ms);
                 let skipped = (instant_ms.saturating_sub(last_ms) / period_ms).saturating_sub(1);
                 let claim = runner.claim_then_fire(id, task, instant_ms, hold, &token);
@@ -755,7 +755,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
         } => {
             // The last occurrence this loop reached: at boot, the clock, since no
             // occurrence before the boot is due.
-            let mut last = Utc::now();
+            let mut last = wall_clock_utc();
             loop {
                 let Some(target) = next_occurrence(&schedule, tz, last) else {
                     tracing::warn!(
@@ -767,7 +767,9 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                     token.cancelled().await;
                     break;
                 };
-                let wait = (target - Utc::now()).to_std().unwrap_or(Duration::ZERO);
+                let wait = (target - wall_clock_utc())
+                    .to_std()
+                    .unwrap_or(Duration::ZERO);
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => break,
@@ -779,7 +781,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                 // reaches the latest one due, once, and names the ones before it,
                 // rather than the stale one it slept for and the latest right after.
                 // The report runs beside the fire, so neither delays the other.
-                let now = Utc::now();
+                let now = wall_clock_utc();
                 let (instant, overrun) = match cron_due(&schedule, tz, last, now) {
                     CronDue::Latest(instant, overrun) => (Some(instant), overrun),
                     // A timer waking before the wall clock reached the occurrence
@@ -887,6 +889,26 @@ fn ticks_skipped_between(previous: Instant, deadline: Instant, period: Duration)
     let periods =
         deadline.saturating_duration_since(previous).as_nanos() / period.as_nanos().max(1);
     u64::try_from(periods).unwrap_or(u64::MAX).saturating_sub(1)
+}
+
+/// The wall clock the schedule picks its instants on: the system clock, moved by
+/// however far tokio's clock stands from the monotonic one. Outside a paused
+/// runtime the two are one clock, so this is `SystemTime::now()` to the
+/// nanosecond, steps included; inside one, the wall clock advances with the
+/// paused clock, so a test runs the schedule on suspended time.
+fn wall_clock() -> SystemTime {
+    let wall = SystemTime::now();
+    let tokio = Instant::now().into_std();
+    let monotonic = std::time::Instant::now();
+    match tokio.checked_duration_since(monotonic) {
+        Some(ahead) => wall + ahead,
+        None => wall - monotonic.duration_since(tokio),
+    }
+}
+
+/// [`wall_clock`], as the instant a cron schedule is walked from.
+fn wall_clock_utc() -> DateTime<Utc> {
+    wall_clock().into()
 }
 
 fn epoch_millis(at: SystemTime) -> u64 {
@@ -1012,7 +1034,7 @@ fn stale_at(instant_ms: u64, hold: Duration) -> u64 {
 /// How long a lock call may still be awaited: from the wall clock now to
 /// `stale_at_ms`, and nothing once it has passed.
 fn left_until(stale_at_ms: u64) -> Duration {
-    Duration::from_millis(stale_at_ms.saturating_sub(epoch_millis(SystemTime::now())))
+    Duration::from_millis(stale_at_ms.saturating_sub(epoch_millis(wall_clock())))
 }
 
 /// What a lock call came to when it was awaited no longer than its budget, and
@@ -1255,9 +1277,7 @@ impl Runner {
         cancel: &CancellationToken,
     ) {
         let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
-        if let Some(late_ms) =
-            reached_after_hold(epoch_millis(SystemTime::now()), instant_ms, hold_ms)
-        {
+        if let Some(late_ms) = reached_after_hold(epoch_millis(wall_clock()), instant_ms, hold_ms) {
             tracing::warn!(
                 target: crate::TARGET,
                 provider = id.provider,
@@ -1345,7 +1365,7 @@ impl Runner {
                 // connect budget after the check above. The claim is then left to
                 // expire, unfired.
                 if let Some(late_ms) =
-                    reached_after_hold(epoch_millis(SystemTime::now()), instant_ms, hold_ms)
+                    reached_after_hold(epoch_millis(wall_clock()), instant_ms, hold_ms)
                 {
                     tracing::warn!(
                         target: crate::TARGET,
@@ -1753,7 +1773,7 @@ mod tests {
             method: "sweep",
             key: None,
         };
-        let stale = stale_at(epoch_millis(SystemTime::now()), MIN_HOLD);
+        let stale = stale_at(epoch_millis(wall_clock()), MIN_HOLD);
         runner
             .report_overrun(
                 id,
@@ -1830,7 +1850,7 @@ mod tests {
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
-        let instant_ms = epoch_millis(SystemTime::now()) - 61_000;
+        let instant_ms = epoch_millis(wall_clock()) - 61_000;
 
         runner
             .claim_then_fire(id, task, instant_ms, MIN_HOLD, &CancellationToken::new())
@@ -1929,7 +1949,7 @@ mod tests {
         };
         // Late, but further from the hold's end than two clocks may disagree —
         // until the claim is answered.
-        let instant_ms = epoch_millis(SystemTime::now()) - 49_000;
+        let instant_ms = epoch_millis(wall_clock()) - 49_000;
 
         runner
             .claim_then_fire(id, task, instant_ms, MIN_HOLD, &CancellationToken::new())
@@ -2067,7 +2087,7 @@ mod tests {
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
-        let now_ms = epoch_millis(SystemTime::now());
+        let now_ms = epoch_millis(wall_clock());
 
         runner
             .claim_then_fire(id, task, now_ms, MIN_HOLD, &CancellationToken::new())
@@ -2138,7 +2158,7 @@ mod tests {
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
-        let instant_ms = epoch_millis(SystemTime::now());
+        let instant_ms = epoch_millis(wall_clock());
 
         runner
             .claim_then_fire(id, task, instant_ms, MIN_HOLD, &CancellationToken::new())
@@ -2187,7 +2207,7 @@ mod tests {
             method: "sweep",
             key: None,
         };
-        let now_ms = epoch_millis(SystemTime::now());
+        let now_ms = epoch_millis(wall_clock());
         let stale = stale_at(now_ms, MIN_HOLD);
 
         runner
@@ -2335,7 +2355,7 @@ mod tests {
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
-        let instant_ms = epoch_millis(SystemTime::now());
+        let instant_ms = epoch_millis(wall_clock());
 
         let claiming = runner.claim_then_fire(id, task, instant_ms, MIN_HOLD, &shutdown);
         let asking = async {
@@ -2382,7 +2402,7 @@ mod tests {
             method: "sweep",
             key: None,
         };
-        let stale = stale_at(epoch_millis(SystemTime::now()), MIN_HOLD);
+        let stale = stale_at(epoch_millis(wall_clock()), MIN_HOLD);
         let shutdown = CancellationToken::new();
         const ASKED_AFTER: Duration = Duration::from_secs(1);
 

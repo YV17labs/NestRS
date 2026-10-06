@@ -106,6 +106,10 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   deployment drift apart; one that reads the constant fails the day they do.
 - **A procedure the docs hand an operator is run by a test, as printed** —
   anything that changes data an operator cannot get back.
+- **A test waiting on a timer pauses tokio's clock** (`start_paused = true`),
+  so a loaded machine moves none of its instants; the scheduler reads its wall
+  clock through tokio's, which a paused clock advances. The real clock is left
+  to a test that blocks a thread on purpose, and to a live service's clock.
 - **nextest is the runner, with no configuration**: `just test` runs every
   test and the doctests.
 - **A doc example is compiled, and run unless it serves forever**: a fragment

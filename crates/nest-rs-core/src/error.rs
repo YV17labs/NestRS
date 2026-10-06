@@ -174,8 +174,9 @@ pub struct DuplicateProviderError {
 /// order — silently dropped, on the wrong side of *no silent failure*. Only a
 /// **declaration** contests (`ContainerBuilder::provide_declared_factory`): a
 /// pinned config base, or a module binding an implementation a sibling module
-/// also binds. A module queuing the same default twice never does, so a diamond
-/// import stays legal.
+/// also binds — and the trait object a `provide_factory_dyn` binds, which one
+/// implementation holds. A module queuing the same default, or the same
+/// binding, twice never does, so a diamond import stays legal.
 ///
 /// Both declarations are named — each as the import that made it and the
 /// module whose `imports = [..]` lists it — so the reader goes to the two lines

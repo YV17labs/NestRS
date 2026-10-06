@@ -82,7 +82,8 @@ queues more than the config or whose `register` does more than recurse.
   (*Configuration*): every `nest-rs-*` module owning a `#[config]`, never one
   owning none (`.claude/decisions/config-one-seam.md`).
 - **A value an import site chose is a declaration**
-  (`ContainerBuilder::provide_declared_factory`, carrying its remedy sentence).
+  (`ContainerBuilder::provide_declared_factory`, carrying its remedy sentence),
+  and so is the trait object a `provide_factory_dyn` binds.
   The boot outcomes `architecture.md` lists — supersede,
   `ContestedDeclarationError` naming both imports and their positions before
   any factory runs, `UnresolvedFactoryError` — each have a behaviour test in

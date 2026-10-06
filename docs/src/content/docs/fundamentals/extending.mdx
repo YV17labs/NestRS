@@ -68,8 +68,9 @@ imports beside the port's module. Consumers inject `dyn Port` and never name the
 backend, so swapping it is a composition-root edit rather than a change to your
 handlers. The port's own default is an *ordinary* factory, so a vendor binding
 supersedes it wherever it sits in `imports`; two vendor bindings contest, and
-the boot fails naming the port and the remedy — where the binding declares
-itself; see the caveat below.
+the boot fails naming the port and the remedy. `ThrottlerStore`,
+`dyn JobProducer` (queue), `dyn OccurrenceLock` (schedule) and `dyn JobContext`
+(database) each word that remedy once, as their crate's `BACKEND_REMEDY`.
 
 ```rust title="apps/api/src/module.rs"
 ThrottlerModule::for_root(None),   // the port: policy, guard, counters in this process
@@ -87,17 +88,6 @@ pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 
 The same shape carries `AbilityGuard<F: AbilityFactory>` and the GraphQL and MCP
 bridges. This is the mode NestRS uses most.
-
-:::caution[One by-import port does not yet arbitrate]
-`ThrottlerStore`, `dyn JobProducer` (queue) and `dyn OccurrenceLock` (schedule)
-declare their binding, so importing two backends of any of them fails the boot:
-`contested declaration`, naming the port, both imports that bind it and the one
-sentence that says what to import instead. `dyn JobContext`
-(database) binds through a container call that records no duplicate, so **two
-database drivers would resolve to whichever module was imported last,
-silently**. Until that is closed, link exactly one database driver and do not
-rely on a boot error to tell you.
-:::
 
 **By configuration.** The import only **opens the gate**; configuration decides
 which members are active, from zero to all of them. Registering a provider is

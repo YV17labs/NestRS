@@ -22,5 +22,5 @@ mod error;
 /// it is declared in is an implementation detail of where the emission lives.
 pub use context::TARGET;
 
-pub use context::{JobContext, JobSettlement, JobTransaction, run_in_job_context};
+pub use context::{BACKEND_REMEDY, JobContext, JobSettlement, JobTransaction, run_in_job_context};
 pub use error::Unhonoured;

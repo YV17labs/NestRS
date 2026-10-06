@@ -7,6 +7,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{Container, ContainerBuilder, Module};
+use nest_rs_worker::{BACKEND_REMEDY, JobContext};
 use sea_orm::DatabaseConnection;
 
 use crate::SeaOrmConfig;
@@ -30,24 +31,21 @@ impl Module for SeaOrmDatabaseModule {
         }
         builder = builder.provide_meta(pool_budget(BudgetReach::Ambient));
         // The worker bridge is a factory output so it counts as global
-        // infrastructure for every transport that runs jobs — and a factory
-        // declared *after* the pool's and its config's, so what it can fail on
-        // is either being absent, which it then names before any later factory
+        // infrastructure for every transport that runs jobs — declared, so a
+        // second job context fails the boot naming both, and queued *after*
+        // the pool's and its config's factories, so what it can fail on is
+        // either being absent, which it then names before any later factory
         // dials anything.
-        builder.provide_factory_dyn_after_both::<
-            crate::WorkerDbContext,
-            dyn nest_rs_worker::JobContext,
+        builder.provide_declared_factory_after_both::<
+            Arc<dyn JobContext>,
             DatabaseConnection,
             SeaOrmConfig,
             _,
             _,
-        >(
-            |container| async move {
-                substrate(&container)?;
-                Ok(crate::WorkerDbContext::from_container(&container))
-            },
-            |context| Arc::new(context) as Arc<dyn nest_rs_worker::JobContext>,
-        )
+        >(BACKEND_REMEDY, |container| async move {
+            substrate(&container)?;
+            Ok(Arc::new(crate::WorkerDbContext::from_container(&container)) as Arc<dyn JobContext>)
+        })
     }
 
     fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
@@ -55,7 +53,7 @@ impl Module for SeaOrmDatabaseModule {
             return builder;
         }
         // Read again rather than trusted to the factory above: a seeded
-        // `WorkerDbContext` skips it, and its check with it.
+        // `dyn JobContext` skips it, and its check with it.
         if let Err(missing) = substrate(&builder.snapshot()) {
             return builder.refuse(missing);
         }
@@ -92,9 +90,70 @@ fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::App;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    use nest_rs_core::{App, ContestedDeclarationError};
+    use nest_rs_worker::{JobSettlement, JobTransaction};
 
     use super::*;
+
+    /// Another bridge's context, bound the way a driver binds a trait object.
+    #[derive(Clone)]
+    struct BareContext;
+
+    impl JobContext for BareContext {
+        fn scope<'a>(
+            &'a self,
+            _: JobTransaction,
+            inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+        ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+            Box::pin(async move {
+                inner.await;
+                JobSettlement::Settled
+            })
+        }
+    }
+
+    struct BareContextModule;
+
+    impl Module for BareContextModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory_dyn::<BareContext, dyn JobContext, _, _>(
+                |_| async { Ok(BareContext) },
+                |context| Arc::new(context) as Arc<dyn JobContext>,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_job_context_binding_fails_the_boot_in_the_ports_words() {
+        for seaorm_first in [true, false] {
+            let app = if seaorm_first {
+                App::builder()
+                    .module::<SeaOrmDatabaseModule>()
+                    .module::<BareContextModule>()
+            } else {
+                App::builder()
+                    .module::<BareContextModule>()
+                    .module::<SeaOrmDatabaseModule>()
+            };
+            let Err(refused) = app.build().await else {
+                panic!("one context would run every job, the other none");
+            };
+            let contested = refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+            assert_eq!(
+                contested.remedy, BACKEND_REMEDY,
+                "seaorm first: {seaorm_first}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn a_pool_seeded_without_its_module_fails_the_boot_naming_the_module() {
@@ -115,18 +174,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_worker_context_seeded_without_the_config_fails_the_boot_naming_the_module() {
+    async fn a_job_context_seeded_without_the_config_fails_the_boot_naming_the_module() {
         let pool = Container::builder()
             .provide(DatabaseConnection::default())
             .build();
         let Err(refused) = App::builder()
             .provide(DatabaseConnection::default())
-            .provide(crate::WorkerDbContext::from_container(&pool))
+            .provide_dyn::<dyn JobContext>(Arc::new(crate::WorkerDbContext::from_container(&pool)))
             .module::<SeaOrmDatabaseModule>()
             .build()
             .await
         else {
-            panic!("a seeded worker context still leaves the interceptor its config to read");
+            panic!("a seeded job context still leaves the interceptor its config to read");
         };
         let refused = format!("{refused:#}");
         assert!(

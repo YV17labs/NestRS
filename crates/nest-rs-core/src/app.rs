@@ -535,6 +535,9 @@ impl AppBuilder {
             };
             let queued = pending.remove(index);
             if builder.contains(queued.id()) {
+                if let Some(derive) = queued.derive {
+                    builder = derive(builder);
+                }
                 continue;
             }
             let register = (queued.factory)(builder.snapshot()).await?;
@@ -831,6 +834,197 @@ mod tests {
         assert_eq!(app.container().get::<PortImpl>().map(|p| p.0), Some(41));
     }
 
+    #[derive(Clone)]
+    struct OtherPortImpl(u32);
+    impl Port for OtherPortImpl {
+        fn value(&self) -> u32 {
+            self.0
+        }
+    }
+    struct BindsPortOtherwiseModule;
+    impl Module for BindsPortOtherwiseModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory_dyn::<OtherPortImpl, dyn Port, _, _>(
+                |_| async { Ok(OtherPortImpl(9)) },
+                |p| Arc::new(p) as Arc<dyn Port>,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn two_dyn_factories_binding_one_trait_object_fail_the_boot_naming_both() {
+        for binds_first in [true, false] {
+            let (app, first, second) = if binds_first {
+                (
+                    App::builder()
+                        .module::<BindsPortModule>()
+                        .module::<BindsPortOtherwiseModule>(),
+                    "BindsPortModule`",
+                    "BindsPortOtherwiseModule`",
+                )
+            } else {
+                (
+                    App::builder()
+                        .module::<BindsPortOtherwiseModule>()
+                        .module::<BindsPortModule>(),
+                    "BindsPortOtherwiseModule`",
+                    "BindsPortModule`",
+                )
+            };
+            let Err(refused) = app.build().await else {
+                panic!("one binding would be dropped for the other");
+            };
+            let contested = refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+            assert_eq!(contested.type_name, std::any::type_name::<Arc<dyn Port>>());
+            assert!(contested.first.contains(first), "{contested:?}");
+            assert!(contested.second.contains(second), "{contested:?}");
+        }
+    }
+
+    struct BindsPortBothWaysModule;
+    impl Module for BindsPortBothWaysModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            BindsPortOtherwiseModule::collect(BindsPortModule::collect(builder))
+        }
+    }
+
+    #[test]
+    fn the_synchronous_boot_names_a_contested_binding_ahead_of_the_queue() {
+        let Err(refused) = App::new::<BindsPortBothWaysModule>() else {
+            panic!("one binding would be dropped for the other");
+        };
+        assert!(
+            refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .is_some(),
+            "{refused:#}"
+        );
+    }
+
+    /// What a port's crate words for two backends, as its declared binding
+    /// carries it.
+    const PORT_REMEDY: &str = "Import exactly one port binding.";
+    struct DeclaresPortModule;
+    impl Module for DeclaresPortModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_declared_factory::<Arc<dyn Port>, _, _>(PORT_REMEDY, |_| async {
+                Ok(Arc::new(PortImpl(3)) as Arc<dyn Port>)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dyn_factory_contests_a_declared_binding_of_its_trait_object_in_the_ports_words() {
+        for declared_first in [true, false] {
+            let app = if declared_first {
+                App::builder()
+                    .module::<DeclaresPortModule>()
+                    .module::<BindsPortModule>()
+            } else {
+                App::builder()
+                    .module::<BindsPortModule>()
+                    .module::<DeclaresPortModule>()
+            };
+            let Err(refused) = app.build().await else {
+                panic!("declared first: {declared_first}: one binding would be dropped");
+            };
+            let contested = refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .unwrap_or_else(|| panic!("not the contest: {refused:#}"));
+            assert_eq!(
+                contested.remedy, PORT_REMEDY,
+                "declared first: {declared_first}"
+            );
+        }
+    }
+
+    // A port's default implementation, as the port's own module queues it.
+    struct DefaultPortModule;
+    impl Module for DefaultPortModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory::<Arc<dyn Port>, _, _>(|_| async {
+                Ok(Arc::new(PortImpl(0)) as Arc<dyn Port>)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dyn_factory_supersedes_its_ports_default_whatever_the_queue_order() {
+        for default_first in [true, false] {
+            let app = if default_first {
+                App::builder()
+                    .module::<DefaultPortModule>()
+                    .module::<BindsPortModule>()
+            } else {
+                App::builder()
+                    .module::<BindsPortModule>()
+                    .module::<DefaultPortModule>()
+            };
+            let app = app
+                .build()
+                .await
+                .unwrap_or_else(|e| panic!("default first: {default_first}: {e:#}"));
+            assert_eq!(
+                app.container().get_dyn::<dyn Port>().map(|p| p.value()),
+                Some(41),
+                "default first: {default_first}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_seeded_concrete_type_is_what_a_dyn_factory_binds_its_trait_object_to() {
+        let app = App::builder()
+            .provide(PortImpl(5))
+            .module::<BindsPortModule>()
+            .build()
+            .await
+            .expect("the seed wins over the factory, and the binding follows it");
+        assert_eq!(
+            app.container().get_dyn::<dyn Port>().map(|p| p.value()),
+            Some(5)
+        );
+    }
+
+    // The same binding queued by two importers that do not dedupe it.
+    struct BindsPortAgainModule;
+    impl Module for BindsPortAgainModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            BindsPortModule::collect(builder)
+        }
+    }
+
+    #[tokio::test]
+    async fn one_dyn_binding_queued_twice_is_one_binding() {
+        let app = App::builder()
+            .module::<BindsPortModule>()
+            .module::<BindsPortAgainModule>()
+            .build()
+            .await
+            .expect("a diamond is not a contest");
+        assert_eq!(
+            app.container().get_dyn::<dyn Port>().map(|p| p.value()),
+            Some(41)
+        );
+    }
+
     #[test]
     fn the_synchronous_boot_refuses_a_static_modules_queued_factory() {
         // `App::new` has no factory phase; a static module whose `collect`
@@ -915,49 +1109,6 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("pinned first: {pinned_first}: {e:#}"));
             assert_eq!(app.container().get::<Connection>().unwrap().0, 7);
-        }
-    }
-
-    struct ReadsBothModule;
-    impl Module for ReadsBothModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            builder
-        }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            builder.provide_factory_dyn_after_both::<PortImpl, dyn Port, First, Second, _, _>(
-                |c| async move {
-                    let first = c
-                        .get::<First>()
-                        .ok_or_else(|| anyhow!("First runs first"))?;
-                    let second = c
-                        .get::<Second>()
-                        .ok_or_else(|| anyhow!("Second runs first"))?;
-                    Ok(PortImpl(first.0 + second.0))
-                },
-                |p| Arc::new(p) as Arc<dyn Port>,
-            )
-        }
-    }
-
-    #[tokio::test]
-    async fn a_dyn_factory_declared_after_two_others_runs_after_both_and_binds_both_names() {
-        for modules in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [2, 0, 1]] {
-            let mut app = App::builder();
-            for module in modules {
-                app = match module {
-                    0 => app.module::<ReadsBothModule>(),
-                    1 => app.module::<FirstModule>(),
-                    _ => app.module::<SecondModule>(),
-                };
-            }
-            let app = app.build().await.expect("the declared order is honoured");
-            assert_eq!(
-                app.container().get::<PortImpl>().unwrap().0,
-                42,
-                "{modules:?}"
-            );
-            let port = app.container().get_dyn::<dyn Port>().expect("the dyn side");
-            assert_eq!(port.value(), 42, "{modules:?}");
         }
     }
 

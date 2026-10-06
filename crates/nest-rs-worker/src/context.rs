@@ -92,6 +92,13 @@ pub trait JobContext: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>>;
 }
 
+/// What a boot refusing two job contexts tells the reader — one is bound by
+/// import, and a binding declares `Arc<dyn JobContext>` carrying this sentence
+/// (`ContainerBuilder::provide_declared_factory`).
+pub const BACKEND_REMEDY: &str = "Import exactly one job context binding: \
+     `nest_rs::seaorm::SeaOrmDatabaseModule` runs each job over SeaORM's executor; with none, \
+     a job runs bare.";
+
 /// Run `fut` inside `ctx` when one is bound, preserving its output. With no
 /// context (`None`) the future runs bare and `transaction` is moot — there is
 /// nothing bound that could open one.

@@ -64,7 +64,7 @@ impl EphemeralDatabase {
                 .await?;
         }
 
-        let url = swap_database(admin_url, &name);
+        let url = crate::url_on(admin_url, &name);
         let mut options = ConnectOptions::new(url.clone());
         options.connect_timeout(POOL_BUDGET);
         let connection = Database::connect(options).await?;
@@ -205,50 +205,9 @@ fn unique_name() -> String {
     format!("{PREFIX}_{}_{}_{}", std::process::id(), now_nanos(), seq)
 }
 
-/// The admin URL with its database name replaced.
-///
-/// RFC 3986 §3.2: the authority is introduced by `//` and terminated by the
-/// next `/`, `?` or `#` — so the path starts at the *first* slash after the
-/// scheme, never the last. Splitting on the last one dropped the host of any
-/// path-less URL (`postgres://host:5432` yielded `postgres://<db>`), surfacing
-/// much later as a connection error naming a URL the developer never wrote.
-fn swap_database(url: &str, db: &str) -> String {
-    let (base, query) = match url.split_once('?') {
-        Some((b, q)) => (b, Some(q)),
-        None => (url, None),
-    };
-    let authority_at = base.find("//").map_or(0, |i| i + 2);
-    let prefix = match base[authority_at..].find('/') {
-        Some(offset) => &base[..authority_at + offset],
-        None => base,
-    };
-    match query {
-        Some(q) => format!("{prefix}/{db}?{q}"),
-        None => format!("{prefix}/{db}"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn swapping_the_database_keeps_the_authority() {
-        assert_eq!(
-            swap_database("postgres://u:p@host:5432/postgres", "tmp"),
-            "postgres://u:p@host:5432/tmp",
-        );
-        // The regression: no path at all. The last `/` is the second one of
-        // `//`, so the host used to vanish.
-        assert_eq!(
-            swap_database("postgres://host:5432", "tmp"),
-            "postgres://host:5432/tmp",
-        );
-        assert_eq!(
-            swap_database("postgres://host/postgres?sslmode=require", "tmp"),
-            "postgres://host/tmp?sslmode=require",
-        );
-    }
 
     #[test]
     fn a_name_round_trips_through_the_reaper() {

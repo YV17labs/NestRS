@@ -92,62 +92,6 @@ async fn a_database_index_redis_does_not_have_fails_the_boot_at_once() {
 /// A test moves onto a database of its own through the suite's URL, which the
 /// deployment writes: its query and fragment — `?protocol=resp3` — stay with
 /// it, and the index replaces the URL's path wherever the authority ends.
-#[test]
-fn a_database_of_a_tests_own_keeps_what_the_suites_url_carries() {
-    for (url, on) in [
-        ("redis://redis:6379", "redis://redis:6379/9"),
-        ("redis://redis:6379/", "redis://redis:6379/9"),
-        ("redis://redis:6379/1", "redis://redis:6379/9"),
-        (
-            "redis://redis:6379?protocol=resp3",
-            "redis://redis:6379/9?protocol=resp3",
-        ),
-        (
-            "rediss://:secret@cache:6380/1/?protocol=resp3",
-            "rediss://:secret@cache:6380/9?protocol=resp3",
-        ),
-        (
-            "redis://redis:6379/1#primary",
-            "redis://redis:6379/9#primary",
-        ),
-    ] {
-        assert_eq!(crate::url_on(url, 9), on, "{url}");
-    }
-}
-
-#[test]
-fn a_user_of_a_tests_own_replaces_the_credentials_the_suites_url_carries() {
-    for (url, user, password, the_user) in [
-        (
-            "redis://redis:6379",
-            "app",
-            "pw",
-            "redis://app:pw@redis:6379",
-        ),
-        ("redis://redis:6379", "", "pw", "redis://:pw@redis:6379"),
-        (
-            "rediss://:secret@cache:6380/1?protocol=resp3",
-            "app",
-            "pw",
-            "rediss://app:pw@cache:6380/1?protocol=resp3",
-        ),
-        (
-            "redis://default:secret@redis:6379",
-            "app",
-            "pw",
-            "redis://app:pw@redis:6379",
-        ),
-        (
-            "redis://redis:6379/1#replica@east",
-            "app",
-            "pw",
-            "redis://app:pw@redis:6379/1#replica@east",
-        ),
-    ] {
-        assert_eq!(crate::url_as(url, user, password), the_user, "{url}");
-    }
-}
-
 /// config-1r2: an ACL user without `+select` on a URL naming a database — the
 /// common least-privilege shape — was retried for the whole budget, because the
 /// client drops the `NOPERM` from a refused `SELECT`, and then reported as a

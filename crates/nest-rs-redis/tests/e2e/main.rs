@@ -41,7 +41,7 @@ use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule,
     RedisQueueProducer,
 };
-use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle};
+use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle, url_as, url_on};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -142,34 +142,6 @@ const _: () = {
 /// `FLUSHDB`.
 fn redis_url_on(db: u8) -> String {
     url_on(&redis_url(), db)
-}
-
-/// `url` with its database index replaced by `db`, its query and fragment
-/// kept: the path starts at the first `/`, `?` or `#` after the authority (RFC
-/// 3986 §3.2) and ends at the first `?` or `#`.
-fn url_on(url: &str, db: u8) -> String {
-    let authority = url.find("//").map_or(0, |at| at + 2);
-    let path = url[authority..]
-        .find(['/', '?', '#'])
-        .map_or(url.len(), |at| authority + at);
-    let rest = url[path..]
-        .find(['?', '#'])
-        .map_or(url.len(), |at| path + at);
-    format!("{}/{db}{}", &url[..path], &url[rest..])
-}
-
-/// `url` connecting as `user` with `password`, any credentials it carried
-/// replaced: the userinfo is the authority up to its last `@`, and the
-/// authority ends at the first `/`, `?` or `#` after `//` (RFC 3986 §3.2).
-fn url_as(url: &str, user: &str, password: &str) -> String {
-    let authority = url.find("//").map_or(0, |at| at + 2);
-    let end = url[authority..]
-        .find(['/', '?', '#'])
-        .map_or(url.len(), |at| authority + at);
-    let host = url[authority..end]
-        .rfind('@')
-        .map_or(authority, |at| authority + at + 1);
-    format!("{}{user}:{password}@{}", &url[..authority], &url[host..])
 }
 
 /// [`redis_config`] on database `db`.

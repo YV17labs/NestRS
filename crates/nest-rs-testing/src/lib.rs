@@ -11,6 +11,9 @@
 //! [`LogCapture`] covers the other half of a transport's contract: the events
 //! it emits. A denial that fails closed but logs nothing passes every response
 //! assertion — and is exactly what nobody can debug at 3am.
+//!
+//! [`url_on`] and [`url_as`] put the suite's own URL on a test's own database
+//! or user, keeping everything else the deployment set.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 #![expect(
@@ -29,6 +32,7 @@ mod env;
 mod headless;
 mod logs;
 pub mod mcp;
+mod url;
 
 #[cfg(feature = "orm")]
 mod database;
@@ -52,5 +56,6 @@ pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
+pub use url::{url_as, url_on};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};

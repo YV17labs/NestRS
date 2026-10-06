@@ -100,8 +100,11 @@ const BUDGET: Duration = Duration::from_millis(500);
 /// hold 1 to 8, so a `FLUSHDB` here never reaches a job one of theirs filed.
 const DB_CONNECTION_DROP: u8 = 11;
 const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
+const DB_BLOCKED_READ: u8 = 10;
 const DB_TLS_FLUSH: u8 = 12;
 const DB_TLS_REFUSED_REOPEN: u8 = 13;
+/// On the TLS Redis, so its blocked read is the one `CLIENT LIST` finds there.
+const DB_TLS_BLOCKED_READ: u8 = 15;
 /// Claims only: every scheduler the `schedule` tests boot claims here, so the
 /// key layout is asserted over the whole database.
 const DB_SCHEDULE: u8 = 14;
@@ -112,10 +115,12 @@ const DB_SCHEDULE: u8 = 14;
 const _: () = {
     let dbs = [
         DB_CONFINED_TO_THE_PREFIX,
+        DB_BLOCKED_READ,
         DB_CONNECTION_DROP,
         DB_TLS_FLUSH,
         DB_TLS_REFUSED_REOPEN,
         DB_SCHEDULE,
+        DB_TLS_BLOCKED_READ,
     ];
     let mut i = 0;
     while i < dbs.len() {
@@ -136,7 +141,11 @@ const _: () = {
 /// not meet another test's — a connection drop aimed at its clients, or a
 /// `FLUSHDB`.
 fn redis_url_on(db: u8) -> String {
-    let url = redis_url();
+    url_on(&redis_url(), db)
+}
+
+/// `url` with its database index replaced by `db`.
+fn url_on(url: &str, db: u8) -> String {
     let url = url.trim_end_matches('/');
     let base = match url.rsplit_once('/') {
         Some((head, index)) if !head.ends_with('/') && index.parse::<u8>().is_ok() => head,
@@ -167,6 +176,52 @@ async fn connect() -> RedisConnection {
     RedisConnection::connect(&redis_config())
         .await
         .expect("connect to the dev container Redis")
+}
+
+/// [`connect`], on database `db`.
+async fn connect_on(db: u8) -> RedisConnection {
+    RedisConnection::connect(&redis_config_on(db))
+        .await
+        .expect("connect to the dev container Redis")
+}
+
+/// How many clients selected on `db` sit blocked in `XREADGROUP`, as `admin`'s
+/// Redis lists them. `CLIENT LIST` names every client of a Redis the suites
+/// share, so only a database one test owns makes a client its worker's, and
+/// `cmd` is only the last command a client sent: the `b` flag of a client
+/// waiting in a blocking call is what says the read waits there.
+async fn blocked_reads_on(admin: &mut RedisConnection, db: u8) -> usize {
+    let clients: String = redis::cmd("CLIENT")
+        .arg("LIST")
+        .query_async(admin)
+        .await
+        .expect("CLIENT LIST");
+    let selected = format!("db={db}");
+    clients
+        .lines()
+        .filter(|client| {
+            let fields: Vec<&str> = client.split(' ').collect();
+            fields.contains(&selected.as_str())
+                && fields.contains(&"cmd=xreadgroup")
+                && fields.iter().any(|field| {
+                    field
+                        .strip_prefix("flags=")
+                        .is_some_and(|flags| flags.contains('b'))
+                })
+        })
+        .count()
+}
+
+/// Whether a read blocks on `db` within a second: a worker sends its read
+/// again at the end of each wait, so one listing can fall between two.
+async fn a_read_blocks_on(admin: &mut RedisConnection, db: u8) -> bool {
+    for _ in 0..20 {
+        if blocked_reads_on(admin, db).await > 0 {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
 }
 
 /// Close, from the server's side, every client connection selected on `db` —

@@ -187,6 +187,14 @@ fn tls_redis_url() -> String {
         .unwrap_or_else(|_| "rediss://redis-tls:6380".to_owned())
 }
 
+/// [`tls_redis`] on database `db`.
+fn tls_redis_on(ca_cert: Option<&[u8]>, db: u8) -> RedisConfig {
+    RedisConfig {
+        url: crate::url_on(&tls_redis_url(), db),
+        ..tls_redis(ca_cert)
+    }
+}
+
 /// The TLS Redis, trusting the authority that signed its certificate.
 fn tls_redis(ca_cert: Option<&[u8]>) -> RedisConfig {
     RedisConfig {
@@ -232,33 +240,39 @@ struct SealedModule;
 /// A queue runs end to end against a Redis speaking TLS itself: the push and
 /// the settle on the shared connection, and the worker's blocking read on a
 /// connection of its own, each a handshake verified against the configured
-/// authority — the server has no plaintext port to fall back to.
+/// authority — the server has no plaintext port to fall back to. On a
+/// database of its own, the one its blocked read is found on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
+    let db = crate::DB_TLS_BLOCKED_READ;
+    let mut admin = RedisConnection::connect(&tls_redis_on(Some(SERVICE_AUTHORITY), db))
+        .await
+        .expect("an administration connection over TLS");
+    let flush = || redis::cmd("FLUSHDB");
+    flush()
+        .query_async::<()>(&mut admin)
+        .await
+        .expect("an empty database to start on");
     let run = crate::this_run();
-    let replica = crate::replica_on::<SealedModule>(tls_redis(Some(SERVICE_AUTHORITY))).await;
+    let replica =
+        crate::replica_on::<SealedModule>(tls_redis_on(Some(SERVICE_AUTHORITY), db)).await;
     replica
         .producer
         .push(SealedQueue, SealedCommand { run }, None)
         .await
         .expect("a push over TLS");
     crate::wait_until(Duration::from_secs(10), || SEALED.of(run).len() == 1).await;
-    let mut admin = RedisConnection::connect(&tls_redis(Some(SERVICE_AUTHORITY)))
-        .await
-        .expect("an administration connection over TLS");
-    let clients: String = redis::cmd("CLIENT")
-        .arg("LIST")
-        .query_async(&mut admin)
-        .await
-        .expect("CLIENT LIST");
+    let blocked = crate::a_read_blocks_on(&mut admin, db).await;
     replica.worker.shutdown().await.expect("clean shutdown");
+    flush()
+        .query_async::<()>(&mut admin)
+        .await
+        .expect("leave the database empty");
 
     assert_eq!(SEALED.of(run).len(), 1, "the job ran once over TLS");
     assert!(
-        clients
-            .lines()
-            .any(|client| client.contains("cmd=xreadgroup")),
-        "the worker's read holds a connection of its own to the TLS Redis: {clients}",
+        blocked,
+        "the worker's read blocks on a connection of its own to the TLS Redis",
     );
 }
 

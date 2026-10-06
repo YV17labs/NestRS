@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, JobProducerExt, QueueName, processor, queue};
-use nest_rs_redis::{RedisModule, RedisQueueConfig, RedisQueueModule};
+use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::queue::KitBackend;
 use serde::{Deserialize, Serialize};
@@ -568,13 +568,13 @@ impl PlainProcessor {
 )]
 struct PlainModule;
 
-/// The consumers of `queue`'s group.
-async fn consumers(queue: &str) -> Vec<String> {
+/// The consumers of `queue`'s group, on `admin`'s database.
+async fn consumers(admin: &mut RedisConnection, queue: &str) -> Vec<String> {
     let consumers: Vec<std::collections::HashMap<String, redis::Value>> = redis::cmd("XINFO")
         .arg("CONSUMERS")
         .arg(crate::key_of(queue, "jobs"))
         .arg(GROUP)
-        .query_async(&mut crate::connect().await)
+        .query_async(admin)
         .await
         .unwrap_or_default();
     consumers
@@ -587,16 +587,33 @@ async fn consumers(queue: &str) -> Vec<String> {
         .collect()
 }
 
+/// Empty `admin`'s database: what a flush does to a running worker, and what
+/// a test owning the database leaves behind.
+async fn flush(admin: &mut RedisConnection) {
+    redis::cmd("FLUSHDB")
+        .query_async::<()>(admin)
+        .await
+        .expect("FLUSHDB");
+}
+
 /// A stream deleted under a running worker — by hand, or a flush — takes its
 /// group with it; the worker makes it again and runs what is filed next. An
 /// idle worker's read blocks on a connection of its own, so a push answers at
-/// once meanwhile; and a worker that stops leaves the group.
+/// once meanwhile; and a worker that stops leaves the group. On a database of
+/// its own, the one its blocked read is found on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leaves_it() {
     let queue = <PlainQueue as nest_rs_queue::Queue>::NAME;
-    crate::forget(queue).await;
+    let mut admin = crate::connect_on(crate::DB_BLOCKED_READ).await;
+    flush(&mut admin).await;
+    assert_eq!(
+        crate::blocked_reads_on(&mut admin, crate::DB_BLOCKED_READ).await,
+        0,
+        "no read blocks on the test's database before its worker starts",
+    );
     let run = crate::this_run();
-    let replica = crate::replica::<PlainModule>().await;
+    let replica =
+        crate::replica_on::<PlainModule>(crate::redis_config_on(crate::DB_BLOCKED_READ)).await;
     replica
         .producer
         .push(PlainQueue, PlainCommand { run }, None)
@@ -604,21 +621,14 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
         .expect("enqueue");
     crate::wait_until(Duration::from_secs(10), || PLAIN.of(run).len() == 1).await;
     assert_eq!(
-        consumers(queue).await.len(),
+        consumers(&mut admin, queue).await.len(),
         1,
         "the worker reads as one consumer"
     );
 
-    let clients: String = redis::cmd("CLIENT")
-        .arg("LIST")
-        .query_async(&mut crate::connect().await)
-        .await
-        .expect("CLIENT LIST");
     assert!(
-        clients
-            .lines()
-            .any(|client| client.contains("cmd=xreadgroup")),
-        "an idle worker's read blocks on a connection: {clients}",
+        crate::a_read_blocks_on(&mut admin, crate::DB_BLOCKED_READ).await,
+        "an idle worker's read blocks on a connection of its own",
     );
     let started = std::time::Instant::now();
     replica
@@ -633,7 +643,7 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     );
     crate::wait_until(Duration::from_secs(10), || PLAIN.of(run + 1).len() == 1).await;
 
-    crate::forget(queue).await;
+    flush(&mut admin).await;
     replica
         .producer
         .push(PlainQueue, PlainCommand { run: run + 2 }, None)
@@ -648,10 +658,10 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
 
     replica.worker.shutdown().await.expect("clean shutdown");
     assert!(
-        consumers(queue).await.is_empty(),
+        consumers(&mut admin, queue).await.is_empty(),
         "a worker that stopped holding nothing leaves the group",
     );
-    crate::forget(queue).await;
+    flush(&mut admin).await;
 }
 
 // --- an acknowledgement lost on its way back -----------------------------------------

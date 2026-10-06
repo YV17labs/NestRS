@@ -468,7 +468,7 @@ impl JobConsumer for RedisQueueConsumer {
     ) -> Result<Option<Duration>, QueueError> {
         let drained = self.drained(method)?;
         let keys = &drained.keys;
-        let next: i64 = self
+        let (next, lost): (i64, Vec<String>) = self
             .conn
             .invoke(
                 SCRIPTS
@@ -480,12 +480,14 @@ impl JobConsumer for RedisQueueConsumer {
                     .key(&keys.unique)
                     .key(&keys.claims)
                     .key(&keys.deferred)
+                    .key(&keys.checkpoints)
                     .key(&keys.dead)
                     .arg(PROMOTE_BATCH)
                     .arg(millis(DEAD_KEPT)),
             )
             .await
             .map_err(QueueError::backend)?;
+        said_lost(method, &lost);
         if Drained::due(&drained.swept, SWEEP_EVERY) {
             let swept: i64 = self
                 .conn
@@ -624,6 +626,22 @@ fn said_vanished(method: &'static ProcessMethod, entries: &[impl AsRef<str>]) {
         backend_ids = %backend_ids.join(","),
         "queue entries deleted while delivered; their jobs are gone, and a unique key they \
          held stays held until cancel_unique frees it",
+    );
+}
+
+/// Say the held-back jobs of `method`'s queue found due without their record —
+/// deleted by hand, since no script deletes one a job still waits on: they are
+/// gone, and the upkeep let go of what they held.
+fn said_lost(method: &'static ProcessMethod, jobs: &[String]) {
+    if jobs.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        target: nest_rs_queue::TARGET,
+        queue = method.queue(),
+        lost = jobs.len(),
+        job_ids = %jobs.join(","),
+        "held-back queue jobs found due without their record are gone; what they held is let go",
     );
 }
 

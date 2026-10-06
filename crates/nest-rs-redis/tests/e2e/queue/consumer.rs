@@ -910,6 +910,96 @@ async fn a_dead_letter_past_its_week_is_trimmed_by_the_upkeep() {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct LostCommand {
+    run: u64,
+}
+
+static LOST: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delayed-lost", job = LostCommand)]
+struct LostQueue;
+
+#[injectable]
+#[derive(Default)]
+struct LostProcessor;
+
+#[processor]
+impl LostProcessor {
+    #[process(queue = LostQueue)]
+    async fn lost(&self, job: LostCommand) -> anyhow::Result<()> {
+        LOST.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [LostProcessor],
+)]
+struct LostModule;
+
+/// A held-back job whose record was deleted from `…:delayed` — by hand, since no
+/// script removes one a job still waits on — is gone with it: the upkeep that
+/// finds it due says so, naming the job, and lets go of what it held, so a later
+/// push under its unique key is filed and runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_held_back_job_whose_record_went_is_said_and_let_go() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let queue = <LostQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let run = crate::this_run();
+    let replica = crate::replica::<LostModule>().await;
+    let unique = || nest_rs_queue::PushOptions::default().with_unique("lost");
+    let held = replica
+        .producer
+        .push(
+            LostQueue,
+            LostCommand { run },
+            unique().with_delay(Duration::from_millis(300)),
+        )
+        .await
+        .expect("a held-back push");
+    let job = held.id().to_string();
+    let _: i64 = redis::cmd("HDEL")
+        .arg(crate::key_of(queue, "delayed"))
+        .arg(&job)
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("its record deleted by hand");
+    let said = "held-back queue jobs found due without their record are gone; what they held \
+                is let go";
+    for _ in 0..80 {
+        if !logs.find(nest_rs_queue::TARGET, said).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let line = logs.expect_one(nest_rs_queue::TARGET, said);
+    assert_eq!(line.level, "warn");
+    assert_eq!(line.field("job_ids").as_deref(), Some(job.as_str()));
+    assert_eq!(crate::field_of(queue, "unique", "lost").await, None);
+
+    replica
+        .producer
+        .push(LostQueue, LostCommand { run: run + 1 }, unique())
+        .await
+        .expect("a later push under the key it held");
+    crate::wait_until(Duration::from_secs(10), || LOST.of(run + 1).len() == 1).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert!(
+        LOST.of(run).is_empty(),
+        "the job whose record went never ran"
+    );
+    assert_eq!(LOST.of(run + 1).len(), 1, "the later push ran");
+    assert_eq!(
+        crate::keys_of(queue).await,
+        [crate::key_of(queue, "jobs")],
+        "nothing of either job is left",
+    );
+    crate::forget(queue).await;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LongCommand {
     run: u64,
 }

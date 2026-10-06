@@ -322,34 +322,42 @@ return 1
 
 /// File up to `ARGV[1]` held-back jobs that fell due, trim the dead letters
 /// older than `ARGV[2]` milliseconds — a dead letter's age is kept here too,
-/// not only when another job dies — and answer how long until the next held
-/// job is due in milliseconds: `0` when more are due already, `-1` when none
-/// is held back.
+/// not only when another job dies — and answer `{wait, lost}`: how long until
+/// the next held job is due in milliseconds (`0` when more are due already,
+/// `-1` when none is held back), and the jobs found due without their record —
+/// deleted by hand, since no script deletes one a job still waits on — which are
+/// let go of with everything they held.
 ///
-/// `KEYS`: jobs, entries, due, delayed, unique, claims, deferred, dead.
+/// `KEYS`: jobs, entries, due, delayed, unique, claims, deferred, checkpoints,
+/// dead.
 const PROMOTE: &str = concat!(
     effects!(),
     now!(),
+    forget!(),
     file!(),
     "local at = now()
-redis.call('XTRIM', KEYS[8], 'MINID', '~', string.format('%.0f', at - tonumber(ARGV[2])))
+redis.call('XTRIM', KEYS[9], 'MINID', '~', string.format('%.0f', at - tonumber(ARGV[2])))
 local due = redis.call('ZRANGEBYSCORE', KEYS[3], '-inf', at, 'LIMIT', 0, ARGV[1])
+local lost = {}
 for _, job in ipairs(due) do
   local record = redis.call('HGET', KEYS[4], job)
   redis.call('ZREM', KEYS[3], job)
   if record then
     redis.call('HDEL', KEYS[4], job)
     file(job, record, 0)
+  else
+    forget(job)
+    lost[#lost + 1] = job
   end
 end
 if #due == tonumber(ARGV[1]) then
-  return 0
+  return {0, lost}
 end
 local next = redis.call('ZRANGE', KEYS[3], 0, 0, 'WITHSCORES')
 if #next == 0 then
-  return -1
+  return {-1, lost}
 end
-return math.max(0, tonumber(next[2]) - at)
+return {math.max(0, tonumber(next[2]) - at), lost}
 "
 );
 

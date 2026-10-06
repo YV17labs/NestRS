@@ -295,6 +295,11 @@ A value out of its bounds fails the boot, whether the environment set it or
   holds it takes its job with it, and a unique key it held stays held until
   `cancel_unique` frees it; the worker says so at `warn`,
   `queue entries deleted while delivered; …`, naming the entries.
+- **Never delete a field of `…:delayed` by hand.** A held-back job whose record
+  went never runs: the upkeep that finds it due lets go of what it held, its
+  unique key included, and says so at `warn`,
+  `held-back queue jobs found due without their record are gone; …`, naming the
+  jobs.
 
 ## Reference
 

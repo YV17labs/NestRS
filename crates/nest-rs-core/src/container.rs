@@ -541,13 +541,13 @@ impl ContainerBuilder {
         self
     }
 
-    /// A **bare** concrete-type registration that replaces an earlier one — two
-    /// modules (or a seed and a module) registering the same type by mistake.
-    /// [`App`](crate::App) reads [`duplicate_providers`](Self::duplicate_providers)
-    /// after the register phase and **fails the boot**, uniform with every other
-    /// wiring error. Trait-object bindings ([`provide_dyn`](Self::provide_dyn))
-    /// are exempt: last-binding-wins is their documented override mechanism, and
-    /// the test override path ([`replace`](Self::replace)) does not route here.
+    /// A **bare** registration — a concrete type or a trait object — that
+    /// replaces an earlier one: two modules (or a seed and a module) registering
+    /// the same type by mistake. [`App`](crate::App) reads
+    /// [`duplicate_providers`](Self::duplicate_providers) after the register
+    /// phase and **fails the boot**, uniform with every other wiring error. The
+    /// test override path ([`replace`](Self::replace),
+    /// [`replace_dyn`](Self::replace_dyn)) does not route here.
     /// **Keyed** providers ([`provide_keyed`](Self::provide_keyed)) keep the
     /// documented last-write-wins: re-registering `(T, name)` is a supported
     /// keyed override, so it warns rather than failing the boot.
@@ -608,7 +608,22 @@ impl ContainerBuilder {
 
     /// Register a trait-object provider. Stored as `Arc<Arc<T>>` so the outer
     /// `Arc` is sized and retrievable via the trait's `TypeId`.
+    ///
+    /// A trait object has one implementation: a second binding of `T` is a
+    /// duplicate the boot refuses, as a concrete type's is
+    /// ([`DuplicateProviderError`](crate::DuplicateProviderError)); a test
+    /// swaps one with [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
+        let key = ProviderKey::of(TypeId::of::<Arc<T>>());
+        self.record_if_replacing(&key, std::any::type_name::<Arc<T>>());
+        self.providers.insert(key, Arc::new(value));
+        self
+    }
+
+    /// Replace a trait-object provider without the duplicate check — the
+    /// intentional swap path used by
+    /// [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
+    pub(crate) fn replace_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.providers
             .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
         self
@@ -1305,7 +1320,8 @@ mod tests {
 
     #[test]
     fn provide_override_keeps_the_last_value() {
-        // Overriding logs a warn, but last-write-wins matches `provide_dyn`.
+        // The builder keeps the last value; the duplicate it records is what
+        // the boot refuses.
         let container = Container::builder()
             .provide(Counter(1))
             .provide(Counter(2))
@@ -1430,16 +1446,19 @@ mod tests {
     }
 
     #[test]
-    fn provide_dyn_last_binding_wins() {
+    fn a_second_dyn_binding_is_a_duplicate() {
         let polite: Arc<dyn Hello + Send + Sync> = Arc::new(Polite);
         let curt: Arc<dyn Hello + Send + Sync> = Arc::new(Curt);
-        let container = Container::builder()
-            .provide_dyn(polite)
-            .provide_dyn(curt)
-            .build();
-
-        let resolved: Arc<dyn Hello + Send + Sync> = container.get_dyn().unwrap();
-        assert_eq!(resolved.say(), "hi");
+        let builder = Container::builder().provide_dyn(polite).provide_dyn(curt);
+        let names: Vec<&str> = builder
+            .duplicate_providers()
+            .iter()
+            .map(|duplicate| duplicate.type_name)
+            .collect();
+        assert_eq!(
+            names,
+            [std::any::type_name::<Arc<dyn Hello + Send + Sync>>()]
+        );
     }
 
     #[derive(Debug, PartialEq)]

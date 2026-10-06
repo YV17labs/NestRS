@@ -462,7 +462,7 @@ impl AppBuilder {
     /// [`override_value`](Self::override_value) for the eager-build caveat.
     pub fn override_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.overrides
-            .push(Box::new(move |builder| builder.provide_dyn(value)));
+            .push(Box::new(move |builder| builder.replace_dyn(value)));
         self
     }
 

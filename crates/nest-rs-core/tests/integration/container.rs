@@ -97,3 +97,82 @@ fn a_request_scoped_factory_replaced_by_another_says_which_kind_it_was() {
         event.fields,
     );
 }
+
+trait Greeting: Send + Sync {
+    fn word(&self) -> &'static str;
+}
+
+#[nest_rs_core::injectable]
+struct Hello;
+
+impl Greeting for Hello {
+    fn word(&self) -> &'static str {
+        "hello"
+    }
+}
+
+#[nest_rs_core::injectable]
+struct Bonjour;
+
+impl Greeting for Bonjour {
+    fn word(&self) -> &'static str {
+        "bonjour"
+    }
+}
+
+#[nest_rs_core::module(providers = [Hello as dyn Greeting])]
+struct HelloModule;
+
+#[nest_rs_core::module(providers = [Bonjour as dyn Greeting])]
+struct BonjourModule;
+
+#[nest_rs_core::module(imports = [HelloModule, BonjourModule])]
+struct BothGreetingsModule;
+
+/// The boot's refusal, as the duplicate it must be.
+fn duplicate(boot: anyhow::Result<nest_rs_core::App>) -> nest_rs_core::DuplicateProviderError {
+    let Err(refused) = boot else {
+        panic!("one binding would be dropped for the other");
+    };
+    refused
+        .downcast::<nest_rs_core::DuplicateProviderError>()
+        .unwrap_or_else(|refused| panic!("not the duplicate: {refused:#}"))
+}
+
+#[test]
+fn two_modules_binding_one_trait_object_fail_the_boot_naming_it() {
+    let duplicate = duplicate(nest_rs_core::App::new::<BothGreetingsModule>());
+    assert_eq!(
+        duplicate.type_name,
+        std::any::type_name::<Arc<dyn Greeting>>()
+    );
+}
+
+#[tokio::test]
+async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot() {
+    let duplicate = duplicate(
+        nest_rs_core::App::builder()
+            .provide_dyn::<dyn Greeting>(Arc::new(Bonjour))
+            .module::<HelloModule>()
+            .build()
+            .await,
+    );
+    assert_eq!(
+        duplicate.type_name,
+        std::any::type_name::<Arc<dyn Greeting>>()
+    );
+}
+
+#[tokio::test]
+async fn an_override_replaces_the_trait_object_a_module_binds() {
+    let app = nest_rs_core::App::builder()
+        .module::<HelloModule>()
+        .override_dyn::<dyn Greeting>(Arc::new(Bonjour))
+        .build()
+        .await
+        .expect("an override is the one replacement a binding takes");
+    assert_eq!(
+        app.container().get_dyn::<dyn Greeting>().map(|g| g.word()),
+        Some("bonjour")
+    );
+}

@@ -149,16 +149,15 @@ impl AccessError {
     }
 }
 
-/// A concrete or keyed provider was registered more than once — two modules,
-/// or a seed and a module, providing the same type. Raised at boot rather than
-/// silently last-write-wins, uniform with every other wiring error.
-/// Trait-object bindings (`provide_dyn`) and the test override path are exempt
-/// (they are the *intended* replacement mechanisms).
+/// A concrete type or a trait object was registered more than once — two
+/// modules, or a seed and a module, providing the same type. Raised at boot
+/// rather than silently last-write-wins, uniform with every other wiring
+/// error. The test override path is exempt: it is the *intended* replacement.
 #[derive(Debug, Error)]
 #[error(
     "duplicate provider: `{type_name}` is registered more than once. Two modules (or a seed and a \
-     module) provide the same type — remove the redundant registration, or expose it as a \
-     `dyn Trait` binding if a deliberate override was intended."
+     module) provide the same type — remove the redundant registration; a test replaces a \
+     provider with `override_value` or `override_dyn`."
 )]
 pub struct DuplicateProviderError {
     /// The type registered more than once.

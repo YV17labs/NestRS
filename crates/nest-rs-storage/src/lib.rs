@@ -76,6 +76,11 @@
 //! within `object_store`'s retries (3 minutes from the call). The operation
 //! timeout is the client's `nest_rs_core::Budget`, so the boot refuses it at or
 //! past a net reaching the client.
+//!
+//! A call the budget cuts fails naming the budget and nothing of the attempts
+//! before it: `object_store` keeps an attempt's cause only in the error its own
+//! retries end on, and says each retry and its cause at `info` on
+//! `object_store::client::retry` — the lines to read beside the cut.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

@@ -451,7 +451,8 @@ async fn bounded<F: Future>(budget: Duration, call: F) -> object_store::Result<F
             source: Box::new(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!(
-                    "S3 did not answer within {budget:?}, the budget {} sets",
+                    "the call did not end within {budget:?}, every retry included — the budget \
+                     {} sets",
                     nest_rs_config::var_name("storage", OPERATION_TIMEOUT.key()),
                 ),
             )),
@@ -830,6 +831,58 @@ mod tests {
         format!("http://{addr}")
     }
 
+    /// A store that answers its first request with a `503`, then stops the
+    /// clock and answers nothing more, so the retry `object_store` sends after
+    /// backing off is the attempt the budget cuts.
+    async fn store_answering_once() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let addr = listener.local_addr().expect("a bound address");
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = socket.read(&mut buf).await.expect("read the request");
+                assert!(read > 0, "the client hung up before its request ended");
+                request.extend_from_slice(&buf[..read]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .expect("answer the first request");
+            tokio::time::pause();
+            held.push(socket);
+            loop {
+                let (socket, _) = listener.accept().await.expect("accept");
+                held.push(socket);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_store_that_answered_before_the_cut_is_not_said_to_have_been_silent() {
+        let budget = StorageConfig::default().operation_timeout;
+        let storage = client(&store_answering_once().await, true);
+        let refused = tokio::time::timeout(budget * 2, storage.head("k"))
+            .await
+            .expect("cut within the budget")
+            .expect_err("a store answering only a 503 returns nothing");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(
+            chain.contains(&format!(
+                "the call did not end within {budget:?}, every retry included — the budget {} sets",
+                nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
+            )) && !chain.contains("did not answer"),
+            "{chain}"
+        );
+    }
+
     type Call = fn(Storage) -> futures_util::future::BoxFuture<'static, Result<()>>;
 
     /// Every call that waits on S3, each on a store of its own, since a second
@@ -881,7 +934,8 @@ mod tests {
             );
             assert!(
                 chain.contains(&format!(
-                    "S3 did not answer within {budget:?}, the budget {} sets",
+                    "the call did not end within {budget:?}, every retry included — the budget {} \
+                     sets",
                     nest_rs_config::var_name("storage", "OPERATION_TIMEOUT_SECS")
                 )),
                 "{name}: {chain}"

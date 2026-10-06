@@ -94,9 +94,11 @@ So a staging or production deployment poses three keys at minimum: an
 
 The two bounds are the AWS SDK's. A call waits for S3's answer within
 `OPERATION_TIMEOUT_SECS`, every retry included, and past it fails with its
-own error, `S3 did not answer within 15s, the budget
+own error, `the call did not end within 15s, every retry included — the budget
 <PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
-HTTP edge's 30-second timeout answers a bare `503` in its place. An upload's
+HTTP edge's 30-second timeout answers a bare `503` in its place. That error
+says nothing of the attempts before the cut: `object_store` logs each retry
+and its cause at `info` on `object_store::client::retry`. An upload's
 body is part of its request: `put_bytes` moves within the budget, and
 `put_stream` ships 5 MiB parts that each do, so a body of any size moves in
 parts. A download's body is a transfer and is never cut for its size: one

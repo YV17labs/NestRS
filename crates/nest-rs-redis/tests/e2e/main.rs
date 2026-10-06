@@ -144,14 +144,18 @@ fn redis_url_on(db: u8) -> String {
     url_on(&redis_url(), db)
 }
 
-/// `url` with its database index replaced by `db`.
+/// `url` with its database index replaced by `db`, its query and fragment
+/// kept: the path starts at the first `/`, `?` or `#` after the authority (RFC
+/// 3986 §3.2) and ends at the first `?` or `#`.
 fn url_on(url: &str, db: u8) -> String {
-    let url = url.trim_end_matches('/');
-    let base = match url.rsplit_once('/') {
-        Some((head, index)) if !head.ends_with('/') && index.parse::<u8>().is_ok() => head,
-        _ => url,
-    };
-    format!("{base}/{db}")
+    let authority = url.find("//").map_or(0, |at| at + 2);
+    let path = url[authority..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |at| authority + at);
+    let rest = url[path..]
+        .find(['?', '#'])
+        .map_or(url.len(), |at| path + at);
+    format!("{}/{db}{}", &url[..path], &url[rest..])
 }
 
 /// [`redis_config`] on database `db`.

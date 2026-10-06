@@ -41,7 +41,7 @@ use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule,
     RedisQueueProducer,
 };
-use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle, url_as, url_on};
+use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle, url_as, url_at, url_on};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -57,10 +57,7 @@ fn redis_url() -> String {
 
 /// The dev container Redis's `host:port`, for a proxy standing in front of it.
 fn redis_address() -> String {
-    redis::IntoConnectionInfo::into_connection_info(redis_url().as_str())
-        .expect("the dev container Redis URL parses")
-        .addr()
-        .to_string()
+    harness::address_of(&redis_url())
 }
 
 /// Pinned rather than read from the env: the framework workspace ships no
@@ -294,8 +291,9 @@ impl DarkeningProxy {
         }
     }
 
+    /// The suite's URL, at the proxy's address.
     fn url(&self) -> String {
-        format!("redis://{}/", self.addr)
+        url_at(&redis_url(), self.addr)
     }
 
     fn go_dark(&self) {
@@ -356,8 +354,9 @@ impl MutingProxy {
         Self { addr, muted }
     }
 
+    /// The suite's URL, at the proxy's address.
     fn url(&self) -> String {
-        format!("redis://{}/", self.addr)
+        url_at(&redis_url(), self.addr)
     }
 
     fn mute(&self) {

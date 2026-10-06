@@ -674,8 +674,9 @@ impl SeveringProxy {
         Self { addr, severed }
     }
 
+    /// The suite's URL on database `db`, at the proxy's address.
     fn url_on(&self, db: u8) -> String {
-        format!("redis://{}/{db}", self.addr)
+        crate::url_at(&crate::redis_url_on(db), self.addr)
     }
 
     fn sever(&self) {
@@ -839,8 +840,9 @@ impl StallingProxy {
         Self { addr, stalled }
     }
 
+    /// The suite's URL on database `db`, at the proxy's address.
     fn url_on(&self, db: u8) -> String {
-        format!("redis://{}/{db}", self.addr)
+        crate::url_at(&crate::redis_url_on(db), self.addr)
     }
 
     fn stall(&self) {

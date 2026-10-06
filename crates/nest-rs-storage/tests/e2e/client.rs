@@ -591,12 +591,18 @@ async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
         .get("ENDPOINT")
         .expect("a readable storage endpoint")
         .unwrap_or(config.endpoint.clone());
-    let upstream = upstream
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned();
-    let (proxy, connections) = stalling_proxy(upstream, 64 * 1024).await;
-    config.endpoint = format!("http://{proxy}");
+    let parsed = reqwest::Url::parse(&upstream).expect("the storage endpoint parses");
+    let dialled = format!(
+        "{}:{}",
+        parsed
+            .host_str()
+            .expect("the storage endpoint names a host"),
+        parsed
+            .port_or_known_default()
+            .expect("the storage endpoint has a port"),
+    );
+    let (proxy, connections) = stalling_proxy(dialled, 64 * 1024).await;
+    config.endpoint = nest_rs_testing::url_at(&upstream, proxy);
     config.read_timeout = Duration::from_secs(1);
     let proxied = Storage::new(Arc::new(config));
 

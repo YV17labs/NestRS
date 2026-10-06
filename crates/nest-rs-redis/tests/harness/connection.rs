@@ -10,8 +10,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
+use nest_rs_testing::url_at;
 
-use super::AT_ONCE;
+use super::{AT_ONCE, address_of};
 
 /// A budget far above [`AT_ONCE`], so a refusal that retried would show.
 pub(crate) fn config(url: String) -> RedisConfig {
@@ -60,15 +61,18 @@ pub(crate) async fn database_refused_at_once(url: String, index: i64, case: &str
 /// with that error line for every command — Redis busy running a script,
 /// loading its dataset, failing over — and with `slots`, a connection past that
 /// many forwarded at once is refused the way Redis refuses one past
-/// `maxclients`. Anything else is forwarded to `upstream`, or closed when there
-/// is none: an in-process test names no Redis, so it cannot dial one.
+/// `maxclients`. Anything else is forwarded to the Redis `upstream` names, or
+/// closed when there is none: an in-process test names no Redis, so it cannot
+/// dial one.
 pub(crate) struct ScriptedRedis {
     addr: SocketAddr,
+    upstream: Option<String>,
     pub(crate) answer: Arc<Mutex<Option<&'static str>>>,
 }
 
 impl ScriptedRedis {
     pub(crate) async fn start(upstream: Option<String>, slots: Option<usize>) -> Self {
+        let dialled = upstream.as_deref().map(address_of);
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind the proxy");
@@ -93,10 +97,10 @@ impl ScriptedRedis {
                 }
                 open.fetch_add(1, Ordering::SeqCst);
                 let open = Arc::clone(&open);
-                let upstream = upstream.clone();
+                let dialled = dialled.clone();
                 tokio::spawn(async move {
-                    if let Some(upstream) = upstream
-                        && let Ok(mut server) = TcpStream::connect(&upstream).await
+                    if let Some(dialled) = dialled
+                        && let Ok(mut server) = TcpStream::connect(&dialled).await
                     {
                         let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
                     }
@@ -104,11 +108,19 @@ impl ScriptedRedis {
                 });
             }
         });
-        Self { addr, answer }
+        Self {
+            addr,
+            upstream,
+            answer,
+        }
     }
 
+    /// The URL of the Redis it fronts, at its own address.
     pub(crate) fn url(&self) -> String {
-        format!("redis://{}/", self.addr)
+        match &self.upstream {
+            Some(upstream) => url_at(upstream, self.addr),
+            None => format!("redis://{}/", self.addr),
+        }
     }
 
     /// Answer every command on connections accepted from now with `line`, or

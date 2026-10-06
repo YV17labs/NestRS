@@ -1,7 +1,7 @@
 //! The URL a suite reads, with one RFC 3986 component replaced — a test's own
-//! database or its own user — and everything else the deployment set kept: the
-//! scheme, the host, the query a TLS or protocol setting rides in, the
-//! fragment.
+//! database, its own user, or the address of a proxy it put in front of the
+//! server — and everything else the deployment set kept: the scheme, the
+//! credentials, the query a TLS or protocol setting rides in, the fragment.
 
 use std::fmt::Display;
 
@@ -46,8 +46,24 @@ pub fn url_as(url: &str, user: &str, password: &str) -> String {
     )
 }
 
-/// Where each component `url_on` and `url_as` replace starts, as byte offsets
-/// into the URL.
+/// `url` at `address`: its host and port replaced by the `host:port` a proxy in
+/// front of the suite's server listens on, and every other component kept. The
+/// host is the authority past its userinfo (RFC 3986 §3.2.2), the port with it.
+///
+/// ```
+/// use nest_rs_testing::url_at;
+///
+/// let proxy: std::net::SocketAddr = "127.0.0.1:40123".parse()?;
+/// assert_eq!(url_at("redis://app:pw@cache:6379/2?protocol=resp3", proxy), "redis://app:pw@127.0.0.1:40123/2?protocol=resp3");
+/// # Ok::<(), std::net::AddrParseError>(())
+/// ```
+pub fn url_at(url: &str, address: impl Display) -> String {
+    let parts = Parts::of(url);
+    format!("{}{address}{}", &url[..parts.host], &url[parts.path..])
+}
+
+/// Where each component `url_on`, `url_as` and `url_at` replace starts, as
+/// byte offsets into the URL.
 struct Parts {
     authority: usize,
     host: usize,
@@ -179,6 +195,40 @@ mod tests {
         assert_eq!(
             url_as("redis://redis:6379", "a user", "p@ss:w/rd"),
             "redis://a%20user:p%40ss%3Aw%2Frd@redis:6379"
+        );
+    }
+
+    #[test]
+    fn an_address_replaces_the_host_and_port_and_keeps_every_other_component() {
+        let proxy: std::net::SocketAddr = "127.0.0.1:40123".parse().expect("an address");
+        for (url, at) in [
+            ("redis://redis:6379", "redis://127.0.0.1:40123"),
+            ("redis://redis", "redis://127.0.0.1:40123"),
+            ("redis://redis:6379/", "redis://127.0.0.1:40123/"),
+            (
+                "redis://app:p%40ss@redis:6379/1?protocol=resp3#primary",
+                "redis://app:p%40ss@127.0.0.1:40123/1?protocol=resp3#primary",
+            ),
+            (
+                "redis://:secret@[::1]:6379?protocol=resp3",
+                "redis://:secret@127.0.0.1:40123?protocol=resp3",
+            ),
+            // An `@` past the authority is not userinfo.
+            (
+                "redis://redis:6379/1#replica@east",
+                "redis://127.0.0.1:40123/1#replica@east",
+            ),
+        ] {
+            assert_eq!(url_at(url, proxy), at, "{url}");
+        }
+    }
+
+    #[test]
+    fn an_ipv6_address_is_written_in_brackets() {
+        let proxy: std::net::SocketAddr = "[::1]:40123".parse().expect("an address");
+        assert_eq!(
+            url_at("redis://redis:6379/2", proxy),
+            "redis://[::1]:40123/2"
         );
     }
 

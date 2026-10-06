@@ -92,9 +92,9 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   own Redis database is the isolation, seeded into every app of the test that
   must meet: the producer and the worker alike. A test that only pushes stays
   on the suites' shared database, where nothing drains.
-- **A test needing its own database or user seeds its config**
-  (`TestApp::provide`) on the suite's URL rewritten by `url_on` or `url_as`,
-  never a `for_root` pin: the suite's own
+- **A test needing its own database, user or proxy seeds its config**
+  (`TestApp::provide`) on the suite's URL rewritten by `url_on`, `url_as` or
+  `url_at`, never a `for_root` pin nor a URL of its own: the suite's own
   `<PREFIX>_REDIS__URL` outranks a pin field by field and would move the app
   back onto the shared database, or around a proxy the test put in front of
   it.

@@ -29,7 +29,7 @@ const CLIENT_KEY: &[u8] = include_bytes!("../harness/fixtures/tls_client.key.pem
 /// limiter's script over it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_certificate_the_configured_authority_signed_carries_the_connection() {
-    let proxy = TlsProxy::start(Some(crate::redis_address()), None).await;
+    let proxy = TlsProxy::start(Some(crate::redis_url()), None).await;
     let conn = RedisConnection::connect(&config(
         proxy.url_on(crate::DB_TLS_FLUSH),
         trusting_the_test_authority(),
@@ -63,7 +63,7 @@ async fn a_certificate_the_configured_authority_signed_carries_the_connection() 
 /// without one the boot fails at once naming the certificate's settings.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_requiring_a_client_certificate_is_handed_the_configured_one() {
-    let proxy = TlsProxy::start(Some(crate::redis_address()), Some(AUTHORITY)).await;
+    let proxy = TlsProxy::start(Some(crate::redis_url()), Some(AUTHORITY)).await;
     let presenting = RedisTls {
         identity: Some(RedisTlsIdentity {
             cert: CLIENT_CERT.to_vec(),
@@ -113,7 +113,7 @@ async fn a_certificate_refused_after_the_boot_is_reported_once_as_the_connection
     const REFUSED: &str = "redis refused a reopened tls connection";
     let budget = Duration::from_secs(1);
     let logs = nest_rs_testing::LogCapture::install_global();
-    let proxy = TlsProxy::start(Some(crate::redis_address()), None).await;
+    let proxy = TlsProxy::start(Some(crate::redis_url()), None).await;
     let conn = RedisConnection::connect(&RedisConfig {
         connect_timeout: budget,
         ..config(

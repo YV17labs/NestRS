@@ -211,7 +211,7 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
     for line in NOT_READY {
-        let proxy = ScriptedRedis::start(Some(crate::redis_address()), None).await;
+        let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
         proxy.answer_with(Some(line));
         let ready = tokio::spawn({
             let answer = Arc::clone(&proxy.answer);
@@ -245,7 +245,7 @@ async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
 /// is retried until it serves, as it is at the proof.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
-    let proxy = ScriptedRedis::start(Some(crate::redis_address()), None).await;
+    let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
     proxy.answer_with(Some(NOT_READY[0]));
     let ready = tokio::spawn({
         let answer = Arc::clone(&proxy.answer);
@@ -258,7 +258,7 @@ async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
     let outcome = RedisConnection::connect(&RedisConfig {
         // Any index but 0 makes the client send a `SELECT`; this one's test
         // keeps keys under a prefix, and this connection writes none.
-        url: format!("{}{}", proxy.url(), crate::DB_CONFINED_TO_THE_PREFIX),
+        url: crate::url_on(&proxy.url(), crate::DB_CONFINED_TO_THE_PREFIX),
         connect_timeout: Duration::from_secs(10),
         ..RedisConfig::default()
     })
@@ -306,7 +306,7 @@ async fn the_ceiling_budget_connects_and_serves() {
 /// slots, and the boot spent its whole budget before blaming the network.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_with_one_client_slot_left_boots() {
-    let proxy = ScriptedRedis::start(Some(crate::redis_address()), Some(1)).await;
+    let proxy = ScriptedRedis::start(Some(crate::redis_url()), Some(1)).await;
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: proxy.url(),
         connect_timeout: Duration::from_secs(5),

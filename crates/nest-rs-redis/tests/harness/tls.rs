@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use nest_rs_redis::{RedisConfig, RedisTls};
+use nest_rs_testing::{url_at, url_on};
 use rustls::RootCertStore;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -15,6 +16,8 @@ use rustls::server::WebPkiClientVerifier;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
+
+use super::address_of;
 
 pub(crate) const AUTHORITY: &[u8] = include_bytes!("fixtures/tls_ca.pem");
 const SERVER_CERT: &[u8] = include_bytes!("fixtures/tls_server.pem");
@@ -57,10 +60,13 @@ fn acceptor(clients_signed_by: Option<&[u8]>, cert: &[u8], key: &[u8]) -> TlsAcc
 }
 
 /// A TLS-terminating proxy on `127.0.0.1` — the address the fixtures' server
-/// certificate names — forwarding each accepted handshake to `upstream`, or
-/// closing it when there is none: an in-process test names no Redis.
+/// certificate names — forwarding each accepted handshake to the plaintext
+/// Redis `upstream` names, or closing it when there is none: an in-process
+/// test names no Redis.
 pub(crate) struct TlsProxy {
     pub(crate) addr: SocketAddr,
+    /// The URL of the Redis it fronts, as a client reaches it: over TLS.
+    fronts: String,
     /// Set, every handshake from then on presents the certificate issued for
     /// another host in place of Redis's own — a renewal that installed the
     /// wrong file.
@@ -75,6 +81,15 @@ impl TlsProxy {
         let right = acceptor(clients_signed_by, SERVER_CERT, SERVER_KEY);
         let wrong = acceptor(clients_signed_by, MISNAMED_CERT, MISNAMED_KEY);
         let misnamed = Arc::new(AtomicBool::new(false));
+        let dialled = upstream.as_deref().map(address_of);
+        let fronts = match &upstream {
+            Some(url) => format!(
+                "rediss://{}",
+                url.strip_prefix("redis://")
+                    .expect("the proxy forwards to a plaintext Redis")
+            ),
+            None => "rediss://localhost".to_owned(),
+        };
 
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -88,23 +103,27 @@ impl TlsProxy {
                 } else {
                     right.clone()
                 };
-                let upstream = upstream.clone();
+                let dialled = dialled.clone();
                 tokio::spawn(async move {
                     let mut client = match acceptor.accept(client).into_fallible().await {
                         Ok(client) => client,
                         Err((_, refused)) => return close_gracefully(refused).await,
                     };
-                    let Some(upstream) = upstream else {
+                    let Some(dialled) = dialled else {
                         return;
                     };
-                    let Ok(mut server) = TcpStream::connect(&upstream).await else {
+                    let Ok(mut server) = TcpStream::connect(&dialled).await else {
                         return;
                     };
                     let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
                 });
             }
         });
-        Self { addr, misnamed }
+        Self {
+            addr,
+            fronts,
+            misnamed,
+        }
     }
 
     pub(crate) fn present_a_certificate_issued_for_another_host(&self) {
@@ -114,7 +133,7 @@ impl TlsProxy {
     /// The proxy's URL on database `db`: a test that drops every connection on
     /// its database, or flushes it, takes one of its own.
     pub(crate) fn url_on(&self, db: u8) -> String {
-        format!("rediss://{}/{db}", self.addr)
+        url_at(&url_on(&self.fronts, db), self.addr)
     }
 }
 

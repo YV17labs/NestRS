@@ -52,6 +52,9 @@ impl Module for SeaOrmDatabaseModule {
         if !builder.mark_registered(TypeId::of::<Self>()) {
             return builder;
         }
+        // A no-op once collected; an importer that skipped `collect` gets what
+        // it queues refused by name (`LateFactoryError`), never left unbuilt.
+        builder = Self::collect(builder);
         // Read again rather than trusted to the factory above: a seeded
         // `dyn JobContext` skips it, and its check with it.
         if let Err(missing) = substrate(&builder.snapshot()) {
@@ -93,7 +96,7 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
-    use nest_rs_core::{App, ContestedDeclarationError};
+    use nest_rs_core::{App, ContestedDeclarationError, LateFactoryError};
     use nest_rs_worker::{JobSettlement, JobTransaction};
 
     use super::*;
@@ -192,5 +195,31 @@ mod tests {
             refused.starts_with("SeaOrmDatabaseModule: no `SeaOrmConfig` in the container"),
             "{refused}"
         );
+    }
+
+    /// A hand-written importer that registers the binding without collecting it.
+    struct RegistersOnly;
+
+    impl Module for RegistersOnly {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            <SeaOrmDatabaseModule as Module>::register(builder)
+        }
+    }
+
+    #[tokio::test]
+    async fn the_binding_registered_without_its_collect_fails_the_boot_naming_its_context() {
+        let Err(refused) = App::builder()
+            .provide(DatabaseConnection::default())
+            .provide(SeaOrmConfig::default())
+            .module::<RegistersOnly>()
+            .build()
+            .await
+        else {
+            panic!("every job would run bare, in silence");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<Arc<dyn JobContext>>());
     }
 }

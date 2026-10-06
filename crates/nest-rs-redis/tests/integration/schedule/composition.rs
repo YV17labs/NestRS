@@ -92,3 +92,11 @@ async fn the_binding_without_its_connection_fails_the_boot_naming_the_import() {
         "the boot error names the import that opens the connection: {rendered}",
     );
 }
+
+#[tokio::test]
+async fn the_binding_registered_without_its_collect_fails_the_boot_naming_its_lock() {
+    assert_eq!(
+        crate::registered_alone::<RedisScheduleModule>().await,
+        std::any::type_name::<Arc<dyn OccurrenceLock>>()
+    );
+}

@@ -22,7 +22,9 @@ pub struct RedisThrottlerModule;
 
 impl Module for RedisThrottlerModule {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        builder
+        // A no-op once collected; an importer that skipped `collect` gets what
+        // it queues refused by name (`LateFactoryError`), never left unbuilt.
+        Self::collect(builder)
     }
 
     fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {

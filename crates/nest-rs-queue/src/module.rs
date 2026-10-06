@@ -41,7 +41,9 @@ impl Module for QueueModule {
         if !builder.mark_registered(TypeId::of::<Self>()) {
             return builder;
         }
-        builder.provide_meta(TransportContribution {
+        // A no-op once collected; an importer that skipped `collect` gets what
+        // it queues refused by name (`LateFactoryError`), never left unbuilt.
+        Self::collect(builder).provide_meta(TransportContribution {
             name: "QueueWorker",
             build: |_| Ok(Box::new(QueueWorker::new())),
         })
@@ -50,9 +52,29 @@ impl Module for QueueModule {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::{Container, Discovery};
+    use nest_rs_core::{App, Container, Discovery, LateFactoryError};
 
     use super::*;
+
+    /// A hand-written importer that registers the module without collecting it.
+    struct RegistersOnly;
+
+    impl Module for RegistersOnly {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            QueueModule::register(builder)
+        }
+    }
+
+    #[tokio::test]
+    async fn the_module_registered_without_its_collect_fails_the_boot_naming_its_config() {
+        let Err(refused) = App::builder().module::<RegistersOnly>().build().await else {
+            panic!("the worker would run on a config nothing resolved");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<QueueConfig>());
+    }
 
     #[test]
     fn two_imports_attach_one_worker() {

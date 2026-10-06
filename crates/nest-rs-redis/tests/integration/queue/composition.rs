@@ -149,3 +149,11 @@ async fn a_second_queue_consumer_beside_redis_fails_the_boot_naming_the_remedy()
         "the boot error carries the port's remedy: {rendered}",
     );
 }
+
+#[tokio::test]
+async fn the_binding_registered_without_its_collect_fails_the_boot_naming_its_config() {
+    assert_eq!(
+        crate::registered_alone::<RedisQueueModule>().await,
+        std::any::type_name::<nest_rs_redis::RedisQueueConfig>()
+    );
+}

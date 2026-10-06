@@ -1,8 +1,8 @@
 //! `nest-rs-redis`'s suite in process, without a Redis: [`connection`] for the
 //! boot against a scripted server and the budget's place below the ports' nets,
 //! [`tls`] for a certificate refused at the handshake, and [`queue`] and
-//! [`schedule`] for what their bindings' composition refuses before Redis is
-//! dialled. What only a live Redis shows is in `e2e`.
+//! [`schedule`] and [`throttler`] for what their bindings' composition refuses
+//! before Redis is dialled. What only a live Redis shows is in `e2e`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -16,4 +16,28 @@ mod connection;
 mod harness;
 mod queue;
 mod schedule;
+mod throttler;
 mod tls;
+
+use nest_rs_core::{App, ContainerBuilder, LateFactoryError, Module};
+
+/// The type the boot names when a hand-written importer registers `M` without
+/// ever collecting it: what `M`'s `collect` queues, refused as late rather
+/// than never built.
+async fn registered_alone<M: Module + 'static>() -> &'static str {
+    struct RegistersOnly<N>(std::marker::PhantomData<N>);
+
+    impl<N: Module> Module for RegistersOnly<N> {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            N::register(builder)
+        }
+    }
+
+    let Err(refused) = App::builder().module::<RegistersOnly<M>>().build().await else {
+        panic!("what the binding queues in `collect` would never be built");
+    };
+    refused
+        .downcast_ref::<LateFactoryError>()
+        .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"))
+        .type_name
+}

@@ -34,6 +34,16 @@ pub fn __dynamic_import_module<D: DynamicModule>(_import: impl FnOnce() -> D) ->
 /// `#[module(imports = [...])]`. The `#[module]` macro makes registration
 /// idempotent via [`ContainerBuilder::mark_registered`], so a diamond import
 /// builds its providers exactly once.
+///
+/// # Written by hand
+///
+/// An importer runs [`collect`](Self::collect), then [`register`](Self::register),
+/// as `#[module]` and the app builder do. A hand-written module whose `collect`
+/// queues anything dedupes it with [`ContainerBuilder::mark_collected`] and
+/// starts its `register` with `Self::collect(builder)`, as the macro's
+/// expansion does: registered by an importer that skipped `collect`, it then
+/// has what it queues refused by name
+/// ([`LateFactoryError`](crate::LateFactoryError)) rather than never built.
 pub trait Module {
     /// Build this module's providers and recurse into imports. Runs in the
     /// register phase, after every async factory has produced its value.

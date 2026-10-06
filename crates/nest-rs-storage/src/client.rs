@@ -360,17 +360,12 @@ impl Storage {
             attributes,
             ..Default::default()
         };
-        let budget = self.config.operation_timeout;
         let mut upload = UploadGuard::new(
-            bounded(
-                budget,
-                self.store()?.put_multipart_opts(&Path::from(key), opts),
-            )
-            .await
-            .and_then(|created| created)
-            .map_err(StorageError::Put)?,
+            self.answered(self.store()?.put_multipart_opts(&Path::from(key), opts))
+                .await
+                .map_err(StorageError::Put)?,
             key,
-            budget,
+            self.config.operation_timeout,
         );
 
         let mut stream = std::pin::pin!(stream);
@@ -395,7 +390,7 @@ impl Storage {
             let part = upload
                 .get()
                 .put_part(PutPayload::from_iter(pending.drain(..)));
-            if let Err(e) = bounded(budget, part).await.and_then(|shipped| shipped) {
+            if let Err(e) = self.answered(part).await {
                 upload.abort().await;
                 return Err(StorageError::Put(e));
             }
@@ -405,12 +400,11 @@ impl Storage {
         // The tail ships even when empty: a multipart upload with no part at all
         // is rejected on completion, so a zero-byte stream still needs one.
         let tail = upload.get().put_part(PutPayload::from_iter(pending));
-        if let Err(e) = bounded(budget, tail).await.and_then(|shipped| shipped) {
+        if let Err(e) = self.answered(tail).await {
             upload.abort().await;
             return Err(StorageError::Put(e));
         }
-        let completed = bounded(budget, upload.get().complete()).await;
-        if let Err(e) = completed.and_then(|completed| completed.map(drop)) {
+        if let Err(e) = self.answered(upload.get().complete()).await {
             upload.abort().await;
             return Err(StorageError::Put(e));
         }

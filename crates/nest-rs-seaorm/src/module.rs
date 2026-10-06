@@ -57,16 +57,7 @@ impl DynamicModule for SeaOrmSetup {
 
     fn collect(&self, mut builder: ContainerBuilder) -> ContainerBuilder {
         if builder.mark_collected(TypeId::of::<SeaOrmModule>()) {
-            // Ambient: `Repo` reaches the pool from whatever unit of work runs,
-            // whether or not the code there injects it.
-            builder = builder.provide_meta(Budget::ambient::<DatabaseConnection>(
-                "the SeaORM pool",
-                format!(
-                    "{}, or `SeaOrmConfig::connect_timeout_secs` in code",
-                    nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"),
-                ),
-                acquire_budget,
-            ));
+            builder = builder.provide_meta(pool_budget(BudgetReach::Injected));
         }
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
@@ -79,6 +70,30 @@ impl DynamicModule for SeaOrmSetup {
                 .expect("SeaOrmConfig is resolved by ConfigModule::provide_feature");
             connect(&config).await
         })
+    }
+}
+
+/// Who reaches the pool: the code injecting it, or — once
+/// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) installs `Repo`'s
+/// executor around every unit of work — any code at all.
+pub(crate) enum BudgetReach {
+    Injected,
+    Ambient,
+}
+
+/// The pool's [`Budget`]: how long a query waits for a connection.
+pub(crate) fn pool_budget(reach: BudgetReach) -> Budget {
+    let setting = format!(
+        "{}, or `SeaOrmConfig::connect_timeout_secs` in code",
+        nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"),
+    );
+    match reach {
+        BudgetReach::Injected => {
+            Budget::of::<DatabaseConnection>("the SeaORM pool", setting, acquire_budget)
+        }
+        BudgetReach::Ambient => {
+            Budget::ambient::<DatabaseConnection>("the SeaORM pool", setting, acquire_budget)
+        }
     }
 }
 

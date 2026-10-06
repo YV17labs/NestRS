@@ -225,12 +225,15 @@ backend that cannot answer. **The net is not the backend's budget** — an adapt
 still bounds each command it sends, so an outage arrives as the backend's own
 error with its cause, and the net fires only on a backend that stopped bounding
 itself. **The boot holds every budget under each net reaching it**
-(`nest_rs_core::{Budget, Net}`): the module opening a resource declares its
-budget, and whoever arms a net declares it — a binding over the resource it
-hands its port, a guard around its strategy; a default is pinned by a unit test
-wherever both constants are visible. **A command whose answer is the only
-record of what it claimed is never cut** — a timeout does not undo it — so it
-waits on the socket's liveness instead (`queue.md`). Past a net every member
+(`nest_rs_core::{Budget, Net}`), refused as soon as the resource exists: the
+module opening a resource declares its budget, as does each binding handing it
+to a port or installing it around every unit of work, and whoever arms a net
+declares it — a binding over the resource it hands its port, a guard around its
+strategy; a default is pinned by a unit test wherever both constants are
+visible. An edge's deadline is the deployment's, not a net: only its default is
+ordered. **A command whose answer is the only record of what it claimed is
+never cut** — a timeout does not undo it — so it waits on the socket's liveness
+instead (`queue.md`). Past a net every member
 fails closed in its own terms: an occurrence claim skips the occurrence at
 `warn`; a throttler hit denies the request for the window at `warn` naming the
 store; a push or cancel is an error to its caller and a checkpoint call fails

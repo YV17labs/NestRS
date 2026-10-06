@@ -74,21 +74,21 @@ async fn a_bare_import_beside_a_for_root_binds_once_with_the_pinned_config() {
     );
 }
 
-// The lease leaves a renewal room under the budget, so the net is the one
-// refusal: the lease's own is the consumer factory's, and runs first.
 #[module(imports = [
     RedisModule::for_root(nest_rs_redis::RedisConfig {
         connect_timeout: nest_rs_queue::BACKEND_TIMEOUT,
         ..redis_config()
     }),
-    RedisQueueModule::for_root(RedisQueueConfig { lease: std::time::Duration::from_secs(31) }),
+    RedisQueueModule,
 ])]
 struct PatientProducerModule;
 
 /// A budget at the queue port's net would let the port give up on a push still
 /// answering, and fail it without its cause: the binding declares the net over
 /// the connection, so the boot refuses it — a producer-only app included —
-/// naming both durations and the variable.
+/// naming both durations and the variable. Refused once the connection opens,
+/// before the consumer's factory refuses the default lease that budget leaves
+/// no renewal room in, whose remedy would only lead here.
 #[tokio::test]
 async fn a_budget_at_the_queue_ports_net_fails_the_boot() {
     let Err(refused) = App::builder()
@@ -136,5 +136,34 @@ async fn a_lease_a_renewal_cannot_fit_in_fails_the_boot() {
         said.contains(&nest_rs_config::var_name("redis__queue", "LEASE_SECS"))
             && said.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
         "{said}"
+    );
+}
+
+#[module(imports = [RedisQueueModule])]
+struct BareBindingModule;
+
+/// A connection seeded rather than opened by `RedisModule` — the path a test
+/// takes — is held under the binding's net all the same, before any factory
+/// runs.
+#[tokio::test]
+async fn a_seeded_connection_past_the_queue_ports_net_fails_the_boot() {
+    let patient = nest_rs_redis::RedisConnection::connect(&nest_rs_redis::RedisConfig {
+        connect_timeout: nest_rs_queue::BACKEND_TIMEOUT,
+        ..redis_config()
+    })
+    .await
+    .expect("connect to the dev container Redis");
+    let Err(refused) = App::builder()
+        .provide(patient)
+        .module::<BareBindingModule>()
+        .build()
+        .await
+    else {
+        panic!("a seeded connection at the queue port's net must not boot");
+    };
+    let refused = crate::budget_past_net(refused);
+    assert_eq!(
+        (refused.resource, refused.port),
+        ("the Redis connection", "the queue port")
     );
 }

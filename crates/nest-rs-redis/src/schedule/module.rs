@@ -35,6 +35,7 @@ impl Module for RedisScheduleModule {
         // (`BACKEND_REMEDY`); queued after the connection's factory, so
         // `imports` order is not a wiring mistake a reader has to know about.
         builder
+            .provide_meta(RedisConnection::declared_budget())
             .provide_meta(Net::over::<RedisConnection>(
                 "the scheduler",
                 nest_rs_schedule::LOCK_TIMEOUT,

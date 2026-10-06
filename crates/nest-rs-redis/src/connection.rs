@@ -494,6 +494,20 @@ impl RedisConnection {
         self.budget
     }
 
+    /// The connection's [`Budget`](nest_rs_core::Budget), declared by
+    /// [`RedisModule`](crate::RedisModule) and by each binding beside its net,
+    /// so a connection seeded without the module is held too.
+    pub(crate) fn declared_budget() -> nest_rs_core::Budget {
+        nest_rs_core::Budget::of::<Self>(
+            "the Redis connection",
+            format!(
+                "{}, or `RedisConfig::connect_timeout` in code",
+                nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+            ),
+            |conn| Some(conn.budget()),
+        )
+    }
+
     /// Run `script`, loading it again each time Redis answers it holds none, at
     /// most [`SCRIPT_LOADS`] times.
     pub(crate) async fn invoke<T: FromRedisValue>(

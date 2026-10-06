@@ -11,6 +11,7 @@
 mod harness;
 
 mod create;
+mod database;
 #[cfg(feature = "graphql")]
 mod graphql;
 mod interceptor;

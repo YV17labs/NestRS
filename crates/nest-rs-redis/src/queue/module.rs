@@ -38,6 +38,7 @@ impl RedisQueueModule {
     /// connection, which the boot holds the connection's budget under.
     fn bind(builder: ContainerBuilder) -> ContainerBuilder {
         builder
+            .provide_meta(RedisConnection::declared_budget())
             .provide_meta(Net::over::<RedisConnection>("the queue port", BACKEND_TIMEOUT))
             .provide_factory_after::<RedisQueueProducer, RedisConnection, _, _>(
                 |container| async move {

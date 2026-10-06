@@ -9,11 +9,13 @@ use std::sync::Arc;
 use nest_rs_core::{ContainerBuilder, Module};
 use sea_orm::DatabaseConnection;
 
-use crate::module::POOL_REMEDY;
+use crate::module::{BudgetReach, POOL_REMEDY, pool_budget};
 
 /// Binds the ambient executor: the `DbContext` request interceptor for HTTP
 /// (feature `http`), the `WorkerDbContext as dyn JobContext` bridge for jobs,
-/// and the link-time audits this binding brings.
+/// and the link-time audits this binding brings. Code anywhere then reaches the
+/// pool through `Repo`, so the binding declares its budget ambient: every net
+/// around developer code holds it.
 pub struct SeaOrmDatabaseModule;
 
 impl Module for SeaOrmDatabaseModule {
@@ -25,6 +27,7 @@ impl Module for SeaOrmDatabaseModule {
         if !builder.mark_collected(TypeId::of::<Self>()) {
             return builder;
         }
+        builder = builder.provide_meta(pool_budget(BudgetReach::Ambient));
         // The worker bridge is a factory output so it counts as global
         // infrastructure for every transport that runs jobs — and a factory
         // declared *after* the pool's, so the one thing it can fail on is the

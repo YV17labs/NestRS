@@ -32,9 +32,11 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
-/// The acquire budget when none is set — Redis's — below every net a query waits
-/// under: the authentication guard's 20 s and the HTTP edge's 30 s, which sqlx's
-/// own 30 s reached, so a pool that ran dry was said as the net's timeout.
+/// The acquire budget when none is set — Redis's — below the authentication
+/// guard's 20 s net and the HTTP edge's default 30 s deadline, which sqlx's own
+/// 30 s reached, so a pool that ran dry was said as their timeout. The edge's
+/// deadline is the deployment's to lower, so it is ordered by default only,
+/// never held as a net.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
@@ -50,9 +52,10 @@ pub struct SeaOrmConfig {
     /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
     pub min_connections: Option<u32>,
     /// How long to wait for a connection before failing, in whole seconds, from
-    /// 1 to 3600; `None` waits 10 s. `Repo` reaches the pool from any unit of
-    /// work, so the boot refuses a budget at or past the net of a guard around
-    /// developer code — the authentication guard's 20 s.
+    /// 1 to 3600; `None` waits 10 s. The boot refuses a budget at or past the
+    /// net of a guard whose code reaches the pool — the authentication guard's
+    /// 20 s — which is every guard's once
+    /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) binds `Repo`.
     pub connect_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
@@ -165,8 +168,8 @@ mod tests {
 
     /// A query waits for a pooled connection under the authentication guard's
     /// net when a strategy resolves an identity, and under the HTTP edge's
-    /// request timeout in a handler: the default budget sits below both, so an
-    /// exhausted pool answers with its own error, never the net's.
+    /// deadline in a handler: the default budget sits below both defaults, so
+    /// an exhausted pool answers with its own error, never theirs.
     #[test]
     fn the_default_budget_sits_below_every_net_a_query_runs_under() {
         let budget = pinned("postgres://localhost/app")

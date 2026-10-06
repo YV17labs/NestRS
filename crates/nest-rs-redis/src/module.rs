@@ -13,7 +13,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Budget, ContainerBuilder, DynamicModule};
+use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 use crate::{RedisConfig, RedisConnection};
 
@@ -46,14 +46,7 @@ impl DynamicModule for RedisSetup {
 
     fn collect(&self, mut builder: ContainerBuilder) -> ContainerBuilder {
         if builder.mark_collected(TypeId::of::<RedisModule>()) {
-            builder = builder.provide_meta(Budget::of::<RedisConnection>(
-                "the Redis connection",
-                format!(
-                    "{}, or `RedisConfig::connect_timeout` in code",
-                    nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
-                ),
-                |conn| Some(conn.budget()),
-            ));
+            builder = builder.provide_meta(RedisConnection::declared_budget());
         }
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<RedisConnection, _, _>(|container| async move {

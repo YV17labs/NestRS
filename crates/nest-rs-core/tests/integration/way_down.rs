@@ -1,12 +1,11 @@
-//! Covers `src/way_down.rs` — the end of the way down: the runtime's teardown
-//! under `#[main]`, and a signal received while the process is already
-//! stopping.
+//! Covers `src/way_down.rs` — a signal received while the process is already
+//! stopping, under `#[main]`; the runtime's teardown is the source file's own
+//! tests, which give it a budget shorter than the hooks'.
 //!
-//! Both are about the *process*, so both are asserted on one: the teardown
-//! through a decorated function, which builds and tears down a runtime of its
-//! own, and the signals through a child — this same test binary, re-run on one
-//! test — that the parent signals and whose exit it reads. A process that
-//! exits at once cannot be asserted on from inside.
+//! A signal is about the *process*, so it is asserted on one: a child — this
+//! same test binary, re-run on one test — that the parent signals and whose
+//! exit it reads. A process that exits at once cannot be asserted on from
+//! inside.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -14,146 +13,10 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use nest_rs_core::{
-    App, Container, ContainerBuilder, Module, SHUTDOWN_HOOKS_TIMEOUT, Transport,
-    TransportContribution, hooks, injectable, module,
+    App, Container, ContainerBuilder, Module, Transport, TransportContribution, hooks, injectable,
+    module,
 };
-use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
-
-/// How long the blocking call the stuck hook waits on lasts: past the hooks'
-/// budget by more than any scheduling noise, so a teardown that waited for it
-/// is told apart from one that did not.
-const BLOCKS_FOR: Duration = Duration::from_secs(8);
-
-/// A cleanup awaiting a blocking call that outlasts the budget — a synchronous
-/// client wrapped the usual way. The budget drops the hook's future; the
-/// blocking thread it was waiting on runs on.
-#[injectable]
-#[derive(Default)]
-struct WaitsOnBlocking;
-
-#[hooks]
-impl WaitsOnBlocking {
-    #[on_module_destroy]
-    async fn flush(&self) {
-        let _ = tokio::task::spawn_blocking(|| std::thread::sleep(BLOCKS_FOR)).await;
-    }
-}
-
-/// No transport: `App::run` goes straight to its way down.
-#[module(providers = [WaitsOnBlocking])]
-struct WaitsOnBlockingModule;
-
-/// The app as `#[main]` runs it — the decorator under test, on an `async fn`
-/// like any binary's `main`.
-#[nest_rs_core::main]
-async fn run_waits_on_blocking() -> anyhow::Result<()> {
-    App::new::<WaitsOnBlockingModule>()?.run().await
-}
-
-/// A hook the budget abandons no longer holds the exit. Under `#[tokio::main]`
-/// the runtime's drop waited for the blocking call the hook had been awaiting —
-/// the probe measured `App::run` returning at five seconds and the process at
-/// nine, after its last line. `#[main]` tears the runtime down within what the
-/// hooks left of their budget, which they spent: the exit comes with the budget.
-#[test]
-fn a_hook_abandoned_at_the_budget_no_longer_holds_the_exit() {
-    let logs = LogCapture::install_global();
-    let started = Instant::now();
-
-    run_waits_on_blocking().expect("the app stops cleanly");
-
-    let took = started.elapsed();
-    assert!(
-        took >= SHUTDOWN_HOOKS_TIMEOUT && took < SHUTDOWN_HOOKS_TIMEOUT + Duration::from_secs(1),
-        "the process ended with the hooks' budget, not with the blocking call ({BLOCKS_FOR:?}): \
-         took {took:?}",
-    );
-    let abandoned = logs.expect_one(
-        nest_rs_core::target::LIFECYCLE,
-        "shutdown hook abandoned: the shutdown hooks' budget was spent while it waited, and the \
-         hooks after it still start",
-    );
-    assert_eq!(
-        abandoned.field("provider").as_deref(),
-        Some("WaitsOnBlocking")
-    );
-}
-
-/// An app with nothing to tear down: no transport, no hook.
-#[module(providers = [])]
-struct NothingToTearDownModule;
-
-/// Leaves blocking work behind that nobody awaits — a fire-and-forget write —
-/// then runs an app whose way down spends none of the hooks' budget.
-#[nest_rs_core::main]
-async fn leave_blocking_work_behind() -> anyhow::Result<()> {
-    tokio::task::spawn_blocking(|| std::thread::sleep(BLOCKS_FOR));
-    App::new::<NothingToTearDownModule>()?.run().await
-}
-
-/// Work still running as the runtime is torn down is given what the hooks left
-/// of their budget — all of it here, since none of them ran — and then abandoned
-/// with the process, and said: nothing named it before, since no hook waited on
-/// it.
-#[test]
-fn work_the_teardown_waited_out_is_abandoned_and_said() {
-    let logs = LogCapture::install();
-    let started = Instant::now();
-
-    leave_blocking_work_behind().expect("the app stops cleanly");
-
-    let took = started.elapsed();
-    assert!(
-        took >= SHUTDOWN_HOOKS_TIMEOUT - Duration::from_millis(100)
-            && took < SHUTDOWN_HOOKS_TIMEOUT + Duration::from_secs(1),
-        "the teardown waited out what was left of the hooks' budget, not the work \
-         ({BLOCKS_FOR:?}): took {took:?}",
-    );
-    let abandoned = logs.expect_one(
-        nest_rs_core::target::APP,
-        "work still running as the runtime is torn down is abandoned: the exit no longer waits \
-         for it",
-    );
-    assert_eq!(abandoned.level, "warn");
-    assert!(abandoned.field("budget_ms").is_some(), "{abandoned:#?}");
-}
-
-/// Leaves blocking work behind and runs no app — a tool's `main`, spawning a
-/// write it never awaits.
-#[nest_rs_core::main]
-async fn leave_blocking_work_behind_without_an_app() {
-    tokio::task::spawn_blocking(|| std::thread::sleep(BLOCKS_FOR));
-}
-
-/// A `main` that ran no app spent none of the hooks' budget, so its teardown is
-/// given all of it: blocking work it left behind is waited for as long as a hook
-/// would be, and named once it outlives that. With no budget recorded the
-/// teardown used to be given nothing, and the work was abandoned at once,
-/// without a line.
-#[test]
-fn a_main_that_ran_no_app_gives_what_it_left_behind_the_whole_budget() {
-    let logs = LogCapture::install();
-    let started = Instant::now();
-
-    leave_blocking_work_behind_without_an_app();
-
-    let took = started.elapsed();
-    assert!(
-        took >= SHUTDOWN_HOOKS_TIMEOUT && took < SHUTDOWN_HOOKS_TIMEOUT + Duration::from_secs(1),
-        "the teardown waited out the hooks' whole budget, not the work ({BLOCKS_FOR:?}) and \
-         not nothing: took {took:?}",
-    );
-    let abandoned = logs.expect_one(
-        nest_rs_core::target::APP,
-        "work still running as the runtime is torn down is abandoned: the exit no longer waits \
-         for it",
-    );
-    assert_eq!(
-        abandoned.field("budget_ms"),
-        Some(SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string()),
-    );
-}
 
 /// The role a child process plays, read from its environment. Unset — the
 /// ordinary run of the suite — the child test has nothing to do.

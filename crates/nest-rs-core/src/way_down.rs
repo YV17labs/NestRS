@@ -323,3 +323,131 @@ pub fn __main<T, F: Future<Output = T>>(main: F) -> T {
     }
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
+
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+    use crate::{App, ContainerBuilder, Module};
+
+    /// How long the blocking work a test leaves behind lasts: past every budget
+    /// a test records by more than any scheduling noise, so a teardown that
+    /// waited for it is told apart from one that did not.
+    const BLOCKS_FOR: Duration = Duration::from_secs(8);
+
+    const ABANDONED: &str = "work still running as the runtime is torn down is abandoned: the exit \
+                             no longer waits for it";
+
+    /// Leaves blocking work behind that nobody awaits — a fire-and-forget
+    /// write, or the call an abandoned hook was waiting on.
+    async fn leave_blocking_work_behind() {
+        tokio::task::spawn_blocking(|| std::thread::sleep(BLOCKS_FOR));
+    }
+
+    /// What `App::run` records once its hooks have run, `left` before the
+    /// deadline.
+    fn hooks_left(left: Duration) {
+        hooks_deadline(tokio::time::Instant::now() + left);
+    }
+
+    /// Work still running as the runtime is torn down is given what the hooks
+    /// left of their budget, and then abandoned with the process, and said.
+    #[test]
+    fn work_outliving_what_the_hooks_left_is_abandoned_at_it_and_said() {
+        let logs = LogCapture::install();
+        let left = Duration::from_millis(300);
+        hooks_left(left);
+        let started = Instant::now();
+
+        __main(leave_blocking_work_behind());
+
+        let took = started.elapsed();
+        assert!(
+            took >= left - Duration::from_millis(100) && took < left + Duration::from_secs(1),
+            "the teardown waited out what the hooks left, not the work ({BLOCKS_FOR:?}): took \
+             {took:?}",
+        );
+        let abandoned = logs.expect_one(crate::target::APP, ABANDONED);
+        assert_eq!(abandoned.level, "warn");
+        let budget_ms: u128 = abandoned
+            .field("budget_ms")
+            .and_then(|ms| ms.parse().ok())
+            .expect("the budget it was given");
+        assert!(budget_ms <= left.as_millis(), "{abandoned:#?}");
+    }
+
+    /// Hooks that spent the budget leave the teardown nothing: the blocking call
+    /// an abandoned hook was waiting on no longer holds the exit — under
+    /// `#[tokio::main]` it held it past its last line — and a teardown that
+    /// waited not at all says nothing it cannot know.
+    #[test]
+    fn a_teardown_the_hooks_left_nothing_holds_the_exit_for_nothing() {
+        let logs = LogCapture::install();
+        hooks_left(Duration::ZERO);
+        let started = Instant::now();
+
+        __main(leave_blocking_work_behind());
+
+        let took = started.elapsed();
+        assert!(took < Duration::from_secs(1), "took {took:?}");
+        assert!(logs.find(crate::target::APP, ABANDONED).is_empty());
+    }
+
+    /// A `main` that ran no app spent none of the hooks' budget, so its
+    /// teardown is given all of it, and blocking work it left behind is waited
+    /// for. With no budget recorded the teardown used to be given nothing, and
+    /// the work was abandoned at once, without a line.
+    #[test]
+    fn a_main_that_ran_no_app_gives_what_it_left_behind_the_whole_budget() {
+        assert_eq!(teardown_budget(), crate::SHUTDOWN_HOOKS_TIMEOUT);
+        let written = Arc::new(AtomicBool::new(false));
+        let writes = Arc::clone(&written);
+
+        __main(async move {
+            tokio::task::spawn_blocking(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                writes.store(true, Ordering::SeqCst);
+            });
+        });
+
+        assert!(
+            written.load(Ordering::SeqCst),
+            "the write it left behind was waited for"
+        );
+    }
+
+    /// An app with nothing to tear down: no transport, no hook.
+    struct NothingToTearDown;
+    impl Module for NothingToTearDown {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+    }
+
+    /// `App::run` records where the hooks' budget ends as their phases start,
+    /// which is what the teardown above is given.
+    #[tokio::test]
+    async fn an_app_run_records_where_its_hooks_budget_ends() {
+        let ran = Instant::now();
+        App::new::<NothingToTearDown>()
+            .expect("boots")
+            .run()
+            .await
+            .expect("stops cleanly");
+        let recorded = HOOKS_DEADLINE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the run recorded its deadline");
+        assert!(
+            recorded >= ran + crate::SHUTDOWN_HOOKS_TIMEOUT
+                && recorded <= Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT,
+            "{:?} after the run started",
+            recorded - ran,
+        );
+    }
+}

@@ -1,5 +1,7 @@
 use nest_rs_core::{container::ContainerBuilder, module::Module};
 
+use crate::OpenTelemetryError;
+
 #[cfg(feature = "otlp")]
 use crate::meter::OpenTelemetryMeter;
 
@@ -14,28 +16,16 @@ use crate::meter::OpenTelemetryMeter;
 ///
 /// **Ordering:** [`crate::OpenTelemetry::init`] must run before this module is
 /// registered, or the global tracer/meter are no-ops and signals are silently
-/// dropped — boot panics with a clear message.
+/// dropped — the boot fails with [`OpenTelemetryError::InitMissing`].
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {
-    #[expect(
-        clippy::panic,
-        reason = "Module::register has no Result, and booting on would drop every signal in silence"
-    )]
     fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
         if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
             return builder;
         }
-        // Module::register has no Result to thread back, so a panic is the
-        // only way to surface the ordering contract before signals are lost.
         if !crate::init::initialized() {
-            panic!(
-                "OpenTelemetryModule was imported without calling `OpenTelemetry::init` first — \
-                 the global tracer and meter are no-ops, so traces and metrics would be \
-                 silently dropped. Add `let _otel = \
-                 nest_rs::opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the top of `main`, \
-                 before building the app."
-            );
+            return builder.refuse(OpenTelemetryError::InitMissing);
         }
         #[cfg(feature = "otlp")]
         let builder = {

@@ -21,7 +21,7 @@ use crate::container::{Container, ContainerBuilder, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
-    UnresolvedFactoryError,
+    LateFactoryError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
@@ -75,16 +75,33 @@ fn check_no_queued_factories(builder: &ContainerBuilder) -> Result<()> {
     Ok(())
 }
 
+/// What the register phase leaves the boot to refuse, on either path: a
+/// module's own refusal first, then what an import declared or queued there,
+/// then a type registered twice.
+fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
+    if let Some(refusal) = builder.take_refusal() {
+        return Err(refusal);
+    }
+    // A dynamic import whose value no collect parked collects in `register`,
+    // so it may declare there too.
+    check_contested_declarations(builder)?;
+    if let Some(type_name) = builder.late_factory_name() {
+        return Err(LateFactoryError { type_name }.into());
+    }
+    check_duplicate_providers(builder)
+}
+
 impl App {
     /// Build the container from the root module synchronously. Every wiring
     /// failure is a `Result`: a cross-module reach returns
     /// [`AccessGraphError`](crate::AccessGraphError), a dependency no module
     /// provides returns [`MissingDependencyError`](crate::MissingDependencyError),
     /// a doubly-registered type returns
-    /// [`DuplicateProviderError`]. The register
+    /// [`DuplicateProviderError`], a provider cycle
+    /// [`ProviderCycleError`](crate::ProviderCycleError), and a module's own
+    /// refusal ([`ContainerBuilder::refuse`]) the error it filed. The register
     /// phase defers a missing dependency to the access-graph check rather than
-    /// panicking ahead of it; only a true provider cycle (invisible to the
-    /// graph) still panics.
+    /// panicking ahead of it.
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
@@ -107,7 +124,8 @@ impl App {
         // an async factory would never exist — refused before `register`, which
         // builds providers from those outputs and would panic on the hole.
         check_no_queued_factories(&builder)?;
-        let builder = M::register(builder.enter_root(root)).leave_import();
+        let mut builder = M::register(builder.enter_root(root)).leave_import();
+        check_register_phase(&mut builder)?;
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
         // front regardless of seed ordering.
@@ -116,11 +134,6 @@ impl App {
             TypeId::of::<ProviderOrder>(),
             TypeId::of::<Composition>(),
         ]);
-        check_duplicate_providers(&builder)?;
-        // Again for what `register` queued: a dynamic import with no parked
-        // value collects there.
-        check_contested_declarations(&builder)?;
-        check_no_queued_factories(&builder)?;
         // The actual registered set (singletons + scoped/transient factories +
         // imperatively-provided values) — consulted so a dependency provided
         // outside the declarative graph is not misreported as unmet.
@@ -315,7 +328,9 @@ struct ModuleHooks {
 ///    **skipped** (a seed wins over a module's `for_root` factory — the path
 ///    a test takes to inject a pre-built resource).
 /// 4. **Register** — each module's [`register`](crate::Module::register) builds
-///    its providers last, injecting seeds and factory outputs.
+///    its providers last, injecting seeds and factory outputs. A module that
+///    cannot build what it must [`refuse`](ContainerBuilder::refuse)s, and the
+///    boot fails with its error once the phase ends.
 ///
 /// The collect/factory split is what lets a module own an async resource while
 /// still being declared in `#[module(imports = [...])]` — `register` is
@@ -539,12 +554,12 @@ impl AppBuilder {
         for hooks in &modules {
             builder = (hooks.register)(builder.enter_root(hooks.name)).leave_import();
         }
+        check_register_phase(&mut builder)?;
         // Overrides last so they win over the modules' registrations.
         for ov in overrides {
             builder = ov(builder);
         }
 
-        check_duplicate_providers(&builder)?;
         let builder = seal(builder, &descriptors, &roots, &global, &global_keyed)?;
         Ok(App {
             container: builder.build(),
@@ -1080,5 +1095,84 @@ mod tests {
         let contributions = Discovery::new(app.container()).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "NullTransport");
+    }
+
+    // A module queuing its factory from `register`: the collect phase every
+    // factory is queued in has already ended, on either path.
+    struct Late(u32);
+    struct QueuesInRegisterModule;
+    impl Module for QueuesInRegisterModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Late(1)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_factory_queued_in_register_fails_either_boot_naming_its_type() {
+        let Err(built) = App::builder()
+            .module::<QueuesInRegisterModule>()
+            .build()
+            .await
+        else {
+            panic!("nothing drains a factory queued after the factory phase");
+        };
+        let Err(synchronous) = App::new::<QueuesInRegisterModule>() else {
+            panic!("nothing drains a factory on the synchronous path");
+        };
+        for refused in [built, synchronous] {
+            let late = refused
+                .downcast_ref::<LateFactoryError>()
+                .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+            assert!(late.type_name.ends_with("Late"), "{late:?}");
+        }
+    }
+
+    struct SeedsLateModule;
+    impl Module for SeedsLateModule {
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Late(7)) })
+        }
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            QueuesInRegisterModule::register(builder)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_factory_queued_in_register_for_a_present_type_is_passed_over() {
+        let app = App::builder()
+            .module::<SeedsLateModule>()
+            .build()
+            .await
+            .expect("the factory phase already built what the late factory would");
+        assert_eq!(app.container().get::<Late>().map(|late| late.0), Some(7));
+    }
+
+    struct Refused;
+    struct RefusingModule;
+    impl Module for RefusingModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+                .refuse(anyhow!("RefusingModule: the first refusal"))
+                .refuse(anyhow!("RefusingModule: a second refusal"))
+                .provide(Refused)
+                .provide(Refused)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_register_refusing_fails_either_boot_with_its_first_error() {
+        let Err(built) = App::builder().module::<RefusingModule>().build().await else {
+            panic!("a refusal fails the boot");
+        };
+        let Err(synchronous) = App::new::<RefusingModule>() else {
+            panic!("a refusal fails the synchronous boot");
+        };
+        for refused in [built, synchronous] {
+            assert_eq!(
+                format!("{refused:#}"),
+                "RefusingModule: the first refusal",
+                "the module's own error, ahead of the duplicate it also left"
+            );
+        }
     }
 }

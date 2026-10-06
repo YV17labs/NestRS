@@ -7,6 +7,16 @@ pub enum OpenTelemetryError {
     /// Carries the underlying message.
     #[error("OpenTelemetry init failed: {0}")]
     Init(String),
+    /// `OpenTelemetryModule` was imported in an app whose `main` never called
+    /// `OpenTelemetry::init`: the global tracer and meter are no-ops, so every
+    /// signal would be dropped in silence.
+    #[error(
+        "OpenTelemetryModule was imported without calling `OpenTelemetry::init` first — the \
+         global tracer and meter are no-ops, so traces and metrics would be silently dropped. \
+         Add `let _otel = nest_rs::opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the \
+         top of `main`, before building the app."
+    )]
+    InitMissing,
     /// A `<PREFIX>_OPENTELEMETRY__*` variable could not be read — both of its
     /// spellings set, or a `<KEY>_FILE` naming a file that cannot be read.
     #[error(transparent)]

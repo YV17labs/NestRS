@@ -139,8 +139,8 @@ impl ConfigModule {
 }
 
 /// The [`DynamicModule`] behind a `for_root` that only pins a config: resolves
-/// `C` (environment over the pinned base, per field) in the factory phase, then
-/// registers `M`'s ordinary wiring. The pinned base supersedes the plain env
+/// `C` (environment over the pinned base, per field) in the factory phase, and
+/// collects and registers `M`'s ordinary wiring. The pinned base supersedes the plain env
 /// factory `M` itself queues via [`for_feature`](ConfigModule::for_feature),
 /// wherever the two fall in `imports = [..]`.
 ///
@@ -156,6 +156,7 @@ impl<M: Module + 'static, C: Config> DynamicModule for ConfigSetup<M, C> {
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+        let builder = <M as Module>::collect(builder);
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }
 
@@ -344,6 +345,46 @@ mod tests {
             assert!(
                 err.contains("App::builder"),
                 "the failure names the boot path that works: {err}"
+            );
+        }
+
+        /// What a pinned module's own imports open beside its config.
+        struct Opened;
+
+        struct OpensModule;
+
+        impl Module for OpensModule {
+            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+                builder
+            }
+            fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+                builder.provide_factory(|_| async { Ok(Opened) })
+            }
+        }
+
+        #[module(imports = [ConfigModule::for_feature::<SeamConfig>(), OpensModule])]
+        struct OpeningOwner;
+
+        #[module(imports = [ConfigModule::setup::<OpeningOwner, SeamConfig>(SeamConfig {
+            bucket: "pinned".into(),
+        })])]
+        struct OnlyThePin;
+
+        /// A setup is its module, configured: what that module's imports queue
+        /// runs in the factory phase, as it does when the module is imported bare.
+        #[tokio::test]
+        async fn a_pinned_module_s_imports_queue_their_factories_in_collect() {
+            let app = App::builder()
+                .module::<OnlyThePin>()
+                .build()
+                .await
+                .expect("the pinned module boots");
+            assert!(app.container().get::<Opened>().is_some());
+            assert_eq!(
+                app.container()
+                    .get::<SeamConfig>()
+                    .map(|c| c.bucket.clone()),
+                Some("pinned".to_owned())
             );
         }
 

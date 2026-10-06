@@ -375,6 +375,9 @@ pub struct ContainerBuilder {
     /// Two declarations for one type: neither may silently win, so the build
     /// fails naming both (see [`ContestedDeclarationError`](crate::ContestedDeclarationError)).
     contested_factories: Vec<crate::ContestedDeclarationError>,
+    /// The first error a `register` refused the boot with — see
+    /// [`refuse`](Self::refuse).
+    refusal: Option<anyhow::Error>,
     /// The imports whose phase is running, innermost last — what a declaration
     /// made now is named by. Pushed and popped by the `#[module]` expansion
     /// around each import, and by the app builder around each root.
@@ -583,6 +586,24 @@ impl ContainerBuilder {
         self
     }
 
+    /// Refuse the boot from a `register`, which has no `Result` to return: the
+    /// boot fails with `error` once the register phase ends, as it fails with a
+    /// factory's own error in the factory phase. The first refusal is the one
+    /// reported; a module refusing returns without registering what it could
+    /// not build, rather than panicking on it.
+    pub fn refuse(mut self, error: impl Into<anyhow::Error>) -> Self {
+        if self.refusal.is_none() {
+            self.refusal = Some(error.into());
+        }
+        self
+    }
+
+    /// The refusal [`refuse`](Self::refuse) filed, taken by the boot as the
+    /// register phase ends.
+    pub(crate) fn take_refusal(&mut self) -> Option<anyhow::Error> {
+        self.refusal.take()
+    }
+
     /// Whether a provider for `id` has already been registered. Lets `#[module]`
     /// register providers in any order by checking dependencies against this.
     pub fn contains(&self, id: TypeId) -> bool {
@@ -623,11 +644,12 @@ impl ContainerBuilder {
     }
 
     /// Register phase for one dynamic import: consume the value the collect
-    /// phase parked at this site, or build one from `fallback` when there was
-    /// no collect phase (the synchronous [`App::new`](crate::App::new) path) —
-    /// and on that path, run its `collect` here too, so the import contributes
-    /// the same thing either way as far as synchronously is possible. Either
-    /// way the import expression runs exactly once.
+    /// phase parked at this site, or build one from `fallback` when nothing
+    /// parked one — which `#[module]` never leaves, since its `register`
+    /// collects the module first when no phase did — and then run its
+    /// `collect` here too, so the import contributes the same thing either way
+    /// as far as synchronously is possible. Either way the import expression
+    /// runs exactly once.
     ///
     /// **Internal ABI** — emitted by `#[module]`, lockstep with
     /// `nest-rs-core-macros`; do not call by hand.
@@ -648,9 +670,8 @@ impl ContainerBuilder {
                 // No collect phase ran, so run it here: its synchronous half
                 // (`ConfigRootSetup` registering `Environment`) would otherwise
                 // be skipped without a trace. Anything it queues as an async
-                // factory stays queued, which is exactly what lets
-                // `App::new` refuse instead of booting the hole
-                // (`UnresolvedFactoryError`).
+                // factory stays queued, which is exactly what lets the boot
+                // refuse instead of booting the hole (`LateFactoryError`).
                 let value = fallback();
                 let builder = value.collect(self);
                 value.register(builder)
@@ -1061,11 +1082,22 @@ impl ContainerBuilder {
         std::mem::take(&mut self.factories)
     }
 
-    /// Types a module queued an async factory for. Non-empty at the end of the
-    /// synchronous [`App::new`](crate::App::new) register phase means those
+    /// Types a module queued an async factory for. Non-empty after the
+    /// synchronous [`App::new`](crate::App::new) collect phase means those
     /// values will never exist — nothing drains the queue on that path.
     pub(crate) fn queued_factory_names(&self) -> Vec<&'static str> {
         self.factories.iter().map(|queued| queued.name).collect()
+    }
+
+    /// The first type a factory still queued would provide and nothing does —
+    /// read as the register phase ends, when no boot drains the queue again.
+    /// One whose output is present is passed over, as the factory phase passes
+    /// it over.
+    pub(crate) fn late_factory_name(&self) -> Option<&'static str> {
+        self.factories
+            .iter()
+            .find(|queued| !self.contains(queued.id()))
+            .map(|queued| queued.name)
     }
 
     /// Provider keys registered so far. Snapshotted by `AppBuilder::build`

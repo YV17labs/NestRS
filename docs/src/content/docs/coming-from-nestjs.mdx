@@ -198,8 +198,8 @@ defer one side of a cycle it cannot see until it runs. Rust does not offer the
 tie in the first place. Cargo refuses a dependency cycle **between crates**
 outright, so the layering you drew is the layering you get.
 
-Inside a module, two providers waiting on each other fail the register phase by
-name, and the panic carries the remedy:
+Inside a module, two providers waiting on each other fail the boot by name
+(`ProviderCycleError`), and the error carries the remedy:
 
 ```text
 module `PostsModule`: dependency cycle among provider(s) ["PostsService", "UsersService"] — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type

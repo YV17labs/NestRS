@@ -7,7 +7,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{App, ContainerBuilder, DynamicModule, module};
+use nest_rs_core::{App, ContainerBuilder, DynamicModule, LateFactoryError, Module, module};
 
 /// Counts how many times the import expression ran, and stamps each
 /// construction with a serial so a test can tell *which* value was installed.
@@ -93,8 +93,8 @@ struct SyncModule;
 
 #[test]
 fn a_dynamic_import_is_evaluated_once_on_the_sync_path() {
-    // `App::new` has no collect phase, so nothing is parked and `register`
-    // falls back to building the value itself — still exactly once.
+    // `App::new` collects first, as the async builder does, so the value is
+    // parked and `register` consumes it — still exactly once.
     BUILDS.store(0, Ordering::SeqCst);
 
     let app = App::new::<SyncModule>().expect("the module boots");
@@ -186,4 +186,50 @@ async fn a_dynamic_import_after_a_static_one_still_resolves_its_site() {
         7,
         "a mismatched collect/register index would leave the value parked",
     );
+}
+
+/// What a module's own import opens: its factory is queued only when that
+/// module is collected.
+struct Opened;
+
+struct OpensModule;
+
+impl Module for OpensModule {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
+
+    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.provide_factory(|_| async { Ok(Opened) })
+    }
+}
+
+#[module(imports = [OpensModule])]
+struct OpeningModule;
+
+/// A setup that registers its module and leaves out the module's `collect`.
+struct UncollectingSetup;
+
+impl DynamicModule for UncollectingSetup {
+    fn module() -> TypeId {
+        TypeId::of::<OpeningModule>()
+    }
+
+    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+        <OpeningModule as Module>::register(builder)
+    }
+}
+
+#[module(imports = [UncollectingSetup {}])]
+struct UncollectedModule;
+
+#[tokio::test]
+async fn a_module_registered_without_its_collect_fails_the_boot_naming_what_it_opens() {
+    let Err(refused) = App::builder().module::<UncollectedModule>().build().await else {
+        panic!("the factory its import queues would never run");
+    };
+    let late = refused
+        .downcast_ref::<LateFactoryError>()
+        .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+    assert!(late.type_name.ends_with("Opened"), "{late:?}");
 }

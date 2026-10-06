@@ -128,8 +128,8 @@ impl From<Option<McpConfig>> for McpOptions {
 
 /// [`DynamicModule`] returned by [`McpModule::for_root`]: resolves
 /// [`McpConfig`] (env over the pinned base) and provides the app's declared
-/// [`McpIdentity`]. Queued first, so it wins over — and skips — the plain env
-/// factory the base module queues.
+/// [`McpIdentity`]. The pinned base is a declaration, so it supersedes the
+/// plain env factory the base module queues, wherever the two fall.
 pub struct McpSetup {
     options: McpOptions,
 }
@@ -140,6 +140,7 @@ impl DynamicModule for McpSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+        let builder = <McpModule as Module>::collect(builder);
         ConfigModule::provide_feature(self.options.config.clone(), builder)
     }
 

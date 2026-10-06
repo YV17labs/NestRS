@@ -249,25 +249,23 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     // Stalled: split the two failure modes. A genuinely-missing
                     // dependency is *deferred* to the boot-time access-graph check
                     // (`App::new` / `App::builder().build()`), which fails with a
-                    // named `MissingDependencyError` / `AccessGraphError` — so the
-                    // register phase no longer panics ahead of it, and every
-                    // wiring failure surfaces through the same `Result`. A true
+                    // named `MissingDependencyError` / `AccessGraphError`. A true
                     // cycle (no missing dep, providers only waiting on each other)
-                    // is invisible to the graph, so it still fails loudly here.
+                    // is invisible to the graph, so it is refused here — either
+                    // way every wiring failure surfaces through the same `Result`.
                     let mut __cyclic: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
                     let mut __unprovided: ::std::vec::Vec<::std::string::String> =
                         ::std::vec::Vec::new();
                     #(#classifies)*
-                    if !__unprovided.is_empty() {
-                        // Leave the unbuilt providers out; the access-graph check
-                        // names the missing dependency and fails the boot cleanly.
-                        break;
-                    } else {
-                        ::std::panic!(
-                            "module `{}`: dependency cycle among provider(s) {:?} — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type",
-                            #name_str, __cyclic
-                        );
+                    if __unprovided.is_empty() {
+                        builder = builder.refuse(::nest_rs_core::ProviderCycleError {
+                            module: #name_str,
+                            type_names: __cyclic,
+                        });
                     }
+                    // Leave the unbuilt providers out; the access-graph check
+                    // names a missing dependency and fails the boot cleanly.
+                    break;
                 }
             }
             ::nest_rs_core::__module_registered(#name_str);
@@ -289,6 +287,10 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 ) {
                     return builder;
                 }
+                // A no-op once collected. A setup that left this module's
+                // `collect` out gets it here, too late for a factory, which the
+                // boot then refuses by name rather than leaving it unqueued.
+                builder = <#name as ::nest_rs_core::Module>::collect(builder);
                 #body
             }
 

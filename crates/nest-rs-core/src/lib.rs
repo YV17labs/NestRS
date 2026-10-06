@@ -123,8 +123,8 @@ pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
     AccessGraphError, BudgetPastNetError, ContestedDeclarationError, DecodeError,
-    DuplicateProviderError, FactoryCycleError, KeyedDependencyError, MissingDependencyError,
-    ScopeViolationError, UnresolvedFactoryError,
+    DuplicateProviderError, FactoryCycleError, KeyedDependencyError, LateFactoryError,
+    MissingDependencyError, ProviderCycleError, ScopeViolationError, UnresolvedFactoryError,
 };
 pub use error_message::{boxed_error, error_message};
 pub use identifier::UUID_V7_REQUIRED;

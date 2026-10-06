@@ -3,9 +3,11 @@
 //!
 //! They are here rather than beside the pass that raises them because half of
 //! them are not the access graph's at all — `DuplicateProviderError`,
-//! `ContestedDeclarationError`, `UnresolvedFactoryError` and `FactoryCycleError`
-//! are constructed only in [`app`](crate::app), by the registration and factory
-//! phases, and `BudgetPastNetError` by the budget check the boot ends on. Filed
+//! `ContestedDeclarationError`, `UnresolvedFactoryError`, `LateFactoryError` and
+//! `FactoryCycleError` are constructed only in [`app`](crate::app), by the
+//! registration and factory phases, `ProviderCycleError` by the `#[module]`
+//! expansion's register phase, and `BudgetPastNetError` by the budget check the
+//! boot ends on. Filed
 //! under `access.rs` the file's name was a claim about all of them and false
 //! for half: from the type a reader derived the wrong file, and from the file
 //! they were offered errors its own pass never raises.
@@ -225,6 +227,42 @@ pub struct UnresolvedFactoryError {
 )]
 pub struct FactoryCycleError {
     /// The types whose factories wait on each other.
+    pub type_names: Vec<&'static str>,
+}
+
+/// A module queued an async factory during the register phase, once the
+/// collect phase every factory is queued in had ended: no boot drains it, so
+/// the value would never exist. Raised by both boot paths as the register
+/// phase ends; a factory whose output is already present is discarded, as the
+/// factory phase discards it.
+///
+/// The usual cause is a [`DynamicModule`](crate::DynamicModule) whose `collect`
+/// leaves out its module's own [`Module::collect`](crate::Module::collect): the
+/// imports that module lists then collect in the register phase, too late.
+#[derive(Debug, Error)]
+#[error(
+    "`{type_name}` is provided by an async factory queued during the register phase, which no \
+     boot drains. Queue it in `collect` — a `DynamicModule` whose `collect` leaves out its \
+     module's own `Module::collect` makes that module's imports queue theirs in `register`."
+)]
+pub struct LateFactoryError {
+    /// The type whose factory was queued too late to run.
+    pub type_name: &'static str,
+}
+
+/// Providers of one module each wait on another of them, injected by its
+/// concrete type, so none can be built first. Raised by the register phase,
+/// since the access graph sees every dependency met.
+#[derive(Debug, Error)]
+#[error(
+    "module `{module}`: dependency cycle among provider(s) {type_names:?} — each waits on another \
+     provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete \
+     type"
+)]
+pub struct ProviderCycleError {
+    /// The module whose providers wait on each other.
+    pub module: &'static str,
+    /// The providers on the cycle.
     pub type_names: Vec<&'static str>,
 }
 

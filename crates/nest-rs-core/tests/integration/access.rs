@@ -414,3 +414,41 @@ async fn a_request_scoped_provider_may_hold_singletons_and_its_own_kind() {
         .await
         .expect("scoped→singleton, scoped→scoped and transient→scoped are all legal");
 }
+
+// Two providers of one module, each injecting the other by its concrete type:
+// every dependency is met, so only the register phase can see that none can be
+// built first.
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct CycleLeft {
+    #[inject]
+    right: Arc<CycleRight>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct CycleRight {
+    #[inject]
+    left: Arc<CycleLeft>,
+}
+
+#[module(providers = [CycleLeft, CycleRight])]
+struct CycleModule;
+
+#[test]
+fn providers_waiting_on_each_other_fail_the_boot_naming_the_cycle() {
+    let Err(refused) = App::new::<CycleModule>() else {
+        panic!("two providers waiting on each other cannot both be built");
+    };
+    let cycle = refused
+        .downcast_ref::<nest_rs_core::ProviderCycleError>()
+        .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
+    assert_eq!(cycle.module, "CycleModule");
+    assert_eq!(cycle.type_names, ["CycleLeft", "CycleRight"]);
+}

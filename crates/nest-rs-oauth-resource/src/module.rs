@@ -66,6 +66,7 @@ impl DynamicModule for OAuthResourceSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+        let builder = <OAuthResourceHost as Module>::collect(builder);
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<ProtectedResourceMetadata, _, _>(|container| async move {
             #[expect(

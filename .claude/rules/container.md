@@ -22,6 +22,10 @@ framework half.
   (providers built from seeds and factory outputs). `main` holds only
   `App::builder().module::<AppModule>()` and its transports; a synchronous app
   keeps `App::new`.
+- **A `register` refuses, never panics**: what it cannot build it files with
+  `ContainerBuilder::refuse` and returns, as a factory returns `Err`. A factory
+  is queued in `collect`, so a setup wiring a module recurses into it in both
+  phases; one queued later is refused (`LateFactoryError`).
 - **Providers are singletons unless scoped.** `scope = request` is built per
   request from the singleton root and is **one level deep**: it may inject
   singletons, never the reverse nor another request-scoped provider, and it is

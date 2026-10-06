@@ -153,7 +153,10 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn loads_clients_from_env() {
         figment::Jail::expect_with(|jail| {
             jail.set_env(
@@ -168,7 +171,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn fails_validation_when_no_clients() {
         figment::Jail::expect_with(|_| {
             let err = OAuthConfig::load().expect_err("empty clients must fail");
@@ -180,9 +186,10 @@ mod tests {
 ```
 
 This is the exact pattern `nest-rs-config`'s own tests use — see
-`crates/nest-rs-config/src/config.rs` and `service.rs`. The
-`#[allow(clippy::result_large_err)]` is for `Jail`'s fixed closure
-signature.
+`crates/nest-rs-config/src/config.rs` and `service.rs`. `Jail` fixes its
+closure's error type, which clippy finds too large: the exception is an
+`#[expect]` with its reason, never an `#[allow]`, so it fails the day the lint
+no longer fires.
 
 ## Default `<PREFIX>_ENV` in tests
 

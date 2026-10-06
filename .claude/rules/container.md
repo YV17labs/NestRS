@@ -244,7 +244,9 @@ an outbound HTTP surface (`CLAUDE.md`, hard "no").
 Known gaps, each owed a line in its crate's `//!` and an issue: a `Repo`
 statement and the `BEGIN` / `COMMIT` / `ROLLBACK` a job context settles through
 (`SeaOrmConfig` exposes no statement timeout — `nest-rs-seaorm`); an outbound
-call made by a queue job or a tick, which no edge timeout bounds. Synchronous
+call made by a queue job or a tick, which no edge timeout bounds; the storage
+client, whose bounds are `object_store`'s and which declares no budget
+(`nest-rs-storage`). Synchronous
 seams (`AbilityFactory`, the WS `Registry`, `ConfigSource`) and in-process
 listeners are outside the family.
 

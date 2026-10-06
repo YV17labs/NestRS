@@ -64,6 +64,18 @@
 //!   without holding the object whole, for bodies larger than memory.
 //! - [`Storage::list`] — the objects under a prefix, streamed as
 //!   [`ObjectEntry`] values.
+//!
+//! ## Known gap: the client's bounds are `object_store`'s
+//!
+//! A call waits on S3 within `object_store`'s defaults, none chosen here: 5 s
+//! to connect, 30 s per attempt with the body's transfer inside it — a
+//! [`get_stream`](Storage::get_stream) read for longer is cut and resumed by
+//! range, for 3 minutes at most — and retries for up to 3 minutes. That sits
+//! past the HTTP edge's request timeout, so a silent S3 under a handler is said
+//! as the edge's bare `503`. No port's net reaches the client in any shipped
+//! composition, and one budget cannot both bound a silent S3 and let a body of
+//! any size move, so it declares no `nest_rs_core::Budget` until it owns a
+//! bound on an answer apart from one on a transfer.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

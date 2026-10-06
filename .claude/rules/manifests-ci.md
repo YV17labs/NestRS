@@ -129,4 +129,6 @@ The tag equals the workspace `version`; `publish.yml` publishes. The changelog
 follows Keep a Changelog, one file per minor line — `changelog/<major>.<minor>.md`
 holds that line's releases and patches — and `CHANGELOG.md` is their index, newest
 first. A new line opens its file under `[Unreleased]` and its index row; a breaking
-change carries its upgrading entry.
+change carries its upgrading entry. A released entry is the record of what shipped
+and is never rewritten to a later rule; `[Unreleased]` is prose like any other,
+`<PREFIX>_` included.

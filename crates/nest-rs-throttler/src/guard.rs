@@ -2,7 +2,7 @@
 
 use std::fmt::{self, Write as _};
 use std::future::{Future as _, poll_fn};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -104,8 +104,9 @@ fn rate_limited(retry_after: Duration) -> Denial {
 ///
 /// **All four request-carrying edges.** The bucket is the unit the edge
 /// *addresses*, joined with the caller that edge can see: the matched route
-/// pattern and the client address on HTTP, the field name on GraphQL, the tool
-/// or prompt on MCP, the event and the connection on WS. Three of them are not
+/// pattern and the client's network on HTTP — its address in IPv4, its `/64`
+/// in IPv6 — the field name on GraphQL, the tool or prompt on MCP, the event
+/// and the connection on WS. Three of them are not
 /// reachable through the HTTP chain at all — `/graphql` and `/mcp` are
 /// [`EdgePosture::Exempt`](nest_rs_http::EdgePosture), and a WS message runs
 /// after the upgrade has returned — so a guard that only checked HTTP left them
@@ -404,17 +405,34 @@ impl nest_rs_guards::WsGuard for ThrottlerGuard {}
 /// is built in **one** allocation: the previous shape rendered the address to
 /// its own `String` only to interpolate it into the real key a line later.
 enum ClientId {
-    /// The resolved client address.
-    Ip(IpAddr),
+    /// The network the resolved address belongs to, with its prefix length: the
+    /// address itself in IPv4 (`/32`), its `/64` in IPv6 — the link one host's
+    /// addresses share (RFC 4291 §2.5.4) while it rotates the rest (RFC 8981).
+    Network(IpAddr, u8),
     /// No address could be resolved — every caller shares one bucket. See
     /// [`warn_shared_bucket`].
     Shared,
 }
 
+impl ClientId {
+    /// The network `ip` is counted under. An IPv4 client a dual-stack socket
+    /// reports as `::ffff:a.b.c.d` is counted as IPv4: its `/64` would be every
+    /// IPv4 client at once.
+    fn network(ip: IpAddr) -> Self {
+        match ip.to_canonical() {
+            IpAddr::V4(v4) => Self::Network(IpAddr::V4(v4), 32),
+            IpAddr::V6(v6) => Self::Network(
+                IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & !u128::from(u64::MAX))),
+                64,
+            ),
+        }
+    }
+}
+
 impl std::fmt::Display for ClientId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Ip(ip) => write!(f, "{ip}"),
+            Self::Network(ip, prefix) => write!(f, "{ip}/{prefix}"),
             Self::Shared => f.write_str("global"),
         }
     }
@@ -429,7 +447,7 @@ impl std::fmt::Display for ClientId {
 impl From<ClientOrigin> for ClientId {
     fn from(origin: ClientOrigin) -> Self {
         match origin {
-            ClientOrigin::Peer(ip) | ClientOrigin::Forwarded(ip) => Self::Ip(ip),
+            ClientOrigin::Peer(ip) | ClientOrigin::Forwarded(ip) => Self::network(ip),
             // The peer is a trusted proxy that forwarded no client address: it
             // is still an address, but everyone behind it shares this bucket.
             ClientOrigin::TrustedProxy(ip) => {
@@ -441,7 +459,7 @@ impl From<ClientOrigin> for ClientId {
                      every caller behind it shares one rate-limit bucket; make the proxy forward \
                      the client address",
                 );
-                Self::Ip(ip)
+                Self::network(ip)
             }
             ClientOrigin::Unknown => {
                 static SEEN: AtomicBool = AtomicBool::new(false);
@@ -615,13 +633,30 @@ mod tests {
         let addr = ip("203.0.113.50");
         assert_eq!(
             ClientId::from(ClientOrigin::Peer(addr)).to_string(),
-            "203.0.113.50"
+            "203.0.113.50/32"
         );
         assert_eq!(
             ClientId::from(ClientOrigin::Forwarded(addr)).to_string(),
-            "203.0.113.50",
+            "203.0.113.50/32",
             "a hop a trusted proxy forwarded keys the same as a direct peer",
         );
+    }
+
+    /// A host picks the low 64 bits of its IPv6 address at will and rotates them
+    /// (RFC 8981), so keyed on the address it would mint a bucket per request:
+    /// IPv6 keys on the `/64`, IPv4 on the address, and an IPv4 client a
+    /// dual-stack socket reports as `::ffff:a.b.c.d` on its IPv4 address.
+    #[test]
+    fn ipv6_keys_on_its_64_and_ipv4_on_its_address() {
+        let id = |addr: &str| ClientId::from(ClientOrigin::Peer(ip(addr))).to_string();
+        assert_eq!(id("2001:db8:1:2::1"), "2001:db8:1:2::/64");
+        assert_eq!(
+            id("2001:db8:1:2::1"),
+            id("2001:db8:1:2:ffff:ffff:ffff:fffe")
+        );
+        assert_ne!(id("2001:db8:1:2::1"), id("2001:db8:1:3::1"));
+        assert_eq!(id("::ffff:203.0.113.7"), id("203.0.113.7"));
+        assert_ne!(id("203.0.113.7"), id("203.0.113.8"));
     }
 
     // A proxy that forwards nothing still has an address, so the bucket is
@@ -631,7 +666,7 @@ mod tests {
         let proxy = ip("10.0.0.1");
         assert_eq!(
             ClientId::from(ClientOrigin::TrustedProxy(proxy)).to_string(),
-            "10.0.0.1",
+            "10.0.0.1/32",
         );
     }
 

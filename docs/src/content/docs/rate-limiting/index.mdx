@@ -20,7 +20,7 @@ see:
 
 | Edge | Bucket |
 |---|---|
-| HTTP | the matched route pattern + the client address |
+| HTTP | the matched route pattern + the client's network: its address in IPv4, its `/64` in IPv6 |
 | GraphQL | the field name + the caller's actor — an operation carries no client address, but it runs inside the request's scope |
 | MCP | the tool or prompt + the caller's actor — the same, carried across the task rmcp spawns for the operation |
 | WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |
@@ -170,6 +170,14 @@ The rest of the rule:
   the offending value — never a silent skip.
 - A request with no peer addr (synthetic, in-process) is counted
   against a literal `"global"` bucket.
+
+**The bucket is the client's network, not its exact address.** An IPv4 client
+counts under its address (`/32`). An IPv6 client counts under its `/64`, the
+link its host's addresses share (RFC 4291 §2.5.4): a host chooses the other 64
+bits itself and rotates them (RFC 8981), so keyed on the address it would get a
+fresh bucket with each one. An IPv4 client that a dual-stack listener reports as
+`::ffff:203.0.113.7` counts as `203.0.113.7`. The cost is that every host on one
+IPv6 link shares a bucket, the way every host behind one IPv4 NAT already does.
 
 The list is `<PREFIX>_HTTP__TRUSTED_PROXIES`, on the transport, not on the
 throttler: which proxies a deployment believes decides who *every* request is

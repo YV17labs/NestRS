@@ -286,13 +286,14 @@ mod tests {
         }
     }
 
-    /// The SDK's own bound on one provider's final export — five seconds in
-    /// opentelemetry_sdk 0.32. `OpenTelemetry`'s `Drop` no longer relies on it
-    /// (it holds all three to [`crate::FLUSH_TIMEOUT`] itself), but an abandoned
-    /// flush thread still runs until this bound, so an SDK bump that drops it
-    /// fails here rather than leaving such a thread exporting forever.
+    /// The tracer provider holds its final export to the bound it is handed,
+    /// which is how `OpenTelemetry`'s `Drop` calls it, with
+    /// [`crate::FLUSH_TIMEOUT`]. `Drop` holds all three providers to that bound
+    /// itself, but a flush thread it abandons still runs until the SDK's own,
+    /// so an SDK bump that stops honouring it fails here rather than leaving
+    /// such a thread exporting forever.
     #[test]
-    fn a_collector_that_never_answers_holds_the_final_flush_no_longer_than_the_sdk_bound() {
+    fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_it_is_handed() {
         use opentelemetry::trace::Tracer as _;
 
         // Bound and never accepted: the kernel completes the handshake, so the
@@ -312,8 +313,9 @@ mod tests {
             .build();
         provider.tracer("pin").in_span("queued", |_| {});
 
+        let bound = std::time::Duration::from_millis(200);
         let started = std::time::Instant::now();
-        let flushed = provider.shutdown();
+        let flushed = provider.shutdown_with_timeout(bound);
         let took = started.elapsed();
 
         assert!(
@@ -321,8 +323,8 @@ mod tests {
             "the final export never answered, so the flush cannot have succeeded",
         );
         assert!(
-            took >= std::time::Duration::from_secs(5) && took < std::time::Duration::from_secs(8),
-            "shutdown gave the export its five seconds and no more, took {took:?}",
+            took >= bound && took < bound + std::time::Duration::from_secs(1),
+            "shutdown gave the export its bound and no more, took {took:?}",
         );
     }
 

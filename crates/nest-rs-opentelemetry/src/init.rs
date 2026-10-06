@@ -213,83 +213,81 @@ where
 pub const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Drop for OpenTelemetry {
+    fn drop(&mut self) {
+        #[cfg(feature = "otlp")]
+        self.flush_within(FLUSH_TIMEOUT);
+    }
+}
+
+#[cfg(feature = "otlp")]
+impl OpenTelemetry {
+    /// Shut every provider down at once, waiting `bound` for all three
+    /// together — [`FLUSH_TIMEOUT`] from `Drop`.
     #[expect(
         clippy::print_stderr,
         reason = "the final flush runs after the subscriber it would log through is gone"
     )]
-    fn drop(&mut self) {
-        #[cfg(feature = "otlp")]
-        {
-            type Shutdown = Box<dyn FnOnce() -> opentelemetry_sdk::error::OTelSdkResult + Send>;
+    fn flush_within(&mut self, bound: std::time::Duration) {
+        type Shutdown = Box<dyn FnOnce() -> opentelemetry_sdk::error::OTelSdkResult + Send>;
 
-            // `Drop` can't return, and tracing may itself be mid-teardown, so
-            // every failure here goes to stderr directly. A failed or abandoned
-            // final flush loses telemetry, and says so.
-            let deadline = std::time::Instant::now() + FLUSH_TIMEOUT;
-            let mut flushes: Vec<(&'static str, Shutdown)> = Vec::new();
-            if let Some(p) = self.tracer_provider.take() {
-                flushes.push((
-                    "tracer",
-                    Box::new(move || p.shutdown_with_timeout(FLUSH_TIMEOUT)),
-                ));
-            }
-            // The metrics provider ignores the timeout it is handed and waits
-            // its reader's fixed five seconds (opentelemetry_sdk 0.32), which is
-            // why the bound is enforced here rather than trusted to the SDK.
-            if let Some(p) = self.meter_provider.take() {
-                flushes.push((
-                    "meter",
-                    Box::new(move || p.shutdown_with_timeout(FLUSH_TIMEOUT)),
-                ));
-            }
-            if let Some(p) = self.logger_provider.take() {
-                flushes.push((
-                    "logger",
-                    Box::new(move || p.shutdown_with_timeout(FLUSH_TIMEOUT)),
-                ));
-            }
+        // `Drop` can't return, and tracing may itself be mid-teardown, so
+        // every failure here goes to stderr directly. A failed or abandoned
+        // final flush loses telemetry, and says so.
+        let deadline = std::time::Instant::now() + bound;
+        let mut flushes: Vec<(&'static str, Shutdown)> = Vec::new();
+        if let Some(p) = self.tracer_provider.take() {
+            flushes.push(("tracer", Box::new(move || p.shutdown_with_timeout(bound))));
+        }
+        // The metrics provider ignores the timeout it is handed and waits
+        // its reader's fixed five seconds (opentelemetry_sdk 0.32), which is
+        // why the bound is enforced here rather than trusted to the SDK.
+        if let Some(p) = self.meter_provider.take() {
+            flushes.push(("meter", Box::new(move || p.shutdown_with_timeout(bound))));
+        }
+        if let Some(p) = self.logger_provider.take() {
+            flushes.push(("logger", Box::new(move || p.shutdown_with_timeout(bound))));
+        }
 
-            let (done, settled) = std::sync::mpsc::channel();
-            let mut pending: Vec<&'static str> = Vec::new();
-            for (provider, shutdown) in flushes {
-                let done = done.clone();
-                let spawned = std::thread::Builder::new()
+        let (done, settled) = std::sync::mpsc::channel();
+        let mut pending: Vec<&'static str> = Vec::new();
+        for (provider, shutdown) in flushes {
+            let done = done.clone();
+            let spawned = std::thread::Builder::new()
                     .name(format!("otel-flush-{provider}"))
                     .spawn(move || {
                         #[expect(clippy::let_underscore_must_use, reason = "the receiver stops listening at the deadline, which it reports itself")]
                         let _ = done.send((provider, shutdown()));
                     });
-                match spawned {
-                    Ok(_) => pending.push(provider),
-                    Err(e) => eprintln!(
-                        "{}: {provider} provider not flushed: no thread to flush it on: {e}",
-                        crate::TARGET,
-                    ),
-                }
+            match spawned {
+                Ok(_) => pending.push(provider),
+                Err(e) => eprintln!(
+                    "{}: {provider} provider not flushed: no thread to flush it on: {e}",
+                    crate::TARGET,
+                ),
             }
-            drop(done);
+        }
+        drop(done);
 
-            while !pending.is_empty() {
-                let left = deadline.saturating_duration_since(std::time::Instant::now());
-                match settled.recv_timeout(left) {
-                    Ok((provider, outcome)) => {
-                        pending.retain(|p| *p != provider);
-                        if let Err(e) = outcome {
-                            eprintln!(
-                                "{}: {provider} provider shutdown failed: {e}",
-                                crate::TARGET
-                            );
-                        }
-                    }
-                    Err(_) => {
+        while !pending.is_empty() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match settled.recv_timeout(left) {
+                Ok((provider, outcome)) => {
+                    pending.retain(|p| *p != provider);
+                    if let Err(e) = outcome {
                         eprintln!(
-                            "{}: final flush abandoned after {} ms, still exporting: {}",
-                            crate::TARGET,
-                            FLUSH_TIMEOUT.as_millis(),
-                            pending.join(", "),
+                            "{}: {provider} provider shutdown failed: {e}",
+                            crate::TARGET
                         );
-                        break;
                     }
+                }
+                Err(_) => {
+                    eprintln!(
+                        "{}: final flush abandoned after {} ms, still exporting: {}",
+                        crate::TARGET,
+                        bound.as_millis(),
+                        pending.join(", "),
+                    );
+                    break;
                 }
             }
         }
@@ -380,7 +378,9 @@ mod tests {
 
     /// A collector that takes the connection and never answers used to hold
     /// the exit for fifteen seconds — each provider's own five, in turn. The
-    /// three now flush at once, held to [`FLUSH_TIMEOUT`] between them.
+    /// three now flush at once, held to one bound between them — the meter's
+    /// included, which ignores the one it is handed — on a bound shorter than
+    /// [`FLUSH_TIMEOUT`], which the grace-period test holds.
     #[cfg(feature = "otlp")]
     #[test]
     fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_for_all_three_providers() {
@@ -442,17 +442,18 @@ mod tests {
         record.set_body("queued".into());
         logger.emit(record);
 
-        let guard = OpenTelemetry {
+        let mut guard = OpenTelemetry {
             tracer_provider: Some(tracer_provider),
             meter_provider: Some(meter_provider),
             logger_provider: Some(logger_provider),
         };
+        let bound = std::time::Duration::from_millis(200);
         let started = std::time::Instant::now();
-        drop(guard);
+        guard.flush_within(bound);
         let took = started.elapsed();
 
         assert!(
-            took >= FLUSH_TIMEOUT && took < FLUSH_TIMEOUT + std::time::Duration::from_secs(1),
+            took >= bound && took < bound + std::time::Duration::from_secs(1),
             "the three providers were held to one bound between them, took {took:?}",
         );
     }

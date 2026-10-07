@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, Module, Net};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Net, Registering};
 use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer};
 
 use super::consumer::RedisQueueConsumer;
@@ -81,14 +81,14 @@ impl RedisQueueModule {
 impl Module for RedisQueueModule {
     // A bare import still reads `<PREFIX>_REDIS__QUEUE__*`; a
     // `for_root(Some(cfg))`'s declared value supersedes this env-only one.
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         Self::bind(ConfigModule::provide_feature(
             None::<RedisQueueConfig>,
             builder,
         ))
     }
 
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 }
@@ -104,11 +104,11 @@ impl DynamicModule for RedisQueueSetup {
         TypeId::of::<RedisQueueModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder.import::<RedisQueueModule>())
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.import::<RedisQueueModule>()
     }
 }

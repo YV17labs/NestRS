@@ -278,14 +278,14 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nest_rs_core::Module for #name {
             fn register(
                 mut builder: ::nest_rs_core::ContainerBuilder,
-                _: ::nest_rs_core::Imported<Self>,
+                _: ::nest_rs_core::Registering<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
                 #body
             }
 
             fn collect(
                 mut builder: ::nest_rs_core::ContainerBuilder,
-                _: ::nest_rs_core::Imported<Self>,
+                _: ::nest_rs_core::Collecting<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
                 #(#collect_calls)*
                 builder

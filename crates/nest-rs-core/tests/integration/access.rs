@@ -6,7 +6,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    App, ContainerBuilder, Discoverable, DynamicModule, Imported, injectable, module,
+    App, ContainerBuilder, Discoverable, DynamicModule, Registering, injectable, module,
 };
 
 // A type no module provides — the dependency a scoped provider will fail to
@@ -140,7 +140,7 @@ impl DynamicModule for ClientSetup {
         TypeId::of::<ClientModule>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.import::<ClientModule>()
     }
 }
@@ -186,7 +186,7 @@ impl DynamicModule for OrderedSetup {
         TypeId::of::<ClientModule>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
             .import::<PrerequisiteModule>()
             .import::<ClientModule>()

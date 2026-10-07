@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Container, ContainerBuilder, Imported, Module};
+use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
 use nest_rs_worker::{BACKEND_REMEDY, JobContext};
 use sea_orm::DatabaseConnection;
 
@@ -23,7 +23,7 @@ impl Module for SeaOrmDatabaseModule {
     // Each phase runs once however many modules import the binding: two
     // importers install one interceptor and one audit, not two — a second
     // `DbContext` wrap would open a second transaction per request.
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = builder.provide_meta(pool_budget(BudgetReach::Ambient));
         // The worker bridge is a factory output so it counts as global
         // infrastructure for every transport that runs jobs — declared, so a
@@ -43,7 +43,7 @@ impl Module for SeaOrmDatabaseModule {
         })
     }
 
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         // Read again rather than trusted to the factory above: a seeded
         // `dyn JobContext` skips it, and its check with it.
         if let Err(missing) = substrate(&builder.snapshot()) {
@@ -110,11 +110,11 @@ mod tests {
     struct BareContextModule;
 
     impl Module for BareContextModule {
-        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder
         }
 
-        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
             builder.provide_factory_dyn::<BareContext, dyn JobContext, _, _>(
                 |_| async { Ok(BareContext) },
                 |context| Arc::new(context) as Arc<dyn JobContext>,
@@ -190,7 +190,7 @@ mod tests {
     struct RegistersOnly;
 
     impl Module for RegistersOnly {
-        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder.import::<SeaOrmDatabaseModule>()
         }
     }

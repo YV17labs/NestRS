@@ -3,7 +3,7 @@
 //! `#[process]` method over the queue backend a binding bound.
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{ContainerBuilder, Imported, Module, TransportContribution};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, TransportContribution};
 
 use crate::{QueueConfig, QueueWorker};
 
@@ -26,13 +26,13 @@ pub type QueueSetup = ConfigSetup<QueueModule, QueueConfig>;
 impl Module for QueueModule {
     // A bare import still reads `<PREFIX>_QUEUE__*`; a `for_root(Some(cfg))`'s
     // declared value supersedes this env-only one.
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(None::<QueueConfig>, builder)
     }
 
     // Registered once however many modules import it, so two importers attach
     // one worker, never two pools of permits running each method twice over.
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "QueueWorker",
             build: |_| Ok(Box::new(QueueWorker::new())),
@@ -50,7 +50,7 @@ mod tests {
     struct RegistersOnly;
 
     impl Module for RegistersOnly {
-        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder.import::<QueueModule>()
         }
     }

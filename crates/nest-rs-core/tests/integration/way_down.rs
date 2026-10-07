@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use nest_rs_core::{
-    App, Container, ContainerBuilder, Imported, Module, Transport, TransportContribution, hooks,
+    App, Container, ContainerBuilder, Module, Registering, Transport, TransportContribution, hooks,
     injectable, module,
 };
 use tokio_util::sync::CancellationToken;
@@ -81,7 +81,7 @@ impl Transport for NeverStops {
 struct NeverStopsModule;
 
 impl Module for NeverStopsModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "NeverStops",
             build: |_| Ok(Box::new(NeverStops)),
@@ -92,7 +92,7 @@ impl Module for NeverStopsModule {
 struct ServesUntilStoppedModule;
 
 impl Module for ServesUntilStoppedModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "ServesUntilStopped",
             build: |_| Ok(Box::new(ServesUntilStopped)),

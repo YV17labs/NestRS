@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{ContainerBuilder, Imported, Module, Net};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Net, Registering};
 use nest_rs_throttler::ThrottlerStore;
 
 use crate::RedisConnection;
@@ -20,11 +20,11 @@ use crate::throttler::RedisThrottler;
 pub struct RedisThrottlerModule;
 
 impl Module for RedisThrottlerModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         // Declared: it supersedes the port's ordinary in-memory factory, and a
         // second vendor binding contests it by name (`BACKEND_REMEDY`). Queued
         // after the connection's factory, so `imports` order is not a wiring

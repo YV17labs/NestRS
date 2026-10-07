@@ -4,7 +4,7 @@ use std::any::TypeId;
 
 use std::marker::PhantomData;
 
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, Module};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering};
 
 use crate::config::Config;
 use crate::environment::Environment;
@@ -155,11 +155,11 @@ impl<M: Module + 'static, C: Config> DynamicModule for ConfigSetup<M, C> {
         TypeId::of::<M>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder.import::<M>())
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.import::<M>()
     }
 }
@@ -176,7 +176,7 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     // Loading is sync-but-fallible and `register` cannot return an error, so
     // we queue a factory the build awaits — an Err there aborts boot with the
     // variable named.
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature::<C>(None, builder)
     }
 }
@@ -190,7 +190,7 @@ impl DynamicModule for ConfigRootSetup {
         TypeId::of::<ConfigModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         // `Environment::from_env` reads `<PREFIX>_ENV` from the real process env;
         // dotenv values reach config reads lazily via `env_var` (the in-crate
         // map), so collect mutates no process state — no `set_var` on the boot
@@ -212,7 +212,7 @@ mod tests {
     /// test, and a `seam::…` filter path existed nowhere else in either
     /// workspace, so "where is this asserted?" had two answers inside one file.
     mod seam {
-        use nest_rs_core::{App, ContainerBuilder, Imported, Module, module};
+        use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, module};
         use validator::Validate;
 
         use super::*;
@@ -240,10 +240,10 @@ mod tests {
         struct OwnerModule;
 
         impl Module for OwnerModule {
-            fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
                 builder
             }
-            fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
                 ConfigModule::provide_feature::<SeamConfig>(None, builder)
             }
         }
@@ -353,10 +353,10 @@ mod tests {
         struct OpensModule;
 
         impl Module for OpensModule {
-            fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
                 builder
             }
-            fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
                 builder.provide_factory(|_| async { Ok(Opened) })
             }
         }

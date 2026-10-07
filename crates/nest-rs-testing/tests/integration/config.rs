@@ -8,7 +8,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, injectable, module};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, injectable, module};
 use nest_rs_testing::TestApp;
 
 #[config(namespace = "demoapp")]
@@ -127,7 +127,7 @@ impl DynamicModule for DemoPinnedSetup {
         TypeId::of::<Self>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(Some(self.0.clone()), builder)
     }
 }

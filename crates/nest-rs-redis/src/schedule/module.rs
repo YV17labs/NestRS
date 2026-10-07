@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{ContainerBuilder, Imported, Module, Net};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Net, Registering};
 use nest_rs_schedule::OccurrenceLock;
 
 use crate::RedisConnection;
@@ -20,11 +20,11 @@ use crate::schedule::RedisOccurrenceLock;
 pub struct RedisScheduleModule;
 
 impl Module for RedisScheduleModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         // Declared, so a second lock backend contests it by name
         // (`BACKEND_REMEDY`); queued after the connection's factory, so
         // `imports` order is not a wiring mistake a reader has to know about.

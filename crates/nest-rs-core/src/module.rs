@@ -7,14 +7,24 @@ use std::marker::PhantomData;
 
 use crate::container::ContainerBuilder;
 
-/// The framework's proof that a phase of the module `M` runs through an
-/// import — [`ContainerBuilder::import`], a `#[module]` expansion or the app's
-/// roots — which runs `M`'s `collect` before its `register`, each once per
-/// app. Only the framework makes one, and one made for `M` serves `M` alone,
-/// so no module runs another's phase by hand.
-pub struct Imported<M: ?Sized>(PhantomData<fn(&M)>);
+/// The framework's proof that the collect phase of the module `M` runs through
+/// an import — [`ContainerBuilder::import`], a `#[module]` expansion or the
+/// app's roots — which runs it once per app, before `M`'s register phase. Only
+/// the framework makes one, and one made for `M`'s collect serves nothing else,
+/// so no module runs a phase by hand, its own or another's.
+pub struct Collecting<M: ?Sized>(PhantomData<fn(&M)>);
 
-impl<M: ?Sized> Imported<M> {
+impl<M: ?Sized> Collecting<M> {
+    pub(crate) fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+/// [`Collecting`]'s twin for the register phase of the module `M`, which an
+/// import runs once per app, after `M`'s collect.
+pub struct Registering<M: ?Sized>(PhantomData<fn(&M)>);
+
+impl<M: ?Sized> Registering<M> {
     pub(crate) fn new() -> Self {
         Self(PhantomData)
     }
@@ -46,8 +56,8 @@ pub fn __dynamic_import_module<D: DynamicModule>(_import: impl FnOnce() -> D) ->
 
 /// A statically-composed module — the common case, listed by type in
 /// `#[module(imports = [...])]`. Its phases are entered through an import
-/// alone ([`Imported`]), which runs each once per app, so a diamond import
-/// builds its providers exactly once.
+/// alone ([`Collecting`], [`Registering`]), which runs each once per app, so a
+/// diamond import builds its providers exactly once.
 ///
 /// # Written by hand
 ///
@@ -55,17 +65,19 @@ pub fn __dynamic_import_module<D: DynamicModule>(_import: impl FnOnce() -> D) ->
 /// [`ContainerBuilder::import`] in both phases, as `#[module]`'s expansion
 /// does. One imported in its `register` alone is collected there, too late for
 /// a factory, and the boot refuses what it would have queued by name
-/// ([`LateFactoryError`](crate::LateFactoryError)).
+/// ([`LateFactoryError`](crate::LateFactoryError)); one imported in its
+/// `collect` alone never registers, and the boot refuses it by name
+/// ([`UnregisteredModuleError`](crate::UnregisteredModuleError)).
 pub trait Module: 'static {
     /// Build this module's providers and import the modules it imports. Runs
     /// in the register phase, after its [`collect`](Self::collect) and every
     /// async factory has produced its value.
-    fn register(builder: ContainerBuilder, imported: Imported<Self>) -> ContainerBuilder;
+    fn register(builder: ContainerBuilder, registering: Registering<Self>) -> ContainerBuilder;
 
     /// Queue the async factories this module and the modules it imports
     /// declare. Defaults to queuing none.
-    fn collect(builder: ContainerBuilder, imported: Imported<Self>) -> ContainerBuilder {
-        let _ = imported;
+    fn collect(builder: ContainerBuilder, collecting: Collecting<Self>) -> ContainerBuilder {
+        let _ = collecting;
         builder
     }
 }
@@ -77,7 +89,7 @@ pub trait Module: 'static {
 ///
 /// ```
 /// # use std::any::TypeId;
-/// # use nest_rs_core::{App, ContainerBuilder, DynamicModule, Imported, module};
+/// # use nest_rs_core::{App, ContainerBuilder, DynamicModule, Registering, module};
 /// # #[module]
 /// # pub struct UsersModule;
 /// # pub struct Greeting(&'static str);
@@ -88,7 +100,7 @@ pub trait Module: 'static {
 /// # }
 /// # impl DynamicModule for GreetingSetup {
 /// #     fn module() -> TypeId { TypeId::of::<GreetingModule>() }
-/// #     fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+/// #     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
 /// #         builder.provide(self.0)
 /// #     }
 /// # }
@@ -117,7 +129,7 @@ pub trait Module: 'static {
 /// ```
 /// # use std::any::TypeId;
 /// # use std::sync::Arc;
-/// # use nest_rs_core::{App, ContainerBuilder, DynamicModule, Imported, injectable, module};
+/// # use nest_rs_core::{App, Collecting, ContainerBuilder, DynamicModule, Registering, injectable, module};
 /// #[injectable]
 /// pub struct Client;
 ///
@@ -131,11 +143,11 @@ pub trait Module: 'static {
 ///         TypeId::of::<ClientModule>()
 ///     }
 ///
-///     fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+///     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
 ///         builder.import::<ClientModule>()
 ///     }
 ///
-///     fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+///     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
 ///         builder.import::<ClientModule>()
 ///     }
 /// }
@@ -178,7 +190,7 @@ pub trait Module: 'static {
 /// consumes *that* value rather than re-running the expression. Both phases
 /// therefore see the same value, and a `for_root` that is not idempotent still
 /// behaves (it runs once). Its phases are entered by that expansion alone
-/// ([`Imported`]).
+/// ([`Collecting`], [`Registering`]).
 ///
 /// Because the value outlives its construction site, an implementor must be
 /// `Send + 'static` to be usable from `#[module(imports = [...])]`.
@@ -199,11 +211,11 @@ pub trait DynamicModule {
     /// configuration. Consumes `self` — the config is moved into the providers.
     /// Defaults to a no-op for modules that only queue async work in
     /// [`collect`](Self::collect).
-    fn register(self, builder: ContainerBuilder, imported: Imported<Self>) -> ContainerBuilder
+    fn register(self, builder: ContainerBuilder, registering: Registering<Self>) -> ContainerBuilder
     where
         Self: Sized,
     {
-        let _ = imported;
+        let _ = registering;
         builder
     }
 
@@ -211,8 +223,8 @@ pub trait DynamicModule {
     /// asynchronously) to be awaited in the factories phase. Takes `&self`, and
     /// the very same value is handed to [`register`](Self::register) afterwards
     /// (see the trait docs). Defaults to a no-op.
-    fn collect(&self, builder: ContainerBuilder, imported: Imported<Self>) -> ContainerBuilder {
-        let _ = imported;
+    fn collect(&self, builder: ContainerBuilder, collecting: Collecting<Self>) -> ContainerBuilder {
+        let _ = collecting;
         builder
     }
 }

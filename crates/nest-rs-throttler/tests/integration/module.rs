@@ -55,7 +55,7 @@ mod guard_outside_for_root {
 mod pseudonym_key {
     use std::sync::Arc;
 
-    use nest_rs_core::{App, ContainerBuilder, Imported, Module, module};
+    use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, module};
     use nest_rs_throttler::{
         BACKEND_REMEDY, Decision, Throttle, ThrottlerConfig, ThrottlerGuard, ThrottlerModule,
         ThrottlerStore,
@@ -74,11 +74,11 @@ mod pseudonym_key {
     struct ElsewhereModule;
 
     impl Module for ElsewhereModule {
-        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
             builder
         }
 
-        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
             builder.provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(
                 BACKEND_REMEDY,
                 |_| async { Ok(Arc::new(Elsewhere) as Arc<dyn ThrottlerStore>) },

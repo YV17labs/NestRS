@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nest_rs_core::{ContainerBuilder, Imported, Module, injectable, module};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, injectable, module};
 use nest_rs_schedule::{
     BACKEND_REMEDY, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError, Replicas,
     ScheduleModule, ScheduledMethod, Scheduler, scheduled,
@@ -88,11 +88,11 @@ impl OccurrenceLock for RecordingLock {
 struct RecordingLockModule;
 
 impl Module for RecordingLockModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder
             .provide_declared_factory::<Arc<dyn OccurrenceLock>, _, _>(BACKEND_REMEDY, |_| async {
                 Ok(Arc::new(RecordingLock) as Arc<dyn OccurrenceLock>)
@@ -105,11 +105,11 @@ impl Module for RecordingLockModule {
 struct SecondLockModule;
 
 impl Module for SecondLockModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder
             .provide_declared_factory::<Arc<dyn OccurrenceLock>, _, _>(BACKEND_REMEDY, |_| async {
                 Ok(Arc::new(RecordingLock) as Arc<dyn OccurrenceLock>)

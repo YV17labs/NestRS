@@ -23,7 +23,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, module};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
 
 use crate::config::McpConfig;
 use crate::identity::McpIdentity;
@@ -139,11 +139,11 @@ impl DynamicModule for McpSetup {
         TypeId::of::<McpModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(self.options.config.clone(), builder.import::<McpModule>())
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         // Provider-less metadata: the app's identity is a statement about
         // itself, not a role played by some provider, so there is nothing to
         // attach it to and nothing for module-gating to gate — the import of

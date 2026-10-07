@@ -13,7 +13,7 @@ use std::any::TypeId;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Budget, ContainerBuilder, DynamicModule, Imported};
+use nest_rs_core::{Budget, Collecting, ContainerBuilder, DynamicModule};
 use sea_orm::{Database, DatabaseConnection, DatabaseConnectionType};
 
 use crate::SeaOrmConfig;
@@ -55,7 +55,7 @@ impl DynamicModule for SeaOrmSetup {
         TypeId::of::<SeaOrmModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(
             self.pinned.clone(),
             builder.provide_meta(pool_budget(BudgetReach::Injected)),

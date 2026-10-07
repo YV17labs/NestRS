@@ -26,9 +26,10 @@ framework half.
   `ContainerBuilder::refuse` and returns, as a factory returns `Err`. A factory
   is queued in `collect`, so a module or setup wiring another imports it in
   both phases, through `ContainerBuilder::import` — the one way into a
-  module's phases, held by `Imported`
+  module's phases, held by `Collecting` and `Registering`
   (`.claude/decisions/module-phases-by-import.md`); one queued later is
-  refused (`LateFactoryError`).
+  refused (`LateFactoryError`), and a module imported in a collect alone
+  (`UnregisteredModuleError`).
 - **Providers are singletons unless scoped.** `scope = request` is built per
   request from the singleton root and is **one level deep**: it may inject
   singletons, never the reverse nor another request-scoped provider, and it is

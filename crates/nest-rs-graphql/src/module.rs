@@ -5,7 +5,7 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
 use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
 use poem::Route;
 
@@ -64,11 +64,11 @@ impl DynamicModule for GraphqlSetup {
         TypeId::of::<GraphqlModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(self.pinned.clone(), builder)
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         #[expect(
             clippy::expect_used,
             reason = "provide_feature queued the config's factory in this module's collect"

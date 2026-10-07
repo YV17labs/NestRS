@@ -25,7 +25,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{ContainerBuilder, Imported, Module, module};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_guards::guard;
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -188,11 +188,11 @@ impl ThrottlerStore for SlowStore {
 struct StoreModule<S>(std::marker::PhantomData<S>);
 
 impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder
             .provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(BACKEND_REMEDY, |_| async {
                 Ok(Arc::new(S::default()) as Arc<dyn ThrottlerStore>)

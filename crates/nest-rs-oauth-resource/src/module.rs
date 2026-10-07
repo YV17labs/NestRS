@@ -22,7 +22,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, module};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
 
 use crate::audience::AudienceBinding;
 use crate::config::OAuthResourceConfig;
@@ -65,7 +65,7 @@ impl DynamicModule for OAuthResourceSetup {
         TypeId::of::<OAuthResourceHost>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(
             self.pinned.clone(),
             builder.import::<OAuthResourceHost>(),
@@ -92,7 +92,7 @@ impl DynamicModule for OAuthResourceSetup {
         })
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.import::<OAuthResourceHost>()
     }
 }

@@ -298,7 +298,7 @@ struct — the framework-wide dual-path rule.
 use std::any::TypeId;
 use std::sync::Arc;
 use nest_rs::config::ConfigModule;
-use nest_rs::core::{ContainerBuilder, DynamicModule};
+use nest_rs::core::{Collecting, ContainerBuilder, DynamicModule, Registering};
 use nest_rs::worker::{BACKEND_REMEDY, JobContext};
 
 pub struct YourDbModule;
@@ -318,11 +318,11 @@ impl DynamicModule for YourDbSetup {
         TypeId::of::<YourDbModule>()
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         <YourDbContext as nest_rs::core::Discoverable>::register(builder)
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder
             .provide_factory::</* YourHandle */, _, _>(|container| async move {

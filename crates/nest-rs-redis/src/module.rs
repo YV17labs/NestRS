@@ -13,7 +13,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Imported};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule};
 
 use crate::{RedisConfig, RedisConnection};
 
@@ -44,7 +44,7 @@ impl DynamicModule for RedisSetup {
         TypeId::of::<RedisModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(
             self.pinned.clone(),
             builder.provide_meta(RedisConnection::declared_budget()),

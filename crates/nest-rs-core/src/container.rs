@@ -13,7 +13,7 @@ use anyhow::Result;
 
 use crate::RequestScope;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
-use crate::module::{DynamicModule, Imported, Module};
+use crate::module::{Collecting, DynamicModule, Module, Registering};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
@@ -423,6 +423,9 @@ pub struct ContainerBuilder {
     registered_modules: HashSet<TypeId>,
     /// Idempotency for the collect phase.
     collected_modules: HashSet<TypeId>,
+    /// Every module collected, in the order its collect ran, for the boot to
+    /// name one no register phase reached.
+    collected_order: Vec<(TypeId, &'static str)>,
     /// Builder-only: drained by [`AppBuilder::build`](crate::AppBuilder::build),
     /// never copied into the [`Container`] or a [`snapshot`](Self::snapshot).
     /// The `TypeId` lets the build skip a factory whose output a seed already
@@ -717,19 +720,20 @@ impl ContainerBuilder {
     /// refuses what it queues by name
     /// ([`LateFactoryError`](crate::LateFactoryError)).
     ///
-    /// The one way into a module's phases ([`Imported`]): a hand-written
+    /// The one way into a module's phases ([`Collecting`], [`Registering`]): a hand-written
     /// module imports the modules it wires with it, in both of its own.
     #[must_use]
     pub fn import<M: Module>(mut self) -> Self {
         let id = TypeId::of::<M>();
         // Marked before the phase runs, so an import cycle ends.
         if self.collected_modules.insert(id) {
+            self.collected_order.push((id, std::any::type_name::<M>()));
             let phase = std::mem::replace(&mut self.phase, Phase::Collect);
-            self = M::collect(self, Imported::new());
+            self = M::collect(self, Collecting::new());
             self.phase = phase;
         }
         if self.phase == Phase::Register && self.registered_modules.insert(id) {
-            self = M::register(self, Imported::new());
+            self = M::register(self, Registering::new());
         }
         self
     }
@@ -753,10 +757,10 @@ impl ContainerBuilder {
     where
         D: DynamicModule + Send + 'static,
     {
-        self = value.collect(self, Imported::new());
+        self = value.collect(self, Collecting::new());
         self.dynamic_registrars.insert(
             (module, index),
-            Box::new(move |builder| value.register(builder, Imported::new())),
+            Box::new(move |builder| value.register(builder, Registering::new())),
         );
         self
     }
@@ -1224,6 +1228,15 @@ impl ContainerBuilder {
             .map(|queued| queued.name)
     }
 
+    /// The first module collected that no register phase reached — imported in
+    /// a collect alone — read as the register phase ends.
+    pub(crate) fn unregistered_module(&self) -> Option<&'static str> {
+        self.collected_order
+            .iter()
+            .find(|(id, _)| !self.registered_modules.contains(id))
+            .map(|&(_, name)| name)
+    }
+
     /// Provider keys registered so far. Snapshotted by `AppBuilder::build`
     /// after the factory phase to form the **global** set (seeds + factory
     /// outputs) for the access-graph check.
@@ -1537,11 +1550,11 @@ mod tests {
         static RAN: std::sync::Mutex<Vec<&str>> = std::sync::Mutex::new(Vec::new());
         struct Counted;
         impl Module for Counted {
-            fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
                 RAN.lock().expect("ran").push("collect");
                 builder
             }
-            fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
                 RAN.lock().expect("ran").push("register");
                 builder
             }

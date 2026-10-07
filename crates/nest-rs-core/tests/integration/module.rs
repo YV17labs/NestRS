@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    App, ContainerBuilder, DynamicModule, Imported, LateFactoryError, Module, module,
+    App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError, Module, Registering, module,
 };
 
 /// Counts how many times the import expression ran, and stamps each
@@ -39,11 +39,11 @@ impl DynamicModule for CountingSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide(Installed(self.serial))
     }
 
-    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder.provide(Collected(self.serial))
     }
 }
@@ -80,7 +80,7 @@ impl DynamicModule for SyncSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide(Installed(BUILDS.fetch_add(1, Ordering::SeqCst)))
     }
 }
@@ -121,7 +121,7 @@ impl DynamicModule for TaggingSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_keyed(self.0, Tagged(self.0))
     }
 }
@@ -158,7 +158,7 @@ impl DynamicModule for MixedSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide(Mixed(7))
     }
 }
@@ -197,11 +197,11 @@ struct Opened;
 struct OpensModule;
 
 impl Module for OpensModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         builder.provide_factory(|_| async { Ok(Opened) })
     }
 }
@@ -217,7 +217,7 @@ impl DynamicModule for UncollectingSetup {
         TypeId::of::<OpeningModule>()
     }
 
-    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.import::<OpeningModule>()
     }
 }

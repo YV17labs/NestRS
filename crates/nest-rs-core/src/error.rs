@@ -237,18 +237,32 @@ pub struct FactoryCycleError {
 /// factory phase discards it, while a declaration is refused all the same — the
 /// value present is not the one it chose.
 ///
-/// The usual cause is a [`DynamicModule`](crate::DynamicModule) whose `collect`
-/// leaves out its module's own [`Module::collect`](crate::Module::collect): the
-/// imports that module lists then collect in the register phase, too late.
+/// The usual cause is a module or [`DynamicModule`](crate::DynamicModule)
+/// importing another in its `register` alone: that module, and the modules it
+/// imports, then collect in the register phase, too late.
 #[derive(Debug, Error)]
 #[error(
     "`{type_name}` is provided by an async factory queued during the register phase, which no \
-     boot drains. Queue it in `collect` — a `DynamicModule` whose `collect` leaves out its \
-     module's own `Module::collect` makes that module's imports queue theirs in `register`."
+     boot drains. Queue it in `collect` — a module imported in its importer's `register` alone \
+     collects there, so import it through `ContainerBuilder::import` in that importer's \
+     `collect` too."
 )]
 pub struct LateFactoryError {
     /// The type whose factory was queued too late to run.
     pub type_name: &'static str,
+}
+
+/// A module was imported in a collect phase and in no register phase, so none
+/// of its providers registered. The cause is a module or
+/// [`DynamicModule`](crate::DynamicModule) importing it in its `collect` alone.
+#[derive(Debug, Error)]
+#[error(
+    "`{module}` was imported in a collect phase alone, so none of its providers registered: \
+     import it through `ContainerBuilder::import` in its importer's `register` too."
+)]
+pub struct UnregisteredModuleError {
+    /// The module imported in a collect phase alone.
+    pub module: &'static str,
 }
 
 /// A `#[module]`'s dynamic import reached the register phase with no value its

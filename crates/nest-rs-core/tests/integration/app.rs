@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use nest_rs_core::target;
 use nest_rs_core::{
-    App, Container, ContainerBuilder, Imported, Module, SHUTDOWN_HOOKS_TIMEOUT, Transport,
+    App, Container, ContainerBuilder, Module, Registering, SHUTDOWN_HOOKS_TIMEOUT, Transport,
     TransportContribution,
 };
 use nest_rs_testing::LogCapture;
@@ -44,7 +44,7 @@ impl Transport for Failing {
 struct FailingModule;
 
 impl Module for FailingModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "Failing",
             build: |_| Ok(Box::new(Failing)),
@@ -74,7 +74,7 @@ impl Transport for Panicking {
 struct PanickingModule;
 
 impl Module for PanickingModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "Panicking",
             build: |_| Ok(Box::new(Panicking)),
@@ -147,7 +147,7 @@ impl Transport for Stated {
 struct TwoBoundsModule;
 
 impl Module for TwoBoundsModule {
-    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
             .provide_meta(TransportContribution {
                 name: "Short",

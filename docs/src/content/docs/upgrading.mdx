@@ -200,7 +200,7 @@ left running until they drain the 6.x jobs (step 7).
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
    | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
    | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout` and `read_timeout` |
-   | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Imported<Self>` after the builder in `register` and `collect`; reach another module with `builder.import::<M>()` in both, never `M::register(builder)` or `M::collect(builder)`, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` — the import runs each phase once, `collect` first |
+   | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, never `M::register(builder)` or `M::collect(builder)`, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` — the import runs each phase once, `collect` first |
 
    `.opaque()` now takes an owned error that converts into `Box<dyn Error +
    Send + Sync>`, so it logs the whole cause chain; an error type that was only

@@ -23,3 +23,14 @@ is the one way in, running `collect` first and each phase once.
   through a wrapper.
 - **One `wire` method called in both phases**: a register-phase read of a
   factory's output would run in the collect phase too, and find nothing.
+
+## 2026-10-07 — one proof per phase, and a module collected alone is refused
+
+A review found the one proof let a module replay its own phase: a `register`
+handed its `Imported<Self>` to its own `collect` — the old leading
+`Self::collect`, which a mechanical migration reproduces — and ran it twice.
+The proof is now one per phase, `Collecting<Self>` and `Registering<Self>`,
+so a phase reaches no other, its own module's included. The reverse of a late
+collect was still silent: a module imported in a `collect` alone never
+registered. The register phase now ends by refusing any module it did not
+reach, naming it (`UnregisteredModuleError`).

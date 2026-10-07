@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    Container, ContainerBuilder, LifecycleHook, LifecyclePhase, Module, ProviderOrder,
+    Container, ContainerBuilder, Imported, LifecycleHook, LifecyclePhase, Module, ProviderOrder,
     ReachableProviders, inventory,
 };
 
@@ -14,10 +14,7 @@ use crate::{EventBus, ListenerMethod};
 pub struct EventsModule;
 
 impl Module for EventsModule {
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_arc(Arc::new(EventBus::new()))
     }
 }

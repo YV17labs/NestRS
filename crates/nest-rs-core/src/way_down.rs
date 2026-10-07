@@ -335,7 +335,7 @@ mod tests {
     use nest_rs_testing::LogCapture;
 
     use super::*;
-    use crate::{App, ContainerBuilder, Module};
+    use crate::{App, ContainerBuilder, Imported, Module};
 
     /// How long the blocking work a test leaves behind lasts: past every budget
     /// a test records by more than any scheduling noise, so a teardown that
@@ -420,7 +420,7 @@ mod tests {
     /// An app with nothing to tear down: no transport, no hook.
     struct NothingToTearDown;
     impl Module for NothingToTearDown {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
     }

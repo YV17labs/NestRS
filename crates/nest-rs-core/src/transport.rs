@@ -55,7 +55,7 @@ pub trait Transport: Send + Sync + 'static {
 ///
 /// ```
 /// # use std::time::Duration;
-/// # use nest_rs_core::{Container, ContainerBuilder, Discovery, Module, Transport, TransportContribution, async_trait};
+/// # use nest_rs_core::{Container, ContainerBuilder, Discovery, Imported, Module, Transport, TransportContribution, async_trait};
 /// # struct ScheduleModule;
 /// # struct Scheduler;
 /// # impl Scheduler {
@@ -68,14 +68,14 @@ pub trait Transport: Send + Sync + 'static {
 /// #     fn stop_bound(&self) -> Duration { Duration::ZERO }
 /// # }
 /// impl Module for ScheduleModule {
-///     fn register(builder: ContainerBuilder) -> ContainerBuilder {
+///     fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
 ///         builder.provide_meta(TransportContribution {
 ///             name: "Scheduler",
 ///             build: |_| Ok(Box::new(Scheduler::new())),
 ///         })
 ///     }
 /// }
-/// # let container = ScheduleModule::register(Container::builder()).build();
+/// # let container = Container::builder().import::<ScheduleModule>().build();
 /// # let contributed = Discovery::new(&container).meta::<TransportContribution>();
 /// # assert_eq!(contributed.iter().map(|c| c.meta.name).collect::<Vec<_>>(), ["Scheduler"]);
 /// ```

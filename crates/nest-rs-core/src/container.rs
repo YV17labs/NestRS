@@ -13,7 +13,7 @@ use anyhow::Result;
 
 use crate::RequestScope;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
-use crate::module::DynamicModule;
+use crate::module::{DynamicModule, Imported, Module};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
@@ -417,6 +417,8 @@ where
 pub struct ContainerBuilder {
     providers: HashMap<ProviderKey, AnyArc>,
     metadata: HashMap<TypeId, Vec<MetaEntry>>,
+    /// The boot phase [`import`](Self::import) runs a module's.
+    phase: Phase,
     /// Idempotency for the register phase — a diamond import registers once.
     registered_modules: HashSet<TypeId>,
     /// Idempotency for the collect phase.
@@ -455,6 +457,18 @@ pub struct ContainerBuilder {
     /// same value instead of re-evaluating the expression. Builder-only —
     /// never copied into a [`Container`] or a [`snapshot`](Self::snapshot).
     dynamic_registrars: HashMap<DynamicImportSite, Registrar>,
+}
+
+/// The boot phase a builder is in, which decides what
+/// [`ContainerBuilder::import`] runs of a module. A builder made outside a boot
+/// registers.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Phase {
+    /// Modules queue the async factories they declare.
+    Collect,
+    /// Modules build their providers, every factory's output present.
+    #[default]
+    Register,
 }
 
 /// Identifies one `#[module(imports = [...])]` entry: the importing module's
@@ -695,16 +709,35 @@ impl ContainerBuilder {
             .and_then(|any| any.clone().downcast::<T>().ok())
     }
 
-    /// Record that a module of type `id` is being registered. Returns `true`
-    /// the first time, `false` thereafter — a module imported via several
-    /// paths registers exactly once.
-    pub fn mark_registered(&mut self, id: TypeId) -> bool {
-        self.registered_modules.insert(id)
+    /// Import the module `M`: in the collect phase its
+    /// [`collect`](Module::collect), in the register phase its
+    /// [`register`](Module::register) — each once per app, however many
+    /// modules import it, and `collect` first. A module first imported in the
+    /// register phase is collected there, too late for a factory, and the boot
+    /// refuses what it queues by name
+    /// ([`LateFactoryError`](crate::LateFactoryError)).
+    ///
+    /// The one way into a module's phases ([`Imported`]): a hand-written
+    /// module imports the modules it wires with it, in both of its own.
+    #[must_use]
+    pub fn import<M: Module>(mut self) -> Self {
+        let id = TypeId::of::<M>();
+        // Marked before the phase runs, so an import cycle ends.
+        if self.collected_modules.insert(id) {
+            let phase = std::mem::replace(&mut self.phase, Phase::Collect);
+            self = M::collect(self, Imported::new());
+            self.phase = phase;
+        }
+        if self.phase == Phase::Register && self.registered_modules.insert(id) {
+            self = M::register(self, Imported::new());
+        }
+        self
     }
 
-    /// Collect-phase counterpart of [`mark_registered`](Self::mark_registered).
-    pub fn mark_collected(&mut self, id: TypeId) -> bool {
-        self.collected_modules.insert(id)
+    /// Enter the boot phase `phase`, which [`import`](Self::import) runs.
+    pub(crate) fn enter_phase(mut self, phase: Phase) -> Self {
+        self.phase = phase;
+        self
     }
 
     /// Collect phase for one dynamic import: run its
@@ -720,19 +753,18 @@ impl ContainerBuilder {
     where
         D: DynamicModule + Send + 'static,
     {
-        self = value.collect(self);
+        self = value.collect(self, Imported::new());
         self.dynamic_registrars.insert(
             (module, index),
-            Box::new(move |builder| value.register(builder)),
+            Box::new(move |builder| value.register(builder, Imported::new())),
         );
         self
     }
 
     /// Register phase for one dynamic import: consume the value the collect
-    /// phase parked at this site. `#[module]`'s `register` collects the module
-    /// first when no phase did, so a value is always parked — unless something
-    /// marked the module collected without running its `collect`, which is
-    /// refused naming the import.
+    /// phase parked at this site. A module's `register` runs after its
+    /// `collect`, which parks every dynamic import's value ([`import`](Self::import)),
+    /// so one is always there; a site called with none is refused naming it.
     ///
     /// **Internal ABI** — emitted by `#[module]`, lockstep with
     /// `nest-rs-core-macros`; do not call by hand.
@@ -1495,12 +1527,50 @@ mod tests {
         assert!(container.metadata_entries(TypeId::of::<Marker>()).is_none());
     }
 
+    /// A module imported twice in each phase runs each once, `collect` first,
+    /// and one first imported in the register phase is collected there.
     #[test]
-    fn mark_registered_is_true_once_then_false() {
-        let mut builder = Container::builder();
-        assert!(builder.mark_registered(TypeId::of::<Host>()));
-        assert!(!builder.mark_registered(TypeId::of::<Host>()));
-        assert!(builder.mark_registered(TypeId::of::<Marker>()));
+    fn an_import_runs_a_modules_collect_then_its_register_once_each() {
+        static RAN: std::sync::Mutex<Vec<&str>> = std::sync::Mutex::new(Vec::new());
+        struct Counted;
+        impl Module for Counted {
+            fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+                RAN.lock().expect("ran").push("collect");
+                builder
+            }
+            fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+                RAN.lock().expect("ran").push("register");
+                builder
+            }
+        }
+        let builder = Container::builder()
+            .enter_phase(Phase::Collect)
+            .import::<Counted>()
+            .import::<Counted>();
+        assert_eq!(*RAN.lock().expect("ran"), ["collect"]);
+        let _registered = builder
+            .enter_phase(Phase::Register)
+            .import::<Counted>()
+            .import::<Counted>();
+        assert_eq!(*RAN.lock().expect("ran"), ["collect", "register"]);
+
+        RAN.lock().expect("ran").clear();
+        let _registered = Container::builder().import::<Counted>();
+        assert_eq!(*RAN.lock().expect("ran"), ["collect", "register"]);
+    }
+
+    #[test]
+    fn a_dynamic_import_site_with_no_parked_value_is_refused_naming_it() {
+        let mut builder = Container::builder()
+            .enter_import("AppModule", 0, "SomeModule::for_root(..)")
+            .register_dynamic_import(TypeId::of::<Host>(), 0);
+        let refused = builder.take_refusal().expect("a refusal");
+        assert!(
+            refused
+                .to_string()
+                .contains("`SomeModule::for_root(..)` at `imports[0]` of `AppModule`"),
+            "{refused}"
+        );
     }
 
     #[test]

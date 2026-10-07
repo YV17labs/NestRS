@@ -9,7 +9,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported};
 
 use crate::client::OAuthClient;
 use crate::config::OAuthClientConfig;
@@ -40,7 +40,7 @@ impl DynamicModule for OAuthClientSetup {
         TypeId::of::<OAuthClientModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<OAuthClient, _, _>(|container| async move {
             #[expect(

@@ -52,12 +52,12 @@ pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::{Container, Module};
+    use nest_rs_core::Container;
     use std::sync::Arc;
 
     #[test]
     fn provides_the_server_registry() {
-        let container = WsModule::register(Container::builder()).build();
+        let container = Container::builder().import::<WsModule>().build();
         let server: Option<Arc<WsServer>> = container.get();
         assert!(server.is_some());
     }

@@ -3,10 +3,9 @@
 //! A bare import beside [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root),
 //! which opens the pool it reads.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::{Container, ContainerBuilder, Module};
+use nest_rs_core::{Container, ContainerBuilder, Imported, Module};
 use nest_rs_worker::{BACKEND_REMEDY, JobContext};
 use sea_orm::DatabaseConnection;
 
@@ -21,15 +20,11 @@ use crate::module::{BudgetReach, SUBSTRATE_REMEDY, pool_budget};
 pub struct SeaOrmDatabaseModule;
 
 impl Module for SeaOrmDatabaseModule {
-    // A hand-written `impl Module` dedupes itself, as `#[module]` does for its
-    // expansions: two importers of this binding must install one interceptor
-    // and one audit, not two — the second `DbContext` wrap would open a second
-    // transaction per request, in silence.
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
-        builder = builder.provide_meta(pool_budget(BudgetReach::Ambient));
+    // Each phase runs once however many modules import the binding: two
+    // importers install one interceptor and one audit, not two — a second
+    // `DbContext` wrap would open a second transaction per request.
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        let builder = builder.provide_meta(pool_budget(BudgetReach::Ambient));
         // The worker bridge is a factory output so it counts as global
         // infrastructure for every transport that runs jobs — declared, so a
         // second job context fails the boot naming both, and queued *after*
@@ -48,13 +43,7 @@ impl Module for SeaOrmDatabaseModule {
         })
     }
 
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(TypeId::of::<Self>()) {
-            return builder;
-        }
-        // A no-op once collected; an importer that skipped `collect` gets what
-        // it queues refused by name (`LateFactoryError`), never left unbuilt.
-        builder = Self::collect(builder);
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         // Read again rather than trusted to the factory above: a seeded
         // `dyn JobContext` skips it, and its check with it.
         if let Err(missing) = substrate(&builder.snapshot()) {
@@ -121,11 +110,11 @@ mod tests {
     struct BareContextModule;
 
     impl Module for BareContextModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
 
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory_dyn::<BareContext, dyn JobContext, _, _>(
                 |_| async { Ok(BareContext) },
                 |context| Arc::new(context) as Arc<dyn JobContext>,
@@ -197,17 +186,17 @@ mod tests {
         );
     }
 
-    /// A hand-written importer that registers the binding without collecting it.
+    /// A hand-written importer that imports the binding in its register alone.
     struct RegistersOnly;
 
     impl Module for RegistersOnly {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            <SeaOrmDatabaseModule as Module>::register(builder)
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<SeaOrmDatabaseModule>()
         }
     }
 
     #[tokio::test]
-    async fn the_binding_registered_without_its_collect_fails_the_boot_naming_its_context() {
+    async fn the_binding_imported_in_a_register_alone_fails_the_boot_naming_its_context() {
         let Err(refused) = App::builder()
             .provide(DatabaseConnection::default())
             .provide(SeaOrmConfig::default())

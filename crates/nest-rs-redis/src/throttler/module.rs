@@ -5,10 +5,9 @@
 //! port's in-process default wherever the three fall in `imports`. Enabled by
 //! the `throttler` feature.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::{ContainerBuilder, Module, Net};
+use nest_rs_core::{ContainerBuilder, Imported, Module, Net};
 use nest_rs_throttler::ThrottlerStore;
 
 use crate::RedisConnection;
@@ -21,18 +20,11 @@ use crate::throttler::RedisThrottler;
 pub struct RedisThrottlerModule;
 
 impl Module for RedisThrottlerModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        // A no-op once collected; an importer that skipped `collect` gets what
-        // it queues refused by name (`LateFactoryError`), never left unbuilt.
-        Self::collect(builder)
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder
     }
 
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        // Deduped like a `#[module]` expansion: a diamond import of this binding
-        // is one declaration, not two contesting ones.
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         // Declared: it supersedes the port's ordinary in-memory factory, and a
         // second vendor binding contests it by name (`BACKEND_REMEDY`). Queued
         // after the connection's factory, so `imports` order is not a wiring

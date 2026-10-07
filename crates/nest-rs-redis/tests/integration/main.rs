@@ -19,17 +19,17 @@ mod schedule;
 mod throttler;
 mod tls;
 
-use nest_rs_core::{App, ContainerBuilder, LateFactoryError, Module};
+use nest_rs_core::{App, ContainerBuilder, Imported, LateFactoryError, Module};
 
-/// The type the boot names when a hand-written importer registers `M` without
-/// ever collecting it: what `M`'s `collect` queues, refused as late rather
-/// than never built.
+/// The type the boot names when a hand-written importer imports `M` in its
+/// register alone: what `M`'s `collect` queues, refused as late rather than
+/// never built.
 async fn registered_alone<M: Module + 'static>() -> &'static str {
     struct RegistersOnly<N>(std::marker::PhantomData<N>);
 
     impl<N: Module> Module for RegistersOnly<N> {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            N::register(builder)
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<N>()
         }
     }
 

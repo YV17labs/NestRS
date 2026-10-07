@@ -22,7 +22,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Module, module};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, module};
 
 use crate::audience::AudienceBinding;
 use crate::config::OAuthResourceConfig;
@@ -65,9 +65,11 @@ impl DynamicModule for OAuthResourceSetup {
         TypeId::of::<OAuthResourceHost>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = <OAuthResourceHost as Module>::collect(builder);
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        let builder = ConfigModule::provide_feature(
+            self.pinned.clone(),
+            builder.import::<OAuthResourceHost>(),
+        );
         builder.provide_factory::<ProtectedResourceMetadata, _, _>(|container| async move {
             #[expect(
                 clippy::expect_used,
@@ -90,7 +92,7 @@ impl DynamicModule for OAuthResourceSetup {
         })
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        <OAuthResourceHost as Module>::register(builder)
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder.import::<OAuthResourceHost>()
     }
 }

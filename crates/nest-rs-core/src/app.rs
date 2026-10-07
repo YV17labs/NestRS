@@ -17,7 +17,7 @@ use crate::access::{
     validate_keyed_access_graph,
 };
 use crate::container::ProviderKey;
-use crate::container::{Container, ContainerBuilder, Registrar};
+use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
@@ -111,7 +111,11 @@ impl App {
         // refused by name, instead of the value being silently absent because
         // nothing ever asked the module what it would have built.
         let root = std::any::type_name::<M>();
-        let builder = M::collect(Container::builder().enter_root(root)).leave_import();
+        let builder = Container::builder()
+            .enter_phase(Phase::Collect)
+            .enter_root(root)
+            .import::<M>()
+            .leave_import();
         // Before the queue check, and for the same reason the async path runs it
         // before any factory: a contested declaration is a fact that **survives
         // the remedy the queue check prescribes**. `UnresolvedFactoryError` says
@@ -124,7 +128,11 @@ impl App {
         // an async factory would never exist — refused before `register`, which
         // builds providers from those outputs and would panic on the hole.
         check_no_queued_factories(&builder)?;
-        let mut builder = M::register(builder.enter_root(root)).leave_import();
+        let mut builder = builder
+            .enter_phase(Phase::Register)
+            .enter_root(root)
+            .import::<M>()
+            .leave_import();
         check_register_phase(&mut builder)?;
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
@@ -309,8 +317,8 @@ impl App {
 struct ModuleHooks {
     type_id: TypeId,
     name: &'static str,
-    collect: fn(ContainerBuilder) -> ContainerBuilder,
-    register: fn(ContainerBuilder) -> ContainerBuilder,
+    /// The root's import, which runs the phase its builder is in.
+    import: fn(ContainerBuilder) -> ContainerBuilder,
 }
 
 /// Builder for an [`App`] whose module tree needs runtime values or
@@ -481,8 +489,7 @@ impl AppBuilder {
         self.modules.push(ModuleHooks {
             type_id: TypeId::of::<M>(),
             name: std::any::type_name::<M>(),
-            collect: M::collect,
-            register: M::register,
+            import: ContainerBuilder::import::<M>,
         });
         self
     }
@@ -498,8 +505,9 @@ impl AppBuilder {
             overrides,
         } = self;
 
+        builder = builder.enter_phase(Phase::Collect);
         for hooks in &modules {
-            builder = (hooks.collect)(builder.enter_root(hooks.name)).leave_import();
+            builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
         }
         // Before any factory runs: two import sites declared the same type and
         // one would have to lose silently.
@@ -553,8 +561,9 @@ impl AppBuilder {
         // The keyed global set: keyed seeds + keyed factory outputs, snapshotted
         // before modules register (same timing as the bare global set).
         let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
+        builder = builder.enter_phase(Phase::Register);
         for hooks in &modules {
-            builder = (hooks.register)(builder.enter_root(hooks.name)).leave_import();
+            builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
         }
         check_register_phase(&mut builder)?;
         // Overrides last so they win over the modules' registrations.
@@ -613,6 +622,7 @@ fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::Imported;
 
     struct Config(u32);
     struct Doubled(u32);
@@ -621,7 +631,7 @@ mod tests {
     // hand-write the trait impl.
     struct DoublerModule;
     impl Module for DoublerModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             let cfg = builder
                 .snapshot()
                 .get::<Config>()
@@ -677,10 +687,10 @@ mod tests {
     // bound over a shared connection is the shape — declares it with `_after`.
     struct SecondAfterFirst;
     impl Module for SecondAfterFirst {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_declared_factory_after::<Second, First, _, _>(
                 "one declaration",
                 |c| async move {
@@ -695,10 +705,10 @@ mod tests {
 
     struct FirstModule;
     impl Module for FirstModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory(|_| async { Ok(First(41)) })
         }
     }
@@ -721,10 +731,10 @@ mod tests {
     struct Third(u32);
     struct ThirdAfterBoth;
     impl Module for ThirdAfterBoth {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_declared_factory_after_both::<Third, First, Second, _, _>(
                 "one declaration",
                 |c| async move {
@@ -742,10 +752,10 @@ mod tests {
 
     struct SecondModule;
     impl Module for SecondModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory(|_| async { Ok(Second(1)) })
         }
     }
@@ -782,10 +792,10 @@ mod tests {
     struct ReadsPort(u32);
     struct ReadsPortModule;
     impl Module for ReadsPortModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory_after::<ReadsPort, Arc<dyn Port>, _, _>(|c| async move {
                 let port = c
                     .get_dyn::<dyn Port>()
@@ -794,16 +804,19 @@ mod tests {
             })
         }
     }
+    fn binds_port(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.provide_factory_dyn::<PortImpl, dyn Port, _, _>(
+            |_| async { Ok(PortImpl(41)) },
+            |p| Arc::new(p) as Arc<dyn Port>,
+        )
+    }
     struct BindsPortModule;
     impl Module for BindsPortModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            builder.provide_factory_dyn::<PortImpl, dyn Port, _, _>(
-                |_| async { Ok(PortImpl(41)) },
-                |p| Arc::new(p) as Arc<dyn Port>,
-            )
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            binds_port(builder)
         }
     }
 
@@ -842,10 +855,10 @@ mod tests {
     }
     struct BindsPortOtherwiseModule;
     impl Module for BindsPortOtherwiseModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory_dyn::<OtherPortImpl, dyn Port, _, _>(
                 |_| async { Ok(OtherPortImpl(9)) },
                 |p| Arc::new(p) as Arc<dyn Port>,
@@ -887,11 +900,13 @@ mod tests {
 
     struct BindsPortBothWaysModule;
     impl Module for BindsPortBothWaysModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            BindsPortOtherwiseModule::collect(BindsPortModule::collect(builder))
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder
+                .import::<BindsPortModule>()
+                .import::<BindsPortOtherwiseModule>()
         }
     }
 
@@ -913,10 +928,10 @@ mod tests {
     const PORT_REMEDY: &str = "Import exactly one port binding.";
     struct DeclaresPortModule;
     impl Module for DeclaresPortModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_declared_factory::<Arc<dyn Port>, _, _>(PORT_REMEDY, |_| async {
                 Ok(Arc::new(PortImpl(3)) as Arc<dyn Port>)
             })
@@ -951,10 +966,10 @@ mod tests {
     // A port's default implementation, as the port's own module queues it.
     struct DefaultPortModule;
     impl Module for DefaultPortModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory::<Arc<dyn Port>, _, _>(|_| async {
                 Ok(Arc::new(PortImpl(0)) as Arc<dyn Port>)
             })
@@ -1002,10 +1017,10 @@ mod tests {
     // An import site's choice of the concrete type a dyn factory binds.
     struct DeclaresPortImplModule;
     impl Module for DeclaresPortImplModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_declared_factory::<PortImpl, _, _>("one declaration", |_| async {
                 Ok(PortImpl(8))
             })
@@ -1061,14 +1076,15 @@ mod tests {
         }
     }
 
-    // The same binding queued by two importers that do not dedupe it.
+    // The same binding queued by a second module — two setups of one module
+    // are the shape, since dynamic imports are not deduplicated.
     struct BindsPortAgainModule;
     impl Module for BindsPortAgainModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            BindsPortModule::collect(builder)
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            binds_port(builder)
         }
     }
 
@@ -1105,11 +1121,11 @@ mod tests {
     // a binding building its interceptor over the pool its factory checked.
     struct ReadsItsFactoryModule;
     impl Module for ReadsItsFactoryModule {
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            ConfigModule::collect(builder)
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<ConfigModule>()
         }
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            DoublerModule::register(builder)
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<DoublerModule>()
         }
     }
 
@@ -1138,19 +1154,19 @@ mod tests {
     }
     struct BareSetup;
     impl Module for BareSetup {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             connect(builder.provide_factory(|_| async { Ok(Config(1)) }))
         }
     }
     struct PinnedSetup;
     impl Module for PinnedSetup {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             connect(
                 builder.provide_declared_factory("one declaration", |_| async { Ok(Config(7)) }),
             )
@@ -1186,10 +1202,10 @@ mod tests {
 
     struct FirstAfterSecond;
     impl Module for FirstAfterSecond {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_declared_factory_after::<First, Second, _, _>(
                 "one declaration",
                 |_| async { Ok(First(0)) },
@@ -1232,10 +1248,10 @@ mod tests {
     // shape).
     struct ConfigModule;
     impl Module for ConfigModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
         }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory(|_| async { Ok(Config(7)) })
         }
     }
@@ -1302,7 +1318,7 @@ mod tests {
 
     struct WithTransportModule;
     impl Module for WithTransportModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_meta(TransportContribution {
                 name: "NullTransport",
                 build: |_| Ok(Box::new(NullTransport)),
@@ -1329,7 +1345,7 @@ mod tests {
     struct Late(u32);
     struct QueuesInRegisterModule;
     impl Module for QueuesInRegisterModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory(|_| async { Ok(Late(1)) })
         }
     }
@@ -1356,11 +1372,11 @@ mod tests {
 
     struct SeedsLateModule;
     impl Module for SeedsLateModule {
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory(|_| async { Ok(Late(7)) })
         }
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            QueuesInRegisterModule::register(builder)
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<QueuesInRegisterModule>()
         }
     }
 
@@ -1378,10 +1394,10 @@ mod tests {
     // default's, not the one the pin chose.
     struct DeclaresLateModule;
     impl Module for DeclaresLateModule {
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_factory(|_| async { Ok(Late(7)) })
         }
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder.provide_declared_factory("pin it in `collect`", |_| async { Ok(Late(1)) })
         }
     }
@@ -1400,11 +1416,11 @@ mod tests {
     // A dyn binding made in `register`, over a concrete type an import declared.
     struct BindsDeclaredPortLateModule;
     impl Module for BindsDeclaredPortLateModule {
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            DeclaresPortImplModule::collect(builder)
+        fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<DeclaresPortImplModule>()
         }
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            BindsPortModule::collect(builder)
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<BindsPortModule>()
         }
     }
 
@@ -1426,7 +1442,7 @@ mod tests {
     struct Refused;
     struct RefusingModule;
     impl Module for RefusingModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
             builder
                 .refuse(anyhow!("RefusingModule: the first refusal"))
                 .refuse(anyhow!("RefusingModule: a second refusal"))

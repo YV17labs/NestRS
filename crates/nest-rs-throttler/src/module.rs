@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported};
 
 use crate::config::ThrottlerConfig;
 use crate::guard::ThrottlerGuard;
@@ -45,7 +45,7 @@ impl DynamicModule for ThrottlerSetup {
         TypeId::of::<ThrottlerModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         // The default store, as an *ordinary* factory: a vendor binding's
         // declared factory for the same `Arc<dyn ThrottlerStore>` supersedes it

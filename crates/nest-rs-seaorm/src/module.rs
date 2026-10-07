@@ -13,7 +13,7 @@ use std::any::TypeId;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Budget, ContainerBuilder, DynamicModule};
+use nest_rs_core::{Budget, ContainerBuilder, DynamicModule, Imported};
 use sea_orm::{Database, DatabaseConnection, DatabaseConnectionType};
 
 use crate::SeaOrmConfig;
@@ -55,11 +55,11 @@ impl DynamicModule for SeaOrmSetup {
         TypeId::of::<SeaOrmModule>()
     }
 
-    fn collect(&self, mut builder: ContainerBuilder) -> ContainerBuilder {
-        if builder.mark_collected(TypeId::of::<SeaOrmModule>()) {
-            builder = builder.provide_meta(pool_budget(BudgetReach::Injected));
-        }
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        let builder = ConfigModule::provide_feature(
+            self.pinned.clone(),
+            builder.provide_meta(pool_budget(BudgetReach::Injected)),
+        );
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
             #[expect(
                 clippy::expect_used,

@@ -6,7 +6,7 @@
 //! its sole job is to contribute a `TransportContribution` via
 //! `provide_meta` — it owns no provider and exposes no injectable.
 
-use nest_rs_core::{ContainerBuilder, Module, TransportContribution};
+use nest_rs_core::{ContainerBuilder, Imported, Module, TransportContribution};
 
 use crate::Scheduler;
 
@@ -23,12 +23,9 @@ use crate::Scheduler;
 pub struct ScheduleModule;
 
 impl Module for ScheduleModule {
-    // Deduped like a `#[module]` expansion: two importers attach one scheduler,
-    // not two firing every tick twice.
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
-            return builder;
-        }
+    // Registered once however many modules import it, so two importers attach
+    // one scheduler, not two firing every tick twice.
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "Scheduler",
             build: |_| Ok(Box::new(Scheduler::new())),

@@ -13,7 +13,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported};
 
 use crate::{RedisConfig, RedisConnection};
 
@@ -44,11 +44,11 @@ impl DynamicModule for RedisSetup {
         TypeId::of::<RedisModule>()
     }
 
-    fn collect(&self, mut builder: ContainerBuilder) -> ContainerBuilder {
-        if builder.mark_collected(TypeId::of::<RedisModule>()) {
-            builder = builder.provide_meta(RedisConnection::declared_budget());
-        }
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        let builder = ConfigModule::provide_feature(
+            self.pinned.clone(),
+            builder.provide_meta(RedisConnection::declared_budget()),
+        );
         builder.provide_factory::<RedisConnection, _, _>(|container| async move {
             #[expect(
                 clippy::expect_used,

@@ -5,10 +5,9 @@
 //! `replicas = "one"` claims its occurrences through. Enabled by the `schedule`
 //! feature.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::{ContainerBuilder, Module, Net};
+use nest_rs_core::{ContainerBuilder, Imported, Module, Net};
 use nest_rs_schedule::OccurrenceLock;
 
 use crate::RedisConnection;
@@ -21,18 +20,11 @@ use crate::schedule::RedisOccurrenceLock;
 pub struct RedisScheduleModule;
 
 impl Module for RedisScheduleModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        // A no-op once collected; an importer that skipped `collect` gets what
-        // it queues refused by name (`LateFactoryError`), never left unbuilt.
-        Self::collect(builder)
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder
     }
 
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        // Deduped like a `#[module]` expansion: a diamond import of this binding
-        // is one declaration, not two contesting ones.
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         // Declared, so a second lock backend contests it by name
         // (`BACKEND_REMEDY`); queued after the connection's factory, so
         // `imports` order is not a wiring mistake a reader has to know about.

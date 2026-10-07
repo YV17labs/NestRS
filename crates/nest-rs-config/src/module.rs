@@ -4,7 +4,7 @@ use std::any::TypeId;
 
 use std::marker::PhantomData;
 
-use nest_rs_core::{ContainerBuilder, DynamicModule, Module};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, Module};
 
 use crate::config::Config;
 use crate::environment::Environment;
@@ -140,7 +140,7 @@ impl ConfigModule {
 
 /// The [`DynamicModule`] behind a `for_root` that only pins a config: resolves
 /// `C` (environment over the pinned base, per field) in the factory phase, and
-/// collects and registers `M`'s ordinary wiring. The pinned base supersedes the plain env
+/// imports `M`, its ordinary wiring, in both phases. The pinned base supersedes the plain env
 /// factory `M` itself queues via [`for_feature`](ConfigModule::for_feature),
 /// wherever the two fall in `imports = [..]`.
 ///
@@ -155,13 +155,12 @@ impl<M: Module + 'static, C: Config> DynamicModule for ConfigSetup<M, C> {
         TypeId::of::<M>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = <M as Module>::collect(builder);
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<M>())
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        <M as Module>::register(builder)
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder.import::<M>()
     }
 }
 
@@ -177,7 +176,7 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
     // Loading is sync-but-fallible and `register` cannot return an error, so
     // we queue a factory the build awaits — an Err there aborts boot with the
     // variable named.
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature::<C>(None, builder)
     }
 }
@@ -191,7 +190,7 @@ impl DynamicModule for ConfigRootSetup {
         TypeId::of::<ConfigModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         // `Environment::from_env` reads `<PREFIX>_ENV` from the real process env;
         // dotenv values reach config reads lazily via `env_var` (the in-crate
         // map), so collect mutates no process state — no `set_var` on the boot
@@ -213,7 +212,7 @@ mod tests {
     /// test, and a `seam::…` filter path existed nowhere else in either
     /// workspace, so "where is this asserted?" had two answers inside one file.
     mod seam {
-        use nest_rs_core::{App, ContainerBuilder, DynamicModule, Module, module};
+        use nest_rs_core::{App, ContainerBuilder, Imported, Module, module};
         use validator::Validate;
 
         use super::*;
@@ -241,11 +240,11 @@ mod tests {
         struct OwnerModule;
 
         impl Module for OwnerModule {
-            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
                 builder
             }
-            fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-                ConfigModule::for_feature::<SeamConfig>().collect(builder)
+            fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+                ConfigModule::provide_feature::<SeamConfig>(None, builder)
             }
         }
 
@@ -354,10 +353,10 @@ mod tests {
         struct OpensModule;
 
         impl Module for OpensModule {
-            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
                 builder
             }
-            fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
                 builder.provide_factory(|_| async { Ok(Opened) })
             }
         }
@@ -402,7 +401,10 @@ mod tests {
 
     use super::*;
     use crate::service::var_name;
-    use nest_rs_core::Container;
+    use nest_rs_core::{App, module};
+
+    #[module(imports = [ConfigModule::for_root()])]
+    struct RootOnly;
 
     /// `ConfigModule::for_root()`'s collect registers the active [`Environment`]
     /// and **nothing else** — in particular it does not merge the `.env` cascade
@@ -428,8 +430,8 @@ mod tests {
                 ),
             )?;
 
-            let builder = ConfigModule::for_root().collect(Container::builder());
-            let container = builder.build();
+            let app = App::new::<RootOnly>().expect("an app importing the root boots");
+            let container = app.container();
 
             assert!(
                 container.get::<Environment>().is_some(),

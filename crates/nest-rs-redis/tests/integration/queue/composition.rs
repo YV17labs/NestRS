@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{App, ContainerBuilder, Module, module};
+use nest_rs_core::{App, ContainerBuilder, Imported, Module, module};
 use nest_rs_queue::{
     Ask, BoundConsumer, Capabilities, Disposition, Envelope, JobConsumer, JobProducer, LeaseHold,
     Prepared, ProcessMethod, PushOptions, QueueBackend, QueueError, QueueName, Received,
@@ -37,11 +37,11 @@ impl JobProducer for ElsewhereProducer {
 struct ElsewhereQueueModule;
 
 impl Module for ElsewhereQueueModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_declared_factory::<Arc<dyn JobProducer>, _, _>(
             nest_rs_queue::BACKEND_REMEDY,
             |_| async { Ok(Arc::new(ElsewhereProducer) as Arc<dyn JobProducer>) },
@@ -116,11 +116,11 @@ impl JobConsumer for ElsewhereConsumer {
 struct ElsewhereConsumerModule;
 
 impl Module for ElsewhereConsumerModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_declared_factory::<BoundConsumer, _, _>(
             nest_rs_queue::BACKEND_REMEDY,
             |_| async { Ok(BoundConsumer::new(ElsewhereConsumer)) },

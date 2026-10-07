@@ -22,11 +22,10 @@
 //! the guard serves is driven below over a store that never answers, on paused
 //! time, so the twenty seconds it waits cost the suite nothing.
 
-use std::any::TypeId;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{ContainerBuilder, Module, module};
+use nest_rs_core::{ContainerBuilder, Imported, Module, module};
 use nest_rs_guards::guard;
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -189,14 +188,11 @@ impl ThrottlerStore for SlowStore {
 struct StoreModule<S>(std::marker::PhantomData<S>);
 
 impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
             .provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(BACKEND_REMEDY, |_| async {
                 Ok(Arc::new(S::default()) as Arc<dyn ThrottlerStore>)

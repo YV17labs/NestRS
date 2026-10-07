@@ -3,7 +3,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported};
 
 use crate::{AuthnConfig, JwtService};
 
@@ -33,7 +33,7 @@ impl DynamicModule for AuthnSetup {
         TypeId::of::<AuthnModule>()
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<JwtService, _, _>(|container| async move {
             #[expect(

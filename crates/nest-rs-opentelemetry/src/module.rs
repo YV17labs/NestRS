@@ -1,4 +1,4 @@
-use nest_rs_core::{container::ContainerBuilder, module::Module};
+use nest_rs_core::{Imported, container::ContainerBuilder, module::Module};
 
 use crate::OpenTelemetryError;
 
@@ -20,10 +20,7 @@ use crate::meter::OpenTelemetryMeter;
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         if !crate::init::initialized() {
             return builder.refuse(OpenTelemetryError::InitMissing);
         }

@@ -18,10 +18,11 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         let at = proc_macro2::Literal::usize_unsuffixed(i);
         let label = import_label(import);
         let call = match import {
-            // Bare type path → static `Module`.
+            // Bare type path → static `Module`, through the one way into its
+            // phases.
             Expr::Path(p) => {
                 let path = &p.path;
-                quote! { builder = <#path as ::nest_rs_core::Module>::register(builder); }
+                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
             }
             // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
             // The collect phase built the value and parked it at this site, so
@@ -50,7 +51,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         let call = match import {
             Expr::Path(p) => {
                 let path = &p.path;
-                quote! { builder = <#path as ::nest_rs_core::Module>::collect(builder); }
+                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
             }
             other => quote! {
                 builder = ::nest_rs_core::ContainerBuilder::collect_dynamic_import(
@@ -277,30 +278,15 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nest_rs_core::Module for #name {
             fn register(
                 mut builder: ::nest_rs_core::ContainerBuilder,
+                _: ::nest_rs_core::Imported<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
-                // Mark before recursing imports so a module cycle terminates.
-                if !::nest_rs_core::ContainerBuilder::mark_registered(
-                    &mut builder,
-                    ::std::any::TypeId::of::<#name>(),
-                ) {
-                    return builder;
-                }
-                // A no-op once collected. A setup that left this module's
-                // `collect` out gets it here, too late for a factory, which the
-                // boot then refuses by name rather than leaving it unqueued.
-                builder = <#name as ::nest_rs_core::Module>::collect(builder);
                 #body
             }
 
             fn collect(
                 mut builder: ::nest_rs_core::ContainerBuilder,
+                _: ::nest_rs_core::Imported<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
-                if !::nest_rs_core::ContainerBuilder::mark_collected(
-                    &mut builder,
-                    ::std::any::TypeId::of::<#name>(),
-                ) {
-                    return builder;
-                }
                 #(#collect_calls)*
                 builder
             }

@@ -245,13 +245,13 @@ reachable only through `PostsHttpModule` — that is the point.
 
 `App::builder().build().await` runs four phases, in order:
 
-1. **Seeds** — runtime values from `main` via `.seed(value)`. A seed
-   wins over a module-built provider of the same type.
-2. **Collect** — async factories run (DB pools, …). A dynamic module's
-   `collect()` lives here.
-3. **Factories** — awaited outputs land in the container as global
-   infrastructure.
-4. **Register** — `Module::register()` builds every provider in
+1. **Seeds** — runtime values from `main` via `.provide(value)`. A seed
+   wins over a factory or a module-built provider of the same type.
+2. **Collect** — every imported module queues the async factories it
+   declares (DB pools, …), a dynamic module's from its `collect`.
+3. **Factories** — the queue is awaited; outputs land in the container as
+   global infrastructure.
+4. **Register** — every imported module builds its providers in
    dependency order.
 
 Sync-only apps skip collect/factories and call
@@ -259,8 +259,9 @@ Sync-only apps skip collect/factories and call
 
 ## Safe to import twice
 
-The `#[module]` macro registers a module the first time `register()`
-runs, then short-circuits on later calls. A **diamond import** — two
+The framework runs each phase of a module once, however many modules
+import it, and a module's collect before its register — a module never
+reaches another's phases but through an import. A **diamond import** — two
 branches that both reach the same module — still builds that module's
 providers once:
 

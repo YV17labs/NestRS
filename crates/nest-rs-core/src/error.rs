@@ -252,14 +252,13 @@ pub struct LateFactoryError {
 }
 
 /// A `#[module]`'s dynamic import reached the register phase with no value its
-/// collect phase built: something marked the module collected without running
-/// its `Module::collect`, which builds each dynamic import. Raised by the
-/// register phase rather than leaving the import out.
+/// collect phase built. An import runs a module's `collect` before its
+/// `register`, so only a call of the expansion's internal seam by hand gets
+/// here; refused rather than leaving the import out.
 #[derive(Debug, Error)]
 #[error(
-    "{site} reached the register phase uncollected: its module was marked collected without \
-     running its `Module::collect`, which builds every dynamic import — call that `collect` \
-     instead of `ContainerBuilder::mark_collected` for a module `#[module]` expands"
+    "{site} reached the register phase with no value its module's collect built — the import's \
+     two phases ran apart, which only a hand call of `#[module]`'s internal seam does"
 )]
 pub(crate) struct UncollectedImportError {
     /// The import, as a boot error names its site.

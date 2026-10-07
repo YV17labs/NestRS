@@ -7,7 +7,9 @@ use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{App, ContainerBuilder, DynamicModule, LateFactoryError, Module, module};
+use nest_rs_core::{
+    App, ContainerBuilder, DynamicModule, Imported, LateFactoryError, Module, module,
+};
 
 /// Counts how many times the import expression ran, and stamps each
 /// construction with a serial so a test can tell *which* value was installed.
@@ -37,11 +39,11 @@ impl DynamicModule for CountingSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide(Installed(self.serial))
     }
 
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide(Collected(self.serial))
     }
 }
@@ -78,7 +80,7 @@ impl DynamicModule for SyncSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide(Installed(BUILDS.fetch_add(1, Ordering::SeqCst)))
     }
 }
@@ -119,7 +121,7 @@ impl DynamicModule for TaggingSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_keyed(self.0, Tagged(self.0))
     }
 }
@@ -156,7 +158,7 @@ impl DynamicModule for MixedSetup {
         TypeId::of::<Self>()
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide(Mixed(7))
     }
 }
@@ -195,11 +197,11 @@ struct Opened;
 struct OpensModule;
 
 impl Module for OpensModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_factory(|_| async { Ok(Opened) })
     }
 }
@@ -207,7 +209,7 @@ impl Module for OpensModule {
 #[module(imports = [OpensModule])]
 struct OpeningModule;
 
-/// A setup that registers its module and leaves out the module's `collect`.
+/// A setup that imports its module in its register alone.
 struct UncollectingSetup;
 
 impl DynamicModule for UncollectingSetup {
@@ -215,8 +217,8 @@ impl DynamicModule for UncollectingSetup {
         TypeId::of::<OpeningModule>()
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        <OpeningModule as Module>::register(builder)
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder.import::<OpeningModule>()
     }
 }
 
@@ -224,7 +226,7 @@ impl DynamicModule for UncollectingSetup {
 struct UncollectedModule;
 
 #[tokio::test]
-async fn a_module_registered_without_its_collect_fails_the_boot_naming_what_it_opens() {
+async fn a_module_imported_in_a_register_alone_fails_the_boot_naming_what_it_opens() {
     let Err(refused) = App::builder().module::<UncollectedModule>().build().await else {
         panic!("the factory its import queues would never run");
     };
@@ -232,34 +234,4 @@ async fn a_module_registered_without_its_collect_fails_the_boot_naming_what_it_o
         .downcast_ref::<LateFactoryError>()
         .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
     assert!(late.type_name.ends_with("Opened"), "{late:?}");
-}
-
-#[module(imports = [TaggingSetup("claimed")])]
-struct ClaimedModule;
-
-/// An importer that marks `ClaimedModule` collected without running its
-/// `collect`, then registers it.
-struct ClaimsCollectModule;
-
-impl Module for ClaimsCollectModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        <ClaimedModule as Module>::register(builder)
-    }
-
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        builder.mark_collected(TypeId::of::<ClaimedModule>());
-        builder
-    }
-}
-
-#[test]
-fn a_dynamic_import_whose_module_was_marked_collected_unrun_fails_the_boot_naming_it() {
-    let Err(refused) = App::new::<ClaimsCollectModule>() else {
-        panic!("the module's imports were never collected");
-    };
-    let refused = format!("{refused:#}");
-    assert!(
-        refused.starts_with("`TaggingSetup(..)` at `imports[0]` of `ClaimedModule`"),
-        "{refused}"
-    );
 }

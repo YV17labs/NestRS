@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{App, ContainerBuilder, Module, module};
+use nest_rs_core::{App, ContainerBuilder, Imported, Module, module};
 use nest_rs_redis::{RedisConfig, RedisModule, RedisScheduleModule};
 use nest_rs_schedule::{Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError};
 
@@ -42,11 +42,11 @@ impl OccurrenceLock for ElsewhereLock {
 struct ElsewhereScheduleModule;
 
 impl Module for ElsewhereScheduleModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder.provide_declared_factory::<Arc<dyn OccurrenceLock>, _, _>(
             nest_rs_schedule::BACKEND_REMEDY,
             |_| async { Ok(Arc::new(ElsewhereLock) as Arc<dyn OccurrenceLock>) },

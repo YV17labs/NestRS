@@ -1,0 +1,26 @@
+error[E0308]: mismatched types
+  --> tests/integration/diagnostics/core/module_entering_another_modules_phase.rs:15:52
+   |
+15 |         <InnerModule as Module>::register(builder, imported)
+   |         ---------------------------------          ^^^^^^^^ expected `Imported<InnerModule>`, found `Imported<OuterModule>`
+   |         |
+   |         arguments to this function are incorrect
+   |
+   = note: expected struct `Imported<InnerModule>`
+              found struct `Imported<OuterModule>`
+note: associated function defined here
+  --> $WORKSPACE/crates/nest-rs-core/src/module.rs
+   |
+   |     fn register(builder: ContainerBuilder, imported: Imported<Self>) -> ContainerBuilder;
+   |        ^^^^^^^^
+
+error[E0624]: associated function `new` is private
+  --> tests/integration/diagnostics/core/module_entering_another_modules_phase.rs:19:61
+   |
+19 |         <InnerModule as Module>::collect(builder, Imported::new())
+   |                                                             ^^^ private associated function
+   |
+  ::: $WORKSPACE/crates/nest-rs-core/src/module.rs
+   |
+   |     pub(crate) fn new() -> Self {
+   |     --------------------------- private associated function defined here

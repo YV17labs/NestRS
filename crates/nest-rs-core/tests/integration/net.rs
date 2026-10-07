@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use nest_rs_core::{
-    App, Budget, BudgetPastNetError, ContainerBuilder, Module, Net, injectable, module,
+    App, Budget, BudgetPastNetError, ContainerBuilder, Imported, Module, Net, injectable, module,
 };
 
 /// A resource that waits what it holds for an answer.
@@ -180,7 +180,7 @@ async fn a_budget_whose_resource_was_never_built_is_not_held() {
 struct DeclaringModule;
 
 impl Module for DeclaringModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
             .provide(Pool(NET))
             .provide_meta(pool_budget())
@@ -301,7 +301,7 @@ struct Dependent;
 struct OpeningModule;
 
 impl Module for OpeningModule {
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
             .provide_meta(pool_budget())
             .provide_meta(Net::over::<Pool>("the test port", NET))
@@ -311,7 +311,7 @@ impl Module for OpeningModule {
             })
     }
 
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 }
@@ -328,14 +328,14 @@ async fn a_budget_is_refused_once_its_resource_is_built_before_the_factories_aft
 struct FailingFactoryModule;
 
 impl Module for FailingFactoryModule {
-    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
             .provide_meta(pool_budget())
             .provide_meta(Net::over::<Pool>("the test port", NET))
             .provide_factory::<Dependent, _, _>(|_| async { Err(anyhow!("a factory ran")) })
     }
 
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         builder
     }
 }

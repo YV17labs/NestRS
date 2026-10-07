@@ -133,7 +133,7 @@ pub use layer_chain::LayerSpec;
 pub use lifecycle::{
     LifecycleHook, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT,
 };
-pub use module::{DynamicModule, Module};
+pub use module::{DynamicModule, Imported, Module};
 pub use net::Net;
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;

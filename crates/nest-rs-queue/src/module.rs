@@ -2,10 +2,8 @@
 //! attaches the [`QueueWorker`] that runs every reachable
 //! `#[process]` method over the queue backend a binding bound.
 
-use std::any::TypeId;
-
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{ContainerBuilder, Module, TransportContribution};
+use nest_rs_core::{ContainerBuilder, Imported, Module, TransportContribution};
 
 use crate::{QueueConfig, QueueWorker};
 
@@ -28,22 +26,14 @@ pub type QueueSetup = ConfigSetup<QueueModule, QueueConfig>;
 impl Module for QueueModule {
     // A bare import still reads `<PREFIX>_QUEUE__*`; a `for_root(Some(cfg))`'s
     // declared value supersedes this env-only one.
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature(None::<QueueConfig>, builder)
     }
 
-    // Deduplicated: two importers attach one worker, never two pools of
-    // permits running each method twice over.
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(TypeId::of::<Self>()) {
-            return builder;
-        }
-        // A no-op once collected; an importer that skipped `collect` gets what
-        // it queues refused by name (`LateFactoryError`), never left unbuilt.
-        Self::collect(builder).provide_meta(TransportContribution {
+    // Registered once however many modules import it, so two importers attach
+    // one worker, never two pools of permits running each method twice over.
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder.provide_meta(TransportContribution {
             name: "QueueWorker",
             build: |_| Ok(Box::new(QueueWorker::new())),
         })
@@ -56,17 +46,17 @@ mod tests {
 
     use super::*;
 
-    /// A hand-written importer that registers the module without collecting it.
+    /// A hand-written importer that imports the module in its register alone.
     struct RegistersOnly;
 
     impl Module for RegistersOnly {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            QueueModule::register(builder)
+        fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+            builder.import::<QueueModule>()
         }
     }
 
     #[tokio::test]
-    async fn the_module_registered_without_its_collect_fails_the_boot_naming_its_config() {
+    async fn the_module_imported_in_a_register_alone_fails_the_boot_naming_its_config() {
         let Err(refused) = App::builder().module::<RegistersOnly>().build().await else {
             panic!("the worker would run on a config nothing resolved");
         };
@@ -78,8 +68,10 @@ mod tests {
 
     #[test]
     fn two_imports_attach_one_worker() {
-        let builder = QueueModule::register(Container::builder());
-        let container = QueueModule::register(builder).build();
+        let container = Container::builder()
+            .import::<QueueModule>()
+            .import::<QueueModule>()
+            .build();
         let contributions = Discovery::new(&container).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "QueueWorker");

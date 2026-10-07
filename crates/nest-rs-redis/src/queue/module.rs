@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, Module, Net};
+use nest_rs_core::{ContainerBuilder, DynamicModule, Imported, Module, Net};
 use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer};
 
 use super::consumer::RedisQueueConsumer;
@@ -81,20 +81,15 @@ impl RedisQueueModule {
 impl Module for RedisQueueModule {
     // A bare import still reads `<PREFIX>_REDIS__QUEUE__*`; a
     // `for_root(Some(cfg))`'s declared value supersedes this env-only one.
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
+    fn collect(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
         Self::bind(ConfigModule::provide_feature(
             None::<RedisQueueConfig>,
             builder,
         ))
     }
 
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        // A no-op once collected; an importer that skipped `collect` gets what
-        // it queues refused by name (`LateFactoryError`), never left unbuilt.
-        Self::collect(builder)
+    fn register(builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder
     }
 }
 
@@ -109,14 +104,12 @@ impl DynamicModule for RedisQueueSetup {
         TypeId::of::<RedisQueueModule>()
     }
 
-    fn collect(&self, mut builder: ContainerBuilder) -> ContainerBuilder {
-        let first = builder.mark_collected(TypeId::of::<RedisQueueModule>());
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        if first {
-            RedisQueueModule::bind(builder)
-        } else {
-            builder
-        }
+    fn collect(&self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<RedisQueueModule>())
+    }
+
+    fn register(self, builder: ContainerBuilder, _: Imported<Self>) -> ContainerBuilder {
+        builder.import::<RedisQueueModule>()
     }
 }
 

@@ -39,7 +39,8 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::consume::{self, AttemptOutcome};
+use crate::consume::{self, AttemptOutcome, millis};
+use crate::error::CallFailed;
 use crate::{
     Ask, BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, Capability, Delivery, Disposition,
     JobConsumer, JobError, JobId, JobProducer, LeaseHold, Prepared, ProcessMethod, QueueBackend,
@@ -56,16 +57,45 @@ const RECEIVE_WAIT: Duration = Duration::from_secs(1);
 const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LONGEST_RETRY: Duration = Duration::from_secs(5);
 
+/// The wait before a failed call is made again: [`FIRST_RETRY`], doubling up
+/// to [`LONGEST_RETRY`], and the first again once a call answers.
+struct Backoff(Duration);
+
+impl Backoff {
+    const fn new() -> Self {
+        Self(FIRST_RETRY)
+    }
+
+    const fn reset(&mut self) {
+        self.0 = FIRST_RETRY;
+    }
+
+    /// The wait before the next call, doubling the one after it.
+    fn wait(&mut self) -> Duration {
+        let wait = self.0;
+        self.0 = (wait * 2).min(LONGEST_RETRY);
+        wait
+    }
+}
+
 /// The least a drain keeps back from its window to hand cut jobs back in, when
 /// the backend answers faster: a healthy backend spends milliseconds of it.
 const HAND_BACK_RESERVE: Duration = Duration::from_secs(5);
 
-/// How often the leases are looked at while none is held.
-const IDLE_RENEWAL: Duration = Duration::from_secs(1);
-
 /// The least time between two renewals of a method's leases, however their
 /// due instants fall.
 const RENEWAL_SPACING: Duration = Duration::from_millis(10);
+
+/// How far into its lease a delivery's renewal is sent: a third, so two
+/// renewals can fail before the lease lapses.
+const RENEWAL_POINT: u32 = 3;
+
+/// Whether the renewal the worker sends a third into `lease` lands before the
+/// lease lapses though it waits out `answer_bound` — the longest one call to the
+/// backend takes. A backend binding refuses at boot a lease that fails it.
+pub fn lease_fits_renewal(lease: Duration, answer_bound: Duration) -> bool {
+    answer_bound.saturating_add(lease / RENEWAL_POINT) < lease
+}
 
 /// The longest dead-letter reason a backend is handed, in bytes: the failure as
 /// its line renders it, cut on a character boundary.
@@ -74,31 +104,26 @@ const REASON_LIMIT: usize = 1024;
 /// The transport [`QueueModule`](crate::QueueModule) attaches: every reachable
 /// `#[process]` method, run over the [`BoundConsumer`] a backend's binding
 /// declared.
+#[derive(Default)]
 pub struct QueueWorker {
-    methods: Vec<&'static ProcessMethod>,
-    container: Option<Container>,
     config: QueueConfig,
-    consumer: Option<Arc<BoundConsumer>>,
-    prepared: Option<Prepared>,
+    /// What `serve` runs, once `configure` found methods to run.
+    ready: Option<Ready>,
+}
+
+/// A configured worker's consumer, and what it serves.
+struct Ready {
+    consumer: Arc<BoundConsumer>,
+    methods: Vec<(&'static ProcessMethod, QueueName)>,
+    container: Container,
+    prepared: Prepared,
 }
 
 impl QueueWorker {
     /// A worker with nothing to run yet: the methods, the consumer and the
     /// settings are read from the container at boot.
     pub fn new() -> Self {
-        Self {
-            methods: Vec::new(),
-            container: None,
-            config: QueueConfig::default(),
-            consumer: None,
-            prepared: None,
-        }
-    }
-}
-
-impl Default for QueueWorker {
-    fn default() -> Self {
-        Self::new()
+        Self::default()
     }
 }
 
@@ -121,7 +146,7 @@ impl Transport for QueueWorker {
             return Ok(());
         };
         let backend = consumer.backend();
-        self.methods = consume::check(reachable, backend)?;
+        let methods = consume::check(reachable, backend)?;
         if let Some(producer) = container.get_dyn::<dyn JobProducer>()
             && producer.backend().name() != backend.name()
         {
@@ -131,31 +156,41 @@ impl Transport for QueueWorker {
                 backend.name(),
             );
         }
-        if !self.methods.is_empty() {
-            let prepared = match within(BACKEND_TIMEOUT, consumer.prepare(&self.methods)).await {
-                Ok(Ok(prepared)) => prepared,
-                Ok(Err(error)) => {
-                    return Err(anyhow::Error::new(error).context(format!(
-                        "the `{}` queue backend could not prepare its consumer",
-                        backend.name()
-                    )));
-                }
-                Err(Elapsed) => anyhow::bail!(
-                    "the `{}` queue backend did not prepare its consumer within the port's net \
-                     of {BACKEND_TIMEOUT:?}",
-                    backend.name()
-                ),
-            };
-            self.prepared = Some(prepared);
+        if methods.is_empty() {
+            return Ok(());
         }
-        self.consumer = Some(consumer);
-        self.container = Some(container.clone());
+        let declared: Vec<&'static ProcessMethod> =
+            methods.iter().map(|(method, _)| *method).collect();
+        let prepared = match within(BACKEND_TIMEOUT, consumer.prepare(&declared)).await {
+            Ok(prepared) => prepared,
+            Err(CallFailed::Erred(error)) => {
+                return Err(anyhow::Error::new(error).context(format!(
+                    "the `{}` queue backend could not prepare its consumer",
+                    backend.name()
+                )));
+            }
+            Err(CallFailed::Unanswered(_)) => anyhow::bail!(
+                "the `{}` queue backend did not prepare its consumer within the port's net \
+                     of {BACKEND_TIMEOUT:?}",
+                backend.name()
+            ),
+        };
+        self.ready = Some(Ready {
+            consumer,
+            methods,
+            container: container.clone(),
+            prepared,
+        });
         Ok(())
     }
 
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
-        let (Some(consumer), Some(container), Some(prepared)) =
-            (self.consumer, self.container, self.prepared)
+        let Some(Ready {
+            consumer,
+            methods,
+            container,
+            prepared,
+        }) = self.ready
         else {
             // Nothing to run: idle until shutdown, so this transport does not
             // race the app down when it is the only one attached.
@@ -164,7 +199,7 @@ impl Transport for QueueWorker {
         };
         consumer
             .serve(Serving {
-                methods: self.methods,
+                methods,
                 container,
                 window: self.config.shutdown_timeout,
                 prepared,
@@ -183,7 +218,7 @@ impl Transport for QueueWorker {
 
 /// What a worker hands the loop of its consumer at `serve`.
 pub(crate) struct Serving {
-    methods: Vec<&'static ProcessMethod>,
+    methods: Vec<(&'static ProcessMethod, QueueName)>,
     container: Container,
     window: Duration,
     prepared: Prepared,
@@ -201,34 +236,29 @@ pub(crate) trait Run: Send + Sync {
     fn serve(&self, serving: Serving) -> BoxFuture<'_, ()>;
 }
 
-pub(crate) struct Erased<C>(Arc<C>);
-
-impl<C: JobConsumer> Erased<C> {
-    pub(crate) fn new(consumer: C) -> Self {
-        Self(Arc::new(consumer))
-    }
-}
-
-impl<C: JobConsumer> Run for Erased<C> {
+impl<C: JobConsumer> Run for Arc<C> {
     fn backend(&self) -> &'static QueueBackend {
-        self.0.backend()
+        (**self).backend()
     }
 
     fn prepare<'a>(
         &'a self,
         methods: &'a [&'static ProcessMethod],
     ) -> BoxFuture<'a, Result<Prepared, QueueError>> {
-        Box::pin(self.0.prepare(methods))
+        Box::pin((**self).prepare(methods))
     }
 
     fn serve(&self, serving: Serving) -> BoxFuture<'_, ()> {
-        Box::pin(serve(Arc::clone(&self.0), serving))
+        Box::pin(serve(Arc::clone(self), serving))
     }
 }
 
 /// What every method's loop of one worker shares.
 struct Shared<C: JobConsumer> {
     consumer: Arc<C>,
+    /// Whether the backend files a record due later, so a retry's wait is the
+    /// backend's rather than a held permit's.
+    delays: bool,
     container: Container,
     /// How long one receive waits for a job.
     wait: Duration,
@@ -256,6 +286,10 @@ async fn serve<C: JobConsumer>(consumer: Arc<C>, serving: Serving) {
     } = serving;
     let reserve = HAND_BACK_RESERVE.max(prepared.answer_bound).min(window / 2);
     let shared = Arc::new(Shared {
+        delays: consumer
+            .backend()
+            .capabilities()
+            .contains(Capability::DelayedPush),
         consumer,
         container,
         wait: RECEIVE_WAIT.min(window / 4),
@@ -268,26 +302,8 @@ async fn serve<C: JobConsumer>(consumer: Arc<C>, serving: Serving) {
     let renewing = CancellationToken::new();
     let mut loops = JoinSet::new();
     let mut renewals = JoinSet::new();
-    for method in methods {
-        let queue = match QueueName::new(method.queue()) {
-            Ok(queue) => queue,
-            // Discovery refused every name outside the rule at boot.
-            Err(refused) => {
-                tracing::error!(
-                    target: TARGET,
-                    processor = method.name(),
-                    error = %error_message(&refused),
-                    "queue processor not run: its queue's name is refused",
-                );
-                continue;
-            }
-        };
+    for (method, queue) in methods {
         let run = Arc::new(MethodRun {
-            delays: shared
-                .consumer
-                .backend()
-                .capabilities()
-                .contains(Capability::DelayedPush),
             shared: Arc::clone(&shared),
             method,
             queue,
@@ -364,15 +380,12 @@ struct MethodRun<C: JobConsumer> {
     shared: Arc<Shared<C>>,
     method: &'static ProcessMethod,
     queue: QueueName,
-    /// Whether the backend files a record due later, so a retry's wait is the
-    /// backend's rather than a held permit's.
-    delays: bool,
     permits: Arc<Semaphore>,
     /// Every lease a delivery of this method holds, by its local token.
     held: Mutex<HashMap<u64, Held<C::Lease>>>,
     next_token: AtomicU64,
-    /// Woken when a delivery takes a lease, so its first renewal is timed from
-    /// its own start.
+    /// Woken when a delivery takes a lease falling due before every lease held,
+    /// so the renewal's sleep is timed again.
     holding: Notify,
 }
 
@@ -388,6 +401,14 @@ struct Held<L> {
     /// Fired when the lease is lost; the delivery's attempt is then cut.
     lost: CancellationToken,
     job: Option<JobId>,
+}
+
+impl<L> Held<L> {
+    /// When the lease falls due for renewal, counted from its last
+    /// confirmation.
+    fn due(&self) -> Instant {
+        self.confirmed + self.leased_for / RENEWAL_POINT
+    }
 }
 
 /// How an attempt's run ended, from where the delivery stands.
@@ -421,7 +442,7 @@ impl<C: JobConsumer> Drop for Released<C> {
 impl<C: JobConsumer> MethodRun<C> {
     /// Ask for as many deliveries as permits are free, until the stop.
     async fn receive(self: Arc<Self>) {
-        let mut retry = FIRST_RETRY;
+        let mut backoff = Backoff::new();
         loop {
             let first = tokio::select! {
                 biased;
@@ -449,11 +470,11 @@ impl<C: JobConsumer> MethodRun<C> {
             )
             .await;
             match answer {
-                Ok(Ok(Received {
+                Ok(Received {
                     deliveries,
                     throttled_for,
-                })) => {
-                    retry = FIRST_RETRY;
+                }) => {
+                    backoff.reset();
                     let stopped = self.shared.stop.is_cancelled();
                     if deliveries.len() > permits.len() {
                         tracing::error!(
@@ -492,20 +513,20 @@ impl<C: JobConsumer> MethodRun<C> {
                         }
                     }
                 }
-                failed => {
+                Err(failed) => {
                     drop(permits);
+                    let wait = backoff.wait();
                     tracing::warn!(
                         target: TARGET,
                         queue = %self.queue,
-                        error = %failure(failed, net),
-                        retry_in_ms = millis(retry),
+                        error = %failed,
+                        retry_in_ms = millis(wait),
                         "queue receive failed; retrying",
                     );
                     tokio::select! {
                         () = self.shared.stop.cancelled() => return,
-                        () = tokio::time::sleep(retry) => {}
+                        () = tokio::time::sleep(wait) => {}
                     }
-                    retry = (retry * 2).min(LONGEST_RETRY);
                 }
             }
         }
@@ -538,26 +559,25 @@ impl<C: JobConsumer> MethodRun<C> {
 
     /// The backend's upkeep of the queue, as often as it asks, until the stop.
     async fn maintain(self: Arc<Self>) {
-        let mut retry = FIRST_RETRY;
+        let mut backoff = Backoff::new();
         loop {
             let next =
                 match within(BACKEND_TIMEOUT, self.shared.consumer.maintain(self.method)).await {
-                    Ok(Ok(None)) => return,
-                    Ok(Ok(Some(next))) => {
-                        retry = FIRST_RETRY;
+                    Ok(None) => return,
+                    Ok(Some(next)) => {
+                        backoff.reset();
                         next
                     }
-                    failed => {
+                    Err(failed) => {
+                        let wait = backoff.wait();
                         tracing::warn!(
                             target: TARGET,
                             queue = %self.queue,
-                            error = %failure(failed, BACKEND_TIMEOUT),
-                            retry_in_ms = millis(retry),
+                            error = %failed,
+                            retry_in_ms = millis(wait),
                             "queue upkeep failed; retrying",
                         );
-                        let now = retry;
-                        retry = (retry * 2).min(LONGEST_RETRY);
-                        now
+                        wait
                     }
                 };
             tokio::select! {
@@ -571,14 +591,14 @@ impl<C: JobConsumer> MethodRun<C> {
     /// length after its last confirmation, every lease held renewed together
     /// when one falls due — until `until`, after the last delivery ended.
     async fn renew(self: Arc<Self>, until: CancellationToken) {
-        let mut retry = FIRST_RETRY;
+        let mut backoff = Backoff::new();
         let mut not_before = Instant::now();
         loop {
-            let due = self.next_renewal().max(not_before);
+            let due = self.next_renewal().map(|due| due.max(not_before));
             tokio::select! {
                 () = until.cancelled() => return,
                 () = self.holding.notified() => continue,
-                () = tokio::time::sleep_until(due) => {}
+                () = sleep_until_some(due) => {}
             }
             let held: Vec<(u64, Arc<C::Lease>)> = self
                 .lock()
@@ -602,8 +622,8 @@ impl<C: JobConsumer> MethodRun<C> {
                     }
                 };
                 match answer {
-                    Ok(Ok(answers)) => {
-                        retry = FIRST_RETRY;
+                    Ok(answers) => {
+                        backoff.reset();
                         not_before = Instant::now() + RENEWAL_SPACING;
                         if answers.len() != held.len() {
                             tracing::error!(
@@ -622,17 +642,17 @@ impl<C: JobConsumer> MethodRun<C> {
                             }
                         }
                     }
-                    failed => {
+                    Err(failed) => {
+                        let wait = backoff.wait();
                         tracing::warn!(
                             target: TARGET,
                             queue = %self.queue,
                             leases = held.len(),
-                            error = %failure(failed, BACKEND_TIMEOUT),
-                            retry_in_ms = millis(retry),
+                            error = %failed,
+                            retry_in_ms = millis(wait),
                             "job leases not renewed; retrying",
                         );
-                        not_before = Instant::now() + retry;
-                        retry = (retry * 2).min(LONGEST_RETRY);
+                        not_before = Instant::now() + wait;
                     }
                 }
             }
@@ -651,11 +671,8 @@ impl<C: JobConsumer> MethodRun<C> {
             deferred_for,
         } = delivery;
         let lease = Arc::new(lease);
-        let (token, lost) = self.hold(Arc::clone(&lease), leased_for);
-        let _released = Released {
-            run: Arc::clone(&self),
-            token,
-        };
+        let (released, lost) = self.hold(Arc::clone(&lease), leased_for);
+        let token = released.token;
         let record = match record {
             Ok(record) => record,
             Err(why) => {
@@ -722,7 +739,6 @@ impl<C: JobConsumer> MethodRun<C> {
                         token,
                         &lease,
                         Disposition::Requeue { record: &record },
-                        Some(&job),
                         false,
                     )
                     .await;
@@ -733,7 +749,6 @@ impl<C: JobConsumer> MethodRun<C> {
                         token,
                         &lease,
                         Disposition::Requeue { record: &record },
-                        Some(&job),
                         true,
                     )
                     .await;
@@ -742,8 +757,7 @@ impl<C: JobConsumer> MethodRun<C> {
             };
             match outcome {
                 AttemptOutcome::Ok => {
-                    self.end(token, &lease, Disposition::Complete, Some(&job), false)
-                        .await;
+                    self.end(token, &lease, Disposition::Complete, false).await;
                     return;
                 }
                 AttemptOutcome::DeadLetter(error) => {
@@ -755,20 +769,23 @@ impl<C: JobConsumer> MethodRun<C> {
                             reason: &reason,
                             record: &record,
                         },
-                        Some(&job),
                         false,
                     )
                     .await;
                     return;
                 }
                 AttemptOutcome::Retry { after } => {
-                    if !self.delays && !after.is_zero() {
+                    if !self.shared.delays && !after.is_zero() {
                         match self.wait(after, &lost).await {
                             Waited::Elapsed => continue,
                             Waited::Stopped | Waited::Lost => {}
                         }
                     }
-                    let after = if self.delays { after } else { Duration::ZERO };
+                    let after = if self.shared.delays {
+                        after
+                    } else {
+                        Duration::ZERO
+                    };
                     let next = state.retry_envelope().into_json().to_string();
                     self.end(
                         token,
@@ -777,14 +794,13 @@ impl<C: JobConsumer> MethodRun<C> {
                             after,
                             record: next.as_bytes(),
                         },
-                        Some(&job),
                         lost.is_cancelled(),
                     )
                     .await;
                     return;
                 }
                 AttemptOutcome::Defer { after } => {
-                    let disposition = if self.delays {
+                    let disposition = if self.shared.delays {
                         Disposition::Defer {
                             after,
                             record: &record,
@@ -795,7 +811,7 @@ impl<C: JobConsumer> MethodRun<C> {
                         let _waited = self.wait(after, &lost).await;
                         Disposition::Requeue { record: &record }
                     };
-                    self.end(token, &lease, disposition, Some(&job), lost.is_cancelled())
+                    self.end(token, &lease, disposition, lost.is_cancelled())
                         .await;
                     return;
                 }
@@ -814,14 +830,14 @@ impl<C: JobConsumer> MethodRun<C> {
             ..
         } = delivery;
         let lease = Arc::new(lease);
-        let (token, _lost) = self.hold(Arc::clone(&lease), leased_for);
+        let (released, _lost) = self.hold(Arc::clone(&lease), leased_for);
+        let token = released.token;
         match record {
             Ok(record) => {
                 self.end(
                     token,
                     &lease,
                     Disposition::Requeue { record: &record },
-                    None,
                     false,
                 )
                 .await;
@@ -852,8 +868,7 @@ impl<C: JobConsumer> MethodRun<C> {
     ) {
         let error = consume::refuse(
             self.shared.consumer.backend(),
-            Some(self.queue.as_str()),
-            None,
+            &self.queue,
             backend_id,
             error,
         )
@@ -866,7 +881,6 @@ impl<C: JobConsumer> MethodRun<C> {
                 reason: &reason,
                 record,
             },
-            None,
             false,
         )
         .await;
@@ -880,11 +894,10 @@ impl<C: JobConsumer> MethodRun<C> {
         token: u64,
         lease: &C::Lease,
         disposition: Disposition<'_>,
-        job: Option<&JobId>,
         expected_loss: bool,
     ) {
-        self.settling(token);
-        let mut retry = FIRST_RETRY;
+        let job = self.settling(token);
+        let mut backoff = Backoff::new();
         let mut erred = false;
         loop {
             match within(
@@ -893,13 +906,13 @@ impl<C: JobConsumer> MethodRun<C> {
             )
             .await
             {
-                Ok(Ok(LeaseHold::Held)) => break,
-                Ok(Ok(LeaseHold::Lost)) => {
+                Ok(LeaseHold::Held) => break,
+                Ok(LeaseHold::Lost) => {
                     if erred || expected_loss {
                         tracing::debug!(
                             target: TARGET,
                             queue = %self.queue,
-                            job_id = job.map(tracing::field::display),
+                            job_id = job.as_ref().map(tracing::field::display),
                             disposition = disposition.name(),
                             "job outcome not written: the delivery is no longer this worker's",
                         );
@@ -907,7 +920,7 @@ impl<C: JobConsumer> MethodRun<C> {
                         tracing::warn!(
                             target: TARGET,
                             queue = %self.queue,
-                            job_id = job.map(tracing::field::display),
+                            job_id = job.as_ref().map(tracing::field::display),
                             disposition = disposition.name(),
                             "job outcome dropped: its lease lapsed and another worker holds its \
                              delivery",
@@ -915,14 +928,14 @@ impl<C: JobConsumer> MethodRun<C> {
                     }
                     break;
                 }
-                failed => {
+                Err(error) => {
                     erred = true;
-                    let error = failure(failed, BACKEND_TIMEOUT);
-                    if Instant::now() + retry >= self.holds_until(token) {
+                    let wait = backoff.wait();
+                    if Instant::now() + wait >= self.holds_until(token) {
                         tracing::error!(
                             target: TARGET,
                             queue = %self.queue,
-                            job_id = job.map(tracing::field::display),
+                            job_id = job.as_ref().map(tracing::field::display),
                             disposition = disposition.name(),
                             error = %error,
                             "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
@@ -932,17 +945,15 @@ impl<C: JobConsumer> MethodRun<C> {
                     tracing::debug!(
                         target: TARGET,
                         queue = %self.queue,
-                        job_id = job.map(tracing::field::display),
+                        job_id = job.as_ref().map(tracing::field::display),
                         error = %error,
-                        retry_in_ms = millis(retry),
+                        retry_in_ms = millis(wait),
                         "job outcome not recorded yet; retrying",
                     );
-                    tokio::time::sleep(retry).await;
-                    retry = (retry * 2).min(LONGEST_RETRY);
+                    tokio::time::sleep(wait).await;
                 }
             }
         }
-        self.lock().remove(&token);
     }
 
     /// Wait `after` in process — a backend that cannot file a record due later —
@@ -960,23 +971,38 @@ impl<C: JobConsumer> MethodRun<C> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Start renewing `lease`, held from now for `leased_for`.
-    fn hold(&self, lease: Arc<C::Lease>, leased_for: Duration) -> (u64, CancellationToken) {
+    /// Start renewing `lease`, held from now for `leased_for`, until the guard
+    /// it answers is dropped.
+    fn hold(
+        self: &Arc<Self>,
+        lease: Arc<C::Lease>,
+        leased_for: Duration,
+    ) -> (Released<C>, CancellationToken) {
         let token = self.next_token.fetch_add(1, Ordering::Relaxed);
         let lost = CancellationToken::new();
-        self.lock().insert(
+        let held = Held {
+            lease,
+            leased_for,
+            confirmed: Instant::now(),
+            settling: false,
+            lost: lost.clone(),
+            job: None,
+        };
+        let due = held.due();
+        let mut leases = self.lock();
+        let earliest = leases.values().map(Held::due).min();
+        leases.insert(token, held);
+        drop(leases);
+        // The renewal sleeps until the earliest lease falls due, so only one
+        // falling due before it needs the sleep re-timed.
+        if earliest.is_none_or(|earliest| due < earliest) {
+            self.holding.notify_one();
+        }
+        let released = Released {
+            run: Arc::clone(self),
             token,
-            Held {
-                lease,
-                leased_for,
-                confirmed: Instant::now(),
-                settling: false,
-                lost: lost.clone(),
-                job: None,
-            },
-        );
-        self.holding.notify_one();
-        (token, lost)
+        };
+        (released, lost)
     }
 
     fn name(&self, token: u64, job: &JobId) {
@@ -985,11 +1011,12 @@ impl<C: JobConsumer> MethodRun<C> {
         }
     }
 
-    /// Mark the lease as being settled.
-    fn settling(&self, token: u64) {
-        if let Some(held) = self.lock().get_mut(&token) {
+    /// Mark the lease as being settled, answering the job it holds once named.
+    fn settling(&self, token: u64) -> Option<JobId> {
+        self.lock().get_mut(&token).and_then(|held| {
             held.settling = true;
-        }
+            held.job.clone()
+        })
     }
 
     /// Until when the lease holds without another renewal: its last
@@ -1057,15 +1084,9 @@ impl<C: JobConsumer> MethodRun<C> {
             .min()
     }
 
-    /// When the next lease falls due for renewal — a third of its length after
-    /// its last confirmation, so two renewals can fail before it lapses — or
-    /// [`IDLE_RENEWAL`] from now when none is held.
-    fn next_renewal(&self) -> Instant {
-        self.lock()
-            .values()
-            .map(|held| held.confirmed + held.leased_for / 3)
-            .min()
-            .unwrap_or_else(|| Instant::now() + IDLE_RENEWAL)
+    /// When the next lease falls due for renewal, if any is held.
+    fn next_renewal(&self) -> Option<Instant> {
+        self.lock().values().map(Held::due).min()
     }
 }
 
@@ -1081,22 +1102,10 @@ async fn sleep_until_some(at: Option<Instant>) {
 async fn within<T>(
     net: Duration,
     answer: impl Future<Output = Result<T, QueueError>>,
-) -> Result<Result<T, QueueError>, Elapsed> {
-    tokio::time::timeout(net, answer)
-        .await
-        .map_err(|_elapsed| Elapsed)
-}
-
-/// A backend call the port stopped waiting for at its net.
-#[derive(Debug)]
-struct Elapsed;
-
-/// What failed in a call the port made, as a line says it.
-fn failure<T>(failed: Result<Result<T, QueueError>, Elapsed>, net: Duration) -> String {
-    match failed {
-        Ok(Err(error)) => error_message(&error),
-        Err(Elapsed) => format!("no answer within the port's net of {net:?}"),
-        Ok(Ok(_)) => String::from("answered"),
+) -> Result<T, CallFailed> {
+    match tokio::time::timeout(net, answer).await {
+        Ok(answered) => answered.map_err(CallFailed::Erred),
+        Err(_) => Err(CallFailed::Unanswered(net)),
     }
 }
 
@@ -1114,7 +1123,18 @@ fn reason(error: &JobError) -> String {
     reason
 }
 
-/// `duration` in whole milliseconds, for a line's field.
-fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A renewal sent a third in leaves two thirds for the answer, so a lease
+    /// fits only past one and a half answer bounds.
+    #[test]
+    fn a_lease_fits_a_renewal_only_past_one_and_a_half_answer_bounds() {
+        let bound = Duration::from_secs(1);
+        assert!(lease_fits_renewal(Duration::from_millis(1_501), bound));
+        assert!(!lease_fits_renewal(Duration::from_millis(1_500), bound));
+        assert!(!lease_fits_renewal(bound, bound));
+        assert!(!lease_fits_renewal(Duration::MAX, Duration::MAX));
+    }
 }

@@ -273,3 +273,13 @@ pub(crate) struct Unimplemented {
     pub(crate) backend: &'static str,
     pub(crate) method: &'static str,
 }
+
+/// A call the worker made to its backend that did not answer `Ok`: the
+/// backend's own error, or no answer within the port's net.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CallFailed {
+    #[error("{}", nest_rs_core::error_message(.0))]
+    Erred(QueueError),
+    #[error("no answer within the port's net of {0:?}")]
+    Unanswered(std::time::Duration),
+}

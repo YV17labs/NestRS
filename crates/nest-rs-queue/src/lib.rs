@@ -139,7 +139,7 @@ pub use push_options::{Delay, PushOptions};
 pub use push_receipt::PushReceipt;
 pub use queue::Queue;
 pub use queue_name::QueueName;
-pub use worker::QueueWorker;
+pub use worker::{QueueWorker, lease_fits_renewal};
 
 // Re-export `async_trait` so backends implement the async traits this crate
 // defines without depending on it directly.

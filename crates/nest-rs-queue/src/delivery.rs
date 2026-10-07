@@ -41,11 +41,7 @@ impl<L> Delivery<L> {
     pub fn refused(lease: L, leased_for: Duration, why: &'static str) -> Self {
         Self {
             record: Err(why),
-            lease,
-            leased_for,
-            delivery_count: 1,
-            backend_id: None,
-            deferred_for: None,
+            ..Self::new(Vec::new(), lease, leased_for)
         }
     }
 

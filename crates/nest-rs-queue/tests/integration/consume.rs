@@ -1507,19 +1507,18 @@ async fn an_attempt_is_named_for_its_queue() {
     );
 }
 
-/// A record no method can take is still a unit of work: the port files its
+/// A record the worker cannot run is still a unit of work: the port files its
 /// dead-letter event and its operation line inside a `queue.job` span, with the
-/// adapter's sentence as the error and the queue the record named.
+/// backend's sentence as the error and the queue it was read from.
 #[tokio::test]
 async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
     let logs = nest_rs_testing::LogCapture::install();
 
     let error = consume::refuse(
         &BARE,
-        Some("reports"),
-        None,
+        &QueueName::new("reports").expect("a queue name"),
         Some("backend-9"),
-        JobError::abort("no #[process] method serves queue `reports`"),
+        JobError::abort("the stored entry is not one a producer files"),
     )
     .await;
 
@@ -1536,7 +1535,7 @@ async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
     assert!(
         event
             .field("error")
-            .is_some_and(|error| error.contains("no #[process] method serves queue")),
+            .is_some_and(|error| error.contains("not one a producer files")),
         "{event:?}"
     );
     let line = logs.expect_one(
@@ -1549,62 +1548,6 @@ async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
     );
     assert!(line.trace_id.is_some(), "the line carries its unit's trace");
     logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
-}
-
-/// A record that could be read as far as its envelope continues the trace the
-/// push sealed, so following that trace reaches the dead-letter; and a queue name
-/// outside the rule names no span, while the event still carries it.
-#[tokio::test]
-async fn an_undeliverable_record_continues_its_trace_and_names_no_span_after_a_bad_name() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let enqueue = nest_rs_core::Correlation::minted(None);
-    let sealed = json!({
-        "v": WIRE_FORMAT_VERSION,
-        "id": JOB_ID,
-        "payload": {},
-        "traceparent": enqueue.traceparent().to_string(),
-    });
-
-    consume::refuse(
-        &BARE,
-        Some("nobody"),
-        Some(&sealed),
-        None,
-        JobError::abort("no #[process] method serves queue `nobody`"),
-    )
-    .await;
-    consume::refuse(
-        &BARE,
-        Some("bad key\nFORGED"),
-        Some(&sealed),
-        None,
-        JobError::abort("its queue name is outside the rule"),
-    )
-    .await;
-
-    let spans = job_spans(&logs);
-    assert_eq!(spans.len(), 2, "{spans:#?}");
-    assert_eq!(
-        spans[0].field("trace_id"),
-        Some(enqueue.trace_id().to_string())
-    );
-    assert_eq!(
-        spans[0].field("otel.name").as_deref(),
-        Some("process nobody")
-    );
-    assert_eq!(
-        spans[1].field("otel.name").as_deref(),
-        Some("process unknown")
-    );
-    assert_eq!(spans[1].field("messaging.destination.name"), None);
-    assert_eq!(
-        spans[0].field("messaging.message.id").as_deref(),
-        Some(JOB_ID),
-        "the job the push's receipt names is the one reported dead",
-    );
-    let events = logs.find(nest_rs_queue::TARGET, "job dead-lettered: undeliverable");
-    assert_eq!(events[1].field("queue").as_deref(), Some("bad key\nFORGED"));
-    assert_eq!(events[0].field("job_id").as_deref(), Some(JOB_ID));
 }
 
 // --- the job's identity and its retries ------------------------------------------

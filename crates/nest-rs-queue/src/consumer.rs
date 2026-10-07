@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 
-use crate::worker::{Erased, Run, Serving};
+use crate::worker::{Run, Serving};
 use crate::{
     CheckpointStore, Delivery, Disposition, JobId, ProcessMethod, QueueBackend, QueueError,
 };
@@ -209,7 +209,7 @@ impl BoundConsumer {
     /// The consumer the worker runs for this app.
     pub fn new<C: JobConsumer>(consumer: C) -> Self {
         Self {
-            run: Box::new(Erased::new(consumer)),
+            run: Box::new(Arc::new(consumer)),
         }
     }
 

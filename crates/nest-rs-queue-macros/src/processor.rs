@@ -1,7 +1,7 @@
 //! `#[processor]` — orchestrator on a provider's `impl` block. Walks the
 //! methods; for each one tagged `#[process(queue = …, …)]` emits a type-erased
-//! handler and a `ProcessMethod` inventory submission a queue backend drains at
-//! boot through `nest_rs_queue::consume::discover`.
+//! handler and a `ProcessMethod` inventory submission the port's
+//! `QueueWorker` runs from boot.
 //!
 //! Like `#[scheduled]`, this does NOT emit `Discoverable` for the host struct —
 //! the user's own `#[injectable]` owns it. Inventory is the seam.
@@ -16,7 +16,7 @@
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
     Edge, Grammar, JobDecorator, JobKey, PipeWrapper, await_if_async, cfg_attrs, duration_millis,
-    generic_args, impl_self_ident, job_key, job_returns_a_result, job_transaction,
+    generic_args, impl_self_ident, job_key, job_returns_a_result, job_timeout, job_transaction,
     missing_argument, payload_arg_type, pipe_wrapper, returns_unit, snake_case, takes_value,
     timeout_value, transactional_value, ungrouped_expr, unread_job_key,
 };
@@ -256,9 +256,8 @@ fn emit_method(
     if checkpoint.is_some() {
         options = quote!(#options.with_checkpoint(true));
     }
-    if let Some(millis) = timeout {
-        options = quote!(#options.with_timeout(::core::time::Duration::from_millis(#millis)));
-    }
+    let timeout = job_timeout(timeout, &quote!(::nest_rs_queue));
+    options = quote!(#options.with_timeout(#timeout));
 
     let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue));
     let checkpoint_open = checkpoint.as_ref().map(|checkpoint| {

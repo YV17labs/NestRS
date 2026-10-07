@@ -142,13 +142,15 @@ from the Redis binding, so each compiles and runs in the framework's suite.
            BACKEND_REMEDY,
            |container| async move {
                // …
-               Ok(BoundConsumer::new(RedisQueueConsumer::new(
-                   (*conn).clone(),
-                   config.lease,
-               )))
+               Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
            },
        )
    ```
+
+   The worker renews a lease a third of the way in, so a lease no renewal fits
+   in lapses while your storage still answers: refuse it at boot with
+   `nest_rs_queue::lease_fits_renewal(lease, answer_bound)`, naming the settings
+   that lengthen the one or shorten the other.
 
    An app running jobs imports `QueueModule::for_root(None)` beside your module;
    one only pushing does not. Checkpoint: the worker app's boot logs

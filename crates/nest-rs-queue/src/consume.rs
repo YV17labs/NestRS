@@ -94,13 +94,13 @@ pub(crate) fn unsupported_by<'a>(
 /// cannot honour, or claims a queue another method already drains. Checked after
 /// module-gating, so a method another app owns cannot fail this app's boot.
 ///
-/// Called once by an adapter's `Transport::configure`; what it returns is what
-/// that adapter subscribes to.
+/// What [`QueueWorker`](crate::QueueWorker) runs at boot.
 pub fn discover(
     container: &Container,
     backend: &QueueBackend,
 ) -> anyhow::Result<Vec<&'static ProcessMethod>> {
-    check(reachable(container), backend)
+    let checked = check(reachable(container), backend)?;
+    Ok(checked.into_iter().map(|(method, _)| method).collect())
 }
 
 /// The `#[process]` methods whose provider is reachable from the running app's
@@ -126,24 +126,26 @@ pub(crate) fn reachable(container: &Container) -> Vec<&'static ProcessMethod> {
     methods
 }
 
-/// `methods`, once each is one `backend` can serve: the boot fails, naming every
-/// offender at once, on a queue name outside the rule, a throttle window under
-/// a millisecond, a declaration `backend` cannot honour, or two methods on one
-/// queue. Each method kept is announced.
+/// `methods`, once each is one `backend` can serve, with the queue each drains:
+/// the boot fails, naming every offender at once, on a queue name outside the
+/// rule, a throttle window under a millisecond, a declaration `backend` cannot
+/// honour, or two methods on one queue. Each method kept is announced.
 pub(crate) fn check(
     methods: Vec<&'static ProcessMethod>,
     backend: &QueueBackend,
-) -> anyhow::Result<Vec<&'static ProcessMethod>> {
+) -> anyhow::Result<Vec<(&'static ProcessMethod, QueueName)>> {
     let mut refusals = Vec::new();
+    let mut checked = Vec::with_capacity(methods.len());
     for method in &methods {
         // A decorator's literals were checked at compile time; an entry built by
         // hand reaches the boot unchecked, so the boot checks what the decorator
         // would have — in the sentence the port already words.
-        if let Err(refused) = QueueName::new(method.queue()) {
-            refusals.push(format!(
+        match QueueName::new(method.queue()) {
+            Ok(queue) => checked.push((*method, queue)),
+            Err(refused) => refusals.push(format!(
                 "`{}` drains a queue whose name is refused: {refused}",
                 method.name()
-            ));
+            )),
         }
         // A window under a millisecond is zero to a store counting in
         // milliseconds, and a zero window limits nothing.
@@ -177,12 +179,12 @@ pub(crate) fn check(
             retries = options.retries(),
             concurrency = options.concurrency().get(),
             throttle_limit = throttle.map(|throttle| throttle.limit().get()),
-            throttle_window_ms = throttle.map(|throttle| throttle.window().as_millis() as u64),
+            throttle_window_ms = throttle.map(|throttle| millis(throttle.window())),
             checkpoint = options.checkpoint().then_some(true),
             "registered queue processor",
         );
     }
-    Ok(methods)
+    Ok(checked)
 }
 
 /// Two `#[process]` methods may not drain one queue.
@@ -650,62 +652,34 @@ async fn defer_newer(delivery: &mut Delivery, version: u64, waited: Duration) ->
 }
 
 /// `duration` in whole milliseconds, for a line's field.
-fn millis(duration: Duration) -> u64 {
+pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Settle a job `backend` fetched and can deliver to no method — a record it
-/// cannot read, a queue name outside the rule, a queue no method serves.
+/// Dead-letter a delivery the worker cannot run — a record its backend could
+/// not hand over, or one that is not JSON — as a unit of work of its own.
 ///
-/// Still a unit of work, so still the port's: it opens the `queue.job` span, files
-/// the dead-letter event and the `nest_rs::operation` line exactly as an attempt
-/// does, and hands back the error the adapter dead-letters the job with. The
-/// adapter keeps only `error`'s sentence — *why* its own storage could not route
-/// the record — and never logs the outcome itself.
-///
-/// `queue` is the name the record carried and `message` the value stored under
-/// it, when the record could be read that far; `backend_id` is the backend's own
-/// id for the record, when it has one. The job's id and the trace a sealed
-/// envelope carries are read from it, as an attempt reads them, so following the
-/// push's trace — or its receipt — reaches the dead-letter. Nothing here trusts
-/// `queue`: the span is named for it only when it is a name a push could have
-/// written, and the raw string reaches the event alone, where the formatter
-/// escapes it.
-///
-/// **Only a driver that holds the record can call it.** One whose library
-/// decodes inside its own fetch never sees the record that failed, nor the
-/// batch dropped with it, and says so in its own line instead of routing here.
+/// It opens the `queue.job` span, files the dead-letter event and the
+/// `nest_rs::operation` line as an attempt does, under a trace of its own, since
+/// a record not read that far carries none, and hands back the error the job is
+/// dead-lettered with. `backend_id` is the backend's own id for the record, when
+/// it has one.
 pub async fn refuse(
     backend: &'static QueueBackend,
-    queue: Option<&str>,
-    message: Option<&Value>,
+    queue: &QueueName,
     backend_id: Option<&str>,
     error: JobError,
 ) -> JobError {
     let started = Instant::now();
-    let named = queue.and_then(|raw| QueueName::new(raw.to_owned()).ok());
-    let job_id = message.and_then(|message| envelope::identify(message).id);
-    let continued = match (message, named.as_ref()) {
-        (Some(message), Some(name)) => {
-            match envelope::open(Cow::Borrowed(message), name.as_str()) {
-                Ok(Opened::Sealed { correlation, .. }) => correlation,
-                _ => None,
-            }
-        }
-        _ => None,
-    };
-    let correlation = continued.unwrap_or_else(|| Correlation::minted(None));
-    let destination = named.as_ref().map_or("unknown", QueueName::as_str);
-    let job_id = job_id.as_ref().map(ToString::to_string);
+    let correlation = Correlation::minted(None);
     let span = nest_rs_core::operation_span!(
         unit::JOB,
         &correlation,
-        otel.name = %format_args!("{PROCESS} {destination}"),
+        otel.name = %format_args!("{PROCESS} {queue}"),
         messaging.system = backend.name(),
         messaging.operation.name = PROCESS,
         messaging.operation.type = PROCESS,
-        messaging.destination.name = named.as_ref().map(QueueName::as_str),
-        messaging.message.id = job_id.as_deref(),
+        messaging.destination.name = queue.as_str(),
         backend_id,
         attempt = 1u32,
     );
@@ -713,8 +687,7 @@ pub async fn refuse(
     with_request_scope(None, correlation, async move {
         tracing::error!(
             target: TARGET,
-            queue,
-            job_id = job_id.as_deref(),
+            queue = queue.as_str(),
             backend_id,
             error = %nest_rs_core::error_message(&error),
             "job dead-lettered: undeliverable",
@@ -724,8 +697,7 @@ pub async fn refuse(
             span: &line_span,
             outcome: nest_rs_core::operation_log::ERROR,
             started: started,
-            queue,
-            job_id = job_id.as_deref(),
+            queue = queue.as_str(),
             backend_id,
             attempt = 1u32,
         );
@@ -982,7 +954,7 @@ async fn run(
             tracing::warn!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
-                retry_after_ms = retry_after.as_millis() as u64,
+                retry_after_ms = millis(retry_after),
                 "job failed; will retry within the budget",
             );
             (

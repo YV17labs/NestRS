@@ -1037,6 +1037,9 @@ impl ContainerBuilder {
             if let Some(declarer) = self.factories.iter_mut().find(|q| q.provides.contains(&id)) {
                 declarer.provides.push(binding.id);
                 declarer.derives.push(binding.derive);
+                // The trait object is declared now, so its port's default
+                // leaves the queue, as it does beside the binding's own entry.
+                self.factories.retain(|q| q.id() != binding.id);
                 return self;
             }
             // Past the factory phase nothing builds `T` again: queued, the

@@ -1057,6 +1057,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_dyn_factory_over_a_declared_type_supersedes_its_ports_default_in_every_order() {
+        let orders: [[u8; 3]; 6] = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        for order in orders {
+            let mut app = App::builder();
+            for module in order {
+                app = match module {
+                    0 => app.module::<DefaultPortModule>(),
+                    1 => app.module::<DeclaresPortImplModule>(),
+                    _ => app.module::<BindsPortModule>(),
+                };
+            }
+            let app = app
+                .build()
+                .await
+                .unwrap_or_else(|e| panic!("{order:?}: {e:#}"));
+            assert_eq!(
+                app.container().get_dyn::<dyn Port>().map(|p| p.value()),
+                Some(8),
+                "{order:?}: the declared type binds the port, not its default"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_dyn_factory_whose_concrete_type_is_declared_still_contests_its_trait_object() {
         for declared_first in [true, false] {
             let app = App::builder().module::<BindsPortOtherwiseModule>();

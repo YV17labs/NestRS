@@ -122,7 +122,8 @@ impl App {
         // "boot with `App::builder()…` instead", so reporting it first hands the
         // developer an edit whose only outcome is a second, different boot
         // failure — while the framework already held the fact that explains it.
-        // A refusal lands at the earliest site that can see the fact.
+        // A refusal lands at the earliest site that can see the fact
+        // (`.claude/decisions/boot-refusal-order.md`).
         check_contested_declarations(&builder)?;
         // Nothing drains the queue on this path, so anything a module queued as
         // an async factory would never exist — refused before `register`, which

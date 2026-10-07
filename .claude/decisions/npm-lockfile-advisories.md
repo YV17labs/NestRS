@@ -53,3 +53,12 @@ ranges allow: GHSA-238p-pmpm-9mq7 (katex < 0.18.2, through `astro-mermaid` →
 `[[IgnoredVulns]]` entry with its reason, until 2027-01-06 like braces. Refused:
 an npm `overrides` forcing either across its parent's major — a fix the parent
 never ran against, for an advisory the site does not reach.
+
+## 2026-10-07 — reviewed: every entry stands to its expiry
+
+No release fixes any of the three: `braces` 3.0.3 is the latest and
+`micromatch` 4.0.8 (latest) requires it; `mermaid` 12.1.0 (latest) still
+requires `katex ^0.16.47`; `@expressive-code/core` 0.44.2 (latest) still
+requires `postcss-nested ^6`. Each entry stands until 2027-01-06, when
+`just audit` fails on it and asks the question again — the expiry is the
+reminder, so none is kept anywhere else.

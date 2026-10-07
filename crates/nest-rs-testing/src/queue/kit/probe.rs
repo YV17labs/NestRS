@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 
 use tokio::time::Instant;
 
@@ -119,16 +118,4 @@ pub(crate) fn peak(queue: &'static str) -> u32 {
         .as_ref()
         .and_then(|probe| probe.peak.get(queue).copied())
         .unwrap_or_default()
-}
-
-/// Wait until `done` holds, polling every 10 ms, for at most `within`.
-pub(crate) async fn until(within: Duration, what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + within;
-    while !done() {
-        assert!(
-            Instant::now() < deadline,
-            "{what}: not seen within {within:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }

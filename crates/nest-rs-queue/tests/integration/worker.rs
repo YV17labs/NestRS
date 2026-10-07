@@ -215,15 +215,6 @@ async fn boot_worker_of<M: nest_rs_core::Module>(
     (app, stop, serving)
 }
 
-/// Wait until `done` holds, for at most ten seconds.
-async fn until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !done() {
-        assert!(tokio::time::Instant::now() < deadline, "{what}");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
 /// A record that is not JSON is dead-lettered on its own, kept as stored, with
 /// a reason that says where it failed and never what it held — and the job
 /// filed beside it runs; once both ended, the queue holds nothing.
@@ -240,7 +231,7 @@ async fn a_record_that_is_not_json_is_dead_lettered_alone_without_its_value() {
     nest_rs_queue::JobProducerExt::push(&*producer, BootQueue, WorkerCommand { seq: 1 }, None)
         .await
         .expect("a push");
-    until("both records ended", || {
+    nest_rs_testing::wait_until(Duration::from_secs(10), || {
         memory.dead(queue).len() == 1 && memory.held(queue) == 0
     })
     .await;
@@ -459,8 +450,7 @@ impl nest_rs_queue::JobConsumer for PanicsOnce {
 
 /// A delivery whose task panics outside its attempt — here in the backend's
 /// settle — stops renewing its lease, so the lease lapses and the job runs
-/// again: renewed for a task that is gone, it was held for as long as the
-/// worker lived.
+/// again.
 #[tokio::test(start_paused = true)]
 async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -663,7 +653,7 @@ async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it(
     nest_rs_queue::JobProducerExt::push(&*producer, HungQueue, WorkerCommand { seq: 1 }, None)
         .await
         .expect("a push");
-    until("the hung job dead-lettered", || {
+    nest_rs_testing::wait_until(Duration::from_secs(10), || {
         memory.dead(queue).len() == 1 && memory.held(queue) == 0
     })
     .await;

@@ -7,8 +7,8 @@ use nest_rs_queue::QueueName;
 
 use crate::TestAppBuilder;
 
-/// What a queue backend supplies the kit: an app reaching it, and the two
-/// hooks a case needs on its storage.
+/// What a queue backend supplies the kit: an app reaching it, its lease, and
+/// the hooks a case needs on its storage.
 pub trait KitBackend: Send + Sync + 'static {
     /// Whether the backend lives in this process, so each case runs on paused
     /// time: its waits cost nothing, and a loaded machine moves none of its

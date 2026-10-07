@@ -472,14 +472,10 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
         // published until both have been polled — otherwise the send lands in a
         // channel nobody is listening on and the test hangs for the wrong
         // reason.
-        let polled = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        while feed.tx.receiver_count() < 2 {
-            assert!(
-                tokio::time::Instant::now() < polled,
-                "both subscriptions listen on the feed within 5s"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            feed.tx.receiver_count() >= 2
+        })
+        .await;
         for (id, name) in [(1, "ada"), (2, "grace"), (1, "ada")] {
             feed.tx
                 .send(WidgetDto {

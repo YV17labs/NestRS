@@ -475,6 +475,10 @@ struct HeldCommand {
 
 static HELD: Runs = Runs::new();
 
+/// Opened by the test once the cancel has answered, so the job is running when
+/// it is asked.
+static HOLD: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(0);
+
 #[queue(name = "nestrs-e2e-cancel-running", job = HeldCommand)]
 struct HeldQueue;
 
@@ -487,7 +491,7 @@ impl HeldProcessor {
     #[process(queue = HeldQueue)]
     async fn hold(&self, job: HeldCommand) -> anyhow::Result<()> {
         HELD.start(job.run);
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+        HOLD.acquire().await?.forget();
         HELD.finish(job.run);
         Ok(())
     }
@@ -517,6 +521,7 @@ async fn cancellation_while_an_attempt_runs_is_refused_and_the_job_runs_to_its_e
         !replica.producer.cancel(&receipt).await.expect("a cancel"),
         "a running job is not cancelled",
     );
+    HOLD.add_permits(1);
     crate::wait_until(Duration::from_secs(10), || HELD.finished(run) == 1).await;
     replica.worker.shutdown().await.expect("clean shutdown");
     assert_eq!(HELD.of(run).len(), 1, "it ran once");

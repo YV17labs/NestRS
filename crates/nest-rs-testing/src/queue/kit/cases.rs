@@ -36,10 +36,7 @@ pub async fn a_pushed_job_runs_once<B: KitBackend>(backend: B, logs: LogCapture)
     let kit = Kit::begin(backend, logs, OnceQueue).await;
     let worker = kit.worker(WINDOW).await;
     kit.push(&worker, OnceQueue, 0, Act::Complete, None).await;
-    kit.until("the job completed", || {
-        kit.completed(OnceQueue::NAME, 0) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(OnceQueue::NAME, 0) == 1).await;
     worker.stop().await;
     assert_eq!(kit.attempts(OnceQueue::NAME, 0).len(), 1, "one attempt");
 }
@@ -56,10 +53,8 @@ pub async fn a_method_runs_no_more_attempts_at_once_than_its_concurrency<B: KitB
         kit.push(&worker, ConcurrencyQueue, seq, Act::Hold { ms: 300 }, None)
             .await;
     }
-    kit.until("the six jobs completed", || {
-        (0..6).all(|seq| kit.completed(ConcurrencyQueue::NAME, seq) == 1)
-    })
-    .await;
+    kit.until(|| (0..6).all(|seq| kit.completed(ConcurrencyQueue::NAME, seq) == 1))
+        .await;
     worker.stop().await;
     assert_eq!(
         probe::peak(ConcurrencyQueue::NAME),
@@ -79,10 +74,7 @@ pub async fn a_retryable_failure_runs_again_as_the_next_attempt<B: KitBackend>(
     let pushed = kit
         .push(&worker, RetryQueue, 0, Act::FailFirst { attempts: 1 }, None)
         .await;
-    kit.until("the second attempt completed", || {
-        kit.completed(RetryQueue::NAME, 0) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(RetryQueue::NAME, 0) == 1).await;
     worker.stop().await;
     let attempts = kit.attempts(RetryQueue::NAME, 0);
     assert_eq!(attempts.len(), 2, "the failure ran once more");
@@ -105,7 +97,7 @@ pub async fn a_spent_budget_dead_letters_the_job<B: KitBackend>(backend: B, logs
     let pushed = kit
         .push(&worker, BudgetQueue, 0, Act::FailAlways, None)
         .await;
-    kit.until("the job was dead-lettered", || {
+    kit.until(|| {
         !kit.logs
             .find(TARGET, "job dead-lettered: retry budget spent")
             .is_empty()
@@ -135,20 +127,15 @@ pub async fn a_job_whose_worker_died_mid_attempt_runs_on_another<B: KitBackend>(
     let kit = Kit::begin(backend, logs, DeathQueue).await;
     let first = kit.worker(WINDOW).await;
     let pushed = kit.push(&first, DeathQueue, 0, Act::ParkOnce, None).await;
-    kit.until("the first attempt started", || {
-        kit.attempts(DeathQueue::NAME, 0).len() == 1
-    })
-    .await;
+    kit.until(|| kit.attempts(DeathQueue::NAME, 0).len() == 1)
+        .await;
     first.kill().await;
     kit.backend
         .lapse(&queue_name::<DeathQueue>())
         .await
         .expect("the backend lapses the dead worker's lease");
     let second = kit.worker(WINDOW).await;
-    kit.until("another worker completed the job", || {
-        kit.completed(DeathQueue::NAME, 0) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(DeathQueue::NAME, 0) == 1).await;
     second.stop().await;
     assert_eq!(kit.attempts(DeathQueue::NAME, 0).len(), 2);
     assert_eq!(
@@ -172,20 +159,15 @@ pub async fn a_lease_lost_under_a_live_worker_cuts_its_attempt_and_the_holder_de
     let kit = Kit::begin(backend, logs, TakenQueue).await;
     let first = kit.worker(WINDOW).await;
     let pushed = kit.push(&first, TakenQueue, 0, Act::ParkOnce, None).await;
-    kit.until("the first attempt started", || {
-        kit.attempts(TakenQueue::NAME, 0).len() == 1
-    })
-    .await;
+    kit.until(|| kit.attempts(TakenQueue::NAME, 0).len() == 1)
+        .await;
     let second = kit.worker(WINDOW).await;
     kit.backend
         .take(&queue_name::<TakenQueue>())
         .await
         .expect("the backend takes the lease");
-    kit.until("the worker holding the job completed it", || {
-        kit.completed(TakenQueue::NAME, 0) == 1
-    })
-    .await;
-    kit.until("the first attempt was cut", || {
+    kit.until(|| kit.completed(TakenQueue::NAME, 0) == 1).await;
+    kit.until(|| {
         kit.lines(&pushed)
             .iter()
             .any(|line| line.field("outcome").as_deref() == Some(operation_log::CANCELLED))
@@ -220,10 +202,8 @@ pub async fn a_job_taking_its_worker_down_past_the_stall_limit_is_dead_lettered_
         .await;
     for started in 1..=nest_rs_queue::STALL_LIMIT {
         let expected = usize::try_from(started).unwrap_or(usize::MAX);
-        kit.until("the attempt started", || {
-            kit.attempts(StallQueue::NAME, 0).len() == expected
-        })
-        .await;
+        kit.until(|| kit.attempts(StallQueue::NAME, 0).len() == expected)
+            .await;
         worker.kill().await;
         kit.backend
             .lapse(&queue_name::<StallQueue>())
@@ -231,7 +211,7 @@ pub async fn a_job_taking_its_worker_down_past_the_stall_limit_is_dead_lettered_
             .expect("the backend lapses the dead worker's lease");
         worker = kit.worker(WINDOW).await;
     }
-    kit.until("the job was dead-lettered", || {
+    kit.until(|| {
         !kit.logs
             .find(
                 TARGET,
@@ -260,7 +240,7 @@ pub async fn the_drain_finishes_what_fits_its_window_and_hands_back_the_rest<B: 
     kit.push(&first, DrainQueue, 0, Act::Hold { ms: 200 }, None)
         .await;
     let parked = kit.push(&first, DrainQueue, 1, Act::ParkOnce, None).await;
-    kit.until("both attempts started", || {
+    kit.until(|| {
         kit.attempts(DrainQueue::NAME, 0).len() == 1 && kit.attempts(DrainQueue::NAME, 1).len() == 1
     })
     .await;
@@ -284,10 +264,7 @@ pub async fn the_drain_finishes_what_fits_its_window_and_hands_back_the_rest<B: 
         "the cut job was handed back",
     );
     let second = kit.worker(WINDOW).await;
-    kit.until("the next worker ran the job handed back", || {
-        kit.completed(DrainQueue::NAME, 1) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(DrainQueue::NAME, 1) == 1).await;
     second.stop().await;
     assert_eq!(kit.attempts(DrainQueue::NAME, 0).len(), 1);
     assert_eq!(kit.attempts(DrainQueue::NAME, 1).len(), 2);
@@ -306,10 +283,8 @@ pub async fn a_long_attempt_keeps_its_lease_and_runs_once<B: KitBackend>(
     let ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
     kit.push(&first, RenewalQueue, 0, Act::Hold { ms }, None)
         .await;
-    kit.until("the job completed", || {
-        kit.completed(RenewalQueue::NAME, 0) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(RenewalQueue::NAME, 0) == 1)
+        .await;
     first.stop().await;
     second.stop().await;
     assert_eq!(kit.attempts(RenewalQueue::NAME, 0).len(), 1, "it ran once");
@@ -350,10 +325,7 @@ pub async fn a_delayed_push_runs_once_its_delay_has_passed<B: KitBackend>(
         Some(PushOptions::default().with_delay(delay)),
     )
     .await;
-    kit.until("the delayed job completed", || {
-        kit.completed(DelayQueue::NAME, 0) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(DelayQueue::NAME, 0) == 1).await;
     worker.stop().await;
     let started = kit.attempts(DelayQueue::NAME, 0)[0].started;
     // A backend timing the delay on its own clock may round to its
@@ -374,10 +346,7 @@ pub async fn a_job_runs_in_the_trace_that_pushed_it<B: KitBackend>(backend: B, l
         current_trace_id().map(|trace| trace.to_string())
     })
     .await;
-    kit.until("the job completed", || {
-        kit.completed(TraceQueue::NAME, 0) == 1
-    })
-    .await;
+    kit.until(|| kit.completed(TraceQueue::NAME, 0) == 1).await;
     worker.stop().await;
     assert!(pushed_in.is_some());
     assert_eq!(kit.attempts(TraceQueue::NAME, 0)[0].trace, pushed_in);
@@ -498,8 +467,9 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
     }
 
     /// Wait for `done`, within a few leases and [`PATIENCE`].
-    async fn until(&self, what: &str, done: impl FnMut() -> bool) {
-        probe::until(self.backend.lease() * 4 + PATIENCE, what, done).await;
+    #[track_caller]
+    fn until(&self, done: impl FnMut() -> bool) -> impl Future<Output = ()> {
+        crate::wait_until(self.backend.lease() * 4 + PATIENCE, done)
     }
 }
 

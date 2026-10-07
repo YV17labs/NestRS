@@ -63,6 +63,8 @@ nextest prints each test's time: compare before and after.
   whose protocol is the socket.
 - **`LogCapture`** — the events a unit emits are half its contract: a denial
   that fails closed and logs nothing passes every response assertion.
+- **`wait_until` / `wait_for`** — a condition the test cannot await, failing at
+  the caller's line past its bound, never a loop of its own.
 - **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
   the value.
 - **`load_project_env`** — the `.env` cascade, so a test reaches the

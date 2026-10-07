@@ -188,13 +188,11 @@ const SERVICE_AUTHORITY: &[u8] = include_bytes!("../harness/fixtures/tls_service
 
 /// The suite's TLS Redis, which speaks `rediss://` alone: the dev container's
 /// `redis-tls`, or the one `<PREFIX>_E2E__REDIS_TLS_URL` names — CI's.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the suite targets the TLS Redis the environment names"
-)]
 fn tls_redis_url() -> String {
-    std::env::var(nest_rs_config::var_name("e2e", "REDIS_TLS_URL"))
-        .unwrap_or_else(|_| "rediss://redis-tls:6380".to_owned())
+    nest_rs_config::ConfigService::for_namespace("e2e")
+        .get("REDIS_TLS_URL")
+        .expect("a readable TLS Redis URL")
+        .unwrap_or_else(|| "rediss://redis-tls:6380".to_owned())
 }
 
 /// [`tls_redis`] on database `db`.

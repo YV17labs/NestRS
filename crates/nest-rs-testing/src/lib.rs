@@ -34,6 +34,7 @@ mod headless;
 mod logs;
 pub mod mcp;
 mod url;
+mod wait;
 
 #[cfg(feature = "orm")]
 mod database;
@@ -58,5 +59,6 @@ pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
 pub use url::{url_as, url_at, url_on};
+pub use wait::{wait_for, wait_until};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};

@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nest_rs_storage::{Storage, StorageConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// The store's endpoint: the documented `NESTRS_STORAGE__ENDPOINT` override, or
+/// The store's endpoint: the documented `<PREFIX>_STORAGE__ENDPOINT` override, or
 /// the dev container's RustFS when it is unset.
 fn endpoint() -> String {
     nest_rs_config::ConfigService::for_namespace("storage")

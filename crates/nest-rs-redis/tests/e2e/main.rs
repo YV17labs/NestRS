@@ -41,18 +41,20 @@ use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule,
     RedisQueueProducer,
 };
-use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle, url_as, url_at, url_on};
+use nest_rs_testing::{
+    CapturedEvent, TestApp, TransportHandle, url_as, url_at, url_on, wait_for, wait_until,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the suite targets the Redis the deployment names, as the app would"
-)]
+/// The Redis the deployment names, as the app would read it, or the dev
+/// container's.
 fn redis_url() -> String {
-    std::env::var(nest_rs_config::var_name("redis", "URL"))
-        .unwrap_or_else(|_| "redis://redis:6379".to_string())
+    nest_rs_config::ConfigService::for_namespace("redis")
+        .get("URL")
+        .expect("a readable Redis URL")
+        .unwrap_or_else(|| "redis://redis:6379".to_owned())
 }
 
 /// The dev container Redis's `host:port`, for a proxy standing in front of it.
@@ -396,6 +398,20 @@ async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Re
 async fn replica_of<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
 ) -> Replica {
+    let (app, producer) = booted::<M>(builder).await;
+    let worker = app
+        .spawn_transport(QueueWorker::new())
+        .await
+        .expect("the queue worker transport starts");
+    Box::leak(Box::new(app));
+    Replica { worker, producer }
+}
+
+/// The worker app `M`, booted through its init phases, and the producer it
+/// binds.
+async fn booted<M: nest_rs_core::Module + 'static>(
+    builder: nest_rs_testing::TestAppBuilder,
+) -> (nest_rs_testing::HeadlessApp, RedisQueueProducer) {
     let app = brisk(builder)
         .module::<M>()
         .build_headless()
@@ -407,12 +423,7 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
             .get::<RedisQueueProducer>()
             .expect("RedisQueueModule binds the producer"),
     );
-    let worker = app
-        .spawn_transport(QueueWorker::new())
-        .await
-        .expect("the queue worker transport starts");
-    Box::leak(Box::new(app));
-    Replica { worker, producer }
+    (app, producer)
 }
 
 /// A replica whose transport can die without a shutdown: aborting `serve`
@@ -434,17 +445,7 @@ impl Mortal {
 /// Boot the worker app `M` like [`replica`], and run its worker on a task a
 /// test can abort.
 async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
-    let app = brisk(TestApp::builder())
-        .module::<M>()
-        .build_headless()
-        .await
-        .expect("the worker app boots against the dev container Redis");
-    app.init().await.expect("init phases");
-    let producer = RedisQueueProducer::clone(
-        &app.container()
-            .get::<RedisQueueProducer>()
-            .expect("RedisQueueModule binds the producer"),
-    );
+    let (app, producer) = booted::<M>(TestApp::builder()).await;
     let mut worker = QueueWorker::new();
     worker
         .configure(app.container())
@@ -470,35 +471,6 @@ fn brisk(builder: nest_rs_testing::TestAppBuilder) -> nest_rs_testing::TestAppBu
         .provide(QueueConfig {
             shutdown_timeout: WINDOW,
         })
-}
-
-/// Poll `ready` until it holds — the wait a live worker's asynchronous progress
-/// needs — and fail the test at the caller's line once `within` elapses, so a
-/// regression fails where it waited rather than hangs, or passes the wait to
-/// fail at a later assertion that names something else.
-#[track_caller]
-fn wait_until(within: Duration, ready: impl Fn() -> bool) -> impl Future<Output = ()> {
-    wait_for(within, move || std::future::ready(ready()))
-}
-
-/// [`wait_until`] for a condition the test must ask for — of Redis, most
-/// often — on every poll.
-#[track_caller]
-fn wait_for<F: Future<Output = bool>>(
-    within: Duration,
-    ready: impl Fn() -> F,
-) -> impl Future<Output = ()> {
-    let waited_at = std::panic::Location::caller();
-    async move {
-        let deadline = tokio::time::Instant::now() + within;
-        while !ready().await {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "{waited_at}: what it waited for did not hold within {within:?}"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
 }
 
 /// A marker no earlier run of this suite chose. Queue names are compile-time
@@ -620,7 +592,13 @@ struct ProducerOnlyModule;
 /// A producer-only app's producer: pushes, and cancels, with no worker running
 /// anywhere to take a job.
 async fn producer() -> RedisQueueProducer {
+    producer_on(redis_config()).await
+}
+
+/// A producer-only app reaching Redis as `redis` says.
+async fn producer_on(redis: RedisConfig) -> RedisQueueProducer {
     let app = TestApp::builder()
+        .provide(redis)
         .module::<ProducerOnlyModule>()
         .build_headless()
         .await

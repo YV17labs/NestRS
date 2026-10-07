@@ -149,14 +149,8 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
     let emitted = tokio::spawn({
         let state = Arc::clone(&state);
         async move {
-            let polled = tokio::time::Instant::now() + Duration::from_secs(2);
-            while state.tx.receiver_count() == 0 {
-                assert!(
-                    tokio::time::Instant::now() < polled,
-                    "the subscription listens on its source within 2s"
-                );
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
+            nest_rs_testing::wait_until(Duration::from_secs(2), || state.tx.receiver_count() > 0)
+                .await;
             state.tx.send(Tick { seq: 1 }).expect("a receiver is live");
             state.tx.send(Tick { seq: 2 }).expect("a receiver is live");
         }

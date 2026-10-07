@@ -18,8 +18,7 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, JobProducerExt, PushOptions, QueueModule, processor, queue};
-use nest_rs_redis::{RedisConfig, RedisConnection, RedisModule, RedisQueueModule};
-use nest_rs_testing::TestApp;
+use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -75,9 +74,6 @@ impl ConfinedProcessor {
         Ok(())
     }
 }
-
-#[module(imports = [RedisModule::for_root(None), RedisQueueModule])]
-struct ProducerModule;
 
 #[module(
     imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
@@ -235,7 +231,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
 
     // The producer alone: its boot, then every push and cancel it has.
     let (seen, reading) = monitor().await;
-    let producer = producer_on(as_producer).await;
+    let producer = crate::producer_on(as_producer).await;
     let job = |offset: u64, act: Act| ConfinedCommand {
         run: run + offset,
         act,
@@ -334,23 +330,6 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
             .all(|key| key.starts_with("nestrs:queue:{nestrs-e2e-acl")),
         "every key is under the queues' own: {keys:?}",
     );
-}
-
-/// A producer-only app reaching Redis as `redis` says.
-async fn producer_on(redis: RedisConfig) -> nest_rs_redis::RedisQueueProducer {
-    let app = TestApp::builder()
-        .provide(redis)
-        .module::<ProducerModule>()
-        .build_headless()
-        .await
-        .expect("a producer-only app boots as the page's producer");
-    let producer = nest_rs_redis::RedisQueueProducer::clone(
-        &app.container()
-            .get::<nest_rs_redis::RedisQueueProducer>()
-            .expect("the producer binding"),
-    );
-    Box::leak(Box::new(app));
-    producer
 }
 
 /// The page's KEDA rule reads a queue's length, and nothing else.

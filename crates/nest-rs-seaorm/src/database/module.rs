@@ -10,7 +10,7 @@ use nest_rs_worker::{BACKEND_REMEDY, JobContext};
 use sea_orm::DatabaseConnection;
 
 use crate::SeaOrmConfig;
-use crate::module::{BudgetReach, SUBSTRATE_REMEDY, pool_budget, statement_budget};
+use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
 
 /// Binds the ambient executor: the `DbContext` request interceptor for HTTP
 /// (feature `http`), the `WorkerDbContext as dyn JobContext` bridge for jobs,
@@ -24,9 +24,9 @@ impl Module for SeaOrmDatabaseModule {
     // importers install one interceptor and one audit, not two — a second
     // `DbContext` wrap would open a second transaction per request.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        let builder = builder
-            .provide_meta(pool_budget(BudgetReach::Ambient))
-            .provide_meta(statement_budget(BudgetReach::Ambient));
+        let builder = budgets(BudgetReach::Ambient)
+            .into_iter()
+            .fold(builder, ContainerBuilder::provide_meta);
         // The worker bridge is a factory output so it counts as global
         // infrastructure for every transport that runs jobs — declared, so a
         // second job context fails the boot naming both, and queued *after*

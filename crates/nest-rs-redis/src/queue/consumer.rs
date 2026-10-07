@@ -26,7 +26,7 @@ use redis::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::checkpoint::RedisCheckpoint;
-use super::scripts::SCRIPTS;
+use super::scripts::{SCRIPTS, keyed};
 use crate::RedisConnection;
 use crate::backend::BACKEND;
 use crate::error::{PreparedTwice, UnexpectedReply, UnknownDisposition};
@@ -434,17 +434,7 @@ impl JobConsumer for RedisQueueConsumer {
         let settled: i64 = self
             .conn
             .invoke(
-                SCRIPTS
-                    .settle
-                    .key(&keys.jobs)
-                    .key(&keys.entries)
-                    .key(&keys.due)
-                    .key(&keys.delayed)
-                    .key(&keys.unique)
-                    .key(&keys.claims)
-                    .key(&keys.deferred)
-                    .key(&keys.checkpoints)
-                    .key(&keys.dead)
+                keyed(&SCRIPTS.settle, &keys.transition())
                     .arg(GROUP)
                     .arg(&self.name)
                     .arg(&lease.entry)
@@ -471,17 +461,7 @@ impl JobConsumer for RedisQueueConsumer {
         let (next, lost): (i64, Vec<String>) = self
             .conn
             .invoke(
-                SCRIPTS
-                    .promote
-                    .key(&keys.jobs)
-                    .key(&keys.entries)
-                    .key(&keys.due)
-                    .key(&keys.delayed)
-                    .key(&keys.unique)
-                    .key(&keys.claims)
-                    .key(&keys.deferred)
-                    .key(&keys.checkpoints)
-                    .key(&keys.dead)
+                keyed(&SCRIPTS.promote, &keys.transition())
                     .arg(PROMOTE_BATCH)
                     .arg(millis(DEAD_KEPT)),
             )

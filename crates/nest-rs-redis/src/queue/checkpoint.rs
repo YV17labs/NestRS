@@ -41,31 +41,6 @@ impl RedisCheckpoint {
             job,
         }
     }
-
-    /// Write `state` while this delivery holds the job.
-    async fn write(&self, state: Vec<u8>) -> Result<(), QueueError> {
-        let written: i64 = self
-            .conn
-            .invoke(
-                SCRIPTS
-                    .checkpoint
-                    .key(&self.jobs)
-                    .key(&self.checkpoints)
-                    .arg(GROUP)
-                    .arg(&self.worker)
-                    .arg(&self.lease.entry)
-                    .arg(self.lease.count)
-                    .arg(&self.job)
-                    .arg(state),
-            )
-            .await
-            .map_err(QueueError::backend)?;
-        if written == 1 {
-            Ok(())
-        } else {
-            Err(QueueError::backend(CheckpointFenced))
-        }
-    }
 }
 
 #[async_trait]
@@ -83,7 +58,28 @@ impl CheckpointStore for RedisCheckpoint {
             .map_err(QueueError::from)
     }
 
+    /// Written only while this delivery holds the job.
     async fn save(&self, state: Value) -> Result<(), QueueError> {
-        self.write(serde_json::to_vec(&state)?).await
+        let written: i64 = self
+            .conn
+            .invoke(
+                SCRIPTS
+                    .checkpoint
+                    .key(&self.jobs)
+                    .key(&self.checkpoints)
+                    .arg(GROUP)
+                    .arg(&self.worker)
+                    .arg(&self.lease.entry)
+                    .arg(self.lease.count)
+                    .arg(&self.job)
+                    .arg(serde_json::to_vec(&state)?),
+            )
+            .await
+            .map_err(QueueError::backend)?;
+        if written == 1 {
+            Ok(())
+        } else {
+            Err(QueueError::backend(CheckpointFenced))
+        }
     }
 }

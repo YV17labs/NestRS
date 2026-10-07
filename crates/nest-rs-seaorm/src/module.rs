@@ -12,11 +12,15 @@
 use std::any::TypeId;
 use std::time::Duration;
 
-use nest_rs_config::ConfigModule;
+use nest_rs_config::{ConfigModule, DurationBounds, Namespaced};
 use nest_rs_core::{Budget, Collecting, ContainerBuilder, DynamicModule};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DatabaseConnectionType};
 
 use crate::SeaOrmConfig;
+use crate::config::{CONNECT_TIMEOUT, STATEMENT_TIMEOUT};
+
+/// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
+const NAMESPACE: &str = <SeaOrmConfig as Namespaced>::NAMESPACE;
 
 /// What every binding says when the pool or its config is missing — one
 /// sentence, every site, so a reader who forgot the substrate is told the same
@@ -58,9 +62,9 @@ impl DynamicModule for SeaOrmSetup {
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(
             self.pinned.clone(),
-            builder
-                .provide_meta(pool_budget(BudgetReach::Injected))
-                .provide_meta(statement_budget(BudgetReach::Injected)),
+            budgets(BudgetReach::Injected)
+                .into_iter()
+                .fold(builder, ContainerBuilder::provide_meta),
         );
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
             #[expect(
@@ -78,26 +82,30 @@ impl DynamicModule for SeaOrmSetup {
 /// Who reaches the pool: the code injecting it, or — once
 /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) installs `Repo`'s
 /// executor around every unit of work — any code at all.
+#[derive(Clone, Copy)]
 pub(crate) enum BudgetReach {
     Injected,
     Ambient,
 }
 
-/// The [`Budget`] of the pool's statements: how long one runs before Postgres
-/// cancels it.
-pub(crate) fn statement_budget(reach: BudgetReach) -> Budget {
-    let setting = format!(
-        "{}, or `SeaOrmConfig::statement_timeout_secs` in code",
-        nest_rs_config::var_name("seaorm", "STATEMENT_TIMEOUT_SECS"),
-    );
-    match reach {
-        BudgetReach::Injected => {
-            Budget::of::<DatabaseConnection>("the SeaORM statements", setting, statement_bound)
+/// The pool's [`Budget`]s: how long a query waits for a connection, and how
+/// long a statement runs before Postgres cancels it.
+pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
+    let declare = |resource, bounds: &DurationBounds, read| {
+        let setting = format!(
+            "{}, or `{}` in code",
+            nest_rs_config::var_name(NAMESPACE, bounds.key()),
+            bounds.field(),
+        );
+        match reach {
+            BudgetReach::Injected => Budget::of::<DatabaseConnection>(resource, setting, read),
+            BudgetReach::Ambient => Budget::ambient::<DatabaseConnection>(resource, setting, read),
         }
-        BudgetReach::Ambient => {
-            Budget::ambient::<DatabaseConnection>("the SeaORM statements", setting, statement_bound)
-        }
-    }
+    };
+    [
+        declare("the SeaORM pool", &CONNECT_TIMEOUT, acquire_budget),
+        declare("the SeaORM statements", &STATEMENT_TIMEOUT, statement_bound),
+    ]
 }
 
 /// How long a statement on `db`'s pool runs before Postgres cancels it, read
@@ -151,22 +159,6 @@ fn statement_timeout_in(options: &str) -> Option<Duration> {
     (amount > 0).then(|| unit * u32::try_from(amount).unwrap_or(u32::MAX))
 }
 
-/// The pool's [`Budget`]: how long a query waits for a connection.
-pub(crate) fn pool_budget(reach: BudgetReach) -> Budget {
-    let setting = format!(
-        "{}, or `SeaOrmConfig::connect_timeout_secs` in code",
-        nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"),
-    );
-    match reach {
-        BudgetReach::Injected => {
-            Budget::of::<DatabaseConnection>("the SeaORM pool", setting, acquire_budget)
-        }
-        BudgetReach::Ambient => {
-            Budget::ambient::<DatabaseConnection>("the SeaORM pool", setting, acquire_budget)
-        }
-    }
-}
-
 /// How long a query waits for a connection from `db`'s pool; `None` for a
 /// connection holding no pool.
 fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
@@ -199,27 +191,24 @@ async fn connect(
     if config.url.is_empty() {
         anyhow::bail!(
             "{} must be set",
-            nest_rs_config::spellings(
-                <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
-                "URL"
-            )
+            nest_rs_config::spellings(NAMESPACE, "URL")
         );
     }
     // A config seeded on the builder skips `from_env`, and with it the range
     // the variable is held to: checked again where the budget is spent, before
     // sqlx adds it to a clock.
     if let Some(secs) = config.connect_timeout_secs {
-        crate::config::CONNECT_TIMEOUT.check(
-            <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
-            "SeaOrmConfig::connect_timeout_secs",
-            std::time::Duration::from_secs(secs),
+        CONNECT_TIMEOUT.check(
+            NAMESPACE,
+            CONNECT_TIMEOUT.field(),
+            Duration::from_secs(secs),
         )?;
     }
     if let Some(secs) = config.statement_timeout_secs {
-        crate::config::STATEMENT_TIMEOUT.check(
-            <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
-            "SeaOrmConfig::statement_timeout_secs",
-            std::time::Duration::from_secs(secs),
+        STATEMENT_TIMEOUT.check(
+            NAMESPACE,
+            STATEMENT_TIMEOUT.field(),
+            Duration::from_secs(secs),
         )?;
     }
     tracing::info!(

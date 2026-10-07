@@ -2,7 +2,7 @@
 //!
 //! Namespace `redis`, read off the path like every other config's. The
 //! connection is the crate's own subject — every binding folder (`queue/`,
-//! `worker/`, `throttler/`) shares it — so it lives at the crate root under the
+//! `schedule/`, `throttler/`) shares it — so it lives at the crate root under the
 //! crate's word, `<PREFIX>_REDIS__*`, and the operator configures the resource
 //! they provisioned rather than the capability that happened to ask first.
 
@@ -68,10 +68,10 @@ pub struct RedisConfig {
     /// `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
     /// refused outside, and in code anything above zero up to an hour; defaults
     /// to 10s. The boot refuses a budget at or past a net waiting on the
-    /// connection — 20s for the queue's and the rate limiter's, 50s for the
-    /// scheduler's, each declared by its binding, and the authentication
-    /// guard's 20s when its strategy injects the connection — and the queue
-    /// binding a lease of no more than one and a half budgets.
+    /// connection — each binding declares its port's, as does the
+    /// authentication guard when its strategy injects the connection — and the
+    /// queue binding a lease the port's renewal cannot fit in
+    /// ([`lease_fits_renewal`](nest_rs_queue::lease_fits_renewal)).
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
     /// authorities of Mozilla's root program compiled into the client and

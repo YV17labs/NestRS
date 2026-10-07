@@ -22,6 +22,7 @@ use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 use redis::Script;
 
 use crate::RedisConnection;
+use crate::connection::effects;
 
 /// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
 /// throttled subject, counting its current window.
@@ -52,31 +53,30 @@ fn bucket(subject: &str) -> String {
 
 /// Atomic fixed-window step. Returns `{count, ttl_ms}` in one round-trip:
 ///
-/// - its writes replicate as effects, as every queue script's do: Redis 6.2
-///   refuses a write after `PTTL` otherwise, when a deployment turned
-///   `lua-replicate-commands` off.
+/// - `PTTL` is the remaining window in ms, so the guard's `Retry-After` is the
+///   true time to reset, not a fixed guess; `INCR` keeps it.
 /// - a window in its last millisecond (`PTTL` `0`) has ended, as the
 ///   in-memory store's does at `start + window`, so `PEXPIRE … 0` deletes it
 ///   and this hit opens the next one.
 /// - `INCR` opens or advances the window counter.
-/// - the window's expiry is (re)armed only when the key has none
-///   (`PTTL < 0` — a just-created key, or one that somehow lost its TTL), which
-///   is the `EXPIRE NX` semantics without a version dependency.
-/// - `PTTL` returns the remaining window in ms, so the guard's `Retry-After` is
-///   the true time to reset, not a fixed guess.
-const WINDOW_SCRIPT: &str = r"
-redis.replicate_commands()
-if redis.call('PTTL', KEYS[1]) == 0 then
+/// - the window's expiry is armed only when the key has none (`PTTL < 0` — a
+///   key this hit created, or one that somehow lost its TTL), which is the
+///   `EXPIRE NX` semantics without a version dependency.
+const WINDOW_SCRIPT: &str = concat!(
+    effects!(),
+    "local ttl = redis.call('PTTL', KEYS[1])
+if ttl == 0 then
   redis.call('PEXPIRE', KEYS[1], 0)
+  ttl = -2
 end
 local count = redis.call('INCR', KEYS[1])
-local ttl = redis.call('PTTL', KEYS[1])
 if ttl < 0 then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
   ttl = tonumber(ARGV[1])
 end
 return {count, ttl}
-";
+"
+);
 
 /// Redis-backed [`ThrottlerStore`]. Construct via [`RedisThrottler::new`] or let
 /// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it over the shared

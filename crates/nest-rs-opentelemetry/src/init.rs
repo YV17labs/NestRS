@@ -376,11 +376,10 @@ mod tests {
         assert!(parse_log_filter("debug,hyper=warn").is_ok());
     }
 
-    /// A collector that takes the connection and never answers used to hold
-    /// the exit for fifteen seconds — each provider's own five, in turn. The
-    /// three now flush at once, held to one bound between them — the meter's
-    /// included, which ignores the one it is handed — on a bound shorter than
-    /// [`FLUSH_TIMEOUT`], which the grace-period test holds.
+    /// A collector that takes the connection and never answers holds the exit
+    /// for one bound: the three providers flush at once, held to it between
+    /// them — the meter's included, which ignores the one it is handed — on a
+    /// bound shorter than [`FLUSH_TIMEOUT`], which the grace-period test holds.
     #[cfg(feature = "otlp")]
     #[test]
     fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_for_all_three_providers() {

@@ -22,7 +22,7 @@ use nest_rs_queue::{
     Envelope, JobId, JobProducer, PushOptions, QueueBackend, QueueError, QueueName,
 };
 
-use super::scripts::SCRIPTS;
+use super::scripts::{SCRIPTS, keyed};
 use crate::RedisConnection;
 use crate::backend::BACKEND;
 use crate::error::UnexpectedReply;
@@ -94,16 +94,7 @@ impl RedisQueueProducer {
         let cancelled: i64 = self
             .conn
             .invoke(
-                SCRIPTS
-                    .cancel
-                    .key(&keys.jobs)
-                    .key(&keys.entries)
-                    .key(&keys.due)
-                    .key(&keys.delayed)
-                    .key(&keys.unique)
-                    .key(&keys.claims)
-                    .key(&keys.deferred)
-                    .key(&keys.checkpoints)
+                keyed(&SCRIPTS.cancel, &keys.transition()[..8])
                     .arg(GROUP)
                     .arg(job)
                     .arg(key),
@@ -140,14 +131,8 @@ impl JobProducer for RedisQueueProducer {
                 .map_or(0, millis),
         };
         let keys = self.keys.of(queue);
-        let mut push = SCRIPTS.push.key(&keys.jobs);
-        push.key(&keys.entries)
-            .key(&keys.due)
-            .key(&keys.delayed)
-            .key(&keys.unique)
-            .key(&keys.claims)
-            .key(&keys.deferred)
-            .arg(after);
+        let mut push = keyed(&SCRIPTS.push, &keys.transition()[..7]);
+        push.arg(after);
         let mut unique_keys = Vec::with_capacity(envelopes.len());
         for envelope in envelopes {
             let id = envelope.id().to_string();

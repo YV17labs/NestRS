@@ -7,11 +7,10 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Net, Registering};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
 use nest_rs_throttler::ThrottlerStore;
 
 use crate::RedisConnection;
-use crate::connection::CONNECTION_REMEDY;
 use crate::throttler::RedisThrottler;
 
 /// Cross-process rate-limit store. Import beside `ThrottlerModule::for_root`
@@ -29,20 +28,13 @@ impl Module for RedisThrottlerModule {
         // second vendor binding contests it by name (`BACKEND_REMEDY`). Queued
         // after the connection's factory, so `imports` order is not a wiring
         // mistake a reader has to know about.
-        builder
-            .provide_meta(RedisConnection::declared_budget())
-            .provide_meta(Net::over::<RedisConnection>(
-                "the rate limiter",
-                nest_rs_throttler::HIT_TIMEOUT,
-            ))
+        RedisConnection::netted(builder, "the rate limiter", nest_rs_throttler::HIT_TIMEOUT)
             .provide_declared_factory_after::<Arc<dyn ThrottlerStore>, RedisConnection, _, _>(
-                nest_rs_throttler::BACKEND_REMEDY,
-                |container| async move {
-                    let conn = container.get::<RedisConnection>().ok_or_else(|| {
-                        anyhow::anyhow!("RedisThrottlerModule: {CONNECTION_REMEDY}")
-                    })?;
-                    Ok(Arc::new(RedisThrottler::new((*conn).clone())) as Arc<dyn ThrottlerStore>)
-                },
-            )
+            nest_rs_throttler::BACKEND_REMEDY,
+            |container| async move {
+                let conn = RedisConnection::of(&container, "RedisThrottlerModule")?;
+                Ok(Arc::new(RedisThrottler::new(conn)) as Arc<dyn ThrottlerStore>)
+            },
+        )
     }
 }

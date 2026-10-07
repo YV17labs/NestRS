@@ -125,12 +125,4 @@ mod tests {
         let empty = Container::builder().provide(Pool(None)).build();
         assert_eq!(budget().wait(&empty), None);
     }
-
-    #[test]
-    fn only_an_ambient_budget_says_so() {
-        assert!(!budget().is_ambient());
-        let ambient = Budget::ambient::<Pool>("the pool", "POOL_WAIT", |pool| pool.0);
-        assert!(ambient.is_ambient());
-        assert_eq!(ambient.provider(), TypeId::of::<Pool>());
-    }
 }

@@ -10,6 +10,7 @@ mod module;
 mod producer;
 mod scripts;
 
+pub(crate) use config::LEASE;
 pub use config::RedisQueueConfig;
 pub use module::{RedisQueueModule, RedisQueueSetup};
 pub use producer::RedisQueueProducer;

@@ -44,6 +44,7 @@ use redis::{
     ScriptInvocation, ServerErrorKind, Value,
 };
 
+use crate::config::CONNECT_TIMEOUT;
 use crate::error::RedisError;
 use crate::{RedisConfig, tls};
 
@@ -51,6 +52,19 @@ use crate::{RedisConfig, tls};
 /// missing — one wording, three sites, so the remedy cannot drift.
 pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered — import \
      RedisModule::for_root(None), which opens the one Redis connection every Redis binding shares";
+
+/// Every script's first line: its writes are replicated as effects, not the
+/// script — which Redis 6.2 needs before a write that follows a command whose
+/// answer varies (`TIME`, `XPENDING`, `PTTL`), when a deployment turned
+/// `lua-replicate-commands` off. Later servers do it always, and take the call
+/// as a no-op.
+macro_rules! effects {
+    () => {
+        "redis.replicate_commands()
+"
+    };
+}
+pub(crate) use effects;
 
 /// How many times one call loads its script, at most: `redis` loads it once,
 /// and a `SCRIPT FLUSH` or a failover landing between that load and its retry
@@ -348,10 +362,10 @@ impl RedisConnection {
     /// apart from a network that drops it: a `rediss://` URL pointed at a
     /// plaintext Redis runs out the budget as an unreachable one does.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
-        let budget = crate::config::CONNECT_TIMEOUT
+        let budget = CONNECT_TIMEOUT
             .check(
                 RedisConfig::NAMESPACE,
-                "RedisConfig::connect_timeout",
+                CONNECT_TIMEOUT.field(),
                 config.connect_timeout,
             )
             .map_err(RedisError::Budget)?;
@@ -508,11 +522,34 @@ impl RedisConnection {
         nest_rs_core::Budget::of::<Self>(
             "the Redis connection",
             format!(
-                "{}, or `RedisConfig::connect_timeout` in code",
-                nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+                "{}, or `{}` in code",
+                nest_rs_config::var_name(RedisConfig::NAMESPACE, CONNECT_TIMEOUT.key()),
+                CONNECT_TIMEOUT.field(),
             ),
             |conn| Some(conn.budget()),
         )
+    }
+
+    /// `builder` with the connection's budget and `port`'s net over it, which
+    /// the boot holds the budget under — what every binding handing the
+    /// connection to a port declares.
+    pub(crate) fn netted(
+        builder: nest_rs_core::ContainerBuilder,
+        port: &'static str,
+        net: Duration,
+    ) -> nest_rs_core::ContainerBuilder {
+        builder
+            .provide_meta(Self::declared_budget())
+            .provide_meta(nest_rs_core::Net::over::<Self>(port, net))
+    }
+
+    /// The connection [`RedisModule`](crate::RedisModule) opened, for
+    /// `binding`'s factory.
+    pub(crate) fn of(container: &nest_rs_core::Container, binding: &str) -> anyhow::Result<Self> {
+        container
+            .get::<Self>()
+            .map(|conn| (*conn).clone())
+            .ok_or_else(|| anyhow::anyhow!("{binding}: {CONNECTION_REMEDY}"))
     }
 
     /// Run `script`, loading it again each time Redis answers it holds none, at

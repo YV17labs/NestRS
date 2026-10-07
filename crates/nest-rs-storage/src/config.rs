@@ -9,8 +9,8 @@ use nest_rs_config::{
 /// silent store is said as its own error beneath both.
 const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
 
-/// How long a transfer waits for its next bytes by default — object_store's
-/// whole-attempt bound before this one replaced it.
+/// How long a transfer waits for its next bytes by default: the 30 seconds
+/// object_store waits for a request by default.
 const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
 
 /// The operation budget's range, the variable that sets it, and why.

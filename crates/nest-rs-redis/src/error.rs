@@ -69,8 +69,8 @@ pub enum RedisError {
          budget ({budget:?}): a renewal is sent a third into the lease and may wait out the \
          whole budget, so a shorter lease lapses while Redis still answers — raise {lease_var} \
          or lower {timeout_var}",
-        lease_var = ::nest_rs_config::var_name("redis__queue", "LEASE_SECS"),
-        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+        lease_var = ::nest_rs_config::var_name("redis__queue", crate::queue::LEASE.key()),
+        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
     )]
     BudgetPastLease {
         /// The connect budget.
@@ -189,7 +189,7 @@ pub enum RedisError {
         "Redis at {endpoint} answered but was not ready within {budget:?} ({attempts} \
          attempt(s)) — its last answer follows; widen the budget with {timeout_var} if it \
          clears on its own",
-        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
     )]
     Unready {
         /// The address the client dials, never the URL.
@@ -211,7 +211,7 @@ pub enum RedisError {
         "could not reach Redis at {endpoint} within {budget:?} ({attempts} attempt(s)): \
          check {url_var}, or widen the budget with {timeout_var}",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
-        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
     )]
     Unreachable {
         /// The address the client dials, never the URL.

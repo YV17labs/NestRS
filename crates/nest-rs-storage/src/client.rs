@@ -72,7 +72,7 @@ pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 /// [`StorageConfig::read_timeout`].
 pub struct Storage {
     config: Arc<StorageConfig>,
-    store: OnceLock<AmazonS3>,
+    store: OnceLock<Arc<AmazonS3>>,
 }
 
 // Registered by hand rather than by `#[injectable]` for what the decorator
@@ -115,7 +115,7 @@ impl ProviderResidency for Storage {
 impl Storage {
     /// Construct directly from a config, bypassing the DI container.
     ///
-    /// The DI path uses the generated `from_container` constructor; this is the
+    /// The DI path uses [`from_container`](Self::from_container); this is the
     /// honest constructor for tests and ad-hoc tooling that hold a
     /// [`StorageConfig`] without standing up a container.
     pub fn new(config: Arc<StorageConfig>) -> Self {
@@ -140,7 +140,7 @@ impl Storage {
 
     /// The S3 driver, built once on first use. Returns [`StorageError::Init`]
     /// instead of panicking when the configured values can't produce a client.
-    fn store(&self) -> Result<&AmazonS3> {
+    fn store(&self) -> Result<&Arc<AmazonS3>> {
         if let Some(store) = self.store.get() {
             return Ok(store);
         }
@@ -199,7 +199,7 @@ impl Storage {
             .map_err(StorageError::Init)?;
         // A racing thread may have initialized first — `get_or_init` keeps the
         // winner and drops our `built`; either way one client is shared.
-        Ok(self.store.get_or_init(|| built))
+        Ok(self.store.get_or_init(|| Arc::new(built)))
     }
 
     /// The configured bucket every key in this client is addressed within.
@@ -308,7 +308,7 @@ impl Storage {
         Ok((
             size,
             download(
-                Arc::new(store.clone()),
+                Arc::clone(store) as Arc<dyn ObjectStore>,
                 path,
                 first,
                 self.config.read_timeout,

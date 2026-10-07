@@ -90,6 +90,23 @@ pub(crate) struct QueueKeys {
 }
 
 impl QueueKeys {
+    /// The keys a transition's script reads, in the order it reads them as
+    /// `KEYS[1]`, `KEYS[2]`, …; each script takes as many from the front as it
+    /// needs.
+    pub(crate) fn transition(&self) -> [&str; 9] {
+        [
+            &self.jobs,
+            &self.entries,
+            &self.due,
+            &self.delayed,
+            &self.unique,
+            &self.claims,
+            &self.deferred,
+            &self.checkpoints,
+            &self.dead,
+        ]
+    }
+
     /// The keys of `queue`.
     pub(crate) fn new(queue: &QueueName) -> Self {
         let tag = format!("{{{queue}}}");

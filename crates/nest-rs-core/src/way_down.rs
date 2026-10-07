@@ -378,8 +378,7 @@ mod tests {
     }
 
     /// Hooks that spent the budget leave the teardown nothing: the blocking call
-    /// an abandoned hook was waiting on no longer holds the exit — under
-    /// `#[tokio::main]` it held it past its last line — and a teardown that
+    /// an abandoned hook waits on does not hold the exit, and a teardown that
     /// waited not at all says nothing it cannot know.
     #[test]
     fn a_teardown_the_hooks_left_nothing_holds_the_exit_for_nothing() {
@@ -396,8 +395,7 @@ mod tests {
 
     /// A `main` that ran no app spent none of the hooks' budget, so its
     /// teardown is given all of it, and blocking work it left behind is waited
-    /// for. With no budget recorded the teardown used to be given nothing, and
-    /// the work was abandoned at once, without a line.
+    /// for.
     #[test]
     fn a_main_that_ran_no_app_gives_what_it_left_behind_the_whole_budget() {
         assert_eq!(teardown_budget(), crate::SHUTDOWN_HOOKS_TIMEOUT);

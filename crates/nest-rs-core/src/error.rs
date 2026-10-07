@@ -1,23 +1,5 @@
 //! Every error the boot can fail with, and [`DecodeError`] — the one error the
 //! kernel lends every edge rather than raises.
-//!
-//! They are here rather than beside the pass that raises them because half of
-//! them are not the access graph's at all — `DuplicateProviderError`,
-//! `ContestedDeclarationError`, `UnresolvedFactoryError`, `LateFactoryError` and
-//! `FactoryCycleError` are constructed only in [`app`](crate::app), by the
-//! registration and factory phases, `ProviderCycleError` by the `#[module]`
-//! expansion's register phase, `UncollectedImportError` by a dynamic import's
-//! register, and `BudgetPastNetError` by the budget check the boot ends on. Filed
-//! under `access.rs` the file's name was a claim about all of them and false
-//! for half: from the type a reader derived the wrong file, and from the file
-//! they were offered errors its own pass never raises.
-//!
-//! This is the role table's own row — *domain error → `error.rs`* — and eleven
-//! `nest-rs-*` crates already carry one; the kernel was the outlier.
-//!
-//! What stays in [`access`](crate::access) is the graph vocabulary and the
-//! validators: the descriptors the `#[module]` macro submits, the reachability
-//! set, and the passes themselves.
 
 use std::borrow::Cow;
 

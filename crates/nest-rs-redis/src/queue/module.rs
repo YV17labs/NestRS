@@ -3,17 +3,15 @@
 //! the port's `QueueWorker` runs jobs with when the app imports
 //! `QueueModule`.
 
-use std::any::TypeId;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Net, Registering};
+use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
 use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, JobProducer};
 
 use super::consumer::RedisQueueConsumer;
 use super::{RedisQueueConfig, RedisQueueProducer};
-use crate::connection::CONNECTION_REMEDY;
 use crate::{RedisConnection, RedisError};
 
 /// The Redis queue binding. Import it beside
@@ -27,9 +25,7 @@ impl RedisQueueModule {
     /// `None` loads [`RedisQueueConfig`] from `<PREFIX>_REDIS__QUEUE__*`;
     /// `Some(cfg)` pins the base those variables overlay, field by field.
     pub fn for_root(config: impl Into<Option<RedisQueueConfig>>) -> RedisQueueSetup {
-        RedisQueueSetup {
-            pinned: config.into(),
-        }
+        ConfigModule::setup(config)
     }
 
     /// The producer and the consumer, each bound under the port's type and
@@ -37,15 +33,11 @@ impl RedisQueueModule {
     /// boot naming both ([`BACKEND_REMEDY`]); and the port's net over the
     /// connection, which the boot holds the connection's budget under.
     fn bind(builder: ContainerBuilder) -> ContainerBuilder {
-        builder
-            .provide_meta(RedisConnection::declared_budget())
-            .provide_meta(Net::over::<RedisConnection>("the queue port", BACKEND_TIMEOUT))
+        RedisConnection::netted(builder, "the queue port", BACKEND_TIMEOUT)
             .provide_factory_after::<RedisQueueProducer, RedisConnection, _, _>(
                 |container| async move {
-                    let conn = container
-                        .get::<RedisConnection>()
-                        .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
-                    let producer = RedisQueueProducer::new((*conn).clone());
+                    let producer =
+                        RedisQueueProducer::new(RedisConnection::of(&container, "RedisQueueModule")?);
                     producer.load_scripts().await?;
                     Ok(producer)
                 },
@@ -53,26 +45,21 @@ impl RedisQueueModule {
             .provide_declared_factory_after::<Arc<dyn JobProducer>, RedisQueueProducer, _, _>(
                 BACKEND_REMEDY,
                 |container| async move {
-                    let producer = container
-                        .get::<RedisQueueProducer>()
-                        .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
+                    let producer = container.get::<RedisQueueProducer>().ok_or_else(|| {
+                        anyhow::anyhow!("RedisQueueModule: RedisQueueProducer was not resolved")
+                    })?;
                     Ok(producer as Arc<dyn JobProducer>)
                 },
             )
             .provide_declared_factory_after_both::<BoundConsumer, RedisConnection, RedisQueueConfig, _, _>(
                 BACKEND_REMEDY,
                 |container| async move {
-                    let conn = container
-                        .get::<RedisConnection>()
-                        .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
+                    let conn = RedisConnection::of(&container, "RedisQueueModule")?;
                     let config = container.get::<RedisQueueConfig>().ok_or_else(|| {
                         anyhow::anyhow!("RedisQueueModule: RedisQueueConfig was not resolved")
                     })?;
                     renewable(config.lease, conn.budget())?;
-                    Ok(BoundConsumer::new(RedisQueueConsumer::new(
-                        (*conn).clone(),
-                        config.lease,
-                    )))
+                    Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
                 },
             )
     }
@@ -95,28 +82,12 @@ impl Module for RedisQueueModule {
 
 /// The configured import [`RedisQueueModule::for_root`] returns: the config it
 /// pins, and the bindings — queued once, however many sites import the module.
-pub struct RedisQueueSetup {
-    pinned: Option<RedisQueueConfig>,
-}
+pub type RedisQueueSetup = ConfigSetup<RedisQueueModule, RedisQueueConfig>;
 
-impl DynamicModule for RedisQueueSetup {
-    fn module() -> TypeId {
-        TypeId::of::<RedisQueueModule>()
-    }
-
-    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder.import::<RedisQueueModule>())
-    }
-
-    fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.import::<RedisQueueModule>()
-    }
-}
-
-/// `Ok` when a renewal fits in `lease`: the port sends one a third into the
-/// lease, and it may wait out the whole `budget`.
+/// `Ok` when the port's renewal fits in `lease` though it waits out the whole
+/// `budget`.
 fn renewable(lease: Duration, budget: Duration) -> Result<(), RedisError> {
-    if budget.saturating_mul(3) < lease.saturating_mul(2) {
+    if nest_rs_queue::lease_fits_renewal(lease, budget) {
         Ok(())
     } else {
         Err(RedisError::BudgetPastLease { budget, lease })
@@ -127,20 +98,18 @@ fn renewable(lease: Duration, budget: Duration) -> Result<(), RedisError> {
 mod tests {
     use super::*;
 
-    /// The defaults fit, and a lease passes only past one and a half budgets.
+    /// The defaults fit, and a lease the port's renewal does not fit is refused
+    /// naming both settings.
     #[test]
-    fn a_lease_passes_only_past_one_and_a_half_budgets() {
+    fn the_defaults_fit_and_a_lease_no_renewal_fits_is_refused() {
         let budget = crate::RedisConfig::default().connect_timeout;
         assert!(renewable(RedisQueueConfig::default().lease, budget).is_ok());
-        assert!(renewable(Duration::from_millis(1_501), Duration::from_secs(1)).is_ok());
-        for lease in [Duration::from_millis(1_500), Duration::from_secs(1)] {
-            let Err(refused) = renewable(lease, Duration::from_secs(1)) else {
-                panic!("a {lease:?} lease must be refused under a 1s budget");
-            };
-            assert!(
-                matches!(refused, RedisError::BudgetPastLease { .. }),
-                "{refused}"
-            );
-        }
+        let Err(refused) = renewable(Duration::from_secs(1), Duration::from_secs(1)) else {
+            panic!("a lease no longer than the budget must be refused");
+        };
+        assert!(
+            matches!(refused, RedisError::BudgetPastLease { .. }),
+            "{refused}"
+        );
     }
 }

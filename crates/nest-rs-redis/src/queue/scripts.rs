@@ -14,19 +14,9 @@
 
 use std::sync::LazyLock;
 
-use redis::Script;
+use redis::{Script, ScriptInvocation};
 
-/// Every script's first line: its writes are replicated as effects, not the
-/// script — which Redis 6.2 needs before a write that follows a command whose
-/// answer varies (`TIME`, `XPENDING`, `XINFO`), when a deployment turned
-/// `lua-replicate-commands` off. Later servers do it always, and take the call
-/// as a no-op.
-macro_rules! effects {
-    () => {
-        "redis.replicate_commands()
-"
-    };
-}
+use crate::connection::effects;
 
 /// `now()`: Redis's clock, in milliseconds.
 macro_rules! now {
@@ -500,13 +490,22 @@ pub(crate) static SCRIPTS: LazyLock<Scripts> = LazyLock::new(|| Scripts {
     leave: Script::new(LEAVE),
 });
 
+/// `script`, called with `keys` in order as its `KEYS`.
+pub(crate) fn keyed<'a>(script: &'a Script, keys: &[&str]) -> ScriptInvocation<'a> {
+    let mut invocation = script.prepare_invoke();
+    for key in keys {
+        invocation.key(*key);
+    }
+    invocation
+}
+
 impl Scripts {
-    /// Every script a worker runs, to load before its first delivery.
     /// The scripts a producer runs, loaded when its binding boots.
     pub(crate) fn producer(&self) -> [&Script; 2] {
         [&self.push, &self.cancel]
     }
 
+    /// Every script a worker runs, to load before its first delivery.
     pub(crate) fn consumer(&self) -> [&Script; 9] {
         [
             &self.reclaim,

@@ -11,7 +11,7 @@ use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result
 const DEFAULT_LEASE_SECS: u64 = 30;
 
 /// The lease's bounds, the variable that sets it, and why.
-const LEASE: DurationBounds = DurationBounds::secs(
+pub(crate) const LEASE: DurationBounds = DurationBounds::secs(
     "LEASE_SECS",
     "RedisQueueConfig::lease",
     Floor::Units(Bound {

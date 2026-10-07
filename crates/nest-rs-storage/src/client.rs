@@ -20,7 +20,9 @@ use crate::config::{OPERATION_TIMEOUT, READ_TIMEOUT, StorageConfig};
 use crate::error::{Result, StorageError};
 use crate::transfer::download;
 
-/// The longest a dial to S3 waits: `object_store`'s default.
+/// The longest a dial to S3 waits — DNS, TCP and the TLS handshake:
+/// `object_store`'s default, never scaled down with the budget, since a dial
+/// cut shorter than the endpoint's round trips never connects.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How `object_store` retries within the operation budget `budget`: it stops
@@ -38,12 +40,6 @@ fn retries_within(budget: Duration) -> RetryConfig {
         retry_timeout: budget / 2,
         ..RetryConfig::default()
     }
-}
-
-/// The longest a dial waits within the operation budget `budget`: a quarter of
-/// it at most, so the attempt after the last backoff fails within the budget.
-fn dial_within(budget: Duration) -> Duration {
-    CONNECT_TIMEOUT.min(budget / 4)
 }
 
 /// Bytes buffered before a multipart part is shipped. S3 requires every part
@@ -187,7 +183,7 @@ impl Storage {
             // by the operation budget above it, and a download's stall by
             // `download`, never by reqwest's read timeout (`transfer.rs`).
             .with_timeout_disabled()
-            .with_connect_timeout(dial_within(self.config.operation_timeout));
+            .with_connect_timeout(CONNECT_TIMEOUT);
         let built = AmazonS3Builder::new()
             .with_client_options(options)
             .with_retry(retries_within(self.config.operation_timeout))
@@ -312,7 +308,7 @@ impl Storage {
         Ok((
             size,
             download(
-                store.clone(),
+                Arc::new(store.clone()),
                 path,
                 first,
                 self.config.read_timeout,
@@ -691,7 +687,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_last_retry_fails_within_the_budget_whatever_the_budget() {
+    fn the_last_backoff_ends_within_the_budget_whatever_the_budget() {
         for budget in [
             Duration::from_millis(1),
             Duration::from_secs(1),
@@ -701,7 +697,7 @@ mod tests {
             let retries = retries_within(budget);
             assert!(retries.backoff.init_backoff <= retries.backoff.max_backoff);
             assert!(
-                retries.retry_timeout + retries.backoff.max_backoff + dial_within(budget) < budget,
+                retries.retry_timeout + retries.backoff.max_backoff < budget,
                 "{budget:?}"
             );
         }

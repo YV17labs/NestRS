@@ -7,12 +7,12 @@
 //! through an upload's body too.
 
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt};
-use object_store::aws::AmazonS3;
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResult, ObjectStore};
 
@@ -25,13 +25,14 @@ use crate::error::{Result, StorageError};
 ///
 /// A body silent that long while its reader waits, or broken past
 /// `object_store`'s own resumption, is resumed with a ranged `GET` of what is
-/// still owed, said at `warn`, and fenced on the object's `ETag` so a version
-/// written since is refused rather than spliced in; each resume waits for S3's
-/// answer within `operation_timeout`. A resumed body that stops before its
+/// still owed, said at `warn`, and fenced on the object's `ETag` — sent as
+/// `If-Match` and checked on the answer — so a version written since is
+/// refused rather than spliced in; each resume waits for S3's answer within
+/// `operation_timeout`. A resumed body that stops before its
 /// first byte fails the download on what stopped it — a stall naming the
 /// bound.
 pub(crate) fn download(
-    store: AmazonS3,
+    store: Arc<dyn ObjectStore>,
     path: Path,
     first: GetResult,
     read_timeout: Duration,
@@ -56,7 +57,7 @@ pub(crate) fn download(
 
 /// One download in flight.
 struct Transfer {
-    store: AmazonS3,
+    store: Arc<dyn ObjectStore>,
     path: Path,
     /// The version every resumed request is fenced on.
     e_tag: Option<String>,
@@ -106,7 +107,7 @@ impl Transfer {
             "download resumed where its body stopped",
         );
         let options = GetOptions {
-            if_match: Some(e_tag),
+            if_match: Some(e_tag.clone()),
             range: Some(GetRange::Bounded(self.owed.clone())),
             ..GetOptions::default()
         };
@@ -115,6 +116,16 @@ impl Transfer {
             self.store.get_opts(&self.path, options),
         )
         .await??;
+        // Checked here too, as object_store checks its own resumes: a store
+        // that ignores `If-Match` would hand over another version's rest.
+        if answer.meta.e_tag.as_deref() != Some(e_tag.as_str()) {
+            return Err(object_store::Error::Precondition {
+                path: self.path.to_string(),
+                source: "the object changed while it was read, so the rest of another version \
+                         is not spliced onto what was read"
+                    .into(),
+            });
+        }
         self.body = answer.into_stream();
         self.resumable = false;
         Ok(())
@@ -134,5 +145,145 @@ fn stalled(read_timeout: Duration) -> object_store::Error {
                 nest_rs_config::var_name("storage", READ_TIMEOUT.key()),
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::stream::BoxStream;
+    use object_store::memory::InMemory;
+    use object_store::{
+        CopyOptions, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStoreExt,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    };
+
+    use super::*;
+
+    /// A store honouring ranges and ignoring `If-Match`, as an S3-compatible
+    /// server may.
+    #[derive(Debug)]
+    struct FenceIgnoring(InMemory);
+
+    impl std::fmt::Display for FenceIgnoring {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("FenceIgnoring")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for FenceIgnoring {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.0.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.0.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            let options = GetOptions {
+                if_match: None,
+                ..options
+            };
+            self.0.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            self.0.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.0.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.0.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.0.copy_opts(from, to, options).await
+        }
+    }
+
+    /// A resume is fenced on the version the download started on: the rest of
+    /// a version written since is refused, never spliced onto what was read,
+    /// even from a store that ignores the fence.
+    #[tokio::test]
+    async fn a_resume_answered_from_a_version_written_since_is_refused_not_spliced() {
+        let store = Arc::new(FenceIgnoring(InMemory::new()));
+        let path = Path::from("k");
+        store
+            .put(&path, PutPayload::from(vec![1_u8; 100]))
+            .await
+            .expect("the first version");
+        let GetResult {
+            meta,
+            range,
+            attributes,
+            extensions,
+            ..
+        } = store.get(&path).await.expect("the first answer");
+        let broken = futures_util::stream::iter([
+            Ok(Bytes::from(vec![1_u8; 10])),
+            Err(object_store::Error::Generic {
+                store: "test",
+                source: "the connection broke".into(),
+            }),
+        ])
+        .boxed();
+        let first = GetResult {
+            payload: GetResultPayload::Stream(broken),
+            meta,
+            range,
+            attributes,
+            extensions,
+        };
+        store
+            .put(&path, PutPayload::from(vec![2_u8; 100]))
+            .await
+            .expect("a version written while the first is read");
+
+        let read: Vec<Result<Bytes>> = download(
+            store,
+            path,
+            first,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .collect()
+        .await;
+        let refused = read
+            .into_iter()
+            .find_map(std::result::Result::err)
+            .expect("the rest of another version is refused");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(chain.contains("changed while it was read"), "{chain}");
     }
 }

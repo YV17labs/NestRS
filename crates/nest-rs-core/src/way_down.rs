@@ -250,9 +250,11 @@ pub(crate) fn watch_signals(cancel: CancellationToken, way_down: std::sync::Arc<
 /// a value threaded through code the developer writes.
 static HOOKS_DEADLINE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-/// Record when the shutdown hooks' budget runs out.
-pub(crate) fn hooks_deadline(deadline: tokio::time::Instant) {
-    let deadline = deadline.into_std();
+/// Record that the shutdown hooks' budget runs out `left` from now. The
+/// deadline is set on the real clock, which the teardown reads, never off a
+/// runtime's, which a test may have paused and moved on.
+pub(crate) fn hooks_deadline(left: Duration) {
+    let deadline = std::time::Instant::now() + left;
     let mut recorded = HOOKS_DEADLINE
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -349,19 +351,13 @@ mod tests {
         tokio::task::spawn_blocking(|| std::thread::sleep(BLOCKS_FOR));
     }
 
-    /// What `App::run` records once its hooks have run, `left` before the
-    /// deadline.
-    fn hooks_left(left: Duration) {
-        hooks_deadline(tokio::time::Instant::now() + left);
-    }
-
     /// Work still running as the runtime is torn down is given what the hooks
     /// left of their budget, and then abandoned with the process, and said.
     #[test]
     fn work_outliving_what_the_hooks_left_is_abandoned_at_it_and_said() {
         let logs = LogCapture::install();
         let left = Duration::from_millis(300);
-        hooks_left(left);
+        hooks_deadline(left);
         let started = Instant::now();
 
         __main(leave_blocking_work_behind());
@@ -388,7 +384,7 @@ mod tests {
     #[test]
     fn a_teardown_the_hooks_left_nothing_holds_the_exit_for_nothing() {
         let logs = LogCapture::install();
-        hooks_left(Duration::ZERO);
+        hooks_deadline(Duration::ZERO);
         let started = Instant::now();
 
         __main(leave_blocking_work_behind());
@@ -448,6 +444,23 @@ mod tests {
                 && recorded <= Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT,
             "{:?} after the run started",
             recorded - ran,
+        );
+    }
+
+    /// The teardown is given real time, so an app whose clock was paused and
+    /// moved on — a test's — records no deadline past what the budget allows.
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_clock_moved_on_records_no_deadline_past_the_budget() {
+        tokio::time::advance(Duration::from_secs(60 * 60)).await;
+        App::new::<NothingToTearDown>()
+            .expect("boots")
+            .run()
+            .await
+            .expect("stops cleanly");
+        assert!(
+            teardown_budget() <= crate::SHUTDOWN_HOOKS_TIMEOUT,
+            "{:?}",
+            teardown_budget()
         );
     }
 }

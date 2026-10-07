@@ -289,7 +289,7 @@ impl App {
         // The runtime's own teardown is held to what they leave of it
         // (`way_down::__main`), so it is recorded where that can read it.
         let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
-        crate::way_down::hooks_deadline(deadline);
+        crate::way_down::hooks_deadline(crate::SHUTDOWN_HOOKS_TIMEOUT);
         for phase in [
             LifecyclePhase::OnModuleDestroy,
             LifecyclePhase::BeforeApplicationShutdown,

@@ -60,22 +60,25 @@ async fn credentials_redis_refuses_fail_the_boot_at_once_naming_them() {
     );
 }
 
-/// A database index Redis does not have is refused on every attempt — the
-/// first index past the count the server is configured with, so the test holds
-/// whatever that count is.
-#[tokio::test]
-async fn a_database_index_redis_does_not_have_fails_the_boot_at_once() {
+/// The first database index Redis does not have — past the count the server
+/// is configured with, so a test naming it holds whatever that count is.
+async fn past_every_database() -> u8 {
     let databases: Vec<String> = redis::cmd("CONFIG")
         .arg("GET")
         .arg("databases")
         .query_async(&mut crate::connect().await)
         .await
         .expect("CONFIG GET databases");
-    let count: u8 = databases
+    databases
         .get(1)
         .and_then(|count| count.parse().ok())
-        .expect("a dev Redis keeps fewer than 256 databases");
+        .expect("a dev Redis keeps fewer than 256 databases")
+}
 
+/// A database index Redis does not have is refused on every attempt.
+#[tokio::test]
+async fn a_database_index_redis_does_not_have_fails_the_boot_at_once() {
+    let count = past_every_database().await;
     let error = database_refused_at_once(
         crate::redis_url_on(count),
         i64::from(count),
@@ -118,19 +121,14 @@ async fn an_acl_denying_select_fails_the_boot_at_once_naming_the_index() {
         .await
         .expect("ACL SETUSER");
 
-    // Refused at the `SELECT`, so the index reaches no key: any but 0 sends one.
-    let url = crate::url_as(
-        &crate::redis_url_on(crate::DB_CONFINED_TO_THE_PREFIX),
-        &user,
-        SECRET,
-    );
+    // Redis checks the ACL before it reads the index, so the `SELECT` names
+    // one past every database: the test holds none, and only the ACL's answer
+    // — `no permissions`, never `out of range` — passes the assertion below.
+    let index = past_every_database().await;
+    let url = crate::url_as(&crate::redis_url_on(index), &user, SECRET);
     let outcome = tokio::time::timeout(
         AT_ONCE * 2,
-        database_refused_at_once(
-            url,
-            i64::from(crate::DB_CONFINED_TO_THE_PREFIX),
-            "an ACL user without +select",
-        ),
+        database_refused_at_once(url, i64::from(index), "an ACL user without +select"),
     )
     .await;
     redis::cmd("ACL")
@@ -256,9 +254,8 @@ async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
     });
     let started = Instant::now();
     let outcome = RedisConnection::connect(&RedisConfig {
-        // Any index but 0 makes the client send a `SELECT`; this one's test
-        // keeps keys under a prefix, and this connection writes none.
-        url: crate::url_on(&proxy.url(), crate::DB_CONFINED_TO_THE_PREFIX),
+        // Any index but 0 makes the client send a `SELECT`.
+        url: crate::url_on(&proxy.url(), crate::DB_SELECT_RETRIED),
         connect_timeout: Duration::from_secs(10),
         ..RedisConfig::default()
     })

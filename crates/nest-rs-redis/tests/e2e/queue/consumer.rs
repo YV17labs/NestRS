@@ -174,12 +174,10 @@ async fn a_job_that_ended_leaves_no_record_but_its_dead_letter() {
             .await
             .expect("XLEN")
     };
-    for _ in 0..200 {
-        if ENDED.finished(run) == 1 && dead_letters().await == 1 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::wait_for(Duration::from_secs(10), || async move {
+        ENDED.finished(run) == 1 && dead_letters().await == 1
+    })
+    .await;
     replica.worker.shutdown().await.expect("clean shutdown");
 
     assert_eq!(ENDED.finished(run), 1, "the first job completed");
@@ -303,31 +301,21 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
 
     // The second attempt read the first one's save, and saved its own.
     crate::wait_until(Duration::from_secs(15), || seen(run).len() == 2).await;
-    let mut held = None;
-    for _ in 0..40 {
-        held = crate::field_of(queue, "checkpoints", &job).await;
-        if held.as_deref() == Some("2") {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(
-        held.as_deref(),
-        Some("2"),
-        "the second attempt's save is in Redis"
-    );
+    let job = job.as_str();
+    // The second attempt's save is in Redis.
+    crate::wait_for(Duration::from_secs(2), || async move {
+        crate::field_of(queue, "checkpoints", job).await.as_deref() == Some("2")
+    })
+    .await;
 
     doomed.kill().await;
     let heir = crate::replica::<ImportModule>().await;
     crate::wait_until(Duration::from_secs(20), || IMPORTED.finished(run) == 1).await;
-    let mut cleared = false;
-    for _ in 0..40 {
-        if crate::field_of(queue, "checkpoints", &job).await.is_none() {
-            cleared = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // Its checkpoint went with it.
+    crate::wait_for(Duration::from_secs(2), || async move {
+        crate::field_of(queue, "checkpoints", job).await.is_none()
+    })
+    .await;
     heir.worker.shutdown().await.expect("clean shutdown");
 
     assert_eq!(
@@ -336,7 +324,6 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
         "each attempt resumed from the last save: after a retry, and after a dead replica",
     );
     assert_eq!(IMPORTED.finished(run), 1, "the job completed once");
-    assert!(cleared, "its checkpoint went with it");
     crate::forget(queue).await;
 }
 
@@ -727,20 +714,15 @@ async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
     GATE.add_permits(1);
     crate::wait_until(Duration::from_secs(10), || GATED.finished(run) == 1).await;
     let unconfirmed = "job outcome not confirmed; unless it was written, the job runs again once its lease lapses";
-    for _ in 0..200 {
-        if !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // The worker said it could not confirm the outcome.
+    crate::wait_until(Duration::from_secs(10), || {
+        !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty()
+    })
+    .await;
     // Past the lease, a delivery the settle had not ended would be reclaimed.
     tokio::time::sleep(crate::LEASE * 3).await;
 
     assert_eq!(GATED.of(run).len(), 1, "the job ran once");
-    assert!(
-        !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty(),
-        "the worker said it could not confirm the outcome",
-    );
     assert_eq!(crate::filed(queue).await, 0, "the settle ended it on Redis");
     drop(replica);
     crate::forget(queue).await;
@@ -853,15 +835,12 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
             .expect("XRANGE");
         entries
     };
-    let mut letters = Vec::new();
-    for _ in 0..200 {
-        letters = dead().await;
-        if !letters.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(letters.len(), 1, "the job dead-lettered");
+    crate::wait_for(Duration::from_secs(10), || async {
+        !dead().await.is_empty()
+    })
+    .await;
+    let letters = dead().await;
+    assert_eq!(letters.len(), 1, "the job dead-lettered once");
 
     FIXED.store(true, std::sync::atomic::Ordering::SeqCst);
     let refiled = refile(&mut crate::connect().await, queue, &letters[0].0)
@@ -1019,14 +998,9 @@ async fn a_dead_letter_past_its_week_is_trimmed_by_the_upkeep() {
             .await
             .expect("XLEN")
     };
-    for _ in 0..60 {
-        if dead().await == 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    // The week-old dead letter went.
+    crate::wait_for(Duration::from_secs(3), || async { dead().await == 0 }).await;
     replica.worker.shutdown().await.expect("clean shutdown");
-    assert_eq!(dead().await, 0, "the week-old dead letter went");
     crate::forget(queue).await;
 }
 
@@ -1089,12 +1063,10 @@ async fn a_held_back_job_whose_record_went_is_said_and_let_go() {
         .expect("its record deleted by hand");
     let said = "held-back queue jobs found due without their record are gone; what they held \
                 is let go";
-    for _ in 0..80 {
-        if !logs.find(nest_rs_queue::TARGET, said).is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::wait_until(Duration::from_secs(4), || {
+        !logs.find(nest_rs_queue::TARGET, said).is_empty()
+    })
+    .await;
     let line = logs.expect_one(nest_rs_queue::TARGET, said);
     assert_eq!(line.level, "warn");
     assert_eq!(line.field("job_ids").as_deref(), Some(job.as_str()));
@@ -1200,12 +1172,10 @@ async fn an_entry_deleted_while_delivered_is_said() {
         crate::forget(queue).await;
         return;
     }
-    for _ in 0..80 {
-        if !logs.find(nest_rs_queue::TARGET, said).is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::wait_until(Duration::from_secs(4), || {
+        !logs.find(nest_rs_queue::TARGET, said).is_empty()
+    })
+    .await;
     replica.worker.shutdown().await.expect("clean shutdown");
     let line = logs.expect_one(nest_rs_queue::TARGET, said);
     assert_eq!(line.level, "warn");

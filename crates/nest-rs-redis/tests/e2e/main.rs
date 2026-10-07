@@ -95,43 +95,51 @@ const BUDGET: Duration = Duration::from_millis(500);
 /// collide. Every other test shares database 0, on queue names of its own.
 /// The framework's are 9 to 15: the demo's suites run on the same Redis and
 /// hold 1 to 8, so a `FLUSHDB` here never reaches a job one of theirs filed.
-const DB_CONNECTION_DROP: u8 = 11;
 const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
 const DB_BLOCKED_READ: u8 = 10;
+const DB_CONNECTION_DROP: u8 = 11;
+/// Through a TLS proxy in front of the suite's Redis.
 const DB_TLS_FLUSH: u8 = 12;
+/// Through a TLS proxy in front of the suite's Redis.
 const DB_TLS_REFUSED_REOPEN: u8 = 13;
-/// On the TLS Redis, so its blocked read is the one `CLIENT LIST` finds there.
-const DB_TLS_BLOCKED_READ: u8 = 15;
 /// Claims only: every scheduler the `schedule` tests boot claims here, so the
 /// key layout is asserted over the whole database.
 const DB_SCHEDULE: u8 = 14;
+const DB_SELECT_RETRIED: u8 = 15;
+
+/// On the TLS Redis — another server, which only the framework's suite uses —
+/// so its blocked read is the one `CLIENT LIST` finds there.
+const DB_TLS_BLOCKED_READ: u8 = 15;
 
 // Two tests sharing a database meet each other's keys and connections, Redis
 // ships sixteen, and the demo holds the lower half: all three facts are checked
-// where the list is written.
+// where the lists are written, one per server.
 const _: () = {
-    let dbs = [
+    const fn hold_apart(dbs: &[u8]) {
+        let mut i = 0;
+        while i < dbs.len() {
+            assert!(
+                dbs[i] >= 9 && dbs[i] < 16,
+                "a framework e2e database is 9 to 15; 1 to 8 are the demo's",
+            );
+            let mut j = i + 1;
+            while j < dbs.len() {
+                assert!(dbs[i] != dbs[j], "two e2e tests share a logical database");
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+    hold_apart(&[
         DB_CONFINED_TO_THE_PREFIX,
         DB_BLOCKED_READ,
         DB_CONNECTION_DROP,
         DB_TLS_FLUSH,
         DB_TLS_REFUSED_REOPEN,
         DB_SCHEDULE,
-        DB_TLS_BLOCKED_READ,
-    ];
-    let mut i = 0;
-    while i < dbs.len() {
-        assert!(
-            dbs[i] >= 9 && dbs[i] < 16,
-            "a framework e2e database is 9 to 15; 1 to 8 are the demo's",
-        );
-        let mut j = i + 1;
-        while j < dbs.len() {
-            assert!(dbs[i] != dbs[j], "two e2e tests share a logical database");
-            j += 1;
-        }
-        i += 1;
-    }
+        DB_SELECT_RETRIED,
+    ]);
+    hold_apart(&[DB_TLS_BLOCKED_READ]);
 };
 
 /// The dev container Redis's URL on database `db`, for a test whose keys must
@@ -464,15 +472,32 @@ fn brisk(builder: nest_rs_testing::TestAppBuilder) -> nest_rs_testing::TestAppBu
         })
 }
 
-/// Poll `ready` until it holds or `within` elapses — the wait a live worker's
-/// asynchronous progress needs, bounded so a regression fails rather than hangs.
-async fn wait_until(within: Duration, ready: impl Fn() -> bool) {
-    let deadline = tokio::time::Instant::now() + within;
-    while tokio::time::Instant::now() < deadline {
-        if ready() {
-            return;
+/// Poll `ready` until it holds — the wait a live worker's asynchronous progress
+/// needs — and fail the test at the caller's line once `within` elapses, so a
+/// regression fails where it waited rather than hangs, or passes the wait to
+/// fail at a later assertion that names something else.
+#[track_caller]
+fn wait_until(within: Duration, ready: impl Fn() -> bool) -> impl Future<Output = ()> {
+    wait_for(within, move || std::future::ready(ready()))
+}
+
+/// [`wait_until`] for a condition the test must ask for — of Redis, most
+/// often — on every poll.
+#[track_caller]
+fn wait_for<F: Future<Output = bool>>(
+    within: Duration,
+    ready: impl Fn() -> F,
+) -> impl Future<Output = ()> {
+    let waited_at = std::panic::Location::caller();
+    async move {
+        let deadline = tokio::time::Instant::now() + within;
+        while !ready().await {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{waited_at}: what it waited for did not hold within {within:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

@@ -3,7 +3,7 @@
 //! **one budget shared across `RedisThrottler` instances** (i.e. across app
 //! replicas), enforced by a single round-trip with no check-then-act race.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nest_rs_redis::RedisThrottler;
 use nest_rs_throttler::{Throttle, ThrottlerStore};
@@ -96,6 +96,7 @@ async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
             .query_async(&mut conn.clone())
             .await
             .expect("a full window ending soon");
+        let set = Instant::now();
         loop {
             let decision = store.hit(&subject, limit).await;
             if decision.allowed {
@@ -105,6 +106,10 @@ async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
                 decision.retry_after <= ending,
                 "round {round}: a window ending in {ending:?} denied for {:?}",
                 decision.retry_after,
+            );
+            assert!(
+                set.elapsed() < Duration::from_secs(1),
+                "round {round}: a window ending in {ending:?} still denies a second later",
             );
         }
     }

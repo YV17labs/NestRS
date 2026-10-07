@@ -149,7 +149,12 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
     let emitted = tokio::spawn({
         let state = Arc::clone(&state);
         async move {
+            let polled = tokio::time::Instant::now() + Duration::from_secs(2);
             while state.tx.receiver_count() == 0 {
+                assert!(
+                    tokio::time::Instant::now() < polled,
+                    "the subscription listens on its source within 2s"
+                );
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             state.tx.send(Tick { seq: 1 }).expect("a receiver is live");
@@ -157,12 +162,12 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
         }
     });
 
-    let first = socket.next_item("ticks").await.expect("the first item");
+    let (first, emitted) = tokio::join!(socket.next_item("ticks"), emitted);
+    emitted.expect("the emitter completes");
+    let first = first.expect("the first item");
     assert_eq!(first["data"]["ticks"]["seq"], 1, "{first}");
     let second = socket.next_item("ticks").await.expect("the second item");
     assert_eq!(second["data"]["ticks"]["seq"], 2, "{second}");
-
-    emitted.await.expect("the emitter completes");
 }
 
 /// `fn` and `async fn` are both accepted at every impl half, a subscription

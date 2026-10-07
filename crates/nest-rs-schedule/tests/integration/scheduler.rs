@@ -248,7 +248,12 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
 
     let cancel = CancellationToken::new();
     let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    let started = tokio::time::Instant::now() + Duration::from_secs(60);
     while !STUCK_STARTED.load(Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < started,
+            "the tick starts within a minute of its 10ms trigger"
+        );
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
     let asked = tokio::time::Instant::now();

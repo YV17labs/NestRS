@@ -193,6 +193,10 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         tokio::time::sleep(Duration::from_millis(100)).await;
         seen = notifications(&conn).await;
     }
+    assert!(
+        seen.iter().any(|message| message.contains("Committed")),
+        "the committed publish's notification arrives within 20s: {seen:?}",
+    );
     draining
         .shutdown()
         .await

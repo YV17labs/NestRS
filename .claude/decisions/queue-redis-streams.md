@@ -273,3 +273,21 @@ filtering it; past that, a page from a cursor the consumer keeps per queue.
 Refused: a page sized by the free permits (a worker at concurrency 1 would read
 ten entries a second). Accepted: behind a list longer than ten pages, a lapsed
 entry waits up to a look per page.
+
+## 2026-10-07 — the lease-deadline index (B′) is declined
+
+Proposed and deferred on 2026-10-06: a sorted set of every delivery's lease
+deadline per queue, read by score, so a lapsed lease is found at once whatever
+the pending list's length (the worker's rule gaining `+zcard`), with 26 cases
+from an external `item7/test_b.py` that never reached this repository.
+
+Declined. Its one gain is the trade-off accepted above — past ten pages, a
+lapsed entry waits up to a look per page — which bites only a queue holding
+over 10 000 deliveries at once, and no app does. Its cost is every app's: a
+second record of each delivery, written by every claim, renewal and settle in
+the same script, on the hot path of queues that never reach ten pages. A
+feature for a hypothetical user, paid for by every real one.
+
+Reopened by a measurement, not a guess: a deployment whose `XPENDING` summary
+counts more than ten pages of deliveries on one queue, and a lapsed job there
+waiting longer than its replicas can afford.

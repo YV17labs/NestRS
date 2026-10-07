@@ -138,12 +138,16 @@ async fn a_certificate_refused_after_the_boot_is_reported_once_as_the_connection
     let _ = redis::cmd("PING")
         .query_async::<()>(&mut conn.clone())
         .await;
-    // Reported before a caller's budget ran out, not once the client stopped
-    // retrying.
     crate::wait_until(budget.saturating_sub(met.elapsed()), || {
         !logs.find(nest_rs_redis::TARGET, REFUSED).is_empty()
     })
     .await;
+    assert!(
+        met.elapsed() < budget,
+        "reported before a caller's budget ran out, not once the client stopped retrying: \
+         took {:?}",
+        met.elapsed()
+    );
     for _ in 0..2 {
         assert!(
             redis::cmd("PING")

@@ -92,9 +92,6 @@ async fn a_database_index_redis_does_not_have_fails_the_boot_at_once() {
     );
 }
 
-/// A test moves onto a database of its own through the suite's URL, which the
-/// deployment writes: its query and fragment — `?protocol=resp3` — stay with
-/// it, and the index replaces the URL's path wherever the authority ends.
 /// config-1r2: an ACL user without `+select` on a URL naming a database — the
 /// common least-privilege shape — was retried for the whole budget, because the
 /// client drops the `NOPERM` from a refused `SELECT`, and then reported as a

@@ -91,9 +91,8 @@ config survives adopting or dropping the observability stack.
 
 ## `seaorm` — `<PREFIX>_SEAORM__*`
 
-The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`.
-The engine is in the URL's scheme (`postgres://`, `mysql://`, `sqlite://`) —
-sea-orm picks it, the variable does not change.
+The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`,
+on Postgres — the one engine the framework builds sea-orm with.
 
 | Key | Meaning |
 |---|---|
@@ -101,6 +100,7 @@ sea-orm picks it, the variable does not change.
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
 | `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, from `1` to `3600` (unset ⇒ `10`, below the authentication guard's 20-second net and the HTTP request timeout, so a pool that runs dry answers with its own error; `Repo` reaches the pool from any strategy, so an app running the authentication guard keeps it under that net: the boot refuses one at or past it) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
+| `STATEMENT_TIMEOUT_SECS` | how long one statement runs before Postgres cancels it (`statement_timeout`), in seconds, from `1` to `3600` (unset ⇒ `15`, below the authentication guard's 20-second net and the HTTP request timeout) — a job context's `BEGIN` / `COMMIT` / `ROLLBACK` included; the boot refuses one at or past a net reaching the pool, as it refuses `CONNECT_TIMEOUT_SECS`. `migrate` and `seed`, opened by `connect_from_env`, run without it |
 | `SQLX_LOGGING` | log SQL statements |
 | `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 

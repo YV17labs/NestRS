@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Budget, Collecting, ContainerBuilder, DynamicModule};
-use sea_orm::{Database, DatabaseConnection, DatabaseConnectionType};
+use sea_orm::{ConnectOptions, Database, DatabaseConnection, DatabaseConnectionType};
 
 use crate::SeaOrmConfig;
 
@@ -58,7 +58,9 @@ impl DynamicModule for SeaOrmSetup {
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(
             self.pinned.clone(),
-            builder.provide_meta(pool_budget(BudgetReach::Injected)),
+            builder
+                .provide_meta(pool_budget(BudgetReach::Injected))
+                .provide_meta(statement_budget(BudgetReach::Injected)),
         );
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
             #[expect(
@@ -68,7 +70,7 @@ impl DynamicModule for SeaOrmSetup {
             let config = container
                 .get::<SeaOrmConfig>()
                 .expect("SeaOrmConfig is resolved by ConfigModule::provide_feature");
-            connect(&config).await
+            connect(&config, config.app_connect_options()).await
         })
     }
 }
@@ -79,6 +81,74 @@ impl DynamicModule for SeaOrmSetup {
 pub(crate) enum BudgetReach {
     Injected,
     Ambient,
+}
+
+/// The [`Budget`] of the pool's statements: how long one runs before Postgres
+/// cancels it.
+pub(crate) fn statement_budget(reach: BudgetReach) -> Budget {
+    let setting = format!(
+        "{}, or `SeaOrmConfig::statement_timeout_secs` in code",
+        nest_rs_config::var_name("seaorm", "STATEMENT_TIMEOUT_SECS"),
+    );
+    match reach {
+        BudgetReach::Injected => {
+            Budget::of::<DatabaseConnection>("the SeaORM statements", setting, statement_bound)
+        }
+        BudgetReach::Ambient => {
+            Budget::ambient::<DatabaseConnection>("the SeaORM statements", setting, statement_bound)
+        }
+    }
+}
+
+/// How long a statement on `db`'s pool runs before Postgres cancels it, read
+/// off the options its connections open with; `None` for a connection holding
+/// no pool, or one opened without the bound.
+fn statement_bound(db: &DatabaseConnection) -> Option<Duration> {
+    match db.inner {
+        DatabaseConnectionType::SqlxPostgresPoolConnection(_) => statement_timeout_in(
+            db.get_postgres_connection_pool()
+                .connect_options()
+                .get_options()?,
+        ),
+        _ => None,
+    }
+}
+
+/// The `statement_timeout` a libpq options string sets — `-c
+/// statement_timeout=15000` — read as Postgres reads it: milliseconds unless a
+/// unit follows; `None` where it is unset or `0`, which Postgres reads as off.
+fn statement_timeout_in(options: &str) -> Option<Duration> {
+    let mut tokens = options.split_whitespace();
+    let mut value = None;
+    while let Some(token) = tokens.next() {
+        let setting = match token {
+            "-c" => tokens.next().unwrap_or_default(),
+            other => other
+                .strip_prefix("-c")
+                .or_else(|| other.strip_prefix("--"))
+                .unwrap_or_default(),
+        };
+        if let Some((name, set)) = setting.split_once('=')
+            && name.replace('-', "_") == "statement_timeout"
+        {
+            value = Some(set);
+        }
+    }
+    let value = value?;
+    let digits = value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len());
+    let amount: u64 = value[..digits].parse().ok()?;
+    let unit = match value[digits..].trim() {
+        "" | "ms" => Duration::from_millis(1),
+        "us" => Duration::from_micros(1),
+        "s" => Duration::from_secs(1),
+        "min" => Duration::from_secs(60),
+        "h" => Duration::from_secs(60 * 60),
+        "d" => Duration::from_secs(24 * 60 * 60),
+        _ => return None,
+    };
+    (amount > 0).then(|| unit * u32::try_from(amount).unwrap_or(u32::MAX))
 }
 
 /// The pool's [`Budget`]: how long a query waits for a connection.
@@ -117,11 +187,15 @@ fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
 pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
     use nest_rs_config::Config;
     let config = SeaOrmConfig::load()?;
-    connect(&config).await
+    connect(&config, config.connect_options()).await
 }
 
-/// The URL may carry credentials, so it is never logged.
-async fn connect(config: &SeaOrmConfig) -> anyhow::Result<DatabaseConnection> {
+/// Open `config`'s pool with `options`. The URL may carry credentials, so it is
+/// never logged.
+async fn connect(
+    config: &SeaOrmConfig,
+    options: ConnectOptions,
+) -> anyhow::Result<DatabaseConnection> {
     if config.url.is_empty() {
         anyhow::bail!(
             "{} must be set",
@@ -141,12 +215,19 @@ async fn connect(config: &SeaOrmConfig) -> anyhow::Result<DatabaseConnection> {
             std::time::Duration::from_secs(secs),
         )?;
     }
+    if let Some(secs) = config.statement_timeout_secs {
+        crate::config::STATEMENT_TIMEOUT.check(
+            <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            "SeaOrmConfig::statement_timeout_secs",
+            std::time::Duration::from_secs(secs),
+        )?;
+    }
     tracing::info!(
         target: crate::TARGET,
         max_connections = ?config.max_connections,
         "connecting to database"
     );
-    Ok(Database::connect(config.connect_options()).await?)
+    Ok(Database::connect(options).await?)
 }
 
 #[cfg(test)]
@@ -164,7 +245,7 @@ mod tests {
             connect_timeout_secs: Some(u64::MAX),
             ..SeaOrmConfig::default()
         };
-        let refused = connect(&config)
+        let refused = connect(&config, config.app_connect_options())
             .await
             .expect_err("refused rather than handed to sqlx")
             .to_string();
@@ -173,5 +254,45 @@ mod tests {
                 && refused.contains("above the 3600s it must be at most"),
             "{refused}"
         );
+    }
+
+    /// The statement bound a seeded config carries is held to its range where
+    /// the pool is opened, as the acquire budget is.
+    #[tokio::test]
+    async fn a_seeded_statement_bound_past_the_ceiling_is_refused_before_the_pool_opens() {
+        let config = SeaOrmConfig {
+            url: "postgres://nobody@127.0.0.1:1/none".to_owned(),
+            statement_timeout_secs: Some(60 * 60 + 1),
+            ..SeaOrmConfig::default()
+        };
+        let refused = connect(&config, config.app_connect_options())
+            .await
+            .expect_err("refused rather than handed to Postgres")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name(
+                "seaorm",
+                "STATEMENT_TIMEOUT_SECS"
+            )) && refused.contains("above the 3600s it must be at most"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn the_statement_bound_is_read_as_postgres_reads_it() {
+        for (options, bound) in [
+            ("-c statement_timeout=15000", Some(Duration::from_secs(15))),
+            (
+                "-c geqo=off -c statement_timeout=2s",
+                Some(Duration::from_secs(2)),
+            ),
+            ("--statement-timeout=5min", Some(Duration::from_secs(300))),
+            ("-cstatement_timeout=1h", Some(Duration::from_secs(3600))),
+            ("-c statement_timeout=0", None),
+            ("-c geqo=off", None),
+            ("-c statement_timeout=fast", None),
+        ] {
+            assert_eq!(statement_timeout_in(options), bound, "{options}");
+        }
     }
 }

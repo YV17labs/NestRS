@@ -32,6 +32,30 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
+/// The statement bound's range, the variable that sets it, and why. Postgres
+/// cancels a statement past it (`statement_timeout`), so a row lock or a query
+/// plan gone wrong ends as the database's own error rather than a request's
+/// deadline or a job's silence.
+pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "STATEMENT_TIMEOUT_SECS",
+    "SeaOrmConfig::statement_timeout_secs",
+    Floor::Units(Bound {
+        count: 1,
+        why: "Postgres cancels every statement that takes longer, and under a second it cancels \
+              ones that only had to wait their turn",
+    }),
+    Bound {
+        count: 60 * 60,
+        why: "the bound is how long one statement holds its connection and its locks, and a \
+              statement running an hour belongs to an operator's tool, not to the app",
+    },
+);
+
+/// The statement bound when none is set: under the authentication guard's
+/// 20 s net and the HTTP edge's default 30 s deadline, as the acquire budget
+/// is, so a statement past it is said as the database's own cancellation.
+const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// The acquire budget when none is set — Redis's — below the authentication
 /// guard's 20 s net and the HTTP edge's default 30 s deadline, which sqlx's own
 /// 30 s reached, so a pool that ran dry was said as their timeout. The edge's
@@ -57,6 +81,14 @@ pub struct SeaOrmConfig {
     /// 20 s — which is every guard's once
     /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) binds `Repo`.
     pub connect_timeout_secs: Option<u64>,
+    /// How long one statement runs before Postgres cancels it — its
+    /// `statement_timeout` — in whole seconds, from 1 to 3600; `None` waits
+    /// 15 s. It bounds every statement of the app's pool, a job context's
+    /// `BEGIN` / `COMMIT` / `ROLLBACK` included, and the boot refuses it at or
+    /// past the net of a guard whose code reaches the pool, as it refuses
+    /// [`connect_timeout_secs`](Self::connect_timeout_secs). The tools
+    /// ([`connect_from_env`](crate::connect_from_env)) open without it.
+    pub statement_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
     pub sqlx_logging: bool,
@@ -84,6 +116,9 @@ impl Config for SeaOrmConfig {
             connect_timeout_secs: CONNECT_TIMEOUT
                 .read_optional(env, base.connect_timeout_secs.map(Duration::from_secs))?
                 .map(|read| read.value.as_secs()),
+            statement_timeout_secs: STATEMENT_TIMEOUT
+                .read_optional(env, base.statement_timeout_secs.map(Duration::from_secs))?
+                .map(|read| read.value.as_secs()),
             sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?,
             observe_serialization_conflicts: env.flag(
                 "OBSERVE_SERIALIZATION_CONFLICTS",
@@ -100,6 +135,7 @@ impl std::fmt::Debug for SeaOrmConfig {
             .field("max_connections", &self.max_connections)
             .field("min_connections", &self.min_connections)
             .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field("statement_timeout_secs", &self.statement_timeout_secs)
             .field("sqlx_logging", &self.sqlx_logging)
             .field(
                 "observe_serialization_conflicts",
@@ -110,6 +146,18 @@ impl std::fmt::Debug for SeaOrmConfig {
 }
 
 impl SeaOrmConfig {
+    /// The app's pool: [`connect_options`](Self::connect_options) with every
+    /// statement bounded.
+    pub(crate) fn app_connect_options(&self) -> ConnectOptions {
+        let mut opts = self.connect_options();
+        opts.statement_timeout(
+            self.statement_timeout_secs
+                .map_or(DEFAULT_STATEMENT_TIMEOUT, Duration::from_secs),
+        );
+        opts
+    }
+
+    /// What every connection this config opens shares — the tools' as they are.
     pub(crate) fn connect_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new(self.url.clone());
         if let Some(n) = self.max_connections {
@@ -166,6 +214,38 @@ mod tests {
         assert_eq!(opts.get_min_connections(), None);
     }
 
+    /// The app's pool bounds every statement, the default included; the tools
+    /// open without the bound, since an operator's migration takes as long as
+    /// its data needs.
+    #[test]
+    fn the_apps_pool_bounds_its_statements_and_the_tools_do_not() {
+        let config = pinned("postgres://localhost/app");
+        assert_eq!(
+            config.app_connect_options().get_statement_timeout(),
+            Some(DEFAULT_STATEMENT_TIMEOUT)
+        );
+        assert_eq!(config.connect_options().get_statement_timeout(), None);
+        let pinned = SeaOrmConfig {
+            statement_timeout_secs: Some(3),
+            ..config
+        };
+        assert_eq!(
+            pinned.app_connect_options().get_statement_timeout(),
+            Some(Duration::from_secs(3))
+        );
+    }
+
+    /// A statement holds its connection under the authentication guard's net
+    /// and the HTTP edge's deadline, as a query waiting for one does.
+    #[test]
+    fn the_default_statement_bound_sits_below_every_net_a_query_runs_under() {
+        assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_authn::AUTHENTICATE_TIMEOUT);
+        let request = nest_rs_http::HttpConfig::default()
+            .request_timeout
+            .expect("the edge bounds a request by default");
+        assert!(DEFAULT_STATEMENT_TIMEOUT < request);
+    }
+
     /// A query waits for a pooled connection under the authentication guard's
     /// net when a strategy resolves an identity, and under the HTTP edge's
     /// deadline in a handler: the default budget sits below both defaults, so
@@ -190,6 +270,7 @@ mod tests {
             max_connections: Some(50),
             min_connections: Some(5),
             connect_timeout_secs: Some(8),
+            statement_timeout_secs: None,
             sqlx_logging: true,
             observe_serialization_conflicts: false,
         }

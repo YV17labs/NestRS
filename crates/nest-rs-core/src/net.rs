@@ -80,11 +80,12 @@ pub(crate) fn check_budgets(
         return Ok(());
     }
     let mut budgets: Vec<(&Budget, bool)> = Vec::new();
+    // One budget declared by several bindings is held once, ambient if any
+    // declaration is; two budgets of one resource are two waits, each held.
     for budget in builder.attached_meta::<Budget>() {
-        match budgets
-            .iter_mut()
-            .find(|(seen, _)| seen.provider() == budget.provider())
-        {
+        match budgets.iter_mut().find(|(seen, _)| {
+            seen.provider() == budget.provider() && seen.resource() == budget.resource()
+        }) {
             Some((_, ambient)) => *ambient |= budget.is_ambient(),
             None => budgets.push((budget, budget.is_ambient())),
         }

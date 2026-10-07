@@ -67,6 +67,7 @@ impl EphemeralDatabase {
         let url = crate::url_on(admin_url, &name);
         let mut options = ConnectOptions::new(url.clone());
         options.connect_timeout(POOL_BUDGET);
+        options.statement_timeout(STATEMENT_BOUND);
         let connection = Database::connect(options).await?;
         M::up(&connection, None).await?;
 
@@ -131,6 +132,11 @@ static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// would wait 30 s, past the authentication guard's net — which the boot holds
 /// a seeded pool under like any other, so this one stays below every net.
 const POOL_BUDGET: Duration = Duration::from_secs(10);
+
+/// How long a statement on the fixture's pool runs before Postgres cancels
+/// it: the app pool's default, so a statement the app's would cancel is
+/// cancelled in a test too, rather than holding it.
+const STATEMENT_BOUND: Duration = Duration::from_secs(15);
 
 /// Five minutes — past this a [`PREFIX`]`*` database is an orphan, not in use
 /// by a concurrent sibling.

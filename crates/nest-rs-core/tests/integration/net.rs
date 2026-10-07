@@ -367,3 +367,25 @@ async fn a_budget_declared_twice_is_held_by_its_ambient_declaration() {
     );
     assert_eq!(refused.port, "the test guard");
 }
+
+/// One resource can wait in two ways — a pool's acquire and its statements —
+/// each its own budget: the second is held under the net, never merged into
+/// the first and dropped.
+#[tokio::test]
+async fn two_budgets_of_one_resource_are_each_held() {
+    let refused = refusal(
+        App::builder()
+            .provide(Pool(NET))
+            .provide_meta(Budget::of::<Pool>(
+                "the test pool's acquire",
+                "TEST_POOL_ACQUIRE",
+                |_| Some(Duration::from_secs(1)),
+            ))
+            .provide_meta(pool_budget())
+            .provide_meta(Net::over::<Pool>("the test port", NET))
+            .module::<EmptyModule>()
+            .build()
+            .await,
+    );
+    assert_eq!(refused.resource, "the test pool");
+}

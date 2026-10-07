@@ -255,10 +255,8 @@ an outbound HTTP surface (`CLAUDE.md`, hard "no"). A body it streams is a
 transfer, bounded by its stall rather than its total, so no size is cut
 (storage's `read_timeout` beside its `operation_timeout`).
 
-Known gaps, each owed a line in its crate's `//!` and an issue: a `Repo`
-statement and the `BEGIN` / `COMMIT` / `ROLLBACK` a job context settles through
-(`SeaOrmConfig` exposes no statement timeout — `nest-rs-seaorm`); an outbound
-call made by a queue job or a tick, which no edge timeout bounds. Synchronous
+Known gap, owed a line in its crate's `//!` and an issue: an outbound call made
+by a queue job or a tick, which no edge timeout bounds. Synchronous
 seams (`AbilityFactory`, the WS `Registry`, `ConfigSource`) and in-process
 listeners are outside the family.
 

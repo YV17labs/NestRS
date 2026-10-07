@@ -14,9 +14,10 @@ use std::str::FromStr;
 
 use nest_rs_codegen::{
     Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs, duration_millis,
-    impl_self_ident, job_key, job_keys, job_returns_a_result, job_transaction, key_value,
-    key_without_replicas_one, replicas_value, require_str_lit, returns_unit, shared_receiver, site,
-    takes_value, transactional_value, ungrouped_expr, unread_job_key,
+    impl_self_ident, job_key, job_keys, job_returns_a_result, job_timeout, job_transaction,
+    key_value, key_without_replicas_one, replicas_value, require_str_lit, returns_unit,
+    shared_receiver, site, takes_value, timeout_value, transactional_value, ungrouped_expr,
+    unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -94,6 +95,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // a host with several wrong triggers learns about all of them at once.
         let ParsedTrigger {
             trigger: trigger_tokens,
+            timeout,
             transactional,
             replicas,
             key,
@@ -107,6 +109,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 continue;
             }
         };
+        let timeout_tokens = job_timeout(timeout, &quote!(::nest_rs_schedule));
         let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
         let replicas_tokens = replicas.tokens(&quote!(::nest_rs_schedule));
         let key_tokens = match key {
@@ -128,6 +131,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     method: #method_name,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     trigger: #trigger_tokens,
+                    timeout: #timeout_tokens,
                     transaction: #transaction_tokens,
                     replicas: #replicas_tokens,
                     key: #key_tokens,
@@ -177,6 +181,8 @@ const TRIGGER_ATTRS: [&str; 3] = ["cron", "every", "after"];
 /// trigger may carry after its own argument.
 struct ParsedTrigger {
     trigger: TokenStream2,
+    /// The shared `timeout` key in milliseconds, `None` when unwritten.
+    timeout: Option<u64>,
     /// The shared `transactional` key, `None` when unwritten.
     transactional: Option<bool>,
     /// The replicas it fires on, every replica when the key is unwritten.
@@ -187,6 +193,7 @@ struct ParsedTrigger {
 
 /// The keys a trigger wrote after its own argument.
 struct TrailingKeys {
+    timeout: Option<u64>,
     transactional: Option<bool>,
     /// The replicas the key selected, `None` when unwritten.
     replicas: Option<Replicas>,
@@ -237,6 +244,7 @@ fn parse_trigger(attr: &Attribute, member: JobDecorator) -> syn::Result<ParsedTr
     };
     Ok(ParsedTrigger {
         trigger,
+        timeout: keys.timeout,
         transactional: keys.transactional,
         replicas,
         key,
@@ -309,6 +317,7 @@ fn parse_trailing_keys(
     member: JobDecorator,
 ) -> syn::Result<TrailingKeys> {
     let mut keys = TrailingKeys {
+        timeout: None,
         transactional: None,
         replicas: None,
         tz: None,
@@ -328,6 +337,7 @@ fn parse_trailing_keys(
     // key rather than syn's `expected `=`` against the enclosing `#[scheduled]`.
     member.grammar().parse(stream, |arg| {
         match job_key(member, &arg)? {
+            JobKey::Timeout => keys.timeout = Some(timeout_value(member, &arg.expr()?)?),
             JobKey::Transactional => {
                 keys.transactional = Some(transactional_value(member, &arg.expr()?)?);
             }

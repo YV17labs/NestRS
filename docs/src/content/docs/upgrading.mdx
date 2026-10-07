@@ -197,7 +197,8 @@ left running until they drain the 6.x jobs (step 7).
    | an `impl McpHost` written by hand | the same with `negotiate_initialize`, which rmcp 3.4 added |
    | `report_inert_host!(target: …, what: …, origin: …)`, in an edge of your own | the same with `host:` — the host's `TypeId` — and `container:`, so the line names its cause |
    | a `ContestedDeclarationError { … }` pattern naming every field | the same with `first: _` and `second: _` — the two imports that made it — or ending in `..` |
-   | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
+   | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `timeout: nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
+   | a `#[process]`, `#[every]`, `#[cron]` or `#[after]` method that runs longer than ten minutes | the same with `timeout = "…"` covering its longest run, up to `"24h"` — an attempt past its timeout is now cut and fails retryably |
    | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
    | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout` and `read_timeout` |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, never `M::register(builder)` or `M::collect(builder)`, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` — the import runs each phase once, `collect` first |

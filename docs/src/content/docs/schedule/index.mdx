@@ -157,11 +157,29 @@ block — same convention as `#[routes]`.
 | `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (compile-time validated)    |
 | `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
 | `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](#firing-once-across-replicas) |
+| `#[every("1h", timeout = "30m")]`             | A run lasting past 30 minutes is cut — see [How long a run lasts](#how-long-a-run-lasts) |
 
 A cron string literal and a `tz` name are validated at **compile time**; a
 `CronExpression` constant when the scheduler configures at boot, which fails
 naming the job and the offending value. An invalid trigger is never
 silently skipped.
+
+## How long a run lasts
+
+A replica runs one occurrence of a job at a time, so a tick waiting on a call
+that never answers would skip every later occurrence for as long as the process
+lives. A run therefore lasts at most **ten minutes** unless its trigger says
+otherwise — `timeout` takes a whole number of `ms`, `s`, `m` or `h`, up to
+`"24h"`, on `#[every]`, `#[cron]` and `#[after]` alike. Past it, the run is cut
+where it waits, what it wrote in its transaction never commits, and the next
+occurrence fires as usual. The run is reported failed, naming the deadline:
+
+```text frame="terminal"
+ERROR nest_rs::schedule: scheduled job failed provider="AudioTasks" method="heartbeat" error=the attempt did not end within its 600s timeout, and was cut — the `timeout` key on its job decorator sets it retryable=true trace_id=… span_id=…
+```
+
+`#[process]` takes the same key, with the same default and ceiling — see
+[How long an attempt runs](/queue/retries-and-failure/#how-long-an-attempt-runs).
 
 ## Wire it in
 

@@ -17,6 +17,7 @@
 use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use nest_rs_core::Container;
 use nest_rs_worker::JobTransaction;
@@ -53,6 +54,10 @@ pub struct CronJobMeta {
     /// The closure the scheduler invokes on each tick — resolves the provider
     /// and calls the method.
     pub run: RunFn,
+    /// How long one run lasts before it is cut and reported failed — from the
+    /// `timeout` key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to
+    /// [`JOB_TIMEOUT`](nest_rs_worker::JOB_TIMEOUT).
+    pub timeout: Duration,
     /// How this job's data-layer work is settled — from the `transactional`
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
     /// transaction per attempt.
@@ -91,6 +96,9 @@ pub struct ScheduledMethod {
     pub trigger: Trigger,
     /// The closure the scheduler invokes on each tick.
     pub run: RunFn,
+    /// How long one run lasts before it is cut, copied to the synthesized
+    /// [`CronJobMeta`].
+    pub timeout: Duration,
     /// How this job's data-layer work is settled — from the `transactional`
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
     /// transaction per attempt.

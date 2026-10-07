@@ -62,6 +62,7 @@ impl HygieneProcessor {
         queue = HygieneTunedQueue,
         concurrency = 4,
         throttle(limit = 10, window = "1m"),
+        timeout = "30m",
     )]
     async fn sync(&self, job: HygieneCommand) -> nest_rs::core::anyhow::Result<()> {
         let _ = job.file;

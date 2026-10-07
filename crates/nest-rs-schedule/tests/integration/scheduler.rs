@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::{Container, Transport};
-use nest_rs_schedule::nest_rs_worker::{JobSettlement, JobTransaction};
+use nest_rs_schedule::nest_rs_worker::{JOB_TIMEOUT, JobSettlement, JobTransaction};
 use nest_rs_schedule::{
     CronExpression, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError,
     Replicas, RunFn, Scheduler, Trigger,
@@ -61,6 +61,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             method: "interval",
             trigger: Trigger::Interval(Duration::from_millis(200)),
             run: tick_interval,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -71,6 +72,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             method: "timeout",
             trigger: Trigger::Timeout(Duration::from_millis(300)),
             run: tick_timeout,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -84,6 +86,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
                 tz: None,
             },
             run: tick_cron,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -152,6 +155,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             method: "panics",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_panic,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -162,6 +166,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             method: "survives",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_survivor,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -235,6 +240,7 @@ async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancell
             method: "never_returns",
             trigger: Trigger::Timeout(Duration::from_millis(10)),
             run: tick_stuck,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -330,6 +336,7 @@ async fn invalid_cron_expression_fails_configure() {
                 tz: None,
             },
             run: tick_cron,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -391,6 +398,7 @@ async fn jobs_run_inside_the_bound_job_context() {
             method: "observe",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_observe,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -465,6 +473,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
             method: "panics",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_panic_naming_itself,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -548,6 +557,7 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_wrapped_failure,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
             key: None,
@@ -614,6 +624,7 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_decode_failure,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
             key: None,
@@ -672,6 +683,7 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_succeed,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -718,6 +730,75 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
     );
 }
 
+static HUNG_STARTS: AtomicU64 = AtomicU64::new(0);
+
+fn tick_hung(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        HUNG_STARTS.fetch_add(1, Ordering::SeqCst);
+        std::future::pending::<()>().await;
+        Ok(())
+    })
+}
+
+/// A tick awaiting a call that never answers held its job for as long as the
+/// process lived: a replica runs one occurrence at a time, so every later one
+/// was skipped. Cut at its `timeout`, it is reported failed naming the
+/// deadline, and the next occurrence fires.
+#[tokio::test(start_paused = true)]
+async fn a_tick_past_its_timeout_is_cut_reported_and_the_schedule_goes_on() {
+    struct HungHost;
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = crate::hermetic()
+        .attach_meta::<HungHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "HungHost",
+            method: "tick",
+            trigger: Trigger::Interval(Duration::from_secs(2)),
+            run: tick_hung,
+            timeout: Duration::from_secs(1),
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::Each,
+            key: None,
+        })
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(5_500)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+
+    assert!(
+        HUNG_STARTS.load(Ordering::SeqCst) >= 2,
+        "the occurrence after a cut one fires"
+    );
+    let event = logs
+        .find("nest_rs::schedule", "scheduled job failed")
+        .into_iter()
+        .find(|event| event.field("provider").as_deref() == Some("HungHost"))
+        .expect("a tick cut at its timeout is reported at error");
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|error| error.contains("1s timeout") && error.contains("`timeout`")),
+        "the line names the deadline and the key setting it: {event:?}",
+    );
+    assert_eq!(
+        event.field("retryable").as_deref(),
+        Some("true"),
+        "a cut says nothing about what the next occurrence reads: {event:?}",
+    );
+}
+
 fn tick_never(_: &Container) -> RunFuture<'_> {
     Box::pin(async {
         NEVER_HITS.fetch_add(1, Ordering::SeqCst);
@@ -753,6 +834,7 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
                 tz: None,
             },
             run: tick_never,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -875,6 +957,7 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
                 method: METHOD,
                 trigger: Trigger::Interval(PERIOD),
                 run: tick_once,
+                timeout: JOB_TIMEOUT,
                 transaction: JobTransaction::Pool,
                 replicas: Replicas::One,
                 key: None,
@@ -974,6 +1057,7 @@ async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() 
                 method: "overlap",
                 trigger: Trigger::Interval(PERIOD),
                 run: tick_overlapping,
+                timeout: JOB_TIMEOUT,
                 transaction: JobTransaction::Pool,
                 replicas: Replicas::One,
                 key: None,
@@ -1061,6 +1145,7 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
                 tz: None,
             },
             run: tick_cron_once,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1105,6 +1190,7 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
             method: "once",
             trigger: Trigger::Interval(Duration::from_secs(5)),
             run: tick_once,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1138,6 +1224,7 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
             method: "warmup",
             trigger: Trigger::Timeout(Duration::from_millis(10)),
             run: tick_once,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1164,6 +1251,7 @@ async fn a_zero_interval_fails_the_boot() {
             method: "spin",
             trigger: Trigger::Interval(Duration::ZERO),
             run: tick_once,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
             key: None,
@@ -1195,6 +1283,7 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
                 method: "spin",
                 trigger: Trigger::Interval(Duration::from_micros(500)),
                 run: tick_once,
+                timeout: JOB_TIMEOUT,
                 transaction: JobTransaction::Pool,
                 replicas,
                 key: None,
@@ -1269,6 +1358,7 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
             method: "once",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_unclaimed,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1385,6 +1475,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
             method: "sweep",
             trigger: Trigger::Interval(PERIOD),
             run: tick_slowly_claimed,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1469,6 +1560,7 @@ async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
         method: "sweep",
         trigger: Trigger::Interval(Duration::from_secs(1)),
         run: tick_noop,
+        timeout: JOB_TIMEOUT,
         transaction: JobTransaction::Pool,
         replicas: Replicas::One,
         key: None,
@@ -1506,6 +1598,7 @@ async fn boot_pinning(key: &'static str, replicas: Replicas) -> Result<(), Strin
             method: "sweep",
             trigger: Trigger::Interval(Duration::from_secs(1)),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas,
             key: Some(key),
@@ -1597,6 +1690,7 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
             method: "close_day",
             trigger: Trigger::Interval(Duration::from_secs(1)),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1607,6 +1701,7 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
             method: "close",
             trigger: Trigger::Interval(Duration::from_secs(1)),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: Some(pinned),
@@ -1642,6 +1737,7 @@ async fn a_job_firing_once_names_its_identity_at_boot() {
         method: "sweep",
         trigger: Trigger::Interval(Duration::from_secs(1)),
         run: tick_noop,
+        timeout: JOB_TIMEOUT,
         transaction: JobTransaction::Pool,
         replicas,
         key,
@@ -1720,6 +1816,7 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
             method: "sweep",
             trigger: Trigger::Interval(PERIOD),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1792,6 +1889,7 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
             method: "crunch",
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
             run: tick_a_little_longer_than_its_period,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1894,6 +1992,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
             run: tick_stalled_interval,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1907,6 +2006,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
                 tz: None,
             },
             run: tick_stalled_cron,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -1989,6 +2089,7 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
             method: "crunch",
             trigger: Trigger::Interval(PERIOD),
             run: tick_longer_than_its_period,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
             key: None,
@@ -2060,6 +2161,7 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
             method: "crunch",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_slightly_longer_than_its_period,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
             key: None,
@@ -2168,6 +2270,7 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
             method: METHOD,
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -2234,6 +2337,7 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
             method: "sweep",
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -2330,6 +2434,7 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             method: "sweep",
             trigger: Trigger::Interval(Duration::from_millis(5)),
             run: tick_noop,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -2448,6 +2553,7 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
             method: "once",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_behind_a_panicking_lock,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -2516,6 +2622,7 @@ async fn a_run_panicking_before_its_future_keeps_its_schedule() {
             method: "panics_early",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_panicking_before_its_future,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
             key: None,
@@ -2594,6 +2701,7 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
             method: "once",
             trigger: Trigger::Interval(Duration::from_millis(50)),
             run: tick_behind_an_unwritable_lock,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,
@@ -2675,6 +2783,7 @@ async fn shut_down_while_a_claim_hangs(
             method,
             trigger,
             run,
+            timeout: JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
             key: None,

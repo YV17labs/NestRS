@@ -33,6 +33,10 @@ mod scheduled;
 /// different times share their instants. `replicas = "each"` is the default,
 /// and `#[after]` refuses the key — each replica's boot is its own event.
 ///
+/// Every trigger takes `timeout = "30m"`: how long a run lasts before it is cut
+/// and reported failed, so a call that never answers skips no later occurrence;
+/// default ten minutes (`nest_rs_worker::JOB_TIMEOUT`), at most `"24h"`.
+///
 /// A job firing once is identified by its crate, its host struct and its
 /// method, so moving its module inside the crate keeps it and renaming any of
 /// the three starts a new job. Beside `replicas = "one"`, `key = "…"` pins the

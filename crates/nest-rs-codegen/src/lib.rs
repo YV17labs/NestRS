@@ -71,8 +71,9 @@ pub use inject::{
     optional_dependencies_method,
 };
 pub use job::{
-    JobDecorator, JobKey, TRANSACTIONAL, job_argument_needs_a_value, job_key, job_keys,
-    job_returns_a_result, job_transaction, transactional_value, unread_job_key,
+    JobDecorator, JobKey, TIMEOUT, TRANSACTIONAL, job_argument_needs_a_value, job_key, job_keys,
+    job_returns_a_result, job_timeout, job_transaction, timeout_value, transactional_value,
+    unread_job_key,
 };
 pub use mcp::{MCP_GRAMMAR, mcp_answers};
 pub use mount::reject_path;

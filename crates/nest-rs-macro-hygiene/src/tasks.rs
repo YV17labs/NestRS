@@ -13,10 +13,13 @@ impl HygieneTasks {
     /// are proved on a trigger that owns none of its own. `replicas = "one"` is
     /// the one that emits a path — `Replicas::One` — through the schedule
     /// crate's root, and `key`, which only a job firing once takes, emits the
-    /// identity it pins. A scheduled method returns `anyhow::Result<()>` by
-    /// contract, named here through the surface re-export.
+    /// identity it pins; a method leaving `timeout` out names the default through
+    /// the schedule crate's re-export of `nest_rs_worker`. A scheduled method
+    /// returns `anyhow::Result<()>` by contract, named here through the surface
+    /// re-export.
     #[every(
         "60s",
+        timeout = "5m",
         transactional = false,
         replicas = "one",
         key = "hygiene::HygieneTasks::tick"

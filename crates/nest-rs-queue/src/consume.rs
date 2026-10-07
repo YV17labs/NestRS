@@ -590,7 +590,8 @@ pub async fn attempt(
                 );
             }
         }
-        run(method.handler(), input, context, identity, last, retry_after).await
+        let timeout = method.options().timeout();
+        run(method.handler(), input, context, identity, last, retry_after, timeout).await
     })
     .instrument(span)
     .await;
@@ -870,14 +871,28 @@ async fn run(
     identity: JobIdentity,
     last: bool,
     retry_after: Duration,
+    timeout: Duration,
 ) -> AttemptOutcome {
     let attempt = identity.attempt;
     let line = JobLine::open(identity);
     // `Err` when nothing ran, saying why.
     let outcome = match input {
-        Input::Payload(payload) => Ok(AssertUnwindSafe(handler(payload, context))
-            .catch_unwind()
-            .await),
+        // Cut at its timeout, an attempt fails retryably: the worker awaits
+        // developer code no edge deadline bounds, and a call that never answers
+        // would hold its permit for as long as the process lives.
+        Input::Payload(payload) => Ok(
+            match tokio::time::timeout(
+                timeout,
+                AssertUnwindSafe(handler(payload, context)).catch_unwind(),
+            )
+            .await
+            {
+                Ok(caught) => caught,
+                Err(_) => Ok(Err(JobError::retry(nest_rs_worker::JobTimedOut {
+                    timeout,
+                }))),
+            },
+        ),
         // An envelope of another version never reaches the handler: the refusal
         // is the attempt's outcome.
         Input::Refused(refused) => Ok(Ok(Err(refused))),
@@ -1030,6 +1045,7 @@ mod tests {
             identity(1),
             last,
             Duration::from_secs(1),
+            nest_rs_worker::JOB_TIMEOUT,
         )
         .await
     }
@@ -1249,6 +1265,7 @@ mod tests {
             identity(4),
             true,
             Duration::from_secs(1),
+            nest_rs_worker::JOB_TIMEOUT,
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));
@@ -1279,6 +1296,7 @@ mod tests {
             identity(1),
             false,
             Duration::from_secs(1),
+            nest_rs_worker::JOB_TIMEOUT,
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));

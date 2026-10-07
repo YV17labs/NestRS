@@ -166,11 +166,11 @@ the connection's own failure, before the queue port's net — twenty seconds —
 gives up on the call; see
 [When a push fails](/queue/producing-jobs/#when-a-push-fails).
 
-**An attempt has no timeout of its own.** A handler that never returns holds its
-permit and keeps its lease renewed, so its job is neither lost nor run elsewhere,
-and its method runs one attempt fewer at a time until a shutdown interrupts it.
-Bound a slow call inside the handler, with `tokio::time::timeout`, and return
-the `Err` the retry budget decides on.
+**An attempt ends within its timeout.** A handler still running at its
+method's `timeout` — ten minutes unless `#[process]` says otherwise — is cut
+where it waits and fails retryably, so a call that never answers holds its
+permit and its renewed lease that long and no longer; see
+[How long an attempt runs](/queue/retries-and-failure/#how-long-an-attempt-runs).
 
 ## Shutdown
 

@@ -1,4 +1,6 @@
-//! Typed errors for the job context.
+//! Typed errors for the job context, and for an attempt cut at its timeout.
+
+use std::time::Duration;
 
 /// A successful job its context could not honour: what went wrong, and whether
 /// running the same attempt again could end differently.
@@ -56,3 +58,25 @@ impl std::fmt::Display for Unhonoured {
 }
 
 impl std::error::Error for Unhonoured {}
+
+/// An attempt of a worker job that did not end within its timeout, and was cut
+/// there. Retryable: an attempt is cut for how long it ran, not for what it
+/// read, and the next one may meet an answer the first waited on in vain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobTimedOut {
+    /// The timeout the attempt ran past.
+    pub timeout: Duration,
+}
+
+impl std::fmt::Display for JobTimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the attempt did not end within its {:?} timeout, and was cut — the `timeout` key on \
+             its job decorator sets it",
+            self.timeout
+        )
+    }
+}
+
+impl std::error::Error for JobTimedOut {}

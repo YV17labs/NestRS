@@ -88,6 +88,33 @@ attempt it happens: a payload that does not deserialize, a pipe rejection, a
 missing provider. Every `Err` your method returns is retryable — the budget is
 how many times a transient fault gets another chance.
 
+## How long an attempt runs
+
+An attempt runs for at most **ten minutes** unless its decorator says otherwise.
+`timeout` takes a whole number of `ms`, `s`, `m` or `h`, up to `"24h"`:
+
+```rust
+#[process(queue = AudioQueue, retries = 3, timeout = "30m")]
+async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
+    self.svc.transcode(&job.file).await
+}
+```
+
+No edge deadline sits above a job, so the timeout is what ends an attempt
+waiting on a call that never answers — an outbound request with no timeout of
+its own. Past it, the attempt is cut where it waits and fails **retryably**:
+the next attempt may meet the answer the first waited on in vain. What it wrote
+in its transaction never commits. The failure names the deadline, on the retry
+`warn`, the dead-letter line and its record alike:
+
+```text frame="terminal"
+ WARN nest_rs::queue: job failed; will retry within the budget error=the attempt did not end within its 1800s timeout, and was cut — the `timeout` key on its job decorator sets it retry_after_ms=1143 trace_id=… span_id=…
+```
+
+The default is the dispatch deadline of Google Cloud Tasks, and the same key,
+default and ceiling hold on `#[every]`, `#[cron]` and `#[after]` — see
+[How long a run lasts](/schedule/#how-long-a-run-lasts).
+
 ## Resuming where an attempt stopped
 
 A retry replays the whole body. A job that works through a long file can keep

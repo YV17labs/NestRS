@@ -15,6 +15,7 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+mod constants;
 pub mod context;
 mod error;
 
@@ -22,5 +23,6 @@ mod error;
 /// it is declared in is an implementation detail of where the emission lives.
 pub use context::TARGET;
 
+pub use constants::JOB_TIMEOUT;
 pub use context::{BACKEND_REMEDY, JobContext, JobSettlement, JobTransaction, run_in_job_context};
-pub use error::Unhonoured;
+pub use error::{JobTimedOut, Unhonoured};

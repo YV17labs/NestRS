@@ -11,7 +11,7 @@ use chrono_tz::Tz;
 use croner::Cron;
 use futures_util::FutureExt;
 use nest_rs_core::{Container, Correlation, Discovery, ReachableProviders, Transport, inventory};
-use nest_rs_worker::{JobContext, JobTransaction, Unhonoured, run_in_job_context};
+use nest_rs_worker::{JobContext, JobTimedOut, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
@@ -72,12 +72,14 @@ enum Job {
     },
 }
 
-/// What one fire runs, how its data-layer work is settled, and how many
-/// replicas fire it — travelling together because they are decided together,
-/// at the `#[every]` / `#[cron]` / `#[after]` that declares the job.
+/// What one fire runs, how long it may last, how its data-layer work is
+/// settled, and how many replicas fire it — travelling together because they
+/// are decided together, at the `#[every]` / `#[cron]` / `#[after]` that
+/// declares the job.
 #[derive(Clone, Copy)]
 struct Task {
     run: RunFn,
+    timeout: Duration,
     transaction: JobTransaction,
     replicas: Replicas,
 }
@@ -227,6 +229,7 @@ impl From<&CronJobMeta> for Task {
     fn from(meta: &CronJobMeta) -> Self {
         Self {
             run: meta.run,
+            timeout: meta.timeout,
             transaction: meta.transaction,
             replicas: meta.replicas,
         }
@@ -395,6 +398,7 @@ impl Transport for Scheduler {
                 method: entry.method,
                 trigger: entry.trigger,
                 run: entry.run,
+                timeout: entry.timeout,
                 transaction: entry.transaction,
                 replicas: entry.replicas,
                 key: entry.key,
@@ -1572,7 +1576,7 @@ impl Runner {
         // reports healthy. Catch it, log at `error`, and let the loop schedule the
         // next occurrence — the run starts inside the catch as well, so a run
         // function panicking before it hands back its future is caught the same way.
-        let outcome = AssertUnwindSafe(run_in_job_context(
+        let run = AssertUnwindSafe(run_in_job_context(
             self.ctx.as_ref(),
             task.transaction,
             async { (task.run)(&self.container).await },
@@ -1588,8 +1592,15 @@ impl Runner {
             // nothing, and it owes the sentence rather than a mechanism.
             |why| Err(anyhow::Error::new(why)),
         ))
-        .catch_unwind()
-        .await;
+        .catch_unwind();
+        // A replica runs one occurrence at a time, so a call that never answers
+        // would skip every later one for as long as the process lives.
+        let outcome = match tokio::time::timeout(task.timeout, run).await {
+            Ok(caught) => caught,
+            Err(_) => Ok(Err(anyhow::Error::new(JobTimedOut {
+                timeout: task.timeout,
+            }))),
+        };
         line.file(match &outcome {
             Ok(Ok(())) => nest_rs_core::operation_log::OK,
             Ok(Err(_)) => nest_rs_core::operation_log::ERROR,
@@ -1610,7 +1621,10 @@ impl Runner {
                 // wants to know whether the next occurrence is likely to work — and
                 // saying "reported, not acted on" while reporting nothing was the
                 // gap an audit found in the sentence above.
-                retryable = err.downcast_ref::<Unhonoured>().map(|why| why.retryable),
+                retryable = err
+                    .downcast_ref::<Unhonoured>()
+                    .map(|why| why.retryable)
+                    .or_else(|| err.is::<JobTimedOut>().then_some(true)),
                 "scheduled job failed",
             ),
             Err(panic) => nest_rs_core::contained_panic!(
@@ -1847,6 +1861,7 @@ mod tests {
         };
         let task = Task {
             run,
+            timeout: nest_rs_worker::JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
@@ -1944,6 +1959,7 @@ mod tests {
         };
         let task = Task {
             run,
+            timeout: nest_rs_worker::JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
@@ -2084,6 +2100,7 @@ mod tests {
         };
         let task = Task {
             run,
+            timeout: nest_rs_worker::JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
@@ -2155,6 +2172,7 @@ mod tests {
         };
         let task = Task {
             run,
+            timeout: nest_rs_worker::JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };
@@ -2269,6 +2287,7 @@ mod tests {
             period: Duration::from_millis(100),
             task: Task {
                 run,
+                timeout: nest_rs_worker::JOB_TIMEOUT,
                 transaction: JobTransaction::Pool,
                 replicas: Replicas::One,
             },
@@ -2352,6 +2371,7 @@ mod tests {
         };
         let task = Task {
             run,
+            timeout: nest_rs_worker::JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
         };

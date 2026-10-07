@@ -235,8 +235,9 @@ mod tests {
         );
     }
 
-    /// A statement holds its connection under the authentication guard's net
-    /// and the HTTP edge's deadline, as a query waiting for one does.
+    /// A statement holds its connection under the authentication guard's net,
+    /// the HTTP edge's deadline and a worker job's, as a query waiting for one
+    /// does.
     #[test]
     fn the_default_statement_bound_sits_below_every_net_a_query_runs_under() {
         assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_authn::AUTHENTICATE_TIMEOUT);
@@ -244,12 +245,13 @@ mod tests {
             .request_timeout
             .expect("the edge bounds a request by default");
         assert!(DEFAULT_STATEMENT_TIMEOUT < request);
+        assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_worker::JOB_TIMEOUT);
     }
 
     /// A query waits for a pooled connection under the authentication guard's
-    /// net when a strategy resolves an identity, and under the HTTP edge's
-    /// deadline in a handler: the default budget sits below both defaults, so
-    /// an exhausted pool answers with its own error, never theirs.
+    /// net when a strategy resolves an identity, and under the HTTP edge's or a
+    /// worker job's deadline in a handler: the default budget sits below each
+    /// default, so an exhausted pool answers with its own error, never theirs.
     #[test]
     fn the_default_budget_sits_below_every_net_a_query_runs_under() {
         let budget = pinned("postgres://localhost/app")
@@ -261,6 +263,7 @@ mod tests {
             .request_timeout
             .expect("the edge bounds a request by default");
         assert!(budget < request, "{budget:?}");
+        assert!(budget < nest_rs_worker::JOB_TIMEOUT, "{budget:?}");
     }
 
     #[test]

@@ -29,6 +29,14 @@ use crate::ungrouped::ungrouped_expr;
 /// The key, spelled once.
 pub const TRANSACTIONAL: &str = "transactional";
 
+/// The key, spelled once.
+pub const TIMEOUT: &str = "timeout";
+
+/// The longest `timeout` a job decorator takes: past a day an attempt is a
+/// process of its own rather than a unit of work, and a deadline set past it
+/// bounds nothing an operator would wait for.
+const TIMEOUT_CEILING_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
 /// A member of the worker-job family — a decorator that declares a unit of work
 /// a worker transport drives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,16 +145,19 @@ pub enum JobKey {
     /// `key = "billing::InvoiceTasks::close_day"` — the identity a job firing
     /// once claims its occurrences under, pinned across a rename.
     Key,
+    /// `timeout = "30m"` — how long an attempt runs before it is cut.
+    Timeout,
 }
 
 impl JobKey {
     /// Every key, in the order a member's column lists them — the order its
     /// unknown-key refusal and its sentences name them in.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Queue,
         Self::Retries,
         Self::Concurrency,
         Self::Throttle,
+        Self::Timeout,
         Self::Tz,
         Self::Transactional,
         Self::Replicas,
@@ -160,6 +171,7 @@ impl JobKey {
             Self::Retries => "retries",
             Self::Concurrency => "concurrency",
             Self::Throttle => "throttle",
+            Self::Timeout => TIMEOUT,
             Self::Tz => "tz",
             Self::Transactional => TRANSACTIONAL,
             Self::Replicas => REPLICAS,
@@ -175,6 +187,7 @@ impl JobKey {
             Self::Retries => "retries = 3",
             Self::Concurrency => "concurrency = 4",
             Self::Throttle => "throttle(limit = 10, window = \"1m\")",
+            Self::Timeout => "timeout = \"30m\"",
             Self::Tz => "tz = \"Europe/Paris\"",
             Self::Transactional => "transactional = false",
             Self::Replicas => "replicas = \"one\"",
@@ -202,7 +215,9 @@ enum Cell {
 const fn cell(key: JobKey, member: JobDecorator) -> Cell {
     use Cell::{Refuses, Takes};
     use JobDecorator::{After, Cron, Every, Process};
-    use JobKey::{Concurrency, Key, Queue, Replicas, Retries, Throttle, Transactional, Tz};
+    use JobKey::{
+        Concurrency, Key, Queue, Replicas, Retries, Throttle, Timeout, Transactional, Tz,
+    };
     match (key, member) {
         (Queue, Process) => Takes,
         (Queue, Every | Cron | After) => Refuses(RUNS_IN_PROCESS),
@@ -224,6 +239,8 @@ const fn cell(key: JobKey, member: JobDecorator) -> Cell {
         (Tz, Process) => Refuses("a job runs when delivered, and has no clock to be read in"),
         (Tz, Every) => Refuses("an interval has no wall clock"),
         (Tz, After) => Refuses("a delay has no wall clock"),
+
+        (Timeout, Process | Every | Cron | After) => Takes,
 
         (Transactional, Process | Every | Cron | After) => Takes,
 
@@ -342,6 +359,34 @@ pub fn transactional_value(member: JobDecorator, expr: &Expr) -> syn::Result<boo
                 takes_one_of(member.name(), TRANSACTIONAL, &["true", "false"])
             ),
         )),
+    }
+}
+
+/// Read a `timeout = "…"` value written at `#[member]`, in milliseconds: a
+/// whole number of `ms`, `s`, `m` or `h`, above zero and at most a day.
+pub fn timeout_value(member: JobDecorator, expr: &Expr) -> syn::Result<u64> {
+    let millis = crate::duration_millis(member.name(), Some(TIMEOUT), expr)?;
+    if millis > TIMEOUT_CEILING_MILLIS {
+        return Err(syn::Error::new_spanned(
+            ungrouped_expr(expr),
+            format!(
+                "{} is at most `\"24h\"`: an attempt running past a day is a process of its own \
+                 — split it into jobs that each end within one",
+                site(member.name(), Some(TIMEOUT)),
+            ),
+        ));
+    }
+    Ok(millis)
+}
+
+/// The deadline a parsed `timeout` sets, rooted at the surface crate the
+/// calling macro emits through. `None` — the key was not written — is the
+/// family's default, `nest_rs_worker::JOB_TIMEOUT`, spelled out so the
+/// expansion states it.
+pub fn job_timeout(millis: Option<u64>, surface: &TokenStream) -> TokenStream {
+    match millis {
+        Some(millis) => quote! { ::core::time::Duration::from_millis(#millis) },
+        None => quote! { #surface::nest_rs_worker::JOB_TIMEOUT },
     }
 }
 
@@ -472,11 +517,34 @@ mod tests {
         assert_eq!(
             read(JobDecorator::Cron, "priority"),
             Err(
-                "unknown #[cron] argument `priority`; expected `tz`, `transactional`, `replicas` \
-                 or `key`"
+                "unknown #[cron] argument `priority`; expected `timeout`, `tz`, `transactional`, \
+                 `replicas` or `key`"
                     .to_owned()
             ),
         );
+    }
+
+    #[test]
+    fn a_timeout_is_read_in_milliseconds_above_zero_and_within_a_day() {
+        let value = |literal: &str| -> Expr { syn::parse_str(literal).expect("an expression") };
+        for member in JobDecorator::ALL {
+            assert_eq!(
+                timeout_value(member, &value("\"30m\"")).ok(),
+                Some(1_800_000)
+            );
+            assert_eq!(
+                timeout_value(member, &value("\"24h\"")).ok(),
+                Some(86_400_000)
+            );
+            assert!(timeout_value(member, &value("\"0s\"")).is_err());
+            let past = timeout_value(member, &value("\"25h\""))
+                .expect_err("a deadline past a day")
+                .to_string();
+            assert!(
+                past.contains(&format!("#[{}] `timeout`", member.name())) && past.contains("24h"),
+                "{past}"
+            );
+        }
     }
 
     #[test]

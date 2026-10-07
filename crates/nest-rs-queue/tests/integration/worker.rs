@@ -186,9 +186,20 @@ async fn boot_worker(
     CancellationToken,
     tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
+    boot_worker_of::<BootModule>(memory).await
+}
+
+/// [`boot_worker`] serving the module `M`.
+async fn boot_worker_of<M: nest_rs_core::Module>(
+    memory: &Memory,
+) -> (
+    nest_rs_testing::HeadlessApp,
+    CancellationToken,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
     let app = TestApp::builder()
-        .module::<BootModule>()
+        .module::<M>()
         .provide(BoundConsumer::new(memory.consumer()))
         .provide_dyn(producer)
         .build_headless()
@@ -612,4 +623,57 @@ async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
     }
     stop.cancel();
     serving.await.expect("ends").expect("cleanly");
+}
+
+#[queue(name = "nestrs-worker-hung", job = WorkerCommand)]
+struct HungQueue;
+
+/// How many attempts at a hung job started.
+static HUNG_STARTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct HungProcessor;
+
+#[processor]
+impl HungProcessor {
+    #[process(queue = HungQueue, retries = 1, timeout = "1s")]
+    async fn run(&self, _job: WorkerCommand) -> anyhow::Result<()> {
+        HUNG_STARTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+#[module(providers = [HungProcessor])]
+struct HungModule;
+
+/// An attempt that never answers — an outbound call with no timeout of its own
+/// — is cut at its `timeout` and fails retryably: retried within its budget,
+/// then dead-lettered, the reason naming the timeout.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it() {
+    let memory = Memory::new(&DELAYING, LEASE);
+    let queue = "nestrs-worker-hung";
+    let (app, stop, serving) = boot_worker_of::<HungModule>(&memory).await;
+    let producer = app
+        .container()
+        .get_dyn::<dyn JobProducer>()
+        .expect("the producer");
+    nest_rs_queue::JobProducerExt::push(&*producer, HungQueue, WorkerCommand { seq: 1 }, None)
+        .await
+        .expect("a push");
+    until("the hung job dead-lettered", || {
+        memory.dead(queue).len() == 1 && memory.held(queue) == 0
+    })
+    .await;
+    stop.cancel();
+    serving.await.expect("ends").expect("cleanly");
+    assert_eq!(
+        HUNG_STARTS.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the first attempt was retried"
+    );
+    let reason = &memory.dead(queue)[0].reason;
+    assert!(reason.contains("1s timeout"), "{reason}");
 }

@@ -18,7 +18,7 @@ use nest_rs_codegen::{
     Edge, Grammar, JobDecorator, JobKey, PipeWrapper, await_if_async, cfg_attrs, duration_millis,
     generic_args, impl_self_ident, job_key, job_returns_a_result, job_transaction,
     missing_argument, payload_arg_type, pipe_wrapper, returns_unit, snake_case, takes_value,
-    transactional_value, ungrouped_expr, unread_job_key,
+    timeout_value, transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -171,6 +171,7 @@ fn emit_method(
         retries,
         concurrency,
         throttle,
+        timeout,
         transactional,
     } = args;
 
@@ -254,6 +255,9 @@ fn emit_method(
     }
     if checkpoint.is_some() {
         options = quote!(#options.with_checkpoint(true));
+    }
+    if let Some(millis) = timeout {
+        options = quote!(#options.with_timeout(::core::time::Duration::from_millis(#millis)));
     }
 
     let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue));
@@ -526,6 +530,8 @@ struct ProcessArgs {
     retries: Option<u32>,
     concurrency: Option<u32>,
     throttle: Option<ThrottleArgs>,
+    /// The shared `timeout` key in milliseconds, `None` when unwritten.
+    timeout: Option<u64>,
     /// The shared `transactional` key, `None` when unwritten — see
     /// `nest_rs_codegen::job`, which words it for every job decorator at once.
     transactional: Option<bool>,
@@ -537,6 +543,7 @@ impl Parse for ProcessArgs {
         let mut retries: Option<u32> = None;
         let mut concurrency: Option<u32> = None;
         let mut throttle: Option<ThrottleArgs> = None;
+        let mut timeout: Option<u64> = None;
         let mut transactional: Option<bool> = None;
 
         // The family's table answers first: a key another member takes is not
@@ -581,6 +588,7 @@ impl Parse for ProcessArgs {
                     syn::parenthesized!(content in input);
                     throttle = Some(parse_throttle(&content, arg.ident().span())?);
                 }
+                JobKey::Timeout => timeout = Some(timeout_value(PROCESS, &arg.expr()?)?),
                 JobKey::Transactional => {
                     transactional = Some(transactional_value(PROCESS, &arg.expr()?)?);
                 }
@@ -598,6 +606,7 @@ impl Parse for ProcessArgs {
             retries,
             concurrency,
             throttle,
+            timeout,
             transactional,
         })
     }

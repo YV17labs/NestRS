@@ -57,15 +57,18 @@ pub struct ProcessOptions {
     concurrency: NonZeroU32,
     throttle: Option<Throttle>,
     checkpoint: bool,
+    timeout: Duration,
 }
 
 impl ProcessOptions {
-    /// One job at a time, no retry, no throttle, no checkpoint.
+    /// One job at a time, no retry, no throttle, no checkpoint, and the
+    /// family's timeout ([`JOB_TIMEOUT`](nest_rs_worker::JOB_TIMEOUT)).
     pub const DEFAULT: Self = Self {
         retries: 0,
         concurrency: NonZeroU32::MIN,
         throttle: None,
         checkpoint: false,
+        timeout: nest_rs_worker::JOB_TIMEOUT,
     };
 
     /// `retries = N`: re-run a job whose attempt failed retryably, up to `N`
@@ -95,6 +98,13 @@ impl ProcessOptions {
         self
     }
 
+    /// `timeout = "…"`: how long an attempt runs before it is cut and fails,
+    /// retryably.
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Re-runs after a first failed attempt.
     pub const fn retries(&self) -> u32 {
         self.retries
@@ -113,6 +123,11 @@ impl ProcessOptions {
     /// Whether the method takes a `Checkpoint<_>` parameter.
     pub const fn checkpoint(&self) -> bool {
         self.checkpoint
+    }
+
+    /// How long an attempt runs before it is cut.
+    pub const fn timeout(&self) -> Duration {
+        self.timeout
     }
 }
 

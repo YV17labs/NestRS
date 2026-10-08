@@ -20,8 +20,8 @@ use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Role, Value};
 use tokio::sync::Notify;
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, GaveUp, answered, backoff_after, classify, connection_config,
-    node_client, read_only, spent, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, GaveUp, Replies, answered, backoff_after, classify, demoted,
+    dial, node_client, spent, within_budget,
 };
 use crate::error::{RedisError, SentinelMiss};
 use crate::url::{NodeAddr, SentinelUrl, listed};
@@ -33,7 +33,6 @@ pub(crate) struct SentinelLink {
     current: RwLock<Current>,
     /// Woken when a replacement connection is in place.
     ready: Notify,
-    reopening: AtomicBool,
 }
 
 /// The connection commands go through now.
@@ -120,7 +119,6 @@ impl SentinelLink {
                 primary,
             }),
             ready: Notify::new(),
-            reopening: AtomicBool::new(false),
         })
     }
 
@@ -150,8 +148,7 @@ impl SentinelLink {
             connection.send_packed_command(cmd).await
         })
         .await;
-        let read_only = outcome.as_ref().is_ok_and(read_only);
-        self.observe(opening, &outcome, read_only);
+        self.observe(opening, &outcome);
         outcome
     }
 
@@ -173,10 +170,7 @@ impl SentinelLink {
                 .await
         })
         .await;
-        let read_only = outcome
-            .as_ref()
-            .is_ok_and(|replies| replies.iter().any(read_only));
-        self.observe(opening, &outcome, read_only);
+        self.observe(opening, &outcome);
         outcome
     }
 
@@ -213,25 +207,18 @@ impl SentinelLink {
 
     /// Replace the connection of `opening` when what it met says it no longer
     /// reaches the primary: a drop, a timeout, a read-only answer.
-    fn observe<T>(
+    fn observe<T: Replies>(
         self: &Arc<Self>,
         opening: Option<u64>,
         outcome: &Result<T, redis::RedisError>,
-        read_only: bool,
     ) {
         let Some(opening) = opening else {
             return;
         };
-        let lost = match outcome {
-            Ok(_) => read_only,
-            Err(error) => {
-                error.is_timeout()
-                    || error.is_unrecoverable_error()
-                    || error.is_connection_dropped()
-                    || error.code() == Some("READONLY")
-            }
-        };
-        if lost {
+        let dropped = outcome.as_ref().is_err_and(|error| {
+            error.is_timeout() || error.is_unrecoverable_error() || error.is_connection_dropped()
+        });
+        if dropped || demoted(outcome) {
             self.lost(opening);
         }
     }
@@ -244,10 +231,8 @@ impl SentinelLink {
             if current.opening != opening || current.connection.is_none() {
                 return;
             }
+            // Only the call that empties it reopens: one reopening at a time.
             current.connection = None;
-        }
-        if self.reopening.swap(true, Ordering::SeqCst) {
-            return;
         }
         tokio::spawn(Self::reopen(Arc::downgrade(self)));
     }
@@ -261,9 +246,6 @@ impl SentinelLink {
             match this.sentinels.resolve(this.sentinels.budget).await {
                 Ok((connection, primary)) => {
                     this.sentinels.said.store(false, Ordering::Relaxed);
-                    // Released before the connection is published: a loss of
-                    // the new one must start a reopening of its own.
-                    this.reopening.store(false, Ordering::SeqCst);
                     let previous = {
                         let mut current =
                             this.current.write().unwrap_or_else(PoisonError::into_inner);
@@ -350,9 +332,7 @@ impl Sentinels {
         client: &redis::Client,
         endpoint: &str,
     ) -> Result<Option<NodeAddr>, redis::RedisError> {
-        let opened = client
-            .get_multiplexed_async_connection_with_config(&connection_config(self.budget))
-            .await;
+        let opened = dial(client, self.budget).await;
         tls::observe_refusal(endpoint, &opened);
         let mut sentinel = opened?;
         let named: Option<(String, u16)> = redis::cmd("SENTINEL")
@@ -390,11 +370,7 @@ impl Sentinels {
         )
         .map_err(Attempt::Refused)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let opened = answered(
-            remaining,
-            client.get_multiplexed_async_connection_with_config(&connection_config(self.budget)),
-        )
-        .await;
+        let opened = answered(remaining, dial(&client, self.budget)).await;
         tls::observe_refusal(&endpoint, &opened);
         let mut connection = opened.map_err(failed)?;
         let remaining = deadline.saturating_duration_since(Instant::now());

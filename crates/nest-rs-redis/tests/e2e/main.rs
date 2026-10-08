@@ -491,54 +491,71 @@ async fn a_read_blocks_on(db: u8) -> bool {
 /// does to a running app. Returns how many it closed.
 async fn drop_every_connection_on(db: u8) -> usize {
     let selected = format!(" db={db} ");
-    let mut closed = 0;
-    for node in data_nodes().await {
-        let mut node = node
-            .get_multiplexed_async_connection()
-            .await
-            .expect("every data node answers");
-        let clients: String = redis::cmd("CLIENT")
-            .arg("LIST")
-            .query_async(&mut node)
-            .await
-            .expect("CLIENT LIST");
-        let ids: Vec<String> = clients
-            .lines()
-            .filter(|client| client.contains(&selected))
-            .filter_map(|client| {
-                client
-                    .split(' ')
-                    .find_map(|field| field.strip_prefix("id="))
-                    .map(str::to_owned)
-            })
-            .collect();
-        for id in &ids {
-            redis::cmd("CLIENT")
-                .arg("KILL")
-                .arg("ID")
-                .arg(id)
-                .query_async::<i64>(&mut node)
+    let nodes = data_nodes().await;
+    let closed = futures_util::future::join_all(nodes.iter().map(|node| {
+        let selected = &selected;
+        async move {
+            let mut node = node
+                .get_multiplexed_async_connection()
                 .await
-                .expect("CLIENT KILL");
+                .expect("every data node answers");
+            let clients: String = redis::cmd("CLIENT")
+                .arg("LIST")
+                .query_async(&mut node)
+                .await
+                .expect("CLIENT LIST");
+            let mut kills = redis::pipe();
+            for id in clients
+                .lines()
+                .filter(|client| client.contains(selected.as_str()))
+                .filter_map(|client| {
+                    client
+                        .split(' ')
+                        .find_map(|field| field.strip_prefix("id="))
+                })
+            {
+                kills.cmd("CLIENT").arg("KILL").arg("ID").arg(id);
+            }
+            if kills.is_empty() {
+                return 0;
+            }
+            kills
+                .query_async::<Vec<i64>>(&mut node)
+                .await
+                .expect("CLIENT KILL")
+                .len()
         }
-        closed += ids.len();
-    }
-    closed
+    }))
+    .await;
+    closed.into_iter().sum()
 }
 
 /// Freeze the node at `addr` for six seconds — longer than the suite's
-/// topologies take to fail it over — as a crashed primary stops answering.
-fn freeze(addr: &str) {
-    let frozen = bare_client(&node_url(addr));
+/// topologies take to fail it over — as a crashed primary stops answering,
+/// returning once it no longer answers.
+async fn freeze(addr: &str) {
+    let mut frozen = node(addr).await;
+    let probe = node(addr).await;
     tokio::spawn(async move {
-        if let Ok(mut frozen) = frozen.get_multiplexed_async_connection().await {
-            let _: Result<(), _> = redis::cmd("DEBUG")
-                .arg("SLEEP")
-                .arg(6)
-                .query_async(&mut frozen)
-                .await;
-        }
+        let _: Result<(), _> = redis::cmd("DEBUG")
+            .arg("SLEEP")
+            .arg(6)
+            .query_async(&mut frozen)
+            .await;
     });
+    wait_for(Duration::from_secs(2), || {
+        let mut probe = probe.clone();
+        async move {
+            let ping = redis::cmd("PING");
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                ping.query_async::<()>(&mut probe),
+            )
+            .await
+            .is_err()
+        }
+    })
+    .await;
 }
 
 /// A proxy in front of the dev container's Valkey that can go dark: it then
@@ -990,8 +1007,7 @@ const CONNECTION_PAGE: &str = "queue/topologies.mdx";
 fn topology_addition() -> String {
     match topology() {
         RedisTopology::Standalone => String::new(),
-        RedisTopology::Sentinel => documented_acl(CONNECTION_PAGE, "Sentinel"),
-        RedisTopology::Cluster => documented_acl(CONNECTION_PAGE, "Cluster"),
+        other => documented_acl(CONNECTION_PAGE, &other.to_string()),
     }
 }
 
@@ -1063,7 +1079,12 @@ fn acl_user(base: &str) -> String {
 
 /// Remove `user`, if it is there.
 async fn forget_user(user: &str) {
-    let _: Vec<i64> = on_every_node(redis::cmd("ACL").arg("DELUSER").arg(user)).await;
+    forget_user_among(&data_nodes().await, user).await;
+}
+
+/// Remove `user` from `nodes`, where it is there.
+async fn forget_user_among(nodes: &[redis::Client], user: &str) {
+    let _: Vec<i64> = on_each(nodes, redis::cmd("ACL").arg("DELUSER").arg(user)).await;
 }
 
 /// Whether `event` carries Redis's refusal of a command or a key — the answer

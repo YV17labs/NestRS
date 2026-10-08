@@ -33,8 +33,7 @@ async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
         .expect("the primary answers");
 
     crate::assert_denied_nothing_among(&sentinels(), &user, &[]).await;
-    let _: Vec<i64> =
-        crate::on_each(&sentinels(), redis::cmd("ACL").arg("DELUSER").arg(&user)).await;
+    crate::forget_user_among(&sentinels(), &user).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -133,11 +132,10 @@ mod failover {
         .await;
 
         let before = crate::sentinel_primary().await;
-        crate::freeze(&before);
+        crate::freeze(&before).await;
         // Forced, the failover skips the sentinels' election, which three
         // sentinels sharing one timing split often enough to stall a test; the
         // primary stays frozen through it, as a crashed one would.
-        tokio::time::sleep(Duration::from_millis(200)).await;
         let _: () = redis::cmd("SENTINEL")
             .arg("FAILOVER")
             .arg(crate::service_name())

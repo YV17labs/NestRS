@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, ConnectionAddr, ConnectionInfo, ErrorKind, Pipeline, ServerErrorKind, Value};
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT_FACTOR, answered, backoff_after,
-    bounded, classify, connection_config, open_client, read_only, refused, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT_FACTOR, Replies, answered,
+    backoff_after, classify, demoted, dial, open_client, refused, within_budget,
 };
 use crate::error::RedisError;
 use crate::{RedisTls, tls};
@@ -107,11 +107,8 @@ impl StandaloneLink {
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
         let (opening, mut manager) = self.manager();
-        let outcome = bounded(budget, manager.send_packed_command(cmd)).await?;
+        let outcome = answered(budget, manager.send_packed_command(cmd)).await;
         self.observe(opening, &outcome);
-        if outcome.as_ref().is_ok_and(read_only) {
-            self.reopen(opening);
-        }
         outcome
     }
 
@@ -125,24 +122,18 @@ impl StandaloneLink {
         budget: Duration,
     ) -> Result<Vec<Value>, redis::RedisError> {
         let (opening, mut manager) = self.manager();
-        let outcome = bounded(
+        let outcome = answered(
             budget,
             manager.send_packed_commands(pipeline, offset, count),
         )
-        .await?;
+        .await;
         self.observe(opening, &outcome);
-        if outcome
-            .as_ref()
-            .is_ok_and(|replies| replies.iter().any(read_only))
-        {
-            self.reopen(opening);
-        }
         outcome
     }
 
     /// The database the URL selects.
     pub(crate) fn db(&self) -> i64 {
-        self.manager().1.get_db()
+        self.client.get_connection_info().redis_settings().db()
     }
 
     /// A manager of its own from the link's client, opened within the budget.
@@ -163,20 +154,19 @@ impl StandaloneLink {
     }
 
     /// Read what a command through the manager of `opening` met.
-    fn observe<T>(self: &Arc<Self>, opening: u64, outcome: &Result<T, redis::RedisError>) {
+    fn observe<T: Replies>(self: &Arc<Self>, opening: u64, outcome: &Result<T, redis::RedisError>) {
         if let Some(refusals) = &self.refusals {
             refusals.observe(outcome);
         }
-        let Err(error) = outcome else {
-            return;
-        };
-        if error.code() == Some("READONLY") {
+        if demoted(outcome) {
             self.reopen(opening);
         }
-        if matches!(
-            error.kind(),
-            ErrorKind::Server(ServerErrorKind::Moved | ServerErrorKind::Ask)
-        ) && !self.clustered.swap(true, Ordering::Relaxed)
+        if let Err(error) = outcome
+            && matches!(
+                error.kind(),
+                ErrorKind::Server(ServerErrorKind::Moved | ServerErrorKind::Ask)
+            )
+            && !self.clustered.swap(true, Ordering::Relaxed)
         {
             tracing::error!(
                 target: crate::TARGET,
@@ -241,7 +231,11 @@ struct TlsRefusals {
 impl TlsRefusals {
     fn observe<T>(self: &Arc<Self>, outcome: &Result<T, redis::RedisError>) {
         match outcome {
-            Ok(_) => self.reported.store(false, Ordering::Relaxed),
+            Ok(_) => {
+                if self.reported.load(Ordering::Relaxed) {
+                    self.reported.store(false, Ordering::Relaxed);
+                }
+            }
             Err(error) if tls::negotiation_failed(error) => self.report(error),
             Err(error) if error.is_io_error() => self.diagnose(),
             Err(_) => {}
@@ -264,16 +258,8 @@ impl TlsRefusals {
         let refusals = Arc::clone(self);
         tokio::spawn(async move {
             let started = tokio::time::Instant::now();
-            let attempt = tokio::time::timeout(
-                refusals.budget,
-                refusals
-                    .client
-                    .get_multiplexed_async_connection_with_config(&connection_config(
-                        refusals.budget,
-                    )),
-            )
-            .await;
-            if let Ok(Err(error)) = attempt
+            let attempt = answered(refusals.budget, dial(&refusals.client, refusals.budget)).await;
+            if let Err(error) = attempt
                 && tls::negotiation_failed(&error)
             {
                 refusals.report(&error);
@@ -312,10 +298,7 @@ async fn prove(
     database: i64,
 ) -> Result<ConnectionManager, Attempt<redis::RedisError>> {
     let classified = |source| classify(source, endpoint, database);
-    let mut proof = client
-        .get_multiplexed_async_connection_with_config(&connection_config(budget))
-        .await
-        .map_err(classified)?;
+    let mut proof = dial(client, budget).await.map_err(classified)?;
     redis::cmd("PING")
         .query_async::<()>(&mut proof)
         .await

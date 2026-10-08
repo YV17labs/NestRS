@@ -24,8 +24,8 @@ use redis::{
 };
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, bounded, classify,
-    connection_config, node_addr, node_client, socket, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, classify, dial, node_addr,
+    node_client, socket, within_budget,
 };
 use crate::error::RedisError;
 use crate::script::RedisScript;
@@ -103,7 +103,7 @@ impl ClusterLink {
         cmd: &Cmd,
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
-        bounded(budget, self.connection.clone().req_packed_command(cmd)).await?
+        answered(budget, self.connection.clone().req_packed_command(cmd)).await
     }
 
     /// Send `count` replies' worth of `pipeline` from `offset` within `budget`.
@@ -114,13 +114,13 @@ impl ClusterLink {
         count: usize,
         budget: Duration,
     ) -> Result<Vec<Value>, redis::RedisError> {
-        bounded(
+        answered(
             budget,
             self.connection
                 .clone()
                 .req_packed_commands(pipeline, offset, count),
         )
-        .await?
+        .await
     }
 
     /// Cache `script` on the primary serving `slot`, or on every primary when
@@ -141,13 +141,13 @@ impl ClusterLink {
                 Some(ResponsePolicy::AllSucceeded),
             )),
         };
-        bounded(
+        answered(
             budget,
             self.connection
                 .clone()
                 .route_command(script.load_cmd(), routing),
         )
-        .await?
+        .await
         .map(drop)
     }
 
@@ -160,7 +160,7 @@ impl ClusterLink {
 impl Plan {
     /// The cluster client every connection is opened from, each node's answer
     /// bounded by `response`. Its retries fit the budget, which
-    /// [`bounded`] holds every command to whatever they do.
+    /// [`answered`] holds every command to whatever they do.
     fn client(&self, response: Duration) -> Result<ClusterClient, redis::RedisError> {
         let seeds = self
             .seeds
@@ -226,9 +226,7 @@ impl Plan {
             )
             .map_err(Attempt::Refused)?;
             let proof = async {
-                let mut node = client
-                    .get_multiplexed_async_connection_with_config(&connection_config(self.budget))
-                    .await?;
+                let mut node = dial(&client, self.budget).await?;
                 redis::cmd("CLUSTER")
                     .arg("SLOTS")
                     .query_async::<Value>(&mut node)

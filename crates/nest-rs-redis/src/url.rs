@@ -140,14 +140,11 @@ fn parse_standalone(raw: &str) -> Result<RedisUrl, RedisError> {
         url.query_pairs()
             .any(|(key, _)| SEVERAL_HOSTS.contains(&key.as_ref()))
     }) {
-        return Err(invalid(
+        return Err(refusal(
             raw,
-            refusal(
-                "a URL of one server names no other host",
-                "name a Sentinel deployment with rediss-sentinel://, or a Cluster's nodes with \
-                 rediss-cluster://"
-                    .to_owned(),
-            ),
+            "a URL of one server names no other host",
+            "name a Sentinel deployment with rediss-sentinel://, or a Cluster's nodes with \
+             rediss-cluster://",
         ));
     }
     if info.redis_settings().protocol() != redis::ProtocolVersion::RESP2 {
@@ -170,7 +167,7 @@ fn parse_standalone(raw: &str) -> Result<RedisUrl, RedisError> {
 /// A URL naming several hosts, read as the scheme declares.
 fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, RedisError> {
     let url = ::url::Url::parse(raw)
-        .map_err(|error| invalid(raw, refusal("the URL does not parse", error.to_string())))?;
+        .map_err(|error| refusal(raw, "the URL does not parse", error.to_string()))?;
     match url.fragment() {
         None => {}
         Some("insecure") => {
@@ -179,22 +176,18 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
             });
         }
         Some(_) => {
-            return Err(invalid(
+            return Err(refusal(
                 raw,
-                refusal(
-                    "the URL carries a fragment",
-                    "a URL naming several hosts reads none".to_owned(),
-                ),
+                "the URL carries a fragment",
+                "a URL naming several hosts reads none",
             ));
         }
     }
     let first = authority(&url, several.default_port()).ok_or_else(|| {
-        invalid(
+        refusal(
             raw,
-            refusal(
-                "the URL names no host",
-                "write the first host after `//`".to_owned(),
-            ),
+            "the URL names no host",
+            "write the first host after `//`",
         )
     })?;
     let settings = settings(&url).map_err(|source| invalid(raw, source))?;
@@ -203,13 +196,10 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
     for (key, value) in url.query_pairs() {
         match (key.as_ref(), several) {
             (NODE, _) => hosts.push(node(&value, several.default_port()).ok_or_else(|| {
-                invalid(
+                refusal(
                     raw,
-                    refusal(
-                        "a `node` is a host and its port",
-                        "write node=host or node=host:port, with no credentials, path or query"
-                            .to_owned(),
-                    ),
+                    "a `node` is a host and its port",
+                    "write node=host or node=host:port, with no credentials, path or query",
                 )
             })?),
             (SERVICE_NAME, Several::Sentinel) => once(raw, &mut service_name, SERVICE_NAME, value)?,
@@ -220,12 +210,10 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
                 once(raw, &mut password, SENTINEL_PASSWORD, value)?;
             }
             (other, _) => {
-                return Err(invalid(
+                return Err(refusal(
                     raw,
-                    refusal(
-                        "the URL names a parameter it does not take",
-                        format!("`{other}`: {} takes {}", url.scheme(), several.parameters()),
-                    ),
+                    "the URL names a parameter it does not take",
+                    format!("`{other}`: {} takes {}", url.scheme(), several.parameters()),
                 ));
             }
         }
@@ -245,25 +233,19 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
             let service_name = service_name
                 .filter(|name| !name.is_empty())
                 .ok_or_else(|| {
-                    invalid(
+                    refusal(
                         raw,
-                        refusal(
-                            "a Sentinel URL names its primary",
-                            format!(
-                                "set `{SERVICE_NAME}` to the name the sentinels monitor it under"
-                            ),
-                        ),
+                        "a Sentinel URL names its primary",
+                        format!("set `{SERVICE_NAME}` to the name the sentinels monitor it under"),
                     )
                 })?;
             let mut sentinel_settings = RedisConnectionInfo::default().set_skip_set_lib_name();
             match (username, password) {
                 (Some(_), None) => {
-                    return Err(invalid(
+                    return Err(refusal(
                         raw,
-                        refusal(
-                            "a sentinel user is authenticated with its password",
-                            format!("set `{SENTINEL_PASSWORD}` beside `{SENTINEL_USERNAME}`"),
-                        ),
+                        "a sentinel user is authenticated with its password",
+                        format!("set `{SENTINEL_PASSWORD}` beside `{SENTINEL_USERNAME}`"),
                     ));
                 }
                 (username, Some(password)) => {
@@ -345,12 +327,10 @@ fn once(
     value: std::borrow::Cow<'_, str>,
 ) -> Result<(), RedisError> {
     if kept.replace(value.into_owned()).is_some() {
-        return Err(invalid(
+        return Err(refusal(
             raw,
-            refusal(
-                "a parameter is given more than once",
-                format!("`{key}` is given more than once"),
-            ),
+            "a parameter is given more than once",
+            format!("`{key}` is given more than once"),
         ));
     }
     Ok(())
@@ -363,8 +343,12 @@ fn nameable(raw: &str, host: &str) -> Result<(), RedisError> {
         .map_err(|error| invalid(raw, error.into()))
 }
 
-fn refusal(description: &'static str, detail: String) -> redis::RedisError {
-    redis::RedisError::from((ErrorKind::InvalidClientConfig, description, detail))
+/// `raw` refused for what `description` and `detail` say.
+fn refusal(raw: &str, description: &'static str, detail: impl Into<String>) -> RedisError {
+    invalid(
+        raw,
+        redis::RedisError::from((ErrorKind::InvalidClientConfig, description, detail.into())),
+    )
 }
 
 fn invalid(raw: &str, source: redis::RedisError) -> RedisError {
@@ -422,17 +406,11 @@ mod tests {
     use super::*;
     use crate::RedisTopology;
 
-    trait Declared {
-        fn topology(&self) -> RedisTopology;
-    }
-
-    impl Declared for RedisUrl {
-        fn topology(&self) -> RedisTopology {
-            match self {
-                RedisUrl::Standalone(_) => RedisTopology::Standalone,
-                RedisUrl::Sentinel(_) => RedisTopology::Sentinel,
-                RedisUrl::Cluster(_) => RedisTopology::Cluster,
-            }
+    fn topology(url: &RedisUrl) -> RedisTopology {
+        match url {
+            RedisUrl::Standalone(_) => RedisTopology::Standalone,
+            RedisUrl::Sentinel(_) => RedisTopology::Sentinel,
+            RedisUrl::Cluster(_) => RedisTopology::Cluster,
         }
     }
 
@@ -443,14 +421,14 @@ mod tests {
     fn sentinel(raw: &str) -> SentinelUrl {
         match parsed(raw) {
             RedisUrl::Sentinel(sentinel) => sentinel,
-            other => panic!("{raw} is a Sentinel URL, read as {}", other.topology()),
+            other => panic!("{raw} is a Sentinel URL, read as {}", topology(&other)),
         }
     }
 
     fn cluster(raw: &str) -> ClusterUrl {
         match parsed(raw) {
             RedisUrl::Cluster(cluster) => cluster,
-            other => panic!("{raw} is a Cluster URL, read as {}", other.topology()),
+            other => panic!("{raw} is a Cluster URL, read as {}", topology(&other)),
         }
     }
 
@@ -473,7 +451,7 @@ mod tests {
 
     #[test]
     fn the_scheme_declares_the_topology() {
-        for (raw, topology) in [
+        for (raw, declared) in [
             ("redis://valkey:6379/2", RedisTopology::Standalone),
             ("rediss://valkey:6379/2", RedisTopology::Standalone),
             ("redis+unix:///run/valkey.sock", RedisTopology::Standalone),
@@ -489,7 +467,7 @@ mod tests {
             ("redis-cluster://n1:7000", RedisTopology::Cluster),
             ("REDISS-CLUSTER://n1:7000", RedisTopology::Cluster),
         ] {
-            assert_eq!(parsed(raw).topology(), topology, "{raw}");
+            assert_eq!(topology(&parsed(raw)), declared, "{raw}");
         }
     }
 

@@ -98,12 +98,13 @@ const BARRIER: &str = "nestrs-e2e-monitor-barrier";
 /// replicate. Every command run once each answers is streamed.
 async fn monitor() -> (Arc<Seen>, Vec<tokio::task::JoinHandle<()>>) {
     let seen = Arc::new(Seen::default());
+    let primaries = crate::primaries().await;
+    let monitors =
+        futures_util::future::join_all(primaries.iter().map(redis::Client::get_async_monitor))
+            .await;
     let mut reading = Vec::new();
-    for node in crate::primaries().await {
-        let monitor = node
-            .get_async_monitor()
-            .await
-            .expect("a monitor connection, which sends MONITOR");
+    for monitor in monitors {
+        let monitor = monitor.expect("a monitor connection, which sends MONITOR");
         let filling = Arc::clone(&seen);
         reading.push(tokio::spawn(async move {
             let mut lines = monitor.into_on_message::<String>();
@@ -389,16 +390,13 @@ async fn every_pages_rule_replaces_what_the_user_held_before() {
                 .arg("SETUSER")
                 .arg(&user)
                 .arg("on")
-                .arg(">nestrs-e2e-acl")
+                .arg(format!(">{}", crate::ACL_PASSWORD))
                 .arg("~*")
                 .arg("+@all"),
         )
         .await;
-        let rule = crate::documented_acl(page, role)
-            .replace("<user>", &user)
-            .replace("<password>", "nestrs-e2e-acl");
-        let tokens: Vec<&str> = rule.split_whitespace().collect();
-        let _: Vec<()> = crate::on_every_node(redis::cmd(tokens[0]).arg(&tokens[1..])).await;
+        let _: Vec<()> =
+            crate::on_every_node(&crate::creating(&crate::documented_acl(page, role), &user)).await;
         let rules: Vec<String> =
             crate::on_every_node::<Vec<redis::Value>>(redis::cmd("ACL").arg("GETUSER").arg(&user))
                 .await

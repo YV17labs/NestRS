@@ -25,10 +25,18 @@ impl RedisScript {
 
     /// A call of the script with `keys` as its `KEYS`, in order.
     pub(crate) fn keys(&self, keys: &[&str]) -> Invocation<'_> {
+        let mut eval = redis::cmd("EVALSHA");
+        eval.arg(&self.hash).arg(keys.len()).arg(keys);
+        let mut slots = keys.iter().map(Slot::for_key);
+        let keys = match slots.next() {
+            None => Keys::None,
+            Some(first) if slots.all(|slot| slot == first) => Keys::In(first),
+            Some(_) => Keys::Across,
+        };
         Invocation {
             script: self,
-            keys: keys.iter().map(|key| key.as_bytes().to_vec()).collect(),
-            args: Vec::new(),
+            eval,
+            keys,
         }
     }
 
@@ -40,17 +48,25 @@ impl RedisScript {
     }
 }
 
-/// One call of a [`RedisScript`]: its keys, then its arguments.
+/// One call of a [`RedisScript`]: the `EVALSHA` it sends, its keys then its
+/// arguments written in as the call is built.
 pub(crate) struct Invocation<'a> {
     script: &'a RedisScript,
-    keys: Vec<Vec<u8>>,
-    args: Vec<Vec<u8>>,
+    eval: Cmd,
+    keys: Keys,
+}
+
+/// The hash slots a call's keys sit in.
+enum Keys {
+    None,
+    In(Slot),
+    Across,
 }
 
 impl<'a> Invocation<'a> {
     /// Add `arg` to the call's `ARGV`.
     pub(crate) fn arg(&mut self, arg: impl ToRedisArgs) -> &mut Self {
-        self.args.extend(arg.to_redis_args());
+        self.eval.arg(arg);
         self
     }
 
@@ -60,30 +76,22 @@ impl<'a> Invocation<'a> {
     }
 
     /// The `EVALSHA` this call sends.
-    pub(crate) fn eval_cmd(&self) -> Cmd {
-        let mut eval = redis::cmd("EVALSHA");
-        eval.arg(&self.script.hash)
-            .arg(self.keys.len())
-            .arg(&self.keys)
-            .arg(&self.args);
-        eval
+    pub(crate) fn eval_cmd(&self) -> &Cmd {
+        &self.eval
     }
 
     /// The hash slot every key of the call sits in — `None` for a call naming
     /// no key — refusing a call whose keys sit in two.
     pub(crate) fn slot(&self) -> Result<Option<Slot>, redis::RedisError> {
-        let mut slots = self.keys.iter().map(Slot::for_key);
-        let Some(first) = slots.next() else {
-            return Ok(None);
-        };
-        if slots.any(|slot| slot != first) {
-            return Err(redis::RedisError::from((
+        match self.keys {
+            Keys::None => Ok(None),
+            Keys::In(slot) => Ok(Some(slot)),
+            Keys::Across => Err(redis::RedisError::from((
                 ErrorKind::Server(ServerErrorKind::CrossSlot),
                 "a script's keys sit in more than one hash slot",
                 "every key one script names shares one hash tag".to_owned(),
-            )));
+            ))),
         }
-        Ok(Some(first))
     }
 }
 

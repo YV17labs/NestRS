@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use nest_rs_config::Namespaced;
 use redis::AsyncConnectionConfig;
-use redis::aio::ConnectionLike;
+use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster_routing::Slot;
 use redis::io::tcp::TcpSettings;
 use redis::io::tcp::socket2::TcpKeepalive;
@@ -528,23 +528,42 @@ pub(crate) fn classify(
     Attempt::Failed(source)
 }
 
-/// Whether a reply is a server's `READONLY` — `redis` hands a server's error
-/// back as a reply, and turns it into an error only once the caller reads it —
-/// or holds one, as a transaction's replies do.
-pub(crate) fn read_only(reply: &Value) -> bool {
-    match reply {
-        Value::ServerError(error) => error.code() == "READONLY",
-        Value::Array(replies) => replies.iter().any(read_only),
-        _ => false,
+/// What a command or a pipeline got back.
+pub(crate) trait Replies {
+    /// Whether a reply is a server's `READONLY` — `redis` hands a server's
+    /// error back as a reply, and turns it into an error only once the caller
+    /// reads it — or holds one, as a transaction's replies do.
+    fn read_only(&self) -> bool;
+}
+
+impl Replies for Value {
+    fn read_only(&self) -> bool {
+        match self {
+            Value::ServerError(error) => error.code() == "READONLY",
+            Value::Array(replies) => replies.read_only(),
+            _ => false,
+        }
+    }
+}
+
+impl Replies for Vec<Value> {
+    fn read_only(&self) -> bool {
+        self.iter().any(Replies::read_only)
+    }
+}
+
+/// Whether the server that met `outcome` no longer takes writes: it answered
+/// `READONLY`, as a reply or as an error.
+pub(crate) fn demoted<T: Replies>(outcome: &Result<T, redis::RedisError>) -> bool {
+    match outcome {
+        Ok(replies) => replies.read_only(),
+        Err(error) => error.code() == Some("READONLY"),
     }
 }
 
 /// `call`, or once `budget` elapses the timeout redis itself reports, so
 /// `redis::RedisError::is_timeout` reads both the same way.
-pub(crate) async fn bounded<F: Future>(
-    budget: Duration,
-    call: F,
-) -> Result<F::Output, redis::RedisError> {
+async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redis::RedisError> {
     #[expect(
         clippy::map_err_ignore,
         reason = "Elapsed carries nothing the timeout's own message does not say"
@@ -612,12 +631,19 @@ pub(crate) fn database_refused(error: &redis::RedisError) -> bool {
         })
 }
 
-/// A connection opened once, with no reopening: its dial bounded by the budget,
-/// and no reply timeout of the client's — the caller bounds what it waits on.
-pub(crate) fn connection_config(budget: Duration) -> AsyncConnectionConfig {
-    AsyncConnectionConfig::new()
+/// A connection of `client`'s opened once, with no reopening: its dial bounded
+/// by `budget`, and no reply timeout of the client's — the caller bounds what
+/// it waits on.
+pub(crate) async fn dial(
+    client: &redis::Client,
+    budget: Duration,
+) -> Result<MultiplexedConnection, redis::RedisError> {
+    let config = AsyncConnectionConfig::new()
         .set_connection_timeout(Some(budget))
-        .set_response_timeout(None)
+        .set_response_timeout(None);
+    client
+        .get_multiplexed_async_connection_with_config(&config)
+        .await
 }
 
 /// How every socket a client of this crate opens is set: a command is written

@@ -26,8 +26,11 @@ use reqwest::header::{ACCEPT, AGE, CACHE_CONTROL, HeaderMap, HeaderName, RETRY_A
 use tokio::sync::watch;
 use tokio::time::Instant;
 
+use crate::AuthnTls;
+use crate::config::{jwks_uri_setting, tls_ca_cert_setting};
 use crate::error::AuthError;
 use crate::jwk_set::{JwkSet, Selection};
+use crate::service::one_of;
 
 /// How long reaching the JWK Set endpoint — name lookup, TCP and the TLS
 /// handshake — may take before a fetch fails, naming the endpoint.
@@ -78,39 +81,37 @@ struct State {
     failure: Option<Failure>,
     /// When the last fetch started, which the floor counts from.
     last_attempt: Option<Instant>,
-    /// The fetch running, if any: its sender is dropped once it has settled.
+    /// The last fetch started: still running while its sender lives.
     in_flight: Option<watch::Receiver<()>>,
 }
 
 struct Held {
-    set: Arc<JwkSet>,
+    set: JwkSet,
     fresh_until: Instant,
-    usable_until: Instant,
 }
 
-#[derive(Clone)]
 struct Failure {
     detail: String,
     /// The issuer's own `Retry-After`, when it gave one in delay-seconds.
     retry_after: Option<Duration>,
 }
 
-/// What a caller does once it has read the state.
-enum Next {
-    Use(Arc<JwkSet>),
-    Wait(watch::Receiver<()>),
-    Refuse(AuthError),
+/// What [`State::join`] found: the fetch to wait for, if any, and the sender of
+/// one it started, which the caller spawns once the state is unlocked.
+struct Joined {
+    fetch: Option<watch::Receiver<()>>,
+    started: Option<watch::Sender<()>>,
 }
 
 impl Jwks {
-    /// The set published at `uri`, its endpoint's certificate chained to
-    /// `ca_cert`'s authorities or the system's. Nothing is fetched yet.
+    /// The set published at `uri`, its endpoint's certificate chained to the
+    /// authorities `tls` names or the system's. Nothing is fetched yet.
     ///
     /// Refuses a URI that does not parse or is not `https`, and an authority
     /// file holding no certificate, naming the setting.
     pub(crate) fn new(
         uri: &str,
-        ca_cert: Option<&[u8]>,
+        tls: &AuthnTls,
         algorithms: &[Algorithm],
     ) -> Result<Self, AuthError> {
         let url = reqwest::Url::parse(uri.trim()).map_err(|error| {
@@ -123,14 +124,14 @@ impl Jwks {
                 jwks_uri_setting()
             )));
         }
-        let roots = match ca_cert {
+        let roots = match &tls.ca_cert {
             Some(pem) => reqwest::Certificate::from_pem_bundle(pem)
                 .ok()
                 .filter(|found| !found.is_empty())
                 .ok_or_else(|| {
                     AuthError::Failed(format!(
                         "{}, holds no PEM CERTIFICATE block, so it would trust no certificate",
-                        crate::config::spellings("TLS_CA_CERT", "tls.ca_cert"),
+                        tls_ca_cert_setting(),
                     ))
                 })?,
             None => reqwest::Certificate::from_pem_bundle(nest_rs_config::system_authorities())
@@ -184,66 +185,40 @@ impl Jwks {
         algorithm: Algorithm,
     ) -> Result<Arc<DecodingKey>, AuthError> {
         let inner = &self.inner;
-        let next = {
+        let (fetch, started) = {
             let now = Instant::now();
             let mut state = inner.lock();
-            match state.usable(now) {
-                Some(held) => {
-                    let set = Arc::clone(&held.set);
-                    if now >= held.fresh_until {
-                        // Served stale while the refresh runs.
-                        inner.join(&mut state, now);
+            let mut held = false;
+            if let Some(found) = state.usable(now) {
+                held = true;
+                let selection = found.set.select(kid, algorithm);
+                if !matches!(selection, Selection::Unknown) {
+                    let stale = now >= found.fresh_until;
+                    let started = if stale { state.join(now).started } else { None };
+                    drop(state);
+                    if let Some(started) = started {
+                        inner.spawn_fetch(started);
                     }
-                    Next::Use(set)
-                }
-                None => match inner.join(&mut state, now) {
-                    Some(fetch) => Next::Wait(fetch),
-                    None => Next::Refuse(state.unavailable(&inner.endpoint, now)),
-                },
-            }
-        };
-        let set = match next {
-            Next::Use(set) => set,
-            Next::Refuse(refused) => return Err(refused),
-            Next::Wait(fetch) => {
-                settled(fetch).await;
-                let now = Instant::now();
-                let state = inner.lock();
-                match state.usable(now) {
-                    Some(held) => Arc::clone(&held.set),
-                    None => return Err(state.unavailable(&inner.endpoint, now)),
+                    return selection.into_key();
                 }
             }
+            let joined = state.join(now);
+            let Some(fetch) = joined.fetch else {
+                return Err(if held {
+                    state.unknown(&inner.endpoint, now)
+                } else {
+                    state.unavailable(&inner.endpoint, now)
+                });
+            };
+            (fetch, joined.started)
         };
-        match set.select(kid, algorithm) {
-            Selection::Key(key) => return Ok(key),
-            Selection::WrongAlgorithm => return Err(AuthError::InvalidAlgorithm),
-            Selection::Ambiguous => return Err(AuthError::UnknownKey),
-            Selection::Unknown => {}
+        if let Some(started) = started {
+            inner.spawn_fetch(started);
         }
-        // The issuer may have rotated since: one more fetch, unless the floor
-        // says one just ran.
-        let fetch = {
-            let mut state = inner.lock();
-            inner.join(&mut state, Instant::now())
-        };
-        if let Some(fetch) = fetch {
-            settled(fetch).await;
-        }
-        let now = Instant::now();
-        let state = inner.lock();
-        // A key looked for while the issuer does not answer was never checked.
-        if state.failure.is_some() {
-            return Err(state.unavailable(&inner.endpoint, now));
-        }
-        let Some(held) = state.usable(now) else {
-            return Err(state.unavailable(&inner.endpoint, now));
-        };
-        match held.set.select(kid, algorithm) {
-            Selection::Key(key) => Ok(key),
-            Selection::WrongAlgorithm => Err(AuthError::InvalidAlgorithm),
-            Selection::Unknown | Selection::Ambiguous => Err(AuthError::UnknownKey),
-        }
+        settled(fetch).await;
+        inner
+            .lock()
+            .answer(&inner.endpoint, Instant::now(), kid, algorithm)
     }
 }
 
@@ -260,28 +235,14 @@ impl Inner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The fetch in flight, or a new one when the floor allows it; `None` when
-    /// a fetch started within the floor and has settled.
-    fn join(self: &Arc<Self>, state: &mut State, now: Instant) -> Option<watch::Receiver<()>> {
-        if let Some(fetch) = &state.in_flight
-            && fetch.has_changed().is_ok()
-        {
-            return Some(fetch.clone());
-        }
-        if state
-            .last_attempt
-            .is_some_and(|started| now.duration_since(started) < JWKS_REFRESH_FLOOR)
-        {
-            return None;
-        }
-        let (done, fetch) = watch::channel(());
-        state.last_attempt = Some(now);
-        state.in_flight = Some(fetch.clone());
+    /// Run the fetch [`State::join`] started; dropping `started` once it has
+    /// settled wakes every token waiting on it.
+    fn spawn_fetch(self: &Arc<Self>, started: watch::Sender<()>) {
         let inner = Arc::clone(self);
         let task = async move {
             let outcome = inner.fetch().await;
             inner.settle(outcome);
-            drop(done);
+            drop(started);
         };
         // The token that asked is the fetch's cause, so its lines carry the
         // token's trace — never its request scope, which ends without it.
@@ -292,7 +253,6 @@ impl Inner {
             None => tokio::spawn(task),
         };
         drop(handle);
-        Some(fetch)
     }
 
     /// One fetch of the set, bounded by [`JWKS_FETCH_TIMEOUT`] and
@@ -357,9 +317,9 @@ impl Inner {
         if set.len() == 0 {
             return Err(Failure {
                 detail: format!(
-                    "{} holds no key this verifier can use: none is an RSA, P-256, P-384 or \
-                     Ed25519 signing key for an accepted algorithm",
-                    self.endpoint
+                    "{} holds no key this verifier can use: none is a signing key for {}",
+                    self.endpoint,
+                    one_of(self.algorithms.iter().copied())
                 ),
                 retry_after: None,
             });
@@ -397,14 +357,12 @@ impl Inner {
     fn settle(&self, outcome: Result<(JwkSet, Duration), Failure>) {
         let now = Instant::now();
         let mut state = self.lock();
-        state.in_flight = None;
         match outcome {
             Ok((set, fresh_for)) => {
                 let (keys, skipped) = (set.len(), set.skipped());
                 state.held = Some(Held {
-                    set: Arc::new(set),
+                    set,
                     fresh_until: now + fresh_for,
-                    usable_until: now + fresh_for + JWKS_STALE_CEILING,
                 });
                 state.failure = None;
                 drop(state);
@@ -438,7 +396,68 @@ impl Inner {
 
 impl State {
     fn usable(&self, now: Instant) -> Option<&Held> {
-        self.held.as_ref().filter(|held| now < held.usable_until)
+        self.held
+            .as_ref()
+            .filter(|held| now < held.fresh_until + JWKS_STALE_CEILING)
+    }
+
+    /// The fetch in flight, or a new one when the floor allows it — its
+    /// sender in `started` — or neither, when a fetch started within the floor
+    /// and has settled.
+    fn join(&mut self, now: Instant) -> Joined {
+        if let Some(fetch) = self
+            .in_flight
+            .as_ref()
+            .filter(|fetch| fetch.has_changed().is_ok())
+        {
+            return Joined {
+                fetch: Some(fetch.clone()),
+                started: None,
+            };
+        }
+        if self
+            .last_attempt
+            .is_some_and(|started| now.duration_since(started) < JWKS_REFRESH_FLOOR)
+        {
+            return Joined {
+                fetch: None,
+                started: None,
+            };
+        }
+        let (started, fetch) = watch::channel(());
+        self.last_attempt = Some(now);
+        self.in_flight = Some(fetch.clone());
+        Joined {
+            fetch: Some(fetch),
+            started: Some(started),
+        }
+    }
+
+    /// What a token gets once the fetch it waited for has settled.
+    fn answer(
+        &self,
+        endpoint: &str,
+        now: Instant,
+        kid: Option<&str>,
+        algorithm: Algorithm,
+    ) -> Result<Arc<DecodingKey>, AuthError> {
+        let Some(held) = self.usable(now) else {
+            return Err(self.unavailable(endpoint, now));
+        };
+        match held.set.select(kid, algorithm) {
+            Selection::Unknown => Err(self.unknown(endpoint, now)),
+            selection => selection.into_key(),
+        }
+    }
+
+    /// A key the held set lacks: unknown when the last fetch answered, and
+    /// unavailable when it failed — the key was never looked for.
+    fn unknown(&self, endpoint: &str, now: Instant) -> AuthError {
+        if self.failure.is_some() {
+            self.unavailable(endpoint, now)
+        } else {
+            AuthError::UnknownKey
+        }
     }
 
     /// The `503` a token gets while no set can be had: the last failure, and
@@ -512,11 +531,6 @@ fn seconds(digits: &str) -> Option<Duration> {
         return None;
     }
     Some(Duration::from_secs(digits.parse().unwrap_or(u64::MAX)))
-}
-
-/// The setting naming the JWK Set's URI, every way it can be given.
-fn jwks_uri_setting() -> String {
-    crate::config::spellings("JWKS_URI", "jwks_uri")
 }
 
 #[cfg(test)]
@@ -606,7 +620,9 @@ mod tests {
             ("issuer.example/jwks", "is not a URL"),
             ("ftp://issuer.example/jwks", "must be an https URL"),
         ] {
-            let Err(AuthError::Failed(refused)) = Jwks::new(uri, None, &[Algorithm::EdDSA]) else {
+            let Err(AuthError::Failed(refused)) =
+                Jwks::new(uri, &AuthnTls::default(), &[Algorithm::EdDSA])
+            else {
                 panic!("{uri} must be refused");
             };
             assert!(
@@ -622,7 +638,9 @@ mod tests {
         for pem in [&b""[..], b"not a certificate"] {
             let Err(AuthError::Failed(refused)) = Jwks::new(
                 "https://issuer.example/jwks",
-                Some(pem),
+                &AuthnTls {
+                    ca_cert: Some(pem.to_vec()),
+                },
                 &[Algorithm::EdDSA],
             ) else {
                 panic!("an authority file with no certificate must be refused");
@@ -637,7 +655,7 @@ mod tests {
     fn the_endpoint_is_named_without_its_query() {
         let jwks = Jwks::new(
             "https://issuer.example/keys?api_key=never-quoted",
-            None,
+            &AuthnTls::default(),
             &[Algorithm::EdDSA],
         )
         .expect("an https URI");

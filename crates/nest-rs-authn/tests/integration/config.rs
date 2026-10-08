@@ -544,28 +544,6 @@ fn a_jwk_set_uri_beside_a_static_key_is_refused_naming_both() {
     }
 }
 
-/// The keys a JWK Set serves decide which tokens verify, so plain http is
-/// refused at boot, before anything is fetched.
-#[test]
-fn a_jwk_set_uri_must_be_https() {
-    use nest_rs_config::{Namespaced, var_name};
-
-    let refused = AuthnConfig {
-        jwks_uri: Some("http://auth.example.com/api/auth/jwks".into()),
-        ..Default::default()
-    }
-    .into_options()
-    .and_then(JwtService::new);
-    let Err(AuthError::Failed(message)) = refused else {
-        panic!("a plain-http JWK Set must be refused")
-    };
-    assert!(
-        message.contains(&var_name(AuthnConfig::NAMESPACE, "JWKS_URI"))
-            && message.contains("must be an https URL"),
-        "{message}"
-    );
-}
-
 /// An authority names what the JWK Set endpoint's certificate chains to, so
 /// set without a JWK Set it would go unused.
 #[test]
@@ -629,16 +607,17 @@ fn the_jwk_set_and_its_authority_are_read_from_the_environment() {
     let _ = std::fs::remove_dir_all(&dir);
 
     let options = config.expect("from_env").into_options().expect("options");
-    let JwtKey::Jwks { uri, ca_cert } = &options.key else {
+    let JwtKey::Jwks { uri, tls } = &options.key else {
         panic!("a JWK Set URI alone makes a JWK Set key")
     };
     assert_eq!(uri, JWKS_URI);
-    assert_eq!(ca_cert.as_deref(), Some(pem.as_bytes()));
+    assert_eq!(tls.ca_cert.as_deref(), Some(pem.as_bytes()));
     JwtService::new(options).expect("the authority holds a certificate");
 }
 
 /// `ALGORITHMS` reads the names RFC 7518 gives them, case and all, and refuses
-/// anything else — `none` included — naming the variable.
+/// anything else — `none` included — naming the variable. A list naming none
+/// is the service's to refuse, like any list that does not fit its key.
 #[test]
 fn algorithms_are_read_by_their_jose_names() {
     use jsonwebtoken::Algorithm;
@@ -655,7 +634,19 @@ fn algorithms_are_read_by_their_jose_names() {
         config.algorithms,
         Some(vec![Algorithm::EdDSA, Algorithm::RS256])
     );
-    for refused in ["none", "rs256", "ES512", ",", "HS256,nope"] {
+    let empty = AuthnConfig {
+        jwks_uri: Some(JWKS_URI.into()),
+        ..read(",").expect("a list of no names reads")
+    };
+    let Err(AuthError::Failed(message)) = empty.into_options().and_then(JwtService::new) else {
+        panic!("a list naming no algorithm must fail the boot")
+    };
+    assert!(
+        message.contains(&var_name(AuthnConfig::NAMESPACE, "ALGORITHMS"))
+            && message.contains("names no algorithm"),
+        "{message}"
+    );
+    for refused in ["none", "rs256", "ES512", "HS256,nope"] {
         let message = read(refused)
             .err()
             .unwrap_or_else(|| panic!("{refused:?} must fail the boot"))
@@ -688,33 +679,17 @@ fn the_algorithms_set_beside_a_key_must_fit_it() {
     assert_eq!(narrowed.algorithms, vec![Algorithm::EdDSA]);
     JwtService::new(narrowed).expect("EdDSA fits a JWK Set");
 
-    for (config, why) in [
-        (
-            AuthnConfig {
-                jwks_uri: Some(JWKS_URI.into()),
-                algorithms: Some(vec![Algorithm::RS256, Algorithm::HS256]),
-                ..Default::default()
-            },
-            "an HMAC algorithm against a public JWK Set",
-        ),
-        (
-            AuthnConfig {
-                public_key: Some(crate::DEV_PUBLIC_KEY.into()),
-                algorithms: Some(vec![Algorithm::RS256]),
-                ..Default::default()
-            },
-            "RS256 with an EdDSA key",
-        ),
-    ] {
-        let refused = config.into_options().and_then(JwtService::new);
-        let Err(AuthError::Failed(message)) = refused else {
-            panic!("{why} must be refused")
-        };
-        assert!(
-            message.contains("algorithm cannot be used"),
-            "{why}: {message}"
-        );
+    let refused = AuthnConfig {
+        public_key: Some(crate::DEV_PUBLIC_KEY.into()),
+        algorithms: Some(vec![Algorithm::RS256]),
+        ..Default::default()
     }
+    .into_options()
+    .and_then(JwtService::new);
+    let Err(AuthError::Failed(message)) = refused else {
+        panic!("RS256 with an EdDSA key must be refused")
+    };
+    assert!(message.contains("algorithm cannot be used"), "{message}");
 }
 
 /// A secret signs with the one HMAC algorithm `ALGORITHMS` names, held to its

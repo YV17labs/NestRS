@@ -1,5 +1,7 @@
 //! [`AuthnTls`] — what the JWK Set endpoint's certificate must chain to.
 
+use std::fmt;
+
 use nest_rs_config::{ConfigService, Result};
 
 /// TLS trust for the JWK Set endpoint `<PREFIX>_AUTHN__JWKS_URI` names. The
@@ -15,6 +17,14 @@ pub struct AuthnTls {
     /// signed. Read from `<PREFIX>_AUTHN__TLS_CA_CERT`, or the file
     /// `<PREFIX>_AUTHN__TLS_CA_CERT_FILE` names.
     pub ca_cert: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for AuthnTls {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthnTls")
+            .field("ca_cert", &self.ca_cert.as_ref().map(|_| "<pem>"))
+            .finish()
+    }
 }
 
 impl AuthnTls {

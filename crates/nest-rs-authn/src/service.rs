@@ -3,15 +3,15 @@
 use std::time::Duration;
 
 use jsonwebtoken::{
-    Algorithm, DecodingKey, EncodingKey, Header, TokenData, Validation, decode, decode_header,
-    encode, errors::ErrorKind, get_current_timestamp,
+    Algorithm, AlgorithmFamily, DecodingKey, EncodingKey, Header, Validation, decode,
+    decode_header, encode, errors::ErrorKind, get_current_timestamp,
 };
 use nest_rs_config::{Namespaced, var_name};
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::AuthnConfig;
 use crate::error::AuthError;
 use crate::jwks::Jwks;
+use crate::{AuthnConfig, AuthnTls};
 
 /// Prove an EdDSA private key and public key are one pair: a signature the
 /// private key makes has to verify under the public key.
@@ -51,20 +51,43 @@ fn min_hmac_secret_bytes(algorithm: Algorithm) -> usize {
     }
 }
 
-/// The algorithms a JWK Set's keys may verify, and a [`JwtKey::Jwks`]'s
-/// default: every asymmetric one this verifier runs, never an `HS*` — a JWK
-/// Set is public, and an HMAC algorithm would verify with a key anyone reads.
-const JWKS_ALGORITHMS: &[Algorithm] = &[
-    Algorithm::RS256,
-    Algorithm::RS384,
-    Algorithm::RS512,
-    Algorithm::PS256,
-    Algorithm::PS384,
-    Algorithm::PS512,
-    Algorithm::ES256,
-    Algorithm::ES384,
-    Algorithm::EdDSA,
+/// Every algorithm family this verifier runs, in the order a sentence lists them.
+pub(crate) const FAMILIES: &[AlgorithmFamily] = &[
+    AlgorithmFamily::Hmac,
+    AlgorithmFamily::Rsa,
+    AlgorithmFamily::Ec,
+    AlgorithmFamily::Ed,
 ];
+
+/// The families a JWK Set's keys may verify, and a [`JwtKey::Jwks`]'s default:
+/// every asymmetric one, never HMAC — a JWK Set is public, and an HMAC
+/// algorithm would verify with a key anyone reads.
+pub(crate) const JWKS_FAMILIES: &[AlgorithmFamily] = &[
+    AlgorithmFamily::Rsa,
+    AlgorithmFamily::Ec,
+    AlgorithmFamily::Ed,
+];
+
+/// The algorithms of `families`, in their order — derived, since
+/// `AlgorithmFamily::algorithms` is not a `const fn`.
+pub(crate) fn algorithms_of(families: &[AlgorithmFamily]) -> impl Iterator<Item = Algorithm> + '_ {
+    families
+        .iter()
+        .flat_map(|family| family.algorithms().iter().copied())
+}
+
+/// `algorithms` as a sentence names them: `HS256, HS384 or HS512`.
+pub(crate) fn one_of(algorithms: impl IntoIterator<Item = Algorithm>) -> String {
+    let names: Vec<String> = algorithms
+        .into_iter()
+        .map(|algorithm| format!("{algorithm:?}"))
+        .collect();
+    match names.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
 
 /// Prefix of every media type this framework mints for a non-access purpose.
 ///
@@ -109,13 +132,14 @@ pub enum JwtKey {
     },
     /// The JWK Set (RFC 7517 §5) an external issuer publishes — Keycloak,
     /// Auth0, better-auth — fetched when a token first needs it and kept
-    /// fresh. Verify-only: [`sign`](JwtService::sign) refuses.
+    /// fresh. Verify-only: [`sign`](JwtService::sign) and the handshake
+    /// methods refuse.
     Jwks {
         /// Where the set is fetched; `https` only.
         uri: String,
-        /// PEM certificates of the authorities the endpoint's certificate must
-        /// chain to, replacing the system's; `None` trusts the system's.
-        ca_cert: Option<Vec<u8>>,
+        /// What the endpoint's certificate must chain to — the system's
+        /// authorities by default.
+        tls: AuthnTls,
     },
 }
 
@@ -165,11 +189,18 @@ pub struct JwtOptions {
 impl JwtOptions {
     const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
 
-    /// Options over `key`, verifying `algorithms`, every other field at its default.
-    fn with_key(key: JwtKey, algorithms: &[Algorithm]) -> Self {
+    /// Options over `key`, accepting its default algorithms — HS256 for a
+    /// secret, EdDSA for a PEM key, every asymmetric one for a JWK Set — every
+    /// other field at its default.
+    pub(crate) fn with_key(key: JwtKey) -> Self {
+        let algorithms = match &key {
+            JwtKey::Hmac(_) => vec![Algorithm::HS256],
+            JwtKey::Pem { .. } => vec![Algorithm::EdDSA],
+            JwtKey::Jwks { .. } => algorithms_of(JWKS_FAMILIES).collect(),
+        };
         Self {
             key,
-            algorithms: algorithms.to_vec(),
+            algorithms,
             expires_in: Duration::from_secs(3600),
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
@@ -182,30 +213,24 @@ impl JwtOptions {
     /// HS256 options from a shared secret. Audience/issuer are unset (no
     /// claim check) and TTL defaults to 1 hour — layer on via the fields.
     pub fn new(secret: impl Into<String>) -> Self {
-        Self::with_key(JwtKey::Hmac(secret.into()), &[Algorithm::HS256])
+        Self::with_key(JwtKey::Hmac(secret.into()))
     }
 
     /// EdDSA options with both keys — a token *issuer* that can sign and verify.
     pub fn eddsa(private_pem: impl Into<String>, public_pem: impl Into<String>) -> Self {
-        Self::with_key(
-            JwtKey::Pem {
-                private_pem: Some(private_pem.into()),
-                public_pem: public_pem.into(),
-            },
-            &[Algorithm::EdDSA],
-        )
+        Self::with_key(JwtKey::Pem {
+            private_pem: Some(private_pem.into()),
+            public_pem: public_pem.into(),
+        })
     }
 
     /// EdDSA options with only the public key — a *resource server* that can
     /// verify but never mint (the `apps/api` posture).
     pub fn eddsa_verify(public_pem: impl Into<String>) -> Self {
-        Self::with_key(
-            JwtKey::Pem {
-                private_pem: None,
-                public_pem: public_pem.into(),
-            },
-            &[Algorithm::EdDSA],
-        )
+        Self::with_key(JwtKey::Pem {
+            private_pem: None,
+            public_pem: public_pem.into(),
+        })
     }
 
     /// Options verifying the tokens of an external issuer against the JWK Set
@@ -214,13 +239,10 @@ impl JwtOptions {
     /// narrows it, and the endpoint's certificate chains to the system's
     /// authorities.
     pub fn jwks(uri: impl Into<String>) -> Self {
-        Self::with_key(
-            JwtKey::Jwks {
-                uri: uri.into(),
-                ca_cert: None,
-            },
-            JWKS_ALGORITHMS,
-        )
+        Self::with_key(JwtKey::Jwks {
+            uri: uri.into(),
+            tls: AuthnTls::default(),
+        })
     }
 }
 
@@ -261,13 +283,10 @@ enum Verifier {
     /// `alg` picks among them, and only among them.
     Jwks {
         set: Jwks,
+        /// One per algorithm: jsonwebtoken 11 refuses every token under a
+        /// `Validation` whose algorithms span two key families.
         validations: Vec<(Algorithm, Validation)>,
     },
-}
-
-/// The `ALGORITHMS` setting, every way it can be given.
-fn algorithms_setting() -> String {
-    crate::config::spellings("ALGORITHMS", "algorithms")
 }
 
 /// `algorithms` without repeats, once each fits `key`: a static key takes
@@ -279,37 +298,32 @@ fn accepted(key: &JwtKey, algorithms: &[Algorithm]) -> Result<Vec<Algorithm>, Au
             accepted.push(*algorithm);
         }
     }
-    let (fitting, key_name, fits_name): (&[Algorithm], &str, &str) = match key {
-        JwtKey::Hmac(_) => (
-            &[Algorithm::HS256, Algorithm::HS384, Algorithm::HS512],
-            "an HMAC secret",
-            "HS256, HS384 or HS512",
-        ),
-        JwtKey::Pem { .. } => (&[Algorithm::EdDSA], "an EdDSA key", "EdDSA"),
-        JwtKey::Jwks { .. } => (
-            JWKS_ALGORITHMS,
-            "a JWK Set, whose keys anyone can read",
-            "RS256, RS384, RS512, PS256, PS384, PS512, ES256, ES384 or EdDSA",
-        ),
+    let (families, key_name): (&[AlgorithmFamily], &str) = match key {
+        JwtKey::Hmac(_) => (&[AlgorithmFamily::Hmac], "an HMAC secret"),
+        JwtKey::Pem { .. } => (&[AlgorithmFamily::Ed], "an EdDSA key"),
+        JwtKey::Jwks { .. } => (JWKS_FAMILIES, "a JWK Set, whose keys anyone can read"),
     };
+    let fitting = || one_of(algorithms_of(families));
     if accepted.is_empty() {
         return Err(AuthError::Failed(format!(
-            "{}, names no algorithm: name {fits_name}",
-            algorithms_setting()
+            "{}, names no algorithm: name {}",
+            crate::config::algorithms_setting(),
+            fitting()
         )));
     }
     if let Some(misfit) = accepted
         .iter()
-        .find(|algorithm| !fitting.contains(algorithm))
+        .find(|algorithm| !families.contains(&algorithm.family()))
     {
         return Err(AuthError::Failed(format!(
-            "the {misfit:?} algorithm cannot be used with {key_name}: use {fits_name}"
+            "the {misfit:?} algorithm cannot be used with {key_name}: use {}",
+            fitting()
         )));
     }
     if !matches!(key, JwtKey::Jwks { .. }) && accepted.len() > 1 {
         return Err(AuthError::Failed(format!(
             "{}, names {} algorithms, and {key_name} signs and verifies with one",
-            algorithms_setting(),
+            crate::config::algorithms_setting(),
             accepted.len()
         )));
     }
@@ -439,10 +453,10 @@ impl JwtService {
                     },
                 )
             }
-            JwtKey::Jwks { uri, ca_cert } => (
+            JwtKey::Jwks { uri, tls } => (
                 None,
                 Verifier::Jwks {
-                    set: Jwks::new(uri, ca_cert.as_deref(), &algorithms)?,
+                    set: Jwks::new(uri, tls, &algorithms)?,
                     validations: algorithms
                         .iter()
                         .map(|algorithm| (*algorithm, validation(&options, *algorithm)))
@@ -522,7 +536,24 @@ impl JwtService {
     /// had is [`AuthError::Unavailable`], never a verdict on the token. Against
     /// a static key it never waits.
     pub async fn verify<C: DeserializeOwned>(&self, token: &str) -> Result<C, AuthError> {
-        let data = self.decode::<C>(token).await?;
+        let data = match &self.verifier {
+            Verifier::Static { key, validation } => {
+                decode::<C>(token, key, validation).map_err(map_decode_error)?
+            }
+            Verifier::Jwks { set, validations } => {
+                // The header is unsigned: it only picks among what the verifier
+                // already accepts, and the signature then has to hold.
+                let header = decode_header(token).map_err(map_decode_error)?;
+                let Some((_, validation)) = validations
+                    .iter()
+                    .find(|(algorithm, _)| *algorithm == header.alg)
+                else {
+                    return Err(AuthError::InvalidAlgorithm);
+                };
+                let key = set.key_for(header.kid.as_deref(), header.alg).await?;
+                decode::<C>(token, &key, validation).map_err(map_decode_error)?
+            }
+        };
         // RFC 9068 §4, case-insensitive (RFC 9110 §8.3.1), checked after the
         // signature so an unsigned header never steers it. `explicit_typing` off
         // relaxes the `at+jwt` check, never the reserved handshake namespace.
@@ -565,39 +596,28 @@ impl JwtService {
     /// The type check is unconditional — a flow's separation from access tokens
     /// cannot depend on a configuration flag — and it is exact, so a
     /// transaction minted for one flow does not verify on another's.
-    pub async fn verify_handshake<C: DeserializeOwned>(
+    ///
+    /// A handshake verifies only under the static key that signs this
+    /// deployment's own: a service verifying an issuer's JWK Set mints none, and
+    /// refuses as [`sign_handshake`](Self::sign_handshake) does.
+    pub fn verify_handshake<C: DeserializeOwned>(
         &self,
         purpose: &str,
         token: &str,
     ) -> Result<C, AuthError> {
-        let data = self.decode::<C>(token).await?;
+        let Verifier::Static { key, validation } = &self.verifier else {
+            return Err(AuthError::Failed(
+                "this JwtService verifies an issuer's JWK Set — it verifies no handshake of \
+                 this deployment's own"
+                    .into(),
+            ));
+        };
+        let data = decode::<C>(token, key, validation).map_err(map_decode_error)?;
         let found = data.header.typ.as_deref().unwrap_or_default();
         if !found.eq_ignore_ascii_case(&handshake_typ(purpose)) {
             return Err(AuthError::InvalidToken);
         }
         Ok(data.claims)
-    }
-
-    /// Check `token`'s signature and claims under the key that verifies it.
-    async fn decode<C: DeserializeOwned>(&self, token: &str) -> Result<TokenData<C>, AuthError> {
-        match &self.verifier {
-            Verifier::Static { key, validation } => {
-                decode::<C>(token, key, validation).map_err(map_decode_error)
-            }
-            Verifier::Jwks { set, validations } => {
-                // The header is unsigned: it only picks among what the verifier
-                // already accepts, and the signature then has to hold.
-                let header = decode_header(token).map_err(map_decode_error)?;
-                let Some((_, validation)) = validations
-                    .iter()
-                    .find(|(algorithm, _)| *algorithm == header.alg)
-                else {
-                    return Err(AuthError::InvalidAlgorithm);
-                };
-                let key = set.key_for(header.kid.as_deref(), header.alg).await?;
-                decode::<C>(token, &key, validation).map_err(map_decode_error)
-            }
-        }
     }
 
     /// Absolute `exp` for a token minted now with the default TTL — the value
@@ -702,8 +722,23 @@ mod tests {
     #[test]
     fn a_jwk_set_accepts_every_asymmetric_algorithm_by_default() {
         let options = JwtOptions::jwks("https://issuer.example/jwks");
-        assert_eq!(options.algorithms, JWKS_ALGORITHMS);
+        assert_eq!(options.algorithms.len(), 9, "{:?}", options.algorithms);
+        assert!(
+            options
+                .algorithms
+                .iter()
+                .all(|algorithm| algorithm.family() != AlgorithmFamily::Hmac)
+        );
         JwtService::new(options).expect("the default set fits a JWK Set");
+    }
+
+    #[test]
+    fn a_list_of_algorithms_reads_as_a_sentence() {
+        assert_eq!(
+            one_of(algorithms_of(&[AlgorithmFamily::Hmac])),
+            "HS256, HS384 or HS512"
+        );
+        assert_eq!(one_of(algorithms_of(&[AlgorithmFamily::Ed])), "EdDSA");
     }
 
     #[test]
@@ -738,6 +773,10 @@ mod tests {
         ));
         assert!(matches!(
             jwt.sign_handshake("oauth-tx", &serde_json::json!({})),
+            Err(AuthError::Failed(_))
+        ));
+        assert!(matches!(
+            jwt.verify_handshake::<serde_json::Value>("oauth-tx", "a.b.c"),
             Err(AuthError::Failed(_))
         ));
     }

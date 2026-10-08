@@ -6,6 +6,7 @@ use jsonwebtoken::Algorithm;
 use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, config};
 
 use crate::error::AuthError;
+use crate::service::{FAMILIES, algorithms_of, one_of};
 use crate::{AuthnTls, JwtKey, JwtOptions};
 
 /// The token lifetime's range, the variable that sets it, and why.
@@ -151,44 +152,38 @@ fn pem_text(env: &ConfigService, key: &str) -> nest_rs_config::Result<Option<Str
     }
 }
 
-/// Every JWS algorithm this verifier runs, in the order a refusal lists them.
-const ALGORITHM_NAMES: &str =
-    "HS256, HS384, HS512, RS256, RS384, RS512, PS256, PS384, PS512, ES256, ES384 or EdDSA";
-
 /// The `ALGORITHMS` list, each name read as RFC 7518 spells it — case and all,
 /// since a JOSE `alg` is case-sensitive. A name it does not know, `none`
-/// included, fails the boot.
+/// included, fails the boot; whether the list fits the key is
+/// [`JwtService::new`](crate::JwtService::new)'s to judge.
 fn algorithms(env: &ConfigService) -> nest_rs_config::Result<Option<Vec<Algorithm>>> {
     let Some(setting) = env.setting("ALGORITHMS")? else {
         return Ok(None);
     };
-    let mut algorithms = Vec::new();
-    for name in setting
+    let known = || one_of(algorithms_of(FAMILIES));
+    setting
         .value
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
-    {
-        // The parser's error says no more than that the name is unknown.
-        let algorithm = name.parse::<Algorithm>().ok().ok_or_else(|| {
-            if setting.from_file() {
-                setting.refuse(format_args!(
-                    "names an algorithm this verifier does not run: use {ALGORITHM_NAMES}"
-                ))
-            } else {
-                setting.refuse(format_args!(
-                    "`{name}` is not an algorithm this verifier runs: use {ALGORITHM_NAMES}"
-                ))
-            }
-        })?;
-        algorithms.push(algorithm);
-    }
-    if algorithms.is_empty() {
-        return Err(setting.refuse(format_args!(
-            "names no algorithm: use {ALGORITHM_NAMES}, comma-separated"
-        )));
-    }
-    Ok(Some(algorithms))
+        .map(|name| {
+            // The parser's error says no more than that the name is unknown.
+            name.parse::<Algorithm>().ok().ok_or_else(|| {
+                if setting.from_file() {
+                    setting.refuse(format_args!(
+                        "names an algorithm this verifier does not run: use {}",
+                        known()
+                    ))
+                } else {
+                    setting.refuse(format_args!(
+                        "`{name}` is not an algorithm this verifier runs: use {}",
+                        known()
+                    ))
+                }
+            })
+        })
+        .collect::<nest_rs_config::Result<Vec<_>>>()
+        .map(Some)
 }
 
 /// A PEM key's setting, every way it can be given: which spelling supplied a
@@ -206,45 +201,31 @@ pub(crate) fn secret_setting() -> String {
     spellings("SECRET", "secret")
 }
 
-impl AuthnConfig {
-    /// Infer signing mode from the keys present. Fails the boot when no usable
-    /// combination exists.
-    ///
-    /// A pair signs and verifies EdDSA, a public key alone verifies it, a secret
-    /// alone signs and verifies HS256, a JWK Set URI alone verifies an external
-    /// issuer's tokens. Refused in order: a JWK Set URI beside a secret or a
-    /// key, a secret beside either key, a private key without its public key,
-    /// an authority without a JWK Set URI, nothing set. Whether each value is
-    /// usable is [`JwtService::new`](crate::JwtService::new)'s to judge.
-    pub fn into_options(self) -> Result<JwtOptions, AuthError> {
-        let leeway = Duration::from_secs(self.leeway_secs.unwrap_or(30));
-        let audience = self.audience;
-        let (secret, private, public) = (self.secret, self.private_key, self.public_key);
-        if self.jwks_uri.is_some() {
-            let keys = [
-                secret.as_ref().map(|_| secret_setting()),
-                private
-                    .as_ref()
-                    .map(|_| spellings("PRIVATE_KEY", "private_key")),
-                public
-                    .as_ref()
-                    .map(|_| spellings("PUBLIC_KEY", "public_key")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-            if !keys.is_empty() {
-                return Err(AuthError::Failed(format!(
-                    "{}, is set beside {}. An external issuer's JWK Set and a key of this \
-                     deployment's own are two key sources, and nothing says which is meant — \
-                     remove the static key from wherever it was set to verify against the JWK \
-                     Set, or the JWK Set URI to keep the static key",
-                    spellings("JWKS_URI", "jwks_uri"),
-                    keys.join(", and "),
-                )));
-            }
-        }
-        if secret.is_some() && (private.is_some() || public.is_some()) {
+/// The JWK Set URI's setting, every way it can be given.
+pub(crate) fn jwks_uri_setting() -> String {
+    spellings("JWKS_URI", "jwks_uri")
+}
+
+/// The accepted algorithms' setting, every way it can be given.
+pub(crate) fn algorithms_setting() -> String {
+    spellings("ALGORITHMS", "algorithms")
+}
+
+/// The JWK Set endpoint's authority setting, `_FILE` spelling included.
+pub(crate) fn tls_ca_cert_setting() -> String {
+    spellings("TLS_CA_CERT", "tls.ca_cert")
+}
+
+/// The key a secret, a private key and a public key make, or why they make
+/// none — every combination named, the order of the arms deciding nothing.
+fn static_key(
+    secret: Option<String>,
+    private: Option<String>,
+    public: Option<String>,
+) -> Result<JwtKey, AuthError> {
+    match (secret, private, public) {
+        (Some(secret), None, None) => Ok(JwtKey::Hmac(secret)),
+        (Some(_), private @ Some(_), public) | (Some(_), private @ None, public @ Some(_)) => {
             let keys = [
                 private
                     .as_ref()
@@ -257,59 +238,87 @@ impl AuthnConfig {
             .flatten()
             .collect::<Vec<_>>()
             .join(", and ");
-            return Err(AuthError::Failed(format!(
+            Err(AuthError::Failed(format!(
                 "{}, is set beside {keys}. An HS256 secret and EdDSA keys are two signing modes, \
                  and nothing says which is meant — remove the secret from wherever it was set \
                  to use EdDSA, or the keys to use HS256",
                 secret_setting(),
-            )));
+            )))
         }
-        if private.is_some() && public.is_none() {
-            return Err(AuthError::Failed(format!(
-                "{}, is set without {}",
-                spellings("PRIVATE_KEY", "private_key"),
-                spellings("PUBLIC_KEY", "public_key"),
-            )));
-        }
-        if self.tls.ca_cert.is_some() && self.jwks_uri.is_none() {
-            return Err(AuthError::Failed(format!(
-                "{}, is set without {}: it names the authority a JWK Set endpoint's certificate \
-                 chains to, and no JWK Set is fetched",
-                spellings("TLS_CA_CERT", "tls.ca_cert"),
-                spellings("JWKS_URI", "jwks_uri"),
-            )));
-        }
-        let mut options = match (secret, private, public, self.jwks_uri) {
-            (Some(secret), _, _, _) => JwtOptions::new(secret),
-            (None, private, Some(public), _) => match private {
-                Some(private) => JwtOptions::eddsa(private, public),
-                None => JwtOptions::eddsa_verify(public),
-            },
-            (None, _, None, Some(uri)) => {
-                let mut options = JwtOptions::jwks(uri.clone());
-                options.key = JwtKey::Jwks {
-                    uri,
-                    ca_cert: self.tls.ca_cert,
-                };
-                options
+        (None, private, Some(public)) => Ok(JwtKey::Pem {
+            private_pem: private,
+            public_pem: public,
+        }),
+        (None, Some(_), None) => Err(AuthError::Failed(format!(
+            "{}, is set without {}",
+            spellings("PRIVATE_KEY", "private_key"),
+            spellings("PUBLIC_KEY", "public_key"),
+        ))),
+        (None, None, None) => Err(AuthError::Failed(format!(
+            "no JWT key configured: set {} for HS256, {} for EdDSA, or {} for an external \
+             issuer's keys — or the same field in an AuthnConfig or JwtOptions built in code",
+            nest_rs_config::spellings(AuthnConfig::NAMESPACE, "SECRET"),
+            nest_rs_config::spellings(AuthnConfig::NAMESPACE, "PUBLIC_KEY"),
+            nest_rs_config::spellings(AuthnConfig::NAMESPACE, "JWKS_URI"),
+        ))),
+    }
+}
+
+impl AuthnConfig {
+    /// Infer signing mode from the keys present. Fails the boot when no usable
+    /// combination exists.
+    ///
+    /// A pair signs and verifies EdDSA, a public key alone verifies it, a secret
+    /// alone signs and verifies HS256, a JWK Set URI alone verifies an external
+    /// issuer's tokens. Refused: a JWK Set URI beside a secret or a key, an
+    /// authority without a JWK Set URI, a secret beside either key, a private
+    /// key without its public key, nothing set. Whether each value is usable is
+    /// [`JwtService::new`](crate::JwtService::new)'s to judge.
+    pub fn into_options(self) -> Result<JwtOptions, AuthError> {
+        let key = match self.jwks_uri {
+            Some(uri) => {
+                let beside = [
+                    self.secret.as_ref().map(|_| secret_setting()),
+                    self.private_key
+                        .as_ref()
+                        .map(|_| spellings("PRIVATE_KEY", "private_key")),
+                    self.public_key
+                        .as_ref()
+                        .map(|_| spellings("PUBLIC_KEY", "public_key")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                if !beside.is_empty() {
+                    return Err(AuthError::Failed(format!(
+                        "{}, is set beside {}. An external issuer's JWK Set and a key of this \
+                         deployment's own are two key sources, and nothing says which is meant \
+                         — remove the static key from wherever it was set to verify against the \
+                         JWK Set, or the JWK Set URI to keep the static key",
+                        jwks_uri_setting(),
+                        beside.join(", and "),
+                    )));
+                }
+                JwtKey::Jwks { uri, tls: self.tls }
             }
-            // A private key alone was refused above, so only nothing is left.
-            (None, _, None, None) => {
-                return Err(AuthError::Failed(format!(
-                    "no JWT key configured: set {} for HS256, {} for EdDSA, or {} for an \
-                     external issuer's keys — or the same field in an AuthnConfig or JwtOptions \
-                     built in code",
-                    nest_rs_config::spellings(Self::NAMESPACE, "SECRET"),
-                    nest_rs_config::spellings(Self::NAMESPACE, "PUBLIC_KEY"),
-                    nest_rs_config::spellings(Self::NAMESPACE, "JWKS_URI"),
-                )));
+            None => {
+                if self.tls.ca_cert.is_some() {
+                    return Err(AuthError::Failed(format!(
+                        "{}, is set without {}: it names the authority a JWK Set endpoint's \
+                         certificate chains to, and no JWK Set is fetched",
+                        tls_ca_cert_setting(),
+                        jwks_uri_setting(),
+                    )));
+                }
+                static_key(self.secret, self.private_key, self.public_key)?
             }
         };
+        let mut options = JwtOptions::with_key(key);
         if let Some(algorithms) = self.algorithms {
             options.algorithms = algorithms;
         }
-        options.leeway = leeway;
-        options.audience = audience;
+        options.leeway = Duration::from_secs(self.leeway_secs.unwrap_or(30));
+        options.audience = self.audience;
         options.issuer = self.issuer;
         options.allow_any_audience = self.allow_any_audience;
         options.explicit_typing = self.explicit_typing.unwrap_or(true);

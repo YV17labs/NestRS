@@ -12,19 +12,11 @@
 use std::sync::Arc;
 
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, KeyOperations, PublicKeyUse};
-use jsonwebtoken::{Algorithm, DecodingKey};
+use jsonwebtoken::{Algorithm, AlgorithmFamily, DecodingKey};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
-/// The algorithms an RSA key verifies: RFC 7518 §3.3 and §3.5.
-const RSA: &[Algorithm] = &[
-    Algorithm::RS256,
-    Algorithm::RS384,
-    Algorithm::RS512,
-    Algorithm::PS256,
-    Algorithm::PS384,
-    Algorithm::PS512,
-];
+use crate::error::AuthError;
 
 /// The keys of an issuer's JWK Set this verifier can use.
 pub(crate) struct JwkSet {
@@ -51,6 +43,17 @@ pub(crate) enum Selection {
     Unknown,
     /// Several keys fit and the token does not say which.
     Ambiguous,
+}
+
+impl Selection {
+    /// The key, or the refusal a token gets once no refresh can change it.
+    pub(crate) fn into_key(self) -> Result<Arc<DecodingKey>, AuthError> {
+        match self {
+            Self::Key(key) => Ok(key),
+            Self::WrongAlgorithm => Err(AuthError::InvalidAlgorithm),
+            Self::Unknown | Self::Ambiguous => Err(AuthError::UnknownKey),
+        }
+    }
 }
 
 /// The document's shape, every entry read on its own: a key this verifier
@@ -106,28 +109,19 @@ impl JwkSet {
     /// verifies its algorithm: trying each in turn would let a token choose its
     /// key.
     pub(crate) fn select(&self, kid: Option<&str>, algorithm: Algorithm) -> Selection {
-        let fits = |key: &&BoundKey| key.algorithms.contains(&algorithm);
-        let mut fitting = match kid {
-            Some(kid) => {
-                let mut named = self
-                    .keys
-                    .iter()
-                    .filter(|key| key.kid.as_deref() == Some(kid))
-                    .peekable();
-                if named.peek().is_none() {
-                    return Selection::Unknown;
-                }
-                let fitting: Vec<&BoundKey> = named.filter(fits).collect();
-                if fitting.is_empty() {
-                    return Selection::WrongAlgorithm;
-                }
-                fitting
-            }
-            None => self.keys.iter().filter(fits).collect(),
-        };
-        match (fitting.pop(), fitting.is_empty()) {
-            (Some(key), true) => Selection::Key(Arc::clone(&key.key)),
-            (Some(_), false) => Selection::Ambiguous,
+        let mut named = self
+            .keys
+            .iter()
+            .filter(|key| kid.is_none_or(|kid| key.kid.as_deref() == Some(kid)))
+            .peekable();
+        if kid.is_some() && named.peek().is_none() {
+            return Selection::Unknown;
+        }
+        let mut fitting = named.filter(|key| key.algorithms.contains(&algorithm));
+        match (fitting.next(), fitting.next()) {
+            (Some(key), None) => Selection::Key(Arc::clone(&key.key)),
+            (Some(_), Some(_)) => Selection::Ambiguous,
+            (None, _) if kid.is_some() => Selection::WrongAlgorithm,
             (None, _) => Selection::Unknown,
         }
     }
@@ -152,7 +146,7 @@ fn bind(jwk: &Jwk, accepted: &[Algorithm]) -> Option<BoundKey> {
         return None;
     }
     let of_its_type: &[Algorithm] = match &jwk.algorithm {
-        AlgorithmParameters::RSA(_) => RSA,
+        AlgorithmParameters::RSA(_) => AlgorithmFamily::Rsa.algorithms(),
         AlgorithmParameters::EllipticCurve(params) => match params.curve {
             EllipticCurve::P256 => &[Algorithm::ES256],
             EllipticCurve::P384 => &[Algorithm::ES384],
@@ -162,15 +156,15 @@ fn bind(jwk: &Jwk, accepted: &[Algorithm]) -> Option<BoundKey> {
             EllipticCurve::Ed25519 => &[Algorithm::EdDSA],
             _ => &[],
         },
-        // A symmetric key, and any type this verifier does not run.
         _ => &[],
     };
     // A key naming an algorithm this verifier does not run (`RSA-OAEP`, a name
     // it does not know) is that algorithm's alone.
-    let named = match common.key_algorithm {
-        None => None,
-        Some(named) => Some(Algorithm::try_from(named).ok()?),
-    };
+    let named = common
+        .key_algorithm
+        .map(Algorithm::try_from)
+        .transpose()
+        .ok()?;
     let algorithms: Vec<Algorithm> = of_its_type
         .iter()
         .copied()
@@ -193,17 +187,9 @@ mod tests {
     use super::*;
 
     /// Every algorithm a JWK Set may verify.
-    const ALL: &[Algorithm] = &[
-        Algorithm::RS256,
-        Algorithm::RS384,
-        Algorithm::RS512,
-        Algorithm::PS256,
-        Algorithm::PS384,
-        Algorithm::PS512,
-        Algorithm::ES256,
-        Algorithm::ES384,
-        Algorithm::EdDSA,
-    ];
+    fn all() -> Vec<Algorithm> {
+        crate::service::algorithms_of(crate::service::JWKS_FAMILIES).collect()
+    }
 
     /// Key material that decodes: selection never runs a signature.
     const B64: &str = "AQAB";
@@ -246,15 +232,15 @@ mod tests {
                 ec("p384", "P-384"),
                 okp("ed", "Ed25519"),
             ],
-            ALL,
+            &all(),
         );
         for (kid, verifies) in [
-            ("r", RSA),
+            ("r", AlgorithmFamily::Rsa.algorithms()),
             ("p256", &[Algorithm::ES256][..]),
             ("p384", &[Algorithm::ES384][..]),
             ("ed", &[Algorithm::EdDSA][..]),
         ] {
-            for algorithm in ALL {
+            for algorithm in &all() {
                 let expected = if verifies.contains(algorithm) {
                     "key"
                 } else {
@@ -271,7 +257,7 @@ mod tests {
 
     #[test]
     fn a_key_naming_its_algorithm_verifies_that_one_alone() {
-        let set = set(&[rsa("r", r#","alg":"PS256""#)], ALL);
+        let set = set(&[rsa("r", r#","alg":"PS256""#)], &all());
         assert_eq!(selects(&set, Some("r"), Algorithm::PS256), "key");
         assert_eq!(
             selects(&set, Some("r"), Algorithm::RS256),
@@ -281,7 +267,10 @@ mod tests {
 
     #[test]
     fn a_key_naming_an_algorithm_of_another_type_is_not_read() {
-        let set = set(&[ec("e", "P-256").replace('}', r#","alg":"RS256"}"#)], ALL);
+        let set = set(
+            &[ec("e", "P-256").replace('}', r#","alg":"RS256"}"#)],
+            &all(),
+        );
         assert_eq!(set.len(), 0);
         assert_eq!(set.skipped(), 1);
     }
@@ -308,7 +297,7 @@ mod tests {
                 rsa("future", r#","alg":"ML-DSA-65""#),
                 rsa("sig", r#","use":"sig","key_ops":["verify"]"#),
             ],
-            ALL,
+            &all(),
         );
         assert_eq!((set.len(), set.skipped()), (1, 4));
         for kid in ["enc", "wrap", "oaep", "future"] {
@@ -331,18 +320,18 @@ mod tests {
                 okp("ed448", "Ed448"),
                 r#"{"kty":"EC","use":7}"#.to_owned(),
             ],
-            ALL,
+            &all(),
         );
         assert_eq!((set.len(), set.skipped()), (0, 5));
     }
 
     #[test]
     fn a_token_without_a_kid_is_checked_only_by_the_one_key_that_fits() {
-        let one = set(&[rsa("r", ""), okp("ed", "Ed25519")], ALL);
+        let one = set(&[rsa("r", ""), okp("ed", "Ed25519")], &all());
         assert_eq!(selects(&one, None, Algorithm::EdDSA), "key");
         assert_eq!(selects(&one, None, Algorithm::ES256), "unknown");
 
-        let two = set(&[okp("ed-1", "Ed25519"), okp("ed-2", "Ed25519")], ALL);
+        let two = set(&[okp("ed-1", "Ed25519"), okp("ed-2", "Ed25519")], &all());
         assert_eq!(selects(&two, None, Algorithm::EdDSA), "ambiguous");
         assert_eq!(selects(&two, Some("ed-2"), Algorithm::EdDSA), "key");
     }
@@ -356,7 +345,7 @@ mod tests {
                 ec("dup", "P-256"),
                 ec("dup", "P-256"),
             ],
-            ALL,
+            &all(),
         );
         assert_eq!(selects(&set, Some("k"), Algorithm::ES256), "key");
         assert_eq!(selects(&set, Some("k"), Algorithm::PS384), "key");
@@ -366,10 +355,10 @@ mod tests {
     #[test]
     fn a_document_that_is_not_a_jwk_set_does_not_parse() {
         for body in [&b"[]"[..], b"{}", br#"{"keys":{}}"#, b"not json"] {
-            assert!(JwkSet::parse(body, ALL).is_err());
+            assert!(JwkSet::parse(body, &all()).is_err());
         }
         assert_eq!(
-            JwkSet::parse(br#"{"keys":[]}"#, ALL)
+            JwkSet::parse(br#"{"keys":[]}"#, &all())
                 .map(|set| set.len())
                 .ok(),
             Some(0)

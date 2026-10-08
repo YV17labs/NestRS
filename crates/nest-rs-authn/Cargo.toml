@@ -49,8 +49,6 @@ anyhow.workspace = true
 tracing.workspace = true
 # The guard's bound on a strategy's answer (`AUTHENTICATE_TIMEOUT`): a strategy
 # that never answers is denied at it rather than holding the request for good.
-# A JWK Set fetch runs on a task of its own, so a caller dropped mid-fetch
-# neither cancels it nor lets the next caller start a second.
 tokio.workspace = true
 
 [dev-dependencies]

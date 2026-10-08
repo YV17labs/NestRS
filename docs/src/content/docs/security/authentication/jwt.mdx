@@ -265,7 +265,8 @@ export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
 
 Nothing else changes: `JwtStrategy` verifies, the claims reach `Ctx<C>`,
 `iss`, `aud` and `exp` are checked as above. The service holds no signing key,
-so `sign` refuses. An issuer that stamps no `typ: at+jwt` on its access tokens
+so `sign` refuses, and so do `sign_handshake` and `verify_handshake`: an OAuth
+flow's transaction cookie needs a key of this deployment's own. An issuer that stamps no `typ: at+jwt` on its access tokens
 also needs `<PREFIX>_AUTHN__EXPLICIT_TYPING=false` — read one token's header to
 know. [External identity provider](/security/authentication/external-identity-provider/)
 walks the whole setup with better-auth.

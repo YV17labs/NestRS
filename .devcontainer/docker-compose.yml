@@ -1,5 +1,33 @@
 name: nestrs
 
+# The one Valkey every suite runs on, the standalone server and the profile below.
+x-valkey-image: &valkey-image valkey/valkey:9.1.2
+
+# Valkey's Sentinel and Cluster, for nest-rs-redis's topology suites alone, off
+# unless the profile is asked for, from the host:
+#   docker compose -f .devcontainer/docker-compose.yml --profile topologies up --detach
+# then `just test topology sentinel|cluster` in the dev container. Every node
+# listens on the dev container's loopback, which the certificate names, on ports
+# clear of the services below.
+x-topology: &topology
+  image: *valkey-image
+  profiles: [topologies]
+  network_mode: service:dev
+  user: "999:999"
+  volumes:
+    - ${CERTS:-certs}:/certs:ro
+
+# Each node sets PORT, the TLS port it listens on and is checked through.
+x-topology-node: &topology-node
+  <<: *topology
+  healthcheck:
+    interval: 5s
+    timeout: 5s
+    retries: 20
+    start_period: 30s
+    start_interval: 1s
+    test: [CMD-SHELL, 'valkey-cli --tls --cacert /certs/ca.pem -p "$$PORT" ping']
+
 services:
   dev:
     build:
@@ -72,7 +100,7 @@ services:
   # Valkey, the open-source Redis the framework supports, on TLS alone: the
   # name every `rediss://` URL of the workspace reaches.
   redis:
-    image: valkey/valkey:9.1.2
+    image: *valkey-image
     restart: unless-stopped
     command:
       - valkey-server
@@ -130,6 +158,94 @@ services:
       timeout: 5s
       retries: 30
       start_period: 40s
+
+  monitored-6380:
+    <<: *topology-node
+    configs: [node.conf]
+    environment: {PORT: "6380"}
+    command: [sh, -c, 'exec valkey-server /node.conf --tls-port "$$PORT"']
+  monitored-6381:
+    <<: *topology-node
+    configs: [node.conf]
+    environment: {PORT: "6381"}
+    command: [sh, -c, 'exec valkey-server /node.conf --tls-port "$$PORT" --replicaof 127.0.0.1 6380']
+
+  sentinel-26379: &sentinel
+    <<: *topology-node
+    configs: [sentinel.conf]
+    environment: {PORT: "26379"}
+    # Sentinel rewrites its configuration, so each one starts from a copy.
+    command: [sh, -c, 'cat /sentinel.conf > /tmp/sentinel.conf && exec valkey-sentinel /tmp/sentinel.conf --tls-port "$$PORT"']
+  sentinel-26380: {<<: *sentinel, environment: {PORT: "26380"}}
+  sentinel-26381: {<<: *sentinel, environment: {PORT: "26381"}}
+
+  cluster-7000: &cluster-node
+    <<: *topology-node
+    configs: [node.conf, cluster.conf]
+    environment: {PORT: "7000"}
+    command: [sh, -c, 'exec valkey-server /cluster.conf --tls-port "$$PORT"']
+  cluster-7001: {<<: *cluster-node, environment: {PORT: "7001"}}
+  cluster-7002: {<<: *cluster-node, environment: {PORT: "7002"}}
+  cluster-7003: {<<: *cluster-node, environment: {PORT: "7003"}}
+  cluster-7004: {<<: *cluster-node, environment: {PORT: "7004"}}
+  cluster-7005: {<<: *cluster-node, environment: {PORT: "7005"}}
+
+  # Forms the Cluster and waits for the sentinels, then exits.
+  topologies:
+    <<: *topology
+    volumes:
+      - ${CERTS:-certs}:/certs:ro
+      - ./topologies:/topologies:ro
+    command: [bash, /topologies/form.sh]
+    depends_on:
+      monitored-6380: {condition: service_healthy}
+      monitored-6381: {condition: service_healthy}
+      sentinel-26379: {condition: service_healthy}
+      sentinel-26380: {condition: service_healthy}
+      sentinel-26381: {condition: service_healthy}
+      cluster-7000: {condition: service_healthy}
+      cluster-7001: {condition: service_healthy}
+      cluster-7002: {condition: service_healthy}
+      cluster-7003: {condition: service_healthy}
+      cluster-7004: {condition: service_healthy}
+      cluster-7005: {condition: service_healthy}
+
+configs:
+  node.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/redis/server.pem
+      tls-key-file /certs/redis/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      repl-diskless-sync-delay 0
+      enable-debug-command local
+      appendonly no
+      save ""
+  cluster.conf:
+    content: |
+      include /node.conf
+      cluster-enabled yes
+      tls-cluster yes
+      cluster-databases 16
+      cluster-node-timeout 2000
+  # The replica is named: a sentinel reading the primary's INFO before the
+  # replica connects would otherwise learn of it only at its next INFO, 10 s later.
+  sentinel.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/redis/server.pem
+      tls-key-file /certs/redis/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      sentinel monitor nestrs 127.0.0.1 6380 2
+      sentinel down-after-milliseconds nestrs 2000
+      sentinel failover-timeout nestrs 10000
+      sentinel known-replica nestrs 127.0.0.1 6381
 
 volumes:
   certs:

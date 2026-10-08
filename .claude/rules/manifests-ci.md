@@ -99,8 +99,8 @@ owning crate's suite is undocumented.
 regressing** (`decisions/ci-on-change.md`). `framework.yml` runs `just ci`,
 recipe for recipe: fmt, clippy, each capability alone, the dependency policy,
 rustdoc, then every test against real Postgres, Valkey and S3 — never a mock —
-and `nest-rs-redis`'s e2e again on Valkey Sentinel and Cluster, on the same
-build (`just test topology`).
+each on one server, the dev container's: a backend's other shapes run by hand
+(`decisions/one-server-per-backend.md`).
 `demo.yml` runs the demo's own recipes — `just lint` with the tree's `nestrs
 lint`, and every suite — on a change to its tree or to the framework it builds
 on by path. `docs.yml` builds the site on a change to `docs/` and deploys it

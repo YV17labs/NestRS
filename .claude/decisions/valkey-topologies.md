@@ -66,3 +66,12 @@ Reopened when `redis` gives a Cluster a setting to skip `CLIENT SETINFO`, or
 reconnects through Sentinel itself as the spec asks — then the seam it replaces
 goes, and the pin with it — and when KEDA moves to another client, whose
 commands its rules follow.
+
+**Moved on 2026-10-08, the same day** (`one-server-per-backend.md`): CI runs
+the one server alone, and Sentinel and Cluster leave the CI job for the dev
+container's `topologies` profile — the `topology-services` action's services
+and its formation script, unchanged but for their network, the dev container's
+own, so the nodes still announce `127.0.0.1`, which the certificate names.
+`just test topology <name>` sets the profile's URL itself. The refusal of
+Sentinel and Cluster in the dev container above stands for its default
+services; a profile starts nothing unless asked for.

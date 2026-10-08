@@ -46,7 +46,9 @@ fast — through semver: removing support is a major, and the previous major
 keeps it. **A backend we support, we support whole**: every deployment shape its
 latest version offers in production (Valkey: standalone, Sentinel, Cluster),
 TLS on each — fewer drivers, each complete, never a subset passed off as
-support. Open source only: a backend's server is free software. We build what keeps an app correct; operating it (dashboards,
+support. CI runs each backend on one server, the dev container's; every other
+shape keeps its e2e suite, run by hand against a compose profile when its
+driver changes (`.claude/decisions/one-server-per-backend.md`). Open source only: a backend's server is free software. We build what keeps an app correct; operating it (dashboards,
 pausing, retuning) is its backend's tooling. No feature for a hypothetical
 user. We aim for excellence, not for done.
 
@@ -195,8 +197,10 @@ it helps. `demo/` Rust carries none.
 ## Testing
 
 Wiring bugs do not surface in unit tests. Postgres, Valkey and S3 run in the
-devcontainer: one that does not answer is an environment defect to fix, never a
-reason to skip a test. **We work encrypted**: every service, in the dev
+devcontainer, one server each, and CI starts those three and nothing else: one
+that does not answer is an environment defect to fix, never a reason to skip a
+test. Valkey's Sentinel and Cluster start with the dev container's `topologies`
+profile, for `just test topology <name>` alone. **We work encrypted**: every service, in the dev
 container and in CI, speaks TLS alone, presenting the one certificate a
 self-signed authority issues at setup (`.devcontainer/tls/issue.sh`); that
 authority joins the system's trust store, as a company installs its own, so

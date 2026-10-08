@@ -137,16 +137,17 @@ features because each pulls a port crate an app may not need.
   forgot is loaded again on that node alone.
 - **The Valkey the docs claim is the one every suite runs on**: the dev
   container's `docker-compose.yml` pins one image tag, which CI starts through
-  the `dev-services` action and the `topology-services` action runs as Sentinel
-  and Cluster, and the docs name its release — they move in one change.
+  the `dev-services` action and the `topologies` profile runs as Sentinel and
+  Cluster, and the docs name its release — they move in one change.
 - **Each binding's docs page prescribes its ACL rule whole, per role** — its
   namespace, the connection's commands, every command it or a script it runs
   sends, and nothing else — plus what a topology's connection adds, written
   once on the topologies page. Held by `nest-rs-redis`'s e2e on every
-  topology, which creates each user from the pages' lines verbatim on every
-  node, reads every node's `ACL LOG` for any denial and, for the queue, every
-  primary's `MONITOR` for a command the rule allows and nothing sends. KEDA's
-  rules are what its client sends on each topology, which the suite replays.
+  topology — CI's one server, the others by hand — which creates each user
+  from the pages' lines verbatim on every node, reads every node's `ACL LOG`
+  for any denial and, for the queue, every primary's `MONITOR` for a command
+  the rule allows and nothing sends. KEDA's rules are what its client sends on
+  each topology, which the suite replays.
 
 ## A key a datastore holds is a name an operator types
 

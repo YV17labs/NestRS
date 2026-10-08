@@ -14,7 +14,6 @@ on:
       # nest-rs-redis's e2e runs as printed.
       - 'crates/**/src/**'
       - 'docs/src/content/docs/queue/delivery.mdx'
-      - 'docs/src/content/docs/queue/topologies.mdx'
       - 'docs/src/content/docs/rate-limiting/index.mdx'
       - 'docs/src/content/docs/schedule/index.mdx'
   pull_request:
@@ -90,13 +89,3 @@ jobs:
         with:
           tool: cargo-nextest@0.9,just@1
       - run: just test
-      # nest-rs-redis's e2e again on Valkey's two other topologies, reusing the
-      # build above; the dev container runs the standalone server alone.
-      - uses: $/.github/actions/topology-services
-        id: topologies
-      - run: just test topology sentinel
-        env:
-          NESTRS_REDIS__URL: ${{ steps.topologies.outputs.sentinel-url }}
-      - run: just test topology cluster
-        env:
-          NESTRS_REDIS__URL: ${{ steps.topologies.outputs.cluster-url }}

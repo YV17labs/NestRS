@@ -252,57 +252,63 @@ async fn cancellation_answers_true_once_for_a_waiting_job_and_leaves_nothing() {
     crate::forget(&queue).await;
 }
 
-/// A push through a Redis gone silent fails at the connection's budget as the
-/// connection's own failure, naming the variable that sets it — within one
-/// budget, before the port's net could answer.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
-    let proxy = crate::DarkeningProxy::start().await;
-    let budget = Duration::from_secs(1);
-    let mut conn = RedisConnection::connect(&RedisConfig {
-        connect_timeout: budget,
-        ..crate::through(proxy.url())
-    })
-    .await
-    .expect("connect through the proxy");
-    let producer = RedisQueueProducer::new(conn.clone());
+/// What holds on one server alone: a double in front of it stands where a
+/// Sentinel or Cluster deployment has several hosts.
+mod standalone {
+    use super::*;
 
-    proxy.go_dark();
-    // The first command to fail is where the client starts reopening the
-    // connection; from there, every command waits on one nothing answers.
-    let mut saw_the_drop = false;
-    for _ in 0..50 {
-        if redis::cmd("PING")
-            .query_async::<()>(&mut conn)
-            .await
-            .is_err()
-        {
-            saw_the_drop = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(
-        saw_the_drop,
-        "the proxy going dark must drop the connection"
-    );
-
-    let queue = format!("nestrs-e2e-silent-{}", crate::this_run());
-    let started = Instant::now();
-    let refused = producer
-        .push_json(&queue, json!({ "probe": true }), None)
+    /// A push through a Redis gone silent fails at the connection's budget as the
+    /// connection's own failure, naming the variable that sets it — within one
+    /// budget, before the port's net could answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
+        let proxy = crate::DarkeningProxy::start().await;
+        let budget = Duration::from_secs(1);
+        let mut conn = RedisConnection::connect(&RedisConfig {
+            connect_timeout: budget,
+            ..crate::through(proxy.url())
+        })
         .await
-        .expect_err("nothing answers once the proxy is dark");
-    let took = started.elapsed();
+        .expect("connect through the proxy");
+        let producer = RedisQueueProducer::new(conn.clone());
 
-    assert!(
-        matches!(refused, QueueError::Backend(_)),
-        "the connection's own failure, not the port's net: {refused:?}"
-    );
-    let cause = nest_rs_core::error_message(&refused);
-    assert!(
-        cause.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
-        "{cause}"
-    );
-    assert!(took < budget * 3 / 2, "one budget: took {took:?}");
+        proxy.go_dark();
+        // The first command to fail is where the client starts reopening the
+        // connection; from there, every command waits on one nothing answers.
+        let mut saw_the_drop = false;
+        for _ in 0..50 {
+            if redis::cmd("PING")
+                .query_async::<()>(&mut conn)
+                .await
+                .is_err()
+            {
+                saw_the_drop = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            saw_the_drop,
+            "the proxy going dark must drop the connection"
+        );
+
+        let queue = format!("nestrs-e2e-silent-{}", crate::this_run());
+        let started = Instant::now();
+        let refused = producer
+            .push_json(&queue, json!({ "probe": true }), None)
+            .await
+            .expect_err("nothing answers once the proxy is dark");
+        let took = started.elapsed();
+
+        assert!(
+            matches!(refused, QueueError::Backend(_)),
+            "the connection's own failure, not the port's net: {refused:?}"
+        );
+        let cause = nest_rs_core::error_message(&refused);
+        assert!(
+            cause.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+            "{cause}"
+        );
+        assert!(took < budget * 3 / 2, "one budget: took {took:?}");
+    }
 }

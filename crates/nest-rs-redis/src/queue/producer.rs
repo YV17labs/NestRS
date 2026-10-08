@@ -80,9 +80,8 @@ impl RedisQueueProducer {
     /// Load the scripts a push and a cancel run, so the first of each is one
     /// round trip rather than a refused call, a load and the call again.
     pub(crate) async fn load_scripts(&self) -> Result<(), redis::RedisError> {
-        let mut conn = self.conn.clone();
         for script in SCRIPTS.producer() {
-            script.load_async(&mut conn).await?;
+            self.conn.load(script).await?;
         }
         Ok(())
     }

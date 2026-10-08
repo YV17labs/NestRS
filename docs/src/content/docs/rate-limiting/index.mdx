@@ -286,6 +286,10 @@ more:
 ACL SETUSER <user> reset on ><password> ~nestrs:throttler:* +ping +select +evalsha +script|load +incr +pttl +pexpire
 ```
 
+Under Sentinel and on a Cluster, the rule is created on every node and takes
+what its topology's connection adds — see
+[ACL on Sentinel and Cluster](/queue/topologies/#acl-on-sentinel-and-cluster).
+
 An app that also queues or fires scheduled jobs once gives the same user
 [the queue's](/queue/delivery/#where-a-queue-lives) and
 [the schedule's](/schedule/#the-keys) rules as well.

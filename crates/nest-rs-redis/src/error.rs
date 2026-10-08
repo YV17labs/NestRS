@@ -79,13 +79,15 @@ pub enum RedisError {
         endpoint: String,
     },
 
-    /// TLS material configured beside a URL that is not `rediss://`, where it
-    /// would go unused — refused rather than ignored.
+    /// TLS material configured beside a URL whose scheme does not encrypt —
+    /// `redis://`, `redis-sentinel://`, `redis-cluster://` — where it would go
+    /// unused: refused rather than ignored.
     #[error(
-        "TLS material is configured for Redis at {endpoint}, but the URL is not `rediss://`, so the \
-         material would go unused and the connection unencrypted: point {url_var} at a port serving \
-         TLS with `rediss://`, or remove the material — {ca_var}, {cert_var} and {key_var}, their \
-         _FILE forms, or `RedisConfig::tls` pinned in code",
+        "TLS material is configured for Redis at {endpoint}, but the URL's scheme does not \
+         encrypt, so the material would go unused and the connection unencrypted: point {url_var} \
+         at ports serving TLS with `rediss://`, `rediss-sentinel://` or `rediss-cluster://`, or \
+         remove the material — {ca_var}, {cert_var} and {key_var}, their _FILE forms, or \
+         `RedisConfig::tls` pinned in code",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
         ca_var = ::nest_rs_config::var_name("redis", "TLS_CA_CERT"),
         cert_var = ::nest_rs_config::var_name("redis", "TLS_CERT"),
@@ -129,14 +131,13 @@ pub enum RedisError {
     },
 
     /// Redis refused to select the database the URL names, for a reason every
-    /// attempt would repeat: an index past the server's `databases`, an ACL
-    /// user without `+select`, a server in cluster mode, which serves database 0
-    /// alone. It fails at once naming the index, with Redis's answer as the
-    /// source.
+    /// attempt would repeat: an index past the server's `databases` — a Cluster
+    /// node's `cluster-databases` — or an ACL user without `+select`. It fails at
+    /// once naming the index, with Redis's answer as the source.
     #[error(
         "Redis at {endpoint} refused to select database {database}, the index {url_var} ends \
-         in — its answer follows: the index must be below the server's `databases`, an ACL \
-         user needs `+select`, and a server in cluster mode serves database 0 alone",
+         in — its answer follows: the index must be below the server's `databases`, a \
+         Cluster node's `cluster-databases` (one unless set), and an ACL user needs `+select`",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
     )]
     DatabaseRefused {
@@ -147,6 +148,65 @@ pub enum RedisError {
         /// What Redis answered.
         #[source]
         source: redis::RedisError,
+    },
+
+    /// The URL declares a topology the server it reached is not part of — a
+    /// Cluster URL at a server whose cluster support is off, a Sentinel URL at a
+    /// server that is no sentinel. Fails at once, with the server's answer as the
+    /// source.
+    #[error(
+        "the Redis URL declares the {declared} topology, but {endpoint} answered that it is not \
+         part of one — its answer follows: name a server of its own with rediss://, a Sentinel \
+         deployment's sentinels with rediss-sentinel://, and a Cluster's nodes with \
+         rediss-cluster:// in {url_var}",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+    )]
+    TopologyMismatch {
+        /// The address the client dialled, never the URL.
+        endpoint: String,
+        /// The topology the URL's scheme declares.
+        declared: crate::RedisTopology,
+        /// What the server answered.
+        #[source]
+        source: redis::RedisError,
+    },
+
+    /// No sentinel the URL names answered within the connect budget.
+    #[error(
+        "no Valkey Sentinel of {sentinels} answered within {budget:?} ({attempts} attempt(s)): \
+         check {url_var}, or widen the budget with {timeout_var}",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+        timeout_var = ::nest_rs_config::var_name("redis", crate::config::CONNECT_TIMEOUT.key()),
+    )]
+    SentinelUnreachable {
+        /// The sentinels the URL names, never the URL.
+        sentinels: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many times every sentinel was asked.
+        attempts: u32,
+        /// The last sentinel's failure, when one failed outright.
+        #[source]
+        source: Option<redis::RedisError>,
+    },
+
+    /// The sentinels answered, and none knew a primary by the name the URL gives
+    /// it — the name `sentinel monitor` gave the primary.
+    #[error(
+        "the Valkey Sentinels {sentinels} know no primary named `{service_name}` within \
+         {budget:?} ({attempts} attempt(s)): set `sentinelServiceName` in {url_var} to the name \
+         they monitor it under",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+    )]
+    PrimaryUnknown {
+        /// The sentinels that answered, never the URL.
+        sentinels: String,
+        /// The name the URL gives the primary.
+        service_name: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many times every sentinel was asked.
+        attempts: u32,
     },
 
     /// The connect budget elapsed with Redis answering every attempt, last with
@@ -220,3 +280,23 @@ pub(crate) struct UnknownDisposition;
 #[derive(Debug, Error)]
 #[error("the Redis queue consumer was prepared twice; each queue worker binds its own")]
 pub(crate) struct PreparedTwice;
+
+/// Why one round of asking the sentinels found no primary to keep — each may
+/// clear, so the next round follows within the budget.
+#[derive(Debug, Error)]
+pub(crate) enum SentinelMiss {
+    /// No sentinel answered.
+    #[error("no sentinel answered")]
+    Unreachable(#[source] Option<redis::RedisError>),
+    /// The sentinels that answered know no primary by the URL's name.
+    #[error("the sentinels that answered know no primary by the URL's name")]
+    Unknown,
+    /// The address the sentinels named did not answer as a primary — a
+    /// failover under way, or a primary not reachable from here.
+    #[error("the primary the sentinels name at {endpoint} did not answer as one")]
+    Primary {
+        endpoint: String,
+        #[source]
+        source: Option<redis::RedisError>,
+    },
+}

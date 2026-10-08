@@ -93,25 +93,29 @@ struct Seen {
 /// command a phase ran.
 const BARRIER: &str = "nestrs-e2e-monitor-barrier";
 
-/// Start reading `MONITOR`, until the returned task is aborted. Every command
-/// run once it answers is streamed.
-async fn monitor() -> (Arc<Seen>, tokio::task::JoinHandle<()>) {
-    let monitor = crate::bare_client(&crate::redis_url())
-        .get_async_monitor()
-        .await
-        .expect("a monitor connection, which sends MONITOR");
+/// Start reading `MONITOR` on every primary, until the returned tasks are
+/// aborted: a node streams only what it runs, and a replica what it is sent to
+/// replicate. Every command run once each answers is streamed.
+async fn monitor() -> (Arc<Seen>, Vec<tokio::task::JoinHandle<()>>) {
     let seen = Arc::new(Seen::default());
-    let filling = Arc::clone(&seen);
-    let reading = tokio::spawn(async move {
-        let mut lines = monitor.into_on_message::<String>();
-        while let Some(line) = lines.next().await {
-            if line.contains(BARRIER) {
-                filling.barriers.fetch_add(1, Ordering::SeqCst);
-            } else if let Some(command) = parse(&line) {
-                filling.commands.lock().await.push(command);
+    let mut reading = Vec::new();
+    for node in crate::primaries().await {
+        let monitor = node
+            .get_async_monitor()
+            .await
+            .expect("a monitor connection, which sends MONITOR");
+        let filling = Arc::clone(&seen);
+        reading.push(tokio::spawn(async move {
+            let mut lines = monitor.into_on_message::<String>();
+            while let Some(line) = lines.next().await {
+                if line.contains(BARRIER) {
+                    filling.barriers.fetch_add(1, Ordering::SeqCst);
+                } else if let Some(command) = parse(&line) {
+                    filling.commands.lock().await.push(command);
+                }
             }
-        }
-    });
+        }));
+    }
     (seen, reading)
 }
 
@@ -136,7 +140,9 @@ fn parse(line: &str) -> Option<(String, String)> {
     let confined = DB_CONFINED_TO_THE_PREFIX.to_string();
     let reached = db == confined || (command == "select" && first == confined);
     let command = match command.as_str() {
-        "script" | "xgroup" | "xinfo" | "client" | "config" | "acl" => format!("{command}|{first}"),
+        "script" | "xgroup" | "xinfo" | "client" | "config" | "acl" | "cluster" => {
+            format!("{command}|{first}")
+        }
         _ => command,
     };
     reached.then_some((client, command))
@@ -145,24 +151,30 @@ fn parse(line: &str) -> Option<(String, String)> {
 /// The commands sent to the confined database in `seen` by anyone but the
 /// test's own administration — the clients of Redis's `default` user still
 /// open — and by the scripts they ran, once the reader caught up with what
-/// `admin`, on that database, ran last.
-async fn sent(seen: &Seen, admin: &mut RedisConnection) -> BTreeSet<String> {
+/// every data node ran last.
+async fn sent(seen: &Seen) -> BTreeSet<String> {
     let passed = seen.barriers.load(Ordering::SeqCst);
-    let _: String = redis::cmd("ECHO")
-        .arg(BARRIER)
-        .query_async(admin)
-        .await
-        .expect("ECHO");
-    let caught_up = || seen.barriers.load(Ordering::SeqCst) > passed;
+    let mut echoed = Vec::new();
+    for primary in crate::primaries().await {
+        let mut primary = primary
+            .get_multiplexed_async_connection()
+            .await
+            .expect("every primary answers");
+        echoed.push(
+            redis::cmd("ECHO")
+                .arg(BARRIER)
+                .query_async::<String>(&mut primary)
+                .await
+                .expect("ECHO"),
+        );
+    }
+    let caught_up = || seen.barriers.load(Ordering::SeqCst) >= passed + echoed.len();
     crate::wait_until(Duration::from_secs(10), caught_up).await;
     assert!(caught_up(), "MONITOR streams what ran before the barrier");
-    let clients: String = redis::cmd("CLIENT")
-        .arg("LIST")
-        .query_async(&mut crate::connect().await)
-        .await
-        .expect("CLIENT LIST");
+    let clients: Vec<String> = crate::on_every_node(redis::cmd("CLIENT").arg("LIST")).await;
     let administration: BTreeSet<String> = clients
-        .lines()
+        .iter()
+        .flat_map(|clients| clients.lines())
         .filter(|client| client.contains(" user=default "))
         .filter_map(|client| {
             client
@@ -264,7 +276,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
             .await
             .expect("a push");
     }
-    let producer_sent = sent(&seen, &mut admin).await;
+    let producer_sent = sent(&seen).await;
     seen.commands.lock().await.clear();
 
     let worker = crate::replica_on::<WorkerModule>(as_worker).await;
@@ -284,8 +296,10 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         .query_async(&mut admin)
         .await
         .expect("XLEN");
-    let worker_sent = sent(&seen, &mut admin).await;
-    reading.abort();
+    let worker_sent = sent(&seen).await;
+    for reading in reading {
+        reading.abort();
+    }
 
     crate::assert_redis_denied_nothing_but(&producer_user, &[]).await;
     crate::assert_redis_denied_nothing_but(&worker_user, &[]).await;
@@ -293,11 +307,15 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     crate::forget_user(&worker_user).await;
 
     assert_eq!(dead, 1, "the failing job dead-lettered");
-    let producer_rule = allowed(&crate::documented_acl(PAGE, "producer"));
-    let worker_rule = allowed(&crate::documented_acl(PAGE, "worker"));
+    let producer_rule = allowed(&crate::documented_rule(PAGE, "producer"));
+    let worker_rule = allowed(&crate::documented_rule(PAGE, "worker"));
+    // A redirection to a slot being moved is the Cluster e2e's to send.
+    let unsent_by_any = ["asking"];
     let unsent: BTreeSet<_> = producer_rule.difference(&producer_sent).cloned().collect();
     assert!(
-        unsent.iter().all(|command| command == "script|load"),
+        unsent
+            .iter()
+            .all(|command| command == "script|load" || unsent_by_any.contains(&command.as_str())),
         "the producer's rule allows what no producer sends: {unsent:?}",
     );
     let unallowed: BTreeSet<_> = producer_sent.difference(&producer_rule).cloned().collect();
@@ -305,9 +323,17 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         unallowed.is_empty(),
         "a producer sends what its rule does not allow: {unallowed:?}"
     );
-    assert_eq!(
-        worker_sent, worker_rule,
-        "the worker sends exactly what its rule allows"
+    let unsent: BTreeSet<_> = worker_rule.difference(&worker_sent).cloned().collect();
+    assert!(
+        unsent
+            .iter()
+            .all(|command| unsent_by_any.contains(&command.as_str())),
+        "the worker's rule allows what no worker sends: {unsent:?}",
+    );
+    let unallowed: BTreeSet<_> = worker_sent.difference(&worker_rule).cloned().collect();
+    assert!(
+        unallowed.is_empty(),
+        "a worker sends what its rule does not allow: {unallowed:?}"
     );
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg("*")
@@ -324,17 +350,30 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
     let user = crate::acl_user("nestrs-e2e-keda");
-    let config = crate::documented_user(PAGE, "KEDA", &user, 0).await;
-    let mut keda = crate::bare_client(config.url.as_str())
+    crate::documented_user(PAGE, "KEDA", &user, 0).await;
+    let jobs = crate::key_of("nestrs-e2e-keda", "jobs");
+    // The node serving the queue's slot: the one whose answer is no redirection.
+    let mut served = None;
+    for node in crate::data_nodes().await {
+        let addr = node.get_connection_info().addr().to_string();
+        let mut keda = crate::bare_client(&crate::url_as(
+            &crate::node_url(&addr),
+            &user,
+            crate::ACL_PASSWORD,
+        ))
         .get_multiplexed_async_connection()
         .await
         .expect("the KEDA user connects");
-    let jobs = crate::key_of("nestrs-e2e-keda", "jobs");
-    let length: i64 = redis::cmd("XLEN")
-        .arg(&jobs)
-        .query_async(&mut keda)
-        .await
-        .expect("KEDA reads a queue's length");
+        if let Ok(length) = redis::cmd("XLEN")
+            .arg(&jobs)
+            .query_async::<i64>(&mut keda)
+            .await
+        {
+            served = Some((keda, length));
+            break;
+        }
+    }
+    let (mut keda, length) = served.expect("KEDA reads a queue's length");
     assert_eq!(length, 0);
     let written: Result<String, _> = redis::cmd("XADD")
         .arg(&jobs)
@@ -358,34 +397,28 @@ async fn every_pages_rule_replaces_what_the_user_held_before() {
         ("schedule/index.mdx", "schedule"),
     ] {
         let user = crate::acl_user("nestrs-e2e-replaced");
-        let _: () = redis::cmd("ACL")
-            .arg("SETUSER")
-            .arg(&user)
-            .arg("on")
-            .arg(">nestrs-e2e-acl")
-            .arg("~*")
-            .arg("+@all")
-            .query_async(&mut crate::connect().await)
-            .await
-            .expect("a user holding everything");
+        let _: Vec<()> = crate::on_every_node(
+            redis::cmd("ACL")
+                .arg("SETUSER")
+                .arg(&user)
+                .arg("on")
+                .arg(">nestrs-e2e-acl")
+                .arg("~*")
+                .arg("+@all"),
+        )
+        .await;
         let rule = crate::documented_acl(page, role)
             .replace("<user>", &user)
             .replace("<password>", "nestrs-e2e-acl");
         let tokens: Vec<&str> = rule.split_whitespace().collect();
-        let _: () = redis::cmd(tokens[0])
-            .arg(&tokens[1..])
-            .query_async(&mut crate::connect().await)
-            .await
-            .unwrap_or_else(|error| panic!("{page}'s {role} rule applies: {error}"));
-        let rules: Vec<String> = redis::cmd("ACL")
-            .arg("GETUSER")
-            .arg(&user)
-            .query_async::<Vec<redis::Value>>(&mut crate::connect().await)
-            .await
-            .expect("ACL GETUSER")
-            .into_iter()
-            .filter_map(|value| redis::from_redis_value::<String>(value).ok())
-            .collect();
+        let _: Vec<()> = crate::on_every_node(redis::cmd(tokens[0]).arg(&tokens[1..])).await;
+        let rules: Vec<String> =
+            crate::on_every_node::<Vec<redis::Value>>(redis::cmd("ACL").arg("GETUSER").arg(&user))
+                .await
+                .into_iter()
+                .flatten()
+                .filter_map(|value| redis::from_redis_value::<String>(value).ok())
+                .collect();
         crate::forget_user(&user).await;
         assert!(
             !rules

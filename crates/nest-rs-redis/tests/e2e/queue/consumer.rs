@@ -602,7 +602,7 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     let mut admin = crate::connect_on(crate::DB_BLOCKED_READ).await;
     flush(&mut admin).await;
     assert_eq!(
-        crate::blocked_reads_on(&mut admin, crate::DB_BLOCKED_READ).await,
+        crate::blocked_reads_on(crate::DB_BLOCKED_READ).await,
         0,
         "no read blocks on the test's database before its worker starts",
     );
@@ -622,7 +622,7 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     );
 
     assert!(
-        crate::a_read_blocks_on(&mut admin, crate::DB_BLOCKED_READ).await,
+        crate::a_read_blocks_on(crate::DB_BLOCKED_READ).await,
         "an idle worker's read blocks on a connection of its own",
     );
     let started = std::time::Instant::now();
@@ -694,42 +694,6 @@ impl GatedProcessor {
     providers = [GatedProcessor],
 )]
 struct GatedModule;
-
-/// A settle that ran on Redis and whose answer was lost: the worker cannot
-/// tell, and says so at `error`, but the job ended in the script that settled
-/// it — it never runs again, and the stream holds nothing of it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
-    let logs = nest_rs_testing::LogCapture::install_global();
-    let queue = <GatedQueue as nest_rs_queue::Queue>::NAME;
-    crate::forget(queue).await;
-    let run = crate::this_run();
-    let proxy = crate::MutingProxy::start().await;
-    let replica = crate::replica_on::<GatedModule>(crate::through(proxy.url())).await;
-    crate::producer()
-        .await
-        .push(GatedQueue, GatedCommand { run }, None)
-        .await
-        .expect("enqueue");
-    crate::wait_until(Duration::from_secs(10), || GATED.of(run).len() == 1).await;
-
-    proxy.mute();
-    GATE.add_permits(1);
-    crate::wait_until(Duration::from_secs(10), || GATED.finished(run) == 1).await;
-    let unconfirmed = "job outcome not confirmed; unless it was written, the job runs again once its lease lapses";
-    // The worker said it could not confirm the outcome.
-    crate::wait_until(Duration::from_secs(10), || {
-        !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty()
-    })
-    .await;
-    // Past the lease, a delivery the settle had not ended would be reclaimed.
-    tokio::time::sleep(crate::LEASE * 3).await;
-
-    assert_eq!(GATED.of(run).len(), 1, "the job ran once");
-    assert_eq!(crate::filed(queue).await, 0, "the settle ended it on Redis");
-    drop(replica);
-    crate::forget(queue).await;
-}
 
 // --- a dead letter filed back --------------------------------------------------------
 
@@ -1362,4 +1326,46 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
     );
     assert!(PAGED.of(running).is_empty(), "no running delivery is taken");
     crate::forget(queue).await;
+}
+
+/// What holds on one server alone: a double in front of it stands where a
+/// Sentinel or Cluster deployment has several hosts.
+mod standalone {
+    use super::*;
+
+    /// A settle that ran on Redis and whose answer was lost: the worker cannot
+    /// tell, and says so at `error`, but the job ended in the script that settled
+    /// it — it never runs again, and the stream holds nothing of it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
+        let logs = nest_rs_testing::LogCapture::install_global();
+        let queue = <GatedQueue as nest_rs_queue::Queue>::NAME;
+        crate::forget(queue).await;
+        let run = crate::this_run();
+        let proxy = crate::MutingProxy::start().await;
+        let replica = crate::replica_on::<GatedModule>(crate::through(proxy.url())).await;
+        crate::producer()
+            .await
+            .push(GatedQueue, GatedCommand { run }, None)
+            .await
+            .expect("enqueue");
+        crate::wait_until(Duration::from_secs(10), || GATED.of(run).len() == 1).await;
+
+        proxy.mute();
+        GATE.add_permits(1);
+        crate::wait_until(Duration::from_secs(10), || GATED.finished(run) == 1).await;
+        let unconfirmed = "job outcome not confirmed; unless it was written, the job runs again once its lease lapses";
+        // The worker said it could not confirm the outcome.
+        crate::wait_until(Duration::from_secs(10), || {
+            !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty()
+        })
+        .await;
+        // Past the lease, a delivery the settle had not ended would be reclaimed.
+        tokio::time::sleep(crate::LEASE * 3).await;
+
+        assert_eq!(GATED.of(run).len(), 1, "the job ran once");
+        assert_eq!(crate::filed(queue).await, 0, "the settle ended it on Redis");
+        drop(replica);
+        crate::forget(queue).await;
+    }
 }

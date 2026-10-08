@@ -11,11 +11,10 @@
 
 use std::time::Duration;
 
+use crate::RedisConnection;
+use crate::script::RedisScript;
 use async_trait::async_trait;
 use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
-use redis::Script;
-
-use crate::RedisConnection;
 
 /// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
 /// throttled subject, counting its current window. The concern is the tail of
@@ -60,7 +59,7 @@ return {count, ttl}
 /// port's policy, carried by the guard.
 pub struct RedisThrottler {
     conn: RedisConnection,
-    script: Script,
+    script: RedisScript,
 }
 
 impl RedisThrottler {
@@ -69,7 +68,7 @@ impl RedisThrottler {
     pub fn new(conn: RedisConnection) -> Self {
         Self {
             conn,
-            script: Script::new(WINDOW_SCRIPT),
+            script: RedisScript::new(WINDOW_SCRIPT),
         }
     }
 

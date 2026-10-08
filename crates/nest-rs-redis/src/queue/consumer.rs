@@ -200,7 +200,12 @@ impl RedisQueueConsumer {
         let mut reading = drained.reading.lock().await;
         let conn = match reading.as_ref() {
             Some(conn) => conn,
-            None => reading.insert(self.conn.dedicated().await.map_err(QueueError::backend)?),
+            None => reading.insert(
+                self.conn
+                    .dedicated(wait)
+                    .await
+                    .map_err(QueueError::backend)?,
+            ),
         };
         let mut conn = conn.with_budget(wait + self.conn.budget());
         drop(reading);
@@ -308,10 +313,7 @@ impl JobConsumer for RedisQueueConsumer {
             );
         }
         for script in SCRIPTS.consumer() {
-            script
-                .load_async(&mut conn)
-                .await
-                .map_err(QueueError::backend)?;
+            self.conn.load(script).await.map_err(QueueError::backend)?;
         }
         if self.drained.set(drained).is_err() {
             return Err(QueueError::backend(PreparedTwice));

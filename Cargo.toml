@@ -78,6 +78,7 @@ inventory = "0.3"
 argon2 = "0.6"
 validator = { version = "0.21", features = ["derive"] }
 uuid = { version = "1.27", features = ["v4", "v7", "serde"] }
+url = "2.5"
 
 # `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed bump,
 # both pins together.
@@ -105,6 +106,7 @@ jiff-tzdb = "0.1"
 
 redis = { version = "1.7", default-features = false, features = [
     "aio",
+    "cluster-async",
     "connection-manager",
     "script",
     "tokio-comp",

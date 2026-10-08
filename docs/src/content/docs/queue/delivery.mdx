@@ -2,7 +2,7 @@
 title: Delivery on Redis
 description: "What the Redis backend promises about each job — its keys and their ACL, at least once and the fence, a crash, a timeout, shutdown, delays, dead letters, and what each capability keeps."
 sidebar:
-  order: 6
+  order: 7
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -76,6 +76,10 @@ A KEDA scaler reads a queue's length:
 ```text title="Redis ACL — KEDA"
 ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +xlen
 ```
+
+Under Sentinel and on a Cluster, each rule is created on every node and takes
+what its topology's connection adds — see
+[ACL on Sentinel and Cluster](/queue/topologies/#acl-on-sentinel-and-cluster).
 
 Each rule is held to what its role sends: the suite runs a producer and a worker
 as users created from these lines through every path the binding has, and fails

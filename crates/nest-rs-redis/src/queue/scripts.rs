@@ -10,11 +10,13 @@
 //!
 //! A script never echoes an argument into an error: a record is a payload.
 //! Each is sent as `EVALSHA`, loaded once, and never inside a pipeline, where a
-//! script Redis has not cached could not be loaded and sent again.
+//! script Redis has not cached could not be loaded and sent again. Every key a
+//! script names is its queue's own, under its hash tag, so a call sits in one
+//! Cluster slot ([`Invocation::slot`]).
 
 use std::sync::LazyLock;
 
-use redis::{Script, ScriptInvocation};
+use crate::script::{Invocation, RedisScript};
 
 /// `now()`: Redis's clock, in milliseconds.
 macro_rules! now {
@@ -436,37 +438,37 @@ return 1
 
 /// Every script, built once per process: building one hashes its source.
 pub(crate) struct Scripts {
-    pub(crate) push: Script,
-    pub(crate) cancel: Script,
-    pub(crate) reclaim: Script,
-    pub(crate) renew: Script,
-    pub(crate) settle: Script,
-    pub(crate) promote: Script,
-    pub(crate) admit: Script,
-    pub(crate) release: Script,
-    pub(crate) checkpoint: Script,
-    pub(crate) sweep: Script,
-    pub(crate) leave: Script,
+    pub(crate) push: RedisScript,
+    pub(crate) cancel: RedisScript,
+    pub(crate) reclaim: RedisScript,
+    pub(crate) renew: RedisScript,
+    pub(crate) settle: RedisScript,
+    pub(crate) promote: RedisScript,
+    pub(crate) admit: RedisScript,
+    pub(crate) release: RedisScript,
+    pub(crate) checkpoint: RedisScript,
+    pub(crate) sweep: RedisScript,
+    pub(crate) leave: RedisScript,
 }
 
 /// The scripts, shared by every producer and consumer of the process.
 pub(crate) static SCRIPTS: LazyLock<Scripts> = LazyLock::new(|| Scripts {
-    push: Script::new(PUSH),
-    cancel: Script::new(CANCEL),
-    reclaim: Script::new(RECLAIM),
-    renew: Script::new(RENEW),
-    settle: Script::new(SETTLE),
-    promote: Script::new(PROMOTE),
-    admit: Script::new(ADMIT),
-    release: Script::new(RELEASE),
-    checkpoint: Script::new(CHECKPOINT),
-    sweep: Script::new(SWEEP),
-    leave: Script::new(LEAVE),
+    push: RedisScript::new(PUSH),
+    cancel: RedisScript::new(CANCEL),
+    reclaim: RedisScript::new(RECLAIM),
+    renew: RedisScript::new(RENEW),
+    settle: RedisScript::new(SETTLE),
+    promote: RedisScript::new(PROMOTE),
+    admit: RedisScript::new(ADMIT),
+    release: RedisScript::new(RELEASE),
+    checkpoint: RedisScript::new(CHECKPOINT),
+    sweep: RedisScript::new(SWEEP),
+    leave: RedisScript::new(LEAVE),
 });
 
 /// `script`, called with `keys` in order as its `KEYS`.
-pub(crate) fn keyed<'a>(script: &'a Script, keys: &[&str]) -> ScriptInvocation<'a> {
-    let mut invocation = script.prepare_invoke();
+pub(crate) fn keyed<'a>(script: &'a RedisScript, keys: &[&str]) -> Invocation<'a> {
+    let mut invocation = script.prepare();
     for key in keys {
         invocation.key(*key);
     }
@@ -475,12 +477,12 @@ pub(crate) fn keyed<'a>(script: &'a Script, keys: &[&str]) -> ScriptInvocation<'
 
 impl Scripts {
     /// The scripts a producer runs, loaded when its binding boots.
-    pub(crate) fn producer(&self) -> [&Script; 2] {
+    pub(crate) fn producer(&self) -> [&RedisScript; 2] {
         [&self.push, &self.cancel]
     }
 
     /// Every script a worker runs, to load before its first delivery.
-    pub(crate) fn consumer(&self) -> [&Script; 9] {
+    pub(crate) fn consumer(&self) -> [&RedisScript; 9] {
         [
             &self.reclaim,
             &self.renew,

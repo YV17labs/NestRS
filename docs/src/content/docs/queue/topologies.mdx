@@ -1,0 +1,193 @@
+---
+title: Valkey topologies
+description: "One server, Sentinel or Cluster — the URL's scheme declares how a deployment lays its Valkey out, and every binding runs on all three, each on TLS."
+sidebar:
+  order: 4
+---
+
+Valkey runs in production three ways, and the connection every Redis binding
+shares runs on each of them: **one server** (a primary, with or without
+replicas), **Sentinel**, where sentinels watch a primary and promote a replica
+when it fails, and **Cluster**, where primaries share the keyspace by hash slot.
+The queue, the rate limiter and the schedule's lock work the same on all three;
+the scheme of `<PREFIX>_REDIS__URL` is the one line that changes. The connection
+is written on the [`redis`](https://docs.rs/redis) client, whose cluster
+connection carries the Cluster topology.
+
+| Topology | Scheme | Encrypted |
+|---|---|---|
+| One server | `redis://` | `rediss://` |
+| Sentinel | `redis-sentinel://` | `rediss-sentinel://` |
+| Cluster | `redis-cluster://` | `rediss-cluster://` |
+
+The topology is declared, never guessed: a `rediss://` URL pointed at a Cluster
+node, or a `rediss-cluster://` URL pointed at a server whose cluster support is
+off, is a deployment that says one thing and runs another, and the connection
+says so — the second fails the boot at once, the first at the first command a
+redirection answers.
+
+## The URL of each topology
+
+A URL naming several hosts reads as the grammar
+[fred's `Config::from_url`](https://docs.rs/fred/latest/fred/types/config/struct.Config.html#method.from_url)
+documents, so it stays a plain RFC 3986 URL: the first host in the authority,
+each further one in a `node` parameter.
+
+```text title="One server"
+rediss://app:s3cret@valkey:6379/2
+```
+
+```text title="Sentinel"
+rediss-sentinel://app:s3cret@sentinel-a:26379/2?node=sentinel-b:26379&node=sentinel-c:26379&sentinelServiceName=orders
+```
+
+```text title="Cluster"
+rediss-cluster://app:s3cret@node-a:6379/2?node=node-b:6379&node=node-c:6379
+```
+
+| Part | One server | Sentinel | Cluster |
+|---|---|---|---|
+| `user:password@` | the server's credentials | the primary's | every node's |
+| host and port | the server, port 6379 unless set | the first sentinel, port 26379 unless set | the first seed, port 6379 unless set |
+| `node=host:port` | — | each further sentinel | each further seed |
+| `/<db>` | the database selected | the database selected on the primary | the database selected on every node |
+| `sentinelServiceName` | — | the name the sentinels monitor the primary under — required | — |
+| `sentinelUsername`, `sentinelPassword` | — | the sentinels' own credentials, when they hold users — the password alone authenticates their `default` user | — |
+
+A parameter its topology does not take fails the boot naming it — `node` on a
+URL of one server included, which names the scheme to use instead. A value that
+carries `+`, `&` or `=` is percent-encoded, as in any URL query. Like every
+`<PREFIX>_REDIS__URL`, the URL may hold passwords, so set it through
+`<PREFIX>_REDIS__URL_FILE` from a secret, and no error or line quotes it: they
+name the hosts.
+
+The database on a Cluster is Valkey 9's: a Cluster serves as many numbered
+databases as its `cluster-databases` setting — one unless set — so `/2` needs
+`cluster-databases 3` or more on every node, and the boot fails naming the
+index otherwise. Two deployments sharing one Cluster are separated by their
+databases, exactly as on one server.
+
+## Sentinel
+
+The connection finds the primary as Valkey's
+[Sentinel client spec](https://valkey.io/topics/sentinel-clients/) prescribes:
+it asks each sentinel in turn for the address of the primary named
+`sentinelServiceName`, asks the one that answered first the next time, and keeps
+the address only once `ROLE` there says it is a primary. A sentinel that does
+not answer leaves the round to the next; the URL may name one host that
+resolves to every sentinel, or list them.
+
+**Every reconnection asks the sentinels again.** A failover demotes the primary
+and closes its clients' connections: the connection's next command finds it
+closed, a timed-out or `READONLY` answer does the same, and the replacement is
+opened to the primary the sentinels name *then* — never reopened to the address
+it had, which is a replica now. A command sent meanwhile waits for the new
+connection, within `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, and fails as a
+timeout past it; the line `redis connection follows the new primary the
+sentinels name`, at `warn` on `nest_rs::redis`, names the old and the new.
+
+## Cluster
+
+Each command goes to the node serving its keys' hash slot, and a `MOVED` or an
+`ASK` redirection — a slot moved, or moving — is followed within the command's
+budget; once a failover promotes a replica, the slots are read again and the
+commands go to the new primary. Every key one script touches shares its
+queue's hash tag (`nestrs:queue:{<queue>}:…`), and a script naming keys of two
+slots is refused before it is sent, on every topology; a script a node has
+forgotten — a replica promoted since it was loaded — is loaded again on that
+node alone.
+
+## TLS on every topology
+
+The `s` of the scheme encrypts every connection the topology opens — to each
+sentinel and the primary, to every Cluster node — and each verifies the
+certificate for the host it dials, against the same authorities and with the
+same client certificate (`<PREFIX>_REDIS__TLS_*`). Valkey couples the two the
+same way: a sentinel speaks TLS exactly when it reaches the nodes over TLS
+(`tls-replication yes`).
+
+The host a sentinel or a Cluster names is the one dialled, so it is the one the
+certificate names. Have them announce hostnames the certificate carries —
+`sentinel resolve-hostnames yes` and `sentinel announce-hostnames yes` with each
+node's `replica-announce-ip`, or a Cluster's `cluster-announce-hostname` with
+`cluster-preferred-endpoint-type hostname` — or issue the certificate for the
+addresses they announce. A Cluster's nodes also present their certificate to
+each other on the cluster bus (`tls-cluster yes`), which asks for a client
+certificate whatever `tls-auth-clients` says, so it carries the `clientAuth`
+extended key usage beside `serverAuth`.
+
+## A failover and a running queue
+
+Delivery stays **at least once** through any failover. A lease is renewed
+through the primary, so a failover that takes longer than the lease
+(`<PREFIX>_REDIS__QUEUE__LEASE_SECS`, 30 s by default) cuts the attempts in
+flight, and their jobs run again once the new primary answers; Valkey
+replicates asynchronously, so an outcome the old primary confirmed but never
+replicated may run its job once more too. Size the lease above how long your
+deployment takes to fail over — Sentinel's `down-after-milliseconds` and a
+Cluster's `cluster-node-timeout`, plus the election — to keep attempts running
+through one.
+
+## ACL on Sentinel and Cluster
+
+A Valkey user is kept per server, so the rule each binding's page prescribes
+for its role — [the queue's](/queue/delivery/#where-a-queue-lives), [the rate
+limiter's](/rate-limiting/#redis-shipped), [the schedule's](/schedule/#firing-once-across-replicas) — is created
+on every node: the primary and each replica under Sentinel, every node of a
+Cluster. Each topology adds the commands its connection sends to every one of
+those rules.
+
+Under Sentinel, the connection asks the primary `ROLE`:
+
+```text title="Redis ACL — Sentinel"
++role
+```
+
+and, when the sentinels hold users of their own, it asks them one question:
+
+```text title="Redis ACL — sentinels"
+ACL SETUSER <user> reset on ><password> +sentinel|get-master-addr-by-name
+```
+
+On a Cluster, the connection reads the slots and answers a redirection to a
+slot being moved:
+
+```text title="Redis ACL — Cluster"
++cluster|slots +asking
+```
+
+## Limits
+
+- **A slot moved key by key holds its queue's scripts until it has moved.** While
+  a legacy migration (`MIGRATING` / `IMPORTING`, keys moved with `MIGRATE`) has
+  some of a queue's keys on each node, Valkey answers a script naming both with
+  `TRYAGAIN`; the connection retries within its budget, and a push or a
+  transition that outlasts it fails as a timeout, its job kept as at least once
+  keeps it. Valkey 9's atomic slot migration moves a slot whole, with no such
+  window.
+- **Every command goes to a primary.** Reading from replicas is not offered: a
+  script never runs on a copy that lags.
+- **The sentinels' Pub/Sub is not followed.** The spec leaves `+switch-master`
+  optional and promises no message arrives; asking the sentinels again on every
+  reconnection is what follows a failover.
+- **No map rewrites the addresses a Cluster announces**: Valkey announces
+  hostnames itself (`cluster-announce-hostname`).
+- **`valkey://` is not a scheme the connection reads**: it speaks the Redis
+  protocol, and Valkey's own URLs are `redis://` and `rediss://`.
+
+## What fails if you get it wrong
+
+| The deployment | What the boot says |
+|---|---|
+| A URL naming a parameter its topology does not take, or `node` on a URL of one server | `RedisError::InvalidUrl`, naming the parameter and the scheme to use, at once |
+| `rediss-cluster://` at a server whose cluster support is off, `rediss-sentinel://` at a node that is no sentinel | `RedisError::TopologyMismatch`, at once |
+| No sentinel answering within `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` | `RedisError::SentinelUnreachable`, naming every sentinel |
+| Sentinels that know no primary by `sentinelServiceName` | `RedisError::PrimaryUnknown`, naming the service |
+| A database past a Cluster's `cluster-databases` | `RedisError::DatabaseRefused`, naming the index, at once |
+| Slots no primary serves yet | retried within the budget, then `RedisError::Unready` |
+
+## Going further
+
+- [Wiring](/queue/wiring/) — the one connection every binding shares.
+- [Delivery on Redis](/queue/delivery/) — what a job keeps through a crash, a timeout and a failover.
+- [Environment variables](/configuration/env-reference/) — every `<PREFIX>_REDIS__*`.

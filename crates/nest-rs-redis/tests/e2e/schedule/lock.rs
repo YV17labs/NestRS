@@ -732,66 +732,6 @@ fn unanswered(logs: &LogCapture, provider: &str) -> Vec<CapturedEvent> {
     .collect()
 }
 
-/// Redis going away while the schedule runs: no occurrence fires while its
-/// claim cannot be made, each one skipped is said at `warn` with the job, the
-/// occurrence and Redis's error, and once Redis answers again the schedule
-/// claims and fires without a restart.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_redis_outage_skips_occurrences_aloud_and_the_schedule_recovers() {
-    // Global: the skips are emitted by the scheduler's task, on a worker thread.
-    let logs = LogCapture::install_global();
-    let proxy = SeveringProxy::start().await;
-    let scheduler =
-        schedule_replica::<OutageModule>(proxied_config(proxy.url_on(crate::DB_SCHEDULE))).await;
-    crate::wait_until(WITHIN, || OUTAGE_RUNS.load(Ordering::SeqCst) >= 1).await;
-    assert!(
-        OUTAGE_RUNS.load(Ordering::SeqCst) >= 1,
-        "the job fires through the proxy before the outage"
-    );
-
-    proxy.sever();
-    crate::wait_until(WITHIN, || !unanswered(&logs, "OutageTasks").is_empty()).await;
-    let first_skips = unanswered(&logs, "OutageTasks").len();
-    assert!(first_skips >= 1, "an occurrence lost to the outage is said");
-    let runs_in_outage = OUTAGE_RUNS.load(Ordering::SeqCst);
-    crate::wait_until(WITHIN, || {
-        unanswered(&logs, "OutageTasks").len() >= first_skips + 2
-    })
-    .await;
-    assert!(
-        unanswered(&logs, "OutageTasks").len() >= first_skips + 2,
-        "every occurrence of the outage is skipped aloud, not only the first"
-    );
-    assert_eq!(
-        OUTAGE_RUNS.load(Ordering::SeqCst),
-        runs_in_outage,
-        "no occurrence fires while its claim cannot be made"
-    );
-
-    proxy.restore();
-    crate::wait_until(WITHIN, || {
-        OUTAGE_RUNS.load(Ordering::SeqCst) > runs_in_outage
-    })
-    .await;
-    assert!(
-        OUTAGE_RUNS.load(Ordering::SeqCst) > runs_in_outage,
-        "the schedule fires again once Redis answers, within {WITHIN:?}"
-    );
-    scheduler.shutdown().await.expect("clean shutdown");
-
-    let skip = unanswered(&logs, "OutageTasks").remove(0);
-    assert_eq!(skip.level, "warn");
-    assert_eq!(skip.field("method").as_deref(), Some("sweep"));
-    assert!(
-        occurrence_of(&skip).is_some_and(|ms| ms % 250 == 0),
-        "names the occurrence it skipped: {skip:?}"
-    );
-    assert!(
-        skip.field("error").is_some_and(|error| !error.is_empty()),
-        "names why Redis could not answer: {skip:?}"
-    );
-}
-
 // --- 7. a lost answer -------------------------------------------------------------
 
 /// A proxy in front of the dev container's Valkey that, while stalled, still
@@ -881,58 +821,6 @@ impl StalledTasks {
 )]
 struct StalledModule;
 
-/// A claim Redis ran but whose answer never reached the scheduler — a reply held
-/// past the connection's budget — skips its occurrence, which nobody fires, and
-/// costs nothing more: the next occurrence is claimed and fired on time. A run
-/// lease taken in the same step as the claim held the job on every replica, the
-/// claimer included, for the half-minute it took to lapse, while every occurrence
-/// meanwhile was put down to a run that did not exist.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_claim_whose_answer_is_lost_costs_that_occurrence_alone() {
-    let logs = LogCapture::install_global();
-    let conn = schedule_connection().await;
-    let proxy = StallingProxy::start().await;
-    let scheduler =
-        schedule_replica::<StalledModule>(proxied_config(proxy.url_on(crate::DB_SCHEDULE))).await;
-    crate::wait_until(WITHIN, || STALLED_RUNS.load(Ordering::SeqCst) >= 2).await;
-    assert!(
-        STALLED_RUNS.load(Ordering::SeqCst) >= 2,
-        "the job fires through the proxy"
-    );
-
-    proxy.stall();
-    crate::wait_until(WITHIN, || !unanswered(&logs, "StalledTasks").is_empty()).await;
-    proxy.resume();
-    let resumed = std::time::Instant::now();
-    let runs_at_resume = STALLED_RUNS.load(Ordering::SeqCst);
-    crate::wait_until(WITHIN, || {
-        STALLED_RUNS.load(Ordering::SeqCst) > runs_at_resume
-    })
-    .await;
-    let next_run_after = resumed.elapsed();
-    scheduler.shutdown().await.expect("clean shutdown");
-
-    let lost = unanswered(&logs, "StalledTasks")
-        .first()
-        .and_then(occurrence_of)
-        .expect("a claim whose answer was held past the budget is skipped aloud");
-    let ran: bool = redis::cmd("EXISTS")
-        .arg(format!("{CLAIMS}:{}:{lost}", job("StalledTasks:sweep")))
-        .query_async(&mut conn.clone())
-        .await
-        .expect("read the claim");
-    assert!(ran, "Redis ran the claim whose answer was lost");
-    assert!(
-        !ledger(&logs, &["StalledTasks"]).fired.contains(&lost),
-        "and nobody fired that occurrence — at most once"
-    );
-    assert!(
-        next_run_after < Duration::from_secs(3),
-        "the next occurrence fires on time once Redis answers, not when a lease lapses: \
-         {next_run_after:?}"
-    );
-}
-
 // --- 8. the documented ACL --------------------------------------------------------
 
 #[injectable]
@@ -988,4 +876,124 @@ async fn a_scheduler_runs_through_exactly_the_acl_its_page_prescribes() {
         .collect();
     assert!(refused.is_empty(), "a line carries a refusal: {refused:#?}");
     crate::assert_redis_denied_nothing_but(&user, &[]).await;
+}
+
+/// What holds on one server alone: a double in front of it stands where a
+/// Sentinel or Cluster deployment has several hosts.
+mod standalone {
+    use super::*;
+
+    /// Redis going away while the schedule runs: no occurrence fires while its
+    /// claim cannot be made, each one skipped is said at `warn` with the job, the
+    /// occurrence and Redis's error, and once Redis answers again the schedule
+    /// claims and fires without a restart.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redis_outage_skips_occurrences_aloud_and_the_schedule_recovers() {
+        // Global: the skips are emitted by the scheduler's task, on a worker thread.
+        let logs = LogCapture::install_global();
+        let proxy = SeveringProxy::start().await;
+        let scheduler =
+            schedule_replica::<OutageModule>(proxied_config(proxy.url_on(crate::DB_SCHEDULE)))
+                .await;
+        crate::wait_until(WITHIN, || OUTAGE_RUNS.load(Ordering::SeqCst) >= 1).await;
+        assert!(
+            OUTAGE_RUNS.load(Ordering::SeqCst) >= 1,
+            "the job fires through the proxy before the outage"
+        );
+
+        proxy.sever();
+        crate::wait_until(WITHIN, || !unanswered(&logs, "OutageTasks").is_empty()).await;
+        let first_skips = unanswered(&logs, "OutageTasks").len();
+        assert!(first_skips >= 1, "an occurrence lost to the outage is said");
+        let runs_in_outage = OUTAGE_RUNS.load(Ordering::SeqCst);
+        crate::wait_until(WITHIN, || {
+            unanswered(&logs, "OutageTasks").len() >= first_skips + 2
+        })
+        .await;
+        assert!(
+            unanswered(&logs, "OutageTasks").len() >= first_skips + 2,
+            "every occurrence of the outage is skipped aloud, not only the first"
+        );
+        assert_eq!(
+            OUTAGE_RUNS.load(Ordering::SeqCst),
+            runs_in_outage,
+            "no occurrence fires while its claim cannot be made"
+        );
+
+        proxy.restore();
+        crate::wait_until(WITHIN, || {
+            OUTAGE_RUNS.load(Ordering::SeqCst) > runs_in_outage
+        })
+        .await;
+        assert!(
+            OUTAGE_RUNS.load(Ordering::SeqCst) > runs_in_outage,
+            "the schedule fires again once Redis answers, within {WITHIN:?}"
+        );
+        scheduler.shutdown().await.expect("clean shutdown");
+
+        let skip = unanswered(&logs, "OutageTasks").remove(0);
+        assert_eq!(skip.level, "warn");
+        assert_eq!(skip.field("method").as_deref(), Some("sweep"));
+        assert!(
+            occurrence_of(&skip).is_some_and(|ms| ms % 250 == 0),
+            "names the occurrence it skipped: {skip:?}"
+        );
+        assert!(
+            skip.field("error").is_some_and(|error| !error.is_empty()),
+            "names why Redis could not answer: {skip:?}"
+        );
+    }
+
+    /// A claim Redis ran but whose answer never reached the scheduler — a reply held
+    /// past the connection's budget — skips its occurrence, which nobody fires, and
+    /// costs nothing more: the next occurrence is claimed and fired on time. A run
+    /// lease taken in the same step as the claim held the job on every replica, the
+    /// claimer included, for the half-minute it took to lapse, while every occurrence
+    /// meanwhile was put down to a run that did not exist.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_claim_whose_answer_is_lost_costs_that_occurrence_alone() {
+        let logs = LogCapture::install_global();
+        let conn = schedule_connection().await;
+        let proxy = StallingProxy::start().await;
+        let scheduler =
+            schedule_replica::<StalledModule>(proxied_config(proxy.url_on(crate::DB_SCHEDULE)))
+                .await;
+        crate::wait_until(WITHIN, || STALLED_RUNS.load(Ordering::SeqCst) >= 2).await;
+        assert!(
+            STALLED_RUNS.load(Ordering::SeqCst) >= 2,
+            "the job fires through the proxy"
+        );
+
+        proxy.stall();
+        crate::wait_until(WITHIN, || !unanswered(&logs, "StalledTasks").is_empty()).await;
+        proxy.resume();
+        let resumed = std::time::Instant::now();
+        let runs_at_resume = STALLED_RUNS.load(Ordering::SeqCst);
+        crate::wait_until(WITHIN, || {
+            STALLED_RUNS.load(Ordering::SeqCst) > runs_at_resume
+        })
+        .await;
+        let next_run_after = resumed.elapsed();
+        scheduler.shutdown().await.expect("clean shutdown");
+
+        let lost = unanswered(&logs, "StalledTasks")
+            .first()
+            .and_then(occurrence_of)
+            .expect("a claim whose answer was held past the budget is skipped aloud");
+        let ran: bool = redis::cmd("EXISTS")
+            .arg(format!("{CLAIMS}:{}:{lost}", job("StalledTasks:sweep")))
+            .query_async(&mut conn.clone())
+            .await
+            .expect("read the claim");
+        assert!(ran, "Redis ran the claim whose answer was lost");
+        assert!(
+            !ledger(&logs, &["StalledTasks"]).fired.contains(&lost),
+            "and nobody fired that occurrence — at most once"
+        );
+        assert!(
+            next_run_after < Duration::from_secs(3),
+            "the next occurrence fires on time once Redis answers, not when a lease lapses: \
+             {next_run_after:?}"
+        );
+    }
 }

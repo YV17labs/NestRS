@@ -24,7 +24,9 @@ graph from each app's root.
 The server is **Valkey**, in its latest release: the connection speaks the
 Redis protocol — hence `redis://`, `rediss://` and `nest_rs::redis` — and Valkey
 is the server it is supported and tested on, never Redis itself; see
-[Limits](/queue/delivery/#limits).
+[Limits](/queue/delivery/#limits). The URL's scheme declares the topology — one
+server, Sentinel or a Cluster — and every binding runs on each: see
+[Valkey topologies](/queue/topologies/).
 
 `RedisModule::for_root(None)` reads `<PREFIX>_REDIS__URL` from the environment;
 `RedisModule::for_root(RedisConfig { url, .. })` supplies that URL as the

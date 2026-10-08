@@ -14,6 +14,8 @@ use std::io;
 use std::sync::Arc;
 
 use nest_rs_config::{ConfigError, ConfigService, Material, Result, Setting};
+
+use crate::RedisError;
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -169,6 +171,32 @@ impl RedisTls {
             ),
         }
     }
+}
+
+/// The material every connection a URL opens is built with: `None` over
+/// plaintext. Material beside a plaintext URL is refused, since it would go
+/// unused, and so is material no handshake could use — before anything is
+/// dialled.
+pub(crate) fn material(
+    tls: &RedisTls,
+    encrypted: bool,
+    endpoint: &str,
+) -> std::result::Result<Option<redis::TlsCertificates>, RedisError> {
+    if !encrypted {
+        if tls.is_set() {
+            return Err(RedisError::PlaintextUrl {
+                endpoint: endpoint.to_owned(),
+            });
+        }
+        return Ok(None);
+    }
+    tls.check(&crypto_provider())
+        .map_err(|reason| RedisError::TlsRefused {
+            endpoint: endpoint.to_owned(),
+            reason,
+            source: None,
+        })?;
+    Ok(Some(tls.certificates()))
 }
 
 /// Why the client refused material [`RedisTls::check`] let through. Both parse

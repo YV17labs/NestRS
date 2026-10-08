@@ -198,76 +198,6 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
     );
 }
 
-/// A Redis that answers but is not ready — busy running a script past its
-/// threshold, loading its dataset, failing over, or answering a code the client
-/// does not know — is retried until it is, within the budget. `BUSY` and an
-/// unknown code used to fail the boot in milliseconds as a refusal, telling the
-/// operator to check the URL.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
-    for line in NOT_READY {
-        let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
-        proxy.answer_with(Some(line));
-        let ready = tokio::spawn({
-            let answer = Arc::clone(&proxy.answer);
-            async move {
-                tokio::time::sleep(Duration::from_millis(600)).await;
-                *answer.lock().expect("answer lock") = None;
-            }
-        });
-        let started = Instant::now();
-        let outcome = RedisConnection::connect(&RedisConfig {
-            connect_timeout: Duration::from_secs(10),
-            ..crate::through(proxy.url())
-        })
-        .await;
-        let took = started.elapsed();
-        ready.await.expect("the proxy is made ready");
-        let mut conn = outcome.unwrap_or_else(|error| panic!("{line}: {error:#}"));
-        assert!(
-            took >= Duration::from_millis(500),
-            "{line}: the boot waited for Redis rather than connecting past it, took {took:?}"
-        );
-        redis::cmd("PING")
-            .query_async::<()>(&mut conn)
-            .await
-            .expect("the kept connection serves");
-    }
-}
-
-/// The one answer to a `SELECT` that clears — a server busy running a script —
-/// is retried until it serves, as it is at the proof.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
-    let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
-    proxy.answer_with(Some(NOT_READY[0]));
-    let ready = tokio::spawn({
-        let answer = Arc::clone(&proxy.answer);
-        async move {
-            tokio::time::sleep(Duration::from_millis(600)).await;
-            *answer.lock().expect("answer lock") = None;
-        }
-    });
-    let started = Instant::now();
-    // Any index but 0 makes the client send a `SELECT`.
-    let outcome = RedisConnection::connect(&RedisConfig {
-        connect_timeout: Duration::from_secs(10),
-        ..crate::through(crate::url_on(&proxy.url(), crate::DB_SELECT_RETRIED))
-    })
-    .await;
-    let took = started.elapsed();
-    ready.await.expect("the proxy is made ready");
-    let mut conn = outcome.unwrap_or_else(|error| panic!("{error:#}"));
-    assert!(
-        took >= Duration::from_millis(500),
-        "the boot waited for Redis rather than connecting past it, took {took:?}"
-    );
-    redis::cmd("PING")
-        .query_async::<()>(&mut conn)
-        .await
-        .expect("the kept connection serves");
-}
-
 /// The budget's ceiling is a budget the kernel accepts: the socket's liveness
 /// is set from it, and past the kernel's keepalive limit every dial failed with
 /// `EINVAL` against a Redis that answered. Both waits are bounded below the
@@ -291,151 +221,6 @@ async fn the_ceiling_budget_connects_and_serves() {
         .query_async::<()>(&mut conn)
         .await
         .expect("and serves");
-}
-
-/// A Redis with one client slot left boots: the proof is closed before the
-/// connection the app keeps is opened. Held across it, every attempt needed two
-/// slots, and the boot spent its whole budget before blaming the network.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_redis_with_one_client_slot_left_boots() {
-    let proxy = ScriptedRedis::start(Some(crate::redis_url()), Some(1)).await;
-    let mut conn = RedisConnection::connect(&RedisConfig {
-        connect_timeout: Duration::from_secs(5),
-        ..crate::through(proxy.url())
-    })
-    .await
-    .unwrap_or_else(|error| panic!("one free slot is enough to boot: {error:#}"));
-    redis::cmd("PING")
-        .query_async::<()>(&mut conn)
-        .await
-        .expect("the kept connection serves");
-}
-
-/// A command Redis holds fails at the budget, as a timeout — and the connection
-/// outlives it: the reply that arrives once Redis answers again goes to nobody,
-/// and the next command gets its own. The timeout says the answer did not come
-/// in time, never that the command did not run, and the held write lands.
-///
-/// `CLIENT PAUSE WRITE` holds every client's writes, so the pause is lifted the
-/// moment the timeout is measured — `CLIENT UNPAUSE` is not a write, and gets
-/// through.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_command_redis_holds_fails_at_the_budget_and_the_connection_outlives_it() {
-    let budget = Duration::from_millis(300);
-    let mut conn = RedisConnection::connect(&RedisConfig {
-        url: crate::redis_url(),
-        connect_timeout: budget,
-        ..RedisConfig::default()
-    })
-    .await
-    .expect("connect to the dev container Redis");
-    let mut admin = crate::connect().await;
-    let key = crate::unique_key("held-write");
-
-    redis::cmd("CLIENT")
-        .arg("PAUSE")
-        .arg(3_000)
-        .arg("WRITE")
-        .query_async::<()>(&mut admin)
-        .await
-        .expect("CLIENT PAUSE WRITE");
-    let started = Instant::now();
-    let held = redis::cmd("SET")
-        .arg(&key)
-        .arg("landed")
-        .query_async::<()>(&mut conn)
-        .await;
-    let took = started.elapsed();
-    redis::cmd("CLIENT")
-        .arg("UNPAUSE")
-        .query_async::<()>(&mut admin)
-        .await
-        .expect("CLIENT UNPAUSE");
-
-    let error = held.expect_err("a write Redis holds is ended by the budget");
-    assert!(error.is_timeout(), "it fails as a timeout: {error}");
-    assert!(
-        took >= budget && took < budget * 3,
-        "and at the budget, took {took:?}",
-    );
-    assert!(
-        error
-            .to_string()
-            .contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
-        "naming the knob that sets it: {error}",
-    );
-
-    let landed: Option<String> = redis::cmd("GET")
-        .arg(&key)
-        .query_async(&mut conn)
-        .await
-        .expect("the connection answers the next command");
-    assert_eq!(
-        landed.as_deref(),
-        Some("landed"),
-        "the held write ran once Redis answered again",
-    );
-    redis::cmd("DEL")
-        .arg(&key)
-        .query_async::<()>(&mut conn)
-        .await
-        .expect("DEL the probe");
-}
-
-/// A command waiting on a connection the client is reopening still ends within
-/// the connect budget, as a timeout — which is what a reply timeout inside the
-/// client never covers, and why the bound exists.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_command_waiting_on_a_reconnection_that_never_answers_times_out_within_the_budget() {
-    let proxy = crate::DarkeningProxy::start().await;
-    let budget = Duration::from_millis(500);
-    let mut conn = RedisConnection::connect(&RedisConfig {
-        connect_timeout: budget,
-        ..crate::through(proxy.url())
-    })
-    .await
-    .expect("connect through the proxy");
-    redis::cmd("PING")
-        .query_async::<()>(&mut conn)
-        .await
-        .expect("the connection answers through the proxy");
-
-    proxy.go_dark();
-    // Commands may still succeed until the client sees the drop; the first one
-    // to fail is where it starts reopening the connection.
-    let mut saw_the_drop = false;
-    for _ in 0..50 {
-        if redis::cmd("PING")
-            .query_async::<()>(&mut conn)
-            .await
-            .is_err()
-        {
-            saw_the_drop = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(
-        saw_the_drop,
-        "the proxy going dark must drop the connection"
-    );
-
-    let started = Instant::now();
-    let error = redis::cmd("PING")
-        .query_async::<()>(&mut conn)
-        .await
-        .expect_err("nothing answers once the proxy is dark");
-    let took = started.elapsed();
-
-    assert!(error.is_timeout(), "it fails as a timeout: {error}");
-    assert!(
-        took < budget * 2,
-        "and within the budget, not after the client's own reconnection attempts: took {took:?}",
-    );
-    assert!(
-        proxy.dials_while_dark() >= 1,
-        "the command waited on a reopened connection, not on the dropped one",
-    );
 }
 
 /// How long the connection has to answer again once Redis dropped it.
@@ -489,10 +274,11 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     // A connection nothing reopens, on the same database: it is how this test
     // knows the drop took, so a recovery below is a reconnection and never a
     // drop that missed.
-    let mut unmanaged = crate::bare_client(url.as_str())
-        .get_multiplexed_async_connection()
-        .await
-        .expect("open a connection nothing reopens");
+    let mut unmanaged =
+        crate::bare_client(&crate::a_primary_url_on(crate::DB_CONNECTION_DROP).await)
+            .get_multiplexed_async_connection()
+            .await
+            .expect("open a connection nothing reopens");
     redis::cmd("PING")
         .query_async::<()>(&mut unmanaged)
         .await
@@ -533,4 +319,225 @@ async fn the_connection_answers_again_once_redis_drops_it() {
         .query_async::<()>(&mut conn.clone())
         .await
         .expect("leave the isolated database empty");
+}
+
+/// What holds on one server alone: a double in front of it stands where a
+/// Sentinel or Cluster deployment has several hosts.
+mod standalone {
+    use super::*;
+
+    /// A Redis with one client slot left boots: the proof is closed before the
+    /// connection the app keeps is opened. Held across it, every attempt needed two
+    /// slots, and the boot spent its whole budget before blaming the network.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redis_with_one_client_slot_left_boots() {
+        let proxy = ScriptedRedis::start(Some(crate::redis_url()), Some(1)).await;
+        let mut conn = RedisConnection::connect(&RedisConfig {
+            connect_timeout: Duration::from_secs(5),
+            ..crate::through(proxy.url())
+        })
+        .await
+        .unwrap_or_else(|error| panic!("one free slot is enough to boot: {error:#}"));
+        redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .expect("the kept connection serves");
+    }
+
+    /// A command waiting on a connection the client is reopening still ends within
+    /// the connect budget, as a timeout — which is what a reply timeout inside the
+    /// client never covers, and why the bound exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_command_waiting_on_a_reconnection_that_never_answers_times_out_within_the_budget() {
+        let proxy = crate::DarkeningProxy::start().await;
+        let budget = Duration::from_millis(500);
+        let mut conn = RedisConnection::connect(&RedisConfig {
+            connect_timeout: budget,
+            ..crate::through(proxy.url())
+        })
+        .await
+        .expect("connect through the proxy");
+        redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .expect("the connection answers through the proxy");
+
+        proxy.go_dark();
+        // Commands may still succeed until the client sees the drop; the first one
+        // to fail is where it starts reopening the connection.
+        let mut saw_the_drop = false;
+        for _ in 0..50 {
+            if redis::cmd("PING")
+                .query_async::<()>(&mut conn)
+                .await
+                .is_err()
+            {
+                saw_the_drop = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            saw_the_drop,
+            "the proxy going dark must drop the connection"
+        );
+
+        let started = Instant::now();
+        let error = redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .expect_err("nothing answers once the proxy is dark");
+        let took = started.elapsed();
+
+        assert!(error.is_timeout(), "it fails as a timeout: {error}");
+        assert!(
+            took < budget * 2,
+            "and within the budget, not after the client's own reconnection attempts: took {took:?}",
+        );
+        assert!(
+            proxy.dials_while_dark() >= 1,
+            "the command waited on a reopened connection, not on the dropped one",
+        );
+    }
+
+    /// A command Redis holds fails at the budget, as a timeout — and the connection
+    /// outlives it: the reply that arrives once Redis answers again goes to nobody,
+    /// and the next command gets its own. The timeout says the answer did not come
+    /// in time, never that the command did not run, and the held write lands.
+    ///
+    /// `CLIENT PAUSE WRITE` holds every client's writes, so the pause is lifted the
+    /// moment the timeout is measured — `CLIENT UNPAUSE` is not a write, and gets
+    /// through.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_command_redis_holds_fails_at_the_budget_and_the_connection_outlives_it() {
+        let budget = Duration::from_millis(300);
+        let mut conn = RedisConnection::connect(&RedisConfig {
+            url: crate::redis_url(),
+            connect_timeout: budget,
+            ..RedisConfig::default()
+        })
+        .await
+        .expect("connect to the dev container Redis");
+        let mut admin = crate::connect().await;
+        let key = crate::unique_key("held-write");
+
+        redis::cmd("CLIENT")
+            .arg("PAUSE")
+            .arg(3_000)
+            .arg("WRITE")
+            .query_async::<()>(&mut admin)
+            .await
+            .expect("CLIENT PAUSE WRITE");
+        let started = Instant::now();
+        let held = redis::cmd("SET")
+            .arg(&key)
+            .arg("landed")
+            .query_async::<()>(&mut conn)
+            .await;
+        let took = started.elapsed();
+        redis::cmd("CLIENT")
+            .arg("UNPAUSE")
+            .query_async::<()>(&mut admin)
+            .await
+            .expect("CLIENT UNPAUSE");
+
+        let error = held.expect_err("a write Redis holds is ended by the budget");
+        assert!(error.is_timeout(), "it fails as a timeout: {error}");
+        assert!(
+            took >= budget && took < budget * 3,
+            "and at the budget, took {took:?}",
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+            "naming the knob that sets it: {error}",
+        );
+
+        let landed: Option<String> = redis::cmd("GET")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .expect("the connection answers the next command");
+        assert_eq!(
+            landed.as_deref(),
+            Some("landed"),
+            "the held write ran once Redis answered again",
+        );
+        redis::cmd("DEL")
+            .arg(&key)
+            .query_async::<()>(&mut conn)
+            .await
+            .expect("DEL the probe");
+    }
+
+    /// A Redis that answers but is not ready — busy running a script past its
+    /// threshold, loading its dataset, failing over, or answering a code the client
+    /// does not know — is retried until it is, within the budget. `BUSY` and an
+    /// unknown code used to fail the boot in milliseconds as a refusal, telling the
+    /// operator to check the URL.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
+        for line in NOT_READY {
+            let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
+            proxy.answer_with(Some(line));
+            let ready = tokio::spawn({
+                let answer = Arc::clone(&proxy.answer);
+                async move {
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    *answer.lock().expect("answer lock") = None;
+                }
+            });
+            let started = Instant::now();
+            let outcome = RedisConnection::connect(&RedisConfig {
+                connect_timeout: Duration::from_secs(10),
+                ..crate::through(proxy.url())
+            })
+            .await;
+            let took = started.elapsed();
+            ready.await.expect("the proxy is made ready");
+            let mut conn = outcome.unwrap_or_else(|error| panic!("{line}: {error:#}"));
+            assert!(
+                took >= Duration::from_millis(500),
+                "{line}: the boot waited for Redis rather than connecting past it, took {took:?}"
+            );
+            redis::cmd("PING")
+                .query_async::<()>(&mut conn)
+                .await
+                .expect("the kept connection serves");
+        }
+    }
+
+    /// The one answer to a `SELECT` that clears — a server busy running a script —
+    /// is retried until it serves, as it is at the proof.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
+        let proxy = ScriptedRedis::start(Some(crate::redis_url()), None).await;
+        proxy.answer_with(Some(NOT_READY[0]));
+        let ready = tokio::spawn({
+            let answer = Arc::clone(&proxy.answer);
+            async move {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                *answer.lock().expect("answer lock") = None;
+            }
+        });
+        let started = Instant::now();
+        // Any index but 0 makes the client send a `SELECT`.
+        let outcome = RedisConnection::connect(&RedisConfig {
+            connect_timeout: Duration::from_secs(10),
+            ..crate::through(crate::url_on(&proxy.url(), crate::DB_SELECT_RETRIED))
+        })
+        .await;
+        let took = started.elapsed();
+        ready.await.expect("the proxy is made ready");
+        let mut conn = outcome.unwrap_or_else(|error| panic!("{error:#}"));
+        assert!(
+            took >= Duration::from_millis(500),
+            "the boot waited for Redis rather than connecting past it, took {took:?}"
+        );
+        redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .expect("the kept connection serves");
+    }
 }

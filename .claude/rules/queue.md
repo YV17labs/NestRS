@@ -102,9 +102,11 @@ promises more; this is how the Redis backend keeps it, on Redis Streams
 
 ## The Redis connection
 
-`RedisConnection` is the connection: one multiplexed manager opened by
-`RedisModule::for_root` and shared by every binding, each of which declares it
-runs after the connection's factory. `throttler` and `schedule` are crate
+`RedisConnection` is the connection: one link opened by `RedisModule::for_root`
+over the topology the URL's scheme declares — one server, Sentinel, Cluster —
+and shared by every binding, each of which declares it runs after the
+connection's factory. Every binding runs on all three
+(`.claude/decisions/valkey-topologies.md`). `throttler` and `schedule` are crate
 features because each pulls a port crate an app may not need.
 
 - **The boot proves the connection with a `PING`**, and what fails the same way
@@ -120,16 +122,24 @@ features because each pulls a port crate an app may not need.
   A blocking command gets a connection of its own from the same client
   (`RedisConnection::dedicated`), bounded by its own wait plus the budget.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
-  silently unused; verification is never an option (`CLAUDE.md`).
+  silently unused; verification is never an option (`CLAUDE.md`). An encrypted
+  scheme encrypts every connection its topology opens, sentinels included.
+- **Under Sentinel, every reconnection asks the sentinels again** (Valkey's
+  Sentinel client spec): a connection is never reopened to the address it had.
+- **A script names keys of one hash slot**, refused before it is sent on every
+  topology, so what runs on one server runs on a Cluster; a script a node
+  forgot is loaded again on that node alone.
 - **The Valkey the docs claim is the one every suite runs on**: the dev
   container's `docker-compose.yml` pins one image tag, which CI starts through
-  the `dev-services` action, and the docs name its release — the two move in
-  one change.
+  the `dev-services` action and the `topology-services` action runs as Sentinel
+  and Cluster, and the docs name its release — they move in one change.
 - **Each binding's docs page prescribes its ACL rule whole, per role** — its
   namespace, the connection's commands, every command it or a script it runs
-  sends, and nothing else. Held by `nest-rs-redis`'s e2e, which creates each
-  user from the page's line verbatim, reads `ACL LOG` for any denial and, for
-  the queue, `MONITOR` for a command the rule allows and nothing sends.
+  sends, and nothing else — plus what a topology's connection adds, written
+  once on the topologies page. Held by `nest-rs-redis`'s e2e on every
+  topology, which creates each user from the pages' lines verbatim on every
+  node, reads every node's `ACL LOG` for any denial and, for the queue, every
+  primary's `MONITOR` for a command the rule allows and nothing sends.
 
 ## A key a datastore holds is a name an operator types
 

@@ -39,8 +39,13 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
 #[config(namespace = "redis")]
 #[derive(Clone)]
 pub struct RedisConfig {
-    /// The Redis connection URL (e.g. `redis://127.0.0.1/`); `rediss://`
-    /// connects over TLS.
+    /// The Redis connection URL, whose scheme declares the topology:
+    /// `redis://valkey:6379/2` one server;
+    /// `redis-sentinel://s1:26379/2?node=s2:26379&sentinelServiceName=orders`
+    /// the primary the sentinels name (`sentinelUsername` and
+    /// `sentinelPassword` for sentinels holding users); and
+    /// `redis-cluster://n1:6379/2?node=n2:6379` a Cluster. Each `rediss…://`
+    /// form connects over TLS.
     pub url: String,
     /// How long boot may spend reaching Redis before failing with a named
     /// error, and afterwards the most any command a caller waits on may take

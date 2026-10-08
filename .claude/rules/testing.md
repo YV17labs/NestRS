@@ -88,7 +88,8 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
 - **Redis's sixteen databases are split between the workspaces.** 0 is the
   developer's — what `nestrs run dev` drains — and the framework suite's
   shared one; the demo holds the lower half above it, the framework the upper
-  half. Each list is checked at compile time where it is written: the
+  half; a Cluster serves them too (`cluster-databases`). Each list is checked
+  at compile time where it is written: the
   framework's `DB_*` constants in `nest-rs-redis`'s e2e `main.rs`, the demo's
   `features::testing::RedisDatabase`, one variant per test, so two tests on
   one database is a duplicate discriminant. A `FLUSHDB` in one half never
@@ -106,6 +107,14 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   back onto the shared database, or around a proxy the test put in front of
   it.
 - **What a test files where nothing drains, it names uniquely and deletes.**
+- **`nest-rs-redis`'s e2e runs once per Valkey topology** the suite's URL
+  declares: on the dev container's one server in `just test`, on Sentinel and
+  Cluster in `just test topology <name>`, which CI runs. A test that holds on
+  one topology alone sits in a module named for it (`standalone`, `sentinel`,
+  `cluster`), and each run leaves the others out; a failover moves what every
+  other test runs on, so it sits in a `failover` module, run last and alone.
+  An administration command reaches every node it concerns — `CLIENT KILL` ids
+  and `ACL` users are per server — never one the client picks.
 
 ## Decisions that bite
 

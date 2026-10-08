@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for nest-rs: one shared connection (RedisModule), and one binding per port over it — the job queue on Redis Streams (RedisQueueModule), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`)."
+description = "Redis for nest-rs: one shared connection (RedisModule) to one Valkey server, Sentinel or a Cluster, and one binding per port over it — the job queue on Redis Streams (RedisQueueModule), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`)."
 keywords = ["framework", "nestrs", "redis", "queue", "streams"]
 categories = ["asynchronous", "database"]
 
@@ -54,6 +54,9 @@ redis = { workspace = true }
 # Each worker's consumer name in a queue's group: UUID v7, so a name also says
 # when its worker started.
 uuid.workspace = true
+# A Sentinel or Cluster URL names several hosts in its query, which only an
+# RFC 3986 parser reads apart; `redis` parses with the same crate.
+url.workspace = true
 # `rediss://`: the process-default crypto provider `redis` builds its client
 # with, installed when the app chose none; the client-certificate check run
 # before anything is dialled; and the `rustls::Error` a refused handshake

@@ -1,9 +1,11 @@
 //! Redis for nestrs — one crate, one connection, one binding per port.
 //!
-//! [`RedisModule::for_root`] opens the one multiplexed [`RedisConnection`]
-//! (`<PREFIX>_REDIS__*`; a `rediss://` URL encrypts it and verifies Redis's
-//! certificate, against what [`RedisTls`] trusts); the bindings sit beside it in
-//! the composition root and share it:
+//! [`RedisModule::for_root`] opens the one [`RedisConnection`]
+//! (`<PREFIX>_REDIS__*`) over the [`RedisTopology`] the URL's scheme declares —
+//! one server (`rediss://`), the primary Sentinel names (`rediss-sentinel://`),
+//! or a Cluster (`rediss-cluster://`), every connection encrypted and verified
+//! against what [`RedisTls`] trusts; the bindings sit beside it in the
+//! composition root and share it, on every topology:
 //!
 //! - **queue** — [`RedisQueueModule`] binds the queue port over it, on Redis
 //!   Streams: the portable `dyn JobProducer` a feature injects to
@@ -33,6 +35,7 @@
 pub const TARGET: &str = "nest_rs::redis";
 
 mod backend;
+mod cluster;
 mod config;
 mod connection;
 mod error;
@@ -41,9 +44,16 @@ mod module;
 mod queue;
 #[cfg(feature = "schedule")]
 mod schedule;
+mod script;
+mod sentinel;
+mod standalone;
+#[cfg(test)]
+mod testing;
 #[cfg(feature = "throttler")]
 mod throttler;
 mod tls;
+mod topology;
+mod url;
 
 pub use config::RedisConfig;
 pub use connection::RedisConnection;
@@ -55,3 +65,4 @@ pub use schedule::{RedisOccurrenceLock, RedisScheduleModule};
 #[cfg(feature = "throttler")]
 pub use throttler::{RedisThrottler, RedisThrottlerModule};
 pub use tls::{RedisTls, RedisTlsIdentity};
+pub use topology::RedisTopology;

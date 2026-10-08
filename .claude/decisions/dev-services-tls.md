@@ -35,3 +35,9 @@ the two never drift.
 
 Reopened if a service cannot read a certificate a row can hand it, or a
 client the framework opens cannot be given the system's authorities.
+
+**2026-10-08 — the certificate serves client authentication too.** A Valkey
+Cluster's nodes present their certificate to each other on the cluster bus,
+which always asks for one, so the certificate carries `clientAuth` beside
+`serverAuth`; one issued before is issued again
+(`decisions/valkey-topologies.md`).

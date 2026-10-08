@@ -424,6 +424,12 @@ left running until they drain the 6.x jobs (step 7).
   ``asks to skip certificate verification (`#insecure`), which is refused`` —
   where 6.x never spoke TLS to Redis at all. Trust the authority that signed
   Redis's certificate with `<PREFIX>_REDIS__TLS_CA_CERT` instead.
+- **A Valkey Cluster named with `rediss://`**, the one scheme 6.x read, reaches
+  one node: a command for a slot another node serves answers `MOVED`, said once
+  at `error` on `nest_rs::redis`. Name the Cluster's nodes with
+  `rediss-cluster://`, and a Sentinel deployment's sentinels with
+  `rediss-sentinel://` rather than a name the DNS moves at a failover — see
+  [Valkey topologies](/queue/topologies/).
 - **Half a storage credential pair** — `<PREFIX>_STORAGE__ACCESS_KEY` without
   `SECRET_KEY`, or the reverse — fails the boot where 6.x paired it with a
   default. **An HMAC secret shorter than its hash** fails `JwtService::new`: a

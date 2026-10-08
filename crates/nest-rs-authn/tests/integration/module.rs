@@ -59,6 +59,7 @@ async fn for_root_pins_the_config_and_provides_a_service_built_from_it() {
         .expect("the pinned secret signs");
     let verified: Claims = jwt
         .verify(&token)
+        .await
         .expect("and verifies through the same key");
     assert_eq!(verified.sub, "user-1");
 

@@ -421,14 +421,14 @@ fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
 
     for (algorithm, minimum) in [(Algorithm::HS384, 48), (Algorithm::HS512, 64)] {
         let mut short = nest_rs_authn::JwtOptions::new(STRONG_SECRET);
-        short.algorithm = algorithm;
+        short.algorithms = vec![algorithm];
         let Err(AuthError::Failed(message)) = JwtService::new(short) else {
             panic!("a 32-byte secret is too short for {algorithm:?}")
         };
         assert!(message.contains(&format!("{minimum} bytes")), "{message}");
 
         let mut long = nest_rs_authn::JwtOptions::new("x".repeat(minimum));
-        long.algorithm = algorithm;
+        long.algorithms = vec![algorithm];
         JwtService::new(long).expect("a secret of the hash's size is accepted");
     }
 }
@@ -493,4 +493,262 @@ fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
     assert_eq!(edges.leeway_secs, Some(0));
     let unset = read(&[], AuthnConfig::default()).expect("unset keeps the defaults");
     assert_eq!((unset.expires_in_secs, unset.leeway_secs), (None, None));
+}
+
+// An external issuer's JWK Set, and the algorithms a token may be signed with.
+
+const JWKS_URI: &str = "https://auth.example.com/api/auth/jwks";
+
+/// A JWK Set and a key of this deployment's own are two key sources, refused
+/// naming exactly the settings that are set.
+#[test]
+fn a_jwk_set_uri_beside_a_static_key_is_refused_naming_both() {
+    use nest_rs_config::{Namespaced, var_name};
+
+    let jwks = var_name(AuthnConfig::NAMESPACE, "JWKS_URI");
+    for (beside, set, unset) in [
+        (
+            AuthnConfig {
+                secret: Some(STRONG_SECRET.into()),
+                ..Default::default()
+            },
+            "SECRET",
+            "PUBLIC_KEY",
+        ),
+        (
+            AuthnConfig {
+                public_key: Some(crate::DEV_PUBLIC_KEY.into()),
+                ..Default::default()
+            },
+            "PUBLIC_KEY",
+            "SECRET",
+        ),
+    ] {
+        let refused = AuthnConfig {
+            jwks_uri: Some(JWKS_URI.into()),
+            ..beside
+        }
+        .into_options();
+        let Err(AuthError::Failed(message)) = refused else {
+            panic!("a JWK Set beside {set} must be refused, not chosen")
+        };
+        assert!(message.contains(&jwks), "{message}");
+        assert!(
+            message.contains(&var_name(AuthnConfig::NAMESPACE, set)),
+            "{message}"
+        );
+        assert!(
+            !message.contains(&var_name(AuthnConfig::NAMESPACE, unset)),
+            "names only what is set: {message}"
+        );
+    }
+}
+
+/// The keys a JWK Set serves decide which tokens verify, so plain http is
+/// refused at boot, before anything is fetched.
+#[test]
+fn a_jwk_set_uri_must_be_https() {
+    use nest_rs_config::{Namespaced, var_name};
+
+    let refused = AuthnConfig {
+        jwks_uri: Some("http://auth.example.com/api/auth/jwks".into()),
+        ..Default::default()
+    }
+    .into_options()
+    .and_then(JwtService::new);
+    let Err(AuthError::Failed(message)) = refused else {
+        panic!("a plain-http JWK Set must be refused")
+    };
+    assert!(
+        message.contains(&var_name(AuthnConfig::NAMESPACE, "JWKS_URI"))
+            && message.contains("must be an https URL"),
+        "{message}"
+    );
+}
+
+/// An authority names what the JWK Set endpoint's certificate chains to, so
+/// set without a JWK Set it would go unused.
+#[test]
+fn an_authority_without_a_jwk_set_is_refused() {
+    use nest_rs_config::{Namespaced, var_name};
+
+    let refused = AuthnConfig {
+        public_key: Some(crate::DEV_PUBLIC_KEY.into()),
+        tls: nest_rs_authn::AuthnTls {
+            ca_cert: Some(b"-----BEGIN CERTIFICATE-----".to_vec()),
+        },
+        ..Default::default()
+    }
+    .into_options();
+    let Err(AuthError::Failed(message)) = refused else {
+        panic!("an authority with nothing to trust it for must be refused")
+    };
+    for key in ["TLS_CA_CERT", "JWKS_URI"] {
+        assert!(
+            message.contains(&var_name(AuthnConfig::NAMESPACE, key)),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn nothing_configured_names_the_jwk_set_among_the_key_sources() {
+    use nest_rs_config::{Namespaced, var_name};
+
+    let Err(AuthError::Failed(message)) = AuthnConfig::default().into_options() else {
+        panic!("no key must fail the boot")
+    };
+    assert!(
+        message.contains(&var_name(AuthnConfig::NAMESPACE, "JWKS_URI")),
+        "{message}"
+    );
+}
+
+/// The URI and its authority come from the environment like every other key,
+/// the authority through its `_FILE` spelling too.
+#[test]
+fn the_jwk_set_and_its_authority_are_read_from_the_environment() {
+    use nest_rs_config::{Config, ConfigService, Namespaced};
+
+    let pem = nest_rs_testing::TestAuthority::new().pem().to_owned();
+    let dir = std::env::temp_dir().join(format!("nest-rs-authn-jwks-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let authority = dir.join("issuer-ca.pem");
+    std::fs::write(&authority, &pem).expect("write the authority");
+    let env = ConfigService::with_vars(
+        AuthnConfig::NAMESPACE,
+        [
+            ("JWKS_URI", JWKS_URI),
+            (
+                "TLS_CA_CERT_FILE",
+                authority.to_str().expect("a UTF-8 path"),
+            ),
+        ],
+    );
+    let config = AuthnConfig::from_env(&env, AuthnConfig::default());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let options = config.expect("from_env").into_options().expect("options");
+    let JwtKey::Jwks { uri, ca_cert } = &options.key else {
+        panic!("a JWK Set URI alone makes a JWK Set key")
+    };
+    assert_eq!(uri, JWKS_URI);
+    assert_eq!(ca_cert.as_deref(), Some(pem.as_bytes()));
+    JwtService::new(options).expect("the authority holds a certificate");
+}
+
+/// `ALGORITHMS` reads the names RFC 7518 gives them, case and all, and refuses
+/// anything else — `none` included — naming the variable.
+#[test]
+fn algorithms_are_read_by_their_jose_names() {
+    use jsonwebtoken::Algorithm;
+    use nest_rs_config::{Config, ConfigService, Namespaced, var_name};
+
+    let read = |value: &str| {
+        AuthnConfig::from_env(
+            &ConfigService::with_vars(AuthnConfig::NAMESPACE, [("ALGORITHMS", value)]),
+            AuthnConfig::default(),
+        )
+    };
+    let config = read(" EdDSA, RS256 ,").expect("two algorithms");
+    assert_eq!(
+        config.algorithms,
+        Some(vec![Algorithm::EdDSA, Algorithm::RS256])
+    );
+    for refused in ["none", "rs256", "ES512", ",", "HS256,nope"] {
+        let message = read(refused)
+            .err()
+            .unwrap_or_else(|| panic!("{refused:?} must fail the boot"))
+            .to_string();
+        assert!(
+            message.contains(&var_name(AuthnConfig::NAMESPACE, "ALGORITHMS")),
+            "{message}"
+        );
+    }
+    let unset = AuthnConfig::from_env(
+        &ConfigService::with_vars(AuthnConfig::NAMESPACE, [("JWKS_URI", JWKS_URI)]),
+        AuthnConfig::default(),
+    )
+    .expect("from_env");
+    assert_eq!(unset.algorithms, None, "unset keeps each key's default");
+}
+
+/// What `ALGORITHMS` names is judged against the key it is set beside.
+#[test]
+fn the_algorithms_set_beside_a_key_must_fit_it() {
+    use jsonwebtoken::Algorithm;
+
+    let narrowed = AuthnConfig {
+        jwks_uri: Some(JWKS_URI.into()),
+        algorithms: Some(vec![Algorithm::EdDSA]),
+        ..Default::default()
+    }
+    .into_options()
+    .expect("options");
+    assert_eq!(narrowed.algorithms, vec![Algorithm::EdDSA]);
+    JwtService::new(narrowed).expect("EdDSA fits a JWK Set");
+
+    for (config, why) in [
+        (
+            AuthnConfig {
+                jwks_uri: Some(JWKS_URI.into()),
+                algorithms: Some(vec![Algorithm::RS256, Algorithm::HS256]),
+                ..Default::default()
+            },
+            "an HMAC algorithm against a public JWK Set",
+        ),
+        (
+            AuthnConfig {
+                public_key: Some(crate::DEV_PUBLIC_KEY.into()),
+                algorithms: Some(vec![Algorithm::RS256]),
+                ..Default::default()
+            },
+            "RS256 with an EdDSA key",
+        ),
+    ] {
+        let refused = config.into_options().and_then(JwtService::new);
+        let Err(AuthError::Failed(message)) = refused else {
+            panic!("{why} must be refused")
+        };
+        assert!(
+            message.contains("algorithm cannot be used"),
+            "{why}: {message}"
+        );
+    }
+}
+
+/// A secret signs with the one HMAC algorithm `ALGORITHMS` names, held to its
+/// hash's size.
+#[tokio::test]
+async fn a_secret_signs_with_the_hmac_algorithm_named() {
+    use jsonwebtoken::Algorithm;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    struct Claims {
+        sub: String,
+        exp: u64,
+    }
+
+    let jwt = JwtService::new(
+        AuthnConfig {
+            secret: Some("x".repeat(64)),
+            algorithms: Some(vec![Algorithm::HS512]),
+            ..Default::default()
+        }
+        .into_options()
+        .expect("options"),
+    )
+    .expect("a 64-byte secret fits HS512");
+    let token = jwt
+        .sign(&Claims {
+            sub: "ada".into(),
+            exp: jwt.expiry(),
+        })
+        .expect("signs");
+    assert_eq!(
+        jsonwebtoken::decode_header(&token).expect("a header").alg,
+        Algorithm::HS512
+    );
+    jwt.verify::<Claims>(&token).await.expect("verifies");
 }

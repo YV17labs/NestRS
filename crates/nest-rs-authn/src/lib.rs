@@ -3,7 +3,8 @@
 //!
 //! [`Strategy`] turns a request into a principal; [`AuthnGuard`] runs one and
 //! records the resulting [`actor_id`](PrincipalIdentity::actor_id) as the audit
-//! identity every downstream event inherits. [`JwtService`] signs and verifies;
+//! identity every downstream event inherits. [`JwtService`] signs and verifies —
+//! against a secret, an EdDSA key, or the JWK Set an external issuer publishes;
 //! [`hash_password`] / [`verify_password`] cover the local-credential case.
 //! The product wiring that binds them — the concrete claims type, the user
 //! lookup, the lockout policy — belongs to the consuming application (in this
@@ -30,6 +31,8 @@ mod config;
 mod credentials;
 mod error;
 mod guard;
+mod jwk_set;
+mod jwks;
 mod module;
 mod password;
 mod principal;
@@ -37,17 +40,23 @@ pub mod scope;
 mod service;
 mod strategies;
 mod strategy;
+mod tls;
 
 pub use config::AuthnConfig;
 pub use credentials::{basic_credentials, bearer_token};
 pub use error::{AuthError, CredentialError, PasswordError};
 pub use guard::AuthnGuard;
+pub use jwks::{
+    JWKS_CONNECT_TIMEOUT, JWKS_DEFAULT_MAX_AGE, JWKS_FETCH_TIMEOUT, JWKS_MAX_AGE_CEILING,
+    JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_STALE_CEILING,
+};
 pub use module::{AuthnModule, AuthnSetup};
 pub use password::{burn_verify, hash_password, verify_password};
 pub use principal::PrincipalIdentity;
 pub use service::{JwtKey, JwtOptions, JwtService};
 pub use strategies::JwtStrategy;
 pub use strategy::{AUTHENTICATE_TIMEOUT, Strategy};
+pub use tls::AuthnTls;
 
 /// Re-exported so apps configure [`JwtOptions`] without a direct `jsonwebtoken` dependency.
 pub use jsonwebtoken::Algorithm;

@@ -24,8 +24,8 @@ fn client() -> OAuthClient {
     OAuthClient::new(valid_config()).expect("client builds")
 }
 
-#[test]
-fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
+#[tokio::test]
+async fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
     let jwt = crate::jwt();
     let auth = client().authorize(&jwt, "acme").expect("authorize");
 
@@ -37,6 +37,7 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
 
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
+        .await
         .expect("transaction verifies as a handshake token");
     assert!(auth.url.contains(&format!("state={}", tx.csrf)));
     assert!(!tx.pkce.is_empty());
@@ -46,22 +47,22 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
 
 /// The cookie is signed by the same service, key, `aud` and `iss` as an access
 /// token: the media type (RFC 9068 §2.1) is the only thing telling them apart.
-#[test]
-fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
+#[tokio::test]
+async fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
     let jwt = crate::jwt();
     let auth = client().authorize(&jwt, "acme").expect("authorize");
 
     assert!(
         matches!(
-            jwt.verify::<Transaction>(&auth.transaction),
+            jwt.verify::<Transaction>(&auth.transaction).await,
             Err(AuthError::InvalidToken)
         ),
         "a handshake token must not verify as an access token",
     );
 }
 
-#[test]
-fn an_access_token_is_not_accepted_as_a_transaction() {
+#[tokio::test]
+async fn an_access_token_is_not_accepted_as_a_transaction() {
     let jwt = crate::jwt();
     let access = jwt
         .sign(&serde_json::json!({
@@ -75,7 +76,8 @@ fn an_access_token_is_not_accepted_as_a_transaction() {
 
     assert!(
         matches!(
-            jwt.verify_handshake::<Transaction>("oauth-tx", &access),
+            jwt.verify_handshake::<Transaction>("oauth-tx", &access)
+                .await,
             Err(AuthError::InvalidToken)
         ),
         "an access token must not verify as a handshake token",
@@ -262,6 +264,7 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     let auth = client.authorize(&jwt, "acme").expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
+        .await
         .expect("the transaction verifies");
 
     let sent = tokio::time::Instant::now();
@@ -455,6 +458,7 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     let auth = client.authorize(&jwt, "acme").expect("authorize");
     let tx: Transaction = jwt
         .verify_handshake("oauth-tx", &auth.transaction)
+        .await
         .expect("the transaction verifies");
     let Err(error) = client
         .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)

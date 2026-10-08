@@ -12,6 +12,7 @@ mod config;
 mod credentials;
 mod error;
 mod guard;
+mod jwks;
 mod module;
 mod password;
 mod service;

@@ -25,6 +25,7 @@ async fn token_endpoint_issues_a_token_the_public_key_verifies() {
 
     let claims: Claims = resource_server_verifier()
         .verify(&token)
+        .await
         .expect("the public key verifies the privately-signed token");
     assert_eq!(claims.org_id.to_string(), ORG_ID);
     assert!(claims.roles.contains(&Role::Admin));
@@ -109,6 +110,7 @@ async fn token_endpoint_derives_the_org_from_the_authenticated_client() {
         .to_owned();
     let claims: Claims = resource_server_verifier()
         .verify(&token)
+        .await
         .expect("the public key verifies the privately-signed token");
     assert_eq!(claims.org_id.to_string(), ORG_ID);
     assert_eq!(claims.roles, vec![Role::User]);

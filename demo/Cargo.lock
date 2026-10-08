@@ -2588,6 +2588,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "poem",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

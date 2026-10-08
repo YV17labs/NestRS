@@ -40,7 +40,7 @@ impl<C: DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static> St
 
     async fn authenticate(&self, req: &mut Request) -> Result<C, AuthError> {
         let token = bearer_token(req).ok_or(AuthError::MissingCredentials)?;
-        let claims: C = self.svc.verify(token)?;
+        let claims: C = self.svc.verify(token).await?;
         Ok(claims)
     }
 }

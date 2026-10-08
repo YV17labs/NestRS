@@ -68,27 +68,28 @@ fn short_hmac_secret_is_rejected_by_the_service_constructor() {
 #[test]
 fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
     let secret = "0123456789abcdef0123456789abcdef";
+    let with = |mut options: JwtOptions, algorithm: Algorithm| {
+        options.algorithms = vec![algorithm];
+        options
+    };
     let cases = [
         (
             "an HMAC secret with RS256",
-            JwtOptions {
-                algorithm: Algorithm::RS256,
-                ..JwtOptions::new(secret)
-            },
+            with(JwtOptions::new(secret), Algorithm::RS256),
         ),
         (
             "an EdDSA pair with HS256",
-            JwtOptions {
-                algorithm: Algorithm::HS256,
-                ..JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY)
-            },
+            with(
+                JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY),
+                Algorithm::HS256,
+            ),
         ),
         (
             "a verify-only EdDSA key with ES256",
-            JwtOptions {
-                algorithm: Algorithm::ES256,
-                ..JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)
-            },
+            with(
+                JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY),
+                Algorithm::ES256,
+            ),
         ),
     ];
     for (label, options) in cases {
@@ -101,52 +102,49 @@ fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
         );
     }
     // RFC 7518 §3.2: HS512 takes a key of at least its 64-byte hash.
-    JwtService::new(JwtOptions {
-        algorithm: Algorithm::HS512,
-        ..JwtOptions::new(secret.repeat(2))
-    })
-    .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
+    JwtService::new(with(JwtOptions::new(secret.repeat(2)), Algorithm::HS512))
+        .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
 }
 
-#[test]
-fn sign_and_verify_round_trip() {
+#[tokio::test]
+async fn sign_and_verify_round_trip() {
     let jwt = service("round-trip-secret");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
 
-#[test]
-fn expired_token_is_rejected() {
+#[tokio::test]
+async fn expired_token_is_rejected() {
     let jwt = service("expired-secret");
     let past = get_current_timestamp().saturating_sub(3600);
     let token = jwt.sign(&claims(past, None)).expect("sign");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::Expired)
     ));
 }
 
-#[test]
-fn not_yet_valid_token_is_rejected() {
+#[tokio::test]
+async fn not_yet_valid_token_is_rejected() {
     let jwt = service("nbf-secret");
     let now = get_current_timestamp();
     let token = jwt
         .sign(&claims(now + 7200, Some(now + 3600)))
         .expect("sign");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::NotYetValid)
     ));
 }
 
-#[test]
-fn invalid_signature_is_rejected() {
+#[tokio::test]
+async fn invalid_signature_is_rejected() {
     let issuer = service("issuer-secret");
     let verifier = service("other-secret");
     let token = issuer.sign(&claims(issuer.expiry(), None)).expect("sign");
     assert!(matches!(
-        verifier.verify::<TestClaims>(&token),
+        verifier.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidSignature)
     ));
 }
@@ -169,27 +167,27 @@ fn invalid_pem_fails_at_construction() {
     ));
 }
 
-#[test]
-fn audience_must_match_when_configured() {
+#[tokio::test]
+async fn audience_must_match_when_configured() {
     let mut options = JwtOptions::new("aud-secret-padded-to-thirty-two-bytes");
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
     let mut ok = claims(jwt.expiry(), None);
     ok.aud = Some("api".into());
     let token = jwt.sign(&ok).expect("sign");
-    assert!(jwt.verify::<TestClaims>(&token).is_ok());
+    assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 
     let mut bad = claims(jwt.expiry(), None);
     bad.aud = Some("other".into());
     let token = jwt.sign(&bad).expect("sign");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidToken)
     ));
 }
 
-#[test]
-fn audience_omitted_is_rejected_when_configured() {
+#[tokio::test]
+async fn audience_omitted_is_rejected_when_configured() {
     // A configured audience is mandatory: a validly-signed token omitting `aud` fails closed.
     let secret = "aud-required-secret-padded-to-32-bytes";
     let mut options = JwtOptions::new(secret);
@@ -206,24 +204,24 @@ fn audience_omitted_is_rejected_when_configured() {
     )
     .expect("encode");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&forged),
+        jwt.verify::<TestClaims>(&forged).await,
         Err(AuthError::InvalidToken)
     ));
 
     // The signer stamps the configured audience onto claims that leave `aud` unset.
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let round_tripped: TestClaims = jwt.verify(&token).expect("stamped aud verifies");
+    let round_tripped: TestClaims = jwt.verify(&token).await.expect("stamped aud verifies");
     assert_eq!(round_tripped.aud.as_deref(), Some("api"));
 
     // An explicit audience in the claims is never overwritten.
     let mut present = claims(jwt.expiry(), None);
     present.aud = Some("api".into());
     let token = jwt.sign(&present).expect("sign");
-    assert!(jwt.verify::<TestClaims>(&token).is_ok());
+    assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 }
 
-#[test]
-fn a_configured_issuer_is_stamped_and_required() {
+#[tokio::test]
+async fn a_configured_issuer_is_stamped_and_required() {
     let secret = "iss-required-secret-padded-to-32-bytes";
     let mut options = JwtOptions::new(secret);
     options.issuer = Some("auth".into());
@@ -243,7 +241,7 @@ fn a_configured_issuer_is_stamped_and_required() {
         iss: None,
     };
     let token = jwt.sign(&minted).expect("sign");
-    let back: IssClaims = jwt.verify(&token).expect("stamped iss verifies");
+    let back: IssClaims = jwt.verify(&token).await.expect("stamped iss verifies");
     assert_eq!(back.iss.as_deref(), Some("auth"));
 
     // The same claims encoded without the stamp are refused.
@@ -254,26 +252,26 @@ fn a_configured_issuer_is_stamped_and_required() {
     )
     .expect("encode");
     assert!(matches!(
-        jwt.verify::<IssClaims>(&forged),
+        jwt.verify::<IssClaims>(&forged).await,
         Err(AuthError::InvalidToken)
     ));
 }
 
-#[test]
-fn invalid_algorithm_is_rejected() {
+#[tokio::test]
+async fn invalid_algorithm_is_rejected() {
     let jwt = service("alg-secret");
     let header = at_jwt_header(Algorithm::HS384);
     let key = EncodingKey::from_secret(b"alg-secret");
     let token = jsonwebtoken::encode(&header, &claims(jwt.expiry(), None), &key)
         .expect("encode with mismatched alg");
     assert!(matches!(
-        jwt.verify::<TestClaims>(&token),
+        jwt.verify::<TestClaims>(&token).await,
         Err(AuthError::InvalidAlgorithm)
     ));
 }
 
-#[test]
-fn unsigned_alg_none_token_is_rejected() {
+#[tokio::test]
+async fn unsigned_alg_none_token_is_rejected() {
     // `alg: none` with an empty signature. jsonwebtoken cannot emit one, so the
     // token is hand-crafted.
     let jwt = service("alg-none-secret");
@@ -285,20 +283,20 @@ fn unsigned_alg_none_token_is_rejected() {
     // `header.payload.` — three segments with an empty signature (RFC 7519 §6.1).
     let token = format!("{header}.{payload}.");
     assert!(
-        jwt.verify::<TestClaims>(&token).is_err(),
+        jwt.verify::<TestClaims>(&token).await.is_err(),
         "an alg=none unsigned token must never verify",
     );
 }
 
-#[test]
-fn eddsa_sign_and_verify_round_trip() {
+#[tokio::test]
+async fn eddsa_sign_and_verify_round_trip() {
     let jwt = JwtService::new(JwtOptions::eddsa(
         crate::DEV_PRIVATE_KEY,
         crate::DEV_PUBLIC_KEY,
     ))
     .expect("EdDSA service");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
 
@@ -326,8 +324,8 @@ fn a_private_key_beside_another_pairs_public_key_is_refused() {
     }
 }
 
-#[test]
-fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
+#[tokio::test]
+async fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
     // The confused deputy: with no audience configured, a token the shared
     // issuer minted for a sibling service is still refused (RFC 7519 §4.1.3).
     let secret = "no-aud-configured-secret-padded-32b";
@@ -348,25 +346,25 @@ fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
 
     assert!(
         matches!(
-            jwt.verify::<TestClaims>(&token),
+            jwt.verify::<TestClaims>(&token).await,
             Err(AuthError::InvalidToken)
         ),
         "a validly-signed token minted for another audience must not verify here",
     );
 }
 
-#[test]
-fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
+#[tokio::test]
+async fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
     // §4.1.3 fires only when the claim is present: no audience configured and
     // none stamped verifies.
     let jwt = service("no-aud-anywhere-secret");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
     assert!(decoded.aud.is_none());
 }
 
-#[test]
-fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
+#[tokio::test]
+async fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
     // The opt-out is written down and reported once per boot, naming the variable.
     let logs = nest_rs_testing::LogCapture::install();
     let secret = "any-aud-opt-in-secret-padded-32-by";
@@ -395,7 +393,7 @@ fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
     )
     .expect("encode");
     assert!(
-        jwt.verify::<TestClaims>(&token).is_ok(),
+        jwt.verify::<TestClaims>(&token).await.is_ok(),
         "the opt-out is what restores the old permissive reading",
     );
 }
@@ -434,8 +432,8 @@ fn a_minted_token_carries_the_rfc9068_media_type() {
 /// RFC 9068 §4: the resource server "MUST verify that the `typ` header value is
 /// `at+jwt` or `application/at+jwt` and reject tokens carrying any other
 /// value". An ID Token signed by the same issuer and key must not be spendable here.
-#[test]
-fn a_token_typed_as_anything_else_is_refused() {
+#[tokio::test]
+async fn a_token_typed_as_anything_else_is_refused() {
     let secret = "typ-fixture-secret-padded-32-byte";
     let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
 
@@ -450,7 +448,7 @@ fn a_token_typed_as_anything_else_is_refused() {
         .expect("encode");
         assert!(
             matches!(
-                jwt.verify::<TestClaims>(&token),
+                jwt.verify::<TestClaims>(&token).await,
                 Err(nest_rs_authn::AuthError::InvalidToken)
             ),
             "typ={typ} must not verify as an access token",
@@ -460,8 +458,8 @@ fn a_token_typed_as_anything_else_is_refused() {
 
 /// §4 names both spellings, and RFC 9110 §8.3.1 makes a media type
 /// case-insensitive — so the long form and an odd casing both verify.
-#[test]
-fn the_long_media_type_and_odd_casing_both_verify() {
+#[tokio::test]
+async fn the_long_media_type_and_odd_casing_both_verify() {
     let secret = "typ-fixture-secret-padded-32-byte";
     let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
 
@@ -474,14 +472,14 @@ fn the_long_media_type_and_odd_casing_both_verify() {
             &EncodingKey::from_secret(secret.as_bytes()),
         )
         .expect("encode");
-        assert!(jwt.verify::<TestClaims>(&token).is_ok(), "typ={typ}");
+        assert!(jwt.verify::<TestClaims>(&token).await.is_ok(), "typ={typ}");
     }
 }
 
 /// The opt-out exists for an issuer that predates the profile, and it is the
 /// only way a plain `typ: JWT` verifies.
-#[test]
-fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
+#[tokio::test]
+async fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
     let secret = "typ-fixture-secret-padded-32-byte";
     let mut options = JwtOptions::new(secret);
     options.explicit_typing = false;
@@ -493,7 +491,7 @@ fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .expect("encode");
-    assert!(jwt.verify::<TestClaims>(&token).is_ok());
+    assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 }
 
 /// A `JwtOptions` built in code is held to the variables' ranges too, or the

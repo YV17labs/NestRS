@@ -234,25 +234,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn issue_round_trips_user_subject_through_verify() {
+    #[tokio::test]
+    async fn issue_round_trips_user_subject_through_verify() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let sub = Uuid::now_v7();
         let org = Uuid::now_v7();
         let token = issue_with_jwt(&jwt_svc, Some(sub), org, vec![Role::Admin]).expect("issue");
 
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert_eq!(claims.sub, Some(sub));
         assert_eq!(claims.org_id, org);
         assert!(claims.is_admin());
     }
 
-    #[test]
-    fn issue_machine_grant_signs_with_no_subject() {
+    #[tokio::test]
+    async fn issue_machine_grant_signs_with_no_subject() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let org = Uuid::now_v7();
         let token = issue_with_jwt(&jwt_svc, None, org, vec![Role::User]).expect("issue");
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert!(claims.sub.is_none(), "machine grant must omit sub");
         assert_eq!(claims.org_id, org);
     }
@@ -308,8 +308,8 @@ mod tests {
         assert!(matches!(err, TokenError::InvalidScope));
     }
 
-    #[test]
-    fn grant_client_credentials_issues_a_bearer_token_with_the_clients_org() {
+    #[tokio::test]
+    async fn grant_client_credentials_issues_a_bearer_token_with_the_clients_org() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["user", "admin"]);
         let org = client.payload;
@@ -321,7 +321,7 @@ mod tests {
         )
         .expect("happy path");
         assert_eq!(token.token_type, "Bearer");
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert!(
             claims.sub.is_none(),
             "client_credentials token must carry no sub",
@@ -437,14 +437,14 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn grant_client_credentials_falls_back_to_the_full_grant_when_scope_blank() {
+    #[tokio::test]
+    async fn grant_client_credentials_falls_back_to_the_full_grant_when_scope_blank() {
         let jwt_svc = jwt_with_ttl(Duration::from_secs(60));
         let client = auth_client(&["admin"]);
         let token =
             grant_client_credentials_with_jwt(&jwt_svc, "client_credentials", None, &client)
                 .expect("blank scope ok");
-        let claims: Claims = jwt_svc.verify(&token.access_token).expect("verify");
+        let claims: Claims = jwt_svc.verify(&token.access_token).await.expect("verify");
         assert!(claims.is_admin(), "blank scope should grant the full set");
     }
 }

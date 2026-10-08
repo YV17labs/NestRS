@@ -92,7 +92,8 @@ impl<S: Strategy> AuthnGuard<S> {
     ///
     ///
     /// Polled once bare before the bound is armed: the JWT strategy answers on
-    /// that first poll, so the common path pays no timer.
+    /// that first poll — against a static key, or a JWK Set already held — so
+    /// the common path pays no timer.
     async fn authenticate(
         &self,
         strategy: &'static str,

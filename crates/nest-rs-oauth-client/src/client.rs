@@ -321,6 +321,7 @@ impl OAuthClient {
         // `JwtService` logs its decode reason at `debug`.
         let tx: Transaction = jwt
             .verify_handshake(TRANSACTION_PURPOSE, transaction)
+            .await
             .inspect_err(|error| {
                 tracing::warn!(
                 target: crate::TARGET,

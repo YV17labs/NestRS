@@ -67,6 +67,11 @@ pub enum AuthError {
     /// closes an `alg`-confusion downgrade.
     #[error("invalid token algorithm")]
     InvalidAlgorithm,
+    /// No key of the issuer's JWK Set can check the token: the key its `kid`
+    /// names is not in the set, even after the refresh an unknown key earns,
+    /// or it names none and several keys fit its algorithm.
+    #[error("unknown token signing key")]
+    UnknownKey,
     /// The token's `nbf` (not-before) is still in the future, beyond leeway.
     #[error("token not yet valid")]
     NotYetValid,
@@ -128,6 +133,7 @@ impl AuthError {
             Self::InvalidToken => "invalid_token",
             Self::InvalidSignature => "invalid_signature",
             Self::InvalidAlgorithm => "invalid_algorithm",
+            Self::UnknownKey => "unknown_key",
             Self::NotYetValid => "not_yet_valid",
             Self::Expired => "expired",
             Self::Failed(_) => "failed",

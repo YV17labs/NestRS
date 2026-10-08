@@ -26,8 +26,11 @@ nest-rs-guards.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
-# jsonwebtoken directly).
+# jsonwebtoken directly). Its `jwk` module reads an issuer's JWK Set.
 jsonwebtoken.workspace = true
+# Fetching an external issuer's JWK Set (`<PREFIX>_AUTHN__JWKS_URI`) over
+# verified TLS, on the workspace's one HTTP client, private to this crate.
+reqwest.workspace = true
 # Decoding `Authorization: Basic` for the `basic_credentials` helper, symmetric
 # to `bearer_token` — the two credential forms a `Strategy` reads off a request.
 base64.workspace = true
@@ -46,11 +49,17 @@ anyhow.workspace = true
 tracing.workspace = true
 # The guard's bound on a strategy's answer (`AUTHENTICATE_TIMEOUT`): a strategy
 # that never answers is denied at it rather than holding the request for good.
+# A JWK Set fetch runs on a task of its own, so a caller dropped mid-fetch
+# neither cancels it nor lets the next caller start a second.
 tokio.workspace = true
 
 [dev-dependencies]
-# Booting the `AuthnModule::for_root` seam and reading the resolved service back.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# Booting the `AuthnModule::for_root` seam and reading the resolved service back;
+# `tls` issues the certificate the in-process JWK Set double presents.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# The signing keys a JWK Set test publishes — RSA, P-256 and Ed25519 —
+# generated in process rather than committed.
+rcgen = { workspace = true }
 # `test-util` (not part of tokio's `full`) pauses time, so a strategy that never
 # answers is denied at `AUTHENTICATE_TIMEOUT` without the suite waiting it out.
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

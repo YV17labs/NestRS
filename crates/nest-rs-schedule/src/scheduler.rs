@@ -6,10 +6,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
 use croner::Cron;
 use futures_util::FutureExt;
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use nest_rs_core::{Container, Correlation, Discovery, ReachableProviders, Transport, inventory};
 use nest_rs_worker::{JobContext, JobTimedOut, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
@@ -58,7 +58,7 @@ enum Job {
         id: JobId,
         // Boxed because a parsed Cron is ~330 bytes (large_enum_variant).
         schedule: Box<Cron>,
-        tz: Option<Tz>,
+        tz: Option<TimeZone>,
         task: Task,
     },
 }
@@ -284,14 +284,9 @@ impl Scheduler {
                     format!("cron job `{id}` has an invalid cron expression `{expr}`")
                 })?;
                 let tz = tz
-                    .map(|name_str| {
-                        name_str.parse::<Tz>().map_err(|e| {
-                            anyhow::anyhow!(
-                                "cron job `{id}` has an invalid timezone `{name_str}`: {e}"
-                            )
-                        })
-                    })
-                    .transpose()?;
+                    .map(time_zone)
+                    .transpose()
+                    .map_err(|e| anyhow::anyhow!("cron job `{id}`: {e:#}"))?;
                 Job::Cron {
                     id,
                     schedule: Box::new(schedule),
@@ -405,7 +400,8 @@ impl Transport for Scheduler {
                     target: crate::TARGET,
                     provider = id.provider,
                     method = id.method,
-                    timezone = tz.map(|t| t.name()).unwrap_or("UTC"),
+                    timezone = tz.as_ref().and_then(TimeZone::iana_name).unwrap_or("UTC"),
+                    tzdb = tz.as_ref().and(jiff_tzdb::VERSION),
                     replicas,
                     key,
                     "scheduled job (cron)",
@@ -670,11 +666,12 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
         Job::Cron {
             schedule, tz, task, ..
         } => {
+            let zone = tz.unwrap_or(TimeZone::UTC);
             // The last occurrence this loop reached: at boot, the clock, since no
             // occurrence before the boot is due.
-            let mut last = wall_clock_utc();
+            let mut last = wall_clock_timestamp();
             loop {
-                let Some(target) = next_occurrence(&schedule, tz, last) else {
+                let Some(target) = next_occurrence(&schedule, &zone, last) else {
                     tracing::warn!(
                         target: crate::TARGET,
                         provider = id.provider,
@@ -684,8 +681,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                     token.cancelled().await;
                     break;
                 };
-                let wait = (target - wall_clock_utc())
-                    .to_std()
+                let wait = Duration::try_from(target.duration_since(wall_clock_timestamp()))
                     .unwrap_or(Duration::ZERO);
                 tokio::select! {
                     biased;
@@ -694,8 +690,8 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                 }
                 // Chosen on the clock the timer woke to: whatever held the loop, it
                 // reaches the latest occurrence due, once, and names those before it.
-                let now = wall_clock_utc();
-                let (instant, overrun) = match cron_due(&schedule, tz, last, now) {
+                let now = wall_clock_timestamp();
+                let (instant, overrun) = match cron_due(&schedule, &zone, last, now) {
                     CronDue::Latest(instant, overrun) => (Some(instant), overrun),
                     // A timer waking before the wall clock reached the occurrence
                     // it slept for fires that one all the same.
@@ -705,10 +701,12 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                 // The instant reached and how long its claim holds, read off the
                 // gap to the following occurrence ([`claim_hold`]).
                 let reached = instant.map(|instant| {
-                    let hold = next_occurrence(&schedule, tz, instant)
-                        .and_then(|following| (following - instant).to_std().ok())
+                    let hold = next_occurrence(&schedule, &zone, instant)
+                        .and_then(|following| {
+                            Duration::try_from(following.duration_since(instant)).ok()
+                        })
                         .map_or(MIN_HOLD, claim_hold);
-                    (u64::try_from(instant.timestamp_millis()).unwrap_or(0), hold)
+                    (epoch_millis(instant.into()), hold)
                 });
                 let fire = async {
                     let Some((instant_ms, hold)) = reached else {
@@ -726,8 +724,8 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                     }
                 };
                 if overrun.count > 0 {
-                    let from_ms = u64::try_from(last.timestamp_millis()).unwrap_or(0);
-                    let now_ms = u64::try_from(now.timestamp_millis()).unwrap_or(0);
+                    let from_ms = epoch_millis(last.into());
+                    let now_ms = epoch_millis(now.into());
                     match task.replicas {
                         Replicas::Each => {
                             report_skipped(id, from_ms, now_ms, &overrun);
@@ -801,9 +799,10 @@ fn wall_clock() -> SystemTime {
     }
 }
 
-/// [`wall_clock`], as the instant a cron schedule is walked from.
-fn wall_clock_utc() -> DateTime<Utc> {
-    wall_clock().into()
+/// [`wall_clock`], as the instant a cron schedule is walked from. A clock outside
+/// the years jiff spans stands at its end, past every occurrence.
+fn wall_clock_timestamp() -> Timestamp {
+    Timestamp::try_from(wall_clock()).unwrap_or(Timestamp::MAX)
 }
 
 fn epoch_millis(at: SystemTime) -> u64 {
@@ -812,16 +811,27 @@ fn epoch_millis(at: SystemTime) -> u64 {
     })
 }
 
-/// The first occurrence strictly after `after`, as a UTC instant; `None` if the
-/// schedule has none.
-fn next_occurrence(schedule: &Cron, tz: Option<Tz>, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    match tz {
-        Some(tz) => schedule
-            .find_next_occurrence(&after.with_timezone(&tz), false)
-            .ok()
-            .map(|dt| dt.with_timezone(&Utc)),
-        None => schedule.find_next_occurrence(&after, false).ok(),
-    }
+/// What follows a `tz` name the zone database does not hold.
+const UNKNOWN_ZONE: &str = "is not a zone of the IANA time zone database bundled with jiff — it \
+     takes an `Area/Location` identifier (e.g. \"Europe/Paris\", \"America/New_York\", \"UTC\")";
+
+/// The zone `name` names in the database bundled with jiff, the one
+/// `#[cron(tz)]` was checked against.
+fn time_zone(name: &str) -> Result<TimeZone> {
+    let Some((canonical, tzif)) = jiff_tzdb::get(name) else {
+        anyhow::bail!("{name:?} {UNKNOWN_ZONE}");
+    };
+    TimeZone::tzif(canonical, tzif)
+        .with_context(|| format!("the database's entry for {canonical:?} does not read"))
+}
+
+/// The first occurrence strictly after `after`, read on `zone`'s calendar; `None`
+/// if the schedule has none.
+fn next_occurrence(schedule: &Cron, zone: &TimeZone, after: Timestamp) -> Option<Timestamp> {
+    schedule
+        .find_next_occurrence(&after.to_zoned(zone.clone()), false)
+        .ok()
+        .map(|next| next.timestamp())
 }
 
 /// The occurrences a slow claim or run overran: the instants of the first
@@ -849,7 +859,7 @@ fn interval_overrun(instant_ms: u64, period_ms: u64, count: u64) -> Overrun {
 enum CronDue {
     /// The latest occurrence due by the clock, and those before it the loop
     /// moves past.
-    Latest(DateTime<Utc>, Overrun),
+    Latest(Timestamp, Overrun),
     /// None is due: the timer woke before the wall clock reached the occurrence
     /// it slept for.
     NoneYet,
@@ -864,21 +874,19 @@ enum CronDue {
 ///
 /// croner names the end of a spring-forward gap as an occurrence in either
 /// direction, so a job whose time falls inside the gap fires once at its end.
-fn cron_due(schedule: &Cron, tz: Option<Tz>, last: DateTime<Utc>, now: DateTime<Utc>) -> CronDue {
+fn cron_due(schedule: &Cron, zone: &TimeZone, last: Timestamp, now: Timestamp) -> CronDue {
     const CAP: u64 = 10_000;
     let mut overrun = Overrun::default();
-    let mut latest: Option<DateTime<Utc>> = None;
+    let mut latest: Option<Timestamp> = None;
     let mut cursor = last;
-    while let Some(next) = next_occurrence(schedule, tz, cursor).filter(|next| *next <= now) {
+    while let Some(next) = next_occurrence(schedule, zone, cursor).filter(|next| *next <= now) {
         if let Some(passed) = latest {
             if overrun.count == CAP {
                 overrun.capped = true;
                 return CronDue::PastCap(overrun);
             }
             if overrun.count < CHECKED {
-                overrun
-                    .first
-                    .push(u64::try_from(passed.timestamp_millis()).unwrap_or(0));
+                overrun.first.push(epoch_millis(passed.into()));
             }
             overrun.count += 1;
         }
@@ -1669,12 +1677,95 @@ mod tests {
     #[test]
     fn the_next_occurrence_is_strictly_after_the_instant_asked_about() {
         let every_second = Cron::from_str("* * * * * *").expect("parses");
-        let at: DateTime<Utc> = "2026-03-11T14:23:45Z".parse().expect("parses");
-        let next = next_occurrence(&every_second, None, at).expect("has one");
-        assert_eq!(
-            next,
-            "2026-03-11T14:23:46Z".parse::<DateTime<Utc>>().unwrap()
-        );
+        let at: Timestamp = "2026-03-11T14:23:45Z".parse().expect("parses");
+        let next = next_occurrence(&every_second, &TimeZone::UTC, at).expect("has one");
+        assert_eq!(next, "2026-03-11T14:23:46Z".parse::<Timestamp>().unwrap());
+    }
+
+    /// Morocco moved to permanent UTC on 2026-09-20 (tzdata 2026c), British
+    /// Columbia to permanent -07 from 2026-11-01 (2026b).
+    #[test]
+    fn a_cron_falls_on_its_zones_current_rules() {
+        let at = |instant: &str| instant.parse::<Timestamp>().expect("parses");
+        let nine = Cron::from_str("0 0 9 * * *").expect("parses");
+        for (zone, after, nine_there) in [
+            (
+                "Africa/Casablanca",
+                "2026-10-01T00:00:00Z",
+                "2026-10-01T09:00:00Z",
+            ),
+            (
+                "America/Vancouver",
+                "2026-12-01T00:00:00Z",
+                "2026-12-01T16:00:00Z",
+            ),
+        ] {
+            let tz = time_zone(zone).expect("held");
+            assert_eq!(
+                next_occurrence(&nine, &tz, at(after)),
+                Some(at(nine_there)),
+                "{zone}"
+            );
+        }
+    }
+
+    fn idle(
+        _: &Container,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cron_in(tz: &'static str) -> Arc<CronJobMeta> {
+        Arc::new(CronJobMeta {
+            origin: "features::tasks",
+            provider: "ReportTasks",
+            method: "send",
+            trigger: Trigger::Cron {
+                expr: "0 0 9 * * *",
+                tz: Some(tz),
+            },
+            run: idle,
+            timeout: nest_rs_worker::JOB_TIMEOUT,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::Each,
+            key: None,
+        })
+    }
+
+    /// The boot's copy of the decorator's `tz` rule, run over one corpus: the
+    /// decorator's check is `jiff_tzdb::get`, its refusal `invalid_time_zone`.
+    #[test]
+    fn the_decorators_copy_of_the_zone_rule_agrees_with_the_boots() {
+        const CORPUS: [&str; 10] = [
+            "UTC",
+            "Europe/Paris",
+            "America/Vancouver",
+            "US/Eastern",
+            "Etc/GMT+5",
+            "europe/paris",
+            "Europe/Pariz",
+            "Paris",
+            "",
+            "Mars/Olympus_Mons",
+        ];
+        for name in CORPUS {
+            let boot = Scheduler::resolve(&cron_in(name));
+            assert_eq!(
+                boot.is_ok(),
+                jiff_tzdb::get(name).is_some(),
+                "the two copies disagree on {name:?}"
+            );
+            if let Err(refusal) = boot {
+                let compile = nest_rs_codegen::invalid_time_zone(name);
+                let fact = compile
+                    .strip_prefix("#[cron] `tz`: ")
+                    .expect("the decorator's refusal opens with its site");
+                assert_eq!(
+                    refusal.to_string(),
+                    format!("cron job `ReportTasks::send`: {fact}")
+                );
+            }
+        }
     }
 
     /// The double blocks its thread to stand for a stall: the answer is ready the
@@ -1837,12 +1928,6 @@ mod tests {
                 panic!("the lock panicked before handing back its answer")
             }
         }
-        fn run(
-            _: &Container,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
-            Box::pin(async { Ok(()) })
-        }
-
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
             container: Container::builder().build(),
@@ -1856,7 +1941,7 @@ mod tests {
             key: None,
         };
         let task = Task {
-            run,
+            run: idle,
             timeout: nest_rs_worker::JOB_TIMEOUT,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
@@ -2006,12 +2091,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_lock_that_never_answers_stops_no_schedule() {
-        fn run(
-            _: &Container,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
-            Box::pin(async { Ok(()) })
-        }
-
         let logs = nest_rs_testing::LogCapture::install();
         let lock = Arc::new(NeverAnswering {
             claims: std::sync::atomic::AtomicUsize::new(0),
@@ -2030,7 +2109,7 @@ mod tests {
             },
             period: Duration::from_millis(100),
             task: Task {
-                run,
+                run: idle,
                 timeout: nest_rs_worker::JOB_TIMEOUT,
                 transaction: JobTransaction::Pool,
                 replicas: Replicas::One,
@@ -2235,11 +2314,12 @@ mod tests {
 
     #[test]
     fn a_cron_reaches_the_latest_occurrence_due_by_the_clock_it_woke_to() {
-        let at = |instant: &str| instant.parse::<DateTime<Utc>>().expect("parses");
-        let ms = |instant: &str| u64::try_from(at(instant).timestamp_millis()).expect("in range");
-        let reach = |expression: &str, tz: Option<Tz>, last: &str, now: &str| {
+        let at = |instant: &str| instant.parse::<Timestamp>().expect("parses");
+        let ms = |instant: &str| epoch_millis(at(instant).into());
+        let zone = |name: &str| time_zone(name).expect("held");
+        let reach = |expression: &str, tz: TimeZone, last: &str, now: &str| {
             let schedule = Cron::from_str(expression).expect("parses");
-            match cron_due(&schedule, tz, at(last), at(now)) {
+            match cron_due(&schedule, &tz, at(last), at(now)) {
                 CronDue::Latest(instant, overrun) => Some((instant, overrun.first)),
                 CronDue::NoneYet => None,
                 CronDue::PastCap(_) => panic!("under the cap"),
@@ -2249,7 +2329,7 @@ mod tests {
         assert_eq!(
             reach(
                 every_minute,
-                None,
+                TimeZone::UTC,
                 "2026-03-11T12:01:00Z",
                 "2026-03-11T12:02:06Z"
             ),
@@ -2259,7 +2339,7 @@ mod tests {
         assert_eq!(
             reach(
                 every_minute,
-                None,
+                TimeZone::UTC,
                 "2026-03-11T12:01:00Z",
                 "2026-03-11T12:04:30Z"
             ),
@@ -2272,7 +2352,7 @@ mod tests {
         assert_eq!(
             reach(
                 every_minute,
-                None,
+                TimeZone::UTC,
                 "2026-03-11T12:02:00Z",
                 "2026-03-11T12:02:59Z"
             ),
@@ -2282,7 +2362,7 @@ mod tests {
         assert_eq!(
             reach(
                 "0 0 9 * * *",
-                Some(chrono_tz::Europe::Paris),
+                zone("Europe/Paris"),
                 "2026-03-10T08:00:00Z",
                 "2026-03-11T08:30:00Z",
             ),
@@ -2295,7 +2375,7 @@ mod tests {
         assert_eq!(
             reach(
                 "0 30 2 * * *",
-                Some(chrono_tz::Europe::London),
+                zone("Europe/London"),
                 "2026-03-28T02:30:00Z",
                 "2026-03-29T01:10:00Z",
             ),
@@ -2307,7 +2387,7 @@ mod tests {
         assert_eq!(
             reach(
                 "0 30 1 * * *",
-                Some(chrono_tz::Europe::London),
+                zone("Europe/London"),
                 "2026-03-28T01:30:00Z",
                 "2026-03-29T02:00:00Z",
             ),
@@ -2319,11 +2399,14 @@ mod tests {
     #[test]
     fn a_cron_overrun_is_counted_up_to_its_cap_and_past_it_none_fires_late() {
         let every_second = Cron::from_str("* * * * * *").expect("parses");
-        let after: DateTime<Utc> = "2026-03-11T00:00:00Z".parse().expect("parses");
-        let seconds = |n| chrono::TimeDelta::try_seconds(n).expect("in range");
-        let CronDue::Latest(latest, within) =
-            cron_due(&every_second, None, after, after + seconds(10_001))
-        else {
+        let after: Timestamp = "2026-03-11T00:00:00Z".parse().expect("parses");
+        let seconds = jiff::SignedDuration::from_secs;
+        let CronDue::Latest(latest, within) = cron_due(
+            &every_second,
+            &TimeZone::UTC,
+            after,
+            after + seconds(10_001),
+        ) else {
             panic!("ten thousand overrun is within the cap");
         };
         assert_eq!(latest, after + seconds(10_001));
@@ -2331,8 +2414,12 @@ mod tests {
             (within.count, within.capped, within.first.len()),
             (10_000, false, 100)
         );
-        let CronDue::PastCap(past) = cron_due(&every_second, None, after, after + seconds(10_002))
-        else {
+        let CronDue::PastCap(past) = cron_due(
+            &every_second,
+            &TimeZone::UTC,
+            after,
+            after + seconds(10_002),
+        ) else {
             panic!("ten thousand and one overrun is past the cap");
         };
         assert_eq!((past.count, past.capped), (10_000, true));

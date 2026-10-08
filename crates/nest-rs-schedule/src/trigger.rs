@@ -86,8 +86,9 @@ presets! {
 #[cfg(test)]
 mod tests {
     use super::CronExpression;
-    use chrono::{DateTime, Utc};
     use croner::Cron;
+    use jiff::Timestamp;
+    use jiff::tz::TimeZone;
     use std::str::FromStr;
 
     macro_rules! pinned {
@@ -127,17 +128,20 @@ mod tests {
 
     #[test]
     fn every_preset_fires_when_its_documentation_says_it_does() {
-        let start: DateTime<Utc> = START.parse().expect("the start instant parses");
+        let start = START
+            .parse::<Timestamp>()
+            .expect("the start instant parses")
+            .to_zoned(TimeZone::UTC);
         let mut moved = Vec::new();
         for (name, expr, expected) in PINNED {
             let cron = Cron::from_str(expr).unwrap_or_else(|e| panic!("`{name}` must parse: {e}"));
-            let mut at = start;
+            let mut at = start.clone();
             let mut fired = Vec::with_capacity(expected.len());
             for _ in 0..expected.len() {
                 at = cron
                     .find_next_occurrence(&at, false)
                     .unwrap_or_else(|e| panic!("`{name}` must have a next occurrence: {e}"));
-                fired.push(at.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+                fired.push(at.timestamp().to_string());
             }
             if fired != *expected {
                 moved.push(format!(

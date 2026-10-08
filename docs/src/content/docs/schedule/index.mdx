@@ -15,8 +15,8 @@ timezone included) or **at boot** (`CronExpression` presets); a bad preset
 fails the boot naming the offending job.
 
 `nest-rs-schedule` builds on [croner](https://docs.rs/croner) — the framework
-wraps it for cron expression parsing (5/6/7-field), with `chrono` /
-[`chrono-tz`](https://docs.rs/chrono-tz) for the optional IANA timezone.
+wraps it for cron expression parsing (5/6/7-field), with
+[`jiff`](https://docs.rs/jiff) for the optional IANA timezone.
 
 ## Install
 
@@ -163,6 +163,14 @@ A cron string literal and a `tz` name are validated at **compile time**; a
 `CronExpression` constant when the scheduler configures at boot, which fails
 naming the job and the offending value. An invalid trigger is never
 silently skipped.
+
+A `tz` name is read from one database, the IANA time zone database bundled
+with jiff (`jiff-tzdb`): the compiler checks the name against it and the
+scheduler reads the zone's rules from it, never from the host's
+`/usr/share/zoneinfo`, so an image built `FROM scratch` needs nothing installed.
+That copy is your lockfile's — `cargo update -p jiff-tzdb` brings the latest
+IANA release — and the job's boot line names the release it read
+(`tzdb="2026e"`).
 
 ## How long a run lasts
 
@@ -583,5 +591,5 @@ Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbin
   for distributed work.
 - [OpenTelemetry](/opentelemetry/) — every schedule event is targeted on
   `nest_rs::schedule`, carrying `provider` and `method` fields (plus
-  `interval_ms` / `delay_ms` / `timezone` on the boot lines, and the `key` a job
+  `interval_ms` / `delay_ms` / `timezone` / `tzdb` on the boot lines, and the `key` a job
   firing once claims under).

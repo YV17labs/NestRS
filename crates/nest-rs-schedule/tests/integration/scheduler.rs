@@ -343,6 +343,54 @@ async fn invalid_cron_expression_fails_configure() {
     );
 }
 
+#[tokio::test]
+async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read() {
+    struct ZonedHost;
+    struct UtcHost;
+
+    let cron = |provider, tz| CronJobMeta {
+        origin: module_path!(),
+        provider,
+        method: "report",
+        trigger: Trigger::Cron {
+            expr: "0 0 9 * * *",
+            tz,
+        },
+        run: tick_cron,
+        timeout: JOB_TIMEOUT,
+        transaction: JobTransaction::PerAttempt,
+        replicas: Replicas::Each,
+        key: None,
+    };
+    let container = crate::hermetic()
+        .attach_meta::<ZonedHost, CronJobMeta>(cron("ZonedHost", Some("america/vancouver")))
+        .attach_meta::<UtcHost, CronJobMeta>(cron("UtcHost", None))
+        .build();
+    let logs = nest_rs_testing::LogCapture::install();
+
+    Scheduler::new()
+        .configure(&container)
+        .await
+        .expect("both jobs configure");
+
+    let line = |provider: &str| {
+        logs.find(nest_rs_schedule::TARGET, "scheduled job (cron)")
+            .into_iter()
+            .find(|line| line.field("provider").as_deref() == Some(provider))
+            .unwrap_or_else(|| panic!("{provider} files a boot line: {:#?}", logs.events()))
+    };
+    let zoned = line("ZonedHost");
+    assert_eq!(
+        zoned.field("timezone").as_deref(),
+        Some("America/Vancouver"),
+        "the zone as the database spells it: {zoned:?}"
+    );
+    assert_eq!(zoned.field("tzdb").as_deref(), jiff_tzdb::VERSION);
+    let utc = line("UtcHost");
+    assert_eq!(utc.field("timezone").as_deref(), Some("UTC"));
+    assert_eq!(utc.field("tzdb"), None, "UTC is read from no database");
+}
+
 // A `JobContext` stub installing an ambient marker the job observes.
 tokio::task_local! {
     static MARKER: u8;

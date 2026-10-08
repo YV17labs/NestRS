@@ -93,9 +93,12 @@ flate2 = "1.1"
 rmcp = { version = "3.4", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
 
-croner = "4.0"
+croner = { version = "4.0", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-chrono-tz = "0.10"
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat"] }
+# The one zone database: `#[cron(tz)]` is checked against it and the scheduler
+# reads it, never the host's zoneinfo, so the two cannot disagree.
+jiff-tzdb = "0.1"
 
 redis = { version = "1.7", default-features = false, features = [
     "aio",

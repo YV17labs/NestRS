@@ -25,9 +25,9 @@ futures-util.workspace = true
 tracing.workspace = true
 # `OccurrenceLockError`, the opaque failure a lock backend reports.
 thiserror.workspace = true
-croner.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
+croner = { workspace = true, features = ["jiff"] }
+jiff.workspace = true
+jiff-tzdb.workspace = true
 
 [dev-dependencies]
 # Raising SIGINT to exercise App::run's graceful-shutdown path end-to-end.

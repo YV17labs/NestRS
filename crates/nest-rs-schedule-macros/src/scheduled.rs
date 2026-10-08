@@ -8,10 +8,10 @@ use std::str::FromStr;
 
 use nest_rs_codegen::{
     Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs, duration_millis,
-    impl_self_ident, job_key, job_keys, job_returns_a_result, job_timeout, job_transaction,
-    key_value, key_without_replicas_one, replicas_value, require_str_lit, returns_unit,
-    shared_receiver, site, takes_value, timeout_value, transactional_value, ungrouped_expr,
-    unread_job_key,
+    impl_self_ident, invalid_time_zone, job_key, job_keys, job_returns_a_result, job_timeout,
+    job_transaction, key_value, key_without_replicas_one, replicas_value, require_str_lit,
+    returns_unit, shared_receiver, site, takes_value, timeout_value, transactional_value,
+    ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -391,21 +391,13 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, TrailingKeys)> {
 }
 
 /// The IANA name set is closed and `tz` is always a literal, so a typo is
-/// knowable here.
+/// knowable here, in the database the scheduler reads.
 fn validate_timezone_literal(s: &LitStr) -> syn::Result<()> {
     let name = s.value();
-    if name.parse::<chrono_tz::Tz>().is_ok() {
+    if jiff_tzdb::get(&name).is_some() {
         return Ok(());
     }
-    Err(syn::Error::new(
-        s.span(),
-        format!(
-            "{}: {name:?} is not an IANA time zone name — it takes an `Area/Location` \
-             identifier from the IANA time zone database (e.g. \"Europe/Paris\", \
-             \"America/New_York\", \"UTC\")",
-            site("cron", Some("tz")),
-        ),
-    ))
+    Err(syn::Error::new(s.span(), invalid_time_zone(&name)))
 }
 
 /// Validate a literal cron expression at expansion time, spanned at the

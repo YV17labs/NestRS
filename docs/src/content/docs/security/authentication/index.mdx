@@ -230,7 +230,7 @@ route.
 
 `AuthError` covers the failure modes a strategy hits:
 `MissingCredentials`, `InvalidToken`, `InvalidSignature`,
-`InvalidAlgorithm`, `NotYetValid`, `Expired`, `Failed(String)` — each
+`InvalidAlgorithm`, `UnknownKey`, `NotYetValid`, `Expired`, `Failed(String)` — each
 a **401** — plus `Unavailable { detail, retry_after }`, which is a
 **503**. `Failed` collapses to a generic `"authentication failed"` on the
 wire so the message never leaks configuration detail.
@@ -269,8 +269,9 @@ shape of that path.
 ## Pick the strategy that matches
 
 - [JWT](/security/authentication/jwt/) — a resource server verifies a
-  signed bearer token. HS256 (shared secret) or EdDSA (asymmetric, the
-  resource server holds only the public key).
+  signed bearer token. HS256 (shared secret), EdDSA (asymmetric, the
+  resource server holds only the public key), or the JWK Set an external
+  issuer publishes.
 - [OAuth2](/security/authentication/oauth2/) — full
   authorization-code flow with PKCE, against any provider.
 - [Password](/security/authentication/password/) — Argon2id hashing
@@ -299,6 +300,9 @@ over — see [Authorization](/security/authorization/).
   signer, many verifiers, no RPC across the boundary.
 - [Social login](/security/authentication/social-login/) — one import
   activates every configured provider, through an open contract.
+- [External identity provider](/security/authentication/external-identity-provider/)
+  — accept the tokens better-auth, Keycloak or Auth0 issues, against the JWK
+  Set it publishes.
 
 ## Going further
 

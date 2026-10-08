@@ -188,6 +188,10 @@ left running until they drain the 6.x jobs (step 7).
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
    | `ThrottlerGuard::new(store, limit)` | gone: `ThrottlerModule::for_root` builds the guard; a `ThrottlerConfig` literal gains `pseudonym_key` |
    | `JwtConfig`, from the authn crate | `nest_rs::authn::AuthnConfig`, with the same fields and variables |
+   | `jwt.verify(token)?`, `jwt.verify_handshake(purpose, token)?` | the same with `.await` before the `?` — a verification may fetch an issuer's JWK Set |
+   | `JwtOptions { algorithm: …, ..JwtOptions::new(secret) }`, or `options.algorithm = …` | `let mut options = JwtOptions::new(secret);` then `options.algorithms = vec![…]` — `JwtOptions` is `#[non_exhaustive]`, so a literal is refused |
+   | a `match` on `JwtKey` naming every variant | the same with a `_` arm — `JwtKey` is `#[non_exhaustive]` and gains `Jwks` |
+   | an `AuthnConfig { … }` written out whole | the same, ending in `..Default::default()` — `AuthnConfig` gains `jwks_uri`, `algorithms` and `tls` |
    | `AuthError::Unavailable(detail)` | `AuthError::Unavailable { detail, retry_after }`, rendered `503` |
    | `env.seconds("KEY", base)` in a `from_env` | a `DurationBounds::secs(…)` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
    | `env.get`, `env.parse` or any other `env.*` reader asked for a key ending in `_SECS` or `_MS` | a `DurationBounds::secs(…)` or `DurationBounds::millis(…)` read the same way — the readers now refuse a duration's key at boot, naming `DurationBounds` |

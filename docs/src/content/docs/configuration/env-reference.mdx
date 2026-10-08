@@ -182,21 +182,25 @@ above — there are no OTel-specific log variables.
 ## `authn` — `<PREFIX>_AUTHN__*`
 
 JWT key material and validation for `nest-rs-authn`. A resource server sets only
-the verification side (`SECRET` **or** `PUBLIC_KEY`); the issuer app also sets the
-signing side. The key material is read at boot, so a rotated file takes effect
-at the next restart.
+the verification side (`SECRET`, `PUBLIC_KEY` **or** `JWKS_URI`); the issuer app
+also sets the signing side. The key material is read at boot, so a rotated file
+takes effect at the next restart; a JWK Set is fetched when a token first needs
+it and kept fresh ([JWT](/security/authentication/jwt/#verifying-another-issuers-tokens)).
 
 | Key | Meaning |
 |---|---|
 | `SECRET` | HS256 shared secret (≥ 32 bytes) — signs and verifies. Beside either key it fails the boot |
 | `PRIVATE_KEY` | EdDSA private key (PEM) — issuer only, to sign; `PRIVATE_KEY_FILE` reads it from a path instead. Without `PUBLIC_KEY`, or beside the public key of another pair, fails the boot |
 | `PUBLIC_KEY` | EdDSA public key (PEM) — to verify; `PUBLIC_KEY_FILE` reads it from a path instead |
+| `JWKS_URI` | the JWK Set an external issuer publishes its keys at — verify-only. `https` only; beside `SECRET`, `PRIVATE_KEY` or `PUBLIC_KEY`, fails the boot |
+| `ALGORITHMS` | comma-separated JOSE algorithms a token may be signed with, case-sensitive (`EdDSA,RS256`). Unset: `HS256` with `SECRET`, `EdDSA` with a PEM key, every asymmetric one (`RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `EdDSA`) with `JWKS_URI`. A secret or a PEM key takes exactly one that fits it, a JWK Set never an `HS*` one; an unknown name, `none` included, fails the boot |
+| `TLS_CA_CERT` | PEM certificates of the authorities the `JWKS_URI` endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or set without `JWKS_URI`, fails the boot |
 | `ISSUER` | expected `iss` claim (unset ⇒ no issuer check) |
 | `AUDIENCE` | expected `aud` claim. Set ⇒ the claim is **mandatory** and must name this app. Unset does *not* disable the check: a token carrying an `aud` this app is not named in is refused either way (RFC 7519 §4.1.3) |
 | `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE`, and reported at `warn` once per boot |
 | `LEEWAY_SECS` | clock-skew leeway in seconds, `0` to `300` (default `30`) — RFC 7519 §4.1.4's "no more than a few minutes"; past it an expired token still verifies |
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds, `1` to `2592000` — thirty days (default `3600`) |
-| `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`) |
+| `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`); `false` for an issuer stamping a plain `typ: JWT`, or none |
 
 ## `oauth__client` — `<PREFIX>_OAUTH__CLIENT__*`
 

@@ -1,0 +1,166 @@
+---
+title: External identity provider
+description: Verify the access tokens an identity provider you do not run issues — better-auth worked end to end — against the JWK Set it publishes.
+sidebar:
+  order: 7
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+Your users sign in somewhere else — a TypeScript app running
+[better-auth](https://www.better-auth.com), a Keycloak realm, an Auth0 tenant —
+and your nestrs API must accept the access tokens that sign-in hands out. The
+API holds no key and mints nothing: it reads the JWK Set the provider
+publishes, and `JwtStrategy` verifies every bearer token against it. This page
+does it with better-auth, whose
+[JWT plugin](https://www.better-auth.com/docs/plugins/jwt) publishes one; any
+provider exposing a `jwks_uri` takes the same three variables.
+
+You need a better-auth server reachable over `https`, and the API's
+`AuthnModule` and `JwtStrategy` wired as on [JWT](/security/authentication/jwt/#the-three-line-setup).
+
+<Steps>
+
+1. **Publish the keys from better-auth.** Add the `jwt()` plugin. It signs with
+   EdDSA over Ed25519 unless `jwks.keyPairConfig` says otherwise, publishes the
+   public keys at `/api/auth/jwks`, and names the signing key in each token's
+   `kid` header. Both `iss` and `aud` default to better-auth's base URL; set the
+   audience to the API's own URL, so a token minted for another service is not
+   one this API accepts:
+
+   ```ts title="auth.ts"
+   import { betterAuth } from "better-auth";
+   import { jwt } from "better-auth/plugins";
+
+   export const auth = betterAuth({
+     plugins: [
+       jwt({
+         jwt: {
+           audience: "https://api.example.com",
+         },
+       }),
+     ],
+   });
+   ```
+
+   Checkpoint: `curl https://auth.example.com/api/auth/jwks` answers a JSON
+   document whose `keys` each carry a `kid`, an `alg` and the public key.
+
+2. **Point the API at that set.** Three variables name it, the issuer and the
+   audience; two more fit it to how better-auth signs:
+
+   ```bash frame="terminal"
+   export NESTRS_AUTHN__JWKS_URI='https://auth.example.com/api/auth/jwks'
+   export NESTRS_AUTHN__ISSUER='https://auth.example.com'
+   export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
+   export NESTRS_AUTHN__ALGORITHMS='EdDSA'
+   export NESTRS_AUTHN__EXPLICIT_TYPING=false
+   ```
+
+   `ALGORITHMS` accepts the one algorithm better-auth signs with, so no other
+   reaches a key. `EXPLICIT_TYPING=false` because better-auth's plugin stamps no
+   `typ` header on what it mints (`plugins/jwt/sign.ts` in its source), while
+   the framework asks for RFC 9068's `at+jwt` by default. Set no `SECRET`,
+   `PUBLIC_KEY` or `PRIVATE_KEY` beside them: two key sources fail the boot.
+
+   Checkpoint: the API boots without asking better-auth for anything — the set
+   is fetched by the first token that needs it.
+
+3. **Read the claims better-auth puts in the token.** `sub` is the user's id
+   unless `jwt.getSubject` says otherwise; beside it sits the session's user
+   object, or what your `jwt.definePayload` returns instead. Read what the API
+   needs:
+
+   ```rust title="crates/features/src/identity/claims.rs"
+   use nest_rs::authn::PrincipalIdentity;
+   use serde::{Deserialize, Serialize};
+
+   #[derive(Clone, Debug, Serialize, Deserialize)]
+   pub struct Claims {
+       pub sub: String,
+       pub exp: u64,
+   }
+
+   impl PrincipalIdentity for Claims {
+       fn actor_id(&self) -> Option<String> {
+           Some(self.sub.clone())
+       }
+   }
+   ```
+
+   Checkpoint: a token from better-auth's `GET /api/auth/token`, sent by a
+   signed-in browser, reaches a guarded route; the same request without it
+   answers `401`.
+
+   ```bash frame="terminal"
+   TOKEN=$(curl -s https://auth.example.com/api/auth/token -H "cookie: $SESSION" | jq -r .token)
+   curl -s https://api.example.com/posts -H "authorization: Bearer $TOKEN"
+   ```
+
+4. **Tell OAuth clients where to get a token**, when better-auth's
+   [OAuth Provider plugin](https://better-auth.com/docs/plugins/oauth-provider)
+   issues them — to an MCP client, say. Its guide asks the API that receives
+   access tokens to publish OAuth Protected Resource metadata, the RFC 9728
+   document `OAuthResourceModule` serves; see
+   [Telling clients where the issuer is](/security/authentication/split-deployment/#telling-clients-where-the-issuer-is).
+   The provider signs with the same `/jwks` keys and puts the `resource` a
+   client asked for in the token's `aud`, so the API's `RESOURCE` and
+   `AUDIENCE` are one URL. Its tokens carry an issuer of its own, under
+   better-auth's base path: `ISSUER` changes from step 2's to the `issuer` its
+   discovery document names, and `AUTHORIZATION_SERVERS` names the same.
+
+   ```bash frame="terminal"
+   export NESTRS_OAUTH__RESOURCE__RESOURCE='https://api.example.com'
+   export NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS='https://auth.example.com/api/auth'
+   export NESTRS_AUTHN__ISSUER='https://auth.example.com/api/auth'
+   export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
+   ```
+
+   Checkpoint: `curl https://api.example.com/.well-known/oauth-protected-resource`
+   names better-auth among its `authorization_servers`.
+
+</Steps>
+
+Key rotation needs nothing on this side. better-auth rotates only when its
+`rotationInterval` option is set, keeping the old key for a `gracePeriod`; a
+token signed by the new key names a `kid` the API has not seen, and the API
+fetches the set once more to find it.
+
+<Aside type="caution">
+`JWKS_URI` is `https` or the boot fails — a JWK Set decides which tokens
+verify, and over plain `http` anyone on the path could serve their own. A
+better-auth dev server on `http://localhost:3000` needs TLS in front of it:
+a local reverse proxy whose certificate the API trusts, through the system's
+store or `<PREFIX>_AUTHN__TLS_CA_CERT`.
+</Aside>
+
+## What fails if you get it wrong
+
+Each refusal is a `warn` on `nest_rs::authn` carrying a `reason`, and a `401`
+with `WWW-Authenticate: Bearer error="invalid_token"`:
+
+- **`EXPLICIT_TYPING` left on** — every better-auth token is
+  `reason="invalid_token"`. Set it to `false`.
+- **`AUDIENCE` that is not the token's `aud`** — `reason="invalid_token"` too.
+  better-auth's default audience is its own base URL: set `jwt.audience` as in
+  step 1, or `AUDIENCE` to that base URL.
+- **`JWKS_URI` naming another tenant or another provider's set** — every token
+  is `reason="unknown_key"`: the key its `kid` names is not in the set, even
+  after the refetch it earned.
+- **An algorithm `ALGORITHMS` leaves out** — `reason="invalid_algorithm"`,
+  before anything is fetched.
+
+An unreachable provider is not a `401`: the request answers `503` with
+`Retry-After`, the line is an `error` naming the endpoint, and a `#[public]`
+route answers the same rather than serving the caller as anonymous. The last
+set fetched keeps verifying for an hour past its freshness while the provider
+is down; see [the bounds](/security/authentication/jwt/#verifying-another-issuers-tokens).
+
+## Going further
+
+- [JWT](/security/authentication/jwt/#verifying-another-issuers-tokens) — what
+  a JWK Set is checked for, and every bound on its fetch.
+- [Split deployment](/security/authentication/split-deployment/) — the same
+  resource server when the issuer is a nestrs app of your own.
+- [Threat model](/security/threat-model/) — what token verification catches,
+  and what it leaves to you.

@@ -32,9 +32,8 @@ thiserror = "2.0"
 anyhow = "1.0"
 
 jsonwebtoken = { version = "11.0", features = ["aws_lc_rs"] }
-# Past the 12-month bar: 5.0.0 (2025-01-21) is the last release. Only RFC 6749's
-# types and flow are its; the HTTP client is the workspace's. No release by
-# 2027-01-31 and the exchange is written on reqwest instead.
+# Past the 12-month bar (5.0.0, 2025-01-21): no release by 2027-01-31 and the
+# exchange is written on reqwest instead.
 oauth2 = { version = "5.0", default-features = false }
 base64 = "0.23"
 
@@ -43,19 +42,12 @@ serde_json = "1.0"
 
 figment = { version = "0.10", features = ["toml", "env"] }
 
-# Past the 12-month bar: 3.1.12 (2025-07-28) is the last release. 4.0, prepared
-# upstream (poem-web/poem#1200), drops the unmaintained rustls-pemfile; it moves
-# at its release, in a nestrs major since poem's types are in the API. No release
-# by 2027-01-31 and the server moves (`.claude/decisions/http-server.md`).
+# Past the 12-month bar (3.1.12, 2025-07-28): 4.0 (poem-web/poem#1200) at its
+# release, or none by 2027-01-31 and `.claude/decisions/http-server.md` applies.
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 rustls = "0.23"
-# What the system trusts, read once: the rustls project's reader, which honours
-# `SSL_CERT_FILE` and `SSL_CERT_DIR`.
 rustls-native-certs = "0.8"
-# Test certificates, issued in process: the rustls project's own generator.
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
-# The one crypto provider (deny.toml bans ring), named directly only where a
-# primitive is used outside TLS and JWT: the throttler's HMAC.
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
 
 object_store = { version = "0.14", features = ["aws"] }
@@ -75,9 +67,7 @@ parking_lot = "0.12"
 
 subtle = "2.6"
 
-# Exact pin: nest-rs-graphql reads async-graphql's registry internals.
-# Without its defaults: the framework serves the playground and builds dataloaders,
-# and an email check is `validator`'s, the one validation at the edge.
+# `=`: nest-rs-graphql reads async-graphql's registry internals.
 async-graphql = { version = "=7.2.1", default-features = false, features = ["dataloader", "playground"] }
 async-graphql-poem = "=7.2.1"
 inventory = "0.3"
@@ -86,11 +76,12 @@ argon2 = "0.6"
 validator = { version = "0.21", features = ["derive"] }
 uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
 
+# `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed bump,
+# both pins together.
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio"] }
-# Postgres's TLS on aws-lc-rs, the provider every other client uses: sea-orm's
-# `runtime-tokio-rustls` can only select sqlx's ring backend, and sqlx picks ring
-# whenever any ring feature is on.
+# Named for its feature alone: sea-orm's `runtime-tokio-rustls` selects sqlx's
+# ring backend, which deny.toml bans.
 sqlx = { version = "0.9", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
@@ -112,8 +103,8 @@ redis = { version = "1.7", default-features = false, features = [
     "script",
     "tokio-comp",
     "tokio-rustls-comp",
-    # Never read: the framework hands every client its authorities. Without it,
-    # `redis` reads the system's store again for every connection it opens.
+    # Never read, the framework hands each client its roots; without it, `redis`
+    # reloads the system's store on every connection.
     "tls-rustls-webpki-roots",
 ] }
 

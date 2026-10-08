@@ -4,6 +4,7 @@
 use std::fmt;
 use std::time::Duration;
 
+use aws_lc_rs::constant_time::verify_slices_are_equal;
 use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::url::Url;
 use oauth2::{
@@ -13,7 +14,6 @@ use oauth2::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use validator::Validate;
 
 use crate::config::OAuthClientConfig;
@@ -341,8 +341,9 @@ impl OAuthClient {
             );
             return Err(AuthError::Failed("OAuth provider mismatch".into()));
         }
-        // Constant-time; `subtle` reads a length mismatch as not equal.
-        if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
+        // Constant-time over the contents; a length mismatch, which is not secret, is
+        // unequal at once.
+        if verify_slices_are_equal(tx.csrf.as_bytes(), state.as_bytes()).is_err() {
             tracing::warn!(
                 target: crate::TARGET,
                 reason = REASON_CSRF_STATE_MISMATCH,
@@ -465,6 +466,20 @@ mod tests {
         JwtService::new(JwtOptions::new("oauth-client-tests-padded-to-32b")).expect("HMAC service")
     }
 
+    fn signed_transaction(jwt: &JwtService, provider: &str, csrf: &str) -> String {
+        jwt.sign_handshake(
+            TRANSACTION_PURPOSE,
+            &Transaction {
+                typ: TransactionKind::OauthTx,
+                provider: provider.into(),
+                csrf: csrf.into(),
+                pkce: "verifier".into(),
+                exp: jwt.expiry(),
+            },
+        )
+        .expect("sign")
+    }
+
     #[test]
     fn new_rejects_invalid_config_at_validate_stage() {
         // `OAuthClient` is not `Debug`, hence `is_err`.
@@ -526,49 +541,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exchange_surfaces_url_parse_error_after_csrf_passes() {
-        let jwt = jwt();
-        let mut config = valid_config();
-        config.token_url = "::::".into();
-        let client = OAuthClient::new(config).expect("new accepts non-empty fields");
-
-        let transaction = jwt
-            .sign_handshake(
-                TRANSACTION_PURPOSE,
-                &Transaction {
-                    typ: TransactionKind::OauthTx,
-                    provider: "acme".into(),
-                    csrf: "agreed-state".into(),
-                    pkce: "verifier".into(),
-                    exp: jwt.expiry(),
-                },
-            )
-            .expect("sign");
-
-        assert!(matches!(
-            client
-                .exchange(&jwt, "acme", &transaction, "agreed-state", "the-code")
-                .await,
-            Err(AuthError::Failed(_))
-        ));
-    }
-
-    #[tokio::test]
     async fn exchange_rejects_a_transaction_minted_for_another_provider() {
         let jwt = jwt();
         let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
-        let transaction = jwt
-            .sign_handshake(
-                TRANSACTION_PURPOSE,
-                &Transaction {
-                    typ: TransactionKind::OauthTx,
-                    provider: "provider-a".into(),
-                    csrf: "agreed-state".into(),
-                    pkce: "verifier".into(),
-                    exp: jwt.expiry(),
-                },
-            )
-            .expect("sign");
+        let transaction = signed_transaction(&jwt, "provider-a", "agreed-state");
 
         let Err(err) = client
             .exchange(&jwt, "provider-b", &transaction, "agreed-state", "code")
@@ -579,32 +555,35 @@ mod tests {
         assert!(err.to_string().contains("provider mismatch"), "{err}");
     }
 
+    /// The token endpoint does not parse, so a state that passes fails there instead.
     #[tokio::test]
-    async fn exchange_rejects_a_state_that_does_not_match() {
+    async fn the_state_matches_only_byte_for_byte_whatever_its_length() {
         let jwt = jwt();
-        let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
-        let transaction = jwt
-            .sign_handshake(
-                TRANSACTION_PURPOSE,
-                &Transaction {
-                    typ: TransactionKind::OauthTx,
-                    provider: "acme".into(),
-                    csrf: "the-signed-state".into(),
-                    pkce: "verifier".into(),
-                    exp: jwt.expiry(),
-                },
-            )
-            .expect("sign");
+        let mut config = valid_config();
+        config.token_url = "::::".into();
+        let client = OAuthClient::new(config).expect("new accepts non-empty fields");
+        let transaction = signed_transaction(&jwt, "acme", "the-signed-state");
 
-        // `TokenSet` is not `Debug` (it carries tokens).
-        let Err(err) = client
-            .exchange(&jwt, "acme", &transaction, "forged", "the-code")
-            .await
-        else {
-            panic!("a mismatched state is rejected");
-        };
-        assert!(matches!(err, AuthError::Failed(_)));
-        assert!(err.to_string().contains("state mismatch"));
+        for (presented, matches) in [
+            ("the-signed-state", true),
+            ("the-signed-statE", false),
+            ("the-signed-stat", false),
+            ("the-signed-states", false),
+            ("", false),
+        ] {
+            let Err(err) = client
+                .exchange(&jwt, "acme", &transaction, presented, "the-code")
+                .await
+            else {
+                panic!("nothing reaches a token endpoint that does not parse");
+            };
+            assert!(matches!(err, AuthError::Failed(_)), "{presented:?}: {err}");
+            assert_eq!(
+                !err.to_string().contains("state mismatch"),
+                matches,
+                "{presented:?}: {err}"
+            );
+        }
     }
 
     /// A name lookup that never answers.

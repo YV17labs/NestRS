@@ -65,8 +65,6 @@ async-trait = "0.1"
 
 parking_lot = "0.12"
 
-subtle = "2.6"
-
 # `=`: nest-rs-graphql reads async-graphql's registry internals.
 async-graphql = { version = "=7.2.1", default-features = false, features = ["dataloader", "playground"] }
 async-graphql-poem = "=7.2.1"

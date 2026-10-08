@@ -1,7 +1,7 @@
 //! The OAuth2 `client_credentials` grant: authenticating a registered machine
 //! client against a static registry, in constant time.
 
-use subtle::ConstantTimeEq;
+use aws_lc_rs::constant_time::verify_slices_are_equal;
 
 use nest_rs_authn::AuthError;
 use nest_rs_authn::PrincipalIdentity;
@@ -61,7 +61,7 @@ impl<P> PrincipalIdentity for AuthenticatedClient<P> {
 
 /// Authenticate a `client_id` + `client_secret` pair against a static registry,
 /// returning the matching principal. Both comparisons run in **constant time**
-/// (`subtle`) and every entry is visited, so neither a valid `client_id` nor a
+/// (AWS-LC's `CRYPTO_memcmp`) and every entry is visited, so neither a valid `client_id` nor a
 /// secret prefix is observable through a timing side-channel. Returns
 /// [`AuthError::Failed`] with an opaque message when no entry matches.
 pub fn authenticate_against_registry<P: Clone>(
@@ -71,12 +71,12 @@ pub fn authenticate_against_registry<P: Clone>(
 ) -> Result<AuthenticatedClient<P>, AuthError> {
     let mut matched: Option<&RegisteredClient<P>> = None;
     for client in clients {
-        let id_ok = client.client_id.as_bytes().ct_eq(client_id.as_bytes());
-        let secret_ok = client
-            .client_secret
-            .as_bytes()
-            .ct_eq(client_secret.as_bytes());
-        if bool::from(id_ok & secret_ok) && matched.is_none() {
+        let id_ok =
+            verify_slices_are_equal(client.client_id.as_bytes(), client_id.as_bytes()).is_ok();
+        let secret_ok =
+            verify_slices_are_equal(client.client_secret.as_bytes(), client_secret.as_bytes())
+                .is_ok();
+        if id_ok & secret_ok && matched.is_none() {
             matched = Some(client);
         }
     }
@@ -127,15 +127,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_unknown_client_id() {
-        let registry = [client("ci", "s3cret", &["read"])];
-        assert!(authenticate_against_registry(&registry, "ghost", "s3cret").is_err());
-    }
-
-    #[test]
     fn rejects_an_empty_registry() {
         let registry: [RegisteredClient<u32>; 0] = [];
         assert!(authenticate_against_registry(&registry, "any", "any").is_err());
+    }
+
+    #[test]
+    fn a_credential_matches_only_byte_for_byte_whatever_its_length() {
+        let registry = [client("ci", "s3cret", &["read"])];
+        for (id, secret, matches) in [
+            ("ci", "s3cret", true),
+            ("ci", "s3creT", false),
+            ("ci", "s3cre", false),
+            ("ci", "s3crets", false),
+            ("ci", "", false),
+            ("cI", "s3cret", false),
+            ("c", "s3cret", false),
+            ("cii", "s3cret", false),
+            ("ghost", "s3cret", false),
+        ] {
+            assert_eq!(
+                authenticate_against_registry(&registry, id, secret).is_ok(),
+                matches,
+                "{id:?} / {secret:?}"
+            );
+        }
     }
 
     #[test]

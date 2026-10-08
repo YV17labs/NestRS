@@ -30,7 +30,7 @@ schemars.workspace = true
 thiserror.workspace = true
 # Constant-time secret comparison for the registry — a client id that exists and
 # one that does not must be indistinguishable by timing.
-subtle.workspace = true
+aws-lc-rs.workspace = true
 # `TokenError::Sign`/`Server` keep the real cause attached for tracing while
 # `Display` stays the opaque `server_error`.
 anyhow.workspace = true

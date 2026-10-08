@@ -33,7 +33,7 @@ serde.workspace = true
 # here, so a refusal says where it failed without quoting the profile.
 serde_json.workspace = true
 # Constant-time comparison of the CSRF state carried in the transaction cookie.
-subtle.workspace = true
+aws-lc-rs.workspace = true
 # `OAuthClientModule::for_root` provides the client through the factory phase, whose
 # error channel is anyhow (the container's `Result`).
 anyhow.workspace = true

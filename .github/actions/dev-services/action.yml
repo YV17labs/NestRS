@@ -1,0 +1,19 @@
+name: Start the development services
+description: >-
+  Postgres, Valkey and RustFS as the dev container runs them — its own
+  docker-compose.yml, every service on TLS alone — presenting the certificate
+  .devcontainer/tls/issue.sh issues into the CERTS directory the job names,
+  whose authority joins the runner's trust store as the dev container's does.
+
+runs:
+  using: composite
+  steps:
+    - name: Issue the certificate
+      shell: bash
+      run: |
+        sudo sh .devcontainer/tls/issue.sh "$CERTS"
+        sudo install -m 0644 "$CERTS/ca.pem" /usr/local/share/ca-certificates/nestrs-development.crt
+        sudo update-ca-certificates
+    - name: Start the services
+      shell: bash
+      run: docker compose -f .devcontainer/docker-compose.yml up --detach --wait --no-deps postgres redis rustfs

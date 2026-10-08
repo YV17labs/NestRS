@@ -77,7 +77,8 @@ authenticating with a public default.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ENDPOINT` | `http://rustfs:9000` | S3 endpoint; empty ⇒ real AWS S3 |
+| `ENDPOINT` | `https://rustfs:9000` | S3 endpoint; empty ⇒ real AWS S3 |
+| `TLS_CA_CERT` | unset | the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path) |
 | `REGION` | `us-east-1` | region |
 | `ACCESS_KEY` / `SECRET_KEY` | `nestrs`, **none outside dev/test** | static credentials |
 | `BUCKET` | `nestrs` | target bucket |

@@ -131,10 +131,12 @@ pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.
 # by field — so a deployment moves the port or turns on TLS without touching
 # the code.
 #
-# Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
+# Postgres + Valkey as `compose.yml` exposes them on localhost. Start them with
 # `docker compose up -d`, then `nestrs run db up`. An app only connects if it
 # imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
-{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
+# Both run without TLS here, which the URLs say: Postgres's connection is
+# verified TLS unless `sslmode=disable` opens it.
+{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
 {{env_prefix}}_REDIS__URL=redis://localhost:6379
 #
 # Precedence (highest first):
@@ -169,7 +171,7 @@ pub(crate) const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-speci
 #
 # Uncomment when you add a database (https://nestrs.dev/configuration/).
 
-# {{env_prefix}}_SEAORM__URL=postgres://user:pass@localhost:5432/{{kebab}}
+# {{env_prefix}}_SEAORM__URL=postgres://user:pass@localhost:5432/{{kebab}}?sslmode=disable
 # {{env_prefix}}_REDIS__URL=redis://localhost:6379
 "#;
 

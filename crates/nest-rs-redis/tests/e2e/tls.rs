@@ -1,9 +1,8 @@
-//! `rediss://` against a live Redis. Most tests put a TLS-terminating proxy in
-//! front of the dev container's plaintext Redis, presenting a certificate the
-//! fixtures' test authority signed, so a test can refuse or swap what it
-//! presents; the queue runs against a Redis speaking TLS itself — the dev
-//! container's `redis-tls`, or the one `<PREFIX>_E2E__REDIS_TLS_URL` names. The
-//! fixtures' `README.md` says what each file is.
+//! `rediss://` against a live Valkey, which speaks nothing else. Most tests put
+//! a proxy in front of it presenting a certificate of the test authority's, so
+//! a test can refuse or swap what the client is shown; the queue runs against
+//! Valkey itself, every connection verified against the development services'
+//! authority.
 
 use std::time::{Duration, Instant};
 
@@ -15,14 +14,12 @@ use serde::{Deserialize, Serialize};
 use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisError, RedisThrottler, RedisTls, RedisTlsIdentity,
 };
+use nest_rs_testing::TestAuthority;
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
 use crate::Runs;
 use crate::harness::AT_ONCE;
-use crate::harness::tls::{AUTHORITY, TlsProxy, config, trusting_the_test_authority};
-
-const CLIENT_CERT: &[u8] = include_bytes!("../harness/fixtures/tls_client.pem");
-const CLIENT_KEY: &[u8] = include_bytes!("../harness/fixtures/tls_client.key.pem");
+use crate::harness::tls::{TlsProxy, config, trusting_the_test_authority};
 
 /// A certificate the configured authority signed carries the connection: the
 /// boot's proof through the handshake, then a caller's own command and the rate
@@ -63,11 +60,13 @@ async fn a_certificate_the_configured_authority_signed_carries_the_connection() 
 /// without one the boot fails at once naming the certificate's settings.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_requiring_a_client_certificate_is_handed_the_configured_one() {
-    let proxy = TlsProxy::start(Some(crate::redis_url()), Some(AUTHORITY)).await;
+    let clients = TestAuthority::new();
+    let proxy = TlsProxy::start(Some(crate::redis_url()), Some(clients.pem().as_bytes())).await;
+    let issued = clients.client("nestrs-test-client");
     let presenting = RedisTls {
         identity: Some(RedisTlsIdentity {
-            cert: CLIENT_CERT.to_vec(),
-            key: CLIENT_KEY.to_vec(),
+            cert: issued.cert.into_bytes(),
+            key: issued.key.into_bytes(),
         }),
         ..trusting_the_test_authority()
     };
@@ -183,39 +182,6 @@ async fn a_certificate_refused_after_the_boot_is_reported_once_as_the_connection
     );
 }
 
-/// The authority that signed the TLS Redis's certificate.
-const SERVICE_AUTHORITY: &[u8] = include_bytes!("../harness/fixtures/tls_service_ca.pem");
-
-/// The suite's TLS Redis, which speaks `rediss://` alone: the dev container's
-/// `redis-tls`, or the one `<PREFIX>_E2E__REDIS_TLS_URL` names — CI's.
-fn tls_redis_url() -> String {
-    nest_rs_config::ConfigService::for_namespace("e2e")
-        .get("REDIS_TLS_URL")
-        .expect("a readable TLS Redis URL")
-        .unwrap_or_else(|| "rediss://redis-tls:6380".to_owned())
-}
-
-/// [`tls_redis`] on database `db`.
-fn tls_redis_on(ca_cert: Option<&[u8]>, db: u8) -> RedisConfig {
-    RedisConfig {
-        url: crate::url_on(&tls_redis_url(), db),
-        ..tls_redis(ca_cert)
-    }
-}
-
-/// The TLS Redis, trusting the authority that signed its certificate.
-fn tls_redis(ca_cert: Option<&[u8]>) -> RedisConfig {
-    RedisConfig {
-        url: tls_redis_url(),
-        connect_timeout: crate::BUDGET,
-        tls: RedisTls {
-            ca_cert: ca_cert.map(<[u8]>::to_vec),
-            identity: None,
-        },
-        ..RedisConfig::default()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SealedCommand {
     run: u64,
@@ -245,7 +211,7 @@ impl SealedProcessor {
 )]
 struct SealedModule;
 
-/// A queue runs end to end against a Redis speaking TLS itself: the push and
+/// A queue runs end to end against Valkey speaking TLS itself: the push and
 /// the settle on the shared connection, and the worker's blocking read on a
 /// connection of its own, each a handshake verified against the configured
 /// authority — the server has no plaintext port to fall back to. On a
@@ -253,17 +219,14 @@ struct SealedModule;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
     let db = crate::DB_TLS_BLOCKED_READ;
-    let mut admin = RedisConnection::connect(&tls_redis_on(Some(SERVICE_AUTHORITY), db))
-        .await
-        .expect("an administration connection over TLS");
+    let mut admin = crate::connect_on(db).await;
     let flush = || redis::cmd("FLUSHDB");
     flush()
         .query_async::<()>(&mut admin)
         .await
         .expect("an empty database to start on");
     let run = crate::this_run();
-    let replica =
-        crate::replica_on::<SealedModule>(tls_redis_on(Some(SERVICE_AUTHORITY), db)).await;
+    let replica = crate::replica_on::<SealedModule>(crate::redis_config_on(db)).await;
     replica
         .producer
         .push(SealedQueue, SealedCommand { run }, None)
@@ -284,13 +247,17 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
     );
 }
 
-/// The same Redis, its authority not configured: the certificate chains to no
-/// root the client trusts, and the boot fails at once naming what to set —
-/// verification is never skipped.
+/// The same Valkey under an authority the client was told to trust instead of
+/// the system's: the certificate chains to no root it trusts, and the boot
+/// fails at once naming what to set — verification is never skipped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_speaking_tls_under_an_authority_not_trusted_fails_the_boot_at_once() {
     let started = Instant::now();
-    let Err(error) = RedisConnection::connect(&tls_redis(None)).await else {
+    let untrusted = RedisConfig {
+        tls: trusting_the_test_authority(),
+        ..crate::redis_config()
+    };
+    let Err(error) = RedisConnection::connect(&untrusted).await else {
         panic!("a certificate no trusted authority signed must not connect");
     };
     assert!(started.elapsed() < AT_ONCE, "took {:?}", started.elapsed());

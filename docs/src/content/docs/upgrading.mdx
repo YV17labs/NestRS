@@ -200,7 +200,9 @@ left running until they drain the 6.x jobs (step 7).
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `timeout: nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
    | a `#[process]`, `#[every]`, `#[cron]` or `#[after]` method that runs longer than ten minutes | the same with `timeout = "…"` covering its longest run, up to `"24h"` — an attempt past its timeout is now cut and fails retryably |
    | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
-   | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout` and `read_timeout` |
+   | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout`, `read_timeout` and `tls` |
+   | a `<PREFIX>_SEAORM__URL` naming no `sslmode`, or `allow`, `prefer`, `require` or `verify-ca` | `sslmode=verify-full` is now the default and the others fail the boot: a server with TLS needs its certificate trusted — by the system's store, or the file `sslrootcert` names — and one without it needs `sslmode=disable` written |
+   | a `rediss://` Valkey whose certificate chains to an authority only Mozilla's roots held | install the authority in the system's store, or name it in `<PREFIX>_REDIS__TLS_CA_CERT`: the connection now trusts the system's authorities rather than the roots compiled into the client |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, never `M::register(builder)` or `M::collect(builder)`, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` — the import runs each phase once, `collect` first |
 
    `.opaque()` now takes an owned error that converts into `Box<dyn Error +

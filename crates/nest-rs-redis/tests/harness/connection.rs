@@ -6,19 +6,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
 use nest_rs_testing::url_at;
 
-use super::{AT_ONCE, address_of};
+use super::AT_ONCE;
+use super::tls;
 
 /// A budget far above [`AT_ONCE`], so a refusal that retried would show.
 pub(crate) fn config(url: String) -> RedisConfig {
     RedisConfig {
         url,
         connect_timeout: Duration::from_secs(10),
+        tls: tls::trusted(),
         ..RedisConfig::default()
     }
 }
@@ -61,9 +63,10 @@ pub(crate) async fn database_refused_at_once(url: String, index: i64, case: &str
 /// with that error line for every command — Redis busy running a script,
 /// loading its dataset, failing over — and with `slots`, a connection past that
 /// many forwarded at once is refused the way Redis refuses one past
-/// `maxclients`. Anything else is forwarded to the Redis `upstream` names, or
-/// closed when there is none: an in-process test names no Redis, so it cannot
-/// dial one.
+/// `maxclients`. Anything else is forwarded to the Valkey `upstream` names, or
+/// closed when there is none: an in-process test names no Valkey, so it cannot
+/// dial one. Every connection is TLS, as Valkey's: the server presents the test
+/// authority's certificate, and dials Valkey over TLS in turn.
 pub(crate) struct ScriptedRedis {
     addr: SocketAddr,
     upstream: Option<String>,
@@ -72,7 +75,7 @@ pub(crate) struct ScriptedRedis {
 
 impl ScriptedRedis {
     pub(crate) async fn start(upstream: Option<String>, slots: Option<usize>) -> Self {
-        let dialled = upstream.as_deref().map(address_of);
+        let dialled = upstream.clone();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind the proxy");
@@ -81,17 +84,24 @@ impl ScriptedRedis {
         let answering = Arc::clone(&answer);
         let open = Arc::new(AtomicUsize::new(0));
         tokio::spawn(async move {
-            while let Ok((mut client, _)) = listener.accept().await {
+            while let Ok((client, _)) = listener.accept().await {
                 let scripted = *answering.lock().expect("answer lock");
                 if let Some(line) = scripted {
-                    tokio::spawn(answer_every_command(client, line));
+                    tokio::spawn(async move {
+                        if let Some(client) = tls::accept(client).await {
+                            answer_every_command(client, line).await;
+                        }
+                    });
                     continue;
                 }
                 if slots.is_some_and(|slots| open.load(Ordering::SeqCst) >= slots) {
                     tokio::spawn(async move {
-                        let _ = client
-                            .write_all(b"-ERR max number of clients reached\r\n")
-                            .await;
+                        if let Some(mut client) = tls::accept(client).await {
+                            let _ = client
+                                .write_all(b"-ERR max number of clients reached\r\n")
+                                .await;
+                            let _ = client.flush().await;
+                        }
                     });
                     continue;
                 }
@@ -99,8 +109,9 @@ impl ScriptedRedis {
                 let open = Arc::clone(&open);
                 let dialled = dialled.clone();
                 tokio::spawn(async move {
-                    if let Some(dialled) = dialled
-                        && let Ok(mut server) = TcpStream::connect(&dialled).await
+                    if let Some(mut client) = tls::accept(client).await
+                        && let Some(dialled) = dialled
+                        && let Some(mut server) = tls::dial(&dialled).await
                     {
                         let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
                     }
@@ -119,7 +130,7 @@ impl ScriptedRedis {
     pub(crate) fn url(&self) -> String {
         match &self.upstream {
             Some(upstream) => url_at(upstream, self.addr),
-            None => format!("redis://{}/", self.addr),
+            None => format!("rediss://{}/", self.addr),
         }
     }
 
@@ -131,14 +142,14 @@ impl ScriptedRedis {
 }
 
 /// Answer each command `client` sends with the error `line`, until it hangs up.
-async fn answer_every_command(mut client: TcpStream, line: &'static str) {
+async fn answer_every_command(mut client: impl AsyncRead + AsyncWrite + Unpin, line: &'static str) {
     let reply = format!("-{line}\r\n");
     let mut received = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
         while let Some(length) = command_length(&received) {
             received.drain(..length);
-            if client.write_all(reply.as_bytes()).await.is_err() {
+            if client.write_all(reply.as_bytes()).await.is_err() || client.flush().await.is_err() {
                 return;
             }
         }

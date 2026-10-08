@@ -7,53 +7,71 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ..:/workspaces/nestrs:cached
+      - ${CERTS:-certs}:/certs:ro
     command: sleep infinity
+    # The database every process here shares. The services' certificate is
+    # trusted through the system's store, where `postStartCommand` installs the
+    # authority `certs` issued; a Redis URL stays each app's, which picks its
+    # own database (`demo/.env.test`).
+    environment:
+      NESTRS_SEAORM__URL: postgres://nestrs:nestrs@postgres:5432/nestrs
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      redis-tls:
-        condition: service_healthy
       rustfs:
         condition: service_healthy
+
+  # Issues, before any service starts, the one certificate they all present,
+  # each service's copy in a folder of its own (`tls/issue.sh`). CI runs the
+  # script itself and mounts its directory as CERTS.
+  certs:
+    image: nestrs-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: root
+    command: ["sh", "/workspaces/nestrs/.devcontainer/tls/issue.sh", "/certs"]
+    volumes:
+      - ..:/workspaces/nestrs:ro
+      - ${CERTS:-certs}:/certs
 
   postgres:
     image: postgres:18.4
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/postgres/server.pem
+      - -c
+      - ssl_key_file=/certs/postgres/server.key
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nestrs}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nestrs}
       POSTGRES_DB: ${POSTGRES_DB:-nestrs}
     volumes:
       - postgres-data:/var/lib/postgresql
+      - ${CERTS:-certs}:/certs:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
     ports:
       - "5432:5432"
+    depends_on:
+      certs:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
 
-  # Valkey, the open-source Redis the framework supports, on the hostname every
-  # `redis://` URL of the workspace names.
+  # Valkey, the open-source Redis the framework supports, on TLS alone: the
+  # name every `rediss://` URL of the workspace reaches.
   redis:
-    image: valkey/valkey:9.1.2
-    restart: unless-stopped
-    command: ["valkey-server", "--appendonly", "yes"]
-    volumes:
-      - valkey-data:/data
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # A Valkey speaking TLS alone, presenting the suite's service certificate:
-  # nest-rs-redis's e2e runs a queue against it, every connection verified.
-  redis-tls:
     image: valkey/valkey:9.1.2
     restart: unless-stopped
     command:
@@ -61,22 +79,30 @@ services:
       - --port
       - "0"
       - --tls-port
-      - "6380"
+      - "6379"
       - --tls-cert-file
-      - /tls/tls_service.pem
+      - /certs/redis/server.pem
       - --tls-key-file
-      - /tls/tls_service.key.pem
+      - /certs/redis/server.key
       - --tls-ca-cert-file
-      - /tls/tls_service_ca.pem
+      - /certs/ca.pem
       - --tls-auth-clients
       - "no"
+      - --appendonly
+      - "yes"
     volumes:
-      - ../crates/nest-rs-redis/tests/harness/fixtures:/tls:ro
+      - valkey-data:/data
+      - ${CERTS:-certs}:/certs:ro
+    ports:
+      - "6379:6379"
+    depends_on:
+      certs:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "valkey-cli", "--tls", "--cacert", "/tls/tls_service_ca.pem", "-p", "6380", "ping"]
-      interval: 10s
+      test: ["CMD", "valkey-cli", "--tls", "--cacert", "/certs/ca.pem", "ping"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
 
   rustfs:
     image: rustfs/rustfs:1.0.0-beta.8
@@ -88,19 +114,25 @@ services:
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-nestrs}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-nestrs}
+      RUSTFS_TLS_PATH: /certs/rustfs
     volumes:
       - rustfs-data:/data
+      - ${CERTS:-certs}:/certs:ro
     ports:
       - "9000:9000"
       - "9001:9001"
+    depends_on:
+      certs:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health >/dev/null 2>&1 || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "curl -fsS --cacert /certs/ca.pem https://localhost:9000/health >/dev/null 2>&1 || exit 1"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
       start_period: 40s
 
 volumes:
+  certs:
   postgres-data:
   # Not Redis's volume: Valkey refuses the dump files Redis 7.4 and later write.
   valkey-data:

@@ -219,6 +219,7 @@ async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
         let outcome = RedisConnection::connect(&RedisConfig {
             url: proxy.url(),
             connect_timeout: Duration::from_secs(10),
+            tls: crate::harness::tls::trusted(),
             ..RedisConfig::default()
         })
         .await;
@@ -254,6 +255,7 @@ async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
         // Any index but 0 makes the client send a `SELECT`.
         url: crate::url_on(&proxy.url(), crate::DB_SELECT_RETRIED),
         connect_timeout: Duration::from_secs(10),
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await;
@@ -283,6 +285,7 @@ async fn the_ceiling_budget_connects_and_serves() {
         RedisConnection::connect(&RedisConfig {
             url: crate::redis_url(),
             connect_timeout: Duration::from_secs(60 * 60),
+            tls: crate::harness::tls::trusted(),
             ..RedisConfig::default()
         }),
     )
@@ -304,6 +307,7 @@ async fn a_redis_with_one_client_slot_left_boots() {
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: proxy.url(),
         connect_timeout: Duration::from_secs(5),
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -328,6 +332,7 @@ async fn a_command_redis_holds_fails_at_the_budget_and_the_connection_outlives_i
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: crate::redis_url(),
         connect_timeout: budget,
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -395,6 +400,7 @@ async fn a_command_waiting_on_a_reconnection_that_never_answers_times_out_within
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: proxy.url(),
         connect_timeout: budget,
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -476,6 +482,7 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     let url = crate::redis_url_on(crate::DB_CONNECTION_DROP);
     let conn = RedisConnection::connect(&RedisConfig {
         url: url.clone(),
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -493,8 +500,7 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     // A connection nothing reopens, on the same database: it is how this test
     // knows the drop took, so a recovery below is a reconnection and never a
     // drop that missed.
-    let mut unmanaged = redis::Client::open(url.as_str())
-        .expect("the isolated url parses")
+    let mut unmanaged = crate::bare_client(url.as_str())
         .get_multiplexed_async_connection()
         .await
         .expect("open a connection nothing reopens");

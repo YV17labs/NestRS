@@ -173,7 +173,7 @@ impl Storage {
         }
         // One `ClientOptions` value: `with_client_options` replaces the whole
         // set, so a builder call made before it would be undone.
-        let options = ClientOptions::new()
+        let mut options = ClientOptions::new()
             // Opt-in plain-HTTP (default on in dev/test, off in prod — STORAGE-ST2)
             // so a RustFS/MinIO dev server is reachable while production refuses
             // to send credentials over an unencrypted endpoint by omission.
@@ -184,6 +184,22 @@ impl Storage {
             // `download`, never by reqwest's read timeout (`transfer.rs`).
             .with_timeout_disabled()
             .with_connect_timeout(CONNECT_TIMEOUT);
+        // A configured authority replaces the system's store, as it does for
+        // Redis: the endpoint's certificate must chain to it.
+        if let Some(pem) = &self.config.tls.ca_cert {
+            let authorities = crate::tls::authorities(pem)
+                .filter(|found| !found.is_empty())
+                .ok_or_else(|| {
+                    StorageError::Init(object_store::Error::Generic {
+                        store: "S3",
+                        source: Box::new(crate::tls::no_authority()),
+                    })
+                })?;
+            options = authorities.into_iter().fold(
+                options.with_no_system_certificates(true),
+                ClientOptions::with_root_certificate,
+            );
+        }
         let built = AmazonS3Builder::new()
             .with_client_options(options)
             .with_retry(retries_within(self.config.operation_timeout))

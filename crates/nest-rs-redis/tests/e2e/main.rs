@@ -9,9 +9,13 @@
 //! trace context that crosses the producer/consumer boundary, and [`schedule`]
 //! for the occurrence lock a job firing once across replicas claims through.
 //!
-//! The URL comes from `<PREFIX>_REDIS__URL` (the dev container wires
-//! `redis://redis:6379`); unset, it falls back to that default. This file holds
-//! the suite's shared fixtures and nothing else.
+//! Valkey is reached over TLS alone: the URL comes from `<PREFIX>_REDIS__URL`,
+//! `rediss://redis:6379` — the dev container's — when unset, and the authority
+//! its certificate chains to from `<PREFIX>_REDIS__TLS_CA_CERT_FILE`, which the
+//! dev container and CI set. A double the suite puts in front of it presents a
+//! certificate of the test authority's, which every connection trusts too
+//! (`harness::tls`). This file holds the suite's shared fixtures and nothing
+//! else.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -44,33 +48,40 @@ use nest_rs_redis::{
 use nest_rs_testing::{
     CapturedEvent, TestApp, TransportHandle, url_as, url_at, url_on, wait_for, wait_until,
 };
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-/// The Redis the deployment names, as the app would read it, or the dev
+/// The Valkey the deployment names, as the app would read it, or the dev
 /// container's.
 fn redis_url() -> String {
     nest_rs_config::ConfigService::for_namespace("redis")
         .get("URL")
         .expect("a readable Redis URL")
-        .unwrap_or_else(|| "redis://redis:6379".to_owned())
-}
-
-/// The dev container Redis's `host:port`, for a proxy standing in front of it.
-fn redis_address() -> String {
-    harness::address_of(&redis_url())
+        .unwrap_or_else(|| "rediss://redis:6379".to_owned())
 }
 
 /// Pinned rather than read from the env: the framework workspace ships no
 /// `.env`, so `for_root(None)` would resolve to the localhost default and a
-/// suite would fail on connect instead of measuring anything.
+/// suite would fail on connect instead of measuring anything. It trusts the
+/// development services' authority and the test authority alike.
 fn redis_config() -> RedisConfig {
     RedisConfig {
         url: redis_url(),
         connect_timeout: BUDGET,
+        tls: harness::tls::trusted(),
         ..Default::default()
     }
+}
+
+/// A bare `redis` client of `url`, trusting what the suite's connections do —
+/// for a test that speaks to Valkey without the framework's connection.
+fn bare_client(url: &str) -> redis::Client {
+    let certificates = redis::TlsCertificates {
+        client_tls: None,
+        root_cert: harness::tls::trusted().ca_cert,
+    };
+    redis::Client::build_with_tls(url, certificates).expect("a TLS client of the suite's Valkey")
 }
 
 /// The boot's refusal of a Redis budget at a net reaching it, its setting
@@ -264,9 +275,9 @@ async fn drop_every_connection_on(db: u8) -> usize {
     ids.len()
 }
 
-/// A TCP proxy in front of the dev container Redis that can go dark: it then
+/// A proxy in front of the dev container's Valkey that can go dark: it then
 /// drops every connection it carries and accepts new ones without ever
-/// answering — Redis gone behind a network that still accepts the dial.
+/// answering — Valkey gone behind a network that still accepts the dial.
 struct DarkeningProxy {
     addr: SocketAddr,
     dark: Arc<watch::Sender<bool>>,
@@ -275,7 +286,7 @@ struct DarkeningProxy {
 
 impl DarkeningProxy {
     async fn start() -> Self {
-        let upstream = redis_address();
+        let upstream = redis_url();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind the proxy");
@@ -286,17 +297,21 @@ impl DarkeningProxy {
         let counting = Arc::clone(&dials_while_dark);
         tokio::spawn(async move {
             let mut held = Vec::new();
-            while let Ok((mut client, _)) = listener.accept().await {
+            while let Ok((client, _)) = listener.accept().await {
                 if *accepting.borrow() {
                     counting.fetch_add(1, Ordering::SeqCst);
                     held.push(client);
                     continue;
                 }
-                let Ok(mut server) = TcpStream::connect(&upstream).await else {
-                    continue;
-                };
+                let upstream = upstream.clone();
                 let mut went_dark = accepting.subscribe();
                 tokio::spawn(async move {
+                    let Some(mut client) = harness::tls::accept(client).await else {
+                        return;
+                    };
+                    let Some(mut server) = harness::tls::dial(&upstream).await else {
+                        return;
+                    };
                     tokio::select! {
                         _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
                         _ = went_dark.wait_for(|dark| *dark) => {}
@@ -325,9 +340,10 @@ impl DarkeningProxy {
     }
 }
 
-/// A proxy in front of the dev container Redis that, once muted, still carries
-/// every command to Redis and drops every reply — a command that runs and whose
-/// answer is lost, the case only a network can make.
+/// A proxy in front of the dev container's Valkey that, once muted, still
+/// carries every command to Valkey and drops every reply — a command that runs
+/// and whose answer is lost, the case only a network can make. It ends TLS on
+/// both sides, so what it drops is a whole reply, never a record.
 struct MutingProxy {
     addr: SocketAddr,
     muted: Arc<AtomicBool>,
@@ -337,7 +353,7 @@ impl MutingProxy {
     async fn start() -> Self {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let upstream = redis_address();
+        let upstream = redis_url();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind the proxy");
@@ -346,16 +362,20 @@ impl MutingProxy {
         let muting = Arc::clone(&muted);
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                let Ok(server) = TcpStream::connect(&upstream).await else {
-                    continue;
-                };
-                let (mut from_client, mut to_client) = client.into_split();
-                let (mut from_server, mut to_server) = server.into_split();
-                tokio::spawn(async move {
-                    let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
-                });
+                let upstream = upstream.clone();
                 let muting = Arc::clone(&muting);
                 tokio::spawn(async move {
+                    let Some(client) = harness::tls::accept(client).await else {
+                        return;
+                    };
+                    let Some(server) = harness::tls::dial(&upstream).await else {
+                        return;
+                    };
+                    let (mut from_client, mut to_client) = tokio::io::split(client);
+                    let (mut from_server, mut to_server) = tokio::io::split(server);
+                    tokio::spawn(async move {
+                        let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
+                    });
                     let mut chunk = [0_u8; 16 * 1024];
                     while let Ok(read) = from_server.read(&mut chunk).await {
                         if read == 0 {
@@ -364,7 +384,9 @@ impl MutingProxy {
                         if muting.load(Ordering::SeqCst) {
                             continue;
                         }
-                        if to_client.write_all(&chunk[..read]).await.is_err() {
+                        if to_client.write_all(&chunk[..read]).await.is_err()
+                            || to_client.flush().await.is_err()
+                        {
                             break;
                         }
                     }

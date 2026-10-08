@@ -1,12 +1,14 @@
 //! `nest-rs-storage`'s suite: a live presign round-trip against an
-//! S3-compatible server (RustFS in the dev container). Proves that `object_store`'s `Signer` produces URLs a plain HTTP
-//! client can PUT to and GET from, in path-style over plain HTTP.
+//! S3-compatible server (RustFS in the dev container). Proves that
+//! `object_store`'s `Signer` produces URLs a plain HTTP client can PUT to and
+//! GET from, in path-style over TLS — RustFS speaks nothing else.
 //!
 //! Config starts from `StorageConfig::default()`, which targets the dev
-//! container's RustFS (`http://rustfs:9000`, `nestrs`/`nestrs`, bucket
-//! `nestrs`, path-style). The endpoint honors the documented
-//! `NESTRS_STORAGE__ENDPOINT` override so the round-trip can point at a server
-//! outside the dev container; unset, it falls back to the default.
+//! container's RustFS (`https://rustfs:9000`, `nestrs`/`nestrs`, bucket
+//! `nestrs`, path-style), its certificate verified against the system's
+//! authorities, where the dev container and CI install theirs. The endpoint
+//! honors the documented `<PREFIX>_STORAGE__ENDPOINT` override; unset, it falls
+//! back to the default.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -23,8 +25,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nest_rs_storage::{Storage, StorageConfig};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use nest_rs_storage::{Storage, StorageConfig, StorageTls};
+use nest_rs_testing::{TestAuthority, TestCertificate};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use std::sync::LazyLock;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
+
+/// The authority this test process issues the proxy's certificate with.
+static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+
+/// What the proxy presents: the loopback it listens on.
+static PROXY: LazyLock<TestCertificate> =
+    LazyLock::new(|| AUTHORITY.server(&["127.0.0.1", "localhost"]));
 
 /// The store's endpoint: the documented `<PREFIX>_STORAGE__ENDPOINT` override, or
 /// the dev container's RustFS when it is unset.
@@ -43,10 +57,13 @@ fn storage() -> Storage {
 }
 
 /// A client reaching the store through the proxy at `proxy`, with `config`'s
-/// other settings.
+/// other settings, trusting the test authority the proxy's certificate is of.
 fn proxied(proxy: SocketAddr, config: StorageConfig) -> Storage {
     Storage::new(Arc::new(StorageConfig {
         endpoint: nest_rs_testing::url_at(&endpoint(), proxy),
+        tls: StorageTls {
+            ca_cert: Some(AUTHORITY.pem().as_bytes().to_vec()),
+        },
         ..config
     }))
 }
@@ -110,19 +127,23 @@ enum Then {
     Close,
 }
 
-/// A TCP proxy to the store carrying its `n`th connection, from 0, as
-/// `carry(n)` says. Returns its address and the count of connections it took.
+/// A proxy to the store carrying its `n`th connection, from 0, as `carry(n)`
+/// says — ending TLS on both sides, so what it carries is HTTP. Returns its
+/// address and the count of connections it took.
 async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, Arc<AtomicUsize>) {
     let parsed = reqwest::Url::parse(&endpoint()).expect("the storage endpoint parses");
+    let host = parsed
+        .host_str()
+        .expect("the storage endpoint names a host")
+        .to_owned();
     let upstream = format!(
-        "{}:{}",
-        parsed
-            .host_str()
-            .expect("the storage endpoint names a host"),
+        "{host}:{}",
         parsed
             .port_or_known_default()
             .expect("the storage endpoint has a port"),
     );
+    let acceptor = proxy_acceptor();
+    let connector = store_connector();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the proxy");
@@ -133,11 +154,19 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
         loop {
             let (client, _) = listener.accept().await.expect("accept");
             let carry = carry(counted.fetch_add(1, Ordering::SeqCst));
+            let Ok(client) = acceptor.accept(client).await else {
+                continue;
+            };
             let server = tokio::net::TcpStream::connect(&upstream)
                 .await
                 .expect("reach the store");
-            let (mut client_read, mut client_write) = client.into_split();
-            let (mut server_read, mut server_write) = server.into_split();
+            let name = ServerName::try_from(host.clone()).expect("the store's host is a name");
+            let server = connector
+                .connect(name, server)
+                .await
+                .expect("a TLS handshake with the store");
+            let (mut client_read, mut client_write) = tokio::io::split(client);
+            let (mut server_read, mut server_write) = tokio::io::split(server);
             tokio::spawn(async move {
                 let _ = paced(
                     &mut client_read,
@@ -158,6 +187,9 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
                 if ended && matches!(carry.answer_ends, Some((_, Then::Hold))) {
                     std::future::pending::<()>().await;
                 }
+                // A split stream's half closes nothing when dropped: the
+                // connection ends here, as a broken one does.
+                let _ = client_write.shutdown().await;
                 drop((server_read, client_write));
             });
         }
@@ -165,12 +197,47 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
     (addr, taken)
 }
 
+/// The proxy's side of a handshake: the test authority's certificate for the
+/// loopback.
+fn proxy_acceptor() -> TlsAcceptor {
+    let chain = CertificateDer::pem_slice_iter(PROXY.cert.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .expect("the proxy's certificate parses");
+    let key = PrivateKeyDer::from_pem_slice(PROXY.key.as_bytes()).expect("its key parses");
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("the provider speaks the default protocol versions")
+    .with_no_client_auth()
+    .with_single_cert(chain, key)
+    .expect("the certificate and key correspond");
+    TlsAcceptor::from(Arc::new(config))
+}
+
+/// The proxy's dial to the store, verifying its certificate against the
+/// system's authorities.
+fn store_connector() -> TlsConnector {
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in CertificateDer::pem_slice_iter(nest_rs_config::system_authorities()) {
+        let _ = roots.add(cert.expect("the system's store parses"));
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("the provider speaks the default protocol versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    TlsConnector::from(Arc::new(config))
+}
+
 /// Copy `from` into `to`, `pace` bytes every 10 ms when set, up to `until`.
 /// Answers whether it stopped there, rather than at the end of `from` or a
 /// failed write.
 async fn paced(
-    from: &mut tokio::net::tcp::OwnedReadHalf,
-    to: &mut tokio::net::tcp::OwnedWriteHalf,
+    from: &mut (impl AsyncRead + Unpin),
+    to: &mut (impl AsyncWrite + Unpin),
     pace: Option<usize>,
     until: Option<Until>,
 ) -> bool {
@@ -191,7 +258,9 @@ async fn paced(
                 .map(|at| at + 4),
         };
         let upto = end.map_or(carried.len(), |end| end.min(carried.len()));
-        if upto > sent && to.write_all(&carried[sent..upto]).await.is_err() {
+        if upto > sent
+            && (to.write_all(&carried[sent..upto]).await.is_err() || to.flush().await.is_err())
+        {
             return false;
         }
         if end.is_some_and(|end| carried.len() >= end) {

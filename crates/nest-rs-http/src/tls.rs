@@ -469,7 +469,32 @@ fn read_pem(path: &Path) -> Result<Vec<u8>> {
     reason = "the tests tear down temp files best-effort, and a watchdog's receiver may be gone"
 )]
 mod tests {
+    use std::sync::LazyLock;
+
+    use nest_rs_testing::{TestAuthority, TestCertificate};
+
     use super::*;
+
+    /// Two pairs under one authority, issued for this test process.
+    static PAIRS: LazyLock<(TestCertificate, TestCertificate)> = LazyLock::new(|| {
+        let authority = TestAuthority::new();
+        (
+            authority.server(&["a.nestrs.test"]),
+            authority.server(&["b.nestrs.test"]),
+        )
+    });
+
+    fn cert_a() -> &'static [u8] {
+        PAIRS.0.cert.as_bytes()
+    }
+
+    fn key_a() -> &'static [u8] {
+        PAIRS.0.key.as_bytes()
+    }
+
+    fn key_b() -> &'static [u8] {
+        PAIRS.1.key.as_bytes()
+    }
 
     /// A FIFO in a scratch directory, for the two readers that must not block
     /// on one.
@@ -715,10 +740,10 @@ mod tests {
     /// by path is `TLS_CERT_FILE` in the refusal, not the inline name nobody set.
     #[test]
     fn a_half_pair_names_the_spelling_the_deployment_used() {
-        let cert = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/integration/fixtures/tls_a.pem"
-        );
+        let file =
+            std::env::temp_dir().join(format!("nestrs-http-half-{}.pem", std::process::id()));
+        std::fs::write(&file, cert_a()).expect("write the certificate");
+        let cert = file.to_str().expect("a UTF-8 temporary path");
         let err = HttpTls::from_env(&tls_env([("TLS_CERT_FILE", cert)]), None)
             .expect_err("half a pair is refused");
         let msg = err.to_string();
@@ -966,11 +991,8 @@ mod tests {
     /// problem and quotes nothing, not even as a list of bytes.
     #[test]
     fn a_pair_that_does_not_parse_is_described_and_never_quoted() {
-        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
-        let key_a = std::str::from_utf8(include_bytes!(
-            "../tests/integration/fixtures/tls_a.key.pem"
-        ))
-        .expect("PEM is text");
+        let cert_a = cert_a();
+        let key_a = std::str::from_utf8(key_a()).expect("PEM is text");
         let secret = key_a.lines().nth(1).expect("a base64 line of the key");
         let as_bytes = secret.as_bytes()[..4]
             .iter()
@@ -1035,8 +1057,8 @@ mod tests {
         .install_default()
         .expect("each test runs in a process of its own, with no provider installed yet");
 
-        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
-        let key_b = include_bytes!("../tests/integration/fixtures/tls_b.key.pem");
+        let cert_a = cert_a();
+        let key_b = key_b();
         let refused = validate_pair(cert_a, key_b).expect_err("a mismatched pair is refused");
         assert!(
             format!("{refused:#}").contains("do not correspond"),
@@ -1069,8 +1091,8 @@ mod tests {
         .install_default()
         .expect("each test runs in a process of its own, with no provider installed yet");
 
-        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
-        let key_a = include_bytes!("../tests/integration/fixtures/tls_a.key.pem");
+        let cert_a = cert_a();
+        let key_a = key_a();
         validate_pair(cert_a, key_a).expect("a pair poem serves is not refused");
     }
 
@@ -1078,8 +1100,8 @@ mod tests {
     /// place — says so, rather than blaming line breaks it does not have.
     #[test]
     fn a_key_file_holding_no_private_key_says_so() {
-        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
-        for (label, key) in [("empty", &b""[..]), ("a certificate", &cert_a[..])] {
+        let cert_a = cert_a();
+        for (label, key) in [("empty", &b""[..]), ("a certificate", cert_a)] {
             let refused =
                 validate_pair(cert_a, key).expect_err("a file with no key in it is refused");
             assert!(
@@ -1095,9 +1117,9 @@ mod tests {
         // poem builds with `with_cert_resolver`, which — unlike
         // `with_single_cert` — never checks that the two halves correspond, and
         // an empty file parses as a chain with nothing in it.
-        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
-        let key_a = include_bytes!("../tests/integration/fixtures/tls_a.key.pem");
-        let key_b = include_bytes!("../tests/integration/fixtures/tls_b.key.pem");
+        let cert_a = cert_a();
+        let key_a = key_a();
+        let key_b = key_b();
 
         validate_pair(cert_a, key_a).expect("the fixture pair corresponds");
 

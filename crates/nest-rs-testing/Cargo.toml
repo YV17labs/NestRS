@@ -35,6 +35,9 @@ ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/webso
 # `test-util` (not part of `full`) is what pauses time under a backend running
 # in process.
 queue = ["dep:nest-rs-queue", "dep:serde", "tokio/test-util"]
+# A test certificate authority (`tls::TestAuthority`): the certificates a TLS
+# test presents or trusts, issued in process rather than committed.
+tls = ["dep:rcgen"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -52,6 +55,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 # Every e2e boot loads the project's `.env` via `load_project_env` — normal dep.
 nest-rs-config.workspace = true
+# Behind `tls`.
+rcgen = { workspace = true, optional = true }
 # Behind `graphql`: the subscription driver composes the app's schema and runs
 # async-graphql's own graphql-ws engine over it. Optional so the harness stays
 # GraphQL-free for a suite that has no schema.

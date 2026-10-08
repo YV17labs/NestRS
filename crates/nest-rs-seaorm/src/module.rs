@@ -211,6 +211,7 @@ async fn connect(
             Duration::from_secs(secs),
         )?;
     }
+    config.tls_mode().map_err(anyhow::Error::msg)?;
     tracing::info!(
         target: crate::TARGET,
         max_connections = ?config.max_connections,

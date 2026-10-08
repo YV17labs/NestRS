@@ -7,8 +7,13 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
+use std::str::FromStr;
+
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, Result, config,
+};
 use sea_orm::ConnectOptions;
+use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 /// The acquire budget's range, the variable that sets it, and why. SeaORM hands
 /// it to sqlx as the pool's `acquire_timeout`: how long the boot waits for its
@@ -157,9 +162,74 @@ impl SeaOrmConfig {
         opts
     }
 
-    /// What every connection this config opens shares — the tools' as they are.
-    pub(crate) fn connect_options(&self) -> ConnectOptions {
+    /// The TLS the pool's connections open with: `verify-full` — the server's
+    /// certificate checked against the system's authorities, or `sslrootcert`,
+    /// and its name against the host — when the URL names no `sslmode`, and
+    /// `disable` when it says so.
+    /// A mode that encrypts without verifying, or may (`allow`, `prefer`,
+    /// `require`, `verify-ca`), is refused, naming the variable and never the
+    /// URL, which carries the password.
+    pub(crate) fn tls_mode(&self) -> std::result::Result<PgSslMode, String> {
+        let named = self.query(&["sslmode", "ssl-mode"]).is_some();
+        let url = || nest_rs_config::spellings(Self::NAMESPACE, "URL");
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "sqlx's parse error can quote the URL, which carries the password"
+        )]
+        let parsed = PgConnectOptions::from_str(&self.url)
+            .map_err(|_| format!("{} is not a Postgres URL", url()))?;
+        match parsed.get_ssl_mode() {
+            PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
+            mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
+            unverified => Err(format!(
+                "{} asks Postgres for TLS without verifying its certificate (sslmode={}): write \
+                 sslmode=verify-full, with sslrootcert naming the authority that signed the \
+                 server's certificate, or sslmode=disable for a server without TLS",
+                url(),
+                match unverified {
+                    PgSslMode::Allow => "allow",
+                    PgSslMode::Prefer => "prefer",
+                    PgSslMode::Require => "require",
+                    _ => "verify-ca",
+                },
+            )),
+        }
+    }
+
+    /// Whether the pool trusts the system's authorities: when the URL names no
+    /// `sslrootcert`, or names libpq's `system` — sqlx would read neither, and
+    /// trusts the authorities compiled into it otherwise.
+    fn trusts_the_system(&self) -> bool {
+        self.query(&["sslrootcert", "ssl-root-cert", "ssl-ca"])
+            .is_none_or(|root| root == "system")
+    }
+
+    /// The value the URL's query gives the first of `keys` it names.
+    fn query(&self, keys: &[&str]) -> Option<&str> {
+        let (_, query) = self.url.split_once('?')?;
+        query.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            keys.contains(&key).then_some(value)
+        })
+    }
+
+    /// What every connection this config opens shares — the tools' as they
+    /// are: its pool bounds, and TLS verified against the system's authorities
+    /// unless the URL names its own. A tool or a test opening a connection of
+    /// its own opens it with these, and verifies what the app does.
+    pub fn connect_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new(self.url.clone());
+        if let Ok(mode) = self.tls_mode() {
+            let system = self.trusts_the_system();
+            opts.map_sqlx_postgres_opts(move |options| {
+                let options = options.ssl_mode(mode);
+                if system {
+                    options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
+                } else {
+                    options
+                }
+            });
+        }
         if let Some(n) = self.max_connections {
             opts.max_connections(n);
         }
@@ -199,6 +269,68 @@ mod tests {
             cfg.url, "postgres://pinned/app",
             "and the untouched pin survives",
         );
+    }
+
+    /// TLS is never on without its certificate verified: a mode that encrypts
+    /// without verifying — or may — is refused, naming the variable and never
+    /// quoting the URL, which carries the password; a URL naming no mode asks
+    /// for a verified certificate; `disable` is the visible plaintext opening.
+    #[test]
+    fn tls_is_verified_or_off_and_verified_unless_the_url_says_otherwise() {
+        use sea_orm::sqlx::postgres::PgSslMode;
+        for unverified in ["allow", "prefer", "require", "verify-ca"] {
+            let refused = pinned(&format!(
+                "postgres://app:s3cret@db/app?sslmode={unverified}"
+            ))
+            .tls_mode()
+            .expect_err(unverified);
+            assert!(
+                refused.contains(&nest_rs_config::var_name("seaorm", "URL"))
+                    && refused.contains(&format!("sslmode={unverified}"))
+                    && refused.contains("verify-full")
+                    && refused.contains("disable")
+                    && !refused.contains("s3cret"),
+                "{refused}"
+            );
+        }
+        for (url, mode) in [
+            ("postgres://db/app", PgSslMode::VerifyFull),
+            (
+                "postgres://db/app?application_name=x",
+                PgSslMode::VerifyFull,
+            ),
+            (
+                "postgres://db/app?sslmode=verify-full&sslrootcert=/ca.pem",
+                PgSslMode::VerifyFull,
+            ),
+            ("postgres://db/app?sslmode=disable", PgSslMode::Disable),
+        ] {
+            assert!(
+                matches!(pinned(url).tls_mode(), Ok(found) if std::mem::discriminant(&found) == std::mem::discriminant(&mode)),
+                "{url}"
+            );
+        }
+    }
+
+    /// The pool trusts the system's authorities unless the URL names a file of
+    /// its own: libpq's `system` is the system's too.
+    #[test]
+    fn the_pool_trusts_the_system_unless_the_url_names_an_authority_file() {
+        for (url, system) in [
+            ("postgres://db/app", true),
+            ("postgres://db/app?sslmode=verify-full", true),
+            (
+                "postgres://db/app?sslmode=verify-full&sslrootcert=system",
+                true,
+            ),
+            (
+                "postgres://db/app?sslmode=verify-full&sslrootcert=/ca.pem",
+                false,
+            ),
+            ("postgres://db/app?ssl-ca=/ca.pem", false),
+        ] {
+            assert_eq!(pinned(url).trusts_the_system(), system, "{url}");
+        }
     }
 
     #[test]

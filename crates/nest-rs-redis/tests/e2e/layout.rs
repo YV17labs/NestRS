@@ -100,8 +100,7 @@ const BARRIER: &str = "nestrs-e2e-monitor-barrier";
 /// Start reading `MONITOR`, until the returned task is aborted. Every command
 /// run once it answers is streamed.
 async fn monitor() -> (Arc<Seen>, tokio::task::JoinHandle<()>) {
-    let monitor = redis::Client::open(crate::redis_url())
-        .expect("the admin URL")
+    let monitor = crate::bare_client(&crate::redis_url())
         .get_async_monitor()
         .await
         .expect("a monitor connection, which sends MONITOR");
@@ -126,7 +125,8 @@ async fn monitor() -> (Arc<Seen>, tokio::task::JoinHandle<()>) {
 /// rule names it: lowercase, with its subcommand for a container command.
 fn parse(line: &str) -> Option<(String, String)> {
     let open = line.find('[')?;
-    let close = line[open..].find(']')? + open;
+    // The source's own bracket, never one inside an IPv6 client's address.
+    let close = line[open..].find("] \"")? + open;
     let mut source = line[open + 1..close].split(' ');
     let db = source.next()?;
     let client = source.next()?.to_owned();
@@ -337,8 +337,7 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
 async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
     let user = crate::acl_user("nestrs-e2e-keda");
     let config = crate::documented_user(PAGE, "KEDA", &user, 0).await;
-    let mut keda = redis::Client::open(config.url.as_str())
-        .expect("the KEDA user's URL")
+    let mut keda = crate::bare_client(config.url.as_str())
         .get_multiplexed_async_connection()
         .await
         .expect("the KEDA user connects");

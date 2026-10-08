@@ -9,21 +9,50 @@
 
 use std::net::TcpListener as StdTcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{HttpTls, HttpTransport, controller, routes};
+use nest_rs_testing::{TestAuthority, TestCertificate};
 use poem::Result;
 use tokio_util::sync::CancellationToken;
 
-const CA: &[u8] = include_bytes!("fixtures/tls_ca.pem");
-const CERT_A: &[u8] = include_bytes!("fixtures/tls_a.pem");
-const KEY_A: &[u8] = include_bytes!("fixtures/tls_a.key.pem");
-const CERT_B: &[u8] = include_bytes!("fixtures/tls_b.pem");
-const KEY_B: &[u8] = include_bytes!("fixtures/tls_b.key.pem");
-
 const HOST_A: &str = "a.nestrs.test";
 const HOST_B: &str = "b.nestrs.test";
+
+/// Two leaves under one authority, differing only in their name, issued for
+/// this run.
+struct Pki {
+    authority: TestAuthority,
+    a: TestCertificate,
+    b: TestCertificate,
+}
+
+static PKI: LazyLock<Pki> = LazyLock::new(|| {
+    let authority = TestAuthority::new();
+    Pki {
+        a: authority.server(&[HOST_A]),
+        b: authority.server(&[HOST_B]),
+        authority,
+    }
+});
+
+fn cert_a() -> &'static [u8] {
+    PKI.a.cert.as_bytes()
+}
+
+fn key_a() -> &'static [u8] {
+    PKI.a.key.as_bytes()
+}
+
+fn cert_b() -> &'static [u8] {
+    PKI.b.cert.as_bytes()
+}
+
+fn key_b() -> &'static [u8] {
+    PKI.b.key.as_bytes()
+}
 
 /// The watch interval the serving tests use — the shortest the seconds-grained
 /// knob allows, so a renewal lands within a tick or two.
@@ -53,7 +82,7 @@ impl Material {
         let dir = std::env::temp_dir().join(format!("nestrs-tls-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         let material = Self { dir };
-        material.write(CERT_A, KEY_A);
+        material.write(cert_a(), key_a());
         material
     }
 
@@ -77,19 +106,21 @@ impl Drop for Material {
     }
 }
 
-/// A client that trusts the fixture CA and resolves both test names to the
+/// A client that trusts the test authority and resolves both test names to the
 /// bound port, so the *only* reason a request can fail is the certificate the
 /// server presents.
 ///
-/// The CA is the client's *only* root, verified by rustls itself. Merged into
-/// the platform's store instead, macOS applies Apple's policy for server
-/// certificates on top — the fixture leaves are valid for twenty years, past
-/// its 825-day ceiling — and the handshake fails there for a reason unrelated
-/// to the swap under test. The suite asserts which certificate is served, not
+/// The authority is the client's *only* root, verified by rustls itself. Merged
+/// into the platform's store instead, macOS applies Apple's policy for server
+/// certificates on top — the test leaves outlive its 825-day ceiling — and the
+/// handshake fails there for a reason unrelated to the swap under test. The suite asserts which certificate is served, not
 /// what one operating system accepts.
 fn client(host: &str, port: u16) -> reqwest::Client {
     reqwest::Client::builder()
-        .tls_certs_only([reqwest::Certificate::from_pem(CA).expect("fixture CA parses")])
+        .tls_certs_only([
+            reqwest::Certificate::from_pem(PKI.authority.pem().as_bytes())
+                .expect("the test authority parses"),
+        ])
         .resolve(host, ([127, 0, 0, 1], port).into())
         .build()
         .expect("client builds")
@@ -151,7 +182,7 @@ async fn watch(ticks: u32) {
 /// A configured transport over the material on disk, not yet served.
 async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> HttpTransport {
     let tls = HttpTls::from_files(material.cert(), material.key())
-        .expect("fixture material reads")
+        .expect("the test material reads")
         .with_reload_secs(reload_secs);
     let app = App::builder()
         .module::<PingModule>()
@@ -193,7 +224,7 @@ async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
     );
 
     // Renew in place. Nothing restarts, nothing rebinds.
-    material.write(CERT_B, KEY_B);
+    material.write(cert_b(), key_b());
     watch(3).await;
 
     let body = ping_until_ok(HOST_B, port, Duration::from_secs(10)).await;
@@ -243,7 +274,7 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
     assert!(opened.status().is_success());
     assert_eq!(opened.text().await.ok().as_deref(), Some("pong"));
 
-    material.write(CERT_B, KEY_B);
+    material.write(cert_b(), key_b());
     watch(3).await;
 
     // The swap has landed once a *fresh* handshake is answered under leaf B…
@@ -288,7 +319,7 @@ async fn watching_off_keeps_serving_the_certificate_it_booted_with() {
             .as_deref(),
         Some("pong"),
     );
-    material.write(CERT_B, KEY_B);
+    material.write(cert_b(), key_b());
     watch(3).await;
     assert!(
         ping(HOST_B, port).await.is_err(),
@@ -311,7 +342,7 @@ async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
     let material = Material::new("boot-refused");
     // Leaf B's certificate beside leaf A's key: both halves parse, and neither
     // corresponds to the other.
-    material.write(CERT_B, KEY_A);
+    material.write(cert_b(), key_a());
     let port = free_port();
     let transport = transport_for(port, &material, 0).await;
 
@@ -351,7 +382,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
 
     // An empty certificate — a truncate that stalls, or a writer that creates
     // before it writes. It parses as a chain holding nothing.
-    material.write(b"", KEY_A);
+    material.write(b"", key_a());
     watch(3).await;
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(5))
@@ -362,7 +393,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
     );
 
     // A mismatched pair: leaf B's certificate, leaf A's key.
-    material.write(CERT_B, KEY_A);
+    material.write(cert_b(), key_a());
     watch(3).await;
     assert_eq!(
         ping_until_ok(HOST_A, port, Duration::from_secs(5))
@@ -378,7 +409,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
 
     // A pair that *does* correspond still lands, so the refusals above did not
     // leave the watcher stuck on the material it rejected.
-    material.write(CERT_B, KEY_B);
+    material.write(cert_b(), key_b());
     watch(3).await;
     assert_eq!(
         ping_until_ok(HOST_B, port, Duration::from_secs(10))

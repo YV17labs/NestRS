@@ -4,6 +4,9 @@
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
 	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli",
+	// The development authority joins the system's store, so every client
+	// trusts the services' certificate as it trusts any other authority.
+	"postStartCommand": "sudo install -m 0644 /certs/ca.pem /usr/local/share/ca-certificates/nestrs-development.crt && sudo update-ca-certificates",
 	// Keep in sync with .vscode/extensions.json.
 	"customizations": {
 		"vscode": {

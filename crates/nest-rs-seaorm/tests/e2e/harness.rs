@@ -1,27 +1,32 @@
-//! Shared Postgres connection for the suite. The dev container's address is
-//! the default, and `NESTRS_SEAORM__URL` overrides it to point at a Postgres
-//! outside the container.
+//! Shared Postgres connection for the suite, over TLS alone: the URL is
+//! `<PREFIX>_SEAORM__URL`, which the dev container and CI set, and every
+//! connection is opened with the pool's own options, so it verifies the
+//! server's certificate as the app does.
 
 use std::sync::Arc;
 
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 
-/// The dev container's Postgres, wired by `.devcontainer` and mirrored in
-/// `demo/.env`.
-const DEFAULT_URL: &str = "postgres://nestrs:nestrs@postgres:5432/nestrs";
-
 pub(crate) fn url() -> String {
     nest_rs_config::ConfigService::for_namespace("seaorm")
         .get("URL")
         .expect("a readable database URL")
-        .unwrap_or_else(|| DEFAULT_URL.to_owned())
+        .expect("the dev container and CI name the suite's Postgres")
+}
+
+/// The pool's own options for `url`.
+pub(crate) fn options(url: String) -> sea_orm::ConnectOptions {
+    nest_rs_seaorm::SeaOrmConfig {
+        url,
+        ..nest_rs_seaorm::SeaOrmConfig::default()
+    }
+    .connect_options()
 }
 
 pub(crate) async fn connect() -> DatabaseConnection {
-    let url = url();
-    Database::connect(&url)
+    Database::connect(options(url()))
         .await
-        .unwrap_or_else(|err| panic!("connect to Postgres at {url}: {err}"))
+        .unwrap_or_else(|err| panic!("connect to the suite's Postgres: {err}"))
 }
 
 pub(crate) async fn connect_arc() -> Arc<DatabaseConnection> {
@@ -100,7 +105,7 @@ fn advisory_lock_key(table: &str) -> i64 {
 /// this, and their timeouts had already drifted apart, which is what a shared
 /// fixture is for.
 pub(crate) async fn starved_pool() -> DatabaseConnection {
-    let mut options = sea_orm::ConnectOptions::new(url());
+    let mut options = options(url());
     options
         .max_connections(1)
         .min_connections(1)

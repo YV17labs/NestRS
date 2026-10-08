@@ -57,7 +57,7 @@ config:
 #
 # Required (here or in `existingSecret`):
 #   SEAORM__URL              postgres://user:pass@host:5432/db
-#   REDIS__URL               redis://host:6379
+#   REDIS__URL               rediss://host:6379
 #   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's
 #   AUTHN__PUBLIC_KEY        PEM, its matching half
 # Optional: STORAGE__ACCESS_KEY, STORAGE__SECRET_KEY, OAUTH__CLIENTS,
@@ -244,7 +244,8 @@ apps:
 
 # --- KEDA ---------------------------------------------------------------------
 # KEDA connects to Redis itself, from the operator — not through the app's env.
-# Its scaler wants `host:port`, not the `redis://` URL the framework reads.
+# Its scaler wants `host:port`, not the `rediss://` URL the framework reads, and
+# speaks TLS when `enableTLS` says so, as Valkey does here.
 #
 # Why minReplicaCount defaults to 1 rather than 0: a job held back — a retry
 # waiting for its backoff, a delayed push — waits on
@@ -257,7 +258,7 @@ keda:
     address: ""
     # Name of an env var on the worker pod holding the Redis password, if any.
     passwordFromEnv: ""
-    enableTLS: false
+    enableTLS: true
     databaseIndex: 0
 
 # --- helm test ----------------------------------------------------------------

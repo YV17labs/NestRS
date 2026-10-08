@@ -67,58 +67,19 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-    services:
-      postgres:
-        image: postgres:18.4
-        env:
-          POSTGRES_USER: nestrs
-          POSTGRES_PASSWORD: nestrs
-          POSTGRES_DB: nestrs
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U nestrs -d nestrs"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-      redis:
-        image: valkey/valkey:9.1.2
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-      rustfs:
-        image: rustfs/rustfs:1.0.0-beta.8
-        env:
-          RUSTFS_VOLUMES: /data
-          RUSTFS_ADDRESS: 0.0.0.0:9000
-          RUSTFS_ACCESS_KEY: nestrs
-          RUSTFS_SECRET_KEY: nestrs
-        ports: ['9000:9000']
-        options: >-
-          --health-cmd "curl -fsS http://localhost:9000/health"
-          --health-interval 5s --health-timeout 5s --health-retries 30
-    # The dev container's services, as the runner reaches them.
+    # The dev container's services, as the runner reaches them: on TLS alone,
+    # trusting through the system's store the authority the dev-services
+    # action issues into CERTS.
     env:
+      CERTS: /tmp/nestrs-certs
       NESTRS_SEAORM__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
-      NESTRS_REDIS__URL: redis://localhost:6379
-      NESTRS_STORAGE__ENDPOINT: http://localhost:9000
-      NESTRS_E2E__REDIS_TLS_URL: rediss://localhost:6380
+      NESTRS_REDIS__URL: rediss://localhost:6379
+      NESTRS_STORAGE__ENDPOINT: https://localhost:9000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # A Valkey speaking TLS alone, presenting the suite's service certificate:
-      # started after the checkout, since a service container cannot mount it.
-      - name: Start the TLS Valkey
-        run: |
-          docker run -d --name redis-tls -p 6380:6380 \
-            -v "$PWD/crates/nest-rs-redis/tests/harness/fixtures:/tls:ro" \
-            valkey/valkey:9.1.2 valkey-server --port 0 --tls-port 6380 \
-            --tls-cert-file /tls/tls_service.pem --tls-key-file /tls/tls_service.key.pem \
-            --tls-ca-cert-file /tls/tls_service_ca.pem --tls-auth-clients no
-          for _ in $(seq 30); do
-            docker exec redis-tls valkey-cli --tls --cacert /tls/tls_service_ca.pem -p 6380 ping && exit 0
-            sleep 1
-          done
-          exit 1
+      - uses: $/.github/actions/dev-services
       - uses: $/.github/actions/setup-rust
         with:
           cache-key: test

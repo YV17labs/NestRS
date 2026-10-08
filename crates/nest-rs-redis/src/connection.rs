@@ -322,9 +322,8 @@ impl RedisConnection {
     /// holding the caller.
     ///
     /// A `rediss://` URL encrypts every connection and verifies Redis's
-    /// certificate for the URL's host — against the authorities of Mozilla's
-    /// root program compiled into the client, or those in
-    /// [`RedisConfig::tls`] — presenting the client certificate set there, if
+    /// certificate for the URL's host — against the system's authorities, or
+    /// those in [`RedisConfig::tls`] — presenting the client certificate set there, if
     /// any. A certificate refused after the boot, when the connection reopens,
     /// is reported once at `warn` on `nest_rs::redis`, with what to change.
     ///
@@ -914,10 +913,17 @@ mod tests {
     use super::*;
     use crate::RedisTlsIdentity;
 
-    const AUTHORITY: &[u8] = include_bytes!("../tests/harness/fixtures/tls_ca.pem");
-    const SERVER_CERT: &[u8] = include_bytes!("../tests/harness/fixtures/tls_server.pem");
-    const SERVER_KEY: &[u8] = include_bytes!("../tests/harness/fixtures/tls_server.key.pem");
-    const CLIENT_CERT: &[u8] = include_bytes!("../tests/harness/fixtures/tls_client.pem");
+    use std::sync::LazyLock;
+
+    use nest_rs_testing::{TestAuthority, TestCertificate};
+
+    /// The authority this test process issues its certificates with.
+    static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+    /// What the TLS listener presents: the loopback it listens on.
+    static SERVER: LazyLock<TestCertificate> =
+        LazyLock::new(|| AUTHORITY.server(&["127.0.0.1", "localhost"]));
+    static CLIENT: LazyLock<TestCertificate> =
+        LazyLock::new(|| AUTHORITY.client("nestrs-test-client"));
 
     const REFUSED: &str = "redis refused a reopened tls connection";
 
@@ -930,14 +936,15 @@ mod tests {
         }
     }
 
-    /// A TLS listener presenting the fixtures' server certificate — which the
-    /// test authority signed, and nothing a client trusts by default — and
+    /// A TLS listener presenting a certificate the test authority issued —
+    /// nothing a client trusts by default — and
     /// answering nothing past the handshake.
     async fn tls_listener() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-        let chain = CertificateDer::pem_slice_iter(SERVER_CERT)
+        let chain = CertificateDer::pem_slice_iter(SERVER.cert.as_bytes())
             .collect::<Result<Vec<_>, _>>()
-            .expect("the fixture certificate parses");
-        let key = PrivateKeyDer::from_pem_slice(SERVER_KEY).expect("the fixture key parses");
+            .expect("the test certificate parses");
+        let key =
+            PrivateKeyDer::from_pem_slice(SERVER.key.as_bytes()).expect("the test key parses");
         let server = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))
@@ -945,7 +952,7 @@ mod tests {
         .expect("the provider speaks the default protocol versions")
         .with_no_client_auth()
         .with_single_cert(chain, key)
-        .expect("the fixture certificate and key correspond");
+        .expect("the test certificate and key correspond");
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1318,7 +1325,7 @@ mod tests {
             "redis+unix:///tmp/nest-rs-redis-absent.sock",
         ] {
             let mut pinned = config(url, Duration::from_secs(5));
-            pinned.tls.ca_cert = Some(AUTHORITY.to_vec());
+            pinned.tls.ca_cert = Some(AUTHORITY.pem().as_bytes().to_vec());
             let Err(error) = RedisConnection::connect(&pinned).await else {
                 panic!("{url} must not connect in plaintext beside TLS material")
             };
@@ -1338,8 +1345,8 @@ mod tests {
         trusting_nothing.tls.ca_cert = Some(b"no certificate in here".to_vec());
         let mut mismatched = config("rediss://127.0.0.1:9/", Duration::from_secs(5));
         mismatched.tls.identity = Some(RedisTlsIdentity {
-            cert: CLIENT_CERT.to_vec(),
-            key: SERVER_KEY.to_vec(),
+            cert: CLIENT.cert.as_bytes().to_vec(),
+            key: SERVER.key.as_bytes().to_vec(),
         });
 
         for (pinned, variable) in [(trusting_nothing, "TLS_CA_CERT"), (mismatched, "TLS_KEY")] {

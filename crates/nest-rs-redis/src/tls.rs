@@ -3,13 +3,11 @@
 //! The URL's scheme decides whether a connection is encrypted, as it does for
 //! every Redis client: `rediss://` is TLS, `redis://` is plaintext. A TLS
 //! connection verifies Redis's certificate for the URL's host against the
-//! authorities of Mozilla's root program, compiled into the client
-//! (`webpki-roots`). The system's own store is never read: `redis` would read
-//! it again for every connection it opens — every reconnection's included —
-//! blocking the runtime while it does, and fail the connection whenever the
-//! store could not be read, a configured authority notwithstanding. Naming the
-//! system's bundle in `<PREFIX>_REDIS__TLS_CA_CERT_FILE` trusts its authorities
-//! instead, read once.
+//! authorities the system trusts ([`nest_rs_config::system_authorities`]), read
+//! once and handed to the client — never by `redis` itself, which would read
+//! the store again for every connection it opens, reconnections included,
+//! blocking the runtime while it does. An authority installed in the system's
+//! store — an enterprise's private one — is trusted like any other.
 //!
 //! [`RedisTls`] changes what is trusted and what is presented — a private
 //! authority, a client certificate for a Redis that requires one — and is
@@ -33,15 +31,15 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 
 /// TLS material for a `rediss://` connection. The default — nothing set —
-/// trusts Mozilla's root program and presents no certificate.
+/// trusts the system's authorities and presents no certificate.
 ///
 /// Read once, when the configuration resolves: a connection reopened later
 /// reuses it, and a renewed file takes effect at the next boot.
 #[derive(Clone, Default)]
 pub struct RedisTls {
     /// PEM certificates of the authorities Redis's certificate must chain to,
-    /// **replacing** the compiled-in ones — for a Redis a private authority
-    /// signed, or the system's bundle, to trust the system's authorities. Read
+    /// **replacing** the system's — for a Redis a private authority signed,
+    /// trusted by this client alone. Read
     /// from `<PREFIX>_REDIS__TLS_CA_CERT`, or the file
     /// `<PREFIX>_REDIS__TLS_CA_CERT_FILE` names.
     pub ca_cert: Option<Vec<u8>>,
@@ -182,7 +180,11 @@ impl RedisTls {
                     client_cert: identity.cert.clone(),
                     client_key: identity.key.clone(),
                 }),
-            root_cert: self.ca_cert.clone(),
+            root_cert: Some(
+                self.ca_cert
+                    .clone()
+                    .unwrap_or_else(|| nest_rs_config::system_authorities().to_vec()),
+            ),
         }
     }
 }
@@ -272,9 +274,9 @@ pub(crate) fn remedy(error: &(dyn std::error::Error + 'static)) -> String {
         ),
         Tls::InvalidCertificate(Certificate::UnknownIssuer | Certificate::BadSignature) => {
             format!(
-                "Redis's certificate does not chain to an authority this app trusts — set {} to \
-                 the authority that signed it, or have Redis serve the intermediate certificates \
-                 that lead to one",
+                "Redis's certificate does not chain to an authority this app trusts — install the \
+                 authority that signed it in the system's store, or set {} to it, or have Redis \
+                 serve the intermediate certificates that lead to one",
                 spellings("TLS_CA_CERT")
             )
         }
@@ -378,8 +380,21 @@ fn half_an_identity(env: &ConfigService, given: &Setting<Material>, missing: &st
 mod tests {
     use super::*;
 
-    const CLIENT_CERT: &[u8] = include_bytes!("../tests/harness/fixtures/tls_client.pem");
-    const CLIENT_KEY: &[u8] = include_bytes!("../tests/harness/fixtures/tls_client.key.pem");
+    use std::sync::LazyLock;
+
+    use nest_rs_testing::{TestAuthority, TestCertificate};
+
+    /// A client certificate and its key, issued for this test process.
+    static CLIENT: LazyLock<TestCertificate> =
+        LazyLock::new(|| TestAuthority::new().client("nestrs-test-client"));
+
+    fn client_cert() -> &'static [u8] {
+        CLIENT.cert.as_bytes()
+    }
+
+    fn client_key() -> &'static [u8] {
+        CLIENT.key.as_bytes()
+    }
 
     #[test]
     fn the_deployment_overlays_each_field_and_the_certificate_moves_with_its_key() {
@@ -422,14 +437,13 @@ mod tests {
     /// variable when a file was named — and both spellings of the half missing.
     #[test]
     fn half_a_client_certificate_is_refused_naming_what_was_set_and_what_is_missing() {
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/harness/fixtures/tls_client.pem"
-        );
+        let file = std::env::temp_dir().join(format!("nestrs-tls-half-{}.pem", std::process::id()));
+        std::fs::write(&file, client_cert()).expect("write the certificate");
+        let file = file.to_str().expect("a UTF-8 temporary path");
         for (key, value, named, missing) in [
             ("TLS_CERT", "-----PEM-----", "TLS_CERT", "TLS_KEY"),
             ("TLS_KEY", "-----PEM-----", "TLS_KEY", "TLS_CERT"),
-            ("TLS_CERT_FILE", fixture, "TLS_CERT_FILE", "TLS_KEY"),
+            ("TLS_CERT_FILE", file, "TLS_CERT_FILE", "TLS_KEY"),
         ] {
             let err = RedisTls::from_env(
                 &ConfigService::with_vars("redis", [(key, value)]),
@@ -454,7 +468,7 @@ mod tests {
     /// describes the problem and quotes nothing, not even as a list of bytes.
     #[test]
     fn material_that_does_not_parse_is_described_and_never_quoted() {
-        let text = std::str::from_utf8(CLIENT_KEY).expect("PEM is text");
+        let text = std::str::from_utf8(client_key()).expect("PEM is text");
         let secret = text.lines().nth(1).expect("a base64 line of the key");
         let as_bytes = secret.as_bytes()[..4]
             .iter()
@@ -465,7 +479,7 @@ mod tests {
             let tls = RedisTls {
                 ca_cert: None,
                 identity: Some(RedisTlsIdentity {
-                    cert: CLIENT_CERT.to_vec(),
+                    cert: client_cert().to_vec(),
                     key: collapsed.into_bytes(),
                 }),
             };
@@ -522,8 +536,8 @@ mod tests {
         let tls = RedisTls {
             ca_cert: None,
             identity: Some(RedisTlsIdentity {
-                cert: CLIENT_CERT.to_vec(),
-                key: CLIENT_KEY.to_vec(),
+                cert: client_cert().to_vec(),
+                key: client_key().to_vec(),
             }),
         };
         assert_eq!(tls.check(&provider), Ok(()));
@@ -650,12 +664,12 @@ mod tests {
     fn a_key_setting_holding_no_private_key_says_so() {
         for (label, key) in [
             ("empty", Vec::new()),
-            ("a certificate", CLIENT_CERT.to_vec()),
+            ("a certificate", client_cert().to_vec()),
         ] {
             let tls = RedisTls {
                 ca_cert: None,
                 identity: Some(RedisTlsIdentity {
-                    cert: CLIENT_CERT.to_vec(),
+                    cert: client_cert().to_vec(),
                     key,
                 }),
             };

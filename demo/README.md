@@ -141,7 +141,7 @@ behind a Service, or a job that runs to completion before them:
 ```bash
 helm install demo charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379"
 ```
 
 Set `apps.<name>.host` rather than the cross-app URLs: the issuer, the audience,

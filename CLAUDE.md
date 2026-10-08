@@ -75,15 +75,18 @@ just ci     # every check CI runs: lint, docs and tests
 ## How we work
 
 - A bug starts with a failing test that reproduces it; the fix covers its
-  cause and its family. A feature that changes the public API, adds a
-  dependency or touches a decision here is agreed with the owner first.
+  cause and its family. A feature that changes the public API or touches a
+  decision here is agreed with the owner first.
 - Branch `<type>/<slug>`, Conventional Commit subjects stating what is now
   true. `just ci` green before a branch reaches the owner's. Push, tag,
   publish and anything posted outside are the owner's.
-- **Ask the owner only for** a hard "no", a decision recorded here, a new
-  third-party dependency, a public API break, a migration dropping or rewriting
-  data, or anything leaving the machine. Decide other trade-offs on
-  performance, security and the standards, with the evidence.
+- **Ask the owner only for** a hard "no", a decision recorded here, a public
+  API break, a migration dropping or rewriting data, or anything leaving the
+  machine. Decide other trade-offs on performance, security and the standards,
+  with the evidence. **A dependency is decided, never asked**: the market's
+  standard for the job in its year — stable, maintained, within the freshness
+  bar (`manifests-ci.md`) — is taken, and the commit body says why it is that
+  one.
 - A red check belongs to the change that turned it red: fixed at once or
   reverted. Code and a rule that drift: the code wins and the rule is fixed in
   that commit, unless the rule is a security invariant or a hard "no".
@@ -191,9 +194,16 @@ it helps. `demo/` Rust carries none.
 
 ## Testing
 
-Wiring bugs do not surface in unit tests. Postgres, Redis and S3 run in the
+Wiring bugs do not surface in unit tests. Postgres, Valkey and S3 run in the
 devcontainer: one that does not answer is an environment defect to fix, never a
-reason to skip a test. **Prove each behaviour at the cheapest level that can
+reason to skip a test. **We work encrypted**: every service, in the dev
+container and in CI, speaks TLS alone, presenting the one certificate a
+self-signed authority issues at setup (`.devcontainer/tls/issue.sh`); that
+authority joins the system's trust store, as a company installs its own, so
+every client verifies it like any other. No certificate is committed: a test
+double's is issued in process (`nest_rs_testing::TestAuthority`). Nothing is
+tested in plaintext — what holds encrypted holds in plaintext, which the
+framework still allows a deployment that writes it. **Prove each behaviour at the cheapest level that can
 prove it** — unit, then in process, then against a live service — and treat a
 slow test as a defect: make it cheaper, or cut what a cheaper test already
 proves (`testing.md`).

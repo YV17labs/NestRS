@@ -8,11 +8,11 @@ paths:
 # Writing tests — the toolbox
 
 A framework crate's tests run in process in `tests/integration/main.rs`, and
-against Postgres, Redis or S3 in `tests/e2e/main.rs`, which connects to the dev
-container's — always reachable; each suite's modules mirror `src/`. A flat
-`tests/<x>.rs` is a binary of its own, relinked per file. This file is the
-toolbox and the decisions that keep live tests from meeting each other. Reach
-for `nest-rs-testing` before hand-rolling a harness.
+against Postgres, Valkey or S3 in `tests/e2e/main.rs`, which connects to the dev
+container's — always reachable, over TLS alone; each suite's modules mirror
+`src/`. A flat `tests/<x>.rs` is a binary of its own, relinked per file. This
+file is the toolbox and the decisions that keep live tests from meeting each
+other. Reach for `nest-rs-testing` before hand-rolling a harness.
 
 ## Choosing the level
 
@@ -65,6 +65,11 @@ nextest prints each test's time: compare before and after.
   that fails closed and logs nothing passes every response assertion.
 - **`wait_until` / `wait_for`** — a condition the test cannot await, failing at
   the caller's line past its bound, never a loop of its own.
+- **`TestAuthority`** (`tls` feature) — the certificates a TLS double presents
+  and a client trusts, issued in process. A double in front of a service ends
+  TLS on both sides — the test authority's certificate to the client, the
+  system's trust to the service — so what it reads or holds back is the
+  protocol, never a record; the client under test trusts both authorities.
 - **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
   the value.
 - **`load_project_env`** — the `.env` cascade, so a test reaches the

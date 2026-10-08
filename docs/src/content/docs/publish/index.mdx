@@ -58,7 +58,7 @@ deploys it.
 ```bash
 helm install demo demo/charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379"
 ```
 
 Every app is declared in one map, and `kind` says what it becomes in the

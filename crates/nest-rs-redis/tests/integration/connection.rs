@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 use crate::harness::connection::{
     NOT_READY, ScriptedRedis, answer, command_length, database_refused_at_once,
@@ -27,6 +27,7 @@ async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
     let Err(error) = RedisConnection::connect(&RedisConfig {
         url: proxy.url(),
         connect_timeout: budget,
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -103,6 +104,7 @@ async fn a_connection_to_a_demoted_primary_is_reopened() {
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: server.url(),
         connect_timeout: Duration::from_secs(2),
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -160,7 +162,9 @@ impl DemotedRedis {
                 let id = counting.fetch_add(1, Ordering::SeqCst);
                 let demoting = Arc::clone(&demoting);
                 tokio::spawn(async move {
-                    answer_as_its_role(client, id, &demoting).await;
+                    if let Some(client) = crate::harness::tls::accept(client).await {
+                        answer_as_its_role(client, id, &demoting).await;
+                    }
                 });
             }
         });
@@ -172,7 +176,7 @@ impl DemotedRedis {
     }
 
     pub(crate) fn url(&self) -> String {
-        format!("redis://{}/", self.addr)
+        format!("rediss://{}/", self.addr)
     }
 
     /// Demote every connection accepted so far.
@@ -184,7 +188,11 @@ impl DemotedRedis {
 
 /// Answer each command connection `id` sends: `READONLY` once it is below the
 /// demotion, `+PONG` otherwise.
-async fn answer_as_its_role(mut client: TcpStream, id: usize, demoted_below: &AtomicUsize) {
+async fn answer_as_its_role(
+    mut client: impl AsyncRead + AsyncWrite + Unpin,
+    id: usize,
+    demoted_below: &AtomicUsize,
+) {
     let mut received = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -195,7 +203,7 @@ async fn answer_as_its_role(mut client: TcpStream, id: usize, demoted_below: &At
             } else {
                 b"+PONG\r\n"
             };
-            if client.write_all(reply).await.is_err() {
+            if client.write_all(reply).await.is_err() || client.flush().await.is_err() {
                 return;
             }
         }

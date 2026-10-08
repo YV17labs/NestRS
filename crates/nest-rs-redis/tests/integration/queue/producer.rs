@@ -10,8 +10,8 @@ use std::time::Duration;
 use nest_rs_queue::{JobProducer, QueueName};
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisQueueProducer};
 use redis::{ErrorKind, ServerErrorKind};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 use crate::harness::connection::command_length;
 
@@ -66,8 +66,9 @@ async fn a_script_redis_never_keeps_fails_after_a_bounded_number_of_loads() {
 async fn the_bindings_producer_loads_its_scripts_at_boot() {
     let server = ForgetfulRedis::start(0).await;
     let redis = RedisConfig {
-        url: format!("redis://{}/", server.addr),
+        url: format!("rediss://{}/", server.addr),
         connect_timeout: Duration::from_secs(2),
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     };
     nest_rs_core::App::builder()
@@ -101,7 +102,12 @@ impl ForgetfulRedis {
         let loading = Arc::clone(&loads);
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                tokio::spawn(forget(client, lost, Arc::clone(&loading)));
+                let loading = Arc::clone(&loading);
+                tokio::spawn(async move {
+                    if let Some(client) = crate::harness::tls::accept(client).await {
+                        forget(client, lost, loading).await;
+                    }
+                });
             }
         });
         Self { addr, loads }
@@ -109,8 +115,9 @@ impl ForgetfulRedis {
 
     async fn connect(&self) -> RedisConnection {
         RedisConnection::connect(&RedisConfig {
-            url: format!("redis://{}/", self.addr),
+            url: format!("rediss://{}/", self.addr),
             connect_timeout: Duration::from_secs(2),
+            tls: crate::harness::tls::trusted(),
             ..RedisConfig::default()
         })
         .await
@@ -123,7 +130,11 @@ impl ForgetfulRedis {
 }
 
 /// Answer each command `client` sends as [`ForgetfulRedis`] does.
-async fn forget(mut client: TcpStream, lost: usize, loads: Arc<AtomicUsize>) {
+async fn forget(
+    mut client: impl AsyncRead + AsyncWrite + Unpin,
+    lost: usize,
+    loads: Arc<AtomicUsize>,
+) {
     let mut received = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -139,7 +150,7 @@ async fn forget(mut client: TcpStream, lost: usize, loads: Arc<AtomicUsize>) {
                 }
                 _ => b"+PONG\r\n".to_vec(),
             };
-            if client.write_all(&reply).await.is_err() {
+            if client.write_all(&reply).await.is_err() || client.flush().await.is_err() {
                 return;
             }
         }

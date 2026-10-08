@@ -262,6 +262,7 @@ async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: proxy.url(),
         connect_timeout: budget,
+        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::StorageTls;
 use nest_rs_config::{
     Bound, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor, Setting, config,
 };
@@ -46,7 +47,7 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 #[config(namespace = "storage")]
 #[derive(Clone)]
 pub struct StorageConfig {
-    /// S3 endpoint URL (e.g. `http://rustfs:9000`). Empty ⇒ real AWS S3.
+    /// S3 endpoint URL (e.g. `https://rustfs:9000`). Empty ⇒ real AWS S3.
     pub endpoint: String,
     /// The S3 region (required).
     #[validate(length(min = 1, message = "must not be empty"))]
@@ -89,6 +90,10 @@ pub struct StorageConfig {
     /// whole seconds from 1 to 3600, and in code anything above zero up to an
     /// hour; defaults to 30s.
     pub read_timeout: Duration,
+    /// What an `https://` endpoint's certificate must chain to — the system's
+    /// store unless `<PREFIX>_STORAGE__TLS_CA_CERT` names an authority. The
+    /// certificate is verified either way.
+    pub tls: StorageTls,
 }
 
 impl std::fmt::Debug for StorageConfig {
@@ -103,6 +108,7 @@ impl std::fmt::Debug for StorageConfig {
             .field("allow_http", &self.allow_http)
             .field("operation_timeout", &self.operation_timeout)
             .field("read_timeout", &self.read_timeout)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -110,7 +116,7 @@ impl std::fmt::Debug for StorageConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://rustfs:9000".into(),
+            endpoint: "https://rustfs:9000".into(),
             region: "us-east-1".into(),
             access_key: "nestrs".into(),
             secret_key: "nestrs".into(),
@@ -119,6 +125,7 @@ impl Default for StorageConfig {
             allow_http: true,
             operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
             read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
+            tls: StorageTls::default(),
         }
     }
 }
@@ -151,8 +158,10 @@ impl Config for StorageConfig {
         let access_key = env.setting("ACCESS_KEY")?;
         let secret_key = env.setting("SECRET_KEY")?;
         refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
+        let endpoint = resolve_endpoint(env, env.setting("ENDPOINT")?, d.endpoint, allow_http)?;
         Ok(Self {
-            endpoint: resolve_endpoint(env, env.setting("ENDPOINT")?, d.endpoint, allow_http)?,
+            tls: StorageTls::from_env(env, d.tls, is_plaintext(&endpoint))?,
+            endpoint,
             region: env.get("REGION")?.unwrap_or(d.region),
             access_key: resolve_credential(env, "ACCESS_KEY", access_key, d.access_key)?,
             secret_key: resolve_credential(env, "SECRET_KEY", secret_key, d.secret_key)?,

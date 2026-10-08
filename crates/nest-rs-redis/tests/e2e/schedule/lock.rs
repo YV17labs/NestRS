@@ -53,7 +53,7 @@ use nest_rs_schedule::{
     Occurrence, OccurrenceClaim, OccurrenceLock, ScheduleModule, Scheduler, scheduled,
 };
 use nest_rs_testing::{CapturedEvent, LogCapture, TestApp, TransportHandle};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 /// Where every claim lives — the layout the schedule page states and an
@@ -635,7 +635,7 @@ async fn the_first_claim_wins_and_the_key_is_the_whole_claim() {
 
 // --- 6. an outage ---------------------------------------------------------------
 
-/// A TCP proxy in front of the dev container Redis that can sever the app from
+/// A proxy in front of the dev container's Valkey that can sever the app from
 /// it and then let it back: severed, it drops every connection it carries and
 /// closes each new one on accept — Redis gone, as a restart or a failover leaves
 /// it — and restored, it carries new connections again.
@@ -646,7 +646,7 @@ struct SeveringProxy {
 
 impl SeveringProxy {
     async fn start() -> Self {
-        let upstream = crate::redis_address();
+        let upstream = crate::redis_url();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind the proxy");
@@ -654,16 +654,20 @@ impl SeveringProxy {
         let severed = watch::channel(false).0;
         let accepting = severed.subscribe();
         tokio::spawn(async move {
-            while let Ok((mut client, _)) = listener.accept().await {
+            while let Ok((client, _)) = listener.accept().await {
                 if *accepting.borrow() {
                     drop(client);
                     continue;
                 }
-                let Ok(mut server) = TcpStream::connect(&upstream).await else {
-                    continue;
-                };
+                let upstream = upstream.clone();
                 let mut cut = accepting.clone();
                 tokio::spawn(async move {
+                    let Some(mut client) = crate::harness::tls::accept(client).await else {
+                        return;
+                    };
+                    let Some(mut server) = crate::harness::tls::dial(&upstream).await else {
+                        return;
+                    };
                     tokio::select! {
                         _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
                         _ = cut.wait_for(|severed| *severed) => {}
@@ -792,8 +796,8 @@ async fn a_redis_outage_skips_occurrences_aloud_and_the_schedule_recovers() {
 
 // --- 7. a lost answer -------------------------------------------------------------
 
-/// A proxy in front of the dev container Redis that, while stalled, still carries
-/// every command to Redis and holds every reply back, then lets them through in
+/// A proxy in front of the dev container's Valkey that, while stalled, still
+/// carries every command to Valkey and holds every reply back, then lets them through in
 /// order once resumed — a command that runs while its answer is lost to its
 /// caller, without reordering the replies a multiplexed connection matches by
 /// position.
@@ -806,7 +810,7 @@ impl StallingProxy {
     async fn start() -> Self {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let upstream = crate::redis_address();
+        let upstream = crate::redis_url();
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind the proxy");
@@ -815,21 +819,26 @@ impl StallingProxy {
         let watching = stalled.subscribe();
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                let Ok(server) = TcpStream::connect(&upstream).await else {
-                    continue;
-                };
-                let (mut from_client, mut to_client) = client.into_split();
-                let (mut from_server, mut to_server) = server.into_split();
-                tokio::spawn(async move {
-                    let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
-                });
+                let upstream = upstream.clone();
                 let mut resumed = watching.clone();
                 tokio::spawn(async move {
+                    let Some(client) = crate::harness::tls::accept(client).await else {
+                        return;
+                    };
+                    let Some(server) = crate::harness::tls::dial(&upstream).await else {
+                        return;
+                    };
+                    let (mut from_client, mut to_client) = tokio::io::split(client);
+                    let (mut from_server, mut to_server) = tokio::io::split(server);
+                    tokio::spawn(async move {
+                        let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
+                    });
                     let mut chunk = [0_u8; 16 * 1024];
                     while let Ok(read) = from_server.read(&mut chunk).await {
                         if read == 0
                             || resumed.wait_for(|stalled| !*stalled).await.is_err()
                             || to_client.write_all(&chunk[..read]).await.is_err()
+                            || to_client.flush().await.is_err()
                         {
                             break;
                         }

@@ -183,6 +183,7 @@ spec:
     - type: redis-streams
       metadata:
         address: redis:6379
+        enableTLS: "true"
         stream: "nestrs:queue:{audio}:jobs"
         streamLength: "20"
 ```

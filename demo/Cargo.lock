@@ -2553,9 +2553,11 @@ name = "nest-rs-config"
 version = "7.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "libc",
  "nest-rs-config-macros",
  "nest-rs-core",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

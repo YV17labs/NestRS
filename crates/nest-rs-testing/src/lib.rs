@@ -36,6 +36,11 @@ pub mod mcp;
 mod url;
 mod wait;
 
+#[cfg(feature = "tls")]
+mod tls;
+#[cfg(feature = "tls")]
+pub use tls::{TestAuthority, TestCertificate};
+
 #[cfg(feature = "orm")]
 mod database;
 #[cfg(feature = "orm")]

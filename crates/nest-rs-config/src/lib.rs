@@ -26,6 +26,7 @@
 /// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::config";
 
+mod authorities;
 mod bounds;
 mod config;
 mod dotenv;
@@ -39,6 +40,7 @@ mod setting;
 mod source;
 pub mod unclaimed;
 
+pub use authorities::system_authorities;
 pub use bounds::{Bound, BoundedDuration, DurationBounds, DurationUnit, Floor};
 pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;

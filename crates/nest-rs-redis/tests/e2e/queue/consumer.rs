@@ -383,8 +383,11 @@ async fn a_throttle_caps_starts_per_window_across_replicas() {
     assert_eq!(starts.len(), 6, "every job ran");
     let first_start = starts.iter().min().copied().expect("a start");
     let span = starts.iter().max().copied().expect("a start") - first_start;
+    // Two windows hold four starts at most, so six take a third, which opens
+    // more than a window after the first start — however late in its window
+    // the first started.
     assert!(
-        span >= Duration::from_millis(1900),
+        span > Duration::from_secs(1),
         "six starts at two a window take three windows: {span:?}",
     );
     for (at, start) in starts.iter().enumerate() {
@@ -704,8 +707,7 @@ async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
     let proxy = crate::MutingProxy::start().await;
     let replica = crate::replica_on::<GatedModule>(nest_rs_redis::RedisConfig {
         url: proxy.url(),
-        connect_timeout: crate::BUDGET,
-        ..Default::default()
+        ..crate::redis_config()
     })
     .await;
     crate::producer()

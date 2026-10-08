@@ -15,7 +15,7 @@ use nest_rs_schedule::{Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLo
 /// the dial at once rather than reach whatever Redis the machine holds.
 fn nowhere() -> RedisConfig {
     RedisConfig {
-        url: "redis://127.0.0.1:1/".to_owned(),
+        url: "rediss://127.0.0.1:1/".to_owned(),
         connect_timeout: Duration::from_millis(200),
         ..RedisConfig::default()
     }

@@ -49,6 +49,11 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # by 2027-01-31 and the server moves (`.claude/decisions/http-server.md`).
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
 rustls = "0.23"
+# What the system trusts, read once: the rustls project's reader, which honours
+# `SSL_CERT_FILE` and `SSL_CERT_DIR`.
+rustls-native-certs = "0.8"
+# Test certificates, issued in process: the rustls project's own generator.
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
 # The one crypto provider (deny.toml bans ring), named directly only where a
 # primitive is used outside TLS and JWT: the throttler's HMAC.
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
@@ -107,6 +112,8 @@ redis = { version = "1.7", default-features = false, features = [
     "script",
     "tokio-comp",
     "tokio-rustls-comp",
+    # Never read: the framework hands every client its authorities. Without it,
+    # `redis` reads the system's store again for every connection it opens.
     "tls-rustls-webpki-roots",
 ] }
 

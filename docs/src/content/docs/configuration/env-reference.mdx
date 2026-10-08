@@ -96,7 +96,7 @@ on Postgres — the one engine the framework builds sea-orm with.
 
 | Key | Meaning |
 |---|---|
-| `URL` | database connection string |
+| `URL` | database connection string. TLS is verified or off: with no `sslmode` the connection asks for `verify-full`, the server's certificate checked against the system's authorities — or the file `sslrootcert` names; libpq's `sslrootcert=system` is the system's too — and its name against the host; `sslmode=disable` is plaintext, written where it is meant. `allow`, `prefer`, `require` and `verify-ca`, which encrypt without that check or may, fail the boot naming this variable |
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
 | `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, from `1` to `3600` (unset ⇒ `10`, below the authentication guard's 20-second net and the HTTP request timeout, so a pool that runs dry answers with its own error; `Repo` reaches the pool from any strategy, so an app running the authentication guard keeps it under that net: the boot refuses one at or past it) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
@@ -115,7 +115,7 @@ next restart.
 | Key | Meaning |
 |---|---|
 | `URL` | Redis connection string — `rediss://` connects over TLS and verifies Redis's certificate for the URL's host; `#insecure`, which skips that, fails the boot |
-| `TLS_CA_CERT` | PEM certificates of the authorities Redis's certificate must chain to, replacing the authorities of Mozilla's root program compiled into the client — a private CA's, or the system's bundle to trust the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Beside a `redis://` URL, fails the boot |
+| `TLS_CA_CERT` | PEM certificates of the authorities Redis's certificate must chain to, replacing the system's, which are trusted otherwise — read once at boot, `SSL_CERT_FILE` and `SSL_CERT_DIR` honoured; `TLS_CA_CERT_FILE` reads them from a path instead. Beside a `redis://` URL, fails the boot |
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a Redis that requires one — its default under TLS (`tls-auth-clients yes`); `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 | `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error, then the most any command a caller waits on may take from end to end — a push, a rate-limit check, a command of your own — past which it fails as a timeout — and how long the socket waits, a second at the least, before it probes an idle Redis or gives up on bytes Redis never acknowledged. A queue worker's blocking read, on a connection of its own, waits its one second plus this budget; defaults to `10`; whole seconds from `1` to `3600` — an hour, past which a Redis silent that long is gone rather than slow — refused outside, and in code anything above zero up to an hour, a sub-second budget included. An app importing the queue or the rate limiter binding keeps it under their net, 20 seconds, one importing the schedule binding under the scheduler's, 50 seconds, and one whose authentication strategy injects the connection under the guard's, 20 seconds — each would otherwise give up on a command still answering: the boot refuses one at or past it. Each boot attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes. Refused credentials and an ACL denying the connection's `PING` fail at once, and so does a database the server will not select — an index it does not have, an ACL user without `+select`, a server in cluster mode — named by the index the URL ends in; a Redis loading its dataset, busy running a script or failing over is retried within the budget, and one still not ready when it runs out fails naming its last answer |
 
@@ -144,7 +144,8 @@ survives a swap of the backend underneath.
 
 | Key | Meaning |
 |---|---|
-| `ENDPOINT` | S3 endpoint (empty ⇒ real AWS S3) |
+| `ENDPOINT` | S3 endpoint (empty ⇒ real AWS S3); an `https://` endpoint's certificate is verified against the system's authorities, or `TLS_CA_CERT`'s |
+| `TLS_CA_CERT` | PEM certificates of the authorities the endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
 | `REGION` | region |
 | `ACCESS_KEY` / `SECRET_KEY` | static credentials |
 | `BUCKET` | target bucket |

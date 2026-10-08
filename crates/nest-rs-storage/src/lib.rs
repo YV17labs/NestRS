@@ -100,6 +100,7 @@ mod client;
 mod config;
 mod error;
 mod module;
+mod tls;
 mod transfer;
 
 #[doc(hidden)]
@@ -108,3 +109,4 @@ pub use client::{ObjectEntry, ObjectMetadata, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
 pub use module::{StorageModule, StorageSetup};
+pub use tls::StorageTls;

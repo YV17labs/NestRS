@@ -33,6 +33,10 @@ serde_json.workspace = true
 # Re-exported `#[config]` decorator. A `*-macros` crate emits absolute-path
 # tokens, so it never depends back on this surface crate.
 nest-rs-config-macros.workspace = true
+# `system_authorities`: the authorities the system trusts, as every TLS client
+# the framework opens trusts them by default — read once, PEM.
+rustls-native-certs.workspace = true
+base64.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # `O_NONBLOCK` for `read_material`: opening a FIFO a `_FILE` variable names

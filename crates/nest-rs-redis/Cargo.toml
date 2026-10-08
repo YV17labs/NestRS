@@ -73,7 +73,7 @@ schedule = ["dep:nest-rs-schedule"]
 # A dead-lettered job that logs nothing passes every outcome assertion —
 # `LogCapture` covers the event half of the worker's contract; `queue` is the
 # behaviour kit every queue backend runs.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["queue"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["queue", "tls"] }
 # Self dev-dependency: the suite runs with `throttler` and `schedule` on.
 nest-rs-redis = { path = ".", features = ["throttler", "schedule"] }
 nest-rs-core = { path = "../nest-rs-core" }
@@ -92,10 +92,9 @@ async-trait.workspace = true
 # The suite reads `MONITOR` as a stream, to hold each documented ACL rule to
 # the commands its binding sends.
 futures-util.workspace = true
-# The TLS server side the tests put in front of the client: the dev container's
-# Redis speaks plaintext, so `rediss://` meets a rustls listener presenting the
-# fixture certificates — the unit tests' refusing one, the suite's proxy.
-# Already in the tree through `redis`'s rustls support.
+# The TLS sides of the suites' doubles: a listener presenting the test
+# authority's certificate, and the dial to Valkey behind it. Already in the
+# tree through `redis`'s rustls support.
 tokio-rustls.workspace = true
 
 [lints]

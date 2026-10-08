@@ -74,8 +74,7 @@ pub struct RedisConfig {
     /// ([`lease_fits_renewal`](nest_rs_queue::lease_fits_renewal)).
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
-    /// authorities of Mozilla's root program compiled into the client and
-    /// presents no certificate. Read from `<PREFIX>_REDIS__TLS_*` — see
+    /// system's authorities and presents no certificate. Read from `<PREFIX>_REDIS__TLS_*` — see
     /// [`RedisTls`].
     pub tls: RedisTls,
 }

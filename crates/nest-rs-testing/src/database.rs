@@ -50,7 +50,7 @@ impl EphemeralDatabase {
     /// callers that resolve the connection string themselves rather than via
     /// the environment.
     pub async fn create_with<M: MigratorTrait>(admin_url: &str) -> Result<Self> {
-        let admin = Database::connect(admin_url).await?;
+        let admin = Database::connect(options(admin_url)).await?;
         let name = unique_name();
 
         // `CREATE DATABASE` reads `template1`; concurrent CREATEs fail with
@@ -65,7 +65,7 @@ impl EphemeralDatabase {
         }
 
         let url = crate::url_on(admin_url, &name);
-        let mut options = ConnectOptions::new(url.clone());
+        let mut options = options(&url);
         options.connect_timeout(POOL_BUDGET);
         options.statement_timeout(STATEMENT_BOUND);
         let connection = Database::connect(options).await?;
@@ -113,7 +113,7 @@ impl Drop for EphemeralDatabase {
                 return;
             };
             rt.block_on(async move {
-                if let Ok(admin) = Database::connect(&admin_url).await {
+                if let Ok(admin) = Database::connect(options(&admin_url)).await {
                     let _ = admin
                         .execute_unprepared(&format!(
                             "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"
@@ -209,6 +209,26 @@ fn unique_name() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{PREFIX}_{}_{}_{}", std::process::id(), now_nanos(), seq)
+}
+
+/// `url`'s connect options, trusting the system's authorities as the app's
+/// pool does unless the URL names an authority file of its own — sqlx alone
+/// would trust only the authorities compiled into it.
+fn options(url: &str) -> ConnectOptions {
+    let mut options = ConnectOptions::new(url.to_owned());
+    let names_a_file = url.split_once('?').is_some_and(|(_, query)| {
+        query.split('&').any(|pair| {
+            pair.split_once('=').is_some_and(|(key, value)| {
+                matches!(key, "sslrootcert" | "ssl-root-cert" | "ssl-ca") && value != "system"
+            })
+        })
+    });
+    if !names_a_file {
+        options.map_sqlx_postgres_opts(|options| {
+            options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
+        });
+    }
+    options
 }
 
 #[cfg(test)]

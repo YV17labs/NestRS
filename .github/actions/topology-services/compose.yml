@@ -1,0 +1,145 @@
+# Run by action.yml; by hand, from this folder with CERTS set, its steps' commands.
+name: nestrs-topologies
+
+# The host's network: every node, replica and sentinel announces 127.0.0.1,
+# which the certificate names, and the ports clear the dev services'.
+x-valkey: &valkey
+  image: valkey/valkey:9.1.2
+  network_mode: host
+  user: "999:999"
+  volumes:
+    - ${CERTS:?the directory the dev-services action issued the certificate into}:/certs:ro
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 5s
+  retries: 20
+  start_period: 30s
+  start_interval: 1s
+
+configs:
+  node.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/redis/server.pem
+      tls-key-file /certs/redis/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      repl-diskless-sync-delay 0
+      enable-debug-command local
+      appendonly no
+      save ""
+  cluster.conf:
+    content: |
+      include /node.conf
+      cluster-enabled yes
+      tls-cluster yes
+      cluster-databases 16
+      cluster-node-timeout 2000
+  # Sentinel rewrites its configuration, so each one starts from a copy. The
+  # replica is named: a sentinel reading the primary's INFO before the replica
+  # connects would otherwise learn of it only at its next INFO, 10 s later.
+  sentinel.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/redis/server.pem
+      tls-key-file /certs/redis/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      sentinel monitor nestrs 127.0.0.1 6380 2
+      sentinel down-after-milliseconds nestrs 2000
+      sentinel failover-timeout nestrs 10000
+      sentinel known-replica nestrs 127.0.0.1 6381
+
+services:
+  monitored-6380:
+    <<: *valkey
+    configs: [node.conf]
+    command: [valkey-server, /node.conf, --tls-port, "6380"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "6380", ping]
+
+  monitored-6381:
+    <<: *valkey
+    configs: [node.conf]
+    command: [valkey-server, /node.conf, --tls-port, "6381", --replicaof, 127.0.0.1, "6380"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "6381", ping]
+
+  sentinel-26379:
+    <<: *valkey
+    configs: [sentinel.conf]
+    command: [sh, -c, "cat /sentinel.conf > sentinel.conf && exec valkey-sentinel sentinel.conf --tls-port 26379"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "26379", ping]
+
+  sentinel-26380:
+    <<: *valkey
+    configs: [sentinel.conf]
+    command: [sh, -c, "cat /sentinel.conf > sentinel.conf && exec valkey-sentinel sentinel.conf --tls-port 26380"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "26380", ping]
+
+  sentinel-26381:
+    <<: *valkey
+    configs: [sentinel.conf]
+    command: [sh, -c, "cat /sentinel.conf > sentinel.conf && exec valkey-sentinel sentinel.conf --tls-port 26381"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "26381", ping]
+
+  cluster-7000:
+    <<: *valkey
+    configs: [node.conf, cluster.conf]
+    command: [valkey-server, /cluster.conf, --tls-port, "7000"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "7000", ping]
+
+  cluster-7001:
+    <<: *valkey
+    configs: [node.conf, cluster.conf]
+    command: [valkey-server, /cluster.conf, --tls-port, "7001"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "7001", ping]
+
+  cluster-7002:
+    <<: *valkey
+    configs: [node.conf, cluster.conf]
+    command: [valkey-server, /cluster.conf, --tls-port, "7002"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "7002", ping]
+
+  cluster-7003:
+    <<: *valkey
+    configs: [node.conf, cluster.conf]
+    command: [valkey-server, /cluster.conf, --tls-port, "7003"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "7003", ping]
+
+  cluster-7004:
+    <<: *valkey
+    configs: [node.conf, cluster.conf]
+    command: [valkey-server, /cluster.conf, --tls-port, "7004"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "7004", ping]
+
+  cluster-7005:
+    <<: *valkey
+    configs: [node.conf, cluster.conf]
+    command: [valkey-server, /cluster.conf, --tls-port, "7005"]
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, valkey-cli, --tls, --cacert, /certs/ca.pem, -p, "7005", ping]

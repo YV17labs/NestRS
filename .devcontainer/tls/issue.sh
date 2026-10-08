@@ -8,9 +8,11 @@
 #   DIR/<service>/<files>   one folder per service: the certificate and its
 #                           key, under the names and the owner it reads
 #
-# The certificate is kept while it has a month left and every service has its
-# copy; otherwise a new authority issues a new one, and the authority's key is
-# thrown away. Runs as root, to give each service the owner it needs.
+# The certificate is kept while it has a month left, every service has its copy
+# and it serves client authentication too — a Valkey Cluster's nodes present it
+# to each other on the cluster bus, which always asks for one; otherwise a new
+# authority issues a new one, and the authority's key is thrown away. Runs as
+# root, to give each service the owner it needs.
 #
 # Adding a service: one row below. Its name is its hostname on the compose
 # network, and joins the certificate's names on its own.
@@ -39,6 +41,8 @@ fresh() {
     services | while read -r service uid cert key; do
         [ -f "$dir/$service/$key" ] || exit 1
         openssl x509 -checkend 2592000 -noout -in "$dir/$service/$cert" >/dev/null 2>&1 || exit 1
+        openssl x509 -noout -ext extendedKeyUsage -in "$dir/$service/$cert" 2>/dev/null \
+            | grep -q 'TLS Web Client Authentication' || exit 1
     done
 }
 
@@ -87,7 +91,7 @@ quietly openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -da
     -addext "subjectAltName=$names" \
     -addext "basicConstraints=critical,CA:false" \
     -addext "keyUsage=critical,digitalSignature" \
-    -addext "extendedKeyUsage=serverAuth" \
+    -addext "extendedKeyUsage=serverAuth,clientAuth" \
     -keyout "$work/key.pem" -out "$work/cert.pem"
 
 install -d -m 0755 "$dir"

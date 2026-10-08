@@ -1,19 +1,5 @@
-//! One W3C trace, from the producer's process into the consumer's.
-//!
-//! Every other propagation in the framework crosses a *task*, and a task-local
-//! is enough. A queue crosses a **process**: the producer is an API pod, the
-//! consumer is a worker pod, and the only thing that reaches from one to the
-//! other is the payload. So the `traceparent` rides the wire envelope
-//! (`nest_rs_queue::Envelope`), and this is where that is measured rather than
-//! asserted about.
-//!
-//! What it buys, concretely: "show me everything this request caused" answers
-//! across the enqueue boundary, with the job appearing **under** the enqueue in
-//! any conformant backend rather than merely beside it — and with no collector
-//! and no shared process required for the logs to say so.
-//!
-//! The in-process envelope tests cover the shape; only a live worker shows the
-//! context survives Redis and the dispatch.
+//! One W3C trace, from the producer's process into the consumer's: only a live
+//! worker shows the context survives Redis and the dispatch.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -33,16 +19,8 @@ struct Observed {
     actor_id: Option<String>,
 }
 
-/// What each job reported, keyed by the `seq` it carried.
-///
-/// A map rather than one slot, and the queue is the reason: its name is a
-/// compile-time literal, so every run of this test shares one Redis queue with
-/// every run before it — including runs that were killed mid-job and left work
-/// on its stream. A single slot recorded whichever job the consumer happened to
-/// reach first, which on a dirty queue is a *previous* run's, carrying that
-/// run's trace and this run's actor (the literal is the same every time). The
-/// result was a failure that read exactly like a broken propagation and was
-/// not one.
+/// What each job reported, keyed by the `seq` it carried: every run shares one
+/// Redis queue, which a killed earlier run may have left jobs on.
 static SEEN: Mutex<Vec<(usize, Observed)>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

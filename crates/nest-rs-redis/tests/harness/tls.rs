@@ -1,7 +1,9 @@
-//! TLS for both suites, which reach Valkey over nothing else: the test
-//! authority every double's certificate is issued by — in process, none is
-//! committed — the handshakes a double accepts and dials, and a proxy that
-//! can present a certificate issued for another host.
+//! TLS for both suites, which reach Valkey over nothing else. A connection to
+//! Valkey itself takes the framework's default — the system's authorities,
+//! where the dev container and CI install the services' — and a connection to
+//! a double trusts the test authority its certificate is issued by, in
+//! process. A double ends TLS on both sides ([`bridge`]), so what it reads or
+//! holds back is the protocol.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,14 +11,11 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use nest_rs_redis::{RedisConfig, RedisTls};
-use nest_rs_testing::{TestAuthority, TestCertificate, url_at, url_on};
-use rustls::RootCertStore;
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use rustls::server::WebPkiClientVerifier;
+use nest_rs_testing::{TestAuthority, TestCertificate, system_connector, url_at, url_on};
+use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{TlsAcceptor, TlsConnector, client, server};
+use tokio_rustls::{TlsAcceptor, client, server};
 
 /// The authority this test process issues its doubles' certificates with.
 static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
@@ -30,31 +29,13 @@ static MISNAMED: LazyLock<TestCertificate> =
     LazyLock::new(|| AUTHORITY.server(&["elsewhere.nestrs.test"]));
 
 /// The handshake a double accepts, with no client certificate asked.
-static ACCEPTOR: LazyLock<TlsAcceptor> = LazyLock::new(|| acceptor(None, &DOUBLE));
+static ACCEPTOR: LazyLock<TlsAcceptor> = LazyLock::new(|| DOUBLE.acceptor(None));
 
-/// The test authority's certificate, which a client trusts to reach a double.
-pub(crate) fn authority() -> &'static [u8] {
-    AUTHORITY.pem().as_bytes()
-}
-
-/// What every connection of the suites trusts: the system's authorities —
-/// where the dev container and CI install the development services' — to
-/// reach Valkey, and the test authority, to reach a double.
-pub(crate) fn trusted() -> RedisTls {
-    let mut authorities = authority().to_vec();
-    authorities.push(b'\n');
-    authorities.extend_from_slice(nest_rs_config::system_authorities());
-    RedisTls {
-        ca_cert: Some(authorities),
-        identity: None,
-    }
-}
-
-/// The test authority alone, so the development services' certificate is
-/// one the client does not trust.
+/// The test authority alone: what a client trusts to reach a double, and the
+/// development services' certificate one it does not.
 pub(crate) fn trusting_the_test_authority() -> RedisTls {
     RedisTls {
-        ca_cert: Some(authority().to_vec()),
+        ca_cert: Some(AUTHORITY.pem().as_bytes().to_vec()),
         identity: None,
     }
 }
@@ -76,56 +57,21 @@ pub(crate) async fn dial(url: &str) -> Option<client::TlsStream<TcpStream>> {
         }
         other => panic!("a double fronts Valkey over TCP, not {other}"),
     };
-    let mut roots = RootCertStore::empty();
-    for cert in CertificateDer::pem_slice_iter(nest_rs_config::system_authorities()) {
-        let _ = roots.add(cert.expect("the system's store parses"));
-    }
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .expect("the provider speaks the default protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
     let name = ServerName::try_from(host).expect("the host is a server name");
     let tcp = TcpStream::connect(info.addr().to_string()).await.ok()?;
-    TlsConnector::from(Arc::new(config))
-        .connect(name, tcp)
-        .await
-        .ok()
+    system_connector().connect(name, tcp).await.ok()
 }
 
-/// The server side of a handshake presenting `issued`, and requiring a client
-/// certificate `clients_signed_by` signed when it names an authority.
-fn acceptor(clients_signed_by: Option<&[u8]>, issued: &TestCertificate) -> TlsAcceptor {
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let builder = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
-        .with_safe_default_protocol_versions()
-        .expect("the provider speaks the default protocol versions");
-    let builder = match clients_signed_by {
-        None => builder.with_no_client_auth(),
-        Some(authority) => {
-            let mut authorities = RootCertStore::empty();
-            for cert in CertificateDer::pem_slice_iter(authority) {
-                authorities
-                    .add(cert.expect("the test authority parses"))
-                    .expect("and is a trust anchor");
-            }
-            let verifier =
-                WebPkiClientVerifier::builder_with_provider(Arc::new(authorities), provider)
-                    .build()
-                    .expect("a client verifier over the test authority");
-            builder.with_client_cert_verifier(verifier)
-        }
-    };
-    let chain = CertificateDer::pem_slice_iter(issued.cert.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .expect("the certificate parses");
-    let key = PrivateKeyDer::from_pem_slice(issued.key.as_bytes()).expect("the key parses");
-    TlsAcceptor::from(Arc::new(
-        builder
-            .with_single_cert(chain, key)
-            .expect("the certificate and key correspond"),
-    ))
+/// Both ends of a double standing between `client` and the Valkey `upstream`
+/// names: the client's handshake accepted, Valkey's dialled — `None` when
+/// either side gave up.
+pub(crate) async fn bridge(
+    client: TcpStream,
+    upstream: &str,
+) -> Option<(server::TlsStream<TcpStream>, client::TlsStream<TcpStream>)> {
+    let client = accept(client).await?;
+    let server = dial(upstream).await?;
+    Some((client, server))
 }
 
 /// A proxy on `127.0.0.1` terminating TLS with the test authority's
@@ -143,11 +89,11 @@ pub(crate) struct TlsProxy {
 }
 
 impl TlsProxy {
-    /// `clients_signed_by` asks every client for a certificate that authority
-    /// issued, as a server with `tls-auth-clients yes` does.
-    pub(crate) async fn start(upstream: Option<String>, clients_signed_by: Option<&[u8]>) -> Self {
-        let right = acceptor(clients_signed_by, &DOUBLE);
-        let wrong = acceptor(clients_signed_by, &MISNAMED);
+    /// `clients` asks every client for a certificate that authority issued,
+    /// as a server with `tls-auth-clients yes` does.
+    pub(crate) async fn start(upstream: Option<String>, clients: Option<&TestAuthority>) -> Self {
+        let right = DOUBLE.acceptor(clients);
+        let wrong = MISNAMED.acceptor(clients);
         let misnamed = Arc::new(AtomicBool::new(false));
         let fronts = upstream
             .clone()

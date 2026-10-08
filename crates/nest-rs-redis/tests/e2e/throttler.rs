@@ -1,7 +1,5 @@
-//! The cross-process [`RedisThrottler`] store: an atomic Lua fixed-window
-//! against a real Redis. The one thing the in-memory unit tests cannot cover is
-//! **one budget shared across `RedisThrottler` instances** (i.e. across app
-//! replicas), enforced by a single round-trip with no check-then-act race.
+//! The cross-process [`RedisThrottler`] store against a real Redis: **one
+//! budget shared across `RedisThrottler` instances**, i.e. across app replicas.
 
 use std::time::{Duration, Instant};
 
@@ -18,9 +16,6 @@ fn bucket(subject: &str) -> String {
     format!("nestrs:throttler:buckets:{subject}")
 }
 
-/// A hit counts in the bucket named for its subject, under the rate limiter's
-/// concern and its structure level, and the window is the bucket's expiry — so
-/// a `SCAN nestrs:throttler:buckets:*` finds every live window and nothing else.
 #[tokio::test]
 async fn a_hit_counts_in_the_bucket_named_for_its_subject() {
     let limit = Throttle::new(5, Duration::from_secs(30));
@@ -50,8 +45,6 @@ async fn a_hit_counts_in_the_bucket_named_for_its_subject() {
     );
 }
 
-/// The window script counts hits up to `limit`, then denies with the real
-/// remaining TTL as `Retry-After`.
 #[tokio::test]
 async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     // A generous window so the counter can't roll over mid-test.
@@ -74,12 +67,8 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     );
 }
 
-/// A hit in a window's last millisecond, whose time to live Redis answers `0`,
-/// opens the next window, as the in-memory store does at a window's end, rather
-/// than being counted into the window that ends and denied for a whole new one.
-/// Each window is full, ending in a few milliseconds set by hand, while the hits
-/// ask for a long one: a denial longer than those milliseconds came from the
-/// ending window. Many rounds, so some hit lands in a last millisecond.
+/// Each window is full, ending in a few milliseconds set by hand: a denial longer
+/// than those came from the ending window. Many rounds, so some hit lands in a last millisecond.
 #[tokio::test]
 async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
     let limit = Throttle::new(1, Duration::from_secs(30));
@@ -115,7 +104,6 @@ async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
     }
 }
 
-/// Two distinct client keys never share a budget.
 #[tokio::test]
 async fn distinct_keys_have_independent_budgets() {
     let limit = Throttle::new(1, Duration::from_secs(30));
@@ -127,25 +115,19 @@ async fn distinct_keys_have_independent_budgets() {
         store.hit(&key_a, limit).await.allowed,
         "a: first hit allowed"
     );
-    // b is untouched, so its own budget is intact.
     assert!(
         store.hit(&key_b, limit).await.allowed,
         "b: first hit allowed"
     );
-    // a is now spent.
     assert!(
         !store.hit(&key_a, limit).await.allowed,
         "a: second hit denied — b's hit must not have spent a's budget",
     );
 }
 
-/// The point of the Redis store: the counter lives in Redis, so two separate
-/// [`RedisThrottler`] instances (as two app replicas would be) share **one**
-/// budget rather than getting `limit` each.
 #[tokio::test]
 async fn the_budget_is_shared_across_store_instances() {
     let limit = Throttle::new(2, Duration::from_secs(30));
-    // Two independent connections → two independent stores, same Redis.
     let replica_a = RedisThrottler::new(connect().await);
     let replica_b = RedisThrottler::new(connect().await);
     let key = unique_key("shared");
@@ -158,30 +140,14 @@ async fn the_budget_is_shared_across_store_instances() {
         replica_b.hit(&key, limit).await.allowed,
         "replica b: count 2"
     );
-    // The third hit — on either replica — is over the shared cap of 2.
     assert!(
         !replica_a.hit(&key, limit).await.allowed,
         "replica a: count 3 must be denied — the two replicas share one budget",
     );
 }
 
-/// The three shapes, executed: `ThrottlerModule::for_root` carries the policy
-/// and the guard, `RedisThrottlerModule` (bare) declares the Redis store over
-/// the connection `RedisModule::for_root` opens — and the store supersedes the
-/// port's in-process default wherever the three fall in `imports`.
-///
-/// Nothing booted this seam before, and a compile could not have covered it —
-/// the store is a factory output that reads `RedisConnection`, another factory
-/// output, and the guard is a factory output that reads the store. What is
-/// under test is a phase the builder runs and a type the container resolves.
-/// The discriminating assertion is the one the in-memory default cannot
-/// satisfy: **two independently booted apps share one budget**, which is the
-/// whole reason the binding exists.
-///
-/// The vendor binding is listed **first** on purpose: its store declares it
-/// runs after `RedisConnection` and the guard declares it runs after the
-/// store, so `imports` order is a readability choice — and a throttler-only
-/// app names no queue.
+/// The three shapes booted together; the vendor binding is listed **first** on
+/// purpose, since its factories declare what they run after.
 mod module {
     use std::sync::Arc;
     use std::time::Duration;
@@ -236,14 +202,11 @@ mod module {
             first.container().get::<ThrottlerGuard>().is_some(),
             "ThrottlerModule::for_root registers the guard as global infrastructure",
         );
-        // The store is Redis's — a superseded default would be the in-memory one,
-        // and the shared-budget assertion below would fail on it.
         let limit = Throttle::new(2, Duration::from_secs(30));
         let key = unique_key("for-root-shared");
 
         // A second boot is a second app instance: an in-memory store would hand
-        // it a fresh budget, and the test would pass while the module bound the
-        // wrong backend.
+        // it a fresh budget.
         let second = boot().await;
         let (a, b) = (store_of(&first), store_of(&second));
 
@@ -262,9 +225,6 @@ mod module {
     ])]
     struct KeylessThrottlerHost;
 
-    /// Redis keeps what it counts where a replica, a backup or a `SCAN` reads
-    /// it, so the binding counts under pseudonyms, and without the key every
-    /// replica shares there is none: the boot refuses, naming the variable.
     #[tokio::test]
     async fn the_redis_store_without_a_pseudonym_key_fails_the_boot() {
         let Err(refused) = App::builder()
@@ -292,10 +252,6 @@ mod module {
     ])]
     struct PatientThrottlerHost;
 
-    /// A budget at the guard's net would let the guard give up on a hit still
-    /// answering, and deny without its cause: the binding declares the net over
-    /// the connection, so the boot refuses it, naming both durations and the
-    /// variable to lower.
     #[tokio::test]
     async fn a_budget_at_the_guards_net_fails_the_boot() {
         let Err(refused) = App::builder()
@@ -317,22 +273,8 @@ mod module {
     }
 }
 
-/// A store that cannot answer denies, and says so.
-///
-/// This is the security property the whole backend exists to have: a rate
-/// limiter that fails **open** under a backend problem is an authentication
-/// bypass — every login endpoint in the app goes unlimited for the duration of
-/// the outage, and nothing in the response says anything is wrong. So the
-/// interesting assertion is not the status but the *direction* of the failure,
-/// plus the line that makes the outage visible at all, since a denied caller is
-/// indistinguishable from one that genuinely ran out of budget.
-///
-/// The error is produced with a `WRONGTYPE` — the window key made to hold a
-/// hash, so `INCR` refuses it — rather than by pointing at a dead port:
-/// `RedisConnection::connect` refuses an unreachable endpoint up front (that is
-/// its own boot error, asserted in `connection.rs`), so a store that exists at
-/// all has a connection that worked. What this covers is the branch for *any*
-/// error the store gets back, of which an outage mid-flight is the common one.
+/// The error is a `WRONGTYPE`, not a dead port: `RedisConnection::connect`
+/// refuses an unreachable endpoint up front, so a store always has a connection.
 #[tokio::test]
 async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_through() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -341,9 +283,6 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     let key = unique_key("unavailable");
 
     // Make the window key a hash, so the fixed-window script's `INCR` fails.
-    // The key is the store's own — spelled here rather than read from it, so a
-    // change to the layout shows up as this test failing instead of passing
-    // against a key nothing uses.
     let namespaced = bucket(&key);
     let mut seeding = conn.clone();
     redis::cmd("HSET")
@@ -353,10 +292,8 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
         .query_async::<()>(&mut seeding)
         .await
         .expect("seed a key the window script cannot count");
-    // With an expiry, because the window script never reaches its `PEXPIRE` on
-    // this key: a failed assertion below would otherwise leave an immortal hash
-    // in the shared Redis, and the dev container already carries one from an
-    // earlier run of this test.
+    // With an expiry: the window script never reaches its `PEXPIRE` on this key,
+    // and a failed run would leave an immortal hash in the shared Redis.
     redis::cmd("EXPIRE")
         .arg(&namespaced)
         .arg(300)
@@ -402,11 +339,8 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
 /// run, so no earlier run's denial in `ACL LOG` is read as its own.
 const CONFINED_USER: &str = "nestrs-e2e-throttler";
 
-/// The user the rate-limiting page prescribes counts a window to its limit and
-/// denies past it: Redis checks the script's own `INCR`, `PTTL` and `PEXPIRE`
-/// against the caller, not only the `EVALSHA` that carries them, and refuses
-/// none. The page used to say only that the ACL "has to allow both", and a user
-/// allowed exactly those two failed every hit, closed.
+/// Redis checks a script's own `INCR`, `PTTL` and `PEXPIRE` against the caller,
+/// not only the `EVALSHA` that carries them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_created_as_the_rate_limiting_page_says_counts_and_denies() {
     let user = crate::acl_user(CONFINED_USER);

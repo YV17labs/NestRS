@@ -260,10 +260,8 @@ async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
     let proxy = crate::DarkeningProxy::start().await;
     let budget = Duration::from_secs(1);
     let mut conn = RedisConnection::connect(&RedisConfig {
-        url: proxy.url(),
         connect_timeout: budget,
-        tls: crate::harness::tls::trusted(),
-        ..RedisConfig::default()
+        ..crate::through(proxy.url())
     })
     .await
     .expect("connect through the proxy");

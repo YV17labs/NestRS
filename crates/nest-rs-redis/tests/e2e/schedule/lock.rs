@@ -662,10 +662,9 @@ impl SeveringProxy {
                 let upstream = upstream.clone();
                 let mut cut = accepting.clone();
                 tokio::spawn(async move {
-                    let Some(mut client) = crate::harness::tls::accept(client).await else {
-                        return;
-                    };
-                    let Some(mut server) = crate::harness::tls::dial(&upstream).await else {
+                    let Some((mut client, mut server)) =
+                        crate::harness::tls::bridge(client, &upstream).await
+                    else {
                         return;
                     };
                     tokio::select! {
@@ -696,9 +695,8 @@ impl SeveringProxy {
 /// one-second budget — so a claim Redis cannot answer is skipped within a second.
 fn proxied_config(url: String) -> RedisConfig {
     RedisConfig {
-        url,
         connect_timeout: Duration::from_secs(1),
-        ..crate::redis_config()
+        ..crate::through(url)
     }
 }
 
@@ -822,10 +820,9 @@ impl StallingProxy {
                 let upstream = upstream.clone();
                 let mut resumed = watching.clone();
                 tokio::spawn(async move {
-                    let Some(client) = crate::harness::tls::accept(client).await else {
-                        return;
-                    };
-                    let Some(server) = crate::harness::tls::dial(&upstream).await else {
+                    let Some((client, server)) =
+                        crate::harness::tls::bridge(client, &upstream).await
+                    else {
                         return;
                     };
                     let (mut from_client, mut to_client) = tokio::io::split(client);

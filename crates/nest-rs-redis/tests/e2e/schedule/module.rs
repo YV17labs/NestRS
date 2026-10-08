@@ -15,9 +15,6 @@ use crate::redis_config;
 ])]
 struct PatientLockModule;
 
-/// A budget at the scheduler's net would let the scheduler abandon a claim
-/// still answering, and skip its occurrence without the cause: the binding
-/// refuses it at boot, naming both durations and the variable to lower.
 #[tokio::test]
 async fn a_budget_at_the_schedulers_net_fails_the_boot() {
     let Err(refused) = App::builder().module::<PatientLockModule>().build().await else {

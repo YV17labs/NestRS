@@ -1,33 +1,12 @@
 //! [`RedisConnection`] — the one connection every binding in this crate shares
-//! to reach Redis. Opened once by [`RedisModule`](crate::RedisModule) in the
-//! collect phase; the queue producer, the worker and the rate-limit store each
-//! read it from the container rather than opening a socket of their own.
+//! to reach Redis, opened once by [`RedisModule`](crate::RedisModule).
 //!
-//! **It is a connection, not a factory of them.** It implements
-//! [`ConnectionLike`], so the queue and the rate limiter run their scripts on a
-//! clone, and a caller's own command runs on one too. Underneath is one `redis` [`ConnectionManager`]: one multiplexed
-//! socket, reopened behind its callers when Redis drops it.
-//!
-//! **Every command a caller waits on answers or fails within the connect
-//! budget**, end to end — the wait for a reopened connection included, which a
-//! reply timeout inside the client would never cover. A failure Redis reports —
-//! a dropped connection, a refusal — arrives when it happens; the budget running
-//! out arrives as a timeout (`redis::RedisError::is_timeout`). Without the bound
-//! an outage held every caller: the rate limiter's request, a push, a cancel.
-//!
-//! **A blocking command gets a connection of its own**
-//! ([`RedisConnection::dedicated`]), opened from the same client: on the shared
-//! socket it would stall every other caller for as long as it blocks. The
-//! worker's read of a queue is one, bounded by its own wait plus the budget.
-//!
-//! **What the URL and [`RedisTls`](crate::RedisTls) say about TLS holds for every
-//! connection the client opens**, the ones it reopens behind its callers
-//! included: both are read into the one client the connection is opened from.
-//!
-//! It sits at the crate root because three binding folders reach it: filed
-//! under whichever asked first, it was named, configured and module-gated for
-//! the queue, so enabling the throttler obliged an app with no queue to import
-//! the queue's module and set the queue's URL.
+//! Underneath is one `redis` [`ConnectionManager`]: one multiplexed socket,
+//! reopened behind its callers when Redis drops it. **Every command a caller
+//! waits on answers or fails within the connect budget**, the wait for a
+//! reopened connection included, which a reply timeout inside the client would
+//! never cover. A blocking command gets a connection of its own
+//! ([`RedisConnection::dedicated`]).
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +28,7 @@ use crate::error::RedisError;
 use crate::{RedisConfig, tls};
 
 /// The sentence every binding's boot error appends when the connection is
-/// missing — one wording, three sites, so the remedy cannot drift.
+/// missing.
 pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered — import \
      RedisModule::for_root(None), which opens the one Redis connection every Redis binding shares";
 
@@ -61,8 +40,7 @@ const SCRIPT_LOADS: u32 = 3;
 /// The app's shared Redis connection, and a connection in its own right: it
 /// implements [`ConnectionLike`], so a clone runs any `redis` command, script or
 /// pipeline — pass `&mut` the clone to `query_async` or `invoke_async`. A clone
-/// shares the one underlying socket, so every binding and every caller reaches
-/// Redis through it, never a second one.
+/// shares the one underlying socket.
 ///
 /// A command answers or fails within the connect budget; when the budget is
 /// what ends it, the error is a timeout (`redis::RedisError::is_timeout`). A
@@ -89,12 +67,8 @@ pub struct RedisConnection {
 /// What every clone of a connection shares: the manager its commands go
 /// through, and what opening it again needs.
 ///
-/// **A connection answered `READONLY` is opened again.** A failover demotes the
-/// primary under its clients: the socket stays open, the name the URL dials now
-/// reaches the new primary, and `redis` reopens a connection only when its
-/// socket fails — so every write would fail until the process restarted. The
-/// first `READONLY` opens a manager afresh, once at a time, and every clone
-/// takes it for its next command.
+/// **A connection answered `READONLY` is opened again**: a failover demotes the
+/// primary under an open socket, and `redis` reopens only a socket that fails.
 struct Kept {
     /// The manager, and how many times it was opened again: a read-only answer
     /// reopens only the manager that gave it, never its successor.
@@ -202,19 +176,9 @@ impl Kept {
 /// Whether the connection has been refused by TLS since it last answered, and
 /// how to learn why.
 ///
-/// The client reopens the connection behind its callers and says nothing when
-/// the handshake fails — a renewed certificate Redis no longer presents
-/// correctly, say — so each caller's command just fails, and nothing names the
-/// cause. And what reaches those callers is the refusal's *text*: `redis` hands
-/// every caller waiting on a reopened connection a copy of the error it met, and
-/// copies an io error by its message, so rustls's reason is gone by the time a
-/// command fails — and only once its retries are spent, seconds after the drop,
-/// each caller cut at its budget meanwhile. The first command failing on the
-/// socket — the drop itself, a budget waited out on the reopening, the shape a
-/// refused handshake leaves — therefore starts one handshake of the
-/// connection's own, whose error still carries rustls's reason, and a refusal it
-/// meets is reported at `warn` with what to change — once, until a command
-/// answers again.
+/// `redis` reopens silently and copies an io error by its message, so rustls's
+/// reason never reaches a caller: the first command failing on the socket starts
+/// one handshake of the connection's own, whose refusal is reported at `warn`.
 struct TlsRefusals {
     /// The client the connection is opened from, so the diagnosing handshake
     /// is the one the client keeps failing: same address, same material.
@@ -252,15 +216,8 @@ impl TlsRefusals {
     }
 
     /// One handshake per budget at most, and none while the refusal stands
-    /// reported: a Redis that is down fails every command on the socket, and
-    /// each would otherwise send it one more connection. It runs beside the
-    /// command that asked for it, which has failed already and must not wait on
-    /// a second handshake past its budget.
-    ///
-    /// It carries no unit of work's trace, deliberately: the refusal is the
-    /// connection's, met by every holder alike, and the command that happened to
-    /// meet it first — a request, a job, a worker's read — is not the
-    /// one it belongs to, any more than the boot's connection lines are.
+    /// reported: a Redis that is down fails every command on the socket. It
+    /// carries no unit of work's trace: the refusal is the connection's.
     fn diagnose(self: &Arc<Self>) {
         if self.reported.load(Ordering::Relaxed) || self.diagnosing.swap(true, Ordering::Relaxed) {
             return;
@@ -292,9 +249,8 @@ impl TlsRefusals {
 /// always clamped to what is left of the budget.
 const FIRST_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
-/// Ceiling for the doubling backoff — a whole boot budget must still fit
-/// several attempts, each of which gets its own `warn`. The connection's own
-/// reconnect backoff takes the same ceiling.
+/// Ceiling for the doubling backoff, so a boot budget fits several attempts;
+/// the connection's reconnect backoff takes it too.
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
 /// The shortest the socket waits before it probes, or before it gives up on
@@ -302,24 +258,16 @@ const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 const LIVENESS_FLOOR: Duration = Duration::from_secs(1);
 
 /// How much each reconnect attempt's wait grows over the last: the boot's
-/// doubling, so a Redis back after a restart is reached within the boot's
-/// ceiling rather than a growing wait.
+/// doubling.
 const RECONNECT_FACTOR: f32 = 2.0;
 
 impl RedisConnection {
     /// Open the connection to the Redis `config` names and prove it answers,
     /// giving up after [`connect_timeout`](RedisConfig::connect_timeout).
     ///
-    /// Each attempt opens a connection and sends it a `PING`: without the proof
-    /// a Redis that accepts the dial and answers nothing boots cleanly and fails
-    /// on the first job or the first rate-limited request — and an endpoint that
-    /// never answers parks the process with an empty log, never healthy and
-    /// never crashed. Every attempt is announced on `nest_rs::redis`, and the
-    /// budget converts the hang into the boot error `/queue/wiring/` promises.
-    ///
-    /// The same budget bounds every command a caller waits on afterwards, so a
-    /// Redis that stops answering fails its caller within it rather than
-    /// holding the caller.
+    /// Each attempt opens a connection and sends it a `PING`, announced on
+    /// `nest_rs::redis`. The same budget bounds every command a caller waits on
+    /// afterwards.
     ///
     /// A `rediss://` URL encrypts every connection and verifies Redis's
     /// certificate for the URL's host — against the system's authorities, or
@@ -342,11 +290,8 @@ impl RedisConnection {
     /// answering with a code this client does not know — as is a refused or
     /// reset TCP connection. A budget spent on answers fails naming the last
     /// one, as a server that is not ready rather than one that cannot be
-    /// reached.
-    ///
-    /// A handshake nobody answers is not among them, because it cannot be told
-    /// apart from a network that drops it: a `rediss://` URL pointed at a
-    /// plaintext Redis runs out the budget as an unreachable one does.
+    /// reached. A `rediss://` URL pointed at a plaintext Redis runs out the
+    /// budget as an unreachable one does.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
         let budget = CONNECT_TIMEOUT
             .check(
@@ -398,8 +343,7 @@ impl RedisConnection {
                         budget,
                     });
                 }
-                // The budget elapsed mid-attempt: one final warn so a hung DNS
-                // or a black-holed port is as legible as a refused connection.
+                // One final warn, so a hung DNS or a black-holed port is said.
                 Err(_elapsed) => {
                     tracing::warn!(
                         target: crate::TARGET,
@@ -646,13 +590,8 @@ async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redi
 /// settings**: credentials refused (`WRONGPASS`, `NOAUTH`, or the client's own
 /// authentication failure), an ACL denying the proof (`NOPERM`), a protocol it
 /// does not speak — and a refused `SELECT`, which [`database_refused`] reads
-/// first. Every other answer may clear — `LOADING`, `BUSY` from a script past
-/// its threshold, `MASTERDOWN` and `TRYAGAIN` during a failover — and so does a
-/// code this client does not know. `redis` marks every unknown code as not worth
-/// retrying, which made a Redis running one long script fail the boot in
-/// milliseconds with a sentence pointing at the URL; the allow-list is the other
-/// way round on purpose, so a code a later server invents is retried within the
-/// budget and named as the failure's source, never mistaken for a refusal.
+/// first. Every other code, one this client does not know included, may clear:
+/// `redis` marks an unknown code `NoRetry`, so the allow-list is ours.
 ///
 /// **What is not an answer** — the client refusing before or around the dial, a
 /// socket the process may not open — keeps `redis`'s own verdict.
@@ -677,15 +616,9 @@ const SELECT_REFUSED: &str = "Redis server refused to switch database";
 /// Whether Redis refused the `SELECT` of the URL's database for a reason every
 /// attempt would repeat.
 ///
-/// The client drops the server's code from a refused `SELECT`, so the code
-/// allow-list [`refused`] reads cannot see it: an ACL user without `+select`
-/// (`NOPERM`), a server in cluster mode, an index out of range — all `ERR`
-/// here — were retried for the whole budget and reported as a Redis that was
-/// "not ready", told to widen the budget "if it clears on its own". It never
-/// does. So it is read the other way round: `SELECT` runs while a server loads
-/// its dataset and on a stale replica (its command flags admit both), and the
-/// one transient answer it can meet is a server busy running a script or a
-/// module command — retried; anything else repeats, and fails at once.
+/// The client drops the server's code from a refused `SELECT`, so [`refused`]
+/// cannot see it; the one transient answer `SELECT` can meet is a server busy
+/// running a script or a module command, and anything else fails at once.
 fn database_refused(error: &redis::RedisError) -> bool {
     error.kind() == redis::ErrorKind::Server(redis::ServerErrorKind::ResponseError)
         && error.to_string().starts_with(SELECT_REFUSED)
@@ -717,10 +650,8 @@ fn client(
             endpoint: endpoint.to_owned(),
         });
     }
-    // Every connection the client opens — the proof, the kept one, one it
-    // reopens, a blocking read's — learns through its socket that Redis is gone,
-    // and sends no `CLIENT SETINFO`, which an ACL user confined to a binding's
-    // commands is refused.
+    // No `CLIENT SETINFO`, which an ACL user confined to a binding's commands is
+    // refused.
     let redis = info.redis_settings().clone().set_skip_set_lib_name();
     let info = info
         .set_tcp_settings(socket(budget))
@@ -762,21 +693,10 @@ fn client(
 /// One boot attempt: a connection of its own, proved with a `PING`, then the
 /// connection the app keeps.
 ///
-/// The proof runs on a connection opened once, with no retry, because the
-/// connection kept is opened by a client that retries on its own and silently —
-/// refused credentials included — which would spend the budget on an answer
-/// that cannot change and then report it as the network. The kept connection is
-/// opened only once the proof has answered, so its own retries are left the one
-/// case they serve: a Redis gone between the two.
-///
-/// **The proof is closed before the kept connection opens.** Held across it,
-/// every attempt needed two of the server's client slots, so a Redis with one
-/// left — `maxclients` nearly reached by a leak elsewhere, a shared managed
-/// instance — answered the proof, refused the kept connection, and the boot
-/// spent its whole budget in the client's silent retries before blaming the
-/// network. The slot is released as the closed socket reaches the server, so
-/// the kept connection may still meet it taken once: its own `PING` then fails
-/// the attempt, and the next lands inside the budget.
+/// The proof runs on a connection opened once, with no retry: the kept one's
+/// client retries silently, refused credentials included. The proof is closed
+/// before the kept connection opens, so an attempt needs one of the server's
+/// `maxclients` slots, not two.
 async fn prove(
     client: &redis::Client,
     budget: Duration,
@@ -786,11 +706,9 @@ async fn prove(
         .await?;
     redis::cmd("PING").query_async::<()>(&mut proof).await?;
     drop(proof);
-    // The kept connection is proved too: one that sends nothing on opening — no
-    // `AUTH`, no `SELECT` — meets a refusal Redis writes before it closes, a
-    // full `maxclients`, only at its first command. The manager reopens it on
-    // its own, so the proof is asked again of the same manager, within the
-    // attempt: a manager dropped mid-reopen would still take a slot.
+    // The kept connection is proved too: one sending nothing on opening meets a
+    // full `maxclients` only at its first command. Same manager: one dropped
+    // mid-reopen would still take a slot.
     let mut kept =
         ConnectionManager::new_with_config(client.clone(), manager_config(budget)).await?;
     let mut wait = FIRST_RETRY_BACKOFF;
@@ -815,11 +733,8 @@ fn connection_config(budget: Duration) -> AsyncConnectionConfig {
 }
 
 /// How the kept connection reopens after Redis drops it: each attempt bounded
-/// by the budget, as the boot's are, and the backoff between attempts doubling
-/// to the boot's ceiling rather than `redis`'s hundredfold. The reply timeout
-/// stays off, because [`RedisConnection`] bounds every command itself — the
-/// wait for a reopened connection included, which that timeout would miss —
-/// and a blocking command's wait is its own.
+/// by the budget, the backoff doubling to the boot's ceiling. The reply timeout
+/// stays off: [`RedisConnection`] bounds every command itself.
 fn manager_config(budget: Duration) -> ConnectionManagerConfig {
     ConnectionManagerConfig::new()
         .set_connection_timeout(Some(budget))
@@ -837,22 +752,14 @@ fn socket(budget: Duration) -> TcpSettings {
     liveness(budget).set_nodelay(true)
 }
 
-/// How the socket learns that Redis is gone rather than slow, so a connection
-/// the client holds open is reopened when it is: keepalive probes once the socket has been idle for the budget, and on
-/// Linux a `TCP_USER_TIMEOUT` of the budget, which drops the socket when what
-/// was sent has gone unacknowledged that long — a network that swallows
-/// packets, a host that vanished. A Redis that is only slow — paused, forking,
-/// busy with another client's script — still acknowledges every byte, so
-/// neither fires, and the answer is received when it comes.
+/// How the socket learns that Redis is gone rather than slow: keepalive probes
+/// once idle for the budget, and on Linux a `TCP_USER_TIMEOUT` of the budget. A
+/// Redis that is only slow still acknowledges every byte, so neither fires.
 ///
-/// The kernel reads the idle time in whole seconds, and refuses zero — which a
-/// budget under a second would round to, failing every dial — so both are a
-/// second at the least: under that, a retransmitted packet would drop a socket
-/// whose answers a command is waiting for. And it refuses an idle time past
+/// Both are a second at the least: the kernel counts the idle time in whole
+/// seconds and refuses zero. It refuses an idle time past
 /// [`KEEPALIVE_IDLE_LIMIT`] and a user timeout past [`USER_TIMEOUT_LIMIT`] with
-/// `EINVAL`, on every dial, so the budget's ceiling sits under both — asserted
-/// below at compile time rather than clamped here, since a budget the boot
-/// accepts can never reach either.
+/// `EINVAL`, so the budget's ceiling sits under both, asserted below.
 fn liveness(budget: Duration) -> TcpSettings {
     let silence = budget.max(LIVENESS_FLOOR);
     let settings = TcpSettings::default().set_keepalive(TcpKeepalive::new().with_time(silence));
@@ -881,11 +788,9 @@ const _: () = {
 };
 
 /// The endpoint the connect diagnostics name, in logs and in the boot error:
-/// the address the client parsed from the URL — `host:port`, or a socket path —
-/// and never the URL, which routinely embeds a password in its userinfo or its
-/// query. The client's own parser decides, so what is shown is what is dialled;
-/// a URL it cannot parse is named by its scheme alone, and by nothing at all
-/// when what precedes `://` is not a scheme and may be a credential.
+/// the address the client parsed from the URL, never the URL, which may embed a
+/// password. A URL it cannot parse is named by its scheme alone, and by nothing
+/// at all when what precedes `://` is not a scheme and may be a credential.
 fn address(url: &str) -> String {
     match url.into_connection_info() {
         Ok(info) => info.addr().to_string(),
@@ -907,9 +812,6 @@ fn is_scheme(candidate: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-
     use super::*;
     use crate::RedisTlsIdentity;
 
@@ -940,20 +842,7 @@ mod tests {
     /// nothing a client trusts by default — and
     /// answering nothing past the handshake.
     async fn tls_listener() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-        let chain = CertificateDer::pem_slice_iter(SERVER.cert.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .expect("the test certificate parses");
-        let key =
-            PrivateKeyDer::from_pem_slice(SERVER.key.as_bytes()).expect("the test key parses");
-        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .expect("the provider speaks the default protocol versions")
-        .with_no_client_auth()
-        .with_single_cert(chain, key)
-        .expect("the test certificate and key correspond");
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let acceptor = SERVER.acceptor(None);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind a TLS listener");
@@ -1016,9 +905,6 @@ mod tests {
         )))
     }
 
-    /// A TLS refusal is reported once, stays reported while commands keep
-    /// failing — whatever else fails meanwhile — and is reported again only
-    /// after a command answered in between.
     #[tokio::test]
     async fn a_tls_refusal_is_reported_once_until_a_command_answers_again() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -1052,10 +938,6 @@ mod tests {
         );
     }
 
-    /// `redis` hands a caller only the text of a refused reopening, so the
-    /// refusal is learnt from a handshake of the record's own — which still
-    /// carries rustls's reason, so the line says what to change rather than
-    /// quoting a message.
     #[tokio::test]
     async fn a_refusal_known_only_by_its_text_is_learnt_from_a_handshake_of_its_own() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -1080,10 +962,6 @@ mod tests {
         );
     }
 
-    /// An answer is Redis's, and sends no handshake; a failure on the socket —
-    /// the drop a refused reopening starts with, a budget waited out on the
-    /// reopening — sends one, one per budget at most, and a peer that refuses
-    /// the connection rather than its certificate is reported as nothing.
     #[tokio::test]
     async fn a_failure_on_the_socket_sends_one_handshake_per_budget_and_an_answer_none() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -1135,12 +1013,6 @@ mod tests {
         error.into()
     }
 
-    /// Only an answer naming the deployment's own settings is a refusal; every
-    /// other answer — the transient ones `redis` knows, and every code it does
-    /// not — is retried within the budget. Every retry costs the boot a backoff
-    /// and the operator a line telling them to widen the budget, so what repeats
-    /// must not get one; but `BUSY` failed the boot in milliseconds, sending the
-    /// operator to the URL, so what may clear must.
     #[test]
     fn only_an_answer_naming_the_deployments_settings_refuses_the_boot() {
         for refusing in [
@@ -1195,11 +1067,6 @@ mod tests {
         ))
     }
 
-    /// config-1r2: the client drops a refused `SELECT`'s code, so an ACL user
-    /// without `+select` and a server in cluster mode read as an unknown `ERR`,
-    /// were retried for the whole budget and reported as "not ready … widen the
-    /// budget if it clears on its own". Every `SELECT` refusal repeats but a
-    /// server busy running a script, so every other one fails at once.
     #[test]
     fn a_refused_select_repeats_unless_the_server_is_busy() {
         for repeating in [
@@ -1229,9 +1096,6 @@ mod tests {
         );
     }
 
-    /// A zero budget handed to `connect` directly — no config read held it to
-    /// the variable's floor — is refused before anything is dialled, naming the
-    /// field, instead of giving up after no attempt and blaming the URL.
     #[tokio::test]
     async fn a_zero_budget_built_in_code_is_refused_before_anything_is_dialled() {
         let Err(error) =
@@ -1249,8 +1113,6 @@ mod tests {
         );
     }
 
-    /// Skipping certificate verification is refused before anything is
-    /// dialled, naming the setting that trusts a private authority instead.
     #[tokio::test]
     async fn a_url_asking_to_skip_certificate_verification_is_refused() {
         let Err(error) = RedisConnection::connect(&config(
@@ -1270,9 +1132,6 @@ mod tests {
         );
     }
 
-    /// A URL asking for RESP3 is refused before anything is dialled: every
-    /// binding reads Redis's RESP2 replies, and over RESP3 the worker's read
-    /// failed on every receive.
     #[tokio::test]
     async fn a_url_asking_for_resp3_is_refused_at_once() {
         let started = Instant::now();
@@ -1297,9 +1156,6 @@ mod tests {
         );
     }
 
-    /// A `rediss://` host no certificate can name is the URL's fault on every
-    /// attempt, so it fails at once as one — not as Redis refusing a connection
-    /// nothing opened.
     #[tokio::test]
     async fn a_tls_host_no_certificate_can_name_is_an_invalid_url() {
         let started = Instant::now();
@@ -1316,8 +1172,6 @@ mod tests {
         );
     }
 
-    /// TLS material beside a URL that would not use it is refused, over TCP and
-    /// over a socket alike: whoever configured it expects it to be used.
     #[tokio::test]
     async fn tls_material_beside_a_plaintext_url_is_refused() {
         for url in [
@@ -1336,9 +1190,6 @@ mod tests {
         }
     }
 
-    /// Material no handshake could use is refused before anything is dialled —
-    /// every connection would otherwise fail on it — and the cause names the
-    /// variable holding it.
     #[tokio::test]
     async fn tls_material_no_handshake_could_use_fails_before_anything_is_dialled() {
         let mut trusting_nothing = config("rediss://127.0.0.1:9/", Duration::from_secs(5));
@@ -1368,9 +1219,6 @@ mod tests {
         }
     }
 
-    /// A certificate the client does not accept fails the boot at once, with
-    /// the setting that fixes it: the same certificate is refused on every
-    /// attempt, so retrying it would only spend the budget.
     #[tokio::test]
     async fn a_certificate_the_client_does_not_accept_fails_the_boot_at_once() {
         let (addr, serving) = tls_listener().await;
@@ -1398,10 +1246,6 @@ mod tests {
         );
     }
 
-    /// The endpoint is what the client dials. Every shape that once reached a
-    /// boot error or a `warn` with its password — a password holding `/` or
-    /// `?`, a socket's `?pass=`, a URL with no `//`, a URL with no scheme at
-    /// all — shows none, whether the client parses it or not.
     #[test]
     fn the_endpoint_is_the_address_the_client_dials_and_never_a_credential() {
         for (url, shown) in [
@@ -1435,11 +1279,6 @@ mod tests {
         }
     }
 
-    /// config-6r2: a budget past the kernel's keepalive limit passed every check
-    /// and then failed every dial with `EINVAL`, warning "redis unreachable"
-    /// against a Redis that answered, for the whole budget. Past the ceiling it
-    /// is refused before anything is dialled, from code and from the variable,
-    /// naming the variable — the top of `u64` included, which no clock holds.
     #[tokio::test]
     async fn a_budget_past_the_ceiling_is_refused_before_any_dial() {
         for budget in [
@@ -1476,10 +1315,6 @@ mod tests {
         );
     }
 
-    /// C6: an unreachable backend used to park the process forever with zero
-    /// output. The budget must convert that into a bounded, named boot error —
-    /// and every attempt inside it must say so, with the credentials redacted
-    /// before they reach the log.
     #[tokio::test]
     async fn a_refused_endpoint_announces_every_attempt_and_fails_naming_it() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -1546,9 +1381,6 @@ mod tests {
         }
     }
 
-    /// A URL the client cannot parse fails the same way on every attempt, so
-    /// the boot refuses it at once — naming the endpoint, without the password —
-    /// instead of retrying for the whole budget.
     #[tokio::test]
     async fn a_rejected_url_fails_at_once_with_the_credentials_redacted() {
         let started = Instant::now();
@@ -1598,9 +1430,6 @@ mod tests {
         (addr, silent)
     }
 
-    /// The other branch: the budget elapses mid-attempt, so a hung DNS or a
-    /// black-holed port is as legible as a refused connection. Without it the
-    /// process reports nothing at all for the whole budget and then fails.
     #[tokio::test]
     async fn a_budget_that_expires_mid_attempt_is_its_own_line() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -1631,10 +1460,6 @@ mod tests {
         );
     }
 
-    /// A budget under a second still opens a socket: the keepalive's idle time,
-    /// which the kernel counts in whole seconds and refuses at zero, is a
-    /// second at the least — at zero every dial failed and the boot ran out its
-    /// budget retrying it — and so is the time the socket gives what it sent.
     #[test]
     fn the_sockets_liveness_is_a_whole_second_at_the_least() {
         for (budget, shown) in [
@@ -1655,8 +1480,6 @@ mod tests {
         }
     }
 
-    /// A command leaves the socket when it is written, never held behind the
-    /// previous one's acknowledgement — and the socket keeps its liveness.
     #[test]
     fn every_socket_sends_a_command_when_it_is_written() {
         let settings = socket(Duration::from_secs(10));
@@ -1664,8 +1487,6 @@ mod tests {
         assert!(settings.keepalive().is_some(), "{settings:?}");
     }
 
-    /// A command that never answers is failed at the budget, as a timeout the
-    /// caller can tell apart from a refusal, naming the knob that sets it.
     #[tokio::test]
     async fn a_command_that_never_answers_fails_at_the_budget_as_a_timeout() {
         let budget = Duration::from_millis(150);

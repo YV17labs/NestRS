@@ -3175,7 +3175,6 @@ dependencies = [
  "rustls",
  "thiserror 2.0.20",
  "tokio",
- "tokio-rustls",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3205,6 +3204,7 @@ dependencies = [
  "nest-rs-ws",
  "poem",
  "rcgen",
+ "rustls",
  "schemars",
  "sea-orm",
  "sea-orm-migration",
@@ -3213,6 +3213,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",

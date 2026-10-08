@@ -1,7 +1,5 @@
-//! `RedisQueueModule` binds the **portable** names: `/queue/producing-jobs/`
-//! tells a feature to inject `Arc<dyn JobProducer>`, and the port's worker runs
-//! the `BoundConsumer` — both from the one connection `RedisModule::for_root`
-//! opens, whether the binding is a bare import or a `for_root`.
+//! `RedisQueueModule` binds the **portable** names — `Arc<dyn JobProducer>` and
+//! the `BoundConsumer` — over the one connection, bare import or `for_root`.
 
 use std::sync::Arc;
 
@@ -55,8 +53,6 @@ async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_
 ])]
 struct PinnedAndBareModule;
 
-/// A bare import and a `for_root` of the binding bind one producer and one
-/// consumer — the pin's config, never a contest between two bindings.
 #[tokio::test]
 async fn a_bare_import_beside_a_for_root_binds_once_with_the_pinned_config() {
     let app = App::builder()
@@ -83,12 +79,6 @@ async fn a_bare_import_beside_a_for_root_binds_once_with_the_pinned_config() {
 ])]
 struct PatientProducerModule;
 
-/// A budget at the queue port's net would let the port give up on a push still
-/// answering, and fail it without its cause: the binding declares the net over
-/// the connection, so the boot refuses it — a producer-only app included —
-/// naming both durations and the variable. Refused once the connection opens,
-/// before the consumer's factory refuses the default lease that budget leaves
-/// no renewal room in, whose remedy would only lead here.
 #[tokio::test]
 async fn a_budget_at_the_queue_ports_net_fails_the_boot() {
     let Err(refused) = App::builder()
@@ -119,9 +109,6 @@ async fn a_budget_at_the_queue_ports_net_fails_the_boot() {
 ])]
 struct UnrenewableLeaseModule;
 
-/// A renewal is sent a third into the lease and may wait out the budget, so a
-/// lease of no more than one and a half budgets can lapse while Redis still
-/// answers: the binding refuses it at boot, naming both variables.
 #[tokio::test]
 async fn a_lease_a_renewal_cannot_fit_in_fails_the_boot() {
     let Err(refused) = App::builder()
@@ -142,9 +129,6 @@ async fn a_lease_a_renewal_cannot_fit_in_fails_the_boot() {
 #[module(imports = [RedisQueueModule])]
 struct BareBindingModule;
 
-/// A connection seeded rather than opened by `RedisModule` — the path a test
-/// takes — is held under the binding's net all the same, before any factory
-/// runs.
 #[tokio::test]
 async fn a_seeded_connection_past_the_queue_ports_net_fails_the_boot() {
     let patient = nest_rs_redis::RedisConnection::connect(&nest_rs_redis::RedisConfig {

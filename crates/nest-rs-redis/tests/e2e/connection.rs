@@ -80,7 +80,7 @@ async fn past_every_database() -> u8 {
 async fn a_database_index_redis_does_not_have_fails_the_boot_at_once() {
     let count = past_every_database().await;
     let error = database_refused_at_once(
-        crate::redis_url_on(count),
+        config(crate::redis_url_on(count)),
         i64::from(count),
         "a database index out of range",
     )
@@ -125,7 +125,7 @@ async fn an_acl_denying_select_fails_the_boot_at_once_naming_the_index() {
     let url = crate::url_as(&crate::redis_url_on(index), &user, SECRET);
     let outcome = tokio::time::timeout(
         AT_ONCE * 2,
-        database_refused_at_once(url, i64::from(index), "an ACL user without +select"),
+        database_refused_at_once(config(url), i64::from(index), "an ACL user without +select"),
     )
     .await;
     redis::cmd("ACL")
@@ -217,10 +217,8 @@ async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
         });
         let started = Instant::now();
         let outcome = RedisConnection::connect(&RedisConfig {
-            url: proxy.url(),
             connect_timeout: Duration::from_secs(10),
-            tls: crate::harness::tls::trusted(),
-            ..RedisConfig::default()
+            ..crate::through(proxy.url())
         })
         .await;
         let took = started.elapsed();
@@ -251,12 +249,10 @@ async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
         }
     });
     let started = Instant::now();
+    // Any index but 0 makes the client send a `SELECT`.
     let outcome = RedisConnection::connect(&RedisConfig {
-        // Any index but 0 makes the client send a `SELECT`.
-        url: crate::url_on(&proxy.url(), crate::DB_SELECT_RETRIED),
         connect_timeout: Duration::from_secs(10),
-        tls: crate::harness::tls::trusted(),
-        ..RedisConfig::default()
+        ..crate::through(crate::url_on(&proxy.url(), crate::DB_SELECT_RETRIED))
     })
     .await;
     let took = started.elapsed();
@@ -285,7 +281,6 @@ async fn the_ceiling_budget_connects_and_serves() {
         RedisConnection::connect(&RedisConfig {
             url: crate::redis_url(),
             connect_timeout: Duration::from_secs(60 * 60),
-            tls: crate::harness::tls::trusted(),
             ..RedisConfig::default()
         }),
     )
@@ -305,10 +300,8 @@ async fn the_ceiling_budget_connects_and_serves() {
 async fn a_redis_with_one_client_slot_left_boots() {
     let proxy = ScriptedRedis::start(Some(crate::redis_url()), Some(1)).await;
     let mut conn = RedisConnection::connect(&RedisConfig {
-        url: proxy.url(),
         connect_timeout: Duration::from_secs(5),
-        tls: crate::harness::tls::trusted(),
-        ..RedisConfig::default()
+        ..crate::through(proxy.url())
     })
     .await
     .unwrap_or_else(|error| panic!("one free slot is enough to boot: {error:#}"));
@@ -332,7 +325,6 @@ async fn a_command_redis_holds_fails_at_the_budget_and_the_connection_outlives_i
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: crate::redis_url(),
         connect_timeout: budget,
-        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await
@@ -398,10 +390,8 @@ async fn a_command_waiting_on_a_reconnection_that_never_answers_times_out_within
     let proxy = crate::DarkeningProxy::start().await;
     let budget = Duration::from_millis(500);
     let mut conn = RedisConnection::connect(&RedisConfig {
-        url: proxy.url(),
         connect_timeout: budget,
-        tls: crate::harness::tls::trusted(),
-        ..RedisConfig::default()
+        ..crate::through(proxy.url())
     })
     .await
     .expect("connect through the proxy");
@@ -482,7 +472,6 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     let url = crate::redis_url_on(crate::DB_CONNECTION_DROP);
     let conn = RedisConnection::connect(&RedisConfig {
         url: url.clone(),
-        tls: crate::harness::tls::trusted(),
         ..RedisConfig::default()
     })
     .await

@@ -9,13 +9,13 @@
 //! trace context that crosses the producer/consumer boundary, and [`schedule`]
 //! for the occurrence lock a job firing once across replicas claims through.
 //!
-//! Valkey is reached over TLS alone: the URL comes from `<PREFIX>_REDIS__URL`,
-//! `rediss://redis:6379` — the dev container's — when unset, and the authority
-//! its certificate chains to from `<PREFIX>_REDIS__TLS_CA_CERT_FILE`, which the
-//! dev container and CI set. A double the suite puts in front of it presents a
-//! certificate of the test authority's, which every connection trusts too
-//! (`harness::tls`). This file holds the suite's shared fixtures and nothing
-//! else.
+//! Valkey is reached over TLS alone, at `<PREFIX>_REDIS__URL` or the dev
+//! container's `rediss://redis:6379`, its certificate verified as the framework
+//! verifies it by default — against the system's authorities, where the dev
+//! container and CI install the services'. A double the suite puts in front of
+//! it presents a certificate of the test authority's, which only a connection
+//! to the double trusts (`harness::tls`). This file holds the suite's shared
+//! fixtures and nothing else.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -63,23 +63,31 @@ fn redis_url() -> String {
 
 /// Pinned rather than read from the env: the framework workspace ships no
 /// `.env`, so `for_root(None)` would resolve to the localhost default and a
-/// suite would fail on connect instead of measuring anything. It trusts the
-/// development services' authority and the test authority alike.
+/// suite would fail on connect instead of measuring anything.
 fn redis_config() -> RedisConfig {
     RedisConfig {
         url: redis_url(),
         connect_timeout: BUDGET,
-        tls: harness::tls::trusted(),
         ..Default::default()
     }
 }
 
-/// A bare `redis` client of `url`, trusting what the suite's connections do —
-/// for a test that speaks to Valkey without the framework's connection.
+/// [`redis_config`] at a double's `url`, trusting the test authority its
+/// certificate is issued by.
+fn through(url: String) -> RedisConfig {
+    RedisConfig {
+        url,
+        tls: harness::tls::trusting_the_test_authority(),
+        ..redis_config()
+    }
+}
+
+/// A bare `redis` client of `url`, trusting the system's authorities as the
+/// framework's connection does — for a test that speaks to Valkey without it.
 fn bare_client(url: &str) -> redis::Client {
     let certificates = redis::TlsCertificates {
         client_tls: None,
-        root_cert: harness::tls::trusted().ca_cert,
+        root_cert: Some(nest_rs_config::system_authorities().to_vec()),
     };
     redis::Client::build_with_tls(url, certificates).expect("a TLS client of the suite's Valkey")
 }
@@ -306,10 +314,9 @@ impl DarkeningProxy {
                 let upstream = upstream.clone();
                 let mut went_dark = accepting.subscribe();
                 tokio::spawn(async move {
-                    let Some(mut client) = harness::tls::accept(client).await else {
-                        return;
-                    };
-                    let Some(mut server) = harness::tls::dial(&upstream).await else {
+                    let Some((mut client, mut server)) =
+                        harness::tls::bridge(client, &upstream).await
+                    else {
                         return;
                     };
                     tokio::select! {
@@ -365,10 +372,8 @@ impl MutingProxy {
                 let upstream = upstream.clone();
                 let muting = Arc::clone(&muting);
                 tokio::spawn(async move {
-                    let Some(client) = harness::tls::accept(client).await else {
-                        return;
-                    };
-                    let Some(server) = harness::tls::dial(&upstream).await else {
+                    let Some((client, server)) = harness::tls::bridge(client, &upstream).await
+                    else {
                         return;
                     };
                     let (mut from_client, mut to_client) = tokio::io::split(client);

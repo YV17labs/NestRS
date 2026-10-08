@@ -705,11 +705,7 @@ async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
     crate::forget(queue).await;
     let run = crate::this_run();
     let proxy = crate::MutingProxy::start().await;
-    let replica = crate::replica_on::<GatedModule>(nest_rs_redis::RedisConfig {
-        url: proxy.url(),
-        ..crate::redis_config()
-    })
-    .await;
+    let replica = crate::replica_on::<GatedModule>(crate::through(proxy.url())).await;
     crate::producer()
         .await
         .push(GatedQueue, GatedCommand { run }, None)

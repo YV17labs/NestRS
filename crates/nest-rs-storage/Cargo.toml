@@ -51,10 +51,9 @@ tracing-subscriber.workspace = true
 # `LogCapture`, for the unit half of the same problem: what the abort-on-drop
 # guard says when it is dropped with no runtime to abort on.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
-# The suite's proxy ends TLS on both sides — presenting a certificate of the
-# test authority's, dialling RustFS — to stop an answer where its body starts.
+# The suite's proxy names the store it dials over TLS, to stop an answer where
+# its body starts.
 rustls.workspace = true
-tokio-rustls.workspace = true
 # `object_store::MultipartUpload` is an `#[async_trait]` trait, so a test double
 # for it has to be written under the same attribute.
 async-trait.workspace = true

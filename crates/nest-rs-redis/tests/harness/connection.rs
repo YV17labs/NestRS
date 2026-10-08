@@ -15,12 +15,12 @@ use nest_rs_testing::url_at;
 use super::AT_ONCE;
 use super::tls;
 
-/// A budget far above [`AT_ONCE`], so a refusal that retried would show.
+/// A budget far above [`AT_ONCE`], so a refusal that retried would show,
+/// trusting what the framework trusts by default: Valkey itself.
 pub(crate) fn config(url: String) -> RedisConfig {
     RedisConfig {
         url,
         connect_timeout: Duration::from_secs(10),
-        tls: tls::trusted(),
         ..RedisConfig::default()
     }
 }
@@ -32,12 +32,16 @@ pub(crate) fn answer(error: &RedisError) -> String {
         .unwrap_or_default()
 }
 
-/// Connect to `url`, whose database `index` Redis will not select, and return
-/// the refusal once it is shown to have come at once, naming the index and the
-/// variable that holds it.
-pub(crate) async fn database_refused_at_once(url: String, index: i64, case: &str) -> RedisError {
+/// Connect as `config` says, to a server that will not select database
+/// `index`, and return the refusal once it is shown to have come at once,
+/// naming the index and the variable that holds it.
+pub(crate) async fn database_refused_at_once(
+    config: RedisConfig,
+    index: i64,
+    case: &str,
+) -> RedisError {
     let started = Instant::now();
-    let Err(error) = RedisConnection::connect(&config(url)).await else {
+    let Err(error) = RedisConnection::connect(&config).await else {
         panic!("{case} must not connect")
     };
     let took = started.elapsed();
@@ -109,9 +113,8 @@ impl ScriptedRedis {
                 let open = Arc::clone(&open);
                 let dialled = dialled.clone();
                 tokio::spawn(async move {
-                    if let Some(mut client) = tls::accept(client).await
-                        && let Some(dialled) = dialled
-                        && let Some(mut server) = tls::dial(&dialled).await
+                    if let Some(dialled) = dialled
+                        && let Some((mut client, mut server)) = tls::bridge(client, &dialled).await
                     {
                         let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
                     }

@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::harness::connection::{
-    NOT_READY, ScriptedRedis, answer, command_length, database_refused_at_once,
+    NOT_READY, ScriptedRedis, answer, command_length, config, database_refused_at_once,
 };
 
 /// A Redis that stays not ready spends the budget and fails as one that
@@ -27,7 +27,7 @@ async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
     let Err(error) = RedisConnection::connect(&RedisConfig {
         url: proxy.url(),
         connect_timeout: budget,
-        tls: crate::harness::tls::trusted(),
+        tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()
     })
     .await
@@ -61,8 +61,15 @@ async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
 async fn a_server_that_serves_database_zero_alone_fails_the_boot_at_once_naming_the_index() {
     let proxy = ScriptedRedis::start(None, None).await;
     proxy.answer_with(Some("ERR SELECT is not allowed in cluster mode"));
-    let error =
-        database_refused_at_once(format!("{}2", proxy.url()), 2, "a server in cluster mode").await;
+    let error = database_refused_at_once(
+        RedisConfig {
+            tls: crate::harness::tls::trusting_the_test_authority(),
+            ..config(format!("{}2", proxy.url()))
+        },
+        2,
+        "a server in cluster mode",
+    )
+    .await;
     assert!(
         answer(&error).contains("not allowed in cluster mode"),
         "the source says what Redis answered: {}",
@@ -104,7 +111,7 @@ async fn a_connection_to_a_demoted_primary_is_reopened() {
     let mut conn = RedisConnection::connect(&RedisConfig {
         url: server.url(),
         connect_timeout: Duration::from_secs(2),
-        tls: crate::harness::tls::trusted(),
+        tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()
     })
     .await

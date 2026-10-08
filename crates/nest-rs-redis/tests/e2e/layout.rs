@@ -2,13 +2,9 @@
 //! `nestrs:queue:{<queue>}:`, and **the queue page's ACL rules are exact**.
 //!
 //! A producer and a worker each run as a Redis user created exactly as the page
-//! prescribes for its role — reaching `nestrs:queue:*` and nothing else — through
-//! a push, a delayed push, a unique push, two cancels, a completion, a long
-//! attempt renewed, a retry, a throttled method, a checkpoint and a dead
-//! letter. Redis's `ACL LOG` holds no denial for either, and `MONITOR` shows
-//! each sent every command its rule allows and nothing else: a rule allowing a
-//! command nothing sends is an opening, and one missing a command a rare path
-//! sends fails in production.
+//! prescribes for its role, through every path the binding has: `ACL LOG` holds
+//! no denial, and `MONITOR` shows each sent every command its rule allows and
+//! nothing else.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -192,11 +188,8 @@ fn allowed(rule: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The page's producer and worker rules, each run by its role through every
-/// path the binding has, are exact: Redis denies neither user anything, and
-/// each sends every command its rule allows — but `SCRIPT LOAD`, which a
-/// producer sends only to a Redis that has not cached the script it calls, and
-/// which is asked of it separately.
+/// `SCRIPT LOAD` is asked of the producer separately: it sends one only to a
+/// Redis that has not cached the script it calls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     let mut admin = RedisConnection::connect(&crate::redis_config_on(DB_CONFINED_TO_THE_PREFIX))
@@ -229,7 +222,6 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     crate::assert_may_load_a_script(&as_producer).await;
     let run = crate::this_run();
 
-    // The producer alone: its boot, then every push and cancel it has.
     let (seen, reading) = monitor().await;
     let producer = crate::producer_on(as_producer).await;
     let job = |offset: u64, act: Act| ConfinedCommand {
@@ -275,9 +267,6 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     let producer_sent = sent(&seen, &mut admin).await;
     seen.commands.lock().await.clear();
 
-    // The worker alone: its boot, every job to its end, and its stop — which
-    // waits for each delivery's settle, the dead letter after the last attempt
-    // failed included.
     let worker = crate::replica_on::<WorkerModule>(as_worker).await;
     crate::wait_until(Duration::from_secs(30), || {
         [0, 1, 3, 4, 5]
@@ -332,7 +321,6 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     );
 }
 
-/// The page's KEDA rule reads a queue's length, and nothing else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
     let user = crate::acl_user("nestrs-e2e-keda");
@@ -359,9 +347,6 @@ async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
     crate::forget_user(&user).await;
 }
 
-/// Each page's rule replaces what a user it is run on held before: an operator
-/// reapplying it to a user granted more by hand — every key, every command —
-/// leaves that user with the rule alone, as the page promises.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_pages_rule_replaces_what_the_user_held_before() {
     for (page, role) in [

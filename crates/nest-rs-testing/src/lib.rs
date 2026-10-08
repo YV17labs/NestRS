@@ -39,7 +39,7 @@ mod wait;
 #[cfg(feature = "tls")]
 mod tls;
 #[cfg(feature = "tls")]
-pub use tls::{TestAuthority, TestCertificate};
+pub use tls::{TestAuthority, TestCertificate, system_connector};
 
 #[cfg(feature = "orm")]
 mod database;

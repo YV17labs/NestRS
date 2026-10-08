@@ -1,14 +1,5 @@
-//! `nest-rs-storage`'s suite: a live presign round-trip against an
-//! S3-compatible server (RustFS in the dev container). Proves that
-//! `object_store`'s `Signer` produces URLs a plain HTTP client can PUT to and
-//! GET from, in path-style over TLS — RustFS speaks nothing else.
-//!
-//! Config starts from `StorageConfig::default()`, which targets the dev
-//! container's RustFS (`https://rustfs:9000`, `nestrs`/`nestrs`, bucket
-//! `nestrs`, path-style), its certificate verified against the system's
-//! authorities, where the dev container and CI install theirs. The endpoint
-//! honors the documented `<PREFIX>_STORAGE__ENDPOINT` override; unset, it falls
-//! back to the default.
+//! `nest-rs-storage`'s suite against a live S3-compatible server over TLS: the
+//! dev container's RustFS, or the one `<PREFIX>_STORAGE__ENDPOINT` names.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -26,12 +17,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_storage::{Storage, StorageConfig, StorageTls};
-use nest_rs_testing::{TestAuthority, TestCertificate};
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use nest_rs_testing::{TestAuthority, TestCertificate, system_connector};
+use rustls::pki_types::ServerName;
 use std::sync::LazyLock;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 /// The authority this test process issues the proxy's certificate with.
 static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
@@ -69,9 +58,7 @@ fn proxied(proxy: SocketAddr, config: StorageConfig) -> Storage {
 }
 
 /// Best-effort bucket creation: a presigned PUT on the bucket root is an S3
-/// `CreateBucket`. A 2xx means created, a 409 means it already exists — both are
-/// fine. Anything else we surface for visibility but don't fail on (the object
-/// round-trip below is the real assertion).
+/// `CreateBucket`, and a 409 means it already exists.
 #[expect(
     clippy::print_stderr,
     reason = "the bucket's state is shown for a reader of a failing run; the round-trip is the assertion"
@@ -142,8 +129,7 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
             .port_or_known_default()
             .expect("the storage endpoint has a port"),
     );
-    let acceptor = proxy_acceptor();
-    let connector = store_connector();
+    let acceptor = PROXY.acceptor(None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the proxy");
@@ -154,29 +140,31 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
         loop {
             let (client, _) = listener.accept().await.expect("accept");
             let carry = carry(counted.fetch_add(1, Ordering::SeqCst));
-            let Ok(client) = acceptor.accept(client).await else {
-                continue;
-            };
-            let server = tokio::net::TcpStream::connect(&upstream)
-                .await
-                .expect("reach the store");
-            let name = ServerName::try_from(host.clone()).expect("the store's host is a name");
-            let server = connector
-                .connect(name, server)
-                .await
-                .expect("a TLS handshake with the store");
-            let (mut client_read, mut client_write) = tokio::io::split(client);
-            let (mut server_read, mut server_write) = tokio::io::split(server);
+            let acceptor = acceptor.clone();
+            let (host, upstream) = (host.clone(), upstream.clone());
             tokio::spawn(async move {
-                let _ = paced(
-                    &mut client_read,
-                    &mut server_write,
-                    carry.request_pace,
-                    None,
-                )
-                .await;
-            });
-            tokio::spawn(async move {
+                let Ok(client) = acceptor.accept(client).await else {
+                    return;
+                };
+                let server = tokio::net::TcpStream::connect(&upstream)
+                    .await
+                    .expect("reach the store");
+                let name = ServerName::try_from(host).expect("the store's host is a name");
+                let server = system_connector()
+                    .connect(name, server)
+                    .await
+                    .expect("a TLS handshake with the store");
+                let (mut client_read, mut client_write) = tokio::io::split(client);
+                let (mut server_read, mut server_write) = tokio::io::split(server);
+                tokio::spawn(async move {
+                    let _ = paced(
+                        &mut client_read,
+                        &mut server_write,
+                        carry.request_pace,
+                        None,
+                    )
+                    .await;
+                });
                 let ended = paced(
                     &mut server_read,
                     &mut client_write,
@@ -195,41 +183,6 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
         }
     });
     (addr, taken)
-}
-
-/// The proxy's side of a handshake: the test authority's certificate for the
-/// loopback.
-fn proxy_acceptor() -> TlsAcceptor {
-    let chain = CertificateDer::pem_slice_iter(PROXY.cert.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .expect("the proxy's certificate parses");
-    let key = PrivateKeyDer::from_pem_slice(PROXY.key.as_bytes()).expect("its key parses");
-    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .expect("the provider speaks the default protocol versions")
-    .with_no_client_auth()
-    .with_single_cert(chain, key)
-    .expect("the certificate and key correspond");
-    TlsAcceptor::from(Arc::new(config))
-}
-
-/// The proxy's dial to the store, verifying its certificate against the
-/// system's authorities.
-fn store_connector() -> TlsConnector {
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in CertificateDer::pem_slice_iter(nest_rs_config::system_authorities()) {
-        let _ = roots.add(cert.expect("the system's store parses"));
-    }
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .expect("the provider speaks the default protocol versions")
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    TlsConnector::from(Arc::new(config))
 }
 
 /// Copy `from` into `to`, `pace` bytes every 10 ms when set, up to `until`.

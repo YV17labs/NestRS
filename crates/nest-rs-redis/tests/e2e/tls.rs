@@ -61,7 +61,7 @@ async fn a_certificate_the_configured_authority_signed_carries_the_connection() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_redis_requiring_a_client_certificate_is_handed_the_configured_one() {
     let clients = TestAuthority::new();
-    let proxy = TlsProxy::start(Some(crate::redis_url()), Some(clients.pem().as_bytes())).await;
+    let proxy = TlsProxy::start(Some(crate::redis_url()), Some(&clients)).await;
     let issued = clients.client("nestrs-test-client");
     let presenting = RedisTls {
         identity: Some(RedisTlsIdentity {

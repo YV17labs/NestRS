@@ -68,7 +68,7 @@ async fn the_bindings_producer_loads_its_scripts_at_boot() {
     let redis = RedisConfig {
         url: format!("rediss://{}/", server.addr),
         connect_timeout: Duration::from_secs(2),
-        tls: crate::harness::tls::trusted(),
+        tls: crate::harness::tls::trusting_the_test_authority(),
         ..RedisConfig::default()
     };
     nest_rs_core::App::builder()
@@ -117,7 +117,7 @@ impl ForgetfulRedis {
         RedisConnection::connect(&RedisConfig {
             url: format!("rediss://{}/", self.addr),
             connect_timeout: Duration::from_secs(2),
-            tls: crate::harness::tls::trusted(),
+            tls: crate::harness::tls::trusting_the_test_authority(),
             ..RedisConfig::default()
         })
         .await

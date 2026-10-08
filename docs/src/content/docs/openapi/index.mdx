@@ -314,6 +314,11 @@ What the composer does not derive, it leaves to you:
   `#[api(description)]`.
 - **`contact` / `license` / `externalDocs`** on the document header — `title`,
   `version`, and `description` are the configurable fields.
+- **OpenAPI 3.2.** The document is 3.1.2, the 3.1 line's current patch. A 3.2
+  document is valid with no other change, but the TypeScript client
+  generators read it as 3.1 and silently drop what only 3.2 can say — a
+  `QUERY` operation, a typed event stream — so the framework stays on the
+  version every generator reads in full.
 - **Which version `/api-json` describes, when the deployment names no default.**
   It then aggregates every declared version and resolves a contested path to the
   highest one, naming the loser in a boot `warn`. Point a client at
@@ -333,6 +338,8 @@ serving it is a string write.)
 
 ## Going further
 
+- [Typed TypeScript clients](/openapi/clients/) — generate the frontend's
+  client and query hooks from this document.
 - [HTTP](/http/) — the controllers, routes and `Json<T>` types this document is
   built from.
 - [Database](/database/) — `#[expose]` turns one entity into a wire DTO, a

@@ -1,0 +1,115 @@
+---
+title: Typed TypeScript clients
+description: Generate a typed TypeScript client and TanStack Query hooks from the OpenAPI document, and keep the frontend in step with the server.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Your frontend calls the API through functions generated from the
+[OpenAPI document](/openapi/), so a renamed field or a new required parameter
+is a TypeScript error before it is a bug. The document is composed from the
+route table, which makes the generated client as current as the server it
+describes. You need `OpenApiModule` wired in and a frontend with Node; this
+recipe uses [Hey API](https://heyapi.dev) and its
+[TanStack Query](https://tanstack.com/query) plugin.
+
+<Steps>
+
+1. **Commit the document.** `<PREFIX>_OPENAPI__EMIT_DOCUMENT` writes it once at
+   boot to `<PREFIX>_OPENAPI__DOCUMENT_PATH`. Set both in `.env.development`
+   so every dev run refreshes it:
+
+   ```bash title=".env.development"
+   NESTRS_OPENAPI__EMIT_DOCUMENT=true
+   NESTRS_OPENAPI__DOCUMENT_PATH=apps/api/openapi.json
+   ```
+
+   The boot then logs the file it wrote:
+
+   ```text
+   INFO nest_rs::openapi: wrote OpenAPI document path=apps/api/openapi.json bytes=76335
+   ```
+
+   A pull request now shows every change to the API contract as a diff of
+   that file.
+
+2. **Generate the client.** Hey API is pre-1.0 and asks to be pinned exactly:
+
+   ```bash frame="terminal"
+   $ npm install -D -E @hey-api/openapi-ts@0.99.0
+   $ npm install @tanstack/react-query
+   $ npx openapi-ts -i ../apps/api/openapi.json -o src/api \
+       -p @hey-api/client-fetch -p @hey-api/typescript -p @hey-api/sdk -p @tanstack/react-query
+   [Job 1] ✓ src/api · 5 files
+   ```
+
+   Each operation becomes a function named after its `operationId`
+   (`posts_list` → `postsList`) and a set of query helpers
+   (`postsListOptions`), each schema a type.
+
+3. **Call it.** Errors are typed too: every error status the framework
+   answers is an RFC 9457 problem document, so `error` is a `ProblemDetails`:
+
+   ```ts title="web/src/posts.ts"
+   import { useQuery } from '@tanstack/react-query';
+   import { client } from './api/client.gen';
+   import { postsCreate, postsList } from './api/sdk.gen';
+   import { postsListOptions } from './api/@tanstack/react-query.gen';
+   import type { Post } from './api/types.gen';
+
+   client.setConfig({ baseUrl: 'https://api.example.com', auth: () => currentToken() });
+
+   export async function firstPage(): Promise<{ posts: Post[]; next: string | null }> {
+     const { data, error, response } = await postsList({ query: { first: 20 } });
+     if (error) throw new Error(`${error.status} ${error.title}`);
+     return { posts: data, next: response?.headers.get('x-next-cursor') ?? null };
+   }
+
+   export async function draft(title: string, body: string): Promise<Post> {
+     const { data, error } = await postsCreate({ body: { title, body } });
+     if (error) throw new Error(error.detail ?? error.title);
+     return data;
+   }
+
+   export const usePosts = () => useQuery(postsListOptions({ query: { first: 20 } }));
+   ```
+
+   `auth` is called only for the operations the document marks `security` —
+   the guarded routes — never for a `#[public]` one.
+
+4. **Allow the frontend's origin.** A browser app on another origin needs
+   CORS: `<PREFIX>_HTTP__CORS_ORIGINS=https://app.example.com`. The headers
+   the framework sends — `x-next-cursor`, `Location`, `Retry-After` — are
+   exposed to it without being listed ([HTTP configuration](/http/configuration/)).
+
+</Steps>
+
+<Aside type="tip">
+  Prefer types over a generated SDK?
+  [openapi-typescript](https://openapi-ts.dev) turns the same file into one
+  `.d.ts`, and `openapi-fetch` calls by path against it:
+  `npx openapi-typescript ../apps/api/openapi.json -o src/api.d.ts`.
+</Aside>
+
+## What fails if you get it wrong
+
+**A response typed `unknown`.** The document reads a handler's payload off
+its return type, `Json<T>` or `Result<Json<T>, E>`. A handler building its own
+`Response`, or returning a `Result` renamed on import, states none: declare it
+with `#[api(response = T)]` ([OpenAPI](/openapi/#enrich-an-operation-with-api)).
+
+**Two operations under one name.** An `operationId` is
+`<controller>_<handler>` and must be unique; when two operations map to one,
+the boot logs `two operations share one operationId` with both addresses.
+Rename one handler — and since generated names follow the id, renaming a
+handler is a breaking change for the frontend that calls it.
+
+**The cursor reads `null` in the browser.** The request reached the server
+from another origin without CORS: no `<PREFIX>_HTTP__CORS_ORIGINS` names it,
+so the browser hides every response header the safelist does not cover.
+
+## Going further
+
+- [OpenAPI](/openapi/) — what the document derives, and what it leaves to you.
+- [Pagination](/database/pagination/) — the cursor `x-next-cursor` carries.
+- [Security](/security/) — the guards that decide which operations carry `security`.

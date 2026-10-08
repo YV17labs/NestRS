@@ -282,6 +282,7 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'http' } },
             { label: 'OpenAPI', slug: 'openapi' },
+            { label: 'Typed TypeScript clients', slug: 'openapi/clients' },
           ],
         },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },

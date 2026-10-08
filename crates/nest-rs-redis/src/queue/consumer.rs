@@ -649,8 +649,8 @@ mod tests {
         Value::BulkString(text.as_bytes().to_vec())
     }
 
-    /// A read's reply, as Redis 6.2 to 8 answer it over RESP2: a nil on a
-    /// timeout, and the stream's entries otherwise.
+    /// A read's reply, as Valkey answers it over RESP2: a nil on a timeout,
+    /// and the stream's entries otherwise.
     #[test]
     fn a_read_answers_its_entries_or_none() {
         assert!(entries(Value::Nil).expect("a timeout").is_empty());

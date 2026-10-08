@@ -21,7 +21,7 @@ what Redis adds. A queue named `audio`, after one job completed, one
 dead-lettered and one held back for an hour:
 
 ```text frame="terminal"
-$ redis-cli --scan --pattern 'nestrs:queue:{audio}:*' | sort
+$ valkey-cli --scan --pattern 'nestrs:queue:{audio}:*' | sort
 nestrs:queue:{audio}:dead
 nestrs:queue:{audio}:delayed
 nestrs:queue:{audio}:due
@@ -266,7 +266,7 @@ unique key again; when another job took the key meanwhile, it files nothing and
 names that job, since two jobs under one key would break what the key promises:
 
 ```bash
-redis-cli EVAL "redis.replicate_commands() local e = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1])[1] if not e then return false end local f = {} for i = 1, #e[2], 2 do f[e[2][i]] = e[2][i + 1] end if f.unique then local holder = redis.call('HGET', KEYS[4], f.unique) if holder and holder ~= f.job then return redis.error_reply('its unique key is held by job ' .. holder) end redis.call('HSET', KEYS[4], f.unique, f.job) redis.call('HSET', KEYS[5], f.job, f.unique) end local id = redis.call('XADD', KEYS[2], '*', 'job', f.job, 'record', f.record) redis.call('HSET', KEYS[3], f.job, id) redis.call('XDEL', KEYS[1], ARGV[1]) return id" 5 'nestrs:queue:{audio}:dead' 'nestrs:queue:{audio}:jobs' 'nestrs:queue:{audio}:entries' 'nestrs:queue:{audio}:unique' 'nestrs:queue:{audio}:claims' 1767225600000-0
+valkey-cli EVAL "local e = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1])[1] if not e then return false end local f = {} for i = 1, #e[2], 2 do f[e[2][i]] = e[2][i + 1] end if f.unique then local holder = redis.call('HGET', KEYS[4], f.unique) if holder and holder ~= f.job then return redis.error_reply('its unique key is held by job ' .. holder) end redis.call('HSET', KEYS[4], f.unique, f.job) redis.call('HSET', KEYS[5], f.job, f.unique) end local id = redis.call('XADD', KEYS[2], '*', 'job', f.job, 'record', f.record) redis.call('HSET', KEYS[3], f.job, id) redis.call('XDEL', KEYS[1], ARGV[1]) return id" 5 'nestrs:queue:{audio}:dead' 'nestrs:queue:{audio}:jobs' 'nestrs:queue:{audio}:entries' 'nestrs:queue:{audio}:unique' 'nestrs:queue:{audio}:claims' 1767225600000-0
 ```
 
 An operator runs it as a user of their own, which this rule allows and nothing
@@ -291,12 +291,12 @@ A value out of its bounds fails the boot, whether the environment set it or
 
 ## Limits
 
-- **Redis 6.2.24 or later, or Valkey 9.1.2 or later** — the oldest the suite
-  passed on at the release, recorded in the changelog. Nothing here needs a later
-  command: the scripts run on Redis 6.2's streams, and every one they send is in
-  Valkey's too.
-- **No Redis Cluster yet.** A queue's keys share one hash slot, so the layout
-  is a cluster's already; the connection is not a cluster client.
+- **Valkey, its latest release** — 9.1 at this release, the one the suite
+  runs on. The connection speaks the Redis protocol, hence `redis://`,
+  `rediss://` and `nest_rs::redis`; Redis itself is not a supported server.
+- **A standalone Valkey only, for now** — neither Valkey Cluster nor Sentinel
+  yet. A queue's keys share one hash slot, so the layout is a cluster's
+  already; the connection is a client of one server.
 - **No eviction of the queue's keys.** At least once covers what Redis kept: run
   `noeviction`, or a `volatile-*` policy, which evicts only keys with an expiry —
   of the queue's, only the throttle window has one. An `allkeys-*` policy can

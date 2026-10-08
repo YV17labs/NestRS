@@ -161,7 +161,7 @@ and every cause beneath it, a `.context(…)` included, with any decode failure
 said without its value:
 
 ```bash frame="terminal"
-$ redis-cli XRANGE 'nestrs:queue:{audio}:dead' - +
+$ valkey-cli XRANGE 'nestrs:queue:{audio}:dead' - +
 1) 1) "1790442140102-0"
    2) 1) "job"
       2) "01a0deaa-cf96-70f8-a924-efd8fbbe3d38"

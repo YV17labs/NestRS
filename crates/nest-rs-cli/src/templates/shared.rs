@@ -74,15 +74,15 @@ services:
       retries: 10
 
   redis:
-    image: redis:7
+    image: valkey/valkey:9.1
     ports:
       - "6379:6379"
     volumes:
-      - redisdata:/data
+      - valkeydata:/data
 
 volumes:
   pgdata:
-  redisdata:
+  valkeydata:
 "#;
 
 /// The line that puts the project's env prefix on every process `just` starts.

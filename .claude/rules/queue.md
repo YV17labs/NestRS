@@ -87,10 +87,9 @@ promises more; this is how the Redis backend keeps it, on Redis Streams
   under a worker, and that worker's writes then land nowhere.
 - **Redis's clock decides when a job is due** (`TIME` in the script), never a
   host's; the push measures a delay, the script anchors it.
-- **The floor is Redis 6.2, and every command is Valkey's too.** A later command
-  (`XACKDEL`, `XREADGROUP CLAIM`, `XNACK`) is an optimisation behind a check,
-  never the path. Recovery reads a bounded `XPENDING` page and `XCLAIM`s it:
-  `XAUTOCLAIM` answers 6.2's deleted entries as a nil with no id.
+- **The server is Valkey, its latest release** (`decisions/valkey-only.md`):
+  a command its release lacks is never the path, and Redis's own commands are
+  not Valkey's.
 - **One queue, one hash slot**: every key a script names is the queue's own.
 - **The Redis capabilities**, each proved by its own e2e: a delayed record waits
   in `due` and is filed by any worker draining the queue; a unique key is
@@ -122,9 +121,9 @@ features because each pulls a port crate an app may not need.
   (`RedisConnection::dedicated`), bounded by its own wait plus the budget.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
   silently unused; verification is never an option (`CLAUDE.md`).
-- **The oldest Redis the docs claim is the oldest the e2e suite passes on**,
-  never one it has not run: `ci.yml`'s `redis` job runs nest-rs-redis's suites
-  on that Redis and that Valkey, so the claim and the matrix move together.
+- **The Valkey the docs claim is the one every suite runs on**: the dev
+  container, `ci.yml` and `demo.yml` pin one image tag, and the docs name its
+  release — the four move in one change.
 - **Each binding's docs page prescribes its ACL rule whole, per role** — its
   namespace, the connection's commands, every command it or a script it runs
   sends, and nothing else. Held by `nest-rs-redis`'s e2e, which creates each

@@ -97,8 +97,7 @@ owning crate's suite is undocumented.
 
 `just ci` is what `ci.yml` runs, recipe for recipe: fmt, clippy, each capability
 alone, the dependency policy, rustdoc, then every test against real Postgres,
-Redis and S3 — never a mock — and `just test redis` once more on each of the
-oldest Redis and Valkey the docs claim. `demo.yml` runs the demo's own recipes
+Valkey and S3 — never a mock. `demo.yml` runs the demo's own recipes
 — `just lint` with the tree's `nestrs lint`, and every suite — and `bench.yml`
 the benchmarks' `just lint`, each on a change to its tree or to the framework
 it builds on by path; `beta.yml` checks both workspaces on the beta toolchain

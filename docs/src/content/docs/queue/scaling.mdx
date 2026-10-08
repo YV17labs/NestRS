@@ -125,13 +125,13 @@ window's count had 42 seconds left; the other five wait on the stream for it to
 end, and nothing was held back:
 
 ```text frame="terminal"
-$ redis-cli GET 'nestrs:queue:{notifications}:throttle'
+$ valkey-cli GET 'nestrs:queue:{notifications}:throttle'
 "120"
-$ redis-cli PTTL 'nestrs:queue:{notifications}:throttle'
+$ valkey-cli PTTL 'nestrs:queue:{notifications}:throttle'
 (integer) 42022
-$ redis-cli XLEN 'nestrs:queue:{notifications}:jobs'
+$ valkey-cli XLEN 'nestrs:queue:{notifications}:jobs'
 (integer) 5
-$ redis-cli ZCARD 'nestrs:queue:{notifications}:due'
+$ valkey-cli ZCARD 'nestrs:queue:{notifications}:due'
 (integer) 0
 ```
 

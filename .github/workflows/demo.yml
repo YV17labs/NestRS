@@ -79,10 +79,10 @@ jobs:
           --health-cmd "pg_isready -U nestrs -d nestrs"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:
-        image: redis:8.6.3
+        image: valkey/valkey:9.1.2
         ports: ['6379:6379']
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "valkey-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 20
       rustfs:
         image: rustfs/rustfs:1.0.0-beta.8

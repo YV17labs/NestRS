@@ -43,7 +43,7 @@ commands and the conventions. Two rules matter most:
 
 The fastest path is the dev container — see
 [Contributing → Get the dev container running](README.md#contributing) in the
-README. It provisions the Rust toolchain, every tool CI runs, and Postgres, Redis
+README. It provisions the Rust toolchain, every tool CI runs, and Postgres, Valkey
 and S3 (RustFS) with their URLs already wired.
 
 Prefer a local toolchain? Install Rust (stable, see
@@ -62,7 +62,7 @@ runs. `demo/` is a separate project and drives itself with `nestrs run`.
 
 ```bash
 just lint   # fmt, clippy, each capability alone, dependency policy
-just test   # every test, against the dev container's Postgres, Redis and S3
+just test   # every test, against the dev container's Postgres, Valkey and S3
 just ci     # every check CI runs: lint, docs and tests
 just test::cov  # coverage of the same tests, doctests aside
 ```

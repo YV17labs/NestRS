@@ -21,6 +21,11 @@ graph from each app's root.
 | `RedisQueueModule` | Binds the queue port over that connection: the producer, `Arc<dyn JobProducer>`, the portable handle a feature injects to enqueue, and the consumer the worker runs jobs through. A bare import reads `<PREFIX>_REDIS__QUEUE__*`; `for_root(RedisQueueConfig { lease })` pins the base — see [Delivery on Redis](/queue/delivery/#configuration). | Every app that enqueues or runs jobs. |
 | `QueueModule::for_root(cfg)` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`. | Worker apps only. |
 
+The server is **Valkey**, in its latest release: the connection speaks the
+Redis protocol — hence `redis://`, `rediss://` and `nest_rs::redis` — and Valkey
+is the server it is supported and tested on, never Redis itself; see
+[Limits](/queue/delivery/#limits).
+
 `RedisModule::for_root(None)` reads `<PREFIX>_REDIS__URL` from the environment;
 `RedisModule::for_root(RedisConfig { url, .. })` supplies that URL as the
 **base** the environment overlays — so a deployment setting `<PREFIX>_REDIS__URL`

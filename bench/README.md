@@ -88,14 +88,14 @@ That is the whole interface — the harness globs `sut/*/provider.toml`.
 
 ## The queue bench — `queue/`
 
-The job queue over Redis, against the adapter it replaces rather than
+The job queue over Valkey, against the adapter it replaces rather than
 another framework, so it has no contract and no provider. It names
 nothing below `nest_rs::queue` and `nest_rs::redis` — the same source
 measures any adapter that keeps that surface — and, like `sut/nestrs`,
 is its own Cargo project on the framework by path.
 
 ```bash
-redis-server --port 16403 --save '' --appendonly no --daemonize yes
+valkey-server --port 16403 --save '' --appendonly no --daemonize yes
 export NESTRS_REDIS__URL=redis://127.0.0.1:16403/   # <PREFIX>_REDIS__URL
 just queue            # every measurement, 3 runs each, Markdown on stdout
 ```

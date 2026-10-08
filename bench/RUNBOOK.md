@@ -68,16 +68,16 @@ must never be the story.
 
 ## 6. The queue bench
 
-Separate from the HTTP protocol above, and needing only Redis beside the
-Rust toolchain. Run it on the same idle host, with a Redis of its own — the
+Separate from the HTTP protocol above, and needing only Valkey beside the
+Rust toolchain. Run it on the same idle host, with a Valkey of its own — the
 bench refuses one holding any key but its own — and the version you mean to
 quote:
 
 ```bash
-redis-server --port 16403 --save '' --appendonly no --daemonize yes
+valkey-server --port 16403 --save '' --appendonly no --daemonize yes
 export NESTRS_REDIS__URL=redis://127.0.0.1:16403/
 just queue > "results/queue-$(date +%Y-%m-%d)-$(hostname -s).md"
-redis-cli -p 16403 shutdown nosave
+valkey-cli -p 16403 shutdown nosave
 ```
 
 Before quoting it: `duplicates` is 0 in every drain, `pushed/s` matches

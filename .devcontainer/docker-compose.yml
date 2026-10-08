@@ -35,27 +35,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # Valkey, the open-source Redis the framework supports, on the hostname every
+  # `redis://` URL of the workspace names.
   redis:
-    image: redis:8.6.3
+    image: valkey/valkey:9.1.2
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["valkey-server", "--appendonly", "yes"]
     volumes:
-      - redis-data:/data
+      - valkey-data:/data
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # A Redis speaking TLS alone, presenting the suite's service certificate:
+  # A Valkey speaking TLS alone, presenting the suite's service certificate:
   # nest-rs-redis's e2e runs a queue against it, every connection verified.
   redis-tls:
-    image: redis:8.6.3
+    image: valkey/valkey:9.1.2
     restart: unless-stopped
     command:
-      - redis-server
+      - valkey-server
       - --port
       - "0"
       - --tls-port
@@ -71,7 +73,7 @@ services:
     volumes:
       - ../crates/nest-rs-redis/tests/harness/fixtures:/tls:ro
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--cacert", "/tls/tls_service_ca.pem", "-p", "6380", "ping"]
+      test: ["CMD", "valkey-cli", "--tls", "--cacert", "/tls/tls_service_ca.pem", "-p", "6380", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -100,5 +102,6 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:
+  # Not Redis's volume: Valkey refuses the dump files Redis 7.4 and later write.
+  valkey-data:
   rustfs-data:

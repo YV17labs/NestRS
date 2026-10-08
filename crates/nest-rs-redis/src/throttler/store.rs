@@ -22,7 +22,6 @@ use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 use redis::Script;
 
 use crate::RedisConnection;
-use crate::connection::effects;
 
 /// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
 /// throttled subject, counting its current window.
@@ -62,9 +61,7 @@ fn bucket(subject: &str) -> String {
 /// - the window's expiry is armed only when the key has none (`PTTL < 0` — a
 ///   key this hit created, or one that somehow lost its TTL), which is the
 ///   `EXPIRE NX` semantics without a version dependency.
-const WINDOW_SCRIPT: &str = concat!(
-    effects!(),
-    "local ttl = redis.call('PTTL', KEYS[1])
+const WINDOW_SCRIPT: &str = "local ttl = redis.call('PTTL', KEYS[1])
 if ttl == 0 then
   redis.call('PEXPIRE', KEYS[1], 0)
   ttl = -2
@@ -75,8 +72,7 @@ if ttl < 0 then
   ttl = tonumber(ARGV[1])
 end
 return {count, ttl}
-"
-);
+";
 
 /// Redis-backed [`ThrottlerStore`]. Construct via [`RedisThrottler::new`] or let
 /// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it over the shared

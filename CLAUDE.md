@@ -43,7 +43,10 @@ We chose Rust for what it gives, and these values order every trade-off:
 We stay lean, a startup outpacing heavy incumbents: we support the most-used
 backends and drivers in their latest versions, not every one, and drop the old
 fast — through semver: removing support is a major, and the previous major
-keeps it. We build what keeps an app correct; operating it (dashboards,
+keeps it. **A backend we support, we support whole**: every deployment shape its
+latest version offers in production (Valkey: standalone, Sentinel, Cluster),
+TLS on each — fewer drivers, each complete, never a subset passed off as
+support. Open source only: a backend's server is free software. We build what keeps an app correct; operating it (dashboards,
 pausing, retuning) is its backend's tooling. No feature for a hypothetical
 user. We aim for excellence, not for done.
 
@@ -213,3 +216,9 @@ proves (`testing.md`).
 `just ci` green: formatting, clippy, rustdoc and every test. An app's `main.rs`
 or wiring outside `TestApp` moved: run the binary, `curl` what changed, stop it.
 Report each command run with its summary line.
+
+**Done is said with what is not done.** Every gap — a deployment shape, a
+version, an edge, a case a test does not reach — is named to the owner in the
+report that calls the work done, with what closing it takes. A limit written
+only in a docs page, a decision or a comment is a limit hidden from the
+owner; finding one is a reason to raise it, never to stop at the easy part.

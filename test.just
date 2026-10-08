@@ -12,14 +12,9 @@ unit:
 integration:
     {{nextest}} -E 'kind(test) and not binary(e2e)'
 
-# The `tests/e2e` suites, against Postgres, Redis and S3
+# The `tests/e2e` suites, against Postgres, Valkey and S3
 e2e:
     {{nextest}} -E 'binary(e2e)'
-
-# CI runs it on the oldest Redis and Valkey the docs claim.
-# nest-rs-redis's suites alone, against the Redis `<PREFIX>_REDIS__URL` names
-redis:
-    cargo nextest run -p nest-rs-redis --all-features --no-fail-fast
 
 # Coverage of the nextest suite, per file; doctests count on nightly only
 cov:

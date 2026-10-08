@@ -107,7 +107,7 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 | **Transports** | HTTP controllers with versioning, extractors, uploads, streaming · OpenAPI 3 + Swagger UI from the route table · GraphQL with dataloaders, subscriptions and federation · WebSocket gateways · MCP tools, prompts and resources |
 | **Data** | SeaORM entities, `Repo`, ambient transactions, pagination, migrations, seeding · S3-compatible object storage |
 | **Security** | JWT on EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
-| **Background work** | Redis-backed queues with retries, cron schedules, a typed in-process event bus |
+| **Background work** | Valkey-backed queues with retries, cron schedules, a typed in-process event bus |
 | **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · OpenTelemetry logs, traces, metrics · `Server-Timing` |
 | **Tooling** | The `nestrs` CLI — scaffold, generate a feature or an adapter, run, migrate · an in-process test harness booting the real DI graph |
 
@@ -119,7 +119,7 @@ Claims a clone of this repository lets you check:
   you can print with `cargo expand` — the index is on
   [nestrs.dev/decorators](https://nestrs.dev/decorators/).
 - **1,800+ tests** across the framework workspace, with the end-to-end suites
-  running against live Postgres, Redis and S3 rather than mocks — the dev
+  running against live Postgres, Valkey and S3 rather than mocks — the dev
   container brings all three up before you get a shell.
 - **Rules held by the toolchain** — types that make the wrong code
   unwritable, `clippy.toml`'s resolved-path lints, and behaviour tests; what
@@ -155,7 +155,7 @@ layout and conventions, read [`CLAUDE.md`](CLAUDE.md) and
 ## Contributing
 
 Anyone who can clone the repo can iterate on the framework — the dev container
-brings up Rust, Postgres and Redis in one step.
+brings up Rust, Postgres and Valkey in one step.
 
 ### Get the dev container running
 
@@ -166,7 +166,7 @@ brings up Rust, Postgres and Redis in one step.
 3. `cd demo && nestrs run dev api` — the main Publish API on `http://localhost:3002` (run `nestrs run db up` first).
 
 The container provisions the Rust toolchain and dev tooling (`just`, `bacon`,
-`cargo-nextest`, …), and brings up **Postgres** and **Redis** beside it with
+`cargo-nextest`, …), and brings up **Postgres** and **Valkey** beside it with
 `<PREFIX>_SEAORM__URL` / `<PREFIX>_REDIS__URL` already pointed at them. `nestrs run dev`
 runs under `bacon` — every save triggers an incremental rebuild and a restart.
 The runnable apps live in their own workspace under [`demo/`](demo/) — `cd demo`

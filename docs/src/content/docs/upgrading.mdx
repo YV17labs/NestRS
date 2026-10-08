@@ -360,7 +360,7 @@ left running until they drain the 6.x jobs (step 7).
      a zero connect timeout or window, a token lifetime past thirty days, a
      connection ceiling past a day — has to move; see the
      [env-var reference](/configuration/env-reference/).
-   - **Redis 6.2.24 or later, or Valkey 9.1.2 or later, and no Redis Cluster yet**: a queue's keys
+   - **Valkey 9.1, standalone — neither Cluster nor Sentinel yet** — Redis is no longer a supported server: a queue's keys
      share one hash slot already, but the connection is not a cluster client.
      Run `noeviction` or a `volatile-*` policy, never `allkeys-*`, which can
      evict a job — see the [delivery page](/queue/delivery/#limits).

@@ -79,10 +79,10 @@ jobs:
           --health-cmd "pg_isready -U nestrs -d nestrs"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:
-        image: redis:8.6.3
+        image: valkey/valkey:9.1.2
         ports: ['6379:6379']
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "valkey-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 20
       rustfs:
         image: rustfs/rustfs:1.0.0-beta.8
@@ -105,17 +105,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # A Redis speaking TLS alone, presenting the suite's service certificate:
+      # A Valkey speaking TLS alone, presenting the suite's service certificate:
       # started after the checkout, since a service container cannot mount it.
-      - name: Start the TLS Redis
+      - name: Start the TLS Valkey
         run: |
           docker run -d --name redis-tls -p 6380:6380 \
             -v "$PWD/crates/nest-rs-redis/tests/harness/fixtures:/tls:ro" \
-            redis:8.6.3 redis-server --port 0 --tls-port 6380 \
+            valkey/valkey:9.1.2 valkey-server --port 0 --tls-port 6380 \
             --tls-cert-file /tls/tls_service.pem --tls-key-file /tls/tls_service.key.pem \
             --tls-ca-cert-file /tls/tls_service_ca.pem --tls-auth-clients no
           for _ in $(seq 30); do
-            docker exec redis-tls redis-cli --tls --cacert /tls/tls_service_ca.pem -p 6380 ping && exit 0
+            docker exec redis-tls valkey-cli --tls --cacert /tls/tls_service_ca.pem -p 6380 ping && exit 0
             sleep 1
           done
           exit 1
@@ -126,54 +126,3 @@ jobs:
         with:
           tool: cargo-nextest@0.9,just@1
       - run: just test
-
-  # The oldest Redis and Valkey the docs claim, each a service of its own:
-  # nest-rs-redis's suites pass on both, or the claim moves (queue.md).
-  redis:
-    name: redis (${{ matrix.server.name }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        server:
-          - { name: Redis 6.2, image: 'redis:6.2.24', bin: redis }
-          - { name: Valkey 9.1, image: 'valkey/valkey:9.1.2', bin: valkey }
-    services:
-      redis:
-        image: ${{ matrix.server.image }}
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "${{ matrix.server.bin }}-cli ping"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
-      NESTRS_REDIS__URL: redis://localhost:6379
-      NESTRS_E2E__REDIS_TLS_URL: rediss://localhost:6380
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Start the TLS server
-        env:
-          IMAGE: ${{ matrix.server.image }}
-          BIN: ${{ matrix.server.bin }}
-        run: |
-          docker run -d --name redis-tls -p 6380:6380 \
-            -v "$PWD/crates/nest-rs-redis/tests/harness/fixtures:/tls:ro" \
-            "$IMAGE" "$BIN-server" --port 0 --tls-port 6380 \
-            --tls-cert-file /tls/tls_service.pem --tls-key-file /tls/tls_service.key.pem \
-            --tls-ca-cert-file /tls/tls_service_ca.pem --tls-auth-clients no
-          for _ in $(seq 30); do
-            docker exec redis-tls "$BIN-cli" --tls --cacert /tls/tls_service_ca.pem -p 6380 ping && exit 0
-            sleep 1
-          done
-          exit 1
-      - uses: $/.github/actions/setup-rust
-        with:
-          cache-key: redis
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-nextest@0.9,just@1
-      - run: just test redis

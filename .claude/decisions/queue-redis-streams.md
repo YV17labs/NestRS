@@ -291,3 +291,11 @@ feature for a hypothetical user, paid for by every real one.
 Reopened by a measurement, not a guess: a deployment whose `XPENDING` summary
 counts more than ten pages of deliveries on one queue, and a lapsed job there
 waiting longer than its replicas can afford.
+
+## 2026-10-08 — Valkey, its latest release
+
+The floor and its matrix above are superseded: the server is Valkey alone, in
+its latest release, and CI runs every suite on it (`valkey-only.md`).
+`XAUTOCLAIM`, which the bounded `XPENDING` page was preferred to because
+Redis 6.2 answered a deleted entry as a nil, is a server's command again; the
+page stays until a measurement says the switch is worth it.

@@ -53,19 +53,6 @@ use crate::{RedisConfig, tls};
 pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered — import \
      RedisModule::for_root(None), which opens the one Redis connection every Redis binding shares";
 
-/// Every script's first line: its writes are replicated as effects, not the
-/// script — which Redis 6.2 needs before a write that follows a command whose
-/// answer varies (`TIME`, `XPENDING`, `PTTL`), when a deployment turned
-/// `lua-replicate-commands` off. Later servers do it always, and take the call
-/// as a no-op.
-macro_rules! effects {
-    () => {
-        "redis.replicate_commands()
-"
-    };
-}
-pub(crate) use effects;
-
 /// How many times one call loads its script, at most: `redis` loads it once,
 /// and a `SCRIPT FLUSH` or a failover landing between that load and its retry
 /// would otherwise fail the call.

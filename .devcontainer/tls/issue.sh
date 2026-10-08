@@ -41,7 +41,17 @@ fresh() {
         openssl x509 -checkend 2592000 -noout -in "$dir/$service/$cert" >/dev/null 2>&1 || exit 1
     done
 }
+
+# One line per service: what became of its copy, and until when it holds.
+report() {
+    services | while read -r service _ cert _; do
+        expiry=$(openssl x509 -enddate -dateopt iso_8601 -noout -in "$dir/$service/$cert")
+        echo "$service: certificate $1, valid until ${expiry#notAfter=}"
+    done
+}
+
 if fresh; then
+    report kept
     exit 0
 fi
 
@@ -52,21 +62,33 @@ for service in $(services | cut -d ' ' -f 1); do
     names="DNS:$service,$names"
 done
 
+echo "no certificate good for another month in $dir: issuing one for $names"
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
+
+# openssl writes a lone `-----` to stderr even when it succeeds: its stderr is
+# shown only when it fails.
+quietly() {
+    "$@" 2>"$work/stderr" || {
+        cat "$work/stderr" >&2
+        return 1
+    }
+}
+
+quietly openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
     -subj "/CN=nestrs development authority" \
     -addext "basicConstraints=critical,CA:true" \
     -addext "keyUsage=critical,keyCertSign,cRLSign" \
-    -keyout "$work/ca.key" -out "$work/ca.pem" 2>/dev/null
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 \
+    -keyout "$work/ca.key" -out "$work/ca.pem"
+quietly openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 \
     -CA "$work/ca.pem" -CAkey "$work/ca.key" \
     -subj "/CN=nestrs development services" \
     -addext "subjectAltName=$names" \
     -addext "basicConstraints=critical,CA:false" \
     -addext "keyUsage=critical,digitalSignature" \
     -addext "extendedKeyUsage=serverAuth" \
-    -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
+    -keyout "$work/key.pem" -out "$work/cert.pem"
 
 install -d -m 0755 "$dir"
 install -m 0644 "$work/ca.pem" "$dir/ca.pem"
@@ -75,3 +97,4 @@ services | while read -r service uid cert key; do
     install -m 0644 -o "$uid" -g "$uid" "$work/cert.pem" "$dir/$service/$cert"
     install -m 0600 -o "$uid" -g "$uid" "$work/key.pem" "$dir/$service/$key"
 done
+report issued

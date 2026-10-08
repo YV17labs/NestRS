@@ -134,6 +134,5 @@ services:
 volumes:
   certs:
   postgres-data:
-  # Not Redis's volume: Valkey refuses the dump files Redis 7.4 and later write.
   valkey-data:
   rustfs-data:

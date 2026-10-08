@@ -37,8 +37,7 @@ impl PostsController {
     #[api(
         summary = "Create a post in the caller's org",
         description = "Requires a bearer JWT with a subject. The org and author are taken from \
-                       the token, never the body.",
-        tags("Post")
+                       the token, never the body."
     )]
     async fn create(
         &self,
@@ -63,8 +62,7 @@ impl PostsController {
         description = "Transitions a draft to published and writes a publication audit row in the \
                        same transaction. The id is bound to the loaded, `Update`-authorized post \
                        through the service. Re-publishing an already published post returns RFC \
-                       9457 `application/problem+json` (409).",
-        tags("Post")
+                       9457 `application/problem+json` (409)."
     )]
     async fn publish(
         &self,

@@ -156,9 +156,8 @@ async fn openapi_document_describes_the_routes() {
         "and an operation whose parameters are all optional advertises none: {list}",
     );
     assert_eq!(
-        list["responses"]["200"]["headers"][nest_rs::http::NEXT_CURSOR_HEADER]["schema"]["type"],
-        "string",
-        "the paginated list documents the cursor header it sends: {list}",
+        list["responses"]["200"]["headers"]["Link"]["schema"]["type"], "string",
+        "the paginated list documents the link it sends: {list}",
     );
 
     let org = &doc["components"]["schemas"]["Org"]["properties"];
@@ -185,5 +184,32 @@ async fn openapi_document_describes_the_routes() {
     assert_eq!(
         throttled["headers"]["Retry-After"]["schema"]["type"], "integer",
         "the 429 documents an integer Retry-After header: {throttled}",
+    );
+}
+
+#[tokio::test]
+async fn the_committed_document_is_the_one_the_app_serves() {
+    let (_db, app) = boot().await;
+    let resp = app.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+    let bytes = resp.0.into_body().into_bytes().await.expect("body");
+    let served: serde_json::Value = serde_json::from_slice(&bytes).expect("api-json is JSON");
+
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
+    let committed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(path).expect("apps/api/openapi.json is committed"),
+    )
+    .expect("the committed document is JSON");
+
+    let stale: Vec<&String> = served["paths"]
+        .as_object()
+        .expect("paths")
+        .keys()
+        .filter(|path| served["paths"][path.as_str()] != committed["paths"][path.as_str()])
+        .collect();
+    assert!(
+        served == committed,
+        "apps/api/openapi.json is not what the api serves (paths differing: {stale:?}): run the \
+         api once under NESTRS_ENV=development, which rewrites it, and commit the diff",
     );
 }

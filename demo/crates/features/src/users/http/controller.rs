@@ -31,8 +31,7 @@ impl UsersController {
     #[api(
         summary = "Create a user in the caller's org",
         description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
-                       user's org is taken from the caller's token, never the body.",
-        tags("User")
+                       user's org is taken from the caller's token, never the body."
     )]
     async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
         let user = self
@@ -46,8 +45,7 @@ impl UsersController {
     #[api(
         summary = "Get a user in the caller's org by id",
         description = "The id is bound to the loaded, authorized user through the \
-                       service — a row outside the caller's scope is 403, absent 404.",
-        tags("User")
+                       service — a row outside the caller's scope is 403, absent 404."
     )]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))

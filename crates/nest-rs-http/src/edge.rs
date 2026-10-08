@@ -1,9 +1,10 @@
 //! The fused transport-edge endpoint: trailing-slash trim, request scope, body
 //! cap, request timeout and default response headers, in that order, in one layer.
 //!
-//! A `413` or `503` is produced inside the header stamp and carries the security
-//! headers; an `Err` escaping the inner tree carries none, and the problem
-//! normalizer renders it — run by the edge itself when it is outermost (`normalize`).
+//! Every answer is stamped with the default headers: a `413` or `503` the edge
+//! produces, and an `Err` escaping the inner tree, which the edge renders as a
+//! problem document first. The normalizer for a raw-text error a handler
+//! answered with runs on the edge itself when it is outermost (`normalize`).
 
 use std::future::{Future, poll_fn};
 use std::net::IpAddr;
@@ -31,14 +32,22 @@ use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
 use crate::{response_body, trace_context};
 
-/// The route template poem's router matched, off the response or the error;
-/// `None` when nothing matched.
-fn matched_route(result: &Result<Response>) -> Option<&str> {
-    let pattern = match result {
-        Ok(resp) => resp.data::<PathPattern>(),
-        Err(err) => err.data::<PathPattern>(),
-    };
-    pattern.map(|PathPattern(pattern)| &**pattern)
+/// The route template poem's router matched; `None` when nothing matched.
+fn matched_route(resp: &Response) -> Option<&str> {
+    resp.data::<PathPattern>()
+        .map(|PathPattern(pattern)| &**pattern)
+}
+
+/// `err` as the problem document it answers, keeping the template the router
+/// matched, which rendering would otherwise drop and the span is named for.
+async fn rendered(err: poem::Error) -> Response {
+    let pattern = err.data::<PathPattern>().cloned();
+    let mut resp =
+        crate::problem::normalize_error_response(crate::problem::render_error(err)).await;
+    if let Some(pattern) = pattern {
+        resp.set_data(pattern);
+    }
+    resp
 }
 
 fn bare(status: StatusCode) -> Response {
@@ -208,11 +217,7 @@ where
 {
     /// The inner tree, under the context `call` built and installs again
     /// around the response body.
-    async fn handle(
-        &self,
-        mut req: Request,
-        continuation: &RequestContinuation,
-    ) -> Result<Response> {
+    async fn handle(&self, mut req: Request, continuation: &RequestContinuation) -> Response {
         // The router matches exactly: `/kitchen/` would 404 before any guard runs.
         trim_trailing_slash(&mut req);
 
@@ -230,7 +235,7 @@ where
                 .typed_get::<ContentLength>()
                 .map(|ContentLength(declared)| declared as usize);
             if declared.is_some_and(|declared| declared > limit) {
-                return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
+                return self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE));
             }
             let body = req.take_body();
             if body.is_empty() {
@@ -247,9 +252,9 @@ where
                 match body.into_bytes_limit(limit).await {
                     Ok(bytes) => req.set_body(bytes),
                     Err(ReadBodyError::PayloadTooLarge) => {
-                        return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
+                        return self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE));
                     }
-                    Err(err) => return Err(err.into()),
+                    Err(err) => return self.finish(rendered(err.into()).await),
                 }
             }
         }
@@ -271,7 +276,7 @@ where
                         Ok(result) => result,
                         Err(_) => {
                             tracing::warn!(target: crate::target::HTTP, ?timeout, "request timed out");
-                            return Ok(self.finish(timed_out(timeout)));
+                            return self.finish(timed_out(timeout));
                         }
                     },
                 }
@@ -279,9 +284,13 @@ where
             None => inner.await,
         };
         if exceeded.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
+            return self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE));
         }
-        Ok(self.finish(result?.into_response()))
+        let resp = match result {
+            Ok(out) => out.into_response(),
+            Err(err) => rendered(err).await,
+        };
+        self.finish(resp)
     }
 }
 
@@ -319,54 +328,33 @@ where
 
         // The cap wraps the continuation, not part of it: its readers are extractors,
         // done before a streaming body is written. See `raw_body::with_body_limit`.
-        let result = crate::raw_body::with_body_limit(
+        let resp = crate::raw_body::with_body_limit(
             self.body_limit,
             self.handle(req, &continuation).instrument(span.clone()),
         )
         .await;
-        // Before any `Err` is rendered: rendering builds a fresh response without
-        // the matched template poem attached.
-        trace_context::name_route(&span, &method, matched_route(&result));
-        let result = if self.normalize {
-            // An `Err` renders without the header stamp.
-            Ok(match result {
-                Ok(resp) => crate::problem::normalize_error_response(resp).await,
-                Err(err) => {
-                    crate::problem::normalize_error_response(crate::problem::render_error(err))
-                        .await
-                }
-            })
-        } else {
-            result
+        // Before the normalizer, which builds a fresh response without the
+        // matched template.
+        trace_context::name_route(&span, &method, matched_route(&resp));
+        let mut resp = match self.normalize {
+            true => crate::problem::normalize_error_response(resp).await,
+            false => resp,
         };
         // Past the last await: from here the request has an answer to file.
         let log = unanswered.answered();
 
-        match result {
-            Ok(mut resp) => {
-                span.record("http.response.status_code", resp.status().as_u16());
-                trace_context::record_failure(&span, resp.status());
-                trace_context::stamp(&correlation, &mut resp);
-                // Unconditional: `current_trace_id()` inside a streaming body
-                // cannot depend on the access log.
-                Ok(response_body::carry(
-                    continuation,
-                    span,
-                    log,
-                    resp,
-                    &self.drain,
-                ))
-            }
-            // Only with CORS or compression, whose outer wrap renders the error.
-            Err(err) => {
-                span.record("http.response.status_code", err.status().as_u16());
-                trace_context::record_failure(&span, err.status());
-                if let Some(log) = log {
-                    log.abandoned(&span, err.status().as_u16());
-                }
-                Err(err)
-            }
-        }
+        span.record("http.response.status_code", resp.status().as_u16());
+        trace_context::record_failure(&span, resp.status());
+        trace_context::stamp(&correlation, &mut resp);
+        // Unconditional: `current_trace_id()` inside a streaming body
+        // cannot depend on the access log.
+        Ok(response_body::carry(
+            continuation,
+            span,
+            log,
+            resp,
+            &self.drain,
+        ))
     }
 }
 
@@ -641,32 +629,22 @@ mod tests {
         resp.assert_content_type("application/problem+json");
     }
 
-    #[tokio::test]
-    async fn fused_normalize_renders_an_inner_error_without_the_header_stamp() {
-        let failing = poem::endpoint::make(|_| async {
+    fn failing() -> impl Endpoint<Output = Response> {
+        poem::endpoint::make(|_| async {
             Err::<Response, poem::Error>(poem::Error::from_status(StatusCode::BAD_REQUEST))
-        });
-        let ep = fused_edge(failing, None, nosniff());
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status(StatusCode::BAD_REQUEST);
-        resp.assert_content_type("application/problem+json");
-        assert!(
-            resp.0.headers().get("x-content-type-options").is_none(),
-            "errors bypass the header stamp, matching the standalone normalizer",
-        );
+        })
     }
 
     #[tokio::test]
-    async fn an_inner_error_propagates_without_headers() {
-        let failing = poem::endpoint::make(|_| async {
-            Err::<Response, poem::Error>(poem::Error::from_status(StatusCode::BAD_REQUEST))
-        });
-        let ep = edge(failing, None, None, nosniff()).map_to_response();
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status(StatusCode::BAD_REQUEST);
-        assert!(
-            resp.0.headers().get("x-content-type-options").is_none(),
-            "errors bypass the header stamp, matching the previous SetHeader behavior",
-        );
+    async fn an_inner_error_is_rendered_inside_the_header_stamp() {
+        for ep in [
+            fused_edge(failing(), None, nosniff()).boxed(),
+            edge(failing(), None, None, nosniff()).boxed(),
+        ] {
+            let resp = TestClient::new(ep).get("/").send().await;
+            resp.assert_status(StatusCode::BAD_REQUEST);
+            resp.assert_content_type("application/problem+json");
+            resp.assert_header("x-content-type-options", "nosniff");
+        }
     }
 }

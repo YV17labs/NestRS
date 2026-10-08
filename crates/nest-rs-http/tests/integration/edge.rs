@@ -24,6 +24,11 @@ impl KitchenController {
     async fn search(&self, req: &poem::Request) -> String {
         req.uri().query().unwrap_or("none").to_owned()
     }
+
+    #[get("/shelves/:n")]
+    async fn shelf(&self, n: poem::web::Path<u32>) -> String {
+        format!("shelf {}", n.0)
+    }
 }
 
 #[module(providers = [KitchenController])]
@@ -67,4 +72,21 @@ async fn the_query_string_survives_normalization() {
     let resp = client.get("/kitchen/search/?q=1&sort=asc").send().await;
     resp.assert_status_is_ok();
     resp.assert_text("q=1&sort=asc").await;
+}
+
+/// An `Err` escaping the route tree is rendered inside the header stamp, so the
+/// router's own `404` and an extractor's `400` carry the security headers too.
+#[tokio::test]
+async fn an_error_the_route_tree_answers_carries_the_edge_s_headers() {
+    let client = crate::boot::<KitchenModule>().await;
+
+    let missing = client.get("/pantry").send().await;
+    missing.assert_status(StatusCode::NOT_FOUND);
+    missing.assert_content_type("application/problem+json");
+    missing.assert_header("x-content-type-options", "nosniff");
+
+    let unparsed = client.get("/kitchen/shelves/top").send().await;
+    unparsed.assert_status(StatusCode::BAD_REQUEST);
+    unparsed.assert_content_type("application/problem+json");
+    unparsed.assert_header("x-content-type-options", "nosniff");
 }

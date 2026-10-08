@@ -69,14 +69,6 @@ impl AccessLog {
         );
     }
 
-    /// File a request whose response this edge never got to hold — an `Err` on
-    /// its way to a layer outside, which will render it. No body passed through
-    /// here, so there is nothing to count; the status is what that error will
-    /// answer with.
-    pub(crate) fn abandoned(self, span: &tracing::Span, status: u16) {
-        self.emit(span, status, 0, None);
-    }
-
     /// File a request that ended before it answered. No `status` and no
     /// `bytes`: a `0` in either would claim a response nobody sent.
     fn unanswered(self, span: &tracing::Span, outcome: &'static str) {

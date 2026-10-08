@@ -5,12 +5,11 @@ use poem::Endpoint;
 use poem::test::{TestClient, TestResponse};
 use serde_json::{Value, json};
 
-/// The protocol version every suite negotiates — rmcp's own `LATEST`, pinned by
-/// `mcp::the_driver_negotiates_the_sdk_latest`.
+/// The protocol version every suite negotiates — rmcp's own
+/// `LATEST_WITH_INITIALIZE`, pinned by `mcp::the_driver_negotiates_the_sdk_latest_handshake`.
 ///
-/// Not `ProtocolVersion::STANDARD_HEADERS` (`2026-07-28`): SEP-2567 serves that
-/// revision statelessly, retiring the `mcp-session-id` model [`open_session`]
-/// implements.
+/// Not `LATEST` (`2026-07-28`): SEP-2567 serves that revision statelessly,
+/// retiring the `initialize` and `mcp-session-id` model [`open_session`] implements.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// The `initialize` request body, declaring no client capabilities.

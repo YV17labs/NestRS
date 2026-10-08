@@ -6,12 +6,10 @@ use nest_rs_testing::mcp;
 /// rmcp accepts every older revision forever, so nothing else fails when the
 /// driver falls behind.
 #[test]
-fn the_driver_negotiates_the_sdk_latest() {
+fn the_driver_negotiates_the_sdk_latest_handshake() {
     assert_eq!(
         mcp::PROTOCOL_VERSION,
-        ProtocolVersion::LATEST.as_str(),
-        "rmcp moved its LATEST: bump `mcp::PROTOCOL_VERSION` to match, and check \
-         whether the new revision still uses the `mcp-session-id` session model \
-         `open_session` implements (SEP-2567 retires it at 2026-07-28)",
+        ProtocolVersion::LATEST_WITH_INITIALIZE.as_str(),
+        "rmcp moved its LATEST_WITH_INITIALIZE: bump `mcp::PROTOCOL_VERSION` to match",
     );
 }

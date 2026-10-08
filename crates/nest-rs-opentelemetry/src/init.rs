@@ -223,7 +223,7 @@ impl OpenTelemetry {
             flushes.push(("tracer", Box::new(move || p.shutdown_with_timeout(bound))));
         }
         // The metrics provider ignores the timeout it is handed and waits
-        // its reader's fixed five seconds (opentelemetry_sdk 0.32), which is
+        // its reader's fixed five seconds (opentelemetry_sdk 0.33), which is
         // why the bound is enforced here rather than trusted to the SDK.
         if let Some(p) = self.meter_provider.take() {
             flushes.push(("meter", Box::new(move || p.shutdown_with_timeout(bound))));

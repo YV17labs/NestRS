@@ -21,17 +21,17 @@ tokio-util = { version = "0.7", features = ["rt", "io"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.32"
-opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
-opentelemetry-appender-tracing = "0.32"
-tracing-opentelemetry = "0.33"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.33"
+opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
+opentelemetry-appender-tracing = "0.33"
+tracing-opentelemetry = "0.34"
 
 thiserror = "2.0"
 anyhow = "1.0"
 
-jsonwebtoken = { version = "11.0", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "11.1", features = ["aws_lc_rs"] }
 # Past the 12-month bar (5.0.0, 2025-01-21): no release by 2027-01-31 and the
 # exchange is written on reqwest instead.
 oauth2 = { version = "5.0", default-features = false }
@@ -77,7 +77,7 @@ inventory = "0.3"
 
 argon2 = "0.6"
 validator = { version = "0.21", features = ["derive"] }
-uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.27", features = ["v4", "v7", "serde"] }
 
 # `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed bump,
 # both pins together.
@@ -93,7 +93,7 @@ trybuild = "1.0"
 
 flate2 = "1.1"
 
-rmcp = { version = "3.4", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
+rmcp = { version = "3.5", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
 
 croner = { version = "4.0", default-features = false }

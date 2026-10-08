@@ -62,7 +62,7 @@ const SEA_ORM: Dep = Dep {
 };
 const UUID: Dep = Dep {
     name: "uuid",
-    workspace_value: "{ version = \"1.26\", features = [\"v7\", \"serde\"] }",
+    workspace_value: "{ version = \"1.27\", features = [\"v7\", \"serde\"] }",
     features: &[],
 };
 const SERDE: Dep = Dep {

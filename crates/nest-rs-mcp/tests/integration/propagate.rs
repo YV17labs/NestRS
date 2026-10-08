@@ -323,6 +323,17 @@ const EXPECTED: &[&str] = &[
 /// The revision carrying SEP-2575 discovery/subscriptions and SEP-2243 headers.
 const MODERN_VERSION: &str = "2026-07-28";
 
+/// rmcp accepts every older revision forever, so nothing else fails when the
+/// stateless suite falls behind.
+#[test]
+fn the_stateless_suite_drives_the_sdk_latest() {
+    assert_eq!(
+        MODERN_VERSION,
+        ProtocolVersion::LATEST.as_str(),
+        "rmcp moved its LATEST: bump `MODERN_VERSION` to match",
+    );
+}
+
 /// Per-request `_meta` a modern (stateless, inline-lifecycle) request must
 /// carry, per SEP-2575.
 fn modern_meta() -> serde_json::Value {

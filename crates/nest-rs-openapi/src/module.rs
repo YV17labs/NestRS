@@ -18,6 +18,7 @@ const SPEC_PATH: &str = "/api-json";
 const CSS_PATH: &str = "/api/swagger-ui.css";
 const BUNDLE_PATH: &str = "/api/swagger-ui-bundle.js";
 const PRESET_PATH: &str = "/api/swagger-ui-standalone-preset.js";
+const INITIALIZER_PATH: &str = "/api/swagger-initializer.js";
 const VERSIONED_SPEC_PATTERN: &str = "/api-json/*version";
 
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
@@ -105,7 +106,8 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                 .at(DOCS_PATH, matched(get(ui::swagger_index)))
                 .at(CSS_PATH, matched(get(ui::swagger_css)))
                 .at(BUNDLE_PATH, matched(get(ui::swagger_bundle)))
-                .at(PRESET_PATH, matched(get(ui::swagger_preset)));
+                .at(PRESET_PATH, matched(get(ui::swagger_preset)))
+                .at(INITIALIZER_PATH, matched(get(ui::swagger_initializer)));
             // OpenAPI keys operations by path, so a version the path does not
             // carry needs a document of its own.
             for version in versioned_documents(container) {
@@ -125,6 +127,7 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
             CSS_PATH,
             BUNDLE_PATH,
             PRESET_PATH,
+            INITIALIZER_PATH,
         ])
         .exempt(),
     )

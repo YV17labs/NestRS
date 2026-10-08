@@ -199,17 +199,27 @@ async fn the_document_describes_headers_multipart_bodies_and_streamed_responses(
 async fn the_swagger_ui_and_its_assets_are_served() {
     let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
 
-    app.http().get("/api").send().await.assert_status_is_ok();
-    app.http()
-        .get("/api/swagger-ui-bundle.js")
-        .send()
-        .await
-        .assert_status_is_ok();
-    app.http()
-        .get("/api/swagger-ui.css")
-        .send()
-        .await
-        .assert_status_is_ok();
+    let page = app.http().get("/api").send().await;
+    page.assert_status_is_ok();
+    let policy = page
+        .0
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .expect("the page states its own policy")
+        .to_owned();
+    assert!(
+        policy.contains("script-src 'self'") && policy.contains("connect-src 'self'"),
+        "{policy}",
+    );
+    for asset in [
+        "/api/swagger-ui-bundle.js",
+        "/api/swagger-ui-standalone-preset.js",
+        "/api/swagger-initializer.js",
+        "/api/swagger-ui.css",
+    ] {
+        app.http().get(asset).send().await.assert_status_is_ok();
+    }
 }
 
 #[tokio::test]

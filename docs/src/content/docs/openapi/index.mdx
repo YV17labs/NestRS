@@ -56,7 +56,10 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
   table** your app serves. Every `#[controller]` your app mounts contributes its
   operations; nothing is listed by hand.
 - **`GET /api`** — a **bundled** Swagger UI. The assets ship inside the binary,
-  so it works with no internet access and no CDN.
+  so it works with no internet access and no CDN, and the page loads nothing
+  from elsewhere: it carries its own `Content-Security-Policy` (scripts and
+  requests from its own origin only, never framed), and Swagger UI's online
+  validator, which would send the document's URL to swagger.io, is off.
 - **`GET /api-json/v{n}`** — one document per API version, and only under
   `<PREFIX>_HTTP__VERSIONING=header` or `media_type`. OpenAPI 3.1 keys operations
   by path, so two versions selected by a header cannot both be described at

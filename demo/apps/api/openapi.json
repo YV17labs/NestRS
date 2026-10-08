@@ -59,18 +59,61 @@
         ],
         "type": "object"
       },
+      "IndicatorReport": {
+        "description": "Outcome of a single indicator check, included in a [`ProbeReport`].",
+        "properties": {
+          "error": {
+            "description": "`Some` only when the check failed — a **fixed, opaque** reason\n(`\"check failed\"` / `\"timed out\"` / `\"probe deadline exceeded\"`), never\nthe indicator's own error, which is logged at `warn` on\n`nest_rs::health`: `/health/*` is routinely unauthenticated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The indicator's stable id (its snake_case method name).",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IndicatorStatus",
+            "description": "Whether this indicator's check passed."
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "IndicatorStatus": {
+        "description": "`up` when the indicator's check returned `Ok`; `down` otherwise.",
+        "oneOf": [
+          {
+            "const": "up",
+            "description": "The check returned `Ok`.",
+            "type": "string"
+          },
+          {
+            "const": "down",
+            "description": "The check returned an error.",
+            "type": "string"
+          }
+        ]
+      },
       "Notification": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "message": {
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           }
         },
@@ -85,15 +128,18 @@
       "Org": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -105,43 +151,25 @@
         ],
         "type": "object"
       },
-      "PageParams": {
-        "description": "The `?first=&after=` cursor query. An unparsable `after` is ignored — paging\nfrom the start, never an error.",
-        "properties": {
-          "after": {
-            "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "first": {
-            "description": "Requested page size; defaults to 20 and is clamped to `1..=100`.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
       "Post": {
         "properties": {
           "author_id": {
+            "format": "uuid",
             "type": "string"
           },
           "body": {
             "type": "string"
           },
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           },
           "status": {
@@ -151,6 +179,7 @@
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -188,7 +217,45 @@
         ],
         "type": "object"
       },
+      "ProbeReport": {
+        "description": "Aggregated outcome of a probe: an overall `status` (`200` up, `503` down)\nplus per-indicator reports.",
+        "properties": {
+          "details": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Every indicator that ran, up or down — the union of `info` and `error`.",
+            "type": "object"
+          },
+          "error": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Down indicators, keyed by name. Empty when `status == Up`.",
+            "type": "object"
+          },
+          "info": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Up indicators, keyed by name.",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IndicatorStatus",
+            "description": "The overall probe result — `down` if any indicator is down."
+          }
+        },
+        "required": [
+          "status",
+          "info",
+          "error",
+          "details"
+        ],
+        "type": "object"
+      },
       "ProblemDetails": {
+        "description": "An RFC 9457 problem details object.",
         "properties": {
           "detail": {
             "type": "string"
@@ -198,17 +265,19 @@
             "type": "object"
           },
           "instance": {
-            "format": "uri",
+            "format": "uri-reference",
             "type": "string"
           },
           "status": {
+            "maximum": 599,
+            "minimum": 100,
             "type": "integer"
           },
           "title": {
             "type": "string"
           },
           "type": {
-            "format": "uri",
+            "format": "uri-reference",
             "type": "string"
           }
         },
@@ -217,19 +286,6 @@
           "title",
           "status"
         ],
-        "type": "object"
-      },
-      "StreamResumeDto": {
-        "properties": {
-          "Last-Event-ID": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
         "type": "object"
       },
       "TranscodeDto": {
@@ -309,21 +365,25 @@
       "User": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "email": {
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -430,6 +490,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -532,6 +602,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -621,6 +701,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -689,6 +779,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -708,6 +808,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -776,6 +886,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -795,6 +915,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -863,6 +993,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -882,6 +1022,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -900,11 +1050,30 @@
         "operationId": "health_live",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
+        "security": [],
+        "summary": "Liveness probe: whether the process should keep running",
         "tags": [
-          "HealthController"
+          "Health"
         ]
       }
     },
@@ -913,11 +1082,30 @@
         "operationId": "health_ready",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
+        "security": [],
+        "summary": "Readiness probe: whether the process can take traffic",
         "tags": [
-          "HealthController"
+          "Health"
         ]
       }
     },
@@ -926,11 +1114,30 @@
         "operationId": "health_startup",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
+        "security": [],
+        "summary": "Startup probe: whether the process has finished booting",
         "tags": [
-          "HealthController"
+          "Health"
         ]
       }
     },
@@ -977,7 +1184,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "x-next-cursor": {
+                "description": "Cursor of the next page, passed back as `after`; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -998,6 +1213,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1065,6 +1290,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1121,7 +1356,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "x-next-cursor": {
+                "description": "Cursor of the next page, passed back as `after`; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1142,6 +1385,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1225,6 +1478,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1295,6 +1568,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1360,6 +1643,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1455,6 +1748,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1511,7 +1824,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "x-next-cursor": {
+                "description": "Cursor of the next page, passed back as `after`; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1532,6 +1853,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1597,6 +1928,26 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1667,6 +2018,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1732,6 +2093,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1827,6 +2198,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1895,6 +2286,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -1951,7 +2352,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "headers": {
+              "x-next-cursor": {
+                "description": "Cursor of the next page, passed back as `after`; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -1972,6 +2381,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2037,6 +2456,26 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2107,6 +2546,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2173,6 +2622,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [
@@ -2268,6 +2727,26 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "security": [

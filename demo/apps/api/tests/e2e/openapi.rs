@@ -155,6 +155,26 @@ async fn openapi_document_describes_the_routes() {
         list["responses"].get("400").is_none(),
         "and an operation whose parameters are all optional advertises none: {list}",
     );
+    assert_eq!(
+        list["responses"]["200"]["headers"][nest_rs::http::NEXT_CURSOR_HEADER]["schema"]["type"],
+        "string",
+        "the paginated list documents the cursor header it sends: {list}",
+    );
+
+    let org = &doc["components"]["schemas"]["Org"]["properties"];
+    assert_eq!(org["id"]["format"], "uuid", "{org}");
+    assert_eq!(org["created_at"]["format"], "date-time", "{org}");
+    assert!(
+        doc["components"]["schemas"].get("PageParams").is_none(),
+        "a query payload is expanded into parameters, never left as an unused type",
+    );
+
+    let live = &doc["paths"]["/health/live"]["get"];
+    assert_eq!(
+        live["security"],
+        json!([]),
+        "a public route states its opening: {live}",
+    );
 
     let throttled = &doc["paths"]["/audio/uploads"]["post"]["responses"]["429"];
     assert_eq!(

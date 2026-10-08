@@ -5,7 +5,7 @@ framework ships for security, so the hard path is the one tested and nothing
 is tested in plaintext. Every service the dev container and CI run — Postgres,
 Valkey, RustFS — listens on TLS alone, presenting one certificate.
 
-`.devcontainer/tls/issue.sh` issues it, with a self-signed authority whose key
+`.devcontainer/scripts/issue-certificates.sh` issues it, with a self-signed authority whose key
 is thrown away, into a volume each service reads its own copy from (one row
 per service: its owner and the names it reads). The authority joins the
 system's trust store — the dev container's at start, the CI runner's in the

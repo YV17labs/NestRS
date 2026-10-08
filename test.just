@@ -22,15 +22,23 @@ integration:
 e2e:
     {{nextest}} -E 'binary(e2e) and not ({{elsewhere}})'
 
-# The dev container's `topologies` profile, as its loopback serves it.
+# Where the `valkey-sentinel` and `valkey-cluster` dev containers serve Valkey.
 sentinel_url := "rediss-sentinel://127.0.0.1:26379?node=127.0.0.1:26380&node=127.0.0.1:26381&sentinelServiceName=nestrs"
 cluster_url := "rediss-cluster://127.0.0.1:7000?node=127.0.0.1:7001&node=127.0.0.1:7002"
 
-# Its failovers run last, one at a time.
-# nest-rs-redis's e2e on Valkey's `sentinel` or `cluster` (the `topologies` profile); CI runs neither
+# nest-rs-redis's e2e on Valkey `sentinel` or `cluster`, from that dev container; CI runs neither
 topology name:
-    {{ if name =~ "^(sentinel|cluster)$" { "" } else { error("a topology is `sentinel` or `cluster`") } }}NESTRS_REDIS__URL='{{ if name == "sentinel" { sentinel_url } else { cluster_url } }}' {{nextest}} -E '{{redis}} and (not {{on_one}} or test(/(^|::){{name}}::/)) and not test(/::failover::/)'
-    NESTRS_REDIS__URL='{{ if name == "sentinel" { sentinel_url } else { cluster_url } }}' {{nextest}} --test-threads 1 -E '{{redis}} and test(/(^|::){{name}}::failover::/)'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{name}}" in
+        sentinel) export NESTRS_REDIS__URL='{{sentinel_url}}' ;;
+        cluster) export NESTRS_REDIS__URL='{{cluster_url}}' ;;
+        *) echo "a topology is \`sentinel\` or \`cluster\`" >&2; exit 1 ;;
+    esac
+    # Every test that holds on any topology, and this one's own.
+    {{nextest}} -E '{{redis}} and (not {{on_one}} or test(/(^|::){{name}}::/)) and not test(/::failover::/)'
+    # Its failovers last, one at a time: each moves the primaries the others run on.
+    {{nextest}} --test-threads 1 -E '{{redis}} and test(/(^|::){{name}}::failover::/)'
 
 # Coverage of the nextest suite, per file; doctests count on nightly only
 cov:

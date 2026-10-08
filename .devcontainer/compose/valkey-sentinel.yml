@@ -1,0 +1,75 @@
+# Valkey under Sentinel, beside the dev container's own services: a primary on
+# 6380 and its replica on 6381, watched as `nestrs` by three sentinels on
+# 26379-26381, every one on the dev container's loopback, which the certificate
+# names. For `just test topology sentinel`, layered on `base.yml` by the
+# `valkey-sentinel` dev container.
+
+x-node: &node
+  extends: {file: valkey.yml, service: valkey}
+  network_mode: service:dev
+  user: "999:999"
+
+services:
+  valkey-sentinel-primary:
+    <<: *node
+    environment: {PORT: "6380"}
+    configs: [valkey-sentinel-node.conf]
+    command: [sh, -c, 'exec valkey-server /valkey-sentinel-node.conf --tls-port "$$PORT"']
+  valkey-sentinel-replica:
+    <<: *node
+    environment: {PORT: "6381"}
+    configs: [valkey-sentinel-node.conf]
+    command: [sh, -c, 'exec valkey-server /valkey-sentinel-node.conf --tls-port "$$PORT" --replicaof 127.0.0.1 6380']
+
+  valkey-sentinel-26379: &sentinel
+    <<: *node
+    environment: {PORT: "26379"}
+    configs: [valkey-sentinel.conf]
+    # Sentinel rewrites its configuration, so each one starts from a copy.
+    command: [sh, -c, 'cat /valkey-sentinel.conf > /tmp/sentinel.conf && exec valkey-sentinel /tmp/sentinel.conf --tls-port "$$PORT"']
+  valkey-sentinel-26380: {<<: *sentinel, environment: {PORT: "26380"}}
+  valkey-sentinel-26381: {<<: *sentinel, environment: {PORT: "26381"}}
+
+  # Waits until the three sentinels name one primary, then exits.
+  valkey-sentinel-init:
+    <<: *node
+    volumes:
+      - ../scripts/valkey-sentinel-ready.sh:/ready.sh:ro
+    command: [bash, /ready.sh]
+    healthcheck: {disable: true}
+    depends_on:
+      valkey-sentinel-primary: {condition: service_healthy}
+      valkey-sentinel-replica: {condition: service_healthy}
+      valkey-sentinel-26379: {condition: service_healthy}
+      valkey-sentinel-26380: {condition: service_healthy}
+      valkey-sentinel-26381: {condition: service_healthy}
+
+configs:
+  valkey-sentinel-node.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/valkey-standalone/server.pem
+      tls-key-file /certs/valkey-standalone/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      repl-diskless-sync-delay 0
+      enable-debug-command local
+      appendonly no
+      save ""
+  # The replica is named: a sentinel reading the primary's INFO before the
+  # replica connects would otherwise learn of it only at its next INFO, 10 s later.
+  valkey-sentinel.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/valkey-standalone/server.pem
+      tls-key-file /certs/valkey-standalone/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      sentinel monitor nestrs 127.0.0.1 6380 2
+      sentinel down-after-milliseconds nestrs 2000
+      sentinel failover-timeout nestrs 10000
+      sentinel known-replica nestrs 127.0.0.1 6381

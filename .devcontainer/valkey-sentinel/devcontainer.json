@@ -1,10 +1,7 @@
 {
-	// The everyday environment, the services CI runs. Each backend shape a driver
-	// is built against is one of its own, a folder beside this file, picked with
-	// "Dev Containers: Reopen in Container". A configuration inherits nothing, so
-	// each one is this file but for its name and its compose files.
-	"name": "nestrs",
-	"dockerComposeFile": "compose/base.yml",
+	// ../devcontainer.json but for its name and its compose files.
+	"name": "nestrs — Valkey Sentinel",
+	"dockerComposeFile": ["../compose/base.yml", "../compose/valkey-sentinel.yml"],
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
 	"postCreateCommand": "bash .devcontainer/scripts/post-create.sh",

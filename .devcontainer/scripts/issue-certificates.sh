@@ -2,7 +2,7 @@
 # Issues the one TLS certificate every development service presents — in the
 # dev container and in CI — and hands each service its own copy.
 #
-#   issue.sh DIR
+#   issue-certificates.sh DIR
 #
 #   DIR/ca.pem              the authority every client trusts
 #   DIR/<service>/<files>   one folder per service: the certificate and its
@@ -18,14 +18,14 @@
 # network, and joins the certificate's names on its own.
 set -eu
 
-# service  uid    certificate      key              how the service reads them
+# service          uid    certificate      key              how the service reads them
 SERVICES='
-postgres   999    server.pem       server.key       postgres -c ssl_cert_file / -c ssl_key_file
-redis      999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
-rustfs     10001  rustfs_cert.pem  rustfs_key.pem   RUSTFS_TLS_PATH, which fixes the two names
+postgres           999    server.pem       server.key       postgres -c ssl_cert_file / -c ssl_key_file
+valkey-standalone  999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+rustfs             10001  rustfs_cert.pem  rustfs_key.pem   RUSTFS_TLS_PATH, which fixes the two names
 '
 
-dir=${1:?usage: issue.sh DIR}
+dir=${1:?usage: issue-certificates.sh DIR}
 
 services() {
     echo "$SERVICES" | while read -r service uid cert key _; do

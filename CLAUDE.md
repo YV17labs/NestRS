@@ -47,8 +47,8 @@ keeps it. **A backend we support, we support whole**: every deployment shape its
 latest version offers in production (Valkey: standalone, Sentinel, Cluster),
 TLS on each — fewer drivers, each complete, never a subset passed off as
 support. CI runs each backend on one server, the dev container's; every other
-shape keeps its e2e suite, run by hand against a compose profile when its
-driver changes (`.claude/decisions/one-server-per-backend.md`). Open source only: a backend's server is free software. We build what keeps an app correct; operating it (dashboards,
+shape keeps its e2e suite, run by hand in a dev container environment of its
+own when its driver changes (`.claude/decisions/one-server-per-backend.md`). Open source only: a backend's server is free software. We build what keeps an app correct; operating it (dashboards,
 pausing, retuning) is its backend's tooling. No feature for a hypothetical
 user. We aim for excellence, not for done.
 
@@ -199,12 +199,17 @@ it helps. `demo/` Rust carries none.
 Wiring bugs do not surface in unit tests. Postgres, Valkey and S3 run in the
 devcontainer, one server each, and CI starts those three and nothing else: one
 that does not answer is an environment defect to fix, never a reason to skip a
-test. Valkey's Sentinel and Cluster start with the dev container's `topologies`
-profile, for `just test topology <name>` alone. **We work encrypted**: every service, in the dev
-container and in CI, speaks TLS alone, presenting the one certificate a
-self-signed authority issues at setup (`.devcontainer/tls/issue.sh`); that
-authority joins the system's trust store, as a company installs its own, so
-every client verifies it like any other. No certificate is committed: a test
+test. Any other backend shape is a dev container environment of its own —
+`.devcontainer/<backend>-<shape>/devcontainer.json`, layering
+`compose/<backend>-<shape>.yml` on `compose/base.yml` (Valkey's
+`valkey-sentinel` and `valkey-cluster`) — opened with *Reopen in Container* in
+place of the everyday one.
+
+**We work encrypted**: every service, in the dev container and in CI, speaks
+TLS alone, presenting the one certificate a self-signed authority issues at
+setup (`.devcontainer/scripts/issue-certificates.sh`); that authority joins the
+system's trust store, as a company installs its own, so every client verifies
+it like any other. No certificate is committed: a test
 double's is issued in process (`nest_rs_testing::TestAuthority`). Nothing is
 tested in plaintext — what holds encrypted holds in plaintext, which the
 framework still allows a deployment that writes it. **Prove each behaviour at the cheapest level that can

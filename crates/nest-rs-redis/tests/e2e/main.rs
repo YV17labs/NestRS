@@ -10,7 +10,7 @@
 //! for the occurrence lock a job firing once across replicas claims through.
 //!
 //! Valkey is reached over TLS alone, at `<PREFIX>_REDIS__URL` or the dev
-//! container's `rediss://redis:6379`, its certificate verified as the framework
+//! container's `rediss://valkey-standalone:6379`, its certificate verified as the framework
 //! verifies it by default — against the system's authorities, where the dev
 //! container and CI install the services'. A double the suite puts in front of
 //! it presents a certificate of the test authority's, which only a connection
@@ -60,7 +60,7 @@ fn redis_url() -> String {
     nest_rs_config::ConfigService::for_namespace("redis")
         .get("URL")
         .expect("a readable Redis URL")
-        .unwrap_or_else(|| "rediss://redis:6379".to_owned())
+        .unwrap_or_else(|| "rediss://valkey-standalone:6379".to_owned())
 }
 
 /// Pinned rather than read from the env: the framework workspace ships no

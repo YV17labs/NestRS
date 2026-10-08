@@ -135,10 +135,10 @@ features because each pulls a port crate an app may not need.
 - **A script names keys of one hash slot**, refused before it is sent on every
   topology, so what runs on one server runs on a Cluster; a script a node
   forgot is loaded again on that node alone.
-- **The Valkey the docs claim is the one every suite runs on**: the dev
-  container's `docker-compose.yml` pins one image tag, which CI starts through
-  the `dev-services` action and the `topologies` profile runs as Sentinel and
-  Cluster, and the docs name its release — they move in one change.
+- **The Valkey the docs claim is the one every suite runs on**:
+  `.devcontainer/compose/valkey.yml` pins one image tag, which every Valkey service of
+  the dev container extends and CI starts through the `dev-services` action,
+  and the docs name its release — they move in one change.
 - **Each binding's docs page prescribes its ACL rule whole, per role** — its
   namespace, the connection's commands, every command it or a script it runs
   sends, and nothing else — plus what a topology's connection adds, written

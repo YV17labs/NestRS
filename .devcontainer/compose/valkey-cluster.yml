@@ -1,0 +1,55 @@
+# A six-node Valkey Cluster, beside the dev container's own services: nodes on
+# 7000-7005, a replica per primary, every one on the dev container's loopback,
+# which the certificate names. For `just test topology cluster`, layered on
+# `base.yml` by the `valkey-cluster` dev container.
+
+x-node: &node
+  extends: {file: valkey.yml, service: valkey}
+  network_mode: service:dev
+  user: "999:999"
+
+services:
+  valkey-cluster-7000: &cluster-node
+    <<: *node
+    environment: {PORT: "7000"}
+    configs: [valkey-cluster.conf]
+    command: [sh, -c, 'exec valkey-server /valkey-cluster.conf --tls-port "$$PORT"']
+  valkey-cluster-7001: {<<: *cluster-node, environment: {PORT: "7001"}}
+  valkey-cluster-7002: {<<: *cluster-node, environment: {PORT: "7002"}}
+  valkey-cluster-7003: {<<: *cluster-node, environment: {PORT: "7003"}}
+  valkey-cluster-7004: {<<: *cluster-node, environment: {PORT: "7004"}}
+  valkey-cluster-7005: {<<: *cluster-node, environment: {PORT: "7005"}}
+
+  # Forms the Cluster once, waits until every node serves it, then exits.
+  valkey-cluster-init:
+    <<: *node
+    volumes:
+      - ../scripts/valkey-cluster-form.sh:/form.sh:ro
+    command: [bash, /form.sh]
+    healthcheck: {disable: true}
+    depends_on:
+      valkey-cluster-7000: {condition: service_healthy}
+      valkey-cluster-7001: {condition: service_healthy}
+      valkey-cluster-7002: {condition: service_healthy}
+      valkey-cluster-7003: {condition: service_healthy}
+      valkey-cluster-7004: {condition: service_healthy}
+      valkey-cluster-7005: {condition: service_healthy}
+
+configs:
+  valkey-cluster.conf:
+    content: |
+      bind 127.0.0.1 -::1
+      port 0
+      tls-cert-file /certs/valkey-standalone/server.pem
+      tls-key-file /certs/valkey-standalone/server.key
+      tls-ca-cert-file /certs/ca.pem
+      tls-auth-clients no
+      tls-replication yes
+      tls-cluster yes
+      repl-diskless-sync-delay 0
+      enable-debug-command local
+      appendonly no
+      save ""
+      cluster-enabled yes
+      cluster-databases 16
+      cluster-node-timeout 2000

@@ -73,7 +73,7 @@ nextest prints each test's time: compare before and after.
 - **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
   the value.
 - **`load_project_env`** — the `.env` cascade, so a test reaches the
-  devcontainer's `postgres`, `redis` and `rustfs`.
+  devcontainer's `postgres`, `valkey-standalone` and `rustfs`.
 
 ## Live backends are shared — each suite hands out its parts
 
@@ -109,8 +109,9 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
 - **What a test files where nothing drains, it names uniquely and deletes.**
 - **`nest-rs-redis`'s e2e runs once per Valkey topology** the suite's URL
   declares: on the dev container's one server in `just test`, which CI runs,
-  and on Sentinel and Cluster in `just test topology <name>`, by hand against
-  the dev container's `topologies` profile when the binding changes; CI runs
+  and on Sentinel and Cluster in `just test topology <name>`, by hand in the
+  `valkey-sentinel` or `valkey-cluster` dev container when the binding
+  changes; CI runs
   neither (`.claude/decisions/one-server-per-backend.md`). A test that holds on
   one topology alone sits in a module named for it (`standalone`, `sentinel`,
   `cluster`), and each run leaves the others out; a failover moves what every

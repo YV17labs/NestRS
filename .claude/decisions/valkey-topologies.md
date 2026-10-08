@@ -75,3 +75,5 @@ own, so the nodes still announce `127.0.0.1`, which the certificate names.
 `just test topology <name>` sets the profile's URL itself. The refusal of
 Sentinel and Cluster in the dev container above stands for its default
 services; a profile starts nothing unless asked for.
+Then two dev container environments rather than a profile, `valkey-sentinel/`
+and `valkey-cluster/` (`one-server-per-backend.md`).

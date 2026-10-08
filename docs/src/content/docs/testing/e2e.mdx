@@ -313,7 +313,7 @@ can own is the database. Two settings keep a suite apart:
   running:
 
   ```bash title=".env.test"
-  NESTRS_REDIS__URL=rediss://redis:6379/1
+  NESTRS_REDIS__URL=rediss://valkey-standalone:6379/1
   ```
 
 - **A test that starts a worker takes a database of its own**, and seeds it

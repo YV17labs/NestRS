@@ -1,0 +1,17 @@
+# The Valkey every Valkey service of the dev container extends — the standalone
+# server beside it and each environment's nodes — so one image tag is the
+# Valkey every suite runs on. No compose file lists this one: it is read
+# through `extends` alone, and never started.
+services:
+  valkey:
+    image: valkey/valkey:9.1.2
+    volumes:
+      - ${CERTS:-certs}:/certs:ro
+    # Each service sets PORT, the TLS port it listens on and is checked through.
+    healthcheck:
+      test: [CMD-SHELL, 'valkey-cli --tls --cacert /certs/ca.pem -p "$$PORT" ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+      start_interval: 1s

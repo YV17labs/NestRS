@@ -26,8 +26,8 @@ build by hand later in
 <Steps>
 
 1. Clone the reference repo and open it in the devcontainer — VS Code
-   offers **Reopen in Container**, which brings up Postgres and Redis
-   beside the workspace and installs the `nestrs` CLI. The demo commits
+   offers **Reopen in Container**, which brings up Postgres, Valkey and
+   RustFS beside the workspace and installs the `nestrs` CLI. The demo commits
    its whole configuration, dev keypair included, so there is nothing
    to prime before the first run.
 
@@ -38,8 +38,8 @@ build by hand later in
    ```
 
    Without VS Code, start the same services from the repo's compose
-   file (`docker compose -f .devcontainer/docker-compose.yml up -d
-   postgres redis rustfs`) and point `<PREFIX>_SEAORM__URL` /
+   file (`docker compose -f .devcontainer/compose/base.yml up -d
+   postgres valkey-standalone rustfs`) and point `<PREFIX>_SEAORM__URL` /
    `<PREFIX>_REDIS__URL` at `localhost` in a git-ignored
    `demo/.env.local`.
 

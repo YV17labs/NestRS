@@ -36,3 +36,24 @@ hand (`CLUSTER MIGRATESLOTS` refused, the suite running beside it), and passes
 alone; it is reproduced when an issue asks.
 
 Reopened when the owner's resources allow a shape in CI again.
+
+**Moved on 2026-10-08, the same day, at the owner's request:** the profile
+asked a command on the host, which a contributor inside the dev container
+cannot run, and services commented out were tried next and dropped for what
+the devcontainer specification already offers: several configurations in one
+repository, each an ordered list of compose files, picked with *Reopen in
+Container* ("Connect to multiple containers", VS Code). The everyday
+environment is `.devcontainer/devcontainer.json`, the services CI runs; each
+backend shape a driver is built against is a folder beside it,
+`<backend>-<shape>/` — `valkey-sentinel/`, `valkey-cluster/` — whose
+`devcontainer.json` layers `compose/<backend>-<shape>.yml` on
+`compose/base.yml`. The folder holds the configurations alone: every compose
+file sits in `compose/`, every script in `scripts/` — the two lifecycle
+commands too, so a configuration's copy carries no logic — and service
+configuration in `config/`. Only the open
+environment runs (`shutdownAction` stops a compose environment with its
+window). Every Valkey service extends `compose/valkey.yml`, the one image
+tag, and the standalone server is named for its shape, `valkey-standalone`,
+like its siblings. A configuration inherits nothing from another (the
+specification has no `extends`), so each environment copies the base's
+`devcontainer.json` but for its name and its compose files.

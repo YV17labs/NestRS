@@ -78,6 +78,21 @@ mod tests {
         cfg.validate().expect("valid");
     }
 
+    #[test]
+    fn clients_are_read_from_their_variable() {
+        let env = ConfigService::with_vars(
+            "oauth",
+            [(
+                "CLIENTS",
+                r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["user"],"payload":"00000000-0000-0000-0000-000000000000"}]"#,
+            )],
+        );
+        let cfg = OAuthConfig::from_env(&env, OAuthConfig::defaults()).expect("the clients parse");
+        assert_eq!(cfg.clients.len(), 1);
+        assert_eq!(cfg.clients[0].client_id, "web");
+        cfg.validate().expect("valid");
+    }
+
     const MISTYPED_CLIENTS: &str = r#"[{"client_id":"demo","client_secret":"hunter2-SECRET","scopes":"hunter2-SECRET","payload":"018f0000-0000-7000-8000-000000000000"}]"#;
 
     #[test]

@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 Configuration in nestrs is a typed struct, one file per concern, mapped
 explicitly to `<PREFIX>_<NAMESPACE>__<KEY>` environment variables. The crate
-is hand-rolled (no figment at runtime): you write `from_env`, the framework
+is hand-rolled: you write `from_env`, the framework
 loads it once at boot, validates it, and registers `Arc<MyConfig>` into
 the container. Consumers inject it like any other provider.
 

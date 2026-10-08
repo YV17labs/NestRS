@@ -151,7 +151,7 @@ What this means in practice:
 The real hermeticity trap is the **cache**, not a write. The cascade is parsed
 once per process, and that first parse freezes both the working directory it
 read from and the `<PREFIX>_ENV` that selected the files. A test that changes
-either afterwards — `figment::Jail` moves the CWD — resolves against the
+either afterwards — a test moving its working directory, say — resolves against the
 *earlier* test's cascade. Prefer `ConfigService::with_vars` for config
 assertions: it answers from a map, so nothing is cached and nothing is shared.
 </Aside>
@@ -203,5 +203,5 @@ impl ConfigSource for Dispatch {
 - [Configuration overview](/configuration/) — the typed-struct contract.
 - [The .env cascade](/configuration/env-cascade/) — load order,
   hermeticity, file naming.
-- [Overriding in tests](/configuration/testing/) — the
-  `figment::Jail`-isolated path for unit tests, `.provide()` for e2e.
+- [Overriding in tests](/configuration/testing/) — `with_vars` for unit
+  tests, `.provide()` for e2e.

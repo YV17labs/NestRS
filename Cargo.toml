@@ -40,7 +40,9 @@ base64 = "0.23"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-figment = { version = "0.10", features = ["toml", "env"] }
+# Past the 12-month bar (0.10.19, 2024-05-17), and test-only (`Jail`): no
+# release by 2027-01-31 and the suites stop mutating the process environment.
+figment = "0.10"
 
 # Past the 12-month bar (3.1.12, 2025-07-28): 4.0 (poem-web/poem#1200) at its
 # release, or none by 2027-01-31 and `.claude/decisions/http-server.md` applies.
@@ -63,6 +65,9 @@ tokio-tungstenite = "0.30"
 
 async-trait = "0.1"
 
+# Past the 12-month bar (0.12.5, 2025-10-03): std's non-poisoning locks
+# (rust-lang/rust#134645) at their stabilisation, or no release by 2027-04-03 and
+# `std::sync` takes its place under one poisoning policy.
 parking_lot = "0.12"
 
 # `=`: nest-rs-graphql reads async-graphql's registry internals.

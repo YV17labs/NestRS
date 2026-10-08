@@ -1,6 +1,6 @@
 ---
 title: Overriding in tests
-description: Seed pinned config values in e2e tests, isolate the environment in unit tests with figment::Jail, keep both hermetic.
+description: Seed pinned config values in e2e tests, unit-test a Config on a map of variables, keep both hermetic.
 sidebar:
   order: 4
 ---
@@ -10,8 +10,8 @@ import { Aside } from '@astrojs/starlight/components';
 Tests bypass the environment in two ways depending on the layer. End-to-end
 tests use `TestApp` and seed pinned config values directly — the seed
 wins over `ConfigModule::for_feature::<C>()`. Unit tests for a `Config`
-impl run inside a `figment::Jail` that scopes `std::env` mutations to
-the test, so neighboring tests stay hermetic.
+impl read a map of variables through `ConfigService::with_vars`, and never
+touch `std::env`.
 
 Both rely on a single guarantee: under `<PREFIX>_ENV=test`, the
 [`.env.local`](/configuration/env-cascade/#test-mode-is-hermetic) file is
@@ -140,56 +140,50 @@ variable a committed `.env` happens to define will read the file. Use
 
 ## Unit-testing a `Config` impl
 
-When the unit under test is the `from_env` mapping itself, drive it
-through `figment::Jail`. The jail is a `dev-dependency` borrowed from
-the `figment` crate; it scopes every `set_env` / `create_file` call to
-the test closure and restores `std::env` on drop.
+When the unit under test is the `from_env` mapping itself, read it from a
+map of variables. `ConfigService::with_vars` answers for one namespace,
+by key, from the pairs you give it, and reads neither `std::env` nor the
+`.env` cascade. Validation is the struct's own `validate()`, which
+`load()` runs after the mapping.
 
-```rust title="crates/features/src/oauth/config.rs"
+```rust title="crates/features/src/oauth/config.rs (from the demo, abridged)"
 #[cfg(test)]
 mod tests {
-    use nest_rs::config::var_name;
-
     use super::*;
 
-    #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
-    fn loads_clients_from_env() {
-        figment::Jail::expect_with(|jail| {
-            jail.set_env(
-                var_name("oauth", "CLIENTS"),
-                r#"[{"client_id":"web","client_secret":"s","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
-            );
-            let cfg = OAuthConfig::load().expect("loads with clients");
-            assert_eq!(cfg.clients.len(), 1);
-            assert_eq!(cfg.clients[0].client_id, "web");
-            Ok(())
-        });
-    }
+    // …
 
     #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
-    fn fails_validation_when_no_clients() {
-        figment::Jail::expect_with(|_| {
-            let err = OAuthConfig::load().expect_err("empty clients must fail");
-            assert!(matches!(err, ConfigError::Validation(_)));
-            Ok(())
-        });
+    fn empty_clients_fails_validation() {
+        let cfg = OAuthConfig {
+            clients: vec![],
+            default_org_id: Uuid::nil(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.field_errors().contains_key("clients"));
+    }
+
+    // …
+
+    #[test]
+    fn clients_are_read_from_their_variable() {
+        let env = ConfigService::with_vars(
+            "oauth",
+            [(
+                "CLIENTS",
+                r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["user"],"payload":"00000000-0000-0000-0000-000000000000"}]"#,
+            )],
+        );
+        let cfg = OAuthConfig::from_env(&env, OAuthConfig::defaults()).expect("the clients parse");
+        assert_eq!(cfg.clients.len(), 1);
+        assert_eq!(cfg.clients[0].client_id, "web");
+        cfg.validate().expect("valid");
     }
 }
 ```
 
-This is the exact pattern `nest-rs-config`'s own tests use — see
-`crates/nest-rs-config/src/config.rs` and `service.rs`. `Jail` fixes its
-closure's error type, which clippy finds too large: the exception is an
-`#[expect]` with its reason, never an `#[allow]`, so it fails the day the lint
-no longer fires.
+Nothing in it touches the process, so these tests run in parallel under
+any runner.
 
 ## Default `<PREFIX>_ENV` in tests
 
@@ -208,10 +202,10 @@ loads the right files.
 
 ## What not to do
 
-- **Don't mutate `std::env` directly from a `#[tokio::test]`.** Tokio
-  runs tests in parallel; one test's `set_var` races against another's
-  read. `figment::Jail` serializes mutations behind a process-wide
-  mutex, which is why it exists.
+- **Don't mutate `std::env` to feed a config.** `std::env::set_var` is
+  `unsafe` since Rust 2024: in a process another test shares, it races
+  that test's reads. `with_vars` answers from a map, and `.provide()`
+  skips the read altogether.
 - **Don't pin config in a `setup` shared between tests.** Each test
   should declare its inputs explicitly — that's what makes a failure
   reproducible from the test code alone.

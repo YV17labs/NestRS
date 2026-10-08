@@ -1285,24 +1285,34 @@ impl PagedProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    imports = [RedisModule::for_root(paged_redis()), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
     providers = [PagedProcessor],
 )]
 struct PagedModule;
+
+/// The suite's Redis at the framework's default budget: this case pushes,
+/// reads and pages through ten thousand entries in single commands, where the
+/// suite's half second is sized for one job's.
+fn paged_redis() -> nest_rs_redis::RedisConfig {
+    crate::at_default_budget(crate::redis_config())
+}
 
 /// Past ten thousand pending entries, a look for lapsed leases reads one page
 /// of a thousand, and the next look reads on from where it stopped: its cost to
 /// Redis stays a page, however many deliveries run elsewhere. Two lapsed
 /// deliveries sit among ten thousand running ones, the first in the first page
 /// and the second past it: the first look takes only the first, and a later one
-/// the second.
+/// the second. One look hands what it takes over in one receive, so its jobs
+/// start together, while the next look comes after a blocking read of its own:
+/// the two starts are told apart by the gap between them, never by when the
+/// test happened to look.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
     let queue = <PagedQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
     let (first, second, running) = (run, run + 1, run + 2);
-    let producer = crate::producer().await;
+    let producer = crate::producer_on(paged_redis()).await;
     producer
         .push(PagedQueue, PagedCommand { run: first }, None)
         .await
@@ -1373,13 +1383,17 @@ async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
         .spawn_transport(nest_rs_queue::QueueWorker::new())
         .await
         .expect("the worker starts");
-    crate::wait_until(Duration::from_secs(10), || PAGED.finished(first) == 1).await;
-    assert!(
-        PAGED.of(second).is_empty(),
-        "the delivery past the first page waits for the next look"
-    );
-    crate::wait_until(Duration::from_secs(10), || PAGED.finished(second) == 1).await;
+    crate::wait_until(Duration::from_secs(10), || {
+        PAGED.finished(first) == 1 && PAGED.finished(second) == 1
+    })
+    .await;
     worker.shutdown().await.expect("clean shutdown");
+    let gap = PAGED.of(second)[0].duration_since(PAGED.of(first)[0]);
+    assert!(
+        gap >= Duration::from_millis(500),
+        "the delivery past the first page waits for the next look, where one look \
+         would have started both together: {gap:?} apart"
+    );
     assert!(PAGED.of(running).is_empty(), "no running delivery is taken");
     crate::forget(queue).await;
 }

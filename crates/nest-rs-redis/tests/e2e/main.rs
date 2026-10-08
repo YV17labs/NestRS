@@ -170,16 +170,26 @@ fn unique_key(tag: &str) -> String {
 }
 
 async fn connect() -> RedisConnection {
-    RedisConnection::connect(&redis_config())
+    RedisConnection::connect(&at_default_budget(redis_config()))
         .await
         .expect("connect to the dev container Redis")
 }
 
 /// [`connect`], on database `db`.
 async fn connect_on(db: u8) -> RedisConnection {
-    RedisConnection::connect(&redis_config_on(db))
+    RedisConnection::connect(&at_default_budget(redis_config_on(db)))
         .await
         .expect("connect to the dev container Redis")
+}
+
+/// `config` at the framework's default budget, for the test's own commands:
+/// [`BUDGET`] is the setting the apps under test run with, and a loaded machine
+/// can spend half a second on a dial alone.
+fn at_default_budget(config: RedisConfig) -> RedisConfig {
+    RedisConfig {
+        connect_timeout: RedisConfig::default().connect_timeout,
+        ..config
+    }
 }
 
 /// How many clients selected on `db` sit blocked in `XREADGROUP`, as `admin`'s

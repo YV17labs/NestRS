@@ -103,10 +103,23 @@ pub(crate) async fn starved_pool() -> DatabaseConnection {
     let mut options = sea_orm::ConnectOptions::new(url());
     options
         .max_connections(1)
+        .min_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_lazy(true)
         .acquire_timeout(std::time::Duration::from_millis(250));
-    sea_orm::Database::connect(options)
+    let pool = sea_orm::Database::connect(options)
         .await
-        .expect("a one-connection pool connects")
+        .expect("a one-connection pool is built");
+    // sqlx counts opening a connection against the acquire timeout, which a
+    // loaded machine can spend on the handshake alone; a lazy pool with neither
+    // an idle timeout nor a lifetime opens its minimum in the background instead,
+    // under sqlx's own deadline.
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(10), || {
+        pool.get_postgres_connection_pool().num_idle() == 1
+    })
+    .await;
+    pool
 }
 
 /// The backend pid serving `executor`, so a probe can have the server close that

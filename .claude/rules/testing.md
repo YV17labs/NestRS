@@ -107,12 +107,12 @@ one Postgres and one Redis. Isolation is declared, never hoped for.
   back onto the shared database, or around a proxy the test put in front of
   it.
 - **What a test files where nothing drains, it names uniquely and deletes.**
-- **`nest-rs-redis`'s e2e runs once per Valkey topology** the suite's URL
-  declares: on the dev container's one server in `just test`, which CI runs,
-  and on Sentinel and Cluster in `just test topology <name>`, by hand in the
-  `valkey-sentinel` or `valkey-cluster` dev container when the binding
-  changes; CI runs
-  neither (`.claude/decisions/one-server-per-backend.md`). A test that holds on
+- **`nest-rs-redis`'s e2e runs on the Valkey topology its URL declares**: the
+  dev container's one server by default, which CI runs too. With the
+  `valkey-sentinel` or `valkey-cluster` dev container open, uncommenting its
+  URL in `test.just` points the same `just test` at it, by hand when the
+  binding changes; `test.just` reads the topology off the URL
+  (`.claude/decisions/one-server-per-backend.md`). A test that holds on
   one topology alone sits in a module named for it (`standalone`, `sentinel`,
   `cluster`), and each run leaves the others out; a failover moves what every
   other test runs on, so it sits in a `failover` module, run last and alone.

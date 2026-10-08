@@ -7,9 +7,10 @@ services:
     image: valkey/valkey:9.1.2
     volumes:
       - ${CERTS:-certs}:/certs:ro
-    # Each service sets PORT, the TLS port it listens on and is checked through.
+    # A service listening elsewhere than 6379 sets PORT, the TLS port it is
+    # checked through.
     healthcheck:
-      test: [CMD-SHELL, 'valkey-cli --tls --cacert /certs/ca.pem -p "$$PORT" ping']
+      test: [CMD-SHELL, 'valkey-cli --tls --cacert /certs/ca.pem -p "$${PORT:-6379}" ping']
       interval: 5s
       timeout: 5s
       retries: 20

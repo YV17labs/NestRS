@@ -77,7 +77,6 @@ services:
   valkey-standalone:
     extends: {file: valkey.yml, service: valkey}
     restart: unless-stopped
-    environment: {PORT: "6379"}
     command:
       - valkey-server
       - --port

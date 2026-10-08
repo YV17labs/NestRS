@@ -77,3 +77,5 @@ Sentinel and Cluster in the dev container above stands for its default
 services; a profile starts nothing unless asked for.
 Then two dev container environments rather than a profile, `valkey-sentinel/`
 and `valkey-cluster/` (`one-server-per-backend.md`).
+Then each node a host of its own, announcing its name, which the certificate
+names: the nodes announce `127.0.0.1` no longer (`one-server-per-backend.md`).

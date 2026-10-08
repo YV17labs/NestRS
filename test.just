@@ -1,14 +1,31 @@
+set allow-duplicate-variables
+
 nextest := "cargo nextest run --workspace --no-fail-fast"
 
-# The tests of nest-rs-redis's e2e that hold on one Valkey topology alone sit in
-# a module named for it: a run keeps the tests every topology holds and its own.
+# Where nest-rs-redis's e2e finds Valkey: the URL CI sets, else the dev
+# container's one server. With the `valkey-sentinel` or `valkey-cluster` dev
+# container open, uncomment its line.
+redis_url := env_var_or_default("NESTRS_REDIS__URL", "rediss://valkey-standalone:6379")
+# redis_url := "rediss-sentinel://valkey-sentinel-1:26379?node=valkey-sentinel-2:26379&node=valkey-sentinel-3:26379&sentinelServiceName=nestrs"
+# redis_url := "rediss-cluster://valkey-cluster-1:6379?node=valkey-cluster-2:6379&node=valkey-cluster-3:6379"
+
+# Its tests that hold on one topology alone sit in a module named for it, and a
+# failover in a `failover` module.
+topology := if redis_url =~ '^rediss?-sentinel://' { "sentinel" } else if redis_url =~ '^rediss?-cluster://' { "cluster" } else { "standalone" }
 redis := "binary_id(nest-rs-redis::e2e)"
-on_one := "test(/(^|::)(standalone|sentinel|cluster)::/)"
-elsewhere := redis + " and test(/(^|::)(sentinel|cluster)::/)"
+elsewhere := redis + " and test(/(^|::)(standalone|sentinel|cluster)::/) and not test(/(^|::)" + topology + "::/)"
+failovers := redis + " and test(/(^|::)" + topology + "::failover::/)"
 
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
-    {{nextest}} -E 'not ({{elsewhere}})'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export NESTRS_REDIS__URL='{{redis_url}}'
+    {{nextest}} -E 'not ({{elsewhere}}) and not ({{failovers}})'
+    # A failover moves the primaries every other test runs on: last, one at a time.
+    if [ "{{topology}}" != standalone ]; then
+        {{nextest}} --test-threads 1 -E '{{failovers}}'
+    fi
 
 # The `#[cfg(test)]` modules in each crate's `src/`
 unit:
@@ -20,25 +37,13 @@ integration:
 
 # The `tests/e2e` suites, against Postgres, Valkey and S3
 e2e:
-    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}})'
-
-# Where the `valkey-sentinel` and `valkey-cluster` dev containers serve Valkey.
-sentinel_url := "rediss-sentinel://127.0.0.1:26379?node=127.0.0.1:26380&node=127.0.0.1:26381&sentinelServiceName=nestrs"
-cluster_url := "rediss-cluster://127.0.0.1:7000?node=127.0.0.1:7001&node=127.0.0.1:7002"
-
-# nest-rs-redis's e2e on Valkey `sentinel` or `cluster`, from that dev container; CI runs neither
-topology name:
     #!/usr/bin/env bash
     set -euo pipefail
-    case "{{name}}" in
-        sentinel) export NESTRS_REDIS__URL='{{sentinel_url}}' ;;
-        cluster) export NESTRS_REDIS__URL='{{cluster_url}}' ;;
-        *) echo "a topology is \`sentinel\` or \`cluster\`" >&2; exit 1 ;;
-    esac
-    # Every test that holds on any topology, and this one's own.
-    {{nextest}} -E '{{redis}} and (not {{on_one}} or test(/(^|::){{name}}::/)) and not test(/::failover::/)'
-    # Its failovers last, one at a time: each moves the primaries the others run on.
-    {{nextest}} --test-threads 1 -E '{{redis}} and test(/(^|::){{name}}::failover::/)'
+    export NESTRS_REDIS__URL='{{redis_url}}'
+    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{failovers}})'
+    if [ "{{topology}}" != standalone ]; then
+        {{nextest}} --test-threads 1 -E '{{failovers}}'
+    fi
 
 # Coverage of the nextest suite, per file; doctests count on nightly only
 cov:

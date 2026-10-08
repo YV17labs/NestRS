@@ -10,12 +10,13 @@
 //! for the occurrence lock a job firing once across replicas claims through.
 //!
 //! Valkey is reached over TLS alone, at `<PREFIX>_REDIS__URL` or the dev
-//! container's `rediss://valkey-standalone:6379`, its certificate verified as the framework
-//! verifies it by default — against the system's authorities, where the dev
-//! container and CI install the services'. A double the suite puts in front of
-//! it presents a certificate of the test authority's, which only a connection
-//! to the double trusts (`harness::tls`). This file holds the suite's shared
-//! fixtures and nothing else.
+//! container's `rediss://valkey-standalone:6379`, by name on every topology,
+//! its certificate verified as the framework verifies it by default — against
+//! the system's authorities, where the dev container and CI install the
+//! services'. A double the suite puts in front of it presents a certificate
+//! of the test authority's, which only a connection to the double trusts
+//! (`harness::tls`). This file holds the suite's shared fixtures and nothing
+//! else.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -339,13 +340,17 @@ async fn cluster_nodes() -> Vec<ClusterNode> {
             .filter(|line| !line.contains("fail") && !line.contains("noaddr"))
             .map(|line| {
                 let fields: Vec<&str> = line.split(' ').collect();
+                // `ip:port@cport[,hostname]`: a node announcing a name is
+                // reached by it, which its certificate names.
+                let (endpoint, hostname) = fields[1].split_once(',').unwrap_or((fields[1], ""));
+                let endpoint = endpoint.split('@').next().unwrap_or(endpoint);
+                let addr = match endpoint.rsplit_once(':') {
+                    Some((_, port)) if !hostname.is_empty() => format!("{hostname}:{port}"),
+                    _ => endpoint.to_owned(),
+                };
                 ClusterNode {
                     id: fields[0].to_owned(),
-                    addr: fields[1]
-                        .split(['@', ','])
-                        .next()
-                        .unwrap_or(fields[1])
-                        .to_owned(),
+                    addr,
                     primary: fields[2].contains("master"),
                     slots: fields[8..]
                         .iter()

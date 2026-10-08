@@ -1,34 +1,48 @@
-# Valkey under Sentinel, beside the dev container's own services: a primary on
-# 6380 and its replica on 6381, watched as `nestrs` by three sentinels on
-# 26379-26381, every one on the dev container's loopback, which the certificate
-# names. For `just test topology sentinel`, layered on `base.yml` by the
-# `valkey-sentinel` dev container.
+# Valkey under Sentinel, beside the dev container's own services: two servers,
+# the first starting as the primary, watched as `nestrs` by three sentinels,
+# each a host of the compose network announcing its name, which the
+# certificate names. Layered on `base.yml` by the `valkey-sentinel` dev
+# container, which opens once the sentinels agree on the primary.
+# Its URL sits commented in `test.just` and `demo/.env`: uncomment it to run on
+# Sentinel.
 
 x-node: &node
   extends: {file: valkey.yml, service: valkey}
-  network_mode: service:dev
   user: "999:999"
+  depends_on:
+    certs: {condition: service_completed_successfully}
 
 services:
-  valkey-sentinel-primary:
-    <<: *node
-    environment: {PORT: "6380"}
-    configs: [valkey-sentinel-node.conf]
-    command: [sh, -c, 'exec valkey-server /valkey-sentinel-node.conf --tls-port "$$PORT"']
-  valkey-sentinel-replica:
-    <<: *node
-    environment: {PORT: "6381"}
-    configs: [valkey-sentinel-node.conf]
-    command: [sh, -c, 'exec valkey-server /valkey-sentinel-node.conf --tls-port "$$PORT" --replicaof 127.0.0.1 6380']
+  dev:
+    depends_on:
+      valkey-sentinel-init: {condition: service_completed_successfully}
 
-  valkey-sentinel-26379: &sentinel
+  valkey-sentinel-server-1:
     <<: *node
+    hostname: valkey-sentinel-server-1
+    configs: [valkey-sentinel-server.conf]
+    command: [sh, -c, 'exec valkey-server /valkey-sentinel-server.conf --tls-cert-file "/certs/$$HOSTNAME/server.pem" --tls-key-file "/certs/$$HOSTNAME/server.key" --replica-announce-ip "$$HOSTNAME"']
+  valkey-sentinel-server-2:
+    <<: *node
+    hostname: valkey-sentinel-server-2
+    configs: [valkey-sentinel-server.conf]
+    command: [sh, -c, 'exec valkey-server /valkey-sentinel-server.conf --tls-cert-file "/certs/$$HOSTNAME/server.pem" --tls-key-file "/certs/$$HOSTNAME/server.key" --replica-announce-ip "$$HOSTNAME" --replicaof valkey-sentinel-server-1 6379']
+
+  # A sentinel resolves the servers it is told of as it reads its
+  # configuration, so it starts once they answer.
+  valkey-sentinel-1: &sentinel
+    <<: *node
+    hostname: valkey-sentinel-1
     environment: {PORT: "26379"}
     configs: [valkey-sentinel.conf]
     # Sentinel rewrites its configuration, so each one starts from a copy.
-    command: [sh, -c, 'cat /valkey-sentinel.conf > /tmp/sentinel.conf && exec valkey-sentinel /tmp/sentinel.conf --tls-port "$$PORT"']
-  valkey-sentinel-26380: {<<: *sentinel, environment: {PORT: "26380"}}
-  valkey-sentinel-26381: {<<: *sentinel, environment: {PORT: "26381"}}
+    command: [sh, -c, 'cat /valkey-sentinel.conf > /tmp/sentinel.conf && exec valkey-sentinel /tmp/sentinel.conf --tls-cert-file "/certs/$$HOSTNAME/server.pem" --tls-key-file "/certs/$$HOSTNAME/server.key" --sentinel announce-ip "$$HOSTNAME"']
+    depends_on:
+      certs: {condition: service_completed_successfully}
+      valkey-sentinel-server-1: {condition: service_healthy}
+      valkey-sentinel-server-2: {condition: service_healthy}
+  valkey-sentinel-2: {<<: *sentinel, hostname: valkey-sentinel-2}
+  valkey-sentinel-3: {<<: *sentinel, hostname: valkey-sentinel-3}
 
   # Waits until the three sentinels name one primary, then exits.
   valkey-sentinel-init:
@@ -38,38 +52,34 @@ services:
     command: [bash, /ready.sh]
     healthcheck: {disable: true}
     depends_on:
-      valkey-sentinel-primary: {condition: service_healthy}
-      valkey-sentinel-replica: {condition: service_healthy}
-      valkey-sentinel-26379: {condition: service_healthy}
-      valkey-sentinel-26380: {condition: service_healthy}
-      valkey-sentinel-26381: {condition: service_healthy}
+      valkey-sentinel-1: {condition: service_healthy}
+      valkey-sentinel-2: {condition: service_healthy}
+      valkey-sentinel-3: {condition: service_healthy}
 
 configs:
-  valkey-sentinel-node.conf:
+  valkey-sentinel-server.conf:
     content: |
-      bind 127.0.0.1 -::1
       port 0
-      tls-cert-file /certs/valkey-standalone/server.pem
-      tls-key-file /certs/valkey-standalone/server.key
+      tls-port 6379
       tls-ca-cert-file /certs/ca.pem
       tls-auth-clients no
       tls-replication yes
       repl-diskless-sync-delay 0
-      enable-debug-command local
+      enable-debug-command yes
       appendonly no
       save ""
   # The replica is named: a sentinel reading the primary's INFO before the
   # replica connects would otherwise learn of it only at its next INFO, 10 s later.
   valkey-sentinel.conf:
     content: |
-      bind 127.0.0.1 -::1
       port 0
-      tls-cert-file /certs/valkey-standalone/server.pem
-      tls-key-file /certs/valkey-standalone/server.key
+      tls-port 26379
       tls-ca-cert-file /certs/ca.pem
       tls-auth-clients no
       tls-replication yes
-      sentinel monitor nestrs 127.0.0.1 6380 2
+      sentinel resolve-hostnames yes
+      sentinel announce-hostnames yes
+      sentinel monitor nestrs valkey-sentinel-server-1 6379 2
       sentinel down-after-milliseconds nestrs 2000
       sentinel failover-timeout nestrs 10000
-      sentinel known-replica nestrs 127.0.0.1 6381
+      sentinel known-replica nestrs valkey-sentinel-server-2 6379

@@ -1,26 +1,36 @@
-# A six-node Valkey Cluster, beside the dev container's own services: nodes on
-# 7000-7005, a replica per primary, every one on the dev container's loopback,
-# which the certificate names. For `just test topology cluster`, layered on
-# `base.yml` by the `valkey-cluster` dev container.
+# A six-node Valkey Cluster, beside the dev container's own services: a replica
+# per primary, each node a host of the compose network announcing its name,
+# which the certificate names. Layered on `base.yml` by the `valkey-cluster`
+# dev container, which opens once the Cluster serves.
+# Its URL sits commented in `test.just` and `demo/.env`: uncomment it to run on
+# the Cluster.
 
 x-node: &node
   extends: {file: valkey.yml, service: valkey}
-  network_mode: service:dev
   user: "999:999"
+  depends_on:
+    certs: {condition: service_completed_successfully}
 
 services:
-  valkey-cluster-7000: &cluster-node
-    <<: *node
-    environment: {PORT: "7000"}
-    configs: [valkey-cluster.conf]
-    command: [sh, -c, 'exec valkey-server /valkey-cluster.conf --tls-port "$$PORT"']
-  valkey-cluster-7001: {<<: *cluster-node, environment: {PORT: "7001"}}
-  valkey-cluster-7002: {<<: *cluster-node, environment: {PORT: "7002"}}
-  valkey-cluster-7003: {<<: *cluster-node, environment: {PORT: "7003"}}
-  valkey-cluster-7004: {<<: *cluster-node, environment: {PORT: "7004"}}
-  valkey-cluster-7005: {<<: *cluster-node, environment: {PORT: "7005"}}
+  dev:
+    depends_on:
+      valkey-cluster-init: {condition: service_completed_successfully}
 
-  # Forms the Cluster once, waits until every node serves it, then exits.
+  valkey-cluster-1: &cluster-node
+    <<: *node
+    hostname: valkey-cluster-1
+    configs: [valkey-cluster.conf]
+    # A node keeping its state would name its peers by the addresses they had
+    # before the restart: each start forms the Cluster afresh.
+    tmpfs: [/data]
+    command: [sh, -c, 'exec valkey-server /valkey-cluster.conf --tls-cert-file "/certs/$$HOSTNAME/server.pem" --tls-key-file "/certs/$$HOSTNAME/server.key" --cluster-announce-hostname "$$HOSTNAME"']
+  valkey-cluster-2: {<<: *cluster-node, hostname: valkey-cluster-2}
+  valkey-cluster-3: {<<: *cluster-node, hostname: valkey-cluster-3}
+  valkey-cluster-4: {<<: *cluster-node, hostname: valkey-cluster-4}
+  valkey-cluster-5: {<<: *cluster-node, hostname: valkey-cluster-5}
+  valkey-cluster-6: {<<: *cluster-node, hostname: valkey-cluster-6}
+
+  # Forms the Cluster, waits until every node serves it, then exits.
   valkey-cluster-init:
     <<: *node
     volumes:
@@ -28,28 +38,27 @@ services:
     command: [bash, /form.sh]
     healthcheck: {disable: true}
     depends_on:
-      valkey-cluster-7000: {condition: service_healthy}
-      valkey-cluster-7001: {condition: service_healthy}
-      valkey-cluster-7002: {condition: service_healthy}
-      valkey-cluster-7003: {condition: service_healthy}
-      valkey-cluster-7004: {condition: service_healthy}
-      valkey-cluster-7005: {condition: service_healthy}
+      valkey-cluster-1: {condition: service_healthy}
+      valkey-cluster-2: {condition: service_healthy}
+      valkey-cluster-3: {condition: service_healthy}
+      valkey-cluster-4: {condition: service_healthy}
+      valkey-cluster-5: {condition: service_healthy}
+      valkey-cluster-6: {condition: service_healthy}
 
 configs:
   valkey-cluster.conf:
     content: |
-      bind 127.0.0.1 -::1
       port 0
-      tls-cert-file /certs/valkey-standalone/server.pem
-      tls-key-file /certs/valkey-standalone/server.key
+      tls-port 6379
       tls-ca-cert-file /certs/ca.pem
       tls-auth-clients no
       tls-replication yes
       tls-cluster yes
       repl-diskless-sync-delay 0
-      enable-debug-command local
+      enable-debug-command yes
       appendonly no
       save ""
       cluster-enabled yes
       cluster-databases 16
       cluster-node-timeout 2000
+      cluster-preferred-endpoint-type hostname

@@ -57,3 +57,25 @@ tag, and the standalone server is named for its shape, `valkey-standalone`,
 like its siblings. A configuration inherits nothing from another (the
 specification has no `extends`), so each environment copies the base's
 `devcontainer.json` but for its name and its compose files.
+Each environment also sets `NESTRS_REDIS__URL` on the dev container to its
+topology, and `test.just` reads the topology off it, so the everyday
+`just test` runs on whichever environment is open — a `just test topology`
+recipe, which only those environments needed, was dropped on the owner's
+word: the open environment decides, never a command.
+Then the environments set nothing: a variable on the dev container outranks
+every `.env`, so it moved the demo's suites off the database 1 `.env.test`
+gives them, and they refused to run. Each topology's URL sits commented in
+`test.just`, for the framework's suites, and in `demo/.env`, for the demo's
+apps — one line to uncomment, the default the one server — and the demo's
+suites stay on `.env.test`'s, at the owner's word.
+Then every node is a host of the compose network, reached by its name like
+`valkey-standalone`, at the owner's word: a name that only the one server
+carried was no convention. The nodes had shared the dev container's loopback,
+so a topology's URL named `127.0.0.1` and a port per node; each now listens on
+Valkey's port and announces its name — the Cluster's preferred endpoint, every
+address Sentinel reports — which the certificate names, one row per node. A
+production deployment announces names too, so the suites now prove the
+framework follows them. The Sentinel servers are numbered, never named for the
+role a failover swaps. A Cluster node keeps nothing across a start, which may
+move every peer's address, so each start forms the Cluster afresh, and no slot
+a test left migrating outlives it.

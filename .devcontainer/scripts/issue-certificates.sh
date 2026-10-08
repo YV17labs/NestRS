@@ -18,11 +18,22 @@
 # network, and joins the certificate's names on its own.
 set -eu
 
-# service          uid    certificate      key              how the service reads them
+# service                 uid    certificate      key              how the service reads them
 SERVICES='
-postgres           999    server.pem       server.key       postgres -c ssl_cert_file / -c ssl_key_file
-valkey-standalone  999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
-rustfs             10001  rustfs_cert.pem  rustfs_key.pem   RUSTFS_TLS_PATH, which fixes the two names
+postgres                  999    server.pem       server.key       postgres -c ssl_cert_file / -c ssl_key_file
+valkey-standalone         999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-sentinel-server-1  999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-sentinel-server-2  999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-sentinel-1         999    server.pem       server.key       valkey-sentinel --tls-cert-file / --tls-key-file
+valkey-sentinel-2         999    server.pem       server.key       valkey-sentinel --tls-cert-file / --tls-key-file
+valkey-sentinel-3         999    server.pem       server.key       valkey-sentinel --tls-cert-file / --tls-key-file
+valkey-cluster-1          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-cluster-2          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-cluster-3          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-cluster-4          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-cluster-5          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+valkey-cluster-6          999    server.pem       server.key       valkey-server --tls-cert-file / --tls-key-file
+rustfs                    10001  rustfs_cert.pem  rustfs_key.pem   RUSTFS_TLS_PATH, which fixes the two names
 '
 
 dir=${1:?usage: issue-certificates.sh DIR}

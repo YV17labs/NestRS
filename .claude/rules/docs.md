@@ -36,6 +36,14 @@ disagreement, and the page is fixed in the same commit as the code it follows.
 - **A capability is a feature a developer can type after `--features`**, not a
   crate.
 
+## The stack follows its vendor
+
+Astro, Starlight and their plugins are upgraded through the vendor's tool
+(`npx @astrojs/upgrade`), what their release notes or deprecations ask is
+changed in that upgrade, a release they say to hold is held, and nothing they
+did not ask for is done — no `overrides`, forced fix, downgrade or workaround
+(`decisions/docs-vendor-first.md`).
+
 ## Gotchas no page shows
 
 - **Snippets are hand-written** — there is no extraction from `examples/`. A

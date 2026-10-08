@@ -2,14 +2,12 @@
 
 ARG RUST_VERSION=1.97
 ARG NODE_MAJOR=24
-ARG OSV_SCANNER_VERSION=2.6.0
 ARG ACTIONLINT_VERSION=1.7.12
 
 FROM mcr.microsoft.com/devcontainers/base:trixie AS dev
 
 ARG RUST_VERSION
 ARG NODE_MAJOR
-ARG OSV_SCANNER_VERSION
 ARG ACTIONLINT_VERSION
 
 RUN apt-get update \
@@ -40,16 +38,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
  && cargo binstall --no-confirm --locked \
       just bacon cargo-nextest cargo-llvm-cov cargo-deny cargo-hack zizmor
 
-# osv-scanner and actionlint are Go binaries cargo cannot install: each release
-# is fetched by version and checked against the digests it publishes.
+# actionlint is a Go binary cargo cannot install: its release is fetched by
+# version and checked against the digests it publishes.
 RUN arch="$(dpkg --print-architecture)" \
- && osv="osv-scanner_linux_${arch}" \
  && actionlint="actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz" \
  && mkdir -p /home/vscode/.local/bin /tmp/tools && cd /tmp/tools \
- && curl -fsSLO "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/${osv}" \
- && curl -fsSL "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_SHA256SUMS" \
-      | grep " ${osv}\$" | sha256sum -c - \
- && install -m 0755 "${osv}" /home/vscode/.local/bin/osv-scanner \
  && curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${actionlint}" \
  && curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt" \
       | grep " ${actionlint}\$" | sha256sum -c - \

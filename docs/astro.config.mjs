@@ -4,7 +4,6 @@ import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import starlightLinksValidator from 'starlight-links-validator';
 import mermaid from 'astro-mermaid';
-import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
 import { REDIRECTS } from './src/redirects.mjs';
 import { DEFAULT_DESCRIPTION } from './src/brand.mjs';
@@ -88,7 +87,6 @@ export default defineConfig({
   markdown: {
     processor: unified({
       gfm: true,
-      remarkPlugins: [remarkGfm],
       // External links open in a new tab (with rel="noopener noreferrer") so a
       // reader following e.g. the SeaORM link keeps the docs open. Internal links
       // are left untouched.

@@ -110,9 +110,9 @@ vulnerable, unsound or unmaintained crate, no licence outside its list, nothing
 outside crates.io, no crate it bans; an exception names its advisory or crate
 and its reason. **A check belongs where only a change can turn it red**: the
 bans, licences and sources are `just lint`'s, while the advisories, which the
-database moves overnight, are `just audit`'s, over every lockfile the
-repository owns, Cargo's through cargo-deny and npm's through osv-scanner, an
-exception an `osv-scanner.toml` entry with its reason and `ignoreUntil`
+database moves overnight, are `just audit`'s, over every Cargo lockfile the
+repository owns; the npm trees (`docs/`, the bench SUTs) are third-party
+tooling, kept to what they use and taking their vendor's fixes as they ship
 (`decisions/npm-lockfile-advisories.md`) — run by `audit.yml` on a change to a
 tree (blocking), daily on `main`, and by `publish.yml` before a release.
 `docs.yml` builds the site when `docs/` changes. The workflows stay hardened —

@@ -20,7 +20,7 @@ lint:
 # Each lockfile is read as committed: one its manifests outgrew fails rather than
 # being resolved again. An ignore is judged in the framework's tree, where it is
 # decided: a tree that does not reach the crate says nothing about it.
-# Every lockfile the repository owns against the advisory databases, which move without a change here
+# Every Cargo lockfile the repository owns against RustSec, which moves without a change here
 audit:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -28,11 +28,6 @@ audit:
     for lock in $(git ls-files '*/Cargo.lock'); do
         cargo deny --locked --manifest-path "$(dirname "$lock")/Cargo.toml" check advisories --allow advisory-not-detected
     done
-    lockfiles=()
-    for lock in $(git ls-files '*package-lock.json'); do
-        lockfiles+=(--lockfile "$lock")
-    done
-    osv-scanner scan source --config osv-scanner.toml "${lockfiles[@]}"
 
 # Tests, one recipe per kind; `just test` runs them all
 mod test

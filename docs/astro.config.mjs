@@ -9,7 +9,7 @@ import { REDIRECTS } from './src/redirects.mjs';
 import { DEFAULT_DESCRIPTION } from './src/brand.mjs';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
-// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
+// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs.yml.
 const base = process.env.ASTRO_BASE || '/';
 const site = process.env.ASTRO_SITE || 'https://nestrs.dev';
 const asset = (path) => `${base}${path.replace(/^\//, '')}`;

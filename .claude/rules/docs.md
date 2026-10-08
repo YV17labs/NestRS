@@ -20,9 +20,10 @@ only the traps a session hits before it thinks to look.
 
 No script checks a page against the code: the author does, before it ships,
 with `STYLE.md` § F as the list of what has shipped wrong. A few tests read a
-fact off a page (the Redis ACL lines); CI's code jobs skip a
-docs-only change, so editing such a page runs `just test`. The code wins a
-disagreement, and the page is fixed in the same commit as the code it follows.
+fact off a page (the Redis ACL lines): `framework.yml` lists those pages and
+runs on a change to one, and a test that starts reading a page adds it there.
+The code wins a disagreement, and the page is fixed in the same commit as the
+code it follows.
 
 - **A capability's `## Install` and its crate README spell
   `cargo add nest-rs --features <x>`**; every unit of work, span target and
@@ -55,7 +56,7 @@ did not ask for is done — no `overrides`, forced fix, downgrade or workaround
   the real repo path (`demo/crates/features/…`).
 - **A snippet with no counterpart in `demo/` or the owning crate's suite is
   undocumented** (`manifests-ci.md`, *Shipping a capability*).
-- **`npm run build` is the docs' one check**, run by CI's `docs` job on every
-  pull request touching `docs/**`; `starlight-links-validator` fails it on a
-  dead internal link or anchor. Deploy is `docs-pages.yml`, from `main` alone:
-  a branch's docs are unfinished and never reach nestrs.dev.
+- **`npm run build` is the docs' one check**, `Docs / build` on every change
+  touching `docs/**`; `starlight-links-validator` fails it on a dead internal
+  link or anchor. `Docs / deploy` runs from `main` alone: a branch's docs are
+  unfinished and never reach nestrs.dev.

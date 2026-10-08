@@ -90,8 +90,8 @@ playground), and note it in the PR.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-The *Definition of done* is `just ci` green — the checks `ci.yml` runs on every
-pull request. A PR that has not passed it is not ready for review.
+The *Definition of done* is `just ci` green — the checks `framework.yml` runs on
+every pull request. A PR that has not passed it is not ready for review.
 
 ### Commit messages
 

@@ -1,5 +1,5 @@
 # The demo's checks — its lint, its suites in process and against Postgres,
-# Redis and S3 — against the framework it builds on by path, on every change
+# Valkey and S3 — against the framework it builds on by path, on every change
 # either side could break them with. The demo is its own workspace with its own
 # commands; this runs them.
 
@@ -35,7 +35,7 @@ env:
 
 jobs:
   lint:
-    name: demo lint (clippy, fmt, nestrs lint)
+    name: lint
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -62,7 +62,7 @@ jobs:
         working-directory: demo
 
   test:
-    name: demo test (unit, integration, doctests, e2e)
+    name: test (unit, integration, doctests, e2e)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

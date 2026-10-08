@@ -95,27 +95,35 @@ owning crate's suite is undocumented.
 
 ## CI
 
-`just ci` is what `ci.yml` runs, recipe for recipe: fmt, clippy, each capability
-alone, the dependency policy, rustdoc, then every test against real Postgres,
-Valkey and S3 — never a mock. `demo.yml` runs the demo's own recipes
-— `just lint` with the tree's `nestrs lint`, and every suite — and `bench.yml`
-the benchmarks' `just lint`, each on a change to its tree or to the framework
-it builds on by path; `beta.yml` checks both workspaces on the beta toolchain
-weekly, so a rustc change that breaks a crate is seen before it is stable.
-**A workflow skips
-only what no build or test reads**: a file under a crate's `src/` is compiled
-whatever its extension, and a docs page may be read by a test (nest-rs-redis's
-e2e runs the ACL rules as printed). `deny.toml` is the dependency policy: no known
-vulnerable, unsound or unmaintained crate, no licence outside its list, nothing
-outside crates.io, no crate it bans; an exception names its advisory or crate
-and its reason. **A check belongs where only a change can turn it red**: the
-bans, licences and sources are `just lint`'s, while the advisories, which the
-database moves overnight, are `just audit`'s, over every Cargo lockfile the
-repository owns; the npm trees (`docs/`, the bench SUTs) are third-party
-tooling, kept to what they use and taking their vendor's fixes as they ship
-(`decisions/npm-lockfile-advisories.md`) — run by `audit.yml` on a change to a
-tree (blocking), daily on `main`, and by `publish.yml` before a release.
-`docs.yml` builds the site when `docs/` changes. The workflows stay hardened —
+**CI runs on a change, never on a clock, and only what keeps the product from
+regressing** (`decisions/ci-on-change.md`). `framework.yml` runs `just ci`,
+recipe for recipe: fmt, clippy, each capability alone, the dependency policy,
+rustdoc, then every test against real Postgres, Valkey and S3 — never a mock.
+`demo.yml` runs the demo's own recipes — `just lint` with the tree's `nestrs
+lint`, and every suite — on a change to its tree or to the framework it builds
+on by path. `docs.yml` builds the site on a change to `docs/` and deploys it
+from `main` alone. The benchmarks are a developer's, on their host: no workflow
+lints, audits or runs them. **A workflow skips only what no build or test
+reads**: a file under a crate's `src/` is compiled whatever its extension, and
+a docs page a test reads is listed in `framework.yml`'s paths. The cargo cache
+is saved by `main` and `release/**` alone.
+
+**A workflow is named for the tree a change to it triggers** (`Framework`,
+`Demo`, `Docs`), **otherwise for what it does** (`Audit`, `Publish`); a job for
+what it runs, with parentheses only for a closed set (`test (unit,
+integration, doctests, e2e)`) — never a tool or a service, which grow. Held by
+review.
+
+`deny.toml` is the dependency policy: no known vulnerable, unsound or
+unmaintained crate, no licence outside its list, nothing outside crates.io, no
+crate it bans; an exception names its advisory or crate and its reason. **A
+check belongs where only a change can turn it red**: the bans, licences and
+sources are `just lint`'s, while the advisories, which the database moves
+overnight, are `just audit`'s, over the framework's and the demo's lockfiles —
+run by `audit.yml` on a change to a tree (blocking) and by `publish.yml` before
+a release. The npm trees (`docs/`, the bench SUTs) are third-party tooling, kept
+to what they use and taking their vendor's fixes as they ship
+(`decisions/npm-lockfile-advisories.md`). The workflows stay hardened —
 actions pinned by SHA, a local action referenced `$/`
 (`decisions/self-repository-actions.md`), `persist-credentials: false`, least
 permissions — held by zizmor's offline audits and actionlint in `just lint`

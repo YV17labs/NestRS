@@ -9,7 +9,7 @@ the same commit.
 
 Requires **Node.js 22.12 or newer** — Astro 7's own floor, and what
 `package.json`'s `engines` declares. CI and the devcontainer both run **Node 24**
-(the active LTS), pinned in `.github/workflows/docs-pages.yml` and
+(the active LTS), pinned in `.github/workflows/docs.yml` and
 `.devcontainer/Dockerfile`; that is the version a build is proven against.
 
 ```bash
@@ -92,11 +92,11 @@ that section already is. `tutorial/` is exempt at any size: its pages are steps
 
 ## Deploying
 
-GitHub Pages, from `.github/workflows/docs-pages.yml`, on every push to `main`
-touching `docs/**`: `npm ci` → `npm run build` with
-`ASTRO_SITE=https://nestrs.dev` and `ASTRO_BASE=/` → `deploy-pages`. CI's `docs`
-job (`.github/workflows/docs.yml`) runs the same build on every pull request
-touching `docs/**`, so a page that breaks it is stopped before `main`.
+GitHub Pages, from `.github/workflows/docs.yml`: every push or pull request
+touching `docs/**` runs `npm ci` → `npm run build` with
+`ASTRO_SITE=https://nestrs.dev` and `ASTRO_BASE=/`, so a page that breaks it is
+stopped before `main`; on `main` alone the `deploy` job hands the build to
+`deploy-pages`.
 
 The output is a plain static tree, so publishing it anywhere else is
 `npm ci && npm run build` from `docs/` and serving `docs/dist/` — set

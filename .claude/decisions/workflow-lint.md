@@ -24,3 +24,7 @@ unquoted `$FEATURES`, now `${FEATURES:+"$FEATURES"}`; zizmor flagged
 without it rust-cache keys beta's artifacts on the pinned toolchain — behind a
 check refusing anything but a channel's or a version's characters, and a
 `# zizmor: ignore[github-env]` beside the reason.
+
+On 2026-10-08 `beta.yml` left CI (`ci-on-change.md`), and with it
+`setup-rust`'s `toolchain` input, its `GITHUB_ENV` write and the ignore beside
+it.

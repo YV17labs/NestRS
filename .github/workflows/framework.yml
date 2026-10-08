@@ -1,4 +1,4 @@
-name: CI
+name: Framework
 
 on:
   push:
@@ -11,9 +11,11 @@ on:
       - '!**.md'
       # Read by a build or a test all the same: a file under a crate's `src/`
       # (the CLI compiles its rules template in), and the pages whose ACL rules
-      # and commands nest-rs-redis's e2e runs as printed.
+      # nest-rs-redis's e2e runs as printed.
       - 'crates/**/src/**'
-      - 'docs/src/content/docs/**'
+      - 'docs/src/content/docs/queue/delivery.mdx'
+      - 'docs/src/content/docs/rate-limiting/index.mdx'
+      - 'docs/src/content/docs/schedule/index.mdx'
   pull_request:
     paths: *tree
   workflow_dispatch:
@@ -21,7 +23,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: framework-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -29,7 +31,7 @@ env:
 
 jobs:
   lint:
-    name: lint (fmt, clippy, rustdoc)
+    name: lint
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -62,7 +64,7 @@ jobs:
       - run: just doc
 
   test:
-    name: test (Postgres, Redis, S3)
+    name: test (unit, integration, doctests, e2e)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

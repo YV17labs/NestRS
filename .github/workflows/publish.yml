@@ -3,7 +3,7 @@
 # (cargo publish --workspace cannot: rust-lang/cargo#15006).
 # Secret: CARGO_REGISTRY_TOKEN on the `crates-io` environment.
 
-name: Publish — crates.io
+name: Publish
 
 on:
   push:
@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   publish:
+    name: crates.io
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: crates-io

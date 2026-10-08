@@ -122,8 +122,9 @@ features because each pulls a port crate an app may not need.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
   silently unused; verification is never an option (`CLAUDE.md`).
 - **The Valkey the docs claim is the one every suite runs on**: the dev
-  container, `ci.yml` and `demo.yml` pin one image tag, and the docs name its
-  release — the four move in one change.
+  container's `docker-compose.yml` pins one image tag, which CI starts through
+  the `dev-services` action, and the docs name its release — the two move in
+  one change.
 - **Each binding's docs page prescribes its ACL rule whole, per role** — its
   namespace, the connection's commands, every command it or a script it runs
   sends, and nothing else. Held by `nest-rs-redis`'s e2e, which creates each

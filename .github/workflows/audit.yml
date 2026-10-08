@@ -1,9 +1,7 @@
-# Every Cargo tree the repository owns — the framework's, the demo's and the
-# benchmarks' — against RustSec through cargo-deny. The npm trees are tooling,
-# not product (.claude/decisions/npm-lockfile-advisories.md). An
-# advisory is published without a change here, so it is checked where it can
-# be acted on: blocking on a change to a tree, daily on `main`, and before a
-# release (`publish.yml`) — never on a change that did not touch one.
+# The framework's and the demo's Cargo trees against RustSec through
+# cargo-deny, blocking a change to either; `publish.yml` runs it again before a
+# release. Not audited: the benchmarks' trees (.claude/decisions/ci-on-change.md)
+# and the npm trees (.claude/decisions/npm-lockfile-advisories.md).
 
 name: Audit
 
@@ -13,13 +11,12 @@ on:
     paths: &tree
       - '**/Cargo.lock'
       - '**/Cargo.toml'
+      - '!bench/**'
       - 'deny.toml'
       - 'Justfile'
       - '.github/workflows/audit.yml'
   pull_request:
     paths: *tree
-  schedule:
-    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -30,7 +27,7 @@ concurrency:
 
 jobs:
   advisories:
-    name: advisories (cargo-deny)
+    name: advisories
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

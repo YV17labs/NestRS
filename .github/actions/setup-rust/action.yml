@@ -13,44 +13,25 @@ inputs:
     description: The cargo workspaces whose target directories are cached (rust-cache's syntax).
     required: false
     default: '. -> target'
-  toolchain:
-    description: >-
-      A channel to build with instead of the pinned one (`beta`); every later
-      step of the job uses it.
-    required: false
-    default: ''
 
 runs:
   using: composite
   steps:
-    # The channel reaches `GITHUB_ENV` so that rust-cache keys on it too, and
-    # only once it holds nothing but a channel's or a version's characters.
     - name: Install the toolchain
       shell: bash
-      env:
-        TOOLCHAIN: ${{ inputs.toolchain }}
-      run: | # zizmor: ignore[github-env]
-        if [ -z "$TOOLCHAIN" ]; then
-          rustup toolchain install --profile minimal
-        else
-          case "$TOOLCHAIN" in
-            *[!A-Za-z0-9._-]*)
-              echo "::error::the toolchain input is a channel or a version: letters, digits, '.', '_' and '-'"
-              exit 1
-              ;;
-          esac
-          rustup toolchain install "$TOOLCHAIN" --profile minimal
-          echo "RUSTUP_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
-        fi
+      run: rustup toolchain install --profile minimal
 
     # .cargo/config.toml links with mold.
     - name: Install mold
       shell: bash
       run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mold
 
+    # Saved by the long-lived branches alone: a run restores its own branch's
+    # cache or the default branch's, a pull request its base's, and the
+    # repository holds 10 GB.
     - name: Cache cargo
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         shared-key: ${{ inputs.cache-key }}
         workspaces: ${{ inputs.workspaces }}
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') }}

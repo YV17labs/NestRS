@@ -1,0 +1,5 @@
+error: `#[deprecated]` on a `#[routes]` handler deprecates Rust code, whose only caller is the framework: a route is deprecated for its clients with `#[api(deprecated = "2026-10-08")]` on its handler, which the document and the `Deprecation` header (RFC 9745) follow
+  --> tests/integration/diagnostics/http/deprecated_on_a_route.rs:14:5
+   |
+14 |     #[deprecated(since = "7.1.0", note = "use `GET /v2/posts`")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

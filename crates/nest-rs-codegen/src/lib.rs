@@ -13,6 +13,7 @@ mod attrs;
 mod capability;
 mod casing;
 mod crud;
+mod deprecation;
 mod dispatch;
 mod duration;
 mod entry;
@@ -49,6 +50,7 @@ pub use casing::{pascal_case, snake_case};
 pub use crud::{
     CrudDeclaration, CrudOp, GeneratedOps, OpsSelection, Paginate, parse_crud_args, singular_of,
 };
+pub use deprecation::{deprecation_header, refuse_rust_deprecated};
 pub use dispatch::{Collision, DispatchKeys};
 pub use duration::duration_millis;
 pub use entry::{ENTRY, entry_needs_an_async_fn, entry_takes_no_arguments};

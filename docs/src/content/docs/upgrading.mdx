@@ -198,6 +198,8 @@ left running until they drain the 6.x jobs (step 7).
    | `report_inert_host!(target: …, what: …, origin: …)`, in an edge of your own | the same with `host:` — the host's `TypeId` — and `container:`, so the line names its cause |
    | a `ContestedDeclarationError { … }` pattern naming every field | the same with `first: _` and `second: _` — the two imports that made it — or ending in `..` |
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `timeout: nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
+   | Rust's `#[deprecated]` on a `#[routes]` handler or a `#[controller]` struct | `#[api(deprecated = "YYYY-MM-DD")]` on each route's handler, the date its `Deprecation` header states — see [OpenAPI operations](/openapi/operations/#deprecate-a-route) |
+   | an `HttpRouteMeta { … }` built by hand | the same with `error_responses: &[]`, `sets_next_link: false`, `response_headers: &[]` and `deprecation: None` — `#[routes]` is what builds it |
    | a `#[process]`, `#[every]`, `#[cron]` or `#[after]` method that runs longer than ten minutes | the same with `timeout = "…"` covering its longest run, up to `"24h"` — an attempt past its timeout is now cut and fails retryably |
    | an `HttpConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout` |
    | a `StorageConfig { … }` written out whole | the same, ending in `..Default::default()` — `StorageConfig` gains `operation_timeout`, `read_timeout` and `tls` |
@@ -379,6 +381,21 @@ left running until they drain the 6.x jobs (step 7).
    remedy when it is this app's own code, and a `debug` line when it belongs to
    another binary of the workspace: read the edge's target at `debug` when a
    handler in a shared crate does not run.
+
+10. **Regenerate every client from the 7.0 document**, and move what it read off
+    the wire:
+
+    - **A paginated `#[crud]` list links its next page** in
+      `Link: </posts?first=20&after=…>; rel="next"` (RFC 8288), where 6.x sent
+      the cursor alone in `x-next-cursor`; follow the link, or read `after` off
+      its query. The last page has no `Link`.
+    - **A route's default tag is its controller's token** — `posts`, not
+      `PostsController` — and a `#[crud]` route no longer takes its entity's
+      name (`Post`). A generator grouping by tag renames its classes or files;
+      keep a name with `tags("…")`.
+    - **An `#[expose]`d timestamp reads `…Z` at UTC**, where an unmasked route
+      wrote `+00:00`: one instant, now spelled as a masked route already spelled
+      it. A client parsing RFC 3339 sees no change; one comparing strings does.
 
 </Steps>
 

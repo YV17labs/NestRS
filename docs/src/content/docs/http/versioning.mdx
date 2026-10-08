@@ -113,7 +113,7 @@ pub struct PostsV2Controller { /* … */ }
 ```
 
 Two controllers, two mount paths (`/v1/posts`, `/v2/posts`), two
-OpenAPI tags by default (the controller struct name groups routes), zero
+OpenAPI tags by default (each controller's token, `posts_v1` and `posts_v2`), zero
 runtime overhead — the version is decided at boot, not per request.
 
 A common pattern: V2 delegates to the same `PostsService` when the change is

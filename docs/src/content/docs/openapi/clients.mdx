@@ -59,10 +59,15 @@ recipe uses [Hey API](https://heyapi.dev) and its
 
    client.setConfig({ baseUrl: 'https://api.example.com', auth: () => currentToken() });
 
-   export async function firstPage(): Promise<{ posts: Post[]; next: string | null }> {
-     const { data, error, response } = await postsList({ query: { first: 20 } });
+   const nextCursor = (link: string | null | undefined): string | null => {
+     const target = link?.match(/<([^>]+)>;\s*rel="next"/)?.[1];
+     return target ? new URL(target, 'https://api.example.com').searchParams.get('after') : null;
+   };
+
+   export async function page(after?: string): Promise<{ posts: Post[]; next: string | null }> {
+     const { data, error, response } = await postsList({ query: { first: 20, after } });
      if (error) throw new Error(`${error.status} ${error.title}`);
-     return { posts: data, next: response?.headers.get('x-next-cursor') ?? null };
+     return { posts: data, next: nextCursor(response?.headers.get('link')) };
    }
 
    export async function draft(title: string, body: string): Promise<Post> {
@@ -75,12 +80,13 @@ recipe uses [Hey API](https://heyapi.dev) and its
    ```
 
    `auth` is called only for the operations the document marks `security` —
-   the guarded routes — never for a `#[public]` one.
+   the guarded routes — never for a `#[public]` one. The next page is the
+   RFC 8288 `Link` a list answers with, `rel="next"`, absent on the last page.
 
 4. **Allow the frontend's origin.** A browser app on another origin needs
    CORS: `<PREFIX>_HTTP__CORS_ORIGINS=https://app.example.com`. The headers
-   the framework sends — `x-next-cursor`, `Location`, `Retry-After` — are
-   exposed to it without being listed ([HTTP configuration](/http/configuration/)).
+   the framework sends — `Link`, `Location`, `Retry-After` — are exposed to it
+   without being listed ([HTTP configuration](/http/configuration/)).
 
 </Steps>
 
@@ -96,7 +102,7 @@ recipe uses [Hey API](https://heyapi.dev) and its
 **A response typed `unknown`.** The document reads a handler's payload off
 its return type, `Json<T>` or `Result<Json<T>, E>`. A handler building its own
 `Response`, or returning a `Result` renamed on import, states none: declare it
-with `#[api(response = T)]` ([OpenAPI](/openapi/#enrich-an-operation-with-api)).
+with `#[api(response = T)]` ([OpenAPI operations](/openapi/operations/#the-payload-a-handler-builds-itself)).
 
 **Two operations under one name.** An `operationId` is
 `<controller>_<handler>` and must be unique; when two operations map to one,
@@ -104,12 +110,12 @@ the boot logs `two operations share one operationId` with both addresses.
 Rename one handler — and since generated names follow the id, renaming a
 handler is a breaking change for the frontend that calls it.
 
-**The cursor reads `null` in the browser.** The request reached the server
+**The next page reads `null` in the browser.** The request reached the server
 from another origin without CORS: no `<PREFIX>_HTTP__CORS_ORIGINS` names it,
 so the browser hides every response header the safelist does not cover.
 
 ## Going further
 
 - [OpenAPI](/openapi/) — what the document derives, and what it leaves to you.
-- [Pagination](/database/pagination/) — the cursor `x-next-cursor` carries.
+- [Pagination](/database/pagination/) — the cursor the `Link` carries.
 - [Security](/security/) — the guards that decide which operations carry `security`.

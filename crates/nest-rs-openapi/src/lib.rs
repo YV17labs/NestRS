@@ -12,9 +12,13 @@
 pub const TARGET: &str = "nest_rs::openapi";
 
 mod config;
+mod contact;
 mod document;
+mod license;
 mod module;
 mod ui;
 
 pub use config::OpenApiConfig;
+pub use contact::OpenApiContact;
+pub use license::OpenApiLicense;
 pub use module::{OpenApiModule, OpenApiSetup};

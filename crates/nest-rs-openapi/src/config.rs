@@ -3,7 +3,10 @@
 
 use std::path::PathBuf;
 
-use nest_rs_config::{Config, ConfigService, Environment, Result, config};
+use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Result, config};
+
+use crate::contact::OpenApiContact;
+use crate::license::OpenApiLicense;
 
 /// The OpenAPI document's `info` block plus the master enable switch, settable
 /// via `<PREFIX>_OPENAPI__*` or pinned through
@@ -21,8 +24,16 @@ pub struct OpenApiConfig {
     pub title: String,
     /// The API version string in the `info` block (the app's version, not nestrs').
     pub version: String,
+    /// A one-line summary of the API for the `info` block.
+    pub summary: Option<String>,
     /// Optional long-form API description for the `info` block.
     pub description: Option<String>,
+    /// A URL to the API's terms of service.
+    pub terms_of_service: Option<String>,
+    /// Who answers for the API.
+    pub contact: Option<OpenApiContact>,
+    /// The license the API is offered under.
+    pub license: Option<OpenApiLicense>,
     /// (Re)write [`document_path`](Self::document_path) with the built document
     /// once at boot. Default `false`.
     pub emit_document: bool,
@@ -37,7 +48,11 @@ impl Default for OpenApiConfig {
             enabled: true,
             title: "nestrs API".into(),
             version: "0.1.0".into(),
+            summary: None,
             description: None,
+            terms_of_service: None,
+            contact: None,
+            license: None,
             emit_document: false,
             document_path: "openapi.json".into(),
         }
@@ -68,7 +83,11 @@ impl Config for OpenApiConfig {
             enabled,
             title: env.get("TITLE")?.unwrap_or(d.title),
             version: env.get("VERSION")?.unwrap_or(d.version),
+            summary: env.get("SUMMARY")?.or(d.summary),
             description: env.get("DESCRIPTION")?.or(d.description),
+            terms_of_service: env.get("TERMS_OF_SERVICE")?.or(d.terms_of_service),
+            contact: contact_from_env(env, d.contact)?,
+            license: license_from_env(env, d.license)?,
             emit_document: env.flag("EMIT_DOCUMENT", d.emit_document)?,
             document_path: env
                 .get("DOCUMENT_PATH")?
@@ -76,6 +95,61 @@ impl Config for OpenApiConfig {
                 .unwrap_or(d.document_path),
         })
     }
+}
+
+/// Each `CONTACT_*` key overlays its field; no field set is no contact.
+fn contact_from_env(
+    env: &ConfigService,
+    base: Option<OpenApiContact>,
+) -> Result<Option<OpenApiContact>> {
+    let base = base.unwrap_or_default();
+    let contact = OpenApiContact {
+        name: env.get("CONTACT_NAME")?.or(base.name),
+        url: env.get("CONTACT_URL")?.or(base.url),
+        email: env.get("CONTACT_EMAIL")?.or(base.email),
+    };
+    Ok((contact != OpenApiContact::default()).then_some(contact))
+}
+
+/// `LICENSE_NAME` makes the license, which OpenAPI requires a name of; the
+/// other keys overlay a license, never stand without one.
+fn license_from_env(
+    env: &ConfigService,
+    base: Option<OpenApiLicense>,
+) -> Result<Option<OpenApiLicense>> {
+    let identifier = env.get("LICENSE_IDENTIFIER")?;
+    let url = env.get("LICENSE_URL")?;
+    let license = match (env.get("LICENSE_NAME")?, base) {
+        (Some(name), base) => Some(OpenApiLicense {
+            name,
+            identifier: identifier.or(base.as_ref().and_then(|b| b.identifier.clone())),
+            url: url.or(base.and_then(|b| b.url)),
+        }),
+        (None, Some(base)) => Some(OpenApiLicense {
+            identifier: identifier.or(base.identifier),
+            url: url.or(base.url),
+            ..base
+        }),
+        (None, None) if identifier.is_some() || url.is_some() => {
+            return Err(ConfigError::parse(
+                env.var_name("LICENSE_NAME"),
+                "is required beside LICENSE_IDENTIFIER or LICENSE_URL: OpenAPI's License \
+                 Object names its license",
+            ));
+        }
+        (None, None) => None,
+    };
+    if let Some(license) = &license
+        && license.identifier.is_some()
+        && license.url.is_some()
+    {
+        return Err(ConfigError::parse(
+            env.var_name("LICENSE_URL"),
+            "is exclusive of LICENSE_IDENTIFIER (OpenAPI 3.1 §4.8.4): name the license by \
+             its SPDX identifier or by a URL to its text, not both",
+        ));
+    }
+    Ok(license)
 }
 
 fn docs_default_enabled(environment: Environment) -> bool {
@@ -123,6 +197,66 @@ mod tests {
         assert_eq!(cfg.title, "Custom API");
         assert_eq!(cfg.version, "9.9.9");
         assert_eq!(cfg.description.as_deref(), Some("Generated docs"));
+    }
+
+    #[test]
+    fn the_contact_and_the_license_overlay_field_by_field() {
+        let service = ConfigService::with_vars(
+            "openapi",
+            [
+                ("CONTACT_EMAIL", "api@publish.example"),
+                ("LICENSE_NAME", "Apache 2.0"),
+                ("LICENSE_IDENTIFIER", "Apache-2.0"),
+            ],
+        );
+        let base = OpenApiConfig {
+            contact: Some(OpenApiContact {
+                name: Some("API team".into()),
+                ..OpenApiContact::default()
+            }),
+            ..OpenApiConfig::default()
+        };
+        let cfg = OpenApiConfig::from_env(&service, base).expect("ok");
+        let contact = cfg.contact.expect("a contact");
+        assert_eq!(contact.name.as_deref(), Some("API team"));
+        assert_eq!(contact.email.as_deref(), Some("api@publish.example"));
+        let license = cfg.license.expect("a license");
+        assert_eq!(license.name, "Apache 2.0");
+        assert_eq!(license.identifier.as_deref(), Some("Apache-2.0"));
+
+        let none =
+            OpenApiConfig::from_env(&ConfigService::with_vars("openapi", []), Default::default())
+                .expect("ok");
+        assert!(none.contact.is_none() && none.license.is_none());
+    }
+
+    #[test]
+    fn a_license_named_by_identifier_and_url_at_once_is_refused() {
+        let service = ConfigService::with_vars(
+            "openapi",
+            [
+                ("LICENSE_NAME", "MIT"),
+                ("LICENSE_IDENTIFIER", "MIT"),
+                ("LICENSE_URL", "https://opensource.org/license/mit"),
+            ],
+        );
+        let err = OpenApiConfig::from_env(&service, Default::default())
+            .expect_err("OpenAPI makes them exclusive");
+        assert!(
+            matches!(err, nest_rs_config::ConfigError::Parse { ref var, .. } if *var == nest_rs_config::var_name("openapi", "LICENSE_URL")),
+            "{err}",
+        );
+    }
+
+    #[test]
+    fn a_license_detail_without_its_name_is_refused() {
+        let service = ConfigService::with_vars("openapi", [("LICENSE_IDENTIFIER", "MIT")]);
+        let err = OpenApiConfig::from_env(&service, Default::default())
+            .expect_err("OpenAPI requires the name");
+        assert!(
+            matches!(err, nest_rs_config::ConfigError::Parse { ref var, .. } if *var == nest_rs_config::var_name("openapi", "LICENSE_NAME")),
+            "{err}",
+        );
     }
 
     #[test]

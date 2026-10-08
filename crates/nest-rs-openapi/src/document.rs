@@ -6,7 +6,7 @@ use std::sync::Arc;
 use nest_rs_core::{Container, Discovery};
 use nest_rs_http::{
     ApiVersioning, GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta,
-    MEDIA_TYPE_PARAM, NEXT_CURSOR_HEADER, declared_versions, join_path,
+    MEDIA_TYPE_PARAM, declared_versions, join_path,
 };
 use poem::http::{StatusCode, header};
 use schemars::SchemaGenerator;
@@ -145,10 +145,7 @@ pub(crate) fn build_document(
     let mut schemas = generator.take_definitions(true);
     schemas.insert("ProblemDetails".into(), problem_details_schema());
 
-    let mut info = json!({ "title": config.title, "version": config.version });
-    if let (Some(description), Value::Object(info)) = (config.description.as_deref(), &mut info) {
-        info.insert("description".into(), json!(description));
-    }
+    let info = info_object(config);
 
     // Paths stay prefix-free; `global_prefix` becomes the `server` base URL clients prepend.
     let mut document = json!({
@@ -167,9 +164,10 @@ pub(crate) fn build_document(
         },
     });
 
-    if let Some(base) = global_prefix_base(container)
-        && let Value::Object(obj) = &mut document
-    {
+    // Stated even at the origin root, OpenAPI's default: a generator reads its
+    // base URL off `servers` and has none to read otherwise.
+    if let Value::Object(obj) = &mut document {
+        let base = global_prefix_base(container).unwrap_or_else(|| "/".to_owned());
         obj.insert("servers".into(), json!([{ "url": base }]));
     }
 
@@ -223,6 +221,47 @@ fn collect_schema_refs(value: &Value, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// OpenAPI's Info Object, every field the config sets.
+fn info_object(config: &OpenApiConfig) -> Value {
+    let mut info = Map::new();
+    info.insert("title".into(), json!(config.title));
+    if let Some(summary) = &config.summary {
+        info.insert("summary".into(), json!(summary));
+    }
+    if let Some(description) = &config.description {
+        info.insert("description".into(), json!(description));
+    }
+    if let Some(terms) = &config.terms_of_service {
+        info.insert("termsOfService".into(), json!(terms));
+    }
+    if let Some(contact) = &config.contact {
+        let mut object = Map::new();
+        for (key, value) in [
+            ("name", &contact.name),
+            ("url", &contact.url),
+            ("email", &contact.email),
+        ] {
+            if let Some(value) = value {
+                object.insert(key.into(), json!(value));
+            }
+        }
+        info.insert("contact".into(), Value::Object(object));
+    }
+    if let Some(license) = &config.license {
+        let mut object = Map::new();
+        object.insert("name".into(), json!(license.name));
+        if let Some(identifier) = &license.identifier {
+            object.insert("identifier".into(), json!(identifier));
+        }
+        if let Some(url) = &license.url {
+            object.insert("url".into(), json!(url));
+        }
+        info.insert("license".into(), Value::Object(object));
+    }
+    info.insert("version".into(), json!(config.version));
+    Value::Object(info)
 }
 
 fn global_prefix_base(container: &Container) -> Option<String> {
@@ -390,6 +429,9 @@ fn operation_object(
     if let Some(description) = route.description {
         op.insert("description".into(), json!(description));
     }
+    if route.deprecation.is_some() {
+        op.insert("deprecated".into(), json!(true));
+    }
 
     let mut parameters = typed_path_parameters(full_path, route.path_params, generator);
     parameters.extend(expand_object_params(route.query_params, "query", generator));
@@ -466,12 +508,34 @@ fn operation_object(
     responses.insert(status.to_string(), Value::Object(ok));
     for (status, title) in error_statuses(route, full_path, global_guards, requires_parameter) {
         let mut response = problem_response(title);
-        if status == "429"
-            && let Value::Object(map) = &mut response
-        {
-            map.insert("headers".into(), retry_after_header());
+        if let Value::Object(map) = &mut response {
+            match status {
+                "401" => {
+                    map.insert("headers".into(), challenge_header());
+                }
+                "429" => {
+                    map.insert("headers".into(), retry_after_header());
+                }
+                _ => {}
+            }
         }
         responses.insert(status.into(), response);
+    }
+    // A body the handler writes itself sits beside the framework's problem
+    // document for that status, when both can answer.
+    for (status, schema_fn) in route.error_responses {
+        let schema = schema_fn(generator).to_value();
+        let response = responses
+            .entry(status.to_string())
+            .or_insert_with(|| json!({ "description": reason_phrase(*status) }));
+        if let Value::Object(response) = response {
+            let content = response
+                .entry("content")
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Value::Object(content) = content {
+                content.insert(JSON_MEDIA_TYPE.into(), json!({ "schema": schema }));
+            }
+        }
     }
     op.insert("responses".into(), Value::Object(responses));
 
@@ -626,6 +690,18 @@ fn problem_response(title: &str) -> Value {
     })
 }
 
+/// The `WWW-Authenticate` challenge every `401` carries (RFC 9110 §15.5.2).
+fn challenge_header() -> Value {
+    json!({
+        "WWW-Authenticate": {
+            "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential \
+                            arrived and was refused.",
+            "required": true,
+            "schema": { "type": "string" }
+        }
+    })
+}
+
 /// The `Retry-After` header a `429` carries, in seconds (RFC 9110 §10.2.3).
 fn retry_after_header() -> Value {
     json!({
@@ -642,13 +718,23 @@ fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
     if route.sets_location {
         headers.insert("Location".into(), location_header(status));
     }
-    if route.sets_next_cursor {
+    if route.sets_next_link {
         headers.insert(
-            NEXT_CURSOR_HEADER.into(),
+            "Link".into(),
             json!({
-                "description": "Cursor of the next page, passed back as `after`; absent on \
-                                the last page.",
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor \
+                                carried in its query; absent on the last page.",
                 "schema": { "type": "string" }
+            }),
+        );
+    }
+    if let Some(deprecation) = route.deprecation {
+        headers.insert(
+            "Deprecation".into(),
+            json!({
+                "description": format!("RFC 9745: deprecated since {}.", deprecation.since),
+                "required": true,
+                "schema": { "type": "string", "const": deprecation.header }
             }),
         );
     }
@@ -932,6 +1018,7 @@ mod tests {
             request_body: None,
             response: None,
             response_content_type: None,
+            error_responses: &[],
             masked: false,
             path_params: &[],
             query_params: &[],
@@ -939,11 +1026,12 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
-            sets_next_cursor: false,
+            sets_next_link: false,
             response_headers: &[],
             success_status: 200,
             scoped_guarded: false,
             public: false,
+            deprecation: None,
             versions: &[],
         }
     }
@@ -1321,7 +1409,10 @@ mod tests {
         let r = route("list", "/users");
         let op = operation(&r, "/users", &mut g, true, None);
         assert_eq!(op["security"][0]["bearerAuth"], json!([]));
-        assert!(op["responses"].get("401").is_some());
+        assert_eq!(
+            op["responses"]["401"]["headers"]["WWW-Authenticate"]["required"], true,
+            "a 401 names its challenge: {op}",
+        );
         assert!(op["responses"].get("403").is_some());
     }
 
@@ -1378,6 +1469,64 @@ mod tests {
     }
 
     #[test]
+    fn a_deprecated_route_is_marked_and_documents_its_header() {
+        let mut g = generator();
+        let mut r = route("list", "/v1/posts");
+        r.deprecation = Some(nest_rs_http::DeprecationMeta {
+            since: "2026-10-08",
+            header: "@1791417600",
+        });
+        let op = operation(&r, "/v1/posts", &mut g, false, None);
+        assert_eq!(op["deprecated"], true, "{op}");
+        let header = &op["responses"]["200"]["headers"]["Deprecation"];
+        assert_eq!(header["schema"]["const"], "@1791417600", "{op}");
+        assert!(
+            header["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("2026-10-08")),
+            "{header}",
+        );
+        let current = operation(
+            &route("list", "/v2/posts"),
+            "/v2/posts",
+            &mut g,
+            false,
+            None,
+        );
+        assert!(current.get("deprecated").is_none());
+    }
+
+    #[test]
+    fn a_declared_error_body_is_documented_under_its_status() {
+        let mut g = generator();
+        let mut r = route("ready", "/health/ready");
+        r.error_responses = &[(503, schema_for_dummy)];
+        let op = operation(&r, "/health/ready", &mut g, false, None);
+        let unavailable = &op["responses"]["503"];
+        assert_eq!(unavailable["description"], "Service Unavailable", "{op}");
+        assert!(
+            unavailable["content"]["application/json"]["schema"].is_object(),
+            "{op}"
+        );
+        assert!(
+            unavailable["content"]
+                .get("application/problem+json")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_declared_error_body_sits_beside_the_frameworks_problem_document() {
+        let mut g = generator();
+        let mut r = route("get", "/users/:id");
+        r.error_responses = &[(404, schema_for_dummy)];
+        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let content = &op["responses"]["404"]["content"];
+        assert!(content["application/problem+json"].is_object(), "{op}");
+        assert!(content["application/json"].is_object(), "{op}");
+    }
+
+    #[test]
     fn a_problem_points_at_uri_references_so_a_relative_instance_validates() {
         let schema = problem_details_schema();
         assert_eq!(schema["properties"]["type"]["format"], "uri-reference");
@@ -1385,12 +1534,12 @@ mod tests {
     }
 
     #[test]
-    fn a_paginated_list_declares_the_cursor_header_it_sends() {
+    fn a_paginated_list_declares_the_link_it_sends() {
         let mut g = generator();
         let mut r = route("list", "/posts");
-        r.sets_next_cursor = true;
+        r.sets_next_link = true;
         let op = operation(&r, "/posts", &mut g, false, None);
-        let header = &op["responses"]["200"]["headers"][NEXT_CURSOR_HEADER];
+        let header = &op["responses"]["200"]["headers"]["Link"];
         assert_eq!(header["schema"]["type"], "string", "{op}");
         assert!(
             header.get("required").is_none(),
@@ -1510,7 +1659,42 @@ mod tests {
     }
 
     #[test]
-    fn no_servers_field_without_a_global_prefix() {
+    fn the_info_object_carries_every_field_the_config_sets() {
+        let config = OpenApiConfig {
+            summary: Some("Publish's REST surface".into()),
+            terms_of_service: Some("https://publish.example/terms".into()),
+            contact: Some(crate::OpenApiContact {
+                name: Some("API team".into()),
+                url: None,
+                email: Some("api@publish.example".into()),
+            }),
+            license: Some(crate::OpenApiLicense {
+                name: "Apache 2.0".into(),
+                identifier: Some("Apache-2.0".into()),
+                url: None,
+            }),
+            ..info("Publish", "2.0.0", None)
+        };
+        let info = info_object(&config);
+        assert_eq!(info["summary"], "Publish's REST surface");
+        assert_eq!(info["termsOfService"], "https://publish.example/terms");
+        assert_eq!(
+            info["contact"],
+            json!({ "name": "API team", "email": "api@publish.example" })
+        );
+        assert_eq!(
+            info["license"],
+            json!({ "name": "Apache 2.0", "identifier": "Apache-2.0" })
+        );
+        assert!(
+            info_object(&OpenApiConfig::default())
+                .get("license")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_server_is_the_origin_root_without_a_global_prefix() {
         let container = Container::builder().build();
         let doc = build_document(
             &container,
@@ -1518,10 +1702,7 @@ mod tests {
             None,
             &mut Reported::default(),
         );
-        assert!(
-            doc.get("servers").is_none(),
-            "with no global prefix the paths are absolute — no `servers` needed",
-        );
+        assert_eq!(doc["servers"], json!([{ "url": "/" }]));
     }
 
     #[test]

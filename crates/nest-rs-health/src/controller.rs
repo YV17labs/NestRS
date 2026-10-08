@@ -24,21 +24,21 @@ pub(crate) struct HealthController {
 impl HealthController {
     #[get("/live")]
     #[public]
-    #[api(summary = "Liveness probe: whether the process should keep running", tags("Health"), response = ProbeReport)]
+    #[api(summary = "Liveness probe: whether the process should keep running", response = ProbeReport, error(503 = ProbeReport))]
     async fn live(&self) -> Response {
         respond(self.svc.probe(ProbeKind::Liveness).await)
     }
 
     #[get("/ready")]
     #[public]
-    #[api(summary = "Readiness probe: whether the process can take traffic", tags("Health"), response = ProbeReport)]
+    #[api(summary = "Readiness probe: whether the process can take traffic", response = ProbeReport, error(503 = ProbeReport))]
     async fn ready(&self) -> Response {
         respond(self.svc.probe(ProbeKind::Readiness).await)
     }
 
     #[get("/startup")]
     #[public]
-    #[api(summary = "Startup probe: whether the process has finished booting", tags("Health"), response = ProbeReport)]
+    #[api(summary = "Startup probe: whether the process has finished booting", response = ProbeReport, error(503 = ProbeReport))]
     async fn startup(&self) -> Response {
         respond(self.svc.probe(ProbeKind::Startup).await)
     }

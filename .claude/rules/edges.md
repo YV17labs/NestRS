@@ -291,6 +291,12 @@ router parses. The rewrite is skipped when nothing is versioned.
   endpoint; `instructions` on `#[mcp]` is a compile error. Identity has no
   environment twin, which is why it travels in `McpOptions`.
 - **OpenAPI** self-mounts a document **composed from the route table** (schemas
-  through `schemars`, `#[api(...)]` enriches) and an offline Swagger UI.
+  through `schemars`, `#[api(...)]` enriches) and an offline Swagger UI that
+  loads nothing from elsewhere. The document is 3.1 and states only what the
+  framework knows (`.claude/decisions/openapi-document-scope.md`); it is a
+  development surface (`.claude/decisions/openapi-docs-exposure.md`). A route
+  is deprecated with `#[api(deprecated = "…")]`, never Rust's `#[deprecated]`
+  (`.claude/decisions/route-deprecation.md`), and a list links its next page
+  (`.claude/decisions/pagination-link-header.md`).
 - **The throttler's** in-memory default is an ordinary factory a vendor binding
   supersedes; a hit's net sits below the HTTP request timeout.

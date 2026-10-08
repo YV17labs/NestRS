@@ -23,6 +23,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Err(err) = nest_rs_codegen::refuse_rust_deprecated(&item.attrs, "a `#[controller]`") {
+        return err.to_compile_error().into();
+    }
 
     // Inert class-level attributes: each must sit below `#[controller]`.
     let interceptors = match take_path_list(&mut item.attrs, "use_interceptors") {

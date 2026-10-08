@@ -1,0 +1,81 @@
+---
+title: OpenAPI configuration
+description: Every OpenApiConfig field — the switch, the whole info block, and the committed copy of the document — set from the environment or pinned in code.
+---
+
+`OpenApiConfig` holds the document's `info` block, the switch that serves it,
+and where a committed copy is written. Every field is on the framework-wide dual
+path — the [`.env` cascade](/configuration/) **and** the pinned struct:
+
+```bash frame="terminal"
+$ NESTRS_OPENAPI__TITLE="Publish API" \
+  NESTRS_OPENAPI__VERSION="2.1.0" \
+  NESTRS_OPENAPI__LICENSE_NAME="Apache 2.0" \
+  NESTRS_OPENAPI__LICENSE_IDENTIFIER="Apache-2.0" \
+  nestrs run dev api
+```
+
+## Fields
+
+| Field | Env var | Default | Effect |
+|---|---|---|---|
+| `enabled` | `<PREFIX>_OPENAPI__ENABLED` | dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
+| `title` | `<PREFIX>_OPENAPI__TITLE` | `nestrs API` | `info.title`. |
+| `version` | `<PREFIX>_OPENAPI__VERSION` | `0.1.0` | `info.version` — your API's version, not the framework's. |
+| `summary` | `<PREFIX>_OPENAPI__SUMMARY` | none | `info.summary`, one line. |
+| `description` | `<PREFIX>_OPENAPI__DESCRIPTION` | none | `info.description`. |
+| `terms_of_service` | `<PREFIX>_OPENAPI__TERMS_OF_SERVICE` | none | `info.termsOfService`, a URL. |
+| `contact` | `<PREFIX>_OPENAPI__CONTACT_NAME`, `__CONTACT_URL`, `__CONTACT_EMAIL` | none | `info.contact`; any one key makes it. |
+| `license` | `<PREFIX>_OPENAPI__LICENSE_NAME`, `__LICENSE_IDENTIFIER`, `__LICENSE_URL` | none | `info.license`: the name, then an SPDX identifier **or** a URL — both is a boot error, as OpenAPI 3.1 makes them exclusive, and either without a name is one too. |
+| `emit_document` | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `false` | Writes the document to `document_path` once at boot — the committed copy a pull request diffs. |
+| `document_path` | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `openapi.json` | Where `emit_document` writes, relative to the working directory. |
+
+## Pin it in code
+
+Pass an `OpenApiConfig` at the import site instead of reading the environment:
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::openapi::{OpenApiConfig, OpenApiLicense, OpenApiModule};
+
+OpenApiModule::for_root(OpenApiConfig {
+    title: "Publish API".into(),
+    version: "2.1.0".into(),
+    license: Some(OpenApiLicense {
+        name: "Apache 2.0".into(),
+        identifier: Some("Apache-2.0".into()),
+        url: None,
+    }),
+    ..OpenApiConfig::default()
+})
+```
+
+The pinned struct is the *base* `<PREFIX>_OPENAPI__*` overlays, field by field —
+so the deployment can still override any one of them, a single contact or
+license key included. See the [precedence chain](/configuration/#the-dual-path-rule).
+
+## The committed document
+
+With `emit_document` on in `.env.development`, every dev run rewrites the file,
+and a pull request shows each change to the API contract as a diff of it. Pin it
+with a test that compares what the app serves to what is committed, as the
+demo's `api` app does — the suite then fails the day someone forgets to rerun:
+
+```rust title="apps/api/tests/e2e/openapi.rs (from the demo, abridged)"
+#[tokio::test]
+async fn the_committed_document_is_the_one_the_app_serves() {
+    let (_db, app) = boot().await;
+    let resp = app.http().get("/api-json").send().await;
+    // …
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
+    // …
+    assert!(
+        served == committed,
+        // …
+    );
+}
+```
+
+## Going further
+
+- [OpenAPI](/openapi/) — what the document derives from the route table.
+- [Typed TypeScript clients](/openapi/clients/) — generate a frontend client from the committed file.

@@ -1,0 +1,5 @@
+error: #[api] `deprecated` takes an RFC 3339 full-date, e.g. `deprecated = "2026-10-08"`: the `Deprecation` header (RFC 9745) a client reads is a date
+  --> tests/integration/diagnostics/http/api_deprecated_not_a_date.rs:13:24
+   |
+13 |     #[api(deprecated = "7.1")]
+   |                        ^^^^^

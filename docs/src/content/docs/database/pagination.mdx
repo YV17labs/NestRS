@@ -36,23 +36,28 @@ collections.
 
 ## Keyset, the REST shape
 
-The generated `GET /posts` returns a plain `Vec<Post>` body plus an
-`x-next-cursor` response header when more rows remain. The body stays a
-flat array so response masking works unchanged. The header is in the
-[OpenAPI document](/openapi/) and, under CORS, exposed to a browser on
-another origin without being listed.
+The generated `GET /posts` returns a plain `Vec<Post>` body and, when more rows
+remain, the next page as an RFC 8288 `Link`. The body stays a flat array so
+response masking works unchanged. The link is in the
+[OpenAPI document](/openapi/) and, under CORS, exposed to a browser on another
+origin without being listed.
 
-```bash
-curl -s '/posts?first=20'
-# [ { "id": "...", "title": "..." }, ... ]
-# x-next-cursor: 0193f1b2-...
+```bash frame="terminal"
+$ curl -si '/posts?first=20'
+HTTP/1.1 200 OK
+link: </posts?first=20&after=0193f1b2-...>; rel="next"
 
-curl -s '/posts?first=20&after=0193f1b2-...'
-# next page
+[ { "id": "...", "title": "..." }, ... ]
+
+$ curl -si '/posts?first=20&after=0193f1b2-...'
 ```
 
+Following the link is the whole protocol: it keeps the page size, carries the
+cursor, and is built on the path the caller addressed, global prefix and
+version included. The last page has no `Link`.
+
 The query carries `first` (page size, defaulting to 20, clamped to
-`1..=100`) and `after` (the cursor returned by the previous response). An
+`1..=100`) and `after` (the cursor the previous page's link carries). An
 unparseable cursor pages from the start — never an error.
 
 ## Keyset, the GraphQL shape

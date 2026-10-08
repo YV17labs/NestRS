@@ -65,7 +65,10 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `#[use_interceptors(...)]` — container-resolved interceptors.
 /// - `#[meta(EXPR)]` (repeatable) — typed metadata read back by a guard with
 ///   `nest_rs_http::Reflector` (value type: `Clone + Send + Sync + 'static`).
-/// - `#[api(summary, description, tags(...))]` — OpenAPI facets.
+/// - `#[api(summary, description, tags(...), response, multipart,
+///   response_content_type, error(...), deprecated)]` — OpenAPI facets;
+///   `deprecated = "YYYY-MM-DD"` also stamps the `Deprecation` header (RFC 9745)
+///   on every answer. Rust's own `#[deprecated]` on a handler is refused.
 ///
 /// The schema of any `Json<T>` request body / response is recorded into the
 /// route's `HttpRouteMeta` (`T: nest_rs_http::schemars::JsonSchema`); raw
@@ -93,7 +96,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `ops = [create]` without `create = <Type>` is a compile error.
 ///
 /// The generated list is **keyset-paginated by default** (`?first=&after=`,
-/// next cursor echoed in `x-next-cursor`, body a plain maskable array);
+/// the next page linked by `Link: <…>; rel="next"`, body a plain maskable array);
 /// `paginate = none` opts out into the full collection, backstopped by
 /// `CrudService::list`'s hard cap.
 ///

@@ -38,6 +38,13 @@ impl WidgetsController {
         "[]".into()
     }
 
+    #[get("/catalog")]
+    #[public]
+    #[api(description = "Use `GET /widgets`.", deprecated = "2026-10-08")]
+    async fn catalog(&self) -> String {
+        "[]".into()
+    }
+
     #[post("/token")]
     async fn token(&self, body: nest_rs_http::poem::web::Form<TokenForm>) -> String {
         body.0.grant_type
@@ -142,6 +149,26 @@ async fn a_public_route_states_its_opening_and_the_headers_it_always_sends() {
 
     let served = app.http().get("/widgets/feed").send().await;
     served.assert_header("cache-control", "no-store");
+}
+
+#[tokio::test]
+async fn a_deprecated_route_says_so_in_the_document_and_on_every_answer() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
+    let catalog = &doc["paths"]["/widgets/catalog"]["get"];
+    assert_eq!(catalog["deprecated"], true, "{catalog}");
+    assert_eq!(
+        catalog["responses"]["200"]["headers"]["Deprecation"]["schema"]["const"], "@1791417600",
+        "{catalog}",
+    );
+
+    let served = app.http().get("/widgets/catalog").send().await;
+    served.assert_status_is_ok();
+    served.assert_header("deprecation", "@1791417600");
+    let current = app.http().get("/widgets/feed").send().await;
+    assert!(current.0.headers().get("deprecation").is_none());
 }
 
 #[tokio::test]

@@ -79,6 +79,15 @@ impl HygieneController {
         "sync".into()
     }
 
+    /// `#[api(deprecated)]` and `#[api(error)]`: a deprecation wrapper and a
+    /// declared schema.
+    #[get("/legacy")]
+    #[public]
+    #[api(deprecated = "2026-10-08", error(503 = HygieneHeaders))]
+    fn legacy(&self) -> String {
+        "legacy".into()
+    }
+
     #[cfg(feature = "seaorm")]
     #[get("/count")]
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]

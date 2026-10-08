@@ -16,6 +16,7 @@ mod config;
 mod context;
 mod controller;
 mod cors;
+mod deprecation;
 mod detached;
 mod drain;
 mod edge;
@@ -23,6 +24,7 @@ mod endpoint;
 mod error;
 mod header;
 mod interceptor;
+mod link;
 mod location;
 mod matched;
 mod metadata;
@@ -53,13 +55,15 @@ pub use config::{
     SSE_KEEP_ALIVE_FLOOR,
 };
 pub use context::{Ctx, RejectedCredential};
-pub use controller::{
-    Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, NEXT_CURSOR_HEADER, RequestBodyMeta,
-};
+pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
 pub use cors::HttpCors;
+pub use deprecation::DeprecationMeta;
+#[doc(hidden)]
+pub use deprecation::deprecated_route;
 pub use detached::DetachedWork;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};
 pub use header::Header;
+pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
 pub use matched::{Matched, matched};
 pub use metadata::{HandlerMetadata, MappedError, Public};

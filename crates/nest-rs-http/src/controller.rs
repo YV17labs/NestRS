@@ -38,10 +38,6 @@ impl HttpVerb {
     }
 }
 
-/// The response header `#[crud]`'s paginated list names the next page's cursor
-/// in, absent on the last page.
-pub const NEXT_CURSOR_HEADER: &str = "x-next-cursor";
-
 /// Builds the schema for a request body or response, recording named component
 /// schemas in the shared generator.
 pub type SchemaFn = fn(&mut schemars::SchemaGenerator) -> schemars::Schema;
@@ -108,8 +104,9 @@ pub struct HttpRouteMeta {
     pub summary: Option<&'static str>,
     /// `#[api(description = …)]` long text for the OpenAPI operation, if given.
     pub description: Option<&'static str>,
-    /// `#[api(tags(...))]`, else a single-element slice holding the controller
-    /// struct name — so routes group by controller in the docs by default.
+    /// `#[api(tags(...))]`, else a single-element slice holding the controller's
+    /// [`token`](HttpControllerMeta::token) — the stem its `operationId`s carry,
+    /// so a controller's routes group under one name by default.
     pub tags: &'static [&'static str],
     /// The request body this route accepts, or `None` when it takes none.
     pub request_body: Option<RequestBodyMeta>,
@@ -121,6 +118,9 @@ pub struct HttpRouteMeta {
     /// `application/json` — `#[api(response_content_type = "audio/mpeg")]`, or
     /// `text/event-stream` inferred from an `-> SSE` return.
     pub response_content_type: Option<&'static str>,
+    /// `#[api(error(503 = T))]` — each error status the handler answers with a
+    /// JSON body of its own, and that body's schema.
+    pub error_responses: &'static [(u16, SchemaFn)],
     /// An ability shaper (`Authorize<_, _>`) masks this route's response, so a
     /// caller may receive a **subset** of [`response`](Self::response)'s
     /// properties — whichever ones its ability grants.
@@ -148,9 +148,9 @@ pub struct HttpRouteMeta {
     /// framework emits (`#[crud]`'s create, `#[redirect]`); a hand-written
     /// handler setting it itself leaves this `false`.
     pub sets_location: bool,
-    /// `#[crud]`'s paginated list: the success response carries
-    /// [`NEXT_CURSOR_HEADER`] whenever another page follows.
-    pub sets_next_cursor: bool,
+    /// `#[crud]`'s paginated list: the success response carries a `Link` with
+    /// `rel="next"` whenever another page follows ([`set_next_link`](crate::set_next_link)).
+    pub sets_next_link: bool,
     /// Each `#[response_header(name, value)]` on the handler, as written: the
     /// success response always carries these.
     pub response_headers: &'static [(&'static str, &'static str)],
@@ -163,6 +163,9 @@ pub struct HttpRouteMeta {
     /// `#[public]` — an explicit, intentional public surface. Suppresses the
     /// posture warning.
     pub public: bool,
+    /// `#[api(deprecated = "…")]` on the handler: the document marks the
+    /// operation, and every answer carries the `Deprecation` header.
+    pub deprecation: Option<crate::DeprecationMeta>,
 }
 
 impl HttpRouteMeta {
@@ -378,6 +381,7 @@ mod tests {
             request_body: None,
             response: None,
             response_content_type: None,
+            error_responses: &[],
             masked: false,
             path_params: &[],
             query_params: &[],
@@ -385,11 +389,12 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
-            sets_next_cursor: false,
+            sets_next_link: false,
             response_headers: &[],
             success_status: 200,
             scoped_guarded: false,
             public: false,
+            deprecation: None,
             versions: &[],
         }
     }
@@ -445,6 +450,7 @@ mod tests {
             request_body: None,
             response: None,
             response_content_type: None,
+            error_responses: &[],
             masked: false,
             path_params: &[],
             query_params: &[],
@@ -452,11 +458,12 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
-            sets_next_cursor: false,
+            sets_next_link: false,
             response_headers: &[],
             success_status: 200,
             scoped_guarded,
             public,
+            deprecation: None,
             versions: &[],
         }
     }

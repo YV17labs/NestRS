@@ -106,7 +106,7 @@ pub(crate) fn next_cursor_from<M>(
 pub struct PageParams {
     /// Requested page size; defaults to 20 and is clamped to `1..=100`.
     pub first: Option<u64>,
-    /// Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.
+    /// Opaque cursor from a prior page's `next` link; unparsable ⇒ from start.
     pub after: Option<String>,
 }
 

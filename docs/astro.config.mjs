@@ -282,6 +282,8 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'http' } },
             { label: 'OpenAPI', slug: 'openapi' },
+            { label: 'OpenAPI operations', slug: 'openapi/operations' },
+            { label: 'OpenAPI configuration', slug: 'openapi/configuration' },
             { label: 'Typed TypeScript clients', slug: 'openapi/clients' },
           ],
         },

@@ -33,7 +33,7 @@ const WILDCARD: &str = "*";
 
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
-const FRAMEWORK_SENT: [&str; 3] = ["location", "retry-after", crate::NEXT_CURSOR_HEADER];
+const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
 
 /// A list a `*` may appear in, paired with the response header it renders into.
 type WildcardList<'a> = (&'a str, &'a str, &'a [String]);

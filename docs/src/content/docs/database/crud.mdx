@@ -121,7 +121,7 @@ impl OrgsController {}
   mirror holds too: an input type for an op `ops` leaves out fails the build
   rather than being dropped, since the two declarations disagree.
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
-  (next cursor in `x-next-cursor` on REST, `first`/`after` arguments on
+  (the next page in a `Link: <…>; rel="next"` header on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped
   by `CrudService::list`'s hard cap). It configures `list` and nothing else, so
   writing it beside an `ops` that leaves `list` out fails the build for the
@@ -293,7 +293,7 @@ impl block rather than the method — drop the parameter, not the attribute.
 
 | Form              | Surface     | Wire shape                                      |
 |-------------------|-------------|-------------------------------------------------|
-| `paginate = cursor` (default) | HTTP + GraphQL | `Vec<T>` body + `x-next-cursor` header (REST); `[T]` + `first`/`after` arguments (GraphQL) |
+| `paginate = cursor` (default) | HTTP + GraphQL | `Vec<T>` body + `Link` `rel="next"` header (REST); `[T]` + `first`/`after` arguments (GraphQL) |
 | `paginate = none`   | HTTP + GraphQL | full ability-scoped collection, hard-capped by `CrudService::list` |
 
 Keyset pagination (`cursor`) is the default — stable under inserts, and the

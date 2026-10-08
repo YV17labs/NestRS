@@ -54,7 +54,7 @@ Real env always wins over the `.env` cascade.
 | `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
 | `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
 | `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
-| `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty — `Location`, `Retry-After` and `x-next-cursor`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
+| `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
 | `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
 | `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
 | `server_header` | `<PREFIX>_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |

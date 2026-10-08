@@ -41,7 +41,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let service = &cfg.service;
     let entity = &cfg.entity;
     let output = &cfg.output;
-    let tag = output
+    let noun = output
         .segments
         .last()
         .map(|s| s.ident.to_string())
@@ -61,11 +61,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let mut generated: Vec<ImplItem> = Vec::new();
 
     if ops.list && !existing.contains("list") {
-        let summary = format!("List {tag}");
+        let summary = format!("List {noun}");
         let list_method: ImplItem = match cfg.paginate {
             Paginate::None => parse_quote! {
                 #[get("/")]
-                #[api(summary = #summary, tags(#tag))]
+                #[api(summary = #summary)]
                 async fn list(
                     &self,
                     _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
@@ -81,17 +81,20 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             Paginate::Cursor => parse_quote! {
                 #[get("/")]
                 // A built `Response` hides the payload from the signature: declared here.
-                #[api(summary = #summary, tags(#tag), response = ::std::vec::Vec<#output>)]
-                // Read by `#[routes]` to declare the cursor header in the document.
-                #[crud_next_cursor]
+                #[api(summary = #summary, response = ::std::vec::Vec<#output>)]
+                // Read by `#[routes]` to declare the `Link` in the document.
+                #[crud_next_link]
                 async fn list(
                     &self,
                     _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
+                    // Read through `caller_path`: the router strips a global prefix off `uri()`.
+                    __req: &::nest_rs_http::poem::Request,
                     __page: ::nest_rs_http::poem::web::Query<::nest_rs_seaorm::PageParams>,
                 ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
+                    let __first = __page.0.limit();
                     let __p = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
-                        __page.0.limit(),
+                        __first,
                         __page.0.after_uuid(),
                     )
                     .await
@@ -99,15 +102,12 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
                     let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
-                    if let ::core::option::Option::Some(__cursor) = __p.next_cursor
-                        && let ::core::result::Result::Ok(__value) =
-                            ::nest_rs_http::poem::http::HeaderValue::from_str(
-                                &::std::string::ToString::to_string(&__cursor),
-                            )
-                    {
-                        __resp.headers_mut().insert(
-                            ::nest_rs_http::poem::http::HeaderName::from_static(::nest_rs_http::NEXT_CURSOR_HEADER),
-                            __value,
+                    if let ::core::option::Option::Some(__cursor) = __p.next_cursor {
+                        ::nest_rs_http::set_next_link(
+                            &mut __resp,
+                            ::nest_rs_http::caller_path(__req),
+                            __first,
+                            __cursor,
                         );
                     }
                     ::core::result::Result::Ok(__resp)
@@ -118,10 +118,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     }
 
     if ops.get && !existing.contains("get") {
-        let summary = format!("Fetch {tag} by id");
+        let summary = format!("Fetch {noun} by id");
         generated.push(parse_quote! {
             #[get("/:id")]
-            #[api(summary = #summary, tags(#tag))]
+            #[api(summary = #summary)]
             async fn get(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
@@ -153,11 +153,11 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if let Some(create) = ops.create
         && !existing.contains("create")
     {
-        let summary = format!("Create {tag}");
+        let summary = format!("Create {noun}");
         generated.push(parse_quote! {
             #[post("/")]
             // A built `Response` hides the payload from the signature: declared here.
-            #[api(summary = #summary, tags(#tag), response = #output)]
+            #[api(summary = #summary, response = #output)]
             #[crud_write]
             // Read by `#[routes]` to declare the `Location` header in the document.
             #[crud_location]
@@ -198,10 +198,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if let Some(update) = ops.update
         && !existing.contains("update")
     {
-        let summary = format!("Update {tag} by id");
+        let summary = format!("Update {noun} by id");
         generated.push(parse_quote! {
             #[patch("/:id")]
-            #[api(summary = #summary, tags(#tag))]
+            #[api(summary = #summary)]
             #[crud_write]
             async fn update(
                 &self,
@@ -240,10 +240,10 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     }
 
     if ops.delete && !existing.contains("delete") {
-        let summary = format!("Delete {tag} by id");
+        let summary = format!("Delete {noun} by id");
         generated.push(parse_quote! {
             #[delete("/:id")]
-            #[api(summary = #summary, tags(#tag))]
+            #[api(summary = #summary)]
             #[crud_write]
             // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(204)]
@@ -331,19 +331,19 @@ mod tests {
     }
 
     #[test]
-    fn only_the_paginated_list_marks_the_cursor_header_it_sends() {
+    fn only_the_paginated_list_marks_the_link_it_sends() {
         let paged = generated_methods(quote! {
             service = svc, entity = E, output = Thing, ops = [list]
         });
         assert!(
-            paged.contains("crud_next_cursor"),
+            paged.contains("crud_next_link"),
             "the cursor list stamps the marker `#[routes]` reads: {paged}",
         );
         let whole = generated_methods(quote! {
             service = svc, entity = E, output = Thing, ops = [list], paginate = none
         });
         assert!(
-            !whole.contains("crud_next_cursor"),
+            !whole.contains("crud_next_link"),
             "a full collection sends no cursor: {whole}",
         );
     }

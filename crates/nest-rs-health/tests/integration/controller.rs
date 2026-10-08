@@ -35,12 +35,22 @@ async fn each_probe_is_documented_under_one_health_tag() {
         .collect();
     assert_eq!(routes.len(), 3, "the three probes");
     for route in &routes {
-        assert_eq!(route.tags, ["Health"], "{}", route.handler);
+        assert_eq!(route.tags, ["health"], "{}", route.handler);
         assert!(route.summary.is_some(), "{} has a summary", route.handler);
         assert!(
             route.response.is_some(),
             "{} types its report",
             route.handler
+        );
+        assert_eq!(
+            route
+                .error_responses
+                .iter()
+                .map(|(s, _)| *s)
+                .collect::<Vec<_>>(),
+            [503],
+            "{} documents the report a failing probe answers with",
+            route.handler,
         );
     }
 }

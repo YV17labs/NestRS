@@ -23,6 +23,8 @@ use crate::attr::opt_str;
 struct RouteHandler {
     verb: syn::Ident,
     wrapper: syn::Ident,
+    /// The `Deprecation` header value Rust's `#[deprecated]` on the method states.
+    deprecation_header: Option<String>,
     /// Whether the verb was `#[sse]`.
     is_sse: bool,
     /// `#[use_guards]` paths on the method.
@@ -105,7 +107,7 @@ const HELPERS: [&str; 13] = [
     "redirect",
     "crud_write",
     "crud_location",
-    "crud_next_cursor",
+    "crud_next_link",
 ];
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -280,6 +282,26 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(paths) => paths,
                 Err(err) => return err.to_compile_error().into(),
             };
+        if let Err(err) =
+            nest_rs_codegen::refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler")
+        {
+            return err.to_compile_error().into();
+        }
+        let api = match nest_rs_codegen::take_single_attr(&mut method.attrs, "api") {
+            Ok(Some(a_attr)) => match parse_api_attr(&a_attr) {
+                Ok(api) => api,
+                Err(err) => return err.to_compile_error().into(),
+            },
+            Ok(None) => ApiMeta::default(),
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let deprecation = match api.deprecated.as_ref().map(|since| {
+            nest_rs_codegen::deprecation_header(since).map(|header| (since.clone(), header))
+        }) {
+            Some(Ok(read)) => Some(read),
+            Some(Err(err)) => return err.to_compile_error().into(),
+            None => None,
+        };
         // Global guards still run on a `#[public]` route.
         let is_public = match take_flag_attr(&mut method.attrs, "public") {
             Ok(flag) => flag,
@@ -312,8 +334,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[crud]`'s paginated-list marker: the document declares the cursor header.
-        let sets_next_cursor = match take_flag_attr(&mut method.attrs, "crud_next_cursor") {
+        // `#[crud]`'s paginated-list marker: the document declares the `Link` it sends.
+        let sets_next_link = match take_flag_attr(&mut method.attrs, "crud_next_link") {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -466,6 +488,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let handler = RouteHandler {
             verb: verb_ident.clone(),
+            deprecation_header: deprecation.as_ref().map(|(_, header)| header.clone()),
             is_sse,
             wrapper: wrapper_name.clone(),
             guards,
@@ -557,18 +580,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             _ => unreachable!("verb_ident filtered above"),
         };
 
-        let api = match nest_rs_codegen::take_single_attr(&mut method.attrs, "api") {
-            Ok(Some(a_attr)) => match parse_api_attr(&a_attr) {
-                Ok(api) => api,
-                Err(err) => return err.to_compile_error().into(),
-            },
-            Ok(None) => ApiMeta::default(),
-            Err(err) => return err.to_compile_error().into(),
-        };
         let summary = opt_str(&api.summary);
         let description = opt_str(&api.description);
         let tags = if api.tags.is_empty() {
-            quote! { &[#ctrl_tag] }
+            quote! { &[#ctrl_token] }
         } else {
             let tags = &api.tags;
             quote! { &[#(#tags),*] }
@@ -649,6 +664,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        let deprecation_meta = match &deprecation {
+            Some((since, header)) => quote! {
+                ::core::option::Option::Some(::nest_rs_http::DeprecationMeta {
+                    since: #since,
+                    header: #header,
+                })
+            },
+            None => quote! { ::core::option::Option::None },
+        };
+        let error_responses = api.errors.iter().map(|(status, ty)| {
+            quote! { (#status, ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn) }
+        });
+        let error_responses = quote! { &[#(#error_responses),*] };
         let response_content_type = match &api.response_content_type {
             Some(lit) => quote! { ::core::option::Option::Some(#lit) },
             None if is_sse || returns_sse(&method.sig.output) => {
@@ -711,6 +739,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 request_body: #request_body,
                 response: #response,
                 response_content_type: #response_content_type,
+                error_responses: #error_responses,
                 masked: #masked,
                 path_params: #path_params,
                 query_params: #query_params,
@@ -719,12 +748,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 throttled: #method_throttled
                     || <#self_ty>::__nestrs_controller_has_throttler(),
                 sets_location: #sets_location,
-                sets_next_cursor: #sets_next_cursor,
+                sets_next_link: #sets_next_link,
                 response_headers: #response_headers,
                 success_status: #success_status,
                 scoped_guarded: #method_guarded
                     || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
                 public: #is_public,
+                deprecation: #deprecation_meta,
                 versions: #route_versions,
             }
         });
@@ -1100,6 +1130,7 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let RouteHandler {
         verb: _,
+        deprecation_header,
         versions: _,
         cfgs: _,
         is_sse,
@@ -1198,6 +1229,9 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     for m in metas {
         expr = quote! { ::nest_rs_http::poem::EndpointExt::data(#expr, #m) };
     }
+    if let Some(header) = deprecation_header {
+        expr = quote! { ::nest_rs_http::deprecated_route(#expr, #header) };
+    }
 
     // Guards read the marker via `Reflector::is_public()`.
     if *is_public {
@@ -1258,18 +1292,25 @@ struct ApiMeta {
     /// `#[api(response_content_type = "audio/mpeg")]` — the media type of a
     /// success body that is not JSON.
     response_content_type: Option<LitStr>,
+    /// `#[api(error(503 = ProbeReport))]` — an error status the handler answers
+    /// with a JSON body of its own, and that body's type.
+    errors: Vec<(syn::LitInt, Type)>,
+    /// `#[api(deprecated = "2026-10-08")]` — the date the route was deprecated on.
+    deprecated: Option<LitStr>,
 }
 
 /// Every key `#[api]` takes. A key the match in [`parse_api_attr`] does not
 /// read is accepted and dropped: `every_api_key_is_read_as_the_table_writes_it`
 /// holds the two together.
-const API_KEYS: [&str; 6] = [
+const API_KEYS: [&str; 8] = [
     "summary",
     "description",
     "tags",
     "response",
     "multipart",
     "response_content_type",
+    "error",
+    "deprecated",
 ];
 
 const API: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("api", &API_KEYS);
@@ -1294,6 +1335,8 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                 out.response_content_type = Some(lit);
             }
             "tags" => out.tags = api_tags(arg.input(), arg.ident())?,
+            "error" => out.errors.extend(api_errors(arg.input(), arg.ident())?),
+            "deprecated" => out.deprecated = Some(arg.str_lit("2026-10-08")?),
             // The grammar hands over only its own keys.
             _ => {}
         }
@@ -1343,6 +1386,62 @@ fn api_tags(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result
             other => Err(refused(other)),
         })
         .collect()
+}
+
+/// `error(503 = ProbeReport, 409 = ConflictDto)` — error statuses, each with
+/// the type of the JSON body the handler answers it with.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the key accepts; syn's own message would name a token"
+)]
+fn api_errors(
+    input: syn::parse::ParseStream<'_>,
+    key: &syn::Ident,
+) -> syn::Result<Vec<(syn::LitInt, Type)>> {
+    const TAKES: &str = "a list of `status = Type`, the status a 4xx or 5xx, e.g. \
+                         `error(503 = ProbeReport)`; the success payload is `response = T`";
+    let refused = |at: &dyn ToTokens| {
+        syn::Error::new_spanned(
+            at,
+            nest_rs_codegen::takes_value("api", Some("error"), TAKES),
+        )
+    };
+    if !input.peek(syn::token::Paren) {
+        return Err(refused(key));
+    }
+    let content;
+    syn::parenthesized!(content in input);
+    let mut out: Vec<(syn::LitInt, Type)> = Vec::new();
+    while !content.is_empty() {
+        let status: syn::LitInt = content.parse().map_err(|_| refused(key))?;
+        let code: u16 = status.base10_parse().map_err(|_| refused(&status))?;
+        if !(400..=599).contains(&code) {
+            return Err(refused(&status));
+        }
+        if out
+            .iter()
+            .any(|(seen, _)| seen.base10_parse::<u16>().ok() == Some(code))
+        {
+            return Err(syn::Error::new_spanned(
+                &status,
+                format!(
+                    "{}: {code} is declared twice — one status, one body",
+                    nest_rs_codegen::site("api", Some("error")),
+                ),
+            ));
+        }
+        content.parse::<Token![=]>().map_err(|_| refused(&status))?;
+        let ty: Type = content.parse().map_err(|_| refused(&status))?;
+        out.push((status, ty));
+        if content.is_empty() {
+            break;
+        }
+        content.parse::<Token![,]>()?;
+    }
+    if out.is_empty() {
+        return Err(refused(key));
+    }
+    Ok(out)
 }
 
 /// The payload type behind an extractor named `name`: `Name<T>`,
@@ -1456,13 +1555,15 @@ mod tests {
     use super::*;
 
     /// How each of [`API_KEYS`] is written, position for position.
-    const API_KEYS_WRITTEN: [&str; 6] = [
+    const API_KEYS_WRITTEN: [&str; 8] = [
         "summary = \"...\"",
         "description = \"...\"",
         "tags(\"a\", \"b\")",
         "response = Type",
         "multipart = Type",
         "response_content_type = \"type/subtype\"",
+        "error(503 = Type)",
+        "deprecated = \"2026-10-08\"",
     ];
 
     #[test]
@@ -1544,6 +1645,53 @@ mod tests {
     }
 
     #[test]
+    fn api_error_reads_each_status_and_its_body() {
+        let meta = match api_attr(quote! { error(503 = ProbeReport, 409 = crate::Conflict) }) {
+            Ok(meta) => meta,
+            Err(err) => panic!("the argument list must parse: {err}"),
+        };
+        let read: Vec<(u16, String)> = meta
+            .errors
+            .iter()
+            .map(|(status, ty)| {
+                (
+                    status.base10_parse().expect("a status"),
+                    quote!(#ty).to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (503, quote!(ProbeReport).to_string()),
+                (409, quote!(crate::Conflict).to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn api_error_refuses_a_status_that_is_not_an_error_or_said_twice() {
+        for bad in [
+            quote! { error(200 = Report) },
+            quote! { error(302 = Report) },
+            quote! { error(Report) },
+            quote! { error = Report },
+            quote! { error() },
+        ] {
+            let msg = match api_attr(bad.clone()) {
+                Ok(_) => panic!("`{bad}` must be refused"),
+                Err(err) => err.to_string(),
+            };
+            assert!(msg.contains("4xx or 5xx"), "{msg}");
+        }
+        let twice = match api_attr(quote! { error(503 = A, 503 = B) }) {
+            Ok(_) => panic!("a status declared twice must be refused"),
+            Err(err) => err.to_string(),
+        };
+        assert!(twice.contains("declared twice"), "{twice}");
+    }
+
+    #[test]
     fn a_media_type_with_a_parameter_is_accepted() {
         api_attr(quote! { response_content_type = "text/event-stream; charset=utf-8" })
             .expect("a parameterized media type is still a media type");
@@ -1603,7 +1751,7 @@ mod tests {
     #[test]
     fn an_unknown_api_argument_names_itself_and_the_accepted_set() {
         let expected = "unknown #[api] argument `returns`; expected `summary`, `description`, \
-                        `tags`, `response`, `multipart` or `response_content_type`";
+                        `tags`, `response`, `multipart`, `response_content_type`, `error` or `deprecated`";
         assert_eq!(api_refusal(quote! { returns = Post }), expected);
         assert_eq!(api_refusal(quote! { returns }), expected);
     }

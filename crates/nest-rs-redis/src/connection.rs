@@ -20,7 +20,10 @@ use redis::aio::ConnectionLike;
 use redis::cluster_routing::Slot;
 use redis::io::tcp::TcpSettings;
 use redis::io::tcp::socket2::TcpKeepalive;
-use redis::{Cmd, ErrorKind, FromRedisValue, Pipeline, RedisFuture, ServerErrorKind, Value};
+use redis::{
+    Cmd, ConnectionAddr, ConnectionInfo, ErrorKind, FromRedisValue, IntoConnectionInfo, Pipeline,
+    RedisConnectionInfo, RedisFuture, ServerErrorKind, Value,
+};
 
 use crate::cluster::ClusterLink;
 use crate::config::CONNECT_TIMEOUT;
@@ -28,7 +31,7 @@ use crate::error::RedisError;
 use crate::script::{Invocation, RedisScript};
 use crate::sentinel::SentinelLink;
 use crate::standalone::StandaloneLink;
-use crate::url::RedisUrl;
+use crate::url::{NodeAddr, RedisUrl};
 use crate::{RedisConfig, tls};
 
 /// The sentence every binding's boot error appends when the connection is
@@ -156,14 +159,15 @@ impl RedisConnection {
 
 impl RedisConnection {
     /// A connection of its own to the same Redis, opened from the same settings
-    /// — for a command that blocks for up to `blocking`, which on the shared
-    /// link would stall every other caller. Its commands keep this one's budget
-    /// until [`with_budget`](Self::with_budget) widens it.
-    pub(crate) async fn dedicated(&self, blocking: Duration) -> Result<Self, redis::RedisError> {
+    /// — for a command that blocks, which on the shared link would stall every
+    /// other caller — its commands waiting this handle's budget: a blocking
+    /// command's own wait plus the budget, set with
+    /// [`with_budget`](Self::with_budget) first.
+    pub(crate) async fn dedicated(&self) -> Result<Self, redis::RedisError> {
         let link = match &self.link {
             Link::Standalone(link) => Link::Standalone(link.dedicated().await?),
             Link::Sentinel(link) => Link::Sentinel(link.dedicated().await?),
-            Link::Cluster(link) => Link::Cluster(link.dedicated(blocking + self.budget).await?),
+            Link::Cluster(link) => Link::Cluster(link.dedicated(self.budget).await?),
         };
         Ok(Self {
             link,
@@ -389,7 +393,7 @@ where
             break;
         }
         tokio::time::sleep(backoff.min(left)).await;
-        backoff = (backoff * 2).min(MAX_RETRY_BACKOFF);
+        backoff = backoff_after(backoff);
     }
     Err(GaveUp::Spent { attempts, last })
 }
@@ -416,6 +420,81 @@ pub(crate) fn spent(
             attempts,
             source,
         },
+    }
+}
+
+impl GaveUp<redis::RedisError> {
+    /// The boot error a spent or refused attempt loop on `endpoint` ends in.
+    pub(crate) fn into_error(self, endpoint: &str, budget: Duration) -> RedisError {
+        match self {
+            Self::Refused(refusal) => refusal,
+            Self::Spent { attempts, last } => spent(endpoint.to_owned(), budget, attempts, last),
+        }
+    }
+}
+
+/// The wait after `wait`: doubled, up to [`MAX_RETRY_BACKOFF`].
+pub(crate) fn backoff_after(wait: Duration) -> Duration {
+    (wait * 2).min(MAX_RETRY_BACKOFF)
+}
+
+/// A client of one host a topology names — a sentinel, the primary it names,
+/// a Cluster's seed — with `settings`, encrypted when `certificates` are
+/// given.
+pub(crate) fn node_client(
+    node: &NodeAddr,
+    settings: RedisConnectionInfo,
+    certificates: Option<&redis::TlsCertificates>,
+    budget: Duration,
+) -> Result<redis::Client, RedisError> {
+    let endpoint = node.to_string();
+    let info = node_addr(node, certificates.is_some())
+        .into_connection_info()
+        .map_err(|source| RedisError::InvalidUrl {
+            endpoint: endpoint.clone(),
+            source,
+        })?
+        .set_redis_settings(settings);
+    open_client(info, certificates, &endpoint, budget)
+}
+
+/// `node`'s address, encrypted or not — verified whenever it is.
+pub(crate) fn node_addr(node: &NodeAddr, encrypted: bool) -> ConnectionAddr {
+    if encrypted {
+        ConnectionAddr::TcpTls {
+            host: node.host.clone(),
+            port: node.port,
+            insecure: false,
+            tls_params: None,
+        }
+    } else {
+        ConnectionAddr::Tcp(node.host.clone(), node.port)
+    }
+}
+
+/// The client of `info`, its sockets set for `budget`, encrypted with
+/// `certificates` when given. Nothing is dialled.
+pub(crate) fn open_client(
+    info: ConnectionInfo,
+    certificates: Option<&redis::TlsCertificates>,
+    endpoint: &str,
+    budget: Duration,
+) -> Result<redis::Client, RedisError> {
+    let info = info.set_tcp_settings(socket(budget));
+    match certificates {
+        None => redis::Client::open(info).map_err(|source| RedisError::InvalidUrl {
+            endpoint: endpoint.to_owned(),
+            source,
+        }),
+        Some(certificates) => {
+            redis::Client::build_with_tls(info, certificates.clone()).map_err(|source| {
+                RedisError::TlsRefused {
+                    endpoint: endpoint.to_owned(),
+                    reason: tls::unusable_material(),
+                    source: Some(source),
+                }
+            })
+        }
     }
 }
 
@@ -479,6 +558,14 @@ pub(crate) async fn bounded<F: Future>(
             ),
         ))
     })
+}
+
+/// `call`, a command's own outcome, answered or failed within `budget`.
+pub(crate) async fn answered<T, F>(budget: Duration, call: F) -> Result<T, redis::RedisError>
+where
+    F: Future<Output = Result<T, redis::RedisError>>,
+{
+    bounded(budget, call).await?
 }
 
 /// Whether an attempt failed in a way every attempt will repeat.

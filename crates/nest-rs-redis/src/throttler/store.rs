@@ -76,7 +76,7 @@ impl RedisThrottler {
     /// is the current limit's window.
     async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
         self.conn
-            .invoke(self.script.key(bucket(key)).arg(window_ms))
+            .invoke(self.script.keys(&[&bucket(key)]).arg(window_ms))
             .await
     }
 }

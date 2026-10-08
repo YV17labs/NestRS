@@ -4,21 +4,28 @@ description: >-
   6380 and its replica on 6381 watched as `nestrs` by three sentinels on
   26379-26381, and a six-node cluster on 7000-7005 — on the runner's loopback,
   every node and sentinel on TLS alone, presenting the certificate the
-  dev-services action issued into CERTS. By hand, on a Docker host with CERTS
-  set: run each step's script from this folder.
+  dev-services action issued into CERTS, in the Valkey image the dev
+  container's compose file pins. By hand, on a Docker host with CERTS and
+  VALKEY_IMAGE set: run the step's script from this folder.
+
+outputs:
+  sentinel-url:
+    description: The URL an app reaches the Sentinel deployment's primary through.
+    value: rediss-sentinel://127.0.0.1:26379?node=127.0.0.1:26380&node=127.0.0.1:26381&sentinelServiceName=nestrs
+  cluster-url:
+    description: The URL an app reaches the Cluster through.
+    value: rediss-cluster://127.0.0.1:7000?node=127.0.0.1:7001&node=127.0.0.1:7002
 
 runs:
   using: composite
   steps:
-    - name: Start the services
-      shell: bash
-      working-directory: ${{ github.action_path }}
-      run: docker compose up --detach --wait
-
-    - name: Form the cluster and wait for the sentinels
+    - name: Start the services, form the cluster and wait for the sentinels
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |
+        VALKEY_IMAGE=$(docker compose -f "$GITHUB_WORKSPACE/.devcontainer/docker-compose.yml" config --images | grep '^valkey/')
+        export VALKEY_IMAGE
+        docker compose up --detach --wait
         valkey() { docker compose exec -T cluster-7000 timeout 60 valkey-cli --tls --cacert /certs/ca.pem "$@"; }
         eventually() {
           for _ in {1..120}; do

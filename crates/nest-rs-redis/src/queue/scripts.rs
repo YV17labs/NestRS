@@ -12,11 +12,11 @@
 //! Each is sent as `EVALSHA`, loaded once, and never inside a pipeline, where a
 //! script Redis has not cached could not be loaded and sent again. Every key a
 //! script names is its queue's own, under its hash tag, so a call sits in one
-//! Cluster slot ([`Invocation::slot`]).
+//! Cluster slot ([`Invocation::slot`](crate::script::Invocation::slot)).
 
 use std::sync::LazyLock;
 
-use crate::script::{Invocation, RedisScript};
+use crate::script::RedisScript;
 
 /// `now()`: Redis's clock, in milliseconds.
 macro_rules! now {
@@ -465,15 +465,6 @@ pub(crate) static SCRIPTS: LazyLock<Scripts> = LazyLock::new(|| Scripts {
     sweep: RedisScript::new(SWEEP),
     leave: RedisScript::new(LEAVE),
 });
-
-/// `script`, called with `keys` in order as its `KEYS`.
-pub(crate) fn keyed<'a>(script: &'a RedisScript, keys: &[&str]) -> Invocation<'a> {
-    let mut invocation = script.prepare();
-    for key in keys {
-        invocation.key(*key);
-    }
-    invocation
-}
 
 impl Scripts {
     /// The scripts a producer runs, loaded when its binding boots.

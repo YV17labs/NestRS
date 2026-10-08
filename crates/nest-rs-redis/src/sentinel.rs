@@ -15,18 +15,16 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant};
 
-use redis::aio::{ConnectionLike, MultiplexedConnection};
-use redis::{
-    Cmd, ConnectionAddr, ErrorKind, IntoConnectionInfo, Pipeline, RedisConnectionInfo, Role, Value,
-};
+use redis::aio::MultiplexedConnection;
+use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Role, Value};
 use tokio::sync::Notify;
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, GaveUp, MAX_RETRY_BACKOFF, bounded, classify, connection_config,
-    read_only, socket, spent, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, GaveUp, answered, backoff_after, classify, connection_config,
+    node_client, read_only, spent, within_budget,
 };
 use crate::error::{RedisError, SentinelMiss};
-use crate::url::{NodeAddr, SentinelUrl};
+use crate::url::{NodeAddr, SentinelUrl, listed};
 use crate::{RedisTls, RedisTopology, tls};
 
 /// The link to the primary the sentinels name.
@@ -75,12 +73,7 @@ impl SentinelLink {
         tls: &RedisTls,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
-        let listed = url
-            .sentinels
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let listed = listed(&url.sentinels);
         let certificates = tls::material(tls, url.tls, &listed)?;
         let sentinels = url
             .sentinels
@@ -136,11 +129,9 @@ impl SentinelLink {
         let sentinels = Arc::clone(&self.sentinels);
         match sentinels.resolve(sentinels.budget).await {
             Ok((connection, primary)) => Ok(Self::opened(sentinels, connection, primary)),
-            Err(Attempt::Refused(refusal)) => Err(redis::RedisError::from((
-                ErrorKind::Io,
-                "the primary the sentinels name could not be reached",
-                nest_rs_core::error_message(&refusal),
-            ))),
+            Err(Attempt::Refused(refusal)) => {
+                Err(unreachable(nest_rs_core::error_message(&refusal)))
+            }
             Err(Attempt::Failed(miss)) => Err(miss.into()),
         }
     }
@@ -153,13 +144,12 @@ impl SentinelLink {
         budget: Duration,
     ) -> Result<Value, redis::RedisError> {
         let mut opening = None;
-        let outcome = bounded(budget, async {
+        let outcome = answered(budget, async {
             let (at, mut connection) = self.connection().await;
             opening = Some(at);
-            connection.req_packed_command(cmd).await
+            connection.send_packed_command(cmd).await
         })
-        .await
-        .and_then(std::convert::identity);
+        .await;
         let read_only = outcome.as_ref().is_ok_and(read_only);
         self.observe(opening, &outcome, read_only);
         outcome
@@ -175,15 +165,14 @@ impl SentinelLink {
         budget: Duration,
     ) -> Result<Vec<Value>, redis::RedisError> {
         let mut opening = None;
-        let outcome = bounded(budget, async {
+        let outcome = answered(budget, async {
             let (at, mut connection) = self.connection().await;
             opening = Some(at);
             connection
-                .req_packed_commands(pipeline, offset, count)
+                .send_packed_commands(pipeline, offset, count)
                 .await
         })
-        .await
-        .and_then(std::convert::identity);
+        .await;
         let read_only = outcome
             .as_ref()
             .is_ok_and(|replies| replies.iter().any(read_only));
@@ -200,17 +189,26 @@ impl SentinelLink {
     /// a replacement while the sentinels are asked again.
     async fn connection(&self) -> (u64, MultiplexedConnection) {
         loop {
+            if let Some(open) = self.open() {
+                return open;
+            }
             let ready = self.ready.notified();
             tokio::pin!(ready);
             ready.as_mut().enable();
-            {
-                let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
-                if let Some(connection) = &current.connection {
-                    return (current.opening, connection.clone());
-                }
+            if let Some(open) = self.open() {
+                return open;
             }
             ready.await;
         }
+    }
+
+    /// The connection in place, and its opening, if one is.
+    fn open(&self) -> Option<(u64, MultiplexedConnection)> {
+        let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
+        current
+            .connection
+            .clone()
+            .map(|connection| (current.opening, connection))
     }
 
     /// Replace the connection of `opening` when what it met says it no longer
@@ -294,7 +292,7 @@ impl SentinelLink {
             }
             drop(this);
             tokio::time::sleep(wait).await;
-            wait = (wait * 2).min(MAX_RETRY_BACKOFF);
+            wait = backoff_after(wait);
         }
     }
 }
@@ -319,10 +317,7 @@ impl Sentinels {
             let at = (first + turn) % count;
             let (client, endpoint) = &self.sentinels[at];
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match bounded(share.min(remaining), self.ask(client))
-                .await
-                .and_then(std::convert::identity)
-            {
+            match answered(share.min(remaining), self.ask(client, endpoint)).await {
                 Ok(Some(primary)) => {
                     self.first.store(at, Ordering::Relaxed);
                     return self.open_primary(&primary, deadline).await;
@@ -350,10 +345,16 @@ impl Sentinels {
 
     /// The address one sentinel names for the primary, `None` when it knows
     /// none by that name.
-    async fn ask(&self, client: &redis::Client) -> Result<Option<NodeAddr>, redis::RedisError> {
-        let mut sentinel = client
+    async fn ask(
+        &self,
+        client: &redis::Client,
+        endpoint: &str,
+    ) -> Result<Option<NodeAddr>, redis::RedisError> {
+        let opened = client
             .get_multiplexed_async_connection_with_config(&connection_config(self.budget))
-            .await?;
+            .await;
+        tls::observe_refusal(endpoint, &opened);
+        let mut sentinel = opened?;
         let named: Option<(String, u16)> = redis::cmd("SENTINEL")
             .arg("GET-MASTER-ADDR-BY-NAME")
             .arg(&self.service_name)
@@ -389,20 +390,19 @@ impl Sentinels {
         )
         .map_err(Attempt::Refused)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let mut connection = bounded(
+        let opened = answered(
             remaining,
             client.get_multiplexed_async_connection_with_config(&connection_config(self.budget)),
         )
-        .await
-        .and_then(std::convert::identity)
-        .map_err(failed)?;
+        .await;
+        tls::observe_refusal(&endpoint, &opened);
+        let mut connection = opened.map_err(failed)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let role = bounded(
+        let role = answered(
             remaining,
             redis::cmd("ROLE").query_async::<Role>(&mut connection),
         )
         .await
-        .and_then(std::convert::identity)
         .map_err(failed)?;
         if !matches!(role, Role::Primary { .. }) {
             // The sentinels still name a node a failover demoted, or one that
@@ -412,12 +412,11 @@ impl Sentinels {
         // The proof every topology's connection passes: one rule per role
         // holds on all of them.
         let remaining = deadline.saturating_duration_since(Instant::now());
-        bounded(
+        answered(
             remaining,
             redis::cmd("PING").query_async::<()>(&mut connection),
         )
         .await
-        .and_then(std::convert::identity)
         .map_err(failed)?;
         Ok((connection, endpoint))
     }
@@ -428,27 +427,21 @@ impl Sentinels {
             GaveUp::Refused(refusal) => return refusal,
             GaveUp::Spent { attempts, last } => (attempts, last),
         };
-        match last {
-            Some(SentinelMiss::Unknown) => RedisError::PrimaryUnknown {
+        match last.unwrap_or(SentinelMiss::Unreachable(None)) {
+            SentinelMiss::Unknown => RedisError::PrimaryUnknown {
                 sentinels: self.listed.clone(),
                 service_name: self.service_name.clone(),
                 budget: self.budget,
                 attempts,
             },
-            Some(SentinelMiss::Primary { endpoint, source }) => {
+            SentinelMiss::Primary { endpoint, source } => {
                 spent(endpoint, self.budget, attempts, source)
             }
-            Some(SentinelMiss::Unreachable(source)) => RedisError::SentinelUnreachable {
+            SentinelMiss::Unreachable(source) => RedisError::SentinelUnreachable {
                 sentinels: self.listed.clone(),
                 budget: self.budget,
                 attempts,
                 source,
-            },
-            None => RedisError::SentinelUnreachable {
-                sentinels: self.listed.clone(),
-                budget: self.budget,
-                attempts,
-                source: None,
             },
         }
     }
@@ -487,11 +480,7 @@ impl From<SentinelMiss> for redis::RedisError {
                 source: Some(source),
                 ..
             } => source,
-            miss => Self::from((
-                ErrorKind::Io,
-                "the primary the sentinels name could not be reached",
-                miss.to_string(),
-            )),
+            miss => unreachable(miss.to_string()),
         }
     }
 }
@@ -504,44 +493,11 @@ fn not_a_sentinel(error: &redis::RedisError) -> bool {
             .is_some_and(|detail| detail.to_ascii_lowercase().contains("unknown command"))
 }
 
-/// A client of one host — a sentinel, or the primary one names — with
-/// `settings`, encrypted when `certificates` are given.
-fn node_client(
-    node: &NodeAddr,
-    settings: RedisConnectionInfo,
-    certificates: Option<&redis::TlsCertificates>,
-    budget: Duration,
-) -> Result<redis::Client, RedisError> {
-    let endpoint = node.to_string();
-    let addr = match certificates {
-        Some(_) => ConnectionAddr::TcpTls {
-            host: node.host.clone(),
-            port: node.port,
-            insecure: false,
-            tls_params: None,
-        },
-        None => ConnectionAddr::Tcp(node.host.clone(), node.port),
-    };
-    let info = addr
-        .into_connection_info()
-        .map_err(|source| RedisError::InvalidUrl {
-            endpoint: endpoint.clone(),
-            source,
-        })?
-        .set_redis_settings(settings)
-        .set_tcp_settings(socket(budget));
-    match certificates {
-        None => {
-            redis::Client::open(info).map_err(|source| RedisError::InvalidUrl { endpoint, source })
-        }
-        Some(certificates) => {
-            redis::Client::build_with_tls(info, certificates.clone()).map_err(|source| {
-                RedisError::TlsRefused {
-                    endpoint,
-                    reason: tls::unusable_material(),
-                    source: Some(source),
-                }
-            })
-        }
-    }
+/// What a dedicated link that found no primary hands its caller.
+fn unreachable(detail: String) -> redis::RedisError {
+    redis::RedisError::from((
+        ErrorKind::Io,
+        "the primary the sentinels name could not be reached",
+        detail,
+    ))
 }

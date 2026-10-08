@@ -270,94 +270,149 @@ fn node_url(addr: &str) -> String {
     format!("{scheme}://{userinfo}{addr}")
 }
 
-/// A bare client of every data node the suite's URL reaches — the server; the
-/// primary and the replicas the sentinels name; every node of the Cluster —
-/// for what the suite asks of each: a user, its ACL log, its clients.
-async fn data_nodes() -> Vec<redis::Client> {
-    nodes(true).await
+/// A connection to the one server at `addr`.
+async fn node(addr: &str) -> redis::aio::MultiplexedConnection {
+    bare_client(&node_url(addr))
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap_or_else(|error| panic!("{addr} answers: {error}"))
 }
 
-/// A bare client of every primary the suite's URL reaches: the nodes an app
-/// sends its commands to, and so the ones a test watches.
-async fn primaries() -> Vec<redis::Client> {
-    nodes(false).await
+/// The name the suite's sentinels monitor the primary under.
+fn service_name() -> String {
+    parsed_url()
+        .query_pairs()
+        .find(|(key, _)| key == "sentinelServiceName")
+        .map(|(_, name)| name.into_owned())
+        .expect("a Sentinel URL names its primary")
 }
 
-/// The data nodes the suite's URL reaches, its replicas with them or not.
-async fn nodes(with_replicas: bool) -> Vec<redis::Client> {
-    let addresses = match topology() {
-        RedisTopology::Standalone => return vec![bare_client(&redis_url())],
+/// The primary the suite's sentinels name now, as `host:port`.
+async fn sentinel_primary() -> String {
+    let (host, port): (String, u16) = redis::cmd("SENTINEL")
+        .arg("GET-MASTER-ADDR-BY-NAME")
+        .arg(service_name())
+        .query_async(&mut node(&named_hosts()[0]).await)
+        .await
+        .expect("the sentinels name a primary");
+    format!("{host}:{port}")
+}
+
+/// One node of the suite's Cluster, as `CLUSTER NODES` lists it.
+struct ClusterNode {
+    id: String,
+    addr: String,
+    primary: bool,
+    /// The slot ranges a primary serves.
+    slots: Vec<(u16, u16)>,
+}
+
+impl ClusterNode {
+    fn serves(&self, slot: u16) -> bool {
+        self.primary
+            && self
+                .slots
+                .iter()
+                .any(|(from, to)| (*from..=*to).contains(&slot))
+    }
+}
+
+/// Every node the suite's Cluster lists and does not hold failed, asked of
+/// the first seed that answers: any may be a node a test froze.
+async fn cluster_nodes() -> Vec<ClusterNode> {
+    for seed in named_hosts() {
+        let Ok(mut seed) = bare_client(&node_url(&seed))
+            .get_multiplexed_async_connection()
+            .await
+        else {
+            continue;
+        };
+        let Ok(listed) = redis::cmd("CLUSTER")
+            .arg("NODES")
+            .query_async::<String>(&mut seed)
+            .await
+        else {
+            continue;
+        };
+        return listed
+            .lines()
+            .filter(|line| !line.contains("fail") && !line.contains("noaddr"))
+            .map(|line| {
+                let fields: Vec<&str> = line.split(' ').collect();
+                ClusterNode {
+                    id: fields[0].to_owned(),
+                    addr: fields[1]
+                        .split(['@', ','])
+                        .next()
+                        .unwrap_or(fields[1])
+                        .to_owned(),
+                    primary: fields[2].contains("master"),
+                    slots: fields[8..]
+                        .iter()
+                        .filter(|range| !range.starts_with('['))
+                        .filter_map(|range| {
+                            let (from, to) = range.split_once('-').unwrap_or((range, range));
+                            Some((from.parse().ok()?, to.parse().ok()?))
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+    }
+    panic!("no seed of the Cluster answers CLUSTER NODES");
+}
+
+/// The address of every data node the suite's URL reaches — the server; the
+/// primary the sentinels name, and its replicas; every node of the Cluster —
+/// replicas included or not.
+async fn node_addresses(with_replicas: bool) -> Vec<String> {
+    match topology() {
+        RedisTopology::Standalone => vec![named_hosts().remove(0)],
         RedisTopology::Sentinel => {
-            let service = parsed_url()
-                .query_pairs()
-                .find(|(key, _)| key == "sentinelServiceName")
-                .map(|(_, name)| name.into_owned())
-                .expect("a Sentinel URL names its primary");
-            let mut sentinel = bare_client(&node_url(&named_hosts()[0]))
-                .get_multiplexed_async_connection()
-                .await
-                .expect("the first sentinel answers");
-            let (host, port): (String, u16) = redis::cmd("SENTINEL")
-                .arg("GET-MASTER-ADDR-BY-NAME")
-                .arg(&service)
-                .query_async(&mut sentinel)
-                .await
-                .expect("the sentinels name the primary");
-            let replicas: Vec<std::collections::HashMap<String, String>> = redis::cmd("SENTINEL")
-                .arg("REPLICAS")
-                .arg(&service)
-                .query_async(&mut sentinel)
-                .await
-                .expect("SENTINEL REPLICAS");
-            std::iter::once(format!("{host}:{port}"))
-                .chain(
+            let mut addresses = vec![sentinel_primary().await];
+            if with_replicas {
+                let replicas: Vec<std::collections::HashMap<String, String>> =
+                    redis::cmd("SENTINEL")
+                        .arg("REPLICAS")
+                        .arg(service_name())
+                        .query_async(&mut node(&named_hosts()[0]).await)
+                        .await
+                        .expect("SENTINEL REPLICAS");
+                addresses.extend(
                     replicas
                         .iter()
-                        .filter(|_| with_replicas)
                         .filter(|replica| {
                             replica
                                 .get("flags")
                                 .is_some_and(|flags| !flags.contains("s_down"))
                         })
                         .map(|replica| format!("{}:{}", replica["ip"], replica["port"])),
-                )
-                .collect::<Vec<_>>()
-        }
-        RedisTopology::Cluster => {
-            // Any seed may be the node a test froze: the first that answers.
-            let mut listed = None;
-            for seed in named_hosts() {
-                let Ok(mut seed) = bare_client(&node_url(&seed))
-                    .get_multiplexed_async_connection()
-                    .await
-                else {
-                    continue;
-                };
-                if let Ok(nodes) = redis::cmd("CLUSTER")
-                    .arg("NODES")
-                    .query_async::<String>(&mut seed)
-                    .await
-                {
-                    listed = Some(nodes);
-                    break;
-                }
+                );
             }
-            let nodes = listed.expect("a seed answers CLUSTER NODES");
-            nodes
-                .lines()
-                .filter(|node| !node.contains("fail") && !node.contains("noaddr"))
-                .filter(|node| {
-                    with_replicas
-                        || node
-                            .split(' ')
-                            .nth(2)
-                            .is_some_and(|flags| flags.contains("master"))
-                })
-                .filter_map(|node| node.split(' ').nth(1))
-                .map(|addr| addr.split(['@', ',']).next().unwrap_or(addr).to_owned())
-                .collect()
+            addresses
         }
-    };
+        RedisTopology::Cluster => cluster_nodes()
+            .await
+            .into_iter()
+            .filter(|node| with_replicas || node.primary)
+            .map(|node| node.addr)
+            .collect(),
+    }
+}
+
+/// A bare client of every data node the suite's URL reaches, for what the
+/// suite asks of each: a user, its ACL log, its clients.
+async fn data_nodes() -> Vec<redis::Client> {
+    clients(node_addresses(true).await)
+}
+
+/// A bare client of every primary the suite's URL reaches: the nodes an app
+/// sends its commands to, and so the ones a test watches.
+async fn primaries() -> Vec<redis::Client> {
+    clients(node_addresses(false).await)
+}
+
+fn clients(addresses: Vec<String>) -> Vec<redis::Client> {
     addresses
         .iter()
         .map(|addr| bare_client(&node_url(addr)))
@@ -367,38 +422,36 @@ async fn nodes(with_replicas: bool) -> Vec<redis::Client> {
 /// The URL of the first primary the suite's URL reaches, on database `db`: a
 /// connection of a test's own to the server its app sends to.
 async fn a_primary_url_on(db: u8) -> String {
-    let primary = primaries().await.remove(0);
-    url_on(
-        &node_url(&primary.get_connection_info().addr().to_string()),
-        db,
-    )
+    url_on(&node_url(&node_addresses(false).await[0]), db)
+}
+
+/// `cmd`'s answer from each of `nodes`, asked of all at once.
+async fn on_each<T: redis::FromRedisValue>(nodes: &[redis::Client], cmd: &redis::Cmd) -> Vec<T> {
+    futures_util::future::join_all(nodes.iter().map(|node| async move {
+        let mut connection = node
+            .get_multiplexed_async_connection()
+            .await
+            .expect("every data node answers");
+        cmd.query_async(&mut connection)
+            .await
+            .unwrap_or_else(|error| panic!("a data node runs {cmd:?}: {error}"))
+    }))
+    .await
 }
 
 /// `cmd`'s answer from every data node, as [`data_nodes`] lists them.
 async fn on_every_node<T: redis::FromRedisValue>(cmd: &redis::Cmd) -> Vec<T> {
-    let mut answers = Vec::new();
-    for node in data_nodes().await {
-        let mut node = node
-            .get_multiplexed_async_connection()
-            .await
-            .expect("every data node answers");
-        answers.push(
-            cmd.query_async(&mut node)
-                .await
-                .unwrap_or_else(|error| panic!("a data node runs {cmd:?}: {error}")),
-        );
-    }
-    answers
+    on_each(&data_nodes().await, cmd).await
 }
 
-/// How many clients selected on `db` sit blocked in `XREADGROUP`, as every data
-/// node lists them. `CLIENT LIST` names every client of a Redis the suites
-/// share, so only a database one test owns makes a client its worker's, and
-/// `cmd` is only the last command a client sent: the `b` flag of a client
-/// waiting in a blocking call is what says the read waits there.
-async fn blocked_reads_on(db: u8) -> usize {
+/// How many clients selected on `db` sit blocked in `XREADGROUP` on `nodes`.
+/// `CLIENT LIST` names every client of a Redis the suites share, so only a
+/// database one test owns makes a client its worker's, and `cmd` is only the
+/// last command a client sent: the `b` flag of a client waiting in a blocking
+/// call is what says the read waits there.
+async fn blocked_reads_among(nodes: &[redis::Client], db: u8) -> usize {
     let selected = format!("db={db}");
-    on_every_node::<String>(redis::cmd("CLIENT").arg("LIST"))
+    on_each::<String>(nodes, redis::cmd("CLIENT").arg("LIST"))
         .await
         .iter()
         .flat_map(|clients| clients.lines())
@@ -415,11 +468,17 @@ async fn blocked_reads_on(db: u8) -> usize {
         .count()
 }
 
+/// [`blocked_reads_among`] every data node.
+async fn blocked_reads_on(db: u8) -> usize {
+    blocked_reads_among(&data_nodes().await, db).await
+}
+
 /// Whether a read blocks on `db` within a second: a worker sends its read
 /// again at the end of each wait, so one listing can fall between two.
 async fn a_read_blocks_on(db: u8) -> bool {
+    let nodes = data_nodes().await;
     for _ in 0..20 {
-        if blocked_reads_on(db).await > 0 {
+        if blocked_reads_among(&nodes, db).await > 0 {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -465,6 +524,21 @@ async fn drop_every_connection_on(db: u8) -> usize {
         closed += ids.len();
     }
     closed
+}
+
+/// Freeze the node at `addr` for six seconds — longer than the suite's
+/// topologies take to fail it over — as a crashed primary stops answering.
+fn freeze(addr: &str) {
+    let frozen = bare_client(&node_url(addr));
+    tokio::spawn(async move {
+        if let Ok(mut frozen) = frozen.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = redis::cmd("DEBUG")
+                .arg("SLEEP")
+                .arg(6)
+                .query_async(&mut frozen)
+                .await;
+        }
+    });
 }
 
 /// A proxy in front of the dev container's Valkey that can go dark: it then
@@ -807,6 +881,51 @@ async fn forget(queue: &str) {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct FailoverCommand {
+    run: u64,
+}
+
+/// Every attempt at a failover test's jobs. One topology runs per process, so
+/// the Sentinel and the Cluster test share the fixture.
+static FAILOVER: Runs = Runs::new();
+
+#[nest_rs_queue::queue(name = "nestrs-e2e-failover", job = FailoverCommand)]
+struct FailoverQueue;
+
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct FailoverProcessor;
+
+#[nest_rs_queue::processor]
+impl FailoverProcessor {
+    #[process(queue = FailoverQueue, retries = 5)]
+    async fn run(&self, job: FailoverCommand) -> anyhow::Result<()> {
+        FAILOVER.start(job.run);
+        FAILOVER.finish(job.run);
+        Ok(())
+    }
+}
+
+#[nest_rs_core::module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, nest_rs_queue::QueueModule::for_root(None)],
+    providers = [FailoverProcessor],
+)]
+struct FailoverModule;
+
+/// Push `run`'s job once the producer answers again: through a failover, a
+/// push fails until the topology names its new primary.
+async fn push_through_a_failover(producer: &RedisQueueProducer, run: u64) {
+    use nest_rs_queue::JobProducerExt as _;
+    wait_for(Duration::from_secs(20), || async {
+        producer
+            .push(FailoverQueue, FailoverCommand { run }, None)
+            .await
+            .is_ok()
+    })
+    .await;
+}
+
 #[nest_rs_core::module(imports = [RedisModule::for_root(redis_config()), RedisQueueModule])]
 struct ProducerOnlyModule;
 
@@ -866,26 +985,23 @@ fn documented_acl(page: &str, role: &str) -> String {
 /// standalone.
 const CONNECTION_PAGE: &str = "queue/topologies.mdx";
 
-/// `role`'s rule on `page`, with what the suite's topology adds to every rule
-/// as the connection's page prescribes it.
-fn documented_rule(page: &str, role: &str) -> String {
-    let rule = documented_acl(page, role);
+/// What the suite's topology adds to every role's rule, as the connection's
+/// page prescribes it: nothing on one server.
+fn topology_addition() -> String {
     match topology() {
-        RedisTopology::Standalone => rule,
-        RedisTopology::Sentinel => {
-            format!("{rule} {}", documented_acl(CONNECTION_PAGE, "Sentinel"))
-        }
-        RedisTopology::Cluster => format!("{rule} {}", documented_acl(CONNECTION_PAGE, "Cluster")),
+        RedisTopology::Standalone => String::new(),
+        RedisTopology::Sentinel => documented_acl(CONNECTION_PAGE, "Sentinel"),
+        RedisTopology::Cluster => documented_acl(CONNECTION_PAGE, "Cluster"),
     }
 }
 
-/// Create `user` exactly as the page `page` prescribes for `role` — its rule,
-/// with what the suite's topology adds, sent as it is written on every data
-/// node, the `<user>` and `<password>` placeholders filled and nothing added —
-/// and answer the config that reaches database `db` as that user, so the user a
-/// test runs as is the one the page tells an operator to create.
-async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisConfig {
-    let rule = documented_rule(page, role);
+/// `role`'s rule on `page`, with what the suite's topology adds to it.
+fn documented_rule(page: &str, role: &str) -> String {
+    format!("{} {}", documented_acl(page, role), topology_addition())
+}
+
+/// `rule` as the command creating `user`, its placeholders filled.
+fn creating(rule: &str, user: &str) -> redis::Cmd {
     let tokens: Vec<String> = rule
         .split_whitespace()
         .map(|token| {
@@ -897,11 +1013,21 @@ async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisCon
     assert_eq!(
         tokens.get(..3),
         Some(["ACL".to_owned(), "SETUSER".to_owned(), user.to_owned()].as_slice()),
-        "{page}'s rule creates the app's user: {rule}"
+        "the rule creates the app's user: {rule}"
     );
-    forget_user(user).await;
     let mut create = redis::cmd(&tokens[0]);
     create.arg(&tokens[1..]);
+    create
+}
+
+/// Create `user` exactly as the page `page` prescribes for `role` — its rule,
+/// with what the suite's topology adds, sent as it is written on every data
+/// node, the `<user>` and `<password>` placeholders filled and nothing added —
+/// and answer the config that reaches database `db` as that user, so the user a
+/// test runs as is the one the page tells an operator to create.
+async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisConfig {
+    let create = creating(&documented_rule(page, role), user);
+    forget_user(user).await;
     let _: Vec<()> = on_every_node(&create).await;
     RedisConfig {
         url: url_as(&redis_url_on(db), user, ACL_PASSWORD),
@@ -948,14 +1074,19 @@ fn refused_by_acl(event: &CapturedEvent) -> bool {
         .is_some_and(|error| error.contains("NOPERM") || error.contains("no permissions"))
 }
 
-/// Redis denied `user` nothing but the commands `besides` names: its own ACL
-/// log holds every denial, so a refusal the app swallowed shows there even
-/// when no line does.
+/// Redis denied `user` nothing but the commands `besides` names on any data
+/// node: its own ACL log holds every denial, so a refusal the app swallowed
+/// shows there even when no line does.
 async fn assert_redis_denied_nothing_but(user: &str, besides: &[&str]) {
+    assert_denied_nothing_among(&data_nodes().await, user, besides).await;
+}
+
+/// [`assert_redis_denied_nothing_but`] on `nodes`.
+async fn assert_denied_nothing_among(nodes: &[redis::Client], user: &str, besides: &[&str]) {
     // Every entry Redis keeps, not the ten `ACL LOG` answers by default: a
     // denial behind ten newer ones would pass unseen.
     let entries: Vec<std::collections::HashMap<String, redis::Value>> =
-        on_every_node::<Vec<_>>(redis::cmd("ACL").arg("LOG").arg(i64::from(u32::MAX)))
+        on_each::<Vec<_>>(nodes, redis::cmd("ACL").arg("LOG").arg(i64::from(u32::MAX)))
             .await
             .into_iter()
             .flatten()

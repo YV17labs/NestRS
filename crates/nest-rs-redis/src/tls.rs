@@ -199,6 +199,44 @@ pub(crate) fn material(
     Ok(Some(tls.certificates()))
 }
 
+/// Say `endpoint`'s TLS refusal at `warn` — the one line every topology says
+/// it in, with what to change.
+pub(crate) fn say_refused(endpoint: &str, error: &redis::RedisError) {
+    tracing::warn!(
+        target: crate::TARGET,
+        endpoint = %endpoint,
+        reason = %remedy(error),
+        error = %nest_rs_core::error_message(error),
+        "redis refused a reopened tls connection",
+    );
+}
+
+/// The hosts refusing TLS, each said once until a connection to it opens.
+static REFUSING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Say what opening a connection to `endpoint` met, when TLS refused it: once,
+/// until a connection to it opens again.
+pub(crate) fn observe_refusal<T>(
+    endpoint: &str,
+    opened: &std::result::Result<T, redis::RedisError>,
+) {
+    let mut refusing = REFUSING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match opened {
+        Ok(_) => {
+            refusing.remove(endpoint);
+        }
+        Err(error) if negotiation_failed(error) => {
+            if refusing.insert(endpoint.to_owned()) {
+                say_refused(endpoint, error);
+            }
+        }
+        Err(_) => {}
+    }
+}
+
 /// Why the client refused material [`RedisTls::check`] let through. Both parse
 /// the same PEM with the same parser, so what is left is an authority whose
 /// certificate rustls cannot make a trust anchor of.

@@ -109,12 +109,12 @@ impl Several {
     }
 
     /// The parameters this topology's URL takes, as a refusal lists them.
-    fn parameters(self) -> &'static str {
+    fn parameters(self) -> String {
         match self {
-            Self::Sentinel => {
-                "`node`, `sentinelServiceName`, `sentinelUsername` and `sentinelPassword`"
-            }
-            Self::Cluster => "`node` alone",
+            Self::Sentinel => format!(
+                "`{NODE}`, `{SERVICE_NAME}`, `{SENTINEL_USERNAME}` and `{SENTINEL_PASSWORD}`"
+            ),
+            Self::Cluster => format!("`{NODE}` alone"),
         }
     }
 }
@@ -125,16 +125,6 @@ impl RedisUrl {
         match scheme(raw).as_deref().and_then(Several::of) {
             Some((several, tls)) => parse_several(raw, several, tls),
             None => parse_standalone(raw),
-        }
-    }
-
-    /// The topology the scheme declared.
-    #[cfg(test)]
-    pub(crate) fn topology(&self) -> crate::RedisTopology {
-        match self {
-            Self::Standalone(_) => crate::RedisTopology::Standalone,
-            Self::Sentinel(_) => crate::RedisTopology::Sentinel,
-            Self::Cluster(_) => crate::RedisTopology::Cluster,
         }
     }
 }
@@ -295,6 +285,15 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Red
     }
 }
 
+/// The hosts a URL names, as a diagnostic lists them.
+pub(crate) fn listed(hosts: &[NodeAddr]) -> String {
+    hosts
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The scheme of `raw`, lowercased, when it has one.
 fn scheme(raw: &str) -> Option<String> {
     raw.split_once("://")
@@ -384,13 +383,7 @@ pub(crate) fn address(raw: &str) -> String {
     if let Some((several, _)) = scheme.as_deref().and_then(Several::of) {
         return hosts(raw, several).map_or_else(
             || format!("{}://<unparseable>", scheme.unwrap_or_default()),
-            |hosts| {
-                hosts
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            },
+            |hosts| listed(&hosts),
         );
     }
     match raw.into_connection_info() {
@@ -428,6 +421,20 @@ fn is_scheme(candidate: &str) -> bool {
 mod tests {
     use super::*;
     use crate::RedisTopology;
+
+    trait Declared {
+        fn topology(&self) -> RedisTopology;
+    }
+
+    impl Declared for RedisUrl {
+        fn topology(&self) -> RedisTopology {
+            match self {
+                RedisUrl::Standalone(_) => RedisTopology::Standalone,
+                RedisUrl::Sentinel(_) => RedisTopology::Sentinel,
+                RedisUrl::Cluster(_) => RedisTopology::Cluster,
+            }
+        }
+    }
 
     fn parsed(raw: &str) -> RedisUrl {
         RedisUrl::parse(raw).unwrap_or_else(|error| panic!("{raw} parses: {error}"))

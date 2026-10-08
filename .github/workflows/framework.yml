@@ -93,9 +93,10 @@ jobs:
       # nest-rs-redis's e2e again on Valkey's two other topologies, reusing the
       # build above; the dev container runs the standalone server alone.
       - uses: $/.github/actions/topology-services
+        id: topologies
       - run: just test topology sentinel
         env:
-          NESTRS_REDIS__URL: rediss-sentinel://127.0.0.1:26379?node=127.0.0.1:26380&node=127.0.0.1:26381&sentinelServiceName=nestrs
+          NESTRS_REDIS__URL: ${{ steps.topologies.outputs.sentinel-url }}
       - run: just test topology cluster
         env:
-          NESTRS_REDIS__URL: rediss-cluster://127.0.0.1:7000?node=127.0.0.1:7001&node=127.0.0.1:7002
+          NESTRS_REDIS__URL: ${{ steps.topologies.outputs.cluster-url }}

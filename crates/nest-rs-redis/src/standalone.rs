@@ -14,8 +14,8 @@ use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, ConnectionAddr, ConnectionInfo, ErrorKind, Pipeline, ServerErrorKind, Value};
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, GaveUp, MAX_RETRY_BACKOFF, RECONNECT_FACTOR, bounded, classify,
-    connection_config, read_only, refused, socket, spent, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT_FACTOR, answered, backoff_after,
+    bounded, classify, connection_config, open_client, read_only, refused, within_budget,
 };
 use crate::error::RedisError;
 use crate::{RedisTls, tls};
@@ -53,10 +53,7 @@ impl StandaloneLink {
             prove(&client, budget, &endpoint, database)
         })
         .await
-        .map_err(|gave_up| match gave_up {
-            GaveUp::Refused(refusal) => refusal,
-            GaveUp::Spent { attempts, last } => spent(endpoint.clone(), budget, attempts, last),
-        })?;
+        .map_err(|gave_up| gave_up.into_error(&endpoint, budget))?;
         let refusals = matches!(
             client.get_connection_info().addr(),
             ConnectionAddr::TcpTls { .. }
@@ -93,11 +90,7 @@ impl StandaloneLink {
 
     /// A link of its own to the same server, opened from the same client.
     pub(crate) async fn dedicated(&self) -> Result<Arc<Self>, redis::RedisError> {
-        let manager = bounded(
-            self.budget,
-            ConnectionManager::new_with_config(self.client.clone(), manager_config(self.budget)),
-        )
-        .await??;
+        let manager = self.open_manager().await?;
         Ok(Self::new(
             manager,
             self.client.clone(),
@@ -152,6 +145,15 @@ impl StandaloneLink {
         self.manager().1.get_db()
     }
 
+    /// A manager of its own from the link's client, opened within the budget.
+    async fn open_manager(&self) -> Result<ConnectionManager, redis::RedisError> {
+        answered(
+            self.budget,
+            ConnectionManager::new_with_config(self.client.clone(), manager_config(self.budget)),
+        )
+        .await
+    }
+
     /// The manager commands go through now, and its opening.
     fn manager(&self) -> (u64, ConnectionManager) {
         self.manager
@@ -193,34 +195,21 @@ impl StandaloneLink {
         }
         let link = Arc::clone(self);
         tokio::spawn(async move {
-            let opened = bounded(
-                link.budget,
-                ConnectionManager::new_with_config(
-                    link.client.clone(),
-                    manager_config(link.budget),
-                ),
-            )
-            .await;
-            match opened {
-                Ok(Ok(manager)) => {
+            match link.open_manager().await {
+                Ok(manager) => {
                     let mut kept = link.manager.write().unwrap_or_else(PoisonError::into_inner);
-                    // Replaced meanwhile: the read-only answer was its
-                    // predecessor's.
-                    if kept.0 != opening {
+                    if kept.0 == opening {
+                        *kept = (opening + 1, manager);
                         drop(kept);
-                        link.reopening.store(false, Ordering::SeqCst);
-                        return;
+                        tracing::warn!(
+                            target: crate::TARGET,
+                            endpoint = %link.endpoint,
+                            "redis connection opened again: the server it reached answered as a \
+                             read-only replica",
+                        );
                     }
-                    *kept = (opening + 1, manager);
-                    drop(kept);
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        endpoint = %link.endpoint,
-                        "redis connection opened again: the server it reached answered as a \
-                         read-only replica",
-                    );
                 }
-                Ok(Err(error)) | Err(error) => tracing::warn!(
+                Err(error) => tracing::warn!(
                     target: crate::TARGET,
                     endpoint = %link.endpoint,
                     error = %nest_rs_core::error_message(&error),
@@ -252,11 +241,7 @@ struct TlsRefusals {
 impl TlsRefusals {
     fn observe<T>(self: &Arc<Self>, outcome: &Result<T, redis::RedisError>) {
         match outcome {
-            Ok(_) => {
-                if self.reported.load(Ordering::Relaxed) {
-                    self.reported.store(false, Ordering::Relaxed);
-                }
-            }
+            Ok(_) => self.reported.store(false, Ordering::Relaxed),
             Err(error) if tls::negotiation_failed(error) => self.report(error),
             Err(error) if error.is_io_error() => self.diagnose(),
             Err(_) => {}
@@ -265,13 +250,7 @@ impl TlsRefusals {
 
     fn report(&self, error: &redis::RedisError) {
         if !self.reported.swap(true, Ordering::Relaxed) {
-            tracing::warn!(
-                target: crate::TARGET,
-                endpoint = %self.endpoint,
-                reason = %tls::remedy(error),
-                error = %nest_rs_core::error_message(error),
-                "redis refused a reopened tls connection",
-            );
+            tls::say_refused(&self.endpoint, error);
         }
     }
 
@@ -315,20 +294,8 @@ fn client(
     budget: Duration,
 ) -> Result<redis::Client, RedisError> {
     let encrypted = matches!(info.addr(), ConnectionAddr::TcpTls { .. });
-    let info = info.set_tcp_settings(socket(budget));
-    match tls::material(tls, encrypted, endpoint)? {
-        None => redis::Client::open(info).map_err(|source| RedisError::InvalidUrl {
-            endpoint: endpoint.to_owned(),
-            source,
-        }),
-        Some(certificates) => redis::Client::build_with_tls(info, certificates).map_err(|source| {
-            RedisError::TlsRefused {
-                endpoint: endpoint.to_owned(),
-                reason: tls::unusable_material(),
-                source: Some(source),
-            }
-        }),
-    }
+    let certificates = tls::material(tls, encrypted, endpoint)?;
+    open_client(info, certificates.as_ref(), endpoint, budget)
 }
 
 /// One boot attempt: a connection of its own, proved with a `PING`, then the
@@ -369,7 +336,7 @@ async fn prove(
             }
             Err(_) => {
                 tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(MAX_RETRY_BACKOFF);
+                wait = backoff_after(wait);
             }
         }
     }

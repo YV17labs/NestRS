@@ -26,7 +26,7 @@ use redis::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::checkpoint::RedisCheckpoint;
-use super::scripts::{SCRIPTS, keyed};
+use super::scripts::SCRIPTS;
 use crate::RedisConnection;
 use crate::backend::BACKEND;
 use crate::error::{PreparedTwice, UnexpectedReply, UnknownDisposition};
@@ -149,7 +149,7 @@ impl RedisQueueConsumer {
             .invoke(
                 SCRIPTS
                     .reclaim
-                    .key(&drained.keys.jobs)
+                    .keys(&[&drained.keys.jobs])
                     .arg(GROUP)
                     .arg(&self.name)
                     .arg(millis(self.lease))
@@ -202,7 +202,8 @@ impl RedisQueueConsumer {
             Some(conn) => conn,
             None => reading.insert(
                 self.conn
-                    .dedicated(wait)
+                    .with_budget(wait + self.conn.budget())
+                    .dedicated()
                     .await
                     .map_err(QueueError::backend)?,
             ),
@@ -335,7 +336,7 @@ impl JobConsumer for RedisQueueConsumer {
                 .invoke(
                     SCRIPTS
                         .admit
-                        .key(&drained.keys.throttle)
+                        .keys(&[&drained.keys.throttle])
                         .arg(throttle.limit().get())
                         .arg(millis(throttle.window()))
                         .arg(max),
@@ -366,7 +367,7 @@ impl JobConsumer for RedisQueueConsumer {
                 // lasts; a give-back that fails only throttles more, never less.
                 let given: Result<i64, _> = self
                     .conn
-                    .invoke(SCRIPTS.release.key(&drained.keys.throttle).arg(unused))
+                    .invoke(SCRIPTS.release.keys(&[&drained.keys.throttle]).arg(unused))
                     .await;
                 if let Err(error) = given {
                     tracing::debug!(
@@ -391,7 +392,7 @@ impl JobConsumer for RedisQueueConsumer {
             return Ok(Vec::new());
         }
         let drained = self.drained(method)?;
-        let mut renew = SCRIPTS.renew.key(&drained.keys.jobs);
+        let mut renew = SCRIPTS.renew.keys(&[&drained.keys.jobs]);
         renew.arg(GROUP).arg(&self.name);
         for lease in leases {
             renew.arg(&lease.entry).arg(lease.count);
@@ -436,7 +437,9 @@ impl JobConsumer for RedisQueueConsumer {
         let settled: i64 = self
             .conn
             .invoke(
-                keyed(&SCRIPTS.settle, &keys.transition())
+                SCRIPTS
+                    .settle
+                    .keys(&keys.transition())
                     .arg(GROUP)
                     .arg(&self.name)
                     .arg(&lease.entry)
@@ -463,7 +466,9 @@ impl JobConsumer for RedisQueueConsumer {
         let (next, lost): (i64, Vec<String>) = self
             .conn
             .invoke(
-                keyed(&SCRIPTS.promote, &keys.transition())
+                SCRIPTS
+                    .promote
+                    .keys(&keys.transition())
                     .arg(PROMOTE_BATCH)
                     .arg(millis(DEAD_KEPT)),
             )
@@ -476,7 +481,7 @@ impl JobConsumer for RedisQueueConsumer {
                 .invoke(
                     SCRIPTS
                         .sweep
-                        .key(&keys.jobs)
+                        .keys(&[&keys.jobs])
                         .arg(GROUP)
                         .arg(millis(SILENT_FOR)),
                 )
@@ -508,7 +513,7 @@ impl JobConsumer for RedisQueueConsumer {
                 .invoke(
                     SCRIPTS
                         .leave
-                        .key(&queue.keys.jobs)
+                        .keys(&[&queue.keys.jobs])
                         .arg(GROUP)
                         .arg(&self.name),
                 )

@@ -65,8 +65,7 @@ impl CheckpointStore for RedisCheckpoint {
             .invoke(
                 SCRIPTS
                     .checkpoint
-                    .key(&self.jobs)
-                    .key(&self.checkpoints)
+                    .keys(&[&self.jobs, &self.checkpoints])
                     .arg(GROUP)
                     .arg(&self.worker)
                     .arg(&self.lease.entry)

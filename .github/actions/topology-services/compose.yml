@@ -1,10 +1,12 @@
-# Run by action.yml; by hand, from this folder with CERTS set, its steps' commands.
+# Run by action.yml; by hand, from this folder with CERTS and VALKEY_IMAGE set,
+# its step's commands.
 name: nestrs-topologies
 
 # The host's network: every node, replica and sentinel announces 127.0.0.1,
 # which the certificate names, and the ports clear the dev services'.
 x-valkey: &valkey
-  image: valkey/valkey:9.1.2
+  # The dev container's own Valkey, which action.yml reads from its compose file.
+  image: ${VALKEY_IMAGE:?the Valkey image the dev container's compose file pins}
   network_mode: host
   user: "999:999"
   volumes:

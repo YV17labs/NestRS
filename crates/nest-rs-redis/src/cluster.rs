@@ -8,8 +8,7 @@
 //! a binding's commands is refused — and a node refusing a TLS connection is
 //! said once.
 
-use std::collections::HashSet;
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use redis::aio::{ConnectionLike, MultiplexedConnection};
@@ -20,17 +19,17 @@ use redis::cluster_routing::{
     SlotAddr,
 };
 use redis::{
-    AsyncConnectionConfig, Cmd, ConnectionAddr, IntoConnectionInfo, Pipeline, RedisConnectionInfo,
-    RedisFuture, TlsMode, Value,
+    AsyncConnectionConfig, Cmd, IntoConnectionInfo, Pipeline, RedisConnectionInfo, RedisFuture,
+    TlsMode, Value,
 };
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, GaveUp, MAX_RETRY_BACKOFF, bounded, classify, connection_config,
-    socket, spent, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, answered, bounded, classify,
+    connection_config, node_addr, node_client, socket, within_budget,
 };
 use crate::error::RedisError;
 use crate::script::RedisScript;
-use crate::url::{ClusterUrl, NodeAddr};
+use crate::url::{ClusterUrl, NodeAddr, listed};
 use crate::{RedisTls, RedisTopology, tls};
 
 /// The link to a Cluster's nodes.
@@ -58,12 +57,7 @@ impl ClusterLink {
         tls: &RedisTls,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
-        let listed = url
-            .seeds
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
+        let listed = listed(&url.seeds);
         let certificates = tls::material(tls, url.tls, &listed)?;
         let plan = Arc::new(Plan {
             seeds: url.seeds,
@@ -80,12 +74,7 @@ impl ClusterLink {
             })?;
         let connection = within_budget(budget, &plan.listed, |_| plan.prove(&client))
             .await
-            .map_err(|gave_up| match gave_up {
-                GaveUp::Refused(refusal) => refusal,
-                GaveUp::Spent { attempts, last } => {
-                    spent(plan.listed.clone(), budget, attempts, last)
-                }
-            })?;
+            .map_err(|gave_up| gave_up.into_error(&plan.listed, budget))?;
         Ok(Arc::new(Self { plan, connection }))
     }
 
@@ -96,11 +85,11 @@ impl ClusterLink {
         response: Duration,
     ) -> Result<Arc<Self>, redis::RedisError> {
         let client = self.plan.client(response)?;
-        let connection = bounded(
+        let connection = answered(
             self.plan.budget,
             client.get_async_generic_connection::<ClusterNode>(),
         )
-        .await??;
+        .await?;
         Ok(Arc::new(Self {
             plan: Arc::clone(&self.plan),
             connection,
@@ -176,7 +165,7 @@ impl Plan {
         let seeds = self
             .seeds
             .iter()
-            .map(|seed| addr(seed, self.certificates.is_some()).into_connection_info())
+            .map(|seed| node_addr(seed, self.certificates.is_some()).into_connection_info())
             .collect::<Result<Vec<_>, _>>()?;
         let mut builder = ClusterClientBuilder::new(seeds)
             .connection_timeout(self.budget)
@@ -229,7 +218,13 @@ impl Plan {
         let mut last = None;
         for seed in &self.seeds {
             let endpoint = seed.to_string();
-            let client = self.seed_client(seed).map_err(Attempt::Refused)?;
+            let client = node_client(
+                seed,
+                self.settings.clone(),
+                self.certificates.as_ref(),
+                self.budget,
+            )
+            .map_err(Attempt::Refused)?;
             let proof = async {
                 let mut node = client
                     .get_multiplexed_async_connection_with_config(&connection_config(self.budget))
@@ -239,10 +234,7 @@ impl Plan {
                     .query_async::<Value>(&mut node)
                     .await
             };
-            match bounded(self.budget, proof)
-                .await
-                .and_then(std::convert::identity)
-            {
+            match answered(self.budget, proof).await {
                 Ok(_) => return Ok(()),
                 Err(error) if cluster_disabled(&error) => {
                     return Err(Attempt::Refused(RedisError::TopologyMismatch {
@@ -263,44 +255,6 @@ impl Plan {
                 "the URL names no seed",
             ))
         })))
-    }
-
-    /// A client of `seed` alone, as every node is reached: its credentials,
-    /// its database, its TLS.
-    fn seed_client(&self, seed: &NodeAddr) -> Result<redis::Client, RedisError> {
-        let endpoint = seed.to_string();
-        let info = addr(seed, self.certificates.is_some())
-            .into_connection_info()
-            .map_err(|source| RedisError::InvalidUrl {
-                endpoint: endpoint.clone(),
-                source,
-            })?
-            .set_redis_settings(self.settings.clone())
-            .set_tcp_settings(socket(self.budget));
-        match &self.certificates {
-            None => redis::Client::open(info)
-                .map_err(|source| RedisError::InvalidUrl { endpoint, source }),
-            Some(certificates) => redis::Client::build_with_tls(info, certificates.clone())
-                .map_err(|source| RedisError::TlsRefused {
-                    endpoint,
-                    reason: tls::unusable_material(),
-                    source: Some(source),
-                }),
-        }
-    }
-}
-
-/// `node`'s address, encrypted or not.
-fn addr(node: &NodeAddr, encrypted: bool) -> ConnectionAddr {
-    if encrypted {
-        ConnectionAddr::TcpTls {
-            host: node.host.clone(),
-            port: node.port,
-            insecure: false,
-            tls_params: None,
-        }
-    } else {
-        ConnectionAddr::Tcp(node.host.clone(), node.port)
     }
 }
 
@@ -334,7 +288,7 @@ impl Connect for ClusterNode {
             let opened = redis::Client::open(info.set_redis_settings(settings))?
                 .get_multiplexed_async_connection_with_config(&config)
                 .await;
-            observe(&endpoint, &opened);
+            tls::observe_refusal(&endpoint, &opened);
             opened.map(Self)
         })
     }
@@ -356,30 +310,5 @@ impl ConnectionLike for ClusterNode {
 
     fn get_db(&self) -> i64 {
         self.0.get_db()
-    }
-}
-
-/// The nodes refusing TLS, each said once until a connection to it opens.
-static REFUSING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
-
-/// Say a node's TLS refusal once, and forget it once the node opens again.
-fn observe<T>(endpoint: &str, opened: &Result<T, redis::RedisError>) {
-    let mut refusing = REFUSING.lock().unwrap_or_else(PoisonError::into_inner);
-    match opened {
-        Ok(_) => {
-            refusing.remove(endpoint);
-        }
-        Err(error) if tls::negotiation_failed(error) => {
-            if refusing.insert(endpoint.to_owned()) {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    endpoint = %endpoint,
-                    reason = %tls::remedy(error),
-                    error = %nest_rs_core::error_message(error),
-                    "redis refused a reopened tls connection",
-                );
-            }
-        }
-        Err(_) => {}
     }
 }

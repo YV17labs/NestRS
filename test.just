@@ -1,8 +1,9 @@
 nextest := "cargo nextest run --workspace --no-fail-fast"
 
 # The tests of nest-rs-redis's e2e that hold on one Valkey topology alone sit in
-# a module named for it; a run on another topology leaves them out.
+# a module named for it: a run keeps the tests every topology holds and its own.
 redis := "binary_id(nest-rs-redis::e2e)"
+on_one := "test(/(^|::)(standalone|sentinel|cluster)::/)"
 elsewhere := redis + " and test(/(^|::)(sentinel|cluster)::/)"
 
 # Every test: unit, integration, e2e and the doc examples
@@ -24,7 +25,7 @@ e2e:
 # nest-rs-redis's e2e on the Valkey topology `<PREFIX>_REDIS__URL` declares —
 # `sentinel` or `cluster` — its failovers last, one at a time
 topology name:
-    {{nextest}} -E '{{redis}} and not test(/(^|::)({{ if name == "sentinel" { "standalone|cluster" } else if name == "cluster" { "standalone|sentinel" } else { error("a topology is `sentinel` or `cluster`") } }})::/) and not test(/::failover::/)'
+    {{ if name =~ "^(sentinel|cluster)$" { "" } else { error("a topology is `sentinel` or `cluster`") } }}{{nextest}} -E '{{redis}} and (not {{on_one}} or test(/(^|::){{name}}::/)) and not test(/::failover::/)'
     {{nextest}} --test-threads 1 -E '{{redis}} and test(/(^|::){{name}}::failover::/)'
 
 # Coverage of the nextest suite, per file; doctests count on nightly only

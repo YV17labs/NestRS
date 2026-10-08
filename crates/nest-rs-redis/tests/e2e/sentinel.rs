@@ -7,54 +7,16 @@ use std::time::Duration;
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisTopology};
 
-/// The name the suite's sentinels monitor the primary under.
-fn service_name() -> String {
-    crate::parsed_url()
-        .query_pairs()
-        .find(|(key, _)| key == "sentinelServiceName")
-        .map(|(_, name)| name.into_owned())
-        .expect("a Sentinel URL names its primary")
-}
-
-/// A connection to each sentinel the suite's URL names.
-async fn sentinels() -> Vec<redis::aio::MultiplexedConnection> {
-    let mut sentinels = Vec::new();
-    for host in crate::named_hosts() {
-        sentinels.push(
-            crate::bare_client(&crate::node_url(&host))
-                .get_multiplexed_async_connection()
-                .await
-                .expect("every sentinel answers"),
-        );
-    }
-    sentinels
-}
-
-/// The primary the sentinels name now, as `host:port`.
-async fn primary() -> String {
-    let (host, port): (String, u16) = redis::cmd("SENTINEL")
-        .arg("GET-MASTER-ADDR-BY-NAME")
-        .arg(service_name())
-        .query_async(&mut sentinels().await.remove(0))
-        .await
-        .expect("the sentinels name a primary");
-    format!("{host}:{port}")
+/// A bare client of each sentinel the suite's URL names.
+fn sentinels() -> Vec<redis::Client> {
+    crate::clients(crate::named_hosts())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
     let user = crate::acl_user("nestrs-e2e-sentinels");
-    let rule = crate::documented_acl(crate::CONNECTION_PAGE, "sentinels")
-        .replace("<user>", &user)
-        .replace("<password>", crate::ACL_PASSWORD);
-    let tokens: Vec<&str> = rule.split_whitespace().collect();
-    for mut sentinel in sentinels().await {
-        let _: () = redis::cmd(tokens[0])
-            .arg(&tokens[1..])
-            .query_async(&mut sentinel)
-            .await
-            .unwrap_or_else(|error| panic!("a sentinel takes the page's rule `{rule}`: {error}"));
-    }
+    let rule = crate::documented_acl(crate::CONNECTION_PAGE, "sentinels");
+    let _: Vec<()> = crate::on_each(&sentinels(), &crate::creating(&rule, &user)).await;
     let mut url = crate::parsed_url();
     url.query_pairs_mut()
         .append_pair("sentinelUsername", &user)
@@ -70,30 +32,9 @@ async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
         .await
         .expect("the primary answers");
 
-    for mut sentinel in sentinels().await {
-        let denied: Vec<std::collections::HashMap<String, redis::Value>> = redis::cmd("ACL")
-            .arg("LOG")
-            .arg(i64::from(u32::MAX))
-            .query_async(&mut sentinel)
-            .await
-            .expect("ACL LOG");
-        let _: i64 = redis::cmd("ACL")
-            .arg("DELUSER")
-            .arg(&user)
-            .query_async(&mut sentinel)
-            .await
-            .expect("ACL DELUSER");
-        let by_user = denied
-            .iter()
-            .filter(|entry| {
-                entry
-                    .get("username")
-                    .and_then(|name| redis::from_redis_value_ref::<String>(name).ok())
-                    .is_some_and(|name| name == user)
-            })
-            .count();
-        assert_eq!(by_user, 0, "a sentinel denied its user a command");
-    }
+    crate::assert_denied_nothing_among(&sentinels(), &user, &[]).await;
+    let _: Vec<i64> =
+        crate::on_each(&sentinels(), redis::cmd("ACL").arg("DELUSER").arg(&user)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -125,12 +66,12 @@ async fn a_service_the_sentinels_do_not_know_fails_the_boot_naming_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_url_declaring_a_topology_its_host_is_not_part_of_fails_at_once() {
-    let primary = primary().await;
+    let primary = crate::sentinel_primary().await;
     for (url, declared) in [
         (
             format!(
                 "rediss-sentinel://{primary}?sentinelServiceName={}",
-                service_name()
+                crate::service_name()
             ),
             RedisTopology::Sentinel,
         ),
@@ -166,46 +107,14 @@ async fn a_url_declaring_a_topology_its_host_is_not_part_of_fails_at_once() {
 mod failover {
     use std::time::Duration;
 
-    use nest_rs_core::{injectable, module};
-    use nest_rs_queue::{JobProducerExt, QueueModule, processor, queue};
-    use nest_rs_redis::{RedisModule, RedisQueueModule};
-    use serde::{Deserialize, Serialize};
+    use nest_rs_queue::{JobProducerExt, PushOptions, Queue};
 
-    use crate::Runs;
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    struct FailoverCommand {
-        run: u64,
-    }
-
-    static FAILOVER: Runs = Runs::new();
-
-    #[queue(name = "nestrs-e2e-sentinel-failover", job = FailoverCommand)]
-    struct FailoverQueue;
-
-    #[injectable]
-    #[derive(Default)]
-    struct FailoverProcessor;
-
-    #[processor]
-    impl FailoverProcessor {
-        #[process(queue = FailoverQueue, retries = 5)]
-        async fn run(&self, job: FailoverCommand) -> anyhow::Result<()> {
-            FAILOVER.start(job.run);
-            FAILOVER.finish(job.run);
-            Ok(())
-        }
-    }
-
-    #[module(
-        imports = [RedisModule::for_root(None), RedisQueueModule, QueueModule::for_root(None)],
-        providers = [FailoverProcessor],
-    )]
-    struct FailoverModule;
+    use crate::{FAILOVER, FailoverCommand, FailoverModule, FailoverQueue};
 
     /// The primary freezes, the sentinels promote its replica, and the app —
     /// its worker and its producer — follows the primary they name then:
-    /// every job pushed before, during and after runs, at least once.
+    /// every job pushed before, during and after runs, at least once, and a
+    /// push after it lands on the new primary.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_queue_runs_on_across_a_failover() {
         let logs = nest_rs_testing::LogCapture::install_global();
@@ -223,53 +132,26 @@ mod failover {
         })
         .await;
 
-        let before = super::primary().await;
-        let frozen = crate::bare_client(&crate::node_url(&before));
-        tokio::spawn(async move {
-            if let Ok(mut frozen) = frozen.get_multiplexed_async_connection().await {
-                let _: Result<(), _> = redis::cmd("DEBUG")
-                    .arg("SLEEP")
-                    .arg(6)
-                    .query_async(&mut frozen)
-                    .await;
-            }
-        });
+        let before = crate::sentinel_primary().await;
+        crate::freeze(&before);
         // Forced, the failover skips the sentinels' election, which three
         // sentinels sharing one timing split often enough to stall a test; the
         // primary stays frozen through it, as a crashed one would.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let _: () = redis::cmd("SENTINEL")
             .arg("FAILOVER")
-            .arg(super::service_name())
-            .query_async(&mut super::sentinels().await.remove(0))
+            .arg(crate::service_name())
+            .query_async(&mut crate::node(&crate::named_hosts()[0]).await)
             .await
             .expect("the sentinels fail the primary over");
-        let mut after = before.clone();
-        for _ in 0..300 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            after = super::primary().await;
-            if after != before {
-                break;
-            }
-        }
-        assert_ne!(after, before, "the sentinels promote the replica");
+        crate::wait_for(Duration::from_secs(30), || async {
+            crate::sentinel_primary().await != before
+        })
+        .await;
+        let after = crate::sentinel_primary().await;
 
         for offset in 5..10 {
-            let job = FailoverCommand { run: run + offset };
-            let mut pushed = false;
-            for _ in 0..100 {
-                if replica
-                    .producer
-                    .push(FailoverQueue, job.clone(), None)
-                    .await
-                    .is_ok()
-                {
-                    pushed = true;
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            assert!(pushed, "a push answers again once the primary moved");
+            crate::push_through_a_failover(&replica.producer, run + offset).await;
         }
         crate::wait_until(Duration::from_secs(60), || {
             (0..10).all(|offset| FAILOVER.finished(run + offset) > 0)
@@ -282,22 +164,14 @@ mod failover {
             .push(
                 FailoverQueue,
                 FailoverCommand { run: run + 10 },
-                nest_rs_queue::PushOptions::default().with_delay(Duration::from_secs(600)),
+                PushOptions::default().with_delay(Duration::from_secs(600)),
             )
             .await
             .expect("a delayed push after the failover");
         let score: Option<f64> = redis::cmd("ZSCORE")
-            .arg(crate::key_of(
-                <FailoverQueue as nest_rs_queue::Queue>::NAME,
-                "due",
-            ))
+            .arg(crate::key_of(FailoverQueue::NAME, "due"))
             .arg(held.id().to_string())
-            .query_async(
-                &mut crate::bare_client(&crate::node_url(&after))
-                    .get_multiplexed_async_connection()
-                    .await
-                    .expect("the new primary answers"),
-            )
+            .query_async(&mut crate::node(&after).await)
             .await
             .expect("ZSCORE");
         assert!(
@@ -305,17 +179,11 @@ mod failover {
             "the held job is cancelled"
         );
         replica.worker.shutdown().await.expect("clean shutdown");
+
         assert!(
             score.is_some(),
             "a push after the failover is filed on the new primary, {after}"
         );
-
-        for offset in 0..10 {
-            assert!(
-                FAILOVER.finished(run + offset) > 0,
-                "job {offset} ran at least once"
-            );
-        }
         let followed = logs.find(
             nest_rs_redis::TARGET,
             "redis connection follows the new primary the sentinels name",

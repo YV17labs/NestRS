@@ -23,18 +23,11 @@ impl RedisScript {
         }
     }
 
-    /// A call of the script with `key` as its first key.
-    pub(crate) fn key(&self, key: impl ToRedisArgs) -> Invocation<'_> {
-        let mut invocation = self.prepare();
-        invocation.key(key);
-        invocation
-    }
-
-    /// A call of the script, with no key or argument yet.
-    pub(crate) fn prepare(&self) -> Invocation<'_> {
+    /// A call of the script with `keys` as its `KEYS`, in order.
+    pub(crate) fn keys(&self, keys: &[&str]) -> Invocation<'_> {
         Invocation {
             script: self,
-            keys: Vec::new(),
+            keys: keys.iter().map(|key| key.as_bytes().to_vec()).collect(),
             args: Vec::new(),
         }
     }
@@ -55,12 +48,6 @@ pub(crate) struct Invocation<'a> {
 }
 
 impl<'a> Invocation<'a> {
-    /// Add `key` to the call's `KEYS`.
-    pub(crate) fn key(&mut self, key: impl ToRedisArgs) -> &mut Self {
-        self.keys.extend(key.to_redis_args());
-        self
-    }
-
     /// Add `arg` to the call's `ARGV`.
     pub(crate) fn arg(&mut self, arg: impl ToRedisArgs) -> &mut Self {
         self.args.extend(arg.to_redis_args());
@@ -93,7 +80,7 @@ impl<'a> Invocation<'a> {
             return Err(redis::RedisError::from((
                 ErrorKind::Server(ServerErrorKind::CrossSlot),
                 "a script's keys sit in more than one hash slot",
-                "every key a script names is its queue's own, under its hash tag".to_owned(),
+                "every key one script names shares one hash tag".to_owned(),
             )));
         }
         Ok(Some(first))
@@ -109,8 +96,8 @@ mod tests {
     #[test]
     fn a_call_is_sent_by_the_hash_valkey_caches_it_under() {
         let script = RedisScript::new(ECHO);
-        let mut call = script.key("nestrs:queue:{audio}:jobs");
-        call.key("nestrs:queue:{audio}:dead").arg(7);
+        let mut call = script.keys(&["nestrs:queue:{audio}:jobs", "nestrs:queue:{audio}:dead"]);
+        call.arg(7);
         let sent: Vec<Vec<u8>> = call
             .eval_cmd()
             .args_iter()
@@ -135,17 +122,18 @@ mod tests {
     #[test]
     fn a_call_whose_keys_share_a_hash_tag_sits_in_one_slot() {
         let script = RedisScript::new(ECHO);
-        let mut call = script.key("nestrs:queue:{audio}:jobs");
-        call.key("nestrs:queue:{audio}:checkpoints");
+        let call = script.keys(&[
+            "nestrs:queue:{audio}:jobs",
+            "nestrs:queue:{audio}:checkpoints",
+        ]);
         assert_eq!(call.slot().expect("one slot"), Some(Slot::for_key("audio")));
-        assert_eq!(script.prepare().slot().expect("no key"), None);
+        assert_eq!(script.keys(&[]).slot().expect("no key"), None);
     }
 
     #[test]
     fn a_call_naming_keys_of_two_slots_is_refused_before_it_is_sent() {
         let script = RedisScript::new(ECHO);
-        let mut call = script.key("nestrs:queue:{audio}:jobs");
-        call.key("nestrs:queue:{video}:jobs");
+        let call = script.keys(&["nestrs:queue:{audio}:jobs", "nestrs:queue:{video}:jobs"]);
         let refused = call.slot().expect_err("two slots");
         assert_eq!(
             refused.kind(),

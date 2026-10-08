@@ -154,21 +154,11 @@ fn parse(line: &str) -> Option<(String, String)> {
 /// every data node ran last.
 async fn sent(seen: &Seen) -> BTreeSet<String> {
     let passed = seen.barriers.load(Ordering::SeqCst);
-    let mut echoed = Vec::new();
-    for primary in crate::primaries().await {
-        let mut primary = primary
-            .get_multiplexed_async_connection()
+    let echoed =
+        crate::on_each::<String>(&crate::primaries().await, redis::cmd("ECHO").arg(BARRIER))
             .await
-            .expect("every primary answers");
-        echoed.push(
-            redis::cmd("ECHO")
-                .arg(BARRIER)
-                .query_async::<String>(&mut primary)
-                .await
-                .expect("ECHO"),
-        );
-    }
-    let caught_up = || seen.barriers.load(Ordering::SeqCst) >= passed + echoed.len();
+            .len();
+    let caught_up = || seen.barriers.load(Ordering::SeqCst) >= passed + echoed;
     crate::wait_until(Duration::from_secs(10), caught_up).await;
     assert!(caught_up(), "MONITOR streams what ran before the barrier");
     let clients: Vec<String> = crate::on_every_node(redis::cmd("CLIENT").arg("LIST")).await;
@@ -307,15 +297,19 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     crate::forget_user(&worker_user).await;
 
     assert_eq!(dead, 1, "the failing job dead-lettered");
-    let producer_rule = allowed(&crate::documented_rule(PAGE, "producer"));
-    let worker_rule = allowed(&crate::documented_rule(PAGE, "worker"));
-    // A redirection to a slot being moved is the Cluster e2e's to send.
-    let unsent_by_any = ["asking"];
+    // Each role's rule is exact; what the topology's connection adds is
+    // allowed beside it, and its redirection to a moving slot is the Cluster
+    // e2e's to send.
+    let addition = allowed(&crate::topology_addition());
+    let without_addition = |sent: &BTreeSet<String>| -> BTreeSet<String> {
+        sent.difference(&addition).cloned().collect()
+    };
+    let producer_rule = allowed(&crate::documented_acl(PAGE, "producer"));
+    let worker_rule = allowed(&crate::documented_acl(PAGE, "worker"));
+    let producer_sent = without_addition(&producer_sent);
     let unsent: BTreeSet<_> = producer_rule.difference(&producer_sent).cloned().collect();
     assert!(
-        unsent
-            .iter()
-            .all(|command| command == "script|load" || unsent_by_any.contains(&command.as_str())),
+        unsent.iter().all(|command| command == "script|load"),
         "the producer's rule allows what no producer sends: {unsent:?}",
     );
     let unallowed: BTreeSet<_> = producer_sent.difference(&producer_rule).cloned().collect();
@@ -323,17 +317,10 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         unallowed.is_empty(),
         "a producer sends what its rule does not allow: {unallowed:?}"
     );
-    let unsent: BTreeSet<_> = worker_rule.difference(&worker_sent).cloned().collect();
-    assert!(
-        unsent
-            .iter()
-            .all(|command| unsent_by_any.contains(&command.as_str())),
-        "the worker's rule allows what no worker sends: {unsent:?}",
-    );
-    let unallowed: BTreeSet<_> = worker_sent.difference(&worker_rule).cloned().collect();
-    assert!(
-        unallowed.is_empty(),
-        "a worker sends what its rule does not allow: {unallowed:?}"
+    assert_eq!(
+        without_addition(&worker_sent),
+        worker_rule,
+        "the worker sends exactly what its rule allows"
     );
     let keys: Vec<String> = redis::cmd("KEYS")
         .arg("*")

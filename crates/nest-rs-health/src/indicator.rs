@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_core::Container;
+use nest_rs_http::schemars::JsonSchema;
 use serde::Serialize;
 
 /// Which Kubernetes-style probe an indicator participates in.
@@ -20,8 +21,9 @@ pub enum ProbeKind {
 }
 
 /// `up` when the indicator's check returned `Ok`; `down` otherwise.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(crate = "nest_rs_http::schemars")]
 pub enum IndicatorStatus {
     /// The check returned `Ok`.
     Up,
@@ -30,7 +32,8 @@ pub enum IndicatorStatus {
 }
 
 /// Outcome of a single indicator check, included in a [`ProbeReport`].
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[schemars(crate = "nest_rs_http::schemars")]
 pub struct IndicatorReport {
     /// The indicator's stable id (its snake_case method name).
     pub name: &'static str,
@@ -46,7 +49,8 @@ pub struct IndicatorReport {
 
 /// Aggregated outcome of a probe: an overall `status` (`200` up, `503` down)
 /// plus per-indicator reports.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[schemars(crate = "nest_rs_http::schemars")]
 pub struct ProbeReport {
     /// The overall probe result — `down` if any indicator is down.
     pub status: IndicatorStatus,

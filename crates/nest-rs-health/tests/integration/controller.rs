@@ -23,6 +23,29 @@ async fn the_documented_import_mounts_the_three_probes() {
 }
 
 #[tokio::test]
+async fn each_probe_is_documented_under_one_health_tag() {
+    let app = TestApp::for_module::<AppModule>()
+        .await
+        .expect("the documented wiring boots");
+
+    let routes: Vec<_> = nest_rs_core::Discovery::new(app.container())
+        .meta::<nest_rs_http::HttpControllerMeta>()
+        .into_iter()
+        .flat_map(|d| d.meta.routes.clone())
+        .collect();
+    assert_eq!(routes.len(), 3, "the three probes");
+    for route in &routes {
+        assert_eq!(route.tags, ["Health"], "{}", route.handler);
+        assert!(route.summary.is_some(), "{} has a summary", route.handler);
+        assert!(
+            route.response.is_some(),
+            "{} types its report",
+            route.handler
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_probe_with_no_indicators_reports_healthy() {
     let app = TestApp::for_module::<AppModule>()
         .await

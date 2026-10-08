@@ -92,7 +92,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// What `#[routes]` consumes off a method beside the layers and the posture.
-const HELPERS: [&str; 12] = [
+const HELPERS: [&str; 13] = [
     "get",
     "post",
     "put",
@@ -105,6 +105,7 @@ const HELPERS: [&str; 12] = [
     "redirect",
     "crud_write",
     "crud_location",
+    "crud_next_cursor",
 ];
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -311,6 +312,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
+        // `#[crud]`'s paginated-list marker: the document declares the cursor header.
+        let sets_next_cursor = match take_flag_attr(&mut method.attrs, "crud_next_cursor") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
 
         let response_shapers =
             match crate::response::take_response_shapers(&mut method.attrs, &method.block) {
@@ -329,6 +335,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .into();
         }
         let success_status = response_shapers.success_status();
+        let response_headers = response_shapers.headers.iter().map(|(name, value)| {
+            quote! { (#name, #value) }
+        });
+        let response_headers = quote! { &[#(#response_headers),*] };
         if response_shapers.redirect.is_some() {
             sets_location = true;
             method.attrs.push(parse_quote! {
@@ -709,6 +719,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 throttled: #method_throttled
                     || <#self_ty>::__nestrs_controller_has_throttler(),
                 sets_location: #sets_location,
+                sets_next_cursor: #sets_next_cursor,
+                response_headers: #response_headers,
                 success_status: #success_status,
                 scoped_guarded: #method_guarded
                     || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),

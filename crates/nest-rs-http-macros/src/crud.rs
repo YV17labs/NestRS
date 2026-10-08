@@ -82,6 +82,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[get("/")]
                 // A built `Response` hides the payload from the signature: declared here.
                 #[api(summary = #summary, tags(#tag), response = ::std::vec::Vec<#output>)]
+                // Read by `#[routes]` to declare the cursor header in the document.
+                #[crud_next_cursor]
                 async fn list(
                     &self,
                     _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
@@ -104,7 +106,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             )
                     {
                         __resp.headers_mut().insert(
-                            ::nest_rs_http::poem::http::HeaderName::from_static("x-next-cursor"),
+                            ::nest_rs_http::poem::http::HeaderName::from_static(::nest_rs_http::NEXT_CURSOR_HEADER),
                             __value,
                         );
                     }
@@ -325,6 +327,24 @@ mod tests {
         assert!(
             !read_only.contains("crud_location"),
             "only the create op declares a Location: {read_only}",
+        );
+    }
+
+    #[test]
+    fn only_the_paginated_list_marks_the_cursor_header_it_sends() {
+        let paged = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, ops = [list]
+        });
+        assert!(
+            paged.contains("crud_next_cursor"),
+            "the cursor list stamps the marker `#[routes]` reads: {paged}",
+        );
+        let whole = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, ops = [list], paginate = none
+        });
+        assert!(
+            !whole.contains("crud_next_cursor"),
+            "a full collection sends no cursor: {whole}",
         );
     }
 

@@ -38,6 +38,10 @@ impl HttpVerb {
     }
 }
 
+/// The response header `#[crud]`'s paginated list names the next page's cursor
+/// in, absent on the last page.
+pub const NEXT_CURSOR_HEADER: &str = "x-next-cursor";
+
 /// Builds the schema for a request body or response, recording named component
 /// schemas in the shared generator.
 pub type SchemaFn = fn(&mut schemars::SchemaGenerator) -> schemars::Schema;
@@ -144,6 +148,12 @@ pub struct HttpRouteMeta {
     /// framework emits (`#[crud]`'s create, `#[redirect]`); a hand-written
     /// handler setting it itself leaves this `false`.
     pub sets_location: bool,
+    /// `#[crud]`'s paginated list: the success response carries
+    /// [`NEXT_CURSOR_HEADER`] whenever another page follows.
+    pub sets_next_cursor: bool,
+    /// Each `#[response_header(name, value)]` on the handler, as written: the
+    /// success response always carries these.
+    pub response_headers: &'static [(&'static str, &'static str)],
     /// The effective **success** HTTP status this route emits — `200` unless a
     /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it.
     pub success_status: u16,
@@ -375,6 +385,8 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
+            sets_next_cursor: false,
+            response_headers: &[],
             success_status: 200,
             scoped_guarded: false,
             public: false,
@@ -440,6 +452,8 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
+            sets_next_cursor: false,
+            response_headers: &[],
             success_status: 200,
             scoped_guarded,
             public,

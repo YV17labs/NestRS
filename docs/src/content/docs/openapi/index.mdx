@@ -238,8 +238,8 @@ Six keys, all on the framework-wide dual path — the [`.env` cascade](/configur
 | Field | Env var | Default | Effect |
 |---|---|---|---|
 | `enabled` | `<PREFIX>_OPENAPI__ENABLED` | dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
-| `title` | `<PREFIX>_OPENAPI__TITLE` | the crate's name | The document's `info.title`. |
-| `version` | `<PREFIX>_OPENAPI__VERSION` | the crate's version | The document's `info.version`. |
+| `title` | `<PREFIX>_OPENAPI__TITLE` | `nestrs API` | The document's `info.title`. |
+| `version` | `<PREFIX>_OPENAPI__VERSION` | `0.1.0` | The document's `info.version` — your API's version, not the framework's. |
 | `description` | `<PREFIX>_OPENAPI__DESCRIPTION` | none | The document's `info.description`. |
 | `emit_document` | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `false` | Writes the document to `document_path` once at boot — the committed-artifact workflow the GraphQL SDL emit has. |
 | `document_path` | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `openapi.json` | Where `emit_document` writes. |
@@ -263,6 +263,7 @@ OpenApiModule::for_root(OpenApiConfig {
     title: "Acme API".into(),
     version: "2.1.0".into(),
     description: Some("Public REST surface".into()),
+    ..OpenApiConfig::default()
 })
 ```
 
@@ -277,10 +278,16 @@ The document composes from the route table, so everything in it is derived:
 - the `info` block, and `servers` from the transport's `global_prefix`;
 - every operation under `paths`, with its path, query and header parameters;
 - its request body, and the media type that body arrives as;
-- a shared `components.schemas`, plus a `bearerAuth` entry in
-  `components.securitySchemes` and per-operation `security` on guarded routes;
-- the error statuses an operation can actually produce — `400` / `404` / `429`
-  alongside its success code — as RFC 9457 `ProblemDetails`.
+- a shared `components.schemas` holding every type an operation reaches and
+  nothing else, an id keeping `format: uuid` and a timestamp `format: date-time`;
+- a `bearerAuth` entry in `components.securitySchemes`, per-operation
+  `security` on guarded routes, and `security: []` on a `#[public]` one;
+- the error statuses an operation can actually produce — `400`, `401` / `403`,
+  `404`, `409`, `413`, `429` and `500`, each where it applies — as RFC 9457
+  `ProblemDetails`;
+- the response headers the framework sends: `Location`, `Retry-After`,
+  `x-next-cursor` on a paginated `#[crud]` list, and every
+  `#[response_header]` with its value.
 
 `operationId` is derived too, as `<controller>_<handler>`, mapped onto what an
 identifier can carry — `PostsController::list` publishes `posts_list`, and a raw
@@ -295,9 +302,13 @@ What the composer does not derive, it leaves to you:
 - **`example` / `examples` on inputs and responses.** schemars derives the
   shape; concrete sample payloads are a documentation choice, so they live in
   the `#[api]` description rather than in a generated block.
-- **Response headers other than the two the framework sends itself**
-  (`Location`, `Retry-After`). A header a *handler* sets is not something the
-  route table knows about.
+- **A response header a handler sets itself** on a `Response` it builds. The
+  route table knows the ones the framework and `#[response_header]` send, not
+  what a handler body writes.
+- **A status a handler answers with a body of its own.** The document types
+  the error statuses the framework produces as problem documents; a handler
+  that writes another status, or another error body, documents it in its
+  `#[api(description)]`.
 - **`contact` / `license` / `externalDocs`** on the document header — `title`,
   `version`, and `description` are the configurable fields.
 - **Which version `/api-json` describes, when the deployment names no default.**

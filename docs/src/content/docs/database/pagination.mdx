@@ -38,7 +38,9 @@ collections.
 
 The generated `GET /posts` returns a plain `Vec<Post>` body plus an
 `x-next-cursor` response header when more rows remain. The body stays a
-flat array so response masking works unchanged.
+flat array so response masking works unchanged. The header is in the
+[OpenAPI document](/openapi/) and, under CORS, exposed to a browser on
+another origin without being listed.
 
 ```bash
 curl -s '/posts?first=20'

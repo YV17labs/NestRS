@@ -80,7 +80,7 @@ config survives adopting or dropping the observability stack.
 | `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer |
 | `CORS_METHODS` | comma-separated allowed request methods |
 | `CORS_HEADERS` | comma-separated allowed request headers |
-| `CORS_EXPOSED` | comma-separated response headers exposed to the browser |
+| `CORS_EXPOSED` | comma-separated response headers exposed to the browser, beside `Location`, `Retry-After` and `x-next-cursor`, always exposed |
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
 | `CORS_MAX_AGE` | preflight cache lifetime in seconds |
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |

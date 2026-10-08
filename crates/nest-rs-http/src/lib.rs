@@ -53,7 +53,9 @@ pub use config::{
     SSE_KEEP_ALIVE_FLOOR,
 };
 pub use context::{Ctx, RejectedCredential};
-pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
+pub use controller::{
+    Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, NEXT_CURSOR_HEADER, RequestBodyMeta,
+};
 pub use cors::HttpCors;
 pub use detached::DetachedWork;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};

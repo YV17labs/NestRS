@@ -6,7 +6,7 @@ use std::sync::Arc;
 use nest_rs_core::{Container, Discovery};
 use nest_rs_http::{
     ApiVersioning, GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta,
-    MEDIA_TYPE_PARAM, declared_versions, join_path,
+    MEDIA_TYPE_PARAM, NEXT_CURSOR_HEADER, declared_versions, join_path,
 };
 use poem::http::{StatusCode, header};
 use schemars::SchemaGenerator;
@@ -173,7 +173,56 @@ pub(crate) fn build_document(
         obj.insert("servers".into(), json!([{ "url": base }]));
     }
 
+    retain_reachable_schemas(&mut document);
     document
+}
+
+/// Drop every component schema no operation reaches. A `Query<T>` or
+/// `Header<T>` payload is expanded into parameters, so its own definition is
+/// referenced by nothing, and a generator would emit a type no call uses.
+fn retain_reachable_schemas(document: &mut Value) {
+    let mut pending = Vec::new();
+    collect_schema_refs(&document["paths"], &mut pending);
+    let Some(schemas) = document
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let mut reachable = std::collections::HashSet::new();
+    while let Some(name) = pending.pop() {
+        if reachable.insert(name.clone())
+            && let Some(schema) = schemas.get(&name)
+        {
+            collect_schema_refs(schema, &mut pending);
+        }
+    }
+    schemas.retain(|name, _| reachable.contains(name));
+}
+
+/// The component names every `$ref` under `value` points at.
+fn collect_schema_refs(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(name) = map
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|r| r.strip_prefix("#/components/schemas/"))
+            {
+                // RFC 6901 §4: `~1` before `~0`.
+                out.push(name.replace("~1", "/").replace("~0", "~"));
+            }
+            for child in map.values() {
+                collect_schema_refs(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_schema_refs(child, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn global_prefix_base(container: &Container) -> Option<String> {
@@ -300,15 +349,20 @@ fn contested_path_remedy() -> String {
 }
 
 /// The RFC 9457 `application/problem+json` schema referenced by every error response.
+///
+/// `type` and `instance` are URI references (§3.1.1, §3.1.5): a relative one
+/// such as the request path is valid, and `format: uri` would make a validating
+/// client refuse it.
 fn problem_details_schema() -> Value {
     json!({
         "type": "object",
+        "description": "An RFC 9457 problem details object.",
         "properties": {
-            "type": { "type": "string", "format": "uri" },
+            "type": { "type": "string", "format": "uri-reference" },
             "title": { "type": "string" },
-            "status": { "type": "integer" },
+            "status": { "type": "integer", "minimum": 100, "maximum": 599 },
             "detail": { "type": "string" },
-            "instance": { "type": "string", "format": "uri" },
+            "instance": { "type": "string", "format": "uri-reference" },
             "errors": { "type": "object", "additionalProperties": true },
         },
         "required": ["type", "title", "status"],
@@ -367,6 +421,10 @@ fn operation_object(
 
     if route_is_guarded(route, global_guards) {
         op.insert("security".into(), json!([{ "bearerAuth": [] }]));
+    } else if route.public {
+        // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
+        // `#[public]` opening stated in the document as in the code.
+        op.insert("security".into(), json!([]));
     }
 
     let mut responses = Map::new();
@@ -401,8 +459,9 @@ fn operation_object(
         }
         _ => {}
     }
-    if route.sets_location {
-        ok.insert("headers".into(), location_header(status));
+    let headers = success_headers(route, status);
+    if !headers.is_empty() {
+        ok.insert("headers".into(), Value::Object(headers));
     }
     responses.insert(status.to_string(), Value::Object(ok));
     for (status, title) in error_statuses(route, full_path, global_guards, requires_parameter) {
@@ -497,6 +556,11 @@ fn error_statuses(
         // Edge validation answers `400`, never `422` (`nest_rs_http::pipe::reject`).
         out.push(("400", "Bad Request"));
     }
+    // The transport's body cap, whatever the media type.
+    let content_too_large = route
+        .request_body
+        .is_some()
+        .then_some(("413", "Content Too Large"));
     if route_is_guarded(route, global_guards) {
         out.push(("401", "Unauthorized"));
         out.push(("403", "Forbidden"));
@@ -508,9 +572,13 @@ fn error_statuses(
     if route.may_conflict {
         out.push(("409", "Conflict"));
     }
+    out.extend(content_too_large);
     if route.throttled {
         out.push(("429", "Too Many Requests"));
     }
+    // A handler's `Err` answers an opaque `500`; not `default`, which would
+    // also claim a status a handler writes with a body of its own.
+    out.push(("500", "Internal Server Error"));
     out
 }
 
@@ -568,6 +636,44 @@ fn retry_after_header() -> Value {
     })
 }
 
+/// The headers the success response carries on the framework's behalf.
+fn success_headers(route: &HttpRouteMeta, status: u16) -> Map<String, Value> {
+    let mut headers = Map::new();
+    if route.sets_location {
+        headers.insert("Location".into(), location_header(status));
+    }
+    if route.sets_next_cursor {
+        headers.insert(
+            NEXT_CURSOR_HEADER.into(),
+            json!({
+                "description": "Cursor of the next page, passed back as `after`; absent on \
+                                the last page.",
+                "schema": { "type": "string" }
+            }),
+        );
+    }
+    for (name, value) in route.response_headers {
+        // RFC 9110 §5.3: `Set-Cookie` alone is sent as several fields, so no
+        // one value describes it.
+        let several = name.eq_ignore_ascii_case("set-cookie")
+            || route
+                .response_headers
+                .iter()
+                .filter(|(n, _)| n == name)
+                .count()
+                > 1;
+        let schema = match several {
+            true => json!({ "type": "string" }),
+            false => json!({ "type": "string", "const": value }),
+        };
+        headers.insert(
+            (*name).into(),
+            json!({ "required": true, "schema": schema }),
+        );
+    }
+    headers
+}
+
 /// The `Location` header, an absolute-path reference (`uri-reference`). Not
 /// `required`: a `#[crud]` create omits it for an entity not keyed on a `Uuid`.
 fn location_header(status: u16) -> Value {
@@ -577,10 +683,8 @@ fn location_header(status: u16) -> Value {
         "URI of the resource that was just created."
     };
     json!({
-        "Location": {
-            "description": description,
-            "schema": { "type": "string", "format": "uri-reference" }
-        }
+        "description": description,
+        "schema": { "type": "string", "format": "uri-reference" }
     })
 }
 
@@ -835,6 +939,8 @@ mod tests {
             may_conflict: false,
             throttled: false,
             sets_location: false,
+            sets_next_cursor: false,
+            response_headers: &[],
             success_status: 200,
             scoped_guarded: false,
             public: false,
@@ -1225,8 +1331,99 @@ mod tests {
         let mut r = route("health", "/health");
         r.public = true;
         let op = operation(&r, "/health", &mut g, true, None);
-        assert!(op.get("security").is_none());
+        assert_eq!(
+            op["security"],
+            json!([]),
+            "the opening is stated, not inferred from an absence: {op}",
+        );
         assert!(op["responses"].get("401").is_none());
+    }
+
+    #[test]
+    fn an_implicit_route_claims_no_posture_in_the_document() {
+        let mut g = generator();
+        let op = operation(&route("list", "/things"), "/things", &mut g, false, None);
+        assert!(
+            op.get("security").is_none(),
+            "neither guarded nor `#[public]`: the document states nothing the code does not: {op}",
+        );
+    }
+
+    #[test]
+    fn every_operation_types_the_opaque_500_as_problem_details() {
+        let mut g = generator();
+        let op = operation(&route("h", "/h"), "/h", &mut g, false, None);
+        assert_eq!(
+            op["responses"]["500"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "{op}",
+        );
+        assert!(
+            op["responses"].get("413").is_none(),
+            "no body, no cap: {op}"
+        );
+    }
+
+    #[test]
+    fn a_route_taking_a_body_advertises_the_cap_it_can_hit() {
+        let mut g = generator();
+        let mut r = route("upload", "/uploads");
+        r.verb = HttpVerb::Post;
+        r.request_body = Some(RequestBodyMeta::Multipart(None));
+        let op = operation(&r, "/uploads", &mut g, false, None);
+        assert_eq!(
+            op["responses"]["413"]["description"], "Content Too Large",
+            "{op}"
+        );
+    }
+
+    #[test]
+    fn a_problem_points_at_uri_references_so_a_relative_instance_validates() {
+        let schema = problem_details_schema();
+        assert_eq!(schema["properties"]["type"]["format"], "uri-reference");
+        assert_eq!(schema["properties"]["instance"]["format"], "uri-reference");
+    }
+
+    #[test]
+    fn a_paginated_list_declares_the_cursor_header_it_sends() {
+        let mut g = generator();
+        let mut r = route("list", "/posts");
+        r.sets_next_cursor = true;
+        let op = operation(&r, "/posts", &mut g, false, None);
+        let header = &op["responses"]["200"]["headers"][NEXT_CURSOR_HEADER];
+        assert_eq!(header["schema"]["type"], "string", "{op}");
+        assert!(
+            header.get("required").is_none(),
+            "the last page sends none: {header}",
+        );
+    }
+
+    #[test]
+    fn a_declared_response_header_is_documented_with_its_value() {
+        let mut g = generator();
+        let mut r = route("feed", "/feed");
+        r.response_headers = &[("cache-control", "no-store")];
+        let op = operation(&r, "/feed", &mut g, false, None);
+        let header = &op["responses"]["200"]["headers"]["cache-control"];
+        assert_eq!(header["required"], true, "{op}");
+        assert_eq!(header["schema"]["const"], "no-store", "{op}");
+    }
+
+    #[test]
+    fn a_header_sent_as_several_fields_claims_no_single_value() {
+        let mut g = generator();
+        let mut r = route("login", "/login");
+        r.response_headers = &[("set-cookie", "a=1"), ("x-tier", "a"), ("x-tier", "b")];
+        let op = operation(&r, "/login", &mut g, false, None);
+        let headers = &op["responses"]["200"]["headers"];
+        assert!(
+            headers["set-cookie"]["schema"].get("const").is_none(),
+            "{headers}"
+        );
+        assert!(
+            headers["x-tier"]["schema"].get("const").is_none(),
+            "{headers}"
+        );
     }
 
     fn info(title: &str, version: &str, description: Option<&str>) -> OpenApiConfig {
@@ -1253,6 +1450,51 @@ mod tests {
         assert!(doc["info"].get("description").is_none());
         assert!(doc["paths"].is_object());
         assert!(doc["components"]["schemas"].is_object());
+    }
+
+    #[test]
+    fn a_query_payload_leaves_no_orphan_component_but_a_body_keeps_its_own() {
+        let mut search = route("search", "/");
+        search.query_params = &[schema_for_dummy];
+        let mut submit = route("submit", "/");
+        submit.verb = HttpVerb::Post;
+        submit.request_body = Some(RequestBodyMeta::Json(schema_for_optional));
+        let container = deployment(vec![controller(
+            "ThingsController",
+            "things",
+            "/things",
+            &[],
+            vec![search],
+        )]);
+        let doc = build_document(
+            &container,
+            &info("X", "0", None),
+            None,
+            &mut Reported::default(),
+        );
+        assert!(
+            doc["components"]["schemas"].get("DummyBody").is_none(),
+            "a query payload is expanded into parameters, its definition reached by nothing: {doc}",
+        );
+
+        let container = deployment(vec![controller(
+            "ThingsController",
+            "things",
+            "/things",
+            &[],
+            vec![submit],
+        )]);
+        let doc = build_document(
+            &container,
+            &info("X", "0", None),
+            None,
+            &mut Reported::default(),
+        );
+        assert!(
+            doc["components"]["schemas"].get("OptionalHeader").is_some(),
+            "a body's component is referenced and stays: {doc}",
+        );
+        assert!(doc["components"]["schemas"].get("ProblemDetails").is_some());
     }
 
     #[test]

@@ -31,6 +31,13 @@ impl WidgetsController {
     #[redirect("/widgets", 301)]
     async fn legacy(&self) {}
 
+    #[get("/feed")]
+    #[public]
+    #[response_header("cache-control", "no-store")]
+    async fn feed(&self) -> String {
+        "[]".into()
+    }
+
     #[post("/token")]
     async fn token(&self, body: nest_rs_http::poem::web::Form<TokenForm>) -> String {
         body.0.grant_type
@@ -115,6 +122,26 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
             .is_none(),
         "a route that sends no Location declares none: {doc}",
     );
+}
+
+#[tokio::test]
+async fn a_public_route_states_its_opening_and_the_headers_it_always_sends() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
+    let feed = &doc["paths"]["/widgets/feed"]["get"];
+
+    assert_eq!(
+        feed["security"],
+        serde_json::json!([]),
+        "`#[public]` is an explicit opening in the document too: {feed}",
+    );
+    let header = &feed["responses"]["200"]["headers"]["cache-control"];
+    assert_eq!(header["schema"]["const"], "no-store", "{feed}");
+
+    let served = app.http().get("/widgets/feed").send().await;
+    served.assert_header("cache-control", "no-store");
 }
 
 #[tokio::test]

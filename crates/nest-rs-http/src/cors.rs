@@ -19,7 +19,8 @@ pub struct HttpCors {
     pub methods: Vec<String>,
     /// Allowed request headers (`Access-Control-Allow-Headers`).
     pub headers: Vec<String>,
-    /// Response headers exposed to the browser (`Access-Control-Expose-Headers`).
+    /// Response headers exposed to the browser (`Access-Control-Expose-Headers`),
+    /// beside the ones the framework itself sends, which are always exposed.
     pub exposed_headers: Vec<String>,
     /// Whether to allow credentialed requests (`Access-Control-Allow-Credentials`).
     pub credentials: bool,
@@ -29,6 +30,10 @@ pub struct HttpCors {
 
 /// The wildcard, as the four lists spell it.
 const WILDCARD: &str = "*";
+
+/// The response headers the framework sends on a route's behalf. None is
+/// CORS-safelisted, so a cross-origin client reads them only when exposed.
+const FRAMEWORK_SENT: [&str; 3] = ["location", "retry-after", crate::NEXT_CURSOR_HEADER];
 
 /// A list a `*` may appear in, paired with the response header it renders into.
 type WildcardList<'a> = (&'a str, &'a str, &'a [String]);
@@ -116,6 +121,9 @@ impl HttpCors {
             let header = HeaderName::from_str(h)
                 .with_context(|| format!("invalid header name in CORS expose-list: `{h}`"))?;
             cors = cors.expose_header(header);
+        }
+        for h in FRAMEWORK_SENT {
+            cors = cors.expose_header(HeaderName::from_static(h));
         }
         if self.credentials {
             cors = cors.allow_credentials(true);
@@ -208,6 +216,44 @@ mod tests {
         };
         cfg.into_middleware()
             .expect("a fully-specified config builds");
+    }
+
+    #[tokio::test]
+    async fn the_headers_the_framework_sends_are_readable_cross_origin() {
+        use poem::test::TestClient;
+        use poem::{EndpointExt, Route, get, handler};
+
+        #[handler]
+        fn page() -> &'static str {
+            "[]"
+        }
+
+        let cors = HttpCors {
+            origins: vec!["https://app.example.com".into()],
+            exposed_headers: vec!["x-request-cost".into()],
+            ..HttpCors::default()
+        }
+        .into_middleware()
+        .expect("builds");
+        let resp = TestClient::new(Route::new().at("/", get(page)).with(cors))
+            .get("/")
+            .header("origin", "https://app.example.com")
+            .send()
+            .await;
+        let exposed: Vec<String> = resp
+            .0
+            .headers()
+            .get_all("access-control-expose-headers")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(',').map(|h| h.trim().to_ascii_lowercase()))
+            .collect();
+        for header in FRAMEWORK_SENT.into_iter().chain(["x-request-cost"]) {
+            assert!(
+                exposed.iter().any(|h| h == header),
+                "{header} must be exposed: {exposed:?}",
+            );
+        }
     }
 
     #[test]

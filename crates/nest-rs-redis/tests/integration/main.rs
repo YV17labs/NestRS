@@ -41,3 +41,17 @@ async fn registered_alone<M: Module + 'static>() -> &'static str {
         .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"))
         .type_name
 }
+
+/// What a scripted server answers `HELLO` with: a server of its own, and a
+/// primary — what the boot asks before its `PING`.
+pub(crate) const HELLO: &[u8] =
+    b"*4\r\n$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n";
+
+/// Whether the whole command `bytes` is a `HELLO`.
+pub(crate) fn is_hello(bytes: &[u8]) -> bool {
+    bytes
+        .split(|&byte| byte == b'\n')
+        .nth(2)
+        .and_then(|line| line.strip_suffix(b"\r"))
+        .is_some_and(|name| name.eq_ignore_ascii_case(b"HELLO"))
+}

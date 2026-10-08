@@ -21,10 +21,11 @@ connection carries the Cluster topology.
 | Cluster | `redis-cluster://` | `rediss-cluster://` |
 
 The topology is declared, never guessed: a `rediss://` URL pointed at a Cluster
-node, or a `rediss-cluster://` URL pointed at a server whose cluster support is
-off, is a deployment that says one thing and runs another, and the connection
-says so — the second fails the boot at once, the first at the first command a
-redirection answers.
+node, or a `rediss-cluster://` URL pointed at a server of its own, is a
+deployment that says one thing and runs another. Each server the boot reaches
+says which topology it serves in its `HELLO` — a command Valkey lets every user
+send, so no rule grants it — and a URL declaring another fails the boot at
+once, naming both.
 
 ## The URL of each topology
 
@@ -73,7 +74,9 @@ The connection finds the primary as Valkey's
 [Sentinel client spec](https://valkey.io/topics/sentinel-clients/) prescribes:
 it asks each sentinel in turn for the address of the primary named
 `sentinelServiceName`, asks the one that answered first the next time, and keeps
-the address only once `ROLE` there says it is a primary. A sentinel that does
+the address only once the server there says it is a primary. The spec asks
+`ROLE`; the connection reads the same answer off `HELLO`, which needs no
+permission, so a role's rule grants nothing for it. A sentinel that does
 not answer leaves the round to the next; the URL may name one host that
 resolves to every sentinel, or list them.
 
@@ -96,6 +99,12 @@ queue's hash tag (`nestrs:queue:{<queue>}:…`), and a script naming keys of two
 slots is refused before it is sent, on every topology; a script a node has
 forgotten — a replica promoted since it was loaded — is loaded again on that
 node alone.
+
+A worker's blocked read — the `XREADGROUP` that waits for a queue's next job —
+holds a connection of its own to the primary serving that queue's slot alone,
+rather than one to every node. It follows an `ASK` while the slot moves key by
+key; a `MOVED`, a drop or a timeout ends it, and the next read opens one to the
+node the Cluster names then.
 
 ## TLS on every topology
 
@@ -137,13 +146,9 @@ on every node: the primary and each replica under Sentinel, every node of a
 Cluster. Each topology adds the commands its connection sends to every one of
 those rules.
 
-Under Sentinel, the connection asks the primary `ROLE`:
-
-```text title="Redis ACL — Sentinel"
-+role
-```
-
-and, when the sentinels hold users of their own, it asks them one question:
+Under Sentinel, the connection sends the primary nothing a rule must grant
+beyond the role's own; when the sentinels hold users of their own, it asks them
+one question:
 
 ```text title="Redis ACL — sentinels"
 ACL SETUSER <user> reset on ><password> +sentinel|get-master-addr-by-name
@@ -156,6 +161,22 @@ slot being moved:
 +cluster|slots +asking
 ```
 
+[KEDA](/queue/scaling/#on-queue-depth-with-keda) dials Valkey with its own
+client, go-redis, which sends more than the connection does. On a Cluster it
+reads the slots and every command's key positions, so its rule on every node
+takes:
+
+```text title="Redis ACL — KEDA on a Cluster"
++cluster|slots +command
+```
+
+Under Sentinel, its user on the sentinels finds the primary, the other
+sentinels, and listens for a failover:
+
+```text title="Redis ACL — KEDA's sentinels"
+ACL SETUSER <user> reset on ><password> &+switch-master &+replica-reconf-done +client|setinfo +sentinel|get-master-addr-by-name +sentinel|sentinels +subscribe
+```
+
 ## Limits
 
 - **A slot moved key by key holds its queue's scripts until it has moved.** While
@@ -163,8 +184,11 @@ slot being moved:
   some of a queue's keys on each node, Valkey answers a script naming both with
   `TRYAGAIN`; the connection retries within its budget, and a push or a
   transition that outlasts it fails as a timeout, its job kept as at least once
-  keeps it. Valkey 9's atomic slot migration moves a slot whole, with no such
-  window.
+  keeps it. Valkey 9's atomic slot migration (`CLUSTER MIGRATESLOTS`) moves a
+  slot whole, with no such window: move a queue's slot that way.
+- **KEDA reads database 0 on a Cluster.** Its cluster client takes no database,
+  so a queue KEDA scales on a Cluster sits in database 0 — the URL's path
+  names none, or `/0`.
 - **Every command goes to a primary.** Reading from replicas is not offered: a
   script never runs on a copy that lags.
 - **The sentinels' Pub/Sub is not followed.** The spec leaves `+switch-master`
@@ -180,7 +204,7 @@ slot being moved:
 | The deployment | What the boot says |
 |---|---|
 | A URL naming a parameter its topology does not take, or `node` on a URL of one server | `RedisError::InvalidUrl`, naming the parameter and the scheme to use, at once |
-| `rediss-cluster://` at a server whose cluster support is off, `rediss-sentinel://` at a node that is no sentinel | `RedisError::TopologyMismatch`, at once |
+| A scheme declaring another topology than the server serves — `rediss://` at a Cluster node or a sentinel, `rediss-cluster://` at a server of its own, `rediss-sentinel://` at a data node | `RedisError::TopologyMismatch`, naming both, at once |
 | No sentinel answering within `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` | `RedisError::SentinelUnreachable`, naming every sentinel |
 | Sentinels that know no primary by `sentinelServiceName` | `RedisError::PrimaryUnknown`, naming the service |
 | A database past a Cluster's `cluster-databases` | `RedisError::DatabaseRefused`, naming the index, at once |

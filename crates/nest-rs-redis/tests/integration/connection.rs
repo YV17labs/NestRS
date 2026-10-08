@@ -14,6 +14,7 @@ use tokio::net::TcpListener;
 use crate::harness::connection::{
     NOT_READY, ScriptedRedis, answer, command_length, config, database_refused_at_once,
 };
+use crate::{HELLO, is_hello};
 
 /// A Redis that stays not ready spends the budget and fails as one that
 /// answered — its last answer as the source, the budget to widen — never as an
@@ -193,8 +194,8 @@ impl DemotedRedis {
     }
 }
 
-/// Answer each command connection `id` sends: `READONLY` once it is below the
-/// demotion, `+PONG` otherwise.
+/// Answer each command connection `id` sends: its `HELLO` as a primary's,
+/// then `READONLY` once it is below the demotion, `+PONG` otherwise.
 async fn answer_as_its_role(
     mut client: impl AsyncRead + AsyncWrite + Unpin,
     id: usize,
@@ -204,8 +205,10 @@ async fn answer_as_its_role(
     let mut chunk = [0u8; 4096];
     loop {
         while let Some(length) = command_length(&received) {
-            received.drain(..length);
-            let reply: &[u8] = if id < demoted_below.load(Ordering::SeqCst) {
+            let command = received.drain(..length).collect::<Vec<_>>();
+            let reply: &[u8] = if is_hello(&command) {
+                HELLO
+            } else if id < demoted_below.load(Ordering::SeqCst) {
                 b"-READONLY You can't write against a read only replica.\r\n"
             } else {
                 b"+PONG\r\n"

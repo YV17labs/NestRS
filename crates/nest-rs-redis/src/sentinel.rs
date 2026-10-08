@@ -2,8 +2,9 @@
 //! Valkey's Sentinel client spec has a client find it: each sentinel is asked in
 //! turn for the address of the primary named `sentinelServiceName`
 //! (`SENTINEL GET-MASTER-ADDR-BY-NAME`), the one that answers is asked first
-//! next time, and the address it names is kept only once `ROLE` there says it
-//! is a primary.
+//! next time, and the address it names is kept only once it says it is a
+//! primary. The spec asks `ROLE`; `HELLO` answers the same and needs no
+//! permission, so a user's rule grants one command fewer.
 //!
 //! **Every reconnection asks the sentinels again**, as the spec requires: a
 //! connection that drops, times out or answers `READONLY` is replaced by one to
@@ -16,7 +17,7 @@ use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use redis::aio::MultiplexedConnection;
-use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Role, Value};
+use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Value};
 use tokio::sync::Notify;
 
 use crate::connection::{
@@ -24,6 +25,7 @@ use crate::connection::{
     dial, node_client, spent, within_budget,
 };
 use crate::error::{RedisError, SentinelMiss};
+use crate::topology::Hello;
 use crate::url::{NodeAddr, SentinelUrl, listed};
 use crate::{RedisTls, RedisTopology, tls};
 
@@ -282,7 +284,7 @@ impl SentinelLink {
 impl Sentinels {
     /// One round: each sentinel asked in turn, from the one that answered
     /// last, for the primary's address, and the primary it names proved with
-    /// `ROLE` — within `within`.
+    /// `HELLO` — within `within`.
     async fn resolve(
         &self,
         within: Duration,
@@ -300,16 +302,16 @@ impl Sentinels {
             let (client, endpoint) = &self.sentinels[at];
             let remaining = deadline.saturating_duration_since(Instant::now());
             match answered(share.min(remaining), self.ask(client, endpoint)).await {
-                Ok(Some(primary)) => {
+                Ok(Answer::Primary(primary)) => {
                     self.first.store(at, Ordering::Relaxed);
                     return self.open_primary(&primary, deadline).await;
                 }
-                Ok(None) => unknown = true,
-                Err(error) if not_a_sentinel(&error) => {
+                Ok(Answer::Unknown) => unknown = true,
+                Ok(Answer::Serves(serves)) => {
                     return Err(Attempt::Refused(RedisError::TopologyMismatch {
                         endpoint: endpoint.clone(),
                         declared: RedisTopology::Sentinel,
-                        source: error,
+                        serves,
                     }));
                 }
                 Err(error) => match classify(error, endpoint, 0) {
@@ -325,25 +327,30 @@ impl Sentinels {
         }))
     }
 
-    /// The address one sentinel names for the primary, `None` when it knows
-    /// none by that name.
+    /// What one sentinel answers when asked for the primary's address.
     async fn ask(
         &self,
         client: &redis::Client,
         endpoint: &str,
-    ) -> Result<Option<NodeAddr>, redis::RedisError> {
+    ) -> Result<Answer, redis::RedisError> {
         let opened = dial(client, self.budget).await;
         tls::observe_refusal(endpoint, &opened);
         let mut sentinel = opened?;
+        let hello = Hello::ask(&mut sentinel).await?;
+        if hello.serves != RedisTopology::Sentinel {
+            return Ok(Answer::Serves(hello.serves));
+        }
         let named: Option<(String, u16)> = redis::cmd("SENTINEL")
             .arg("GET-MASTER-ADDR-BY-NAME")
             .arg(&self.service_name)
             .query_async(&mut sentinel)
             .await?;
-        Ok(named.map(|(host, port)| NodeAddr { host, port }))
+        Ok(named.map_or(Answer::Unknown, |(host, port)| {
+            Answer::Primary(NodeAddr { host, port })
+        }))
     }
 
-    /// A connection to the address the sentinels named, kept once `ROLE` says
+    /// A connection to the address the sentinels named, kept once `HELLO` says
     /// it is a primary and it answers a `PING`.
     async fn open_primary(
         &self,
@@ -374,13 +381,10 @@ impl Sentinels {
         tls::observe_refusal(&endpoint, &opened);
         let mut connection = opened.map_err(failed)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let role = answered(
-            remaining,
-            redis::cmd("ROLE").query_async::<Role>(&mut connection),
-        )
-        .await
-        .map_err(failed)?;
-        if !matches!(role, Role::Primary { .. }) {
+        let hello = answered(remaining, Hello::ask(&mut connection))
+            .await
+            .map_err(failed)?;
+        if !hello.primary {
             // The sentinels still name a node a failover demoted, or one that
             // is no primary yet.
             return Err(missed(None));
@@ -461,12 +465,14 @@ impl From<SentinelMiss> for redis::RedisError {
     }
 }
 
-/// Whether a server answered as one that is no sentinel.
-fn not_a_sentinel(error: &redis::RedisError) -> bool {
-    error.code() == Some("ERR")
-        && error
-            .detail()
-            .is_some_and(|detail| detail.to_ascii_lowercase().contains("unknown command"))
+/// What one sentinel answered when asked for the primary's address.
+enum Answer {
+    /// The primary's address.
+    Primary(NodeAddr),
+    /// It knows no primary by the service's name.
+    Unknown,
+    /// It is no sentinel: it serves this topology.
+    Serves(RedisTopology),
 }
 
 /// What a dedicated link that found no primary hands its caller.

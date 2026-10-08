@@ -192,8 +192,37 @@ spec:
 method's `concurrency`: at four at once, 20 is five jobs per running slot, and
 40 on the stream ask for two replicas. Declare one trigger per queue the worker
 drains, and KEDA follows the busiest. KEDA dials Redis itself, so `address` is
-`host:port` rather than the URL the framework reads; a password, TLS and a
-database index are the scaler's own metadata.
+`host:port` rather than the URL the framework reads; a password, TLS and the
+database index of the URL's path (`databaseIndex`) are the scaler's own
+metadata, and its user takes [the KEDA rule](/queue/delivery/#where-a-queue-lives).
+
+Under Sentinel and on a Cluster, KEDA has a scaler of its own for each, which
+takes every address the URL names:
+
+```yaml title="Sentinel"
+    - type: redis-sentinel-streams
+      metadata:
+        addresses: sentinel-a:26379,sentinel-b:26379,sentinel-c:26379
+        sentinelMaster: orders
+        enableTLS: "true"
+        stream: "nestrs:queue:{audio}:jobs"
+        streamLength: "20"
+```
+
+```yaml title="Cluster"
+    - type: redis-cluster-streams
+      metadata:
+        addresses: node-a:6379,node-b:6379,node-c:6379
+        enableTLS: "true"
+        stream: "nestrs:queue:{audio}:jobs"
+        streamLength: "20"
+```
+
+`sentinelMaster` is the URL's `sentinelServiceName`, and the sentinels' own
+credentials go in `sentinelUsername` and `sentinelPassword`. KEDA's cluster
+client takes no database, so a queue it scales on a Cluster sits in database 0.
+What KEDA's user adds on each topology is on
+[ACL on Sentinel and Cluster](/queue/topologies/#acl-on-sentinel-and-cluster).
 
 **The trigger counts waiting and running jobs.** The stream holds a job until it
 ends — its outcome deletes its entry — so a replica busy with long jobs still

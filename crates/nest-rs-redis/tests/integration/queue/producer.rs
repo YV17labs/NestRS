@@ -13,6 +13,7 @@ use redis::{ErrorKind, ServerErrorKind};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+use crate::HELLO;
 use crate::harness::connection::command_length;
 
 /// A script flushed again right after its reload still runs: the call loads it
@@ -86,7 +87,8 @@ struct ProducerModule;
 
 /// A server whose first `lost` script loads are flushed as soon as they land:
 /// it answers a script call `NOSCRIPT` until a load is kept and `1` after,
-/// answers a load with the script's digest, and `PONG`s the rest.
+/// answers a load with the script's digest, `HELLO` as a primary of its own,
+/// and `PONG`s the rest.
 struct ForgetfulRedis {
     addr: SocketAddr,
     loads: Arc<AtomicUsize>,
@@ -148,6 +150,7 @@ async fn forget(
                     let code = String::from_utf8_lossy(bulk(&command, 2));
                     format!("$40\r\n{}\r\n", redis::Script::new(&code).get_hash()).into_bytes()
                 }
+                b"HELLO" => HELLO.to_vec(),
                 _ => b"+PONG\r\n".to_vec(),
             };
             if client.write_all(&reply).await.is_err() || client.flush().await.is_err() {

@@ -82,8 +82,14 @@
         "redis": {
           "type": "object",
           "properties": {
+            "topology": { "enum": ["standalone", "sentinel", "cluster"] },
             "address": { "type": "string" },
+            "addresses": { "type": "string" },
+            "sentinelMaster": { "type": "string" },
+            "usernameFromEnv": { "type": "string" },
             "passwordFromEnv": { "type": "string" },
+            "sentinelUsernameFromEnv": { "type": "string" },
+            "sentinelPasswordFromEnv": { "type": "string" },
             "enableTLS": { "type": "boolean" },
             "databaseIndex": { "type": "integer", "minimum": 0 }
           }

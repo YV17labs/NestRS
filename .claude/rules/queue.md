@@ -120,12 +120,18 @@ features because each pulls a port crate an app may not need.
   and the queue binding refuses a lease a renewal sent a third in cannot outlast
   the budget in.
   A blocking command gets a connection of its own from the same client
-  (`RedisConnection::dedicated`), bounded by its own wait plus the budget.
+  (`RedisConnection::dedicated`), bounded by its own wait plus the budget — on
+  a Cluster, to the primary serving its key's slot alone, which its holder
+  opens afresh after a `MOVED` or a loss.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
   silently unused; verification is never an option (`CLAUDE.md`). An encrypted
   scheme encrypts every connection its topology opens, sentinels included.
 - **Under Sentinel, every reconnection asks the sentinels again** (Valkey's
   Sentinel client spec): a connection is never reopened to the address it had.
+- **What the boot reached is checked by its `HELLO`**, which needs no
+  permission: a server serving another topology than the URL declares fails
+  at once, and the primary the sentinels name is kept once it says it is one.
+  No refusal is read off an error's text where a server can say it.
 - **A script names keys of one hash slot**, refused before it is sent on every
   topology, so what runs on one server runs on a Cluster; a script a node
   forgot is loaded again on that node alone.
@@ -139,7 +145,8 @@ features because each pulls a port crate an app may not need.
   once on the topologies page. Held by `nest-rs-redis`'s e2e on every
   topology, which creates each user from the pages' lines verbatim on every
   node, reads every node's `ACL LOG` for any denial and, for the queue, every
-  primary's `MONITOR` for a command the rule allows and nothing sends.
+  primary's `MONITOR` for a command the rule allows and nothing sends. KEDA's
+  rules are what its client sends on each topology, which the suite replays.
 
 ## A key a datastore holds is a name an operator types
 

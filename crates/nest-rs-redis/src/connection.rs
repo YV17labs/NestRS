@@ -25,7 +25,7 @@ use redis::{
     RedisConnectionInfo, RedisFuture, ServerErrorKind, Value,
 };
 
-use crate::cluster::ClusterLink;
+use crate::cluster::{ClusterLink, SlotLink};
 use crate::config::CONNECT_TIMEOUT;
 use crate::error::RedisError;
 use crate::script::{Invocation, RedisScript};
@@ -78,6 +78,8 @@ enum Link {
     Standalone(Arc<StandaloneLink>),
     Sentinel(Arc<SentinelLink>),
     Cluster(Arc<ClusterLink>),
+    /// A Cluster's link dedicated to one slot's primary.
+    Slot(Arc<SlotLink>),
 }
 
 /// Backoff before the first retry; doubles up to [`MAX_RETRY_BACKOFF`] and is
@@ -159,15 +161,20 @@ impl RedisConnection {
 
 impl RedisConnection {
     /// A connection of its own to the same Redis, opened from the same settings
-    /// — for a command that blocks, which on the shared link would stall every
-    /// other caller — its commands waiting this handle's budget: a blocking
-    /// command's own wait plus the budget, set with
+    /// — for a command that blocks on `key`, which on the shared link would
+    /// stall every other caller — its commands waiting this handle's budget: a
+    /// blocking command's own wait plus the budget, set with
     /// [`with_budget`](Self::with_budget) first.
-    pub(crate) async fn dedicated(&self) -> Result<Self, redis::RedisError> {
+    ///
+    /// On a Cluster it reaches the primary serving `key`'s slot alone, and a
+    /// `MOVED`, a drop or a timeout fails its command rather than reopening it:
+    /// its holder opens another, which asks the Cluster where the slot is now.
+    pub(crate) async fn dedicated(&self, key: &str) -> Result<Self, redis::RedisError> {
         let link = match &self.link {
             Link::Standalone(link) => Link::Standalone(link.dedicated().await?),
             Link::Sentinel(link) => Link::Sentinel(link.dedicated().await?),
-            Link::Cluster(link) => Link::Cluster(link.dedicated(self.budget).await?),
+            Link::Cluster(link) => Link::Slot(link.dedicated(key).await?),
+            Link::Slot(link) => Link::Slot(link.dedicated(key).await?),
         };
         Ok(Self {
             link,
@@ -266,7 +273,7 @@ impl RedisConnection {
     ) -> Result<(), redis::RedisError> {
         match &self.link {
             Link::Cluster(link) => link.load(script, slot, self.budget).await,
-            Link::Standalone(_) | Link::Sentinel(_) => {
+            Link::Standalone(_) | Link::Sentinel(_) | Link::Slot(_) => {
                 script.load_cmd().query_async::<()>(&mut self.clone()).await
             }
         }
@@ -282,6 +289,7 @@ impl ConnectionLike for RedisConnection {
                 Link::Standalone(link) => link.send(cmd, budget).await,
                 Link::Sentinel(link) => link.send(cmd, budget).await,
                 Link::Cluster(link) => link.send(cmd, budget).await,
+                Link::Slot(link) => link.send(cmd, budget).await,
             }
         })
     }
@@ -299,6 +307,7 @@ impl ConnectionLike for RedisConnection {
                 Link::Standalone(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Sentinel(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Cluster(link) => link.send_pipeline(pipeline, offset, count, budget).await,
+                Link::Slot(link) => link.send_pipeline(pipeline, offset, count, budget).await,
             }
         })
     }
@@ -308,6 +317,7 @@ impl ConnectionLike for RedisConnection {
             Link::Standalone(link) => link.db(),
             Link::Sentinel(link) => link.db(),
             Link::Cluster(link) => link.db(),
+            Link::Slot(link) => link.db(),
         }
     }
 }

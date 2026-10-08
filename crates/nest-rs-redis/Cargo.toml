@@ -51,6 +51,9 @@ nest-rs-schedule = { workspace = true, optional = true }
 # (`redis::RedisError`, the `aio::ConnectionLike` `RedisConnection` implements,
 # the command API a caller runs on it).
 redis = { workspace = true }
+# The scripts a producer or a worker caches at boot, loaded together: on a
+# Cluster each load reaches every primary. `redis` already builds on it.
+futures-util.workspace = true
 # Each worker's consumer name in a queue's group: UUID v7, so a name also says
 # when its worker started.
 uuid.workspace = true
@@ -94,7 +97,6 @@ tokio-util.workspace = true
 async-trait.workspace = true
 # The suite reads `MONITOR` as a stream, to hold each documented ACL rule to
 # the commands its binding sends.
-futures-util.workspace = true
 # The TLS sides of the suites' doubles: a listener presenting the test
 # authority's certificate, and the dial to Valkey behind it. Already in the
 # tree through `redis`'s rustls support.

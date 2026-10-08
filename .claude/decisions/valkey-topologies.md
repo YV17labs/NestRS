@@ -15,13 +15,27 @@ on these terms.
   Cluster, which Valkey 9 serves (`cluster-databases`). `RedisConfig` and the
   variables do not change; `RedisTopology` names the three.
 - **Sentinel follows Valkey's Sentinel client spec**, written here over the
-  `redis` client's connections: `SENTINEL GET-MASTER-ADDR-BY-NAME`, `ROLE` on
+  `redis` client's connections: `SENTINEL GET-MASTER-ADDR-BY-NAME`, the role of
   the address named, and every reconnection asking again.
+- **What a connection reached is read off its `HELLO`**, which Valkey lets
+  every user send: its `mode` refuses at once a URL declaring another topology,
+  on all three, and its `role` proves the primary the sentinels name where the
+  spec says `ROLE`, which every role's rule would have had to grant. Matching
+  the text of a refused `CLUSTER` or `SENTINEL` is what it replaced.
 - **Cluster is `redis`'s cluster connection**, its nodes opened through a
   connection of ours, which skips `CLIENT SETINFO` (an ACL-confined user is
   refused it) and says a node's TLS refusal; the seam is its doc-hidden
-  generic connection, until `redis` offers the setting. A script's keys sit in
-  one slot, checked before it is sent on every topology.
+  generic connection, until `redis` offers the setting — so `redis` is pinned
+  `=1.7`, as `async-graphql` is for its registry internals. A script's keys sit
+  in one slot, checked before it is sent on every topology.
+- **A blocking read on a Cluster reaches its slot's primary alone**, a socket
+  per drained method, found through `CLUSTER SLOTS`; it follows an `ASK` and is
+  opened afresh by its holder after a `MOVED` or a loss. A second cluster
+  connection held one socket to every node, replicas included, per method.
+- **KEDA's rules are what its client sends**, recorded against KEDA 2.21 and its
+  go-redis 9.22 on each topology and replayed by the suite as the pages print
+  them; KEDA's cluster scaler reads database 0 alone, which the pages and the
+  demo chart say.
 - **Test isolation stays the logical database** on every topology, the test
   Cluster running `cluster-databases 16`.
 - **The dev container keeps one server** (owner, 2026-10-08): Sentinel and
@@ -39,7 +53,8 @@ on these terms.
   waits without a bound, and its `ConnectionManager` reopens the address it
   had, which after a failover is a replica.
 - **Inferring the topology** from what a server answers: a deployment declares
-  it, as a recurring job declares where it fires.
+  it, as a recurring job declares where it fires; `HELLO` checks the
+  declaration, never replaces it.
 - **Reading from replicas, following `+switch-master`, a node address map,
   `valkey://` schemes**: a lagging copy under a script; an optional channel
   that guarantees nothing a reconnection does not; Valkey announces hostnames
@@ -49,4 +64,5 @@ on these terms.
 
 Reopened when `redis` gives a Cluster a setting to skip `CLIENT SETINFO`, or
 reconnects through Sentinel itself as the spec asks — then the seam it replaces
-goes.
+goes, and the pin with it — and when KEDA moves to another client, whose
+commands its rules follow.

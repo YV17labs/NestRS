@@ -80,10 +80,9 @@ impl RedisQueueProducer {
     /// Load the scripts a push and a cancel run, so the first of each is one
     /// round trip rather than a refused call, a load and the call again.
     pub(crate) async fn load_scripts(&self) -> Result<(), redis::RedisError> {
-        for script in SCRIPTS.producer() {
-            self.conn.load(script).await?;
-        }
-        Ok(())
+        futures_util::future::try_join_all(SCRIPTS.producer().map(|script| self.conn.load(script)))
+            .await
+            .map(drop)
     }
 
     /// Cancel the job `job` names, or the one holding the unique key `key`.

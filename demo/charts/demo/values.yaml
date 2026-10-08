@@ -255,10 +255,26 @@ apps:
 # Every demo job retries. Set it to 0 knowingly.
 keda:
   redis:
+    # The topology the app's URL declares — standalone, sentinel or cluster —
+    # which picks KEDA's scaler: redis-streams, redis-sentinel-streams or
+    # redis-cluster-streams.
+    topology: standalone
+    # standalone: the server's host:port.
     address: ""
-    # Name of an env var on the worker pod holding the Redis password, if any.
+    # sentinel and cluster: every host the URL names, comma-separated host:port.
+    addresses: ""
+    # sentinel: the URL's sentinelServiceName.
+    sentinelMaster: ""
+    # Names of env vars on the worker pod holding the credentials of KEDA's
+    # user — the rule the queue's docs prescribe — and, under Sentinel, of its
+    # user on the sentinels, if any.
+    usernameFromEnv: ""
     passwordFromEnv: ""
+    sentinelUsernameFromEnv: ""
+    sentinelPasswordFromEnv: ""
     enableTLS: true
+    # The database of the URL's path. KEDA's cluster scaler reads database 0
+    # alone, so on a Cluster it stays 0.
     databaseIndex: 0
 
 # --- helm test ----------------------------------------------------------------

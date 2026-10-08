@@ -74,6 +74,24 @@ apps:
       enabled: true
 ```
 
+Under Sentinel or on a Cluster, `keda.redis.topology` picks KEDA's scaler for
+it — `redis-sentinel-streams` or `redis-cluster-streams` — reading every host
+from `keda.redis.addresses`, and under Sentinel the service from
+`keda.redis.sentinelMaster`:
+
+```yaml
+keda:
+  redis:
+    topology: cluster
+    addresses: node-a:6379,node-b:6379,node-c:6379
+```
+
+KEDA's cluster scaler reads database 0 alone, so the chart refuses a Cluster
+with another `databaseIndex`. KEDA's user takes the rule the queue's docs
+prescribe; its credentials ride in the worker pod's env, named by
+`keda.redis.usernameFromEnv` and `passwordFromEnv` — and, for its user on the
+sentinels, `sentinelUsernameFromEnv` and `sentinelPasswordFromEnv`.
+
 The triggers ship pre-wired to the demo's two queues, as `redis-streams`
 triggers on `streamLength`. Each names the stream a worker reads,
 `nestrs:queue:{<queue>}:jobs`, where `<queue>` is the name the `#[queue]`

@@ -34,20 +34,54 @@ spec:
         {{- toYaml . | nindent 8 }}
   {{- end }}
   triggers:
+    {{- $redis := $.Values.keda.redis }}
     {{- range $cfg.keda.triggers }}
-    - type: {{ .type }}
+    {{- if eq .type "redis-streams" }}
+    {{- /* KEDA has a scaler per Valkey topology: the one the app's URL declares. */}}
+    - type: {{ get (dict "standalone" "redis-streams" "sentinel" "redis-sentinel-streams" "cluster" "redis-cluster-streams") $redis.topology }}
       metadata:
-        {{- if eq .type "redis-streams" }}
+        {{- if eq $redis.topology "standalone" }}
         {{- if not (or (index .metadata "address") (index .metadata "addressFromEnv") (index .metadata "host")) }}
-        address: {{ $.Values.keda.redis.address | quote }}
+        address: {{ $redis.address | quote }}
         {{- end }}
-        {{- if $.Values.keda.redis.passwordFromEnv }}
-        passwordFromEnv: {{ $.Values.keda.redis.passwordFromEnv | quote }}
+        {{- else }}
+        {{- if not $redis.addresses }}
+        {{- fail (printf "keda.redis.addresses names the %s's hosts, comma-separated host:port" $redis.topology) }}
         {{- end }}
-        enableTLS: {{ $.Values.keda.redis.enableTLS | quote }}
-        databaseIndex: {{ $.Values.keda.redis.databaseIndex | quote }}
+        addresses: {{ $redis.addresses | quote }}
+        {{- end }}
+        {{- if eq $redis.topology "sentinel" }}
+        {{- if not $redis.sentinelMaster }}
+        {{- fail "keda.redis.sentinelMaster is the URL's sentinelServiceName" }}
+        {{- end }}
+        sentinelMaster: {{ $redis.sentinelMaster | quote }}
+        {{- with $redis.sentinelUsernameFromEnv }}
+        sentinelUsernameFromEnv: {{ . | quote }}
+        {{- end }}
+        {{- with $redis.sentinelPasswordFromEnv }}
+        sentinelPasswordFromEnv: {{ . | quote }}
+        {{- end }}
+        {{- end }}
+        {{- with $redis.usernameFromEnv }}
+        usernameFromEnv: {{ . | quote }}
+        {{- end }}
+        {{- with $redis.passwordFromEnv }}
+        passwordFromEnv: {{ . | quote }}
+        {{- end }}
+        enableTLS: {{ $redis.enableTLS | quote }}
+        {{- if eq $redis.topology "cluster" }}
+        {{- if ne (int $redis.databaseIndex) 0 }}
+        {{- fail "KEDA's cluster scaler reads database 0 alone: keep the queues there (keda.redis.databaseIndex: 0)" }}
+        {{- end }}
+        {{- else }}
+        databaseIndex: {{ $redis.databaseIndex | quote }}
         {{- end }}
         {{- toYaml .metadata | nindent 8 }}
+    {{- else }}
+    - type: {{ .type }}
+      metadata:
+        {{- toYaml .metadata | nindent 8 }}
+    {{- end }}
       {{- with .authenticationRef }}
       authenticationRef:
         {{- toYaml . | nindent 8 }}

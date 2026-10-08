@@ -11,14 +11,15 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
-use redis::{Cmd, ConnectionAddr, ConnectionInfo, ErrorKind, Pipeline, ServerErrorKind, Value};
+use redis::{Cmd, ConnectionAddr, ConnectionInfo, Pipeline, Value};
 
 use crate::connection::{
     Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT_FACTOR, Replies, answered,
     backoff_after, classify, demoted, dial, open_client, refused, within_budget,
 };
 use crate::error::RedisError;
-use crate::{RedisTls, tls};
+use crate::topology::Hello;
+use crate::{RedisTls, RedisTopology, tls};
 
 /// The link to one server, and what opening it again needs.
 pub(crate) struct StandaloneLink {
@@ -35,8 +36,6 @@ pub(crate) struct StandaloneLink {
     /// handshake can be refused.
     refusals: Option<Arc<TlsRefusals>>,
     reopening: AtomicBool,
-    /// Whether the server was already said to be a Cluster node.
-    clustered: AtomicBool,
 }
 
 impl StandaloneLink {
@@ -84,7 +83,6 @@ impl StandaloneLink {
             budget,
             refusals,
             reopening: AtomicBool::new(false),
-            clustered: AtomicBool::new(false),
         })
     }
 
@@ -160,20 +158,6 @@ impl StandaloneLink {
         }
         if demoted(outcome) {
             self.reopen(opening);
-        }
-        if let Err(error) = outcome
-            && matches!(
-                error.kind(),
-                ErrorKind::Server(ServerErrorKind::Moved | ServerErrorKind::Ask)
-            )
-            && !self.clustered.swap(true, Ordering::Relaxed)
-        {
-            tracing::error!(
-                target: crate::TARGET,
-                endpoint = %self.endpoint,
-                "redis answered as a Cluster node to a URL of one server: name the Cluster's \
-                 nodes with rediss-cluster://",
-            );
         }
     }
 
@@ -284,8 +268,8 @@ fn client(
     open_client(info, certificates.as_ref(), endpoint, budget)
 }
 
-/// One boot attempt: a connection of its own, proved with a `PING`, then the
-/// connection the app keeps.
+/// One boot attempt: a connection of its own, proved a server of its own by
+/// its `HELLO` and with a `PING`, then the connection the app keeps.
 ///
 /// The proof runs on a connection opened once, with no retry: the kept one's
 /// client retries silently, refused credentials included. The proof is closed
@@ -299,6 +283,14 @@ async fn prove(
 ) -> Result<ConnectionManager, Attempt<redis::RedisError>> {
     let classified = |source| classify(source, endpoint, database);
     let mut proof = dial(client, budget).await.map_err(classified)?;
+    let hello = Hello::ask(&mut proof).await.map_err(classified)?;
+    if hello.serves != RedisTopology::Standalone {
+        return Err(Attempt::Refused(RedisError::TopologyMismatch {
+            endpoint: endpoint.to_owned(),
+            declared: RedisTopology::Standalone,
+            serves: hello.serves,
+        }));
+    }
     redis::cmd("PING")
         .query_async::<()>(&mut proof)
         .await

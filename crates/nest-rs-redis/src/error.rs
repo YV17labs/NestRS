@@ -150,15 +150,14 @@ pub enum RedisError {
         source: redis::RedisError,
     },
 
-    /// The URL declares a topology the server it reached is not part of — a
-    /// Cluster URL at a server whose cluster support is off, a Sentinel URL at a
-    /// server that is no sentinel. Fails at once, with the server's answer as the
-    /// source.
+    /// The URL declares a topology other than the one the server it reached
+    /// serves, as the server's `HELLO` says — a URL of one server at a Cluster
+    /// node or a sentinel, a Cluster URL at a server of its own, a Sentinel URL
+    /// at a data node. Fails at once.
     #[error(
-        "the Redis URL declares the {declared} topology, but {endpoint} answered that it is not \
-         part of one — its answer follows: name a server of its own with rediss://, a Sentinel \
-         deployment's sentinels with rediss-sentinel://, and a Cluster's nodes with \
-         rediss-cluster:// in {url_var}",
+        "the Redis URL declares the {declared} topology, but {endpoint} serves the {serves} one: \
+         name a server of its own with rediss://, a Sentinel deployment's sentinels with \
+         rediss-sentinel://, and a Cluster's nodes with rediss-cluster:// in {url_var}",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
     )]
     TopologyMismatch {
@@ -166,9 +165,8 @@ pub enum RedisError {
         endpoint: String,
         /// The topology the URL's scheme declares.
         declared: crate::RedisTopology,
-        /// What the server answered.
-        #[source]
-        source: redis::RedisError,
+        /// The topology the server serves.
+        serves: crate::RedisTopology,
     },
 
     /// No sentinel the URL names answered within the connect budget.

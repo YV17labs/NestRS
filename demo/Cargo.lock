@@ -3017,6 +3017,7 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-queue",

@@ -104,7 +104,11 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat"]
 # reads it, never the host's zoneinfo, so the two cannot disagree.
 jiff-tzdb = "0.1"
 
-redis = { version = "1.7", default-features = false, features = [
+# `=`: nest-rs-redis opens each Cluster node through
+# `ClusterClient::get_async_generic_connection`, which is `#[doc(hidden)]`.
+# `cluster-async` brings crc16 0.4 (2018), the slot checksum, finished and
+# without an advisory; it leaves with `redis`.
+redis = { version = "=1.7", default-features = false, features = [
     "aio",
     "cluster-async",
     "connection-manager",

@@ -203,7 +203,7 @@ impl RedisQueueConsumer {
             None => reading.insert(
                 self.conn
                     .with_budget(wait + self.conn.budget())
-                    .dedicated()
+                    .dedicated(&drained.keys.jobs)
                     .await
                     .map_err(QueueError::backend)?,
             ),
@@ -232,7 +232,12 @@ impl RedisQueueConsumer {
                 create_group(&mut self.conn.clone(), &drained.keys).await?;
                 return Ok(Vec::new());
             }
-            Err(error) => return Err(QueueError::backend(error)),
+            // The link that met it is given up: the next read opens another,
+            // which on a Cluster asks again which node serves the queue.
+            Err(error) => {
+                *drained.reading.lock().await = None;
+                return Err(QueueError::backend(error));
+            }
         };
         entries(read)?
             .into_iter()
@@ -313,9 +318,9 @@ impl JobConsumer for RedisQueueConsumer {
                 }),
             );
         }
-        for script in SCRIPTS.consumer() {
-            self.conn.load(script).await.map_err(QueueError::backend)?;
-        }
+        futures_util::future::try_join_all(SCRIPTS.consumer().map(|script| self.conn.load(script)))
+            .await
+            .map_err(QueueError::backend)?;
         if self.drained.set(drained).is_err() {
             return Err(QueueError::backend(PreparedTwice));
         }

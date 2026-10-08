@@ -14,7 +14,7 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, JobProducerExt, PushOptions, QueueModule, processor, queue};
-use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule};
+use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisTopology};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -299,9 +299,10 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
 
     assert_eq!(dead, 1, "the failing job dead-lettered");
     // Each role's rule is exact; what the topology's connection adds is
-    // allowed beside it, and its redirection to a moving slot is the Cluster
-    // e2e's to send.
-    let addition = allowed(&crate::topology_addition());
+    // allowed beside it, its redirection to a moving slot is the Cluster e2e's
+    // to send, and `HELLO` is no rule's: the ACL never governs it.
+    let mut addition = allowed(&crate::topology_addition());
+    addition.insert("hello".to_owned());
     let without_addition = |sent: &BTreeSet<String>| -> BTreeSet<String> {
         sent.difference(&addition).cloned().collect()
     };
@@ -335,13 +336,50 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     );
 }
 
+/// How go-redis 9.22, KEDA 2.21's client, names itself on every connection.
+fn go_redis_names_itself() -> [redis::Cmd; 2] {
+    let mut name = redis::cmd("CLIENT");
+    name.arg("SETINFO").arg("LIB-NAME").arg("go-redis(,go1.25)");
+    let mut version = redis::cmd("CLIENT");
+    version.arg("SETINFO").arg("LIB-VER").arg("9.22.0");
+    [name, version]
+}
+
+/// What KEDA 2.21's `redis-streams` scalers send a data node for a
+/// `streamLength` trigger, as go-redis 9.22 opens it: its name, the `SELECT` of
+/// `databaseIndex`, the `PING` proving the connection and, on a Cluster, the
+/// slots and every command's key positions — then the `XLEN` it reads.
+fn keda_sends_a_node(jobs: &str) -> Vec<redis::Cmd> {
+    let mut sent = go_redis_names_itself().to_vec();
+    sent.push(redis::cmd("SELECT").arg(0).clone());
+    sent.push(redis::cmd("PING"));
+    if crate::topology() == RedisTopology::Cluster {
+        sent.push(redis::cmd("CLUSTER").arg("SLOTS").clone());
+        sent.push(redis::cmd("COMMAND"));
+    }
+    sent.push(redis::cmd("XLEN").arg(jobs).clone());
+    sent
+}
+
+/// The queue page's KEDA rule, with what the topologies page adds for KEDA,
+/// lets KEDA's client send everything it sends — on every data node, and on
+/// the sentinels under Sentinel, subscribing to their failover channels
+/// included — and write nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
+async fn the_queue_pages_keda_rule_takes_what_keda_sends_and_writes_nothing() {
     let user = crate::acl_user("nestrs-e2e-keda");
-    crate::documented_user(PAGE, "KEDA", &user, 0).await;
+    let mut rule = crate::documented_acl(PAGE, "KEDA");
+    if crate::topology() == RedisTopology::Cluster {
+        rule = format!(
+            "{rule} {}",
+            crate::documented_acl(crate::CONNECTION_PAGE, "KEDA on a Cluster")
+        );
+    }
+    crate::forget_user(&user).await;
+    let _: Vec<()> = crate::on_every_node(&crate::creating(&rule, &user)).await;
     let jobs = crate::key_of("nestrs-e2e-keda", "jobs");
-    // The node serving the queue's slot: the one whose answer is no redirection.
-    let mut served = None;
+
+    let mut read = None;
     for node in crate::data_nodes().await {
         let addr = node.get_connection_info().addr().to_string();
         let mut keda = crate::bare_client(&crate::url_as(
@@ -352,26 +390,74 @@ async fn the_queue_pages_keda_rule_reads_a_length_and_writes_nothing() {
         .get_multiplexed_async_connection()
         .await
         .expect("the KEDA user connects");
-        if let Ok(length) = redis::cmd("XLEN")
-            .arg(&jobs)
-            .query_async::<i64>(&mut keda)
-            .await
-        {
-            served = Some((keda, length));
-            break;
+        // A replica or a node serving another slot answers a redirection,
+        // which comes after the ACL's verdict; the `XLEN` comes last.
+        let mut answer = None;
+        for cmd in keda_sends_a_node(&jobs) {
+            answer = Some(cmd.query_async::<redis::Value>(&mut keda).await);
         }
+        if let Some(Ok(redis::Value::Int(length))) = answer {
+            read = Some(length);
+        }
+        let written: Result<String, _> = redis::cmd("XADD")
+            .arg(&jobs)
+            .arg("*")
+            .arg("job")
+            .arg("x")
+            .query_async(&mut keda)
+            .await;
+        assert!(
+            written.is_err_and(|refused| refused.code() == Some("NOPERM")),
+            "KEDA writes nothing on {addr}"
+        );
     }
-    let (mut keda, length) = served.expect("KEDA reads a queue's length");
-    assert_eq!(length, 0);
-    let written: Result<String, _> = redis::cmd("XADD")
-        .arg(&jobs)
-        .arg("*")
-        .arg("job")
-        .arg("x")
-        .query_async(&mut keda)
+
+    if crate::topology() == RedisTopology::Sentinel {
+        let sentinel_user = crate::acl_user("nestrs-e2e-keda-sentinels");
+        let sentinel_rule = crate::documented_acl(crate::CONNECTION_PAGE, "KEDA's sentinels");
+        crate::forget_user_among(&crate::sentinels(), &sentinel_user).await;
+        let _: Vec<()> = crate::on_each(
+            &crate::sentinels(),
+            &crate::creating(&sentinel_rule, &sentinel_user),
+        )
         .await;
-    assert!(written.is_err(), "KEDA writes nothing");
+        for addr in crate::named_hosts() {
+            let as_keda =
+                crate::url_as(&crate::node_url(&addr), &sentinel_user, crate::ACL_PASSWORD);
+            let mut sentinel = crate::bare_client(&as_keda)
+                .get_multiplexed_async_connection()
+                .await
+                .expect("KEDA's sentinel user connects");
+            let mut sent = go_redis_names_itself().to_vec();
+            for question in ["GET-MASTER-ADDR-BY-NAME", "SENTINELS"] {
+                sent.push(
+                    redis::cmd("SENTINEL")
+                        .arg(question)
+                        .arg(crate::service_name())
+                        .clone(),
+                );
+            }
+            for cmd in sent {
+                cmd.query_async::<redis::Value>(&mut sentinel)
+                    .await
+                    .unwrap_or_else(|refused| panic!("{addr} answers {cmd:?}: {refused}"));
+            }
+            let mut listening = crate::bare_client(&as_keda)
+                .get_async_pubsub()
+                .await
+                .expect("KEDA's sentinel user listens");
+            listening
+                .subscribe(&["+switch-master", "+replica-reconf-done"])
+                .await
+                .expect("KEDA's sentinel user listens for a failover");
+        }
+        crate::assert_denied_nothing_among(&crate::sentinels(), &sentinel_user, &[]).await;
+        crate::forget_user_among(&crate::sentinels(), &sentinel_user).await;
+    }
+
+    crate::assert_redis_denied_nothing_but(&user, &["xadd"]).await;
     crate::forget_user(&user).await;
+    assert_eq!(read, Some(0), "KEDA reads the queue's length");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

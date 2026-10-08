@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisThrottler};
+use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisThrottler, RedisTopology};
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
 use crate::harness::AT_ONCE;
@@ -40,6 +40,58 @@ async fn refused_at_once(url: String, case: &str) -> RedisError {
         "{case}: the error names the variable to fix: {error}",
     );
     error
+}
+
+/// A URL whose scheme declares a topology other than the one its server
+/// serves fails the boot at once, naming both: a data node of the suite's
+/// topology, and a sentinel when it has some, each named as the two others.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_url_declaring_a_topology_its_server_does_not_serve_fails_at_once_naming_both() {
+    let data = match crate::topology() {
+        RedisTopology::Cluster => RedisTopology::Cluster,
+        RedisTopology::Standalone | RedisTopology::Sentinel => RedisTopology::Standalone,
+    };
+    let mut servers = vec![(crate::node_addresses(false).await.remove(0), data)];
+    if crate::topology() == RedisTopology::Sentinel {
+        servers.push((crate::named_hosts().remove(0), RedisTopology::Sentinel));
+    }
+    for (addr, serves) in servers {
+        let one_server = crate::node_url(&addr);
+        for declared in [
+            RedisTopology::Standalone,
+            RedisTopology::Sentinel,
+            RedisTopology::Cluster,
+        ] {
+            if declared == serves {
+                continue;
+            }
+            let url = match declared {
+                RedisTopology::Standalone => one_server.clone(),
+                RedisTopology::Sentinel => format!(
+                    "{}?sentinelServiceName=nestrs",
+                    one_server.replacen("://", "-sentinel://", 1)
+                ),
+                RedisTopology::Cluster => one_server.replacen("://", "-cluster://", 1),
+            };
+            let started = Instant::now();
+            let Err(refused) = RedisConnection::connect(&config(url.clone())).await else {
+                panic!("{url} must not connect");
+            };
+            assert!(
+                started.elapsed() < AT_ONCE,
+                "{declared} at a {serves} server: at once, took {:?}",
+                started.elapsed()
+            );
+            assert!(
+                matches!(
+                    &refused,
+                    RedisError::TopologyMismatch { declared: d, serves: s, .. }
+                        if *d == declared && *s == serves
+                ),
+                "{declared} at a {serves} server: {refused}"
+            );
+        }
+    }
 }
 
 /// Credentials Redis refuses are not an outage. Retried as one, the boot spent

@@ -71,10 +71,12 @@ A worker runs jobs, and pushes or cancels as well:
 ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +evalsha +script|load +xreadgroup +xgroup|create +xgroup|delconsumer +xinfo|consumers +xpending +xclaim +xack +xdel +xadd +xtrim +time +hget +hset +hdel +zadd +zrem +zrange +zrangebyscore +get +set +pttl
 ```
 
-A KEDA scaler reads a queue's length:
+A KEDA scaler reads a queue's length. Its client, go-redis, proves the
+connection with a `PING`, selects the trigger's `databaseIndex` and names itself
+with `CLIENT SETINFO` before it does:
 
 ```text title="Redis ACL — KEDA"
-ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +xlen
+ACL SETUSER <user> reset on ><password> ~nestrs:queue:* +ping +select +client|setinfo +xlen
 ```
 
 Under Sentinel and on a Cluster, each rule is created on every node and takes

@@ -362,6 +362,11 @@ async fn cluster_nodes() -> Vec<ClusterNode> {
     panic!("no seed of the Cluster answers CLUSTER NODES");
 }
 
+/// A bare client of each sentinel the suite's URL names.
+fn sentinels() -> Vec<redis::Client> {
+    clients(named_hosts())
+}
+
 /// The address of every data node the suite's URL reaches — the server; the
 /// primary the sentinels name, and its replicas; every node of the Cluster —
 /// replicas included or not.
@@ -1003,11 +1008,11 @@ fn documented_acl(page: &str, role: &str) -> String {
 const CONNECTION_PAGE: &str = "queue/topologies.mdx";
 
 /// What the suite's topology adds to every role's rule, as the connection's
-/// page prescribes it: nothing on one server.
+/// page prescribes it: nothing on one server or under Sentinel.
 fn topology_addition() -> String {
     match topology() {
-        RedisTopology::Standalone => String::new(),
-        other => documented_acl(CONNECTION_PAGE, &other.to_string()),
+        RedisTopology::Standalone | RedisTopology::Sentinel => String::new(),
+        RedisTopology::Cluster => documented_acl(CONNECTION_PAGE, "Cluster"),
     }
 }
 

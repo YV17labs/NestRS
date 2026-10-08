@@ -5,18 +5,13 @@
 
 use std::time::Duration;
 
-use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisTopology};
-
-/// A bare client of each sentinel the suite's URL names.
-fn sentinels() -> Vec<redis::Client> {
-    crate::clients(crate::named_hosts())
-}
+use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
     let user = crate::acl_user("nestrs-e2e-sentinels");
     let rule = crate::documented_acl(crate::CONNECTION_PAGE, "sentinels");
-    let _: Vec<()> = crate::on_each(&sentinels(), &crate::creating(&rule, &user)).await;
+    let _: Vec<()> = crate::on_each(&crate::sentinels(), &crate::creating(&rule, &user)).await;
     let mut url = crate::parsed_url();
     url.query_pairs_mut()
         .append_pair("sentinelUsername", &user)
@@ -32,8 +27,8 @@ async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
         .await
         .expect("the primary answers");
 
-    crate::assert_denied_nothing_among(&sentinels(), &user, &[]).await;
-    crate::forget_user_among(&sentinels(), &user).await;
+    crate::assert_denied_nothing_among(&crate::sentinels(), &user, &[]).await;
+    crate::forget_user_among(&crate::sentinels(), &user).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -61,44 +56,6 @@ async fn a_service_the_sentinels_do_not_know_fails_the_boot_naming_it() {
         matches!(&refused, RedisError::PrimaryUnknown { service_name, .. } if service_name == "nestrs-e2e-unknown"),
         "{refused}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_url_declaring_a_topology_its_host_is_not_part_of_fails_at_once() {
-    let primary = crate::sentinel_primary().await;
-    for (url, declared) in [
-        (
-            format!(
-                "rediss-sentinel://{primary}?sentinelServiceName={}",
-                crate::service_name()
-            ),
-            RedisTopology::Sentinel,
-        ),
-        (
-            format!("rediss-cluster://{primary}"),
-            RedisTopology::Cluster,
-        ),
-    ] {
-        let started = std::time::Instant::now();
-        let Err(refused) = RedisConnection::connect(&RedisConfig {
-            url: url.clone(),
-            connect_timeout: Duration::from_secs(10),
-            ..crate::redis_config()
-        })
-        .await
-        else {
-            panic!("{url} must not connect");
-        };
-        assert!(
-            started.elapsed() < crate::harness::AT_ONCE,
-            "{url}: at once, took {:?}",
-            started.elapsed()
-        );
-        assert!(
-            matches!(&refused, RedisError::TopologyMismatch { declared: found, .. } if *found == declared),
-            "{url}: {refused}"
-        );
-    }
 }
 
 /// Failovers move the primary every other test runs on, so they run one at a

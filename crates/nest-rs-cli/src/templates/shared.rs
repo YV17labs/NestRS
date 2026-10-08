@@ -58,7 +58,7 @@ pub(crate) const COMPOSE: &str = r#"# Local development services. Start them wit
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_USER: {{kebab}}
       POSTGRES_PASSWORD: {{kebab}}
@@ -66,7 +66,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U {{kebab}}"]
       interval: 5s

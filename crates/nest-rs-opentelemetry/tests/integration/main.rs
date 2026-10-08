@@ -1,7 +1,6 @@
-//! `OpenTelemetryModule` must not be imported without `OpenTelemetry::init` first — that would
-//! register no-op telemetry providers and drop traces/metrics silently, so the
-//! boot fails instead. nextest runs every test in a process of its own, so a
-//! test that initialises OpenTelemetry never does it for another.
+//! `OpenTelemetryModule`'s boot contract. nextest runs every test in a process
+//! of its own, so a test that initialises OpenTelemetry never does it for
+//! another.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

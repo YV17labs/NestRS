@@ -1,35 +1,18 @@
 //! [`WsConfig`] — WebSocket transport options resolved at boot.
 //!
-//! Today a single field, [`max_connection`](WsConfig::max_connection): a ceiling
-//! on how long one socket may stay open. It is a **security** control, not a
-//! resource knob. A WS connection captures its principal/ability **once** at the
-//! upgrade and replays them for every message; `exp` is checked only at that
-//! upgrade. Without a ceiling a socket therefore keeps its privileges after the
-//! bearer token has expired, the user has logged out, or the grant was revoked —
-//! until the peer happens to disconnect. The ceiling bounds that stale-privilege
-//! window: the server closes the socket when it elapses, forcing a fresh upgrade
-//! (and with it a fresh authn/authz check).
-//!
-//! Dual-path like every `nest-rs-*` config: settable via `<PREFIX>_WS__*` env vars
-//! (`<PREFIX>_WS__MAX_CONNECTION_SECS`) **and** the pinned struct passed to
-//! [`WsModule::for_root`](crate::WsModule::for_root). `0` (env) / `None` (struct)
-//! means **unlimited** — the pre-ceiling behaviour, kept opt-in preservable —
-//! and a value is held to a second at least and a day at most, the range every
-//! long-lived connection's ceiling shares.
+//! [`max_connection`](WsConfig::max_connection) is a **security** control: a
+//! connection captures its principal and ability once at the upgrade, where `exp`
+//! is checked, so the ceiling bounds how long a revoked or expired credential
+//! keeps a live socket's privileges.
 
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, DurationBounds, Result, config};
 
-/// Default socket-lifetime ceiling: 4 hours. Long enough not to disrupt a normal
-/// interactive session, short enough to bound how long a revoked or expired
-/// credential keeps a live socket's privileges.
+/// Default socket-lifetime ceiling: 4 hours.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
-/// The socket-lifetime ceiling's range — the one every long-lived connection's
-/// is held to, [`MAX_CONNECTION_FLOOR`](nest_rs_http::MAX_CONNECTION_FLOOR) and
-/// [`MAX_CONNECTION_CEILING`](nest_rs_http::MAX_CONNECTION_CEILING) — and the
-/// variable that sets it.
+/// The socket-lifetime ceiling's range and the variable that sets it.
 const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
     "MAX_CONNECTION_SECS",
     "WsConfig::max_connection",
@@ -37,29 +20,21 @@ const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
     nest_rs_http::MAX_CONNECTION_CEILING,
 );
 
-/// Default per-message byte cap: 64 KiB. Applied at the WebSocket *protocol*
-/// layer so an oversize frame is refused while reading rather than after
-/// tungstenite buffers it whole (its own default is 64 MiB — a ~1000×
-/// amplification, WS-I1).
+/// Default per-message byte cap: 64 KiB, against tungstenite's own 64 MiB.
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
-/// WebSocket transport options resolved at boot (namespace `ws`). See the
-/// module docs for why the socket-lifetime ceiling is a security control.
+/// WebSocket transport options resolved at boot (namespace `ws`).
 #[config(namespace = "ws")]
 #[derive(Clone, Debug)]
 pub struct WsConfig {
-    /// Maximum lifetime of a single WebSocket connection. When it elapses the
-    /// server closes the socket through the normal disconnect path, so the peer
-    /// must re-upgrade — re-running authn/authz and re-checking token `exp`.
-    /// `None` ⇒ unlimited (the pre-ceiling behaviour). Read from
-    /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 (a day)
-    /// or `0` for unlimited — refused outside, from the environment and from the
-    /// pinned struct alike; defaults to 4 hours.
+    /// Maximum lifetime of a single WebSocket connection; the peer must then
+    /// re-upgrade, re-running authn/authz. `None` ⇒ unlimited. Read from
+    /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 or `0`
+    /// for unlimited; defaults to 4 hours.
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
-    /// WebSocket protocol layer (both `max_message_size` and `max_frame_size`)
-    /// so buffering is bounded *before* a giant frame is fully read (WS-I1).
-    /// Read from `<PREFIX>_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
+    /// protocol layer so a giant frame is refused before it is buffered. Read
+    /// from `<PREFIX>_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
     #[validate(range(min = 1, message = "must be at least 1 byte"))]
     pub max_message_bytes: usize,
 }
@@ -100,8 +75,6 @@ impl Config for WsConfig {
 mod tests {
     use super::*;
 
-    // The dual-path rule is framework-wide, not an HTTP special case: a pinned
-    // `WsConfig` still takes its overrides per field from `<PREFIX>_WS__*`.
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = WsConfig {
@@ -123,8 +96,6 @@ mod tests {
 
     #[test]
     fn default_bounds_the_socket_to_four_hours() {
-        // A bounded default is deliberate: the stale-privilege window is capped
-        // unless an operator opts back into unlimited.
         assert_eq!(
             WsConfig::default().max_connection,
             Some(Duration::from_secs(4 * 60 * 60)),
@@ -191,10 +162,6 @@ mod tests {
         );
     }
 
-    /// The ceiling has a range like every duration a deployment sets: past a
-    /// day, or a pinned zero — which would close every socket as it opens — is
-    /// refused naming the variable; `0` from the environment and `None` in code
-    /// stay the off switch.
     #[test]
     fn a_ceiling_outside_its_range_is_refused_from_either_side() {
         let var = nest_rs_config::var_name("ws", "MAX_CONNECTION_SECS");

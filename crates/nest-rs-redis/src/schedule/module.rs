@@ -24,9 +24,7 @@ impl Module for RedisScheduleModule {
     }
 
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        // Declared, so a second lock backend contests it by name
-        // (`BACKEND_REMEDY`); queued after the connection's factory, so
-        // `imports` order is not a wiring mistake a reader has to know about.
+        // Declared, so a second lock backend contests it by name (`BACKEND_REMEDY`).
         RedisConnection::netted(builder, "the scheduler", nest_rs_schedule::LOCK_TIMEOUT)
             .provide_declared_factory_after::<Arc<dyn OccurrenceLock>, RedisConnection, _, _>(
             nest_rs_schedule::BACKEND_REMEDY,

@@ -2,14 +2,8 @@
 //! is worded.
 //!
 //! `#[authorize(Action, Entity)]` / `#[public]` beside an operation is the only
-//! greppable declaration of what a caller must be allowed to do — *no
-//! authn/authz decision outside a guard*. Three transports emit a class gate
-//! and a response mask from it (`#[tools]`, `#[messages]`, `#[operations]`), and
-//! two of them parse exactly the same grammar, so that grammar and the refusal
-//! that makes it mandatory live here rather than in each macro crate.
-//!
-//! A transport supplies only what is genuinely its own — how its operations are
-//! spelled, and what `#[public]` buys on it:
+//! greppable declaration of what a caller must be allowed to do. A transport
+//! supplies only how its operations are spelled, and what `#[public]` buys on it:
 //!
 //! ```
 //! # use nest_rs_codegen::{Posture, PostureRules};
@@ -35,10 +29,8 @@
 //! # }
 //! ```
 //!
-//! GraphQL keeps its own parser: `#[authorize(Update, bind = ArtworksService)]`
-//! synthesises an id argument and an `Authorized<A, E>` proof, which no other
-//! transport can express. Carrying that option here for two transports that
-//! reject it would be the abstraction paying for a case it does not have.
+//! GraphQL keeps its own parser for `#[authorize(Update, bind = ArtworksService)]`,
+//! which no other transport can express.
 
 use syn::punctuated::Punctuated;
 use syn::{ImplItemFn, Meta, Path, Token};
@@ -46,33 +38,16 @@ use syn::{ImplItemFn, Meta, Path, Token};
 use crate::attrs::take_flag_attr;
 
 /// The sentence every site prints for a second `#[authorize(...)]`.
-///
-/// One rule, one wording, `site` apart — it was worded three times and one of
-/// the three said "per route" where the others said "per operation", which is
-/// the drift a shared sentence exists to stop rather than a difference anyone
-/// decided.
 pub fn at_most_one_authorize(site: &str) -> String {
     format!("at most one `#[authorize(...)]` per {site}")
 }
 
-/// Why `id_arg` cannot be expressed anywhere but GraphQL.
-///
-/// One constant rather than a per-site `because`, because the fact is not the
-/// site's: `id_arg` renames the argument **GraphQL's `bind` synthesises**, so a
-/// transport without `bind` has nothing for it to rename. A site that grows a
-/// binding of its own gets its own sentence then, not before.
+/// Why `id_arg` cannot be expressed anywhere but GraphQL: it renames the
+/// argument GraphQL's `bind` synthesises.
 pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's `bind = Service` synthesises, and no other \
      transport synthesises one";
 
 /// The sentence an edge prints when an operation declares both postures.
-///
-/// Free-standing beside [`at_most_one_authorize`] and
-/// [`posture_key_unsupported`], because the seam for *wording without parsing*
-/// is what this family needed: two of four edges parse their own posture —
-/// GraphQL's `bind = Service` and `id_arg`, HTTP's optional posture — and both
-/// reasons are about the parser's **signature**. Neither reaches this
-/// sentence, which contains no `bind`, no `id_arg` and no optionality, and
-/// which GraphQL had retyped byte for byte.
 pub fn posture_contradiction() -> &'static str {
     "`#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both"
 }
@@ -80,10 +55,7 @@ pub fn posture_contradiction() -> &'static str {
 /// The sentence an edge prints for an operation with no posture at all.
 ///
 /// `operation` names what the edge calls one and `public_means` says what
-/// `#[public]` costs there — the two axes that genuinely differ. Everything
-/// else is one wording, for [`posture_contradiction`]'s reason. It is the one
-/// sentence of the family that is load-bearing on its own, so three spellings
-/// of it was the worst place in the framework to have three.
+/// `#[public]` costs there.
 pub fn posture_required(operation: &str, public_means: &str) -> String {
     format!(
         "every {operation} declares its access posture: `#[authorize(Action, Entity)]` \
@@ -93,17 +65,6 @@ pub fn posture_required(operation: &str, public_means: &str) -> String {
 }
 
 /// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
-///
-/// **One helper for all three keys**, because refusals are shared, not per
-/// key: one helper, one sentence, every key it covers, one trybuild snapshot
-/// per site. Per-key refusals multiply with the matrix, and what multiplies is
-/// what gets skipped. There were two — `unmasked_unsupported` and
-/// `bind_unsupported`, each with its key baked into its `format!` — and the
-/// third key, `id_arg`, got neither. It was refused at exactly one of the three
-/// sites that cannot express it, through `bind_unsupported`, which printed
-/// *"`bind = Service` is not available on HTTP — and neither is `id_arg`…"* to a
-/// developer who had never written `bind`. The `because` slot was carrying a
-/// subject the template had already fixed.
 ///
 /// `key` is spelled **as the grammar spells it** — `unmasked`, `bind = Service`,
 /// `id_arg = argument` — so one sentence serves a bare flag and a `key = value`
@@ -147,25 +108,20 @@ impl Posture {
 pub struct PostureRules {
     /// The operation attribute as written — `"#[tool]"`, `"#[subscribe_message]"`.
     pub operation: &'static str,
-    /// The transport as an operator reads it — `"MCP"`, `"WebSockets"`. Spliced
-    /// into the shared refusals so the sentence names where it is refused.
+    /// The transport as an operator reads it — `"MCP"`, `"WebSockets"`.
     pub transport: &'static str,
-    /// What `#[public]` means on this transport, spliced into the
-    /// mandatory-posture refusal so the developer reads the actual alternative
-    /// rather than a generic one.
+    /// What `#[public]` means on this transport, for the mandatory-posture
+    /// refusal.
     pub public_means: &'static str,
     /// Why `bind = Service` cannot be expressed here — the half after the dash;
-    /// [`posture_key_unsupported`] words the rest. Stated rather than silently parsed
-    /// and ignored.
+    /// [`posture_key_unsupported`] words the rest.
     pub bind_unsupported_because: &'static str,
 }
 
 impl PostureRules {
     /// Take the operation's declared posture off the method.
     ///
-    /// Mandatory and fail-secure: an operation the developer forgot to think
-    /// about does not compile, instead of shipping ungated and unmasked. That is
-    /// the whole reason this returns `Posture` rather than `Option<Posture>`.
+    /// Mandatory and fail-secure: an operation with no posture does not compile.
     pub fn take(&self, method: &mut ImplItemFn) -> syn::Result<Posture> {
         let spec = self.take_authorize(method)?;
         let public = take_flag_attr(&mut method.attrs, "public")?;
@@ -222,10 +178,6 @@ impl PostureRules {
             match meta {
                 Meta::Path(path) if path.is_ident("unmasked") => unmasked = true,
                 Meta::Path(path) => positional.push(path.clone()),
-                // **Both of GraphQL's keys, by name.** `bind` was refused here
-                // and `id_arg` fell through to `malformed()`, which names the
-                // grammar and not the key — the silence the whole family exists
-                // to close, at the two sites that had no snapshot to notice.
                 Meta::NameValue(value) if value.path.is_ident("bind") => {
                     return Err(syn::Error::new_spanned(
                         value,

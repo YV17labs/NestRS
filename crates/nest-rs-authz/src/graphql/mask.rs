@@ -26,23 +26,9 @@ use crate::{Ability, Action, ActionMarker};
 /// `#[operations]` after every `#[authorize(Action, Entity)]`-declared
 /// `#[subscription]`. A resolver never calls it.
 ///
-/// # Why it is not just `masked_value_for`
-///
-/// [`masked_value_for`] never drops a lone object: on a query the class gate and
-/// `bind` have already decided instance visibility, so by the time the value is
-/// masked the only open question is which *fields* the caller may read. A
-/// subscription has no such decision per item — the gate ran once, at subscribe,
-/// against the operation's class, and the items arrive afterwards from a stream
-/// the subscriber did not address. So each one is a **row**, and the row-level
-/// verdict applies exactly as `mask_many` applies it to a list: refused ⇒
-/// dropped, never nulled and never masked to an empty shell. Two subscribers on
-/// one stream therefore see two different item sequences, which is the whole
-/// guarantee.
-///
-/// Fails **closed** on every uncertain case, like its sibling: a value that
-/// cannot be reconciled with `E::Model` is an `Err`, and the caller
-/// (`nest_rs_graphql::keep_masked_item`) drops the item rather than pushing it
-/// unmasked.
+/// Each item is a row — the gate ran once, at subscribe — so one the ability
+/// refuses is dropped, never nulled. Fails **closed**: a value that cannot be
+/// reconciled with `E::Model` is an `Err`, and the caller drops the item.
 pub fn masked_item_for<A, E, O>(ctx: &Context<'_>, item: O) -> Result<Option<O>, Error>
 where
     A: ActionMarker,
@@ -60,9 +46,7 @@ where
             &err,
         )
     })?;
-    // A scalar item (a counter, an id) is nothing entity-shaped: there is no row
-    // to evaluate and no field to strip, so it passes exactly as it does on the
-    // query path.
+    // A scalar item has no row to evaluate; it passes as on the query path.
     if !wire.is_object() {
         return Ok(Some(item));
     }
@@ -74,10 +58,6 @@ where
             &err,
         )
     })?;
-    // One rule scan answers both halves — whether this subscriber may see the
-    // row, and which of its columns. Delegating to `masked_value_for` here would
-    // re-serialize the item, rebuild the model and re-run this scan, on a path
-    // that runs per item and per subscriber.
     let verdict = ability.evaluate::<E>(action, &model);
     if !verdict.allowed {
         return Ok(None);
@@ -103,25 +83,10 @@ where
 /// retain only the exposed wire keys, deserialize back. Handles the wire DTO
 /// itself, `Option<…>`, `Vec<…>`; scalars and `None` pass through untouched.
 ///
-/// # A stripped field the schema cannot null
-///
-/// The masked value comes back as the operation's own type, so a removed key
-/// survives the round-trip only where the schema can express its absence — a
-/// nullable field, which masks to `null` exactly as the HTTP body drops the
-/// key. A **non-null** field (what `#[expose]` emits for a non-nullable column)
-/// has no such representation, so GraphQL's own rule decides rather than the
-/// value round-trip:
-///
-/// - the operation **selected** that field ⇒ refuse it (`FORBIDDEN`, with the
-///   names in the `fields` extension): nulling it is not expressible, and
-///   serving it would be the leak;
-/// - it did **not** ⇒ serve the surviving rows. Only the selection set is ever
-///   serialized, so a field outside it never reaches the client.
-///
-/// Rows the ability refuses are dropped either way. Without this the entity was
-/// unreadable for every principal holding a partial field grant — a query
-/// asking only for granted columns failed too, because what could not be
-/// reconciled was the round-trip, not the response.
+/// A stripped **non-null** field cannot mask to `null`: when the operation
+/// selected it, the operation is refused (`FORBIDDEN`, with the names in the
+/// `fields` extension); otherwise the surviving rows are served. Rows the
+/// ability refuses are dropped either way.
 ///
 /// Fails **closed**: an irreconcilable value is a GraphQL error, never
 /// unmasked data. Same caveat as HTTP masking: a hidden column an ability rule
@@ -165,9 +130,7 @@ where
 }
 
 /// The masked value did not fit the operation's own type: decide by selection
-/// set (see [`masked_value_for`]). Takes the wire value and the original by
-/// value — this is the steady-state path for a partial field grant, so it
-/// neither clones the payload nor rebuilds one it already has.
+/// set (see [`masked_value_for`]).
 fn unrepresentable<E, O>(
     ctx: &Context<'_>,
     ability: &Ability,
@@ -213,18 +176,7 @@ where
 
 /// Whether the keys the mask stripped refuse the *operation*.
 ///
-/// A stripped key only matters when the caller asked for it: GraphQL never
-/// serializes a field outside the selection set, so one the operation did not
-/// select cannot leak. The two masking paths — one value, one stream item —
-/// answer this identically, and a second copy of "which removed key did the
-/// client select?" is exactly the kind of divergence that turns into a leak on
-/// one path and not the other.
-///
-/// The refusal is filed as a **denial**, through the emitter every gate refusal
-/// uses, because that is what it is: this caller asked for a column this caller
-/// may not read. MCP reaches the same decision without a selection set to weigh
-/// it against, and files the same event — one message and one `reason` value,
-/// so an incident query by `reason` returns both edges or neither.
+/// A key outside the selection set is never serialized, so it cannot leak.
 fn refused_selection(
     ctx: &Context<'_>,
     action: Action,
@@ -254,9 +206,8 @@ fn refused_selection(
     Some(forbidden_fields(&refused))
 }
 
-/// One shape for every fail-closed masking exit: the queryable `warn` (so a
-/// branch that forgets it is the visible omission) plus the opaque client
-/// error, which never names the column or the reason.
+/// One shape for every fail-closed masking exit: the queryable `warn` plus the
+/// opaque client error, which never names the column or the reason.
 fn mask_failure<E>(
     action: Action,
     reason: &'static str,

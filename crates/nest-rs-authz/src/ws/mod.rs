@@ -69,20 +69,9 @@
 //! # }
 //! ```
 //!
-//! # Why there is no `WsAbilityBridge`
-//!
-//! GraphQL and MCP are `EdgePosture::Exempt`, so each needs a bridge to re-run
-//! the guard chain *in band* per operation. A WS gateway is `Guarded`: the upgrade
-//! is an HTTP `GET`, so the real HTTP guards run on it at the edge and there is no
-//! chain to re-run. What the connection *cannot* keep is its task-locals — those
-//! unwound when the upgrade returned — so the only thing to re-establish per
-//! message is the ambient state, and that is `nest_rs_seaorm::ws::WsDataContext`
-//! (`dyn SocketContext`), not a guard.
-//!
-//! Hence one asymmetry worth stating plainly: on GraphQL and MCP the *guard*
-//! installs the ability, on WS the *data context* does. The gate below reads it
-//! the same way either way — [`current_ability`](crate::current_ability) — which
-//! is what lets one `#[authorize]` mean one thing on all four transports.
+//! There is no `WsAbilityBridge`: a gateway is `Guarded`, so the HTTP guards run
+//! on the upgrade. Per message only the ambient ability is re-installed, by
+//! `nest_rs_seaorm::ws::WsDataContext` (`dyn SocketContext`).
 
 mod authorize;
 mod mask;

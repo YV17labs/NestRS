@@ -32,16 +32,12 @@ impl Interceptor for ServerTiming {
         match result {
             Ok(mut res) => {
                 if let Some(value) = header {
-                    // `append` (not `insert`): the spec allows multiple
-                    // `Server-Timing` headers and a downstream interceptor or
-                    // the handler may already have set one.
+                    // `append`: the handler may already have set a `Server-Timing`.
                     res.headers_mut().append(SERVER_TIMING, value);
                 }
                 Ok(res)
             }
-            // An error response deserves its timing too — attach the header
-            // to the rendered response and keep the error shape for outer
-            // layers.
+            // An error response gets its timing too, keeping the error shape.
             Err(err) => {
                 let Some(value) = header else { return Err(err) };
                 let mut res = err.into_response();

@@ -129,8 +129,7 @@ impl QueueKeys {
 /// `duration` in whole milliseconds, at least one — Redis refuses a zero `PX` —
 /// and at most [`Delay::LATEST_DUE`](nest_rs_queue::Delay::LATEST_DUE): a
 /// duration a declaration may carry — a throttle window of `u64::MAX` ms — would
-/// overflow the instant Redis computes from it. Past that bound a key outlives
-/// any deployment, which is what a longer one would have meant.
+/// overflow the instant Redis computes from it.
 pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.min(nest_rs_queue::Delay::LATEST_DUE).as_millis())
         .unwrap_or(u64::MAX)
@@ -141,7 +140,6 @@ pub(crate) fn millis(duration: Duration) -> u64 {
 mod tests {
     use super::*;
 
-    /// Every duration a key is kept for is one Redis accepts.
     #[test]
     fn a_duration_redis_would_refuse_is_kept_for_the_longest_it_accepts() {
         let longest =
@@ -176,11 +174,6 @@ mod tests {
         keys
     }
 
-    /// Every key is `nestrs:<concern>:<structure>[:…]`, its concern read off
-    /// the owning crate's span target — so renaming the target moves the keys,
-    /// or fails here — a queue's naming its queue first, in a hash tag, and no
-    /// key another's twin or its prefix but at a level, so a `SCAN` of one never
-    /// matches the other.
     #[test]
     fn every_key_is_a_level_of_the_concern_its_owner_emits_on() {
         let keys = every_key();
@@ -211,9 +204,6 @@ mod tests {
         }
     }
 
-    /// A queue's keys share one hash tag, its name, so they share one slot —
-    /// and one queue's keys never prefix another's, whose name it prefixes. A
-    /// name holding a brace would end the tag inside it, so the port refuses one.
     #[test]
     fn a_queues_keys_share_its_hash_tag_and_no_other_queues() {
         for braced in ["a{b", "a}b", "{audio}"] {

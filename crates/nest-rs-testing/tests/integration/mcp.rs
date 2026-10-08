@@ -3,10 +3,8 @@
 use nest_rs_mcp::ProtocolVersion;
 use nest_rs_testing::mcp;
 
-/// The driver pinned `2024-11-05` — the oldest of five — for four revisions,
-/// and nothing said so: rmcp accepts it forever, so every MCP suite in both
-/// workspaces passed while negotiating a handshake no current client performs.
-/// A shared constant was never the guard against that; this is.
+/// rmcp accepts every older revision forever, so nothing else fails when the
+/// driver falls behind.
 #[test]
 fn the_driver_negotiates_the_sdk_latest() {
     assert_eq!(

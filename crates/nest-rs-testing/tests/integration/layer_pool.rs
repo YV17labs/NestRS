@@ -1,20 +1,7 @@
-//! Layer-pool invariant: a layer declared at any combination of scopes
-//! (global / controller / method) executes **exactly once** per request. This
-//! is the contract the unified layer pool guarantees — scope is a *declaration*
-//! concern, deduplicated by `TypeId` via `compose_chain`, run once.
-//!
-//! The first half pins the invariant for **guards** across all seven scope
-//! combinations (interceptor / filter / pipe / exception-filter cross-scope
-//! dedup is exercised in `interceptors.rs`, `versioning_filters.rs`,
-//! `pipes.rs` and `exception_filters.rs`). A counting guard increments a
-//! process-global counter and then lets the request through, so the response
-//! is always `200` and the counter is the assertion surface.
-//!
-//! The second half pins the **execution site** contract for the global
-//! interceptor / filter scope: they run at the transport edge, so they
-//! observe what the per-route site cannot — 404s and guard denials — and an
-//! error a route-site filter maps carries the `MappedError` marker the data
-//! layer reads to refuse the commit.
+//! Layer-pool invariant: a guard declared at any combination of scopes
+//! executes **exactly once** per request; global interceptors and filters run
+//! at the transport edge, seeing 404s and guard denials; a mapped error keeps
+//! its `MappedError` marker.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -40,8 +27,7 @@ fn counter() -> usize {
     COUNTER.load(Ordering::SeqCst)
 }
 
-/// Counts every execution, then admits the request (so the count, not the
-/// status, is what each test asserts).
+/// Counts every execution, then admits the request.
 #[injectable]
 #[derive(Default)]
 struct CountingGuard;
@@ -58,22 +44,17 @@ impl Guard for CountingGuard {
 
 impl HttpGuard for CountingGuard {}
 
-// One controller carries every scope combination on its own route, so a single
-// module covers all cases. `g` = guarded at the named scope(s).
-
 #[controller(path = "/pool")]
 #[use_guards(CountingGuard)]
 struct ControllerGuarded;
 
 #[routes]
 impl ControllerGuarded {
-    // controller-only
     #[get("/c")]
     async fn c(&self) -> &'static str {
         "ok"
     }
 
-    // controller + method
     #[get("/cm")]
     #[use_guards(CountingGuard)]
     async fn cm(&self) -> &'static str {
@@ -86,14 +67,13 @@ struct MethodGuarded;
 
 #[routes]
 impl MethodGuarded {
-    // method-only
     #[get("/m")]
     #[use_guards(CountingGuard)]
     async fn m(&self) -> &'static str {
         "ok"
     }
 
-    // unguarded locally — used only under a global guard
+    // Used only under a global guard.
     #[get("/none")]
     async fn none(&self) -> &'static str {
         "ok"
@@ -140,14 +120,6 @@ async fn guard_runs_once_per_request_with_global_seeding() {
     }
 }
 
-// --- transport-edge coverage of the global interceptor / filter scope --------
-//
-// Global interceptors / filters execute at the transport edge (outside
-// routing and the guard pool), so they cover what a per-route site cannot:
-// unmatched paths and guard denials. Per-route interceptors stay inside the
-// guard chain (a denial short-circuits before them) — that case is pinned in
-// `interceptors.rs::guard_short_circuits_before_the_interceptor`.
-
 static EDGE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn reset_edge_counter() {
@@ -189,8 +161,7 @@ impl Filter for EdgeTeapot {
     }
 }
 
-/// Maps a handler error to a *success* — exists to prove the response still
-/// carries the `MappedError` marker the data layer reads to refuse a commit.
+/// Maps a handler error to a *success*.
 #[injectable]
 #[derive(Default)]
 struct MapToOk;
@@ -304,9 +275,7 @@ async fn a_mapped_error_response_carries_the_rollback_marker() {
 
     let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
 
-    // The route-site filter maps the handler's 500 into a 200 — but the
-    // response must carry `MappedError`, which the data layer reads to roll
-    // the ambient transaction back (a mapped error never commits).
+    // The data layer reads `MappedError` to roll the ambient transaction back.
     let resp = app.http().get("/edge/boom").send().await;
     resp.assert_status_is_ok();
     assert!(

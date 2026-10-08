@@ -1,17 +1,10 @@
 //! [`GlobalPoolOperationGuard`] — the fallback `GraphqlOperationGuard`.
 //!
-//! `/graphql` is `EdgePosture::Exempt`: no guard runs at the HTTP edge, the
-//! per-operation seam is the only gate. An app normally registers its authz
-//! bridge there (`AuthzGraphqlBridge as dyn GraphqlOperationGuard`); when it
-//! does not, this fallback folds the **global guard pool** in-band so a
-//! forgotten bridge module never leaves GraphQL operations unguarded —
-//! the fail-secure net, not the full authz integration (it installs no
-//! ambient `Ability`; row scoping and masking still require the bridge).
-//!
-//! The GraphQL endpoint carries the [`Public`](nest_rs_http::Public) marker
-//! as request data, so an `AuthnGuard` in the pool admits anonymous callers
-//! (resolver-level gates still apply) while a present bearer is verified —
-//! exactly once, here.
+//! `/graphql` is `EdgePosture::Exempt`. With no authz bridge registered, this
+//! folds the global guard pool in-band, so a forgotten bridge never leaves
+//! operations unguarded; it installs no ambient `Ability`. The endpoint carries
+//! the [`Public`](nest_rs_http::Public) marker, so a pooled `AuthnGuard` admits
+//! anonymous callers to the resolver-level gates.
 
 use std::sync::Arc;
 

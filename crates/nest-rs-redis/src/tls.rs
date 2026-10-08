@@ -1,24 +1,13 @@
 //! [`RedisTls`] — what a `rediss://` connection trusts, and what it presents.
 //!
-//! The URL's scheme decides whether a connection is encrypted, as it does for
-//! every Redis client: `rediss://` is TLS, `redis://` is plaintext. A TLS
-//! connection verifies Redis's certificate for the URL's host against the
-//! authorities the system trusts ([`nest_rs_config::system_authorities`]), read
-//! once and handed to the client — never by `redis` itself, which would read
-//! the store again for every connection it opens, reconnections included,
-//! blocking the runtime while it does. An authority installed in the system's
-//! store — an enterprise's private one — is trusted like any other.
-//!
-//! [`RedisTls`] changes what is trusted and what is presented — a private
-//! authority, a client certificate for a Redis that requires one — and is
-//! refused beside a plaintext URL, since whoever configured it expects it to be
-//! used.
+//! `rediss://` is TLS, `redis://` is plaintext. A TLS connection verifies
+//! Redis's certificate for the URL's host against the system's authorities
+//! ([`nest_rs_config::system_authorities`]), read once and handed to the client:
+//! `redis` itself would read the store again for every connection, blocking the
+//! runtime.
 //!
 //! **Verification is never switched off.** `rediss://…#insecure` is refused at
-//! boot, and the client is built without the code that would honour it
-//! (`redis`'s `tls-rustls-insecure`): a certificate a private authority signed
-//! is trusted by configuring that authority, which keeps the connection
-//! authenticated as well as encrypted.
+//! boot, and the client is built without `redis`'s `tls-rustls-insecure`.
 
 use std::fmt;
 use std::io;
@@ -108,18 +97,11 @@ impl RedisTls {
     }
 
     /// Refuse material no handshake could use, before anything is dialled, with
-    /// a reason naming the variables that hold it. The client would meet it on
-    /// every connection it opens instead: an authority file holding no
-    /// certificate trusts nothing, so every certificate fails as untrusted, and
-    /// a certificate its key does not sign for is refused by rustls as a client
-    /// configuration error that names no variable.
+    /// a reason naming the variables that hold it.
     ///
-    /// The pair is judged by rustls's own `CertifiedKey::from_der` — the check
-    /// the client runs — so a key whose provider cannot say which public key it
-    /// holds passes here exactly as it passes there. A parse failure is
-    /// described and never quoted: the parser's error carries the line it choked
-    /// on, byte for byte, and a key whose line breaks were collapsed is one line
-    /// holding all of it.
+    /// The pair is judged by rustls's own `CertifiedKey::from_der`, the check the
+    /// client runs. A parse failure is described and never quoted: the parser's
+    /// error carries the offending line byte for byte, a whole collapsed key.
     pub(crate) fn check(&self, provider: &CryptoProvider) -> std::result::Result<(), String> {
         if let Some(ca_cert) = &self.ca_cert {
             let authorities =
@@ -202,13 +184,9 @@ pub(crate) fn unusable_material() -> String {
 /// The process-wide crypto provider rustls builds with, installed first when
 /// the app has not chosen one.
 ///
-/// `redis` builds its client configuration from that default, and rustls picks
-/// one on its own only when exactly one of its providers is compiled in: a
-/// dependency tree enabling both — this workspace's does — leaves it nothing to
-/// pick, and the first handshake panics. aws-lc-rs is rustls's own default, and
-/// the one poem's TLS listener installs under the same condition, so whichever
-/// of the two runs first, the process ends with one provider and both use it.
-/// An app that installed a provider before the boot keeps its choice.
+/// `redis` builds from that default, which rustls picks on its own only when
+/// exactly one provider is compiled in; with both, the first handshake panics.
+/// aws-lc-rs is the one poem's TLS listener installs too.
 pub(crate) fn crypto_provider() -> Arc<CryptoProvider> {
     if let Some(installed) = CryptoProvider::get_default() {
         return Arc::clone(installed);
@@ -228,12 +206,8 @@ pub(crate) fn crypto_provider() -> Arc<CryptoProvider> {
 
 /// Whether `error` is a TLS negotiation every attempt would fail the same way —
 /// a certificate the client does not accept, a handshake Redis refused, a peer
-/// answering in something other than TLS. None of it is an outage, so the boot
-/// fails at once. An internal error Redis reports may clear, and is retried like
-/// an outage; so is a peer that never answers the handshake, which reaches the
-/// boot only as the timeout it cannot be told apart from; and so is a failure of
-/// this host's own TLS stack — no clock, no random bytes, a configuration rustls
-/// rejects — which no setting of Redis's or the peer's fixes.
+/// answering in something other than TLS. An internal error Redis reports, and
+/// a failure of this host's own TLS stack, may clear and are retried.
 pub(crate) fn negotiation_failed(error: &(dyn std::error::Error + 'static)) -> bool {
     negotiation_error(error).is_some_and(|refused| {
         !matches!(
@@ -246,9 +220,8 @@ pub(crate) fn negotiation_failed(error: &(dyn std::error::Error + 'static)) -> b
     })
 }
 
-/// What to change about a failed negotiation, naming the setting. rustls's own
-/// reason is not repeated here: the error carrying this sentence keeps it as
-/// its source.
+/// What to change about a failed negotiation, naming the setting; rustls's own
+/// reason travels as the error's source.
 pub(crate) fn remedy(error: &(dyn std::error::Error + 'static)) -> String {
     use rustls::{AlertDescription as Alert, CertificateError as Certificate, Error as Tls};
 
@@ -433,8 +406,6 @@ mod tests {
         assert_eq!(replaced.key, b"deployed-key");
     }
 
-    /// Half a pair is refused naming the spelling the operator set — a file's
-    /// variable when a file was named — and both spellings of the half missing.
     #[test]
     fn half_a_client_certificate_is_refused_naming_what_was_set_and_what_is_missing() {
         let file = std::env::temp_dir().join(format!("nestrs-tls-half-{}.pem", std::process::id()));
@@ -463,9 +434,6 @@ mod tests {
         }
     }
 
-    /// A key whose line breaks were collapsed is one line holding the whole key,
-    /// and the parser's error carries that line byte for byte — so the refusal
-    /// describes the problem and quotes nothing, not even as a list of bytes.
     #[test]
     fn material_that_does_not_parse_is_described_and_never_quoted() {
         let text = std::str::from_utf8(client_key()).expect("PEM is text");
@@ -498,9 +466,6 @@ mod tests {
         }
     }
 
-    /// A pair whose provider cannot say which public key it holds is accepted,
-    /// as rustls itself accepts it when the client is built: the check defers to
-    /// rustls's verdict rather than a stricter copy of it.
     #[test]
     fn a_key_whose_provider_hides_its_public_half_is_accepted_as_rustls_accepts_it() {
         #[derive(Debug)]
@@ -543,8 +508,6 @@ mod tests {
         assert_eq!(tls.check(&provider), Ok(()));
     }
 
-    /// `redis` builds every TLS client from the process default, which rustls
-    /// never installs on its own in a tree compiling both of its providers.
     #[test]
     fn opening_a_tls_client_leaves_a_process_default_provider_installed() {
         let provider = crypto_provider();
@@ -560,9 +523,6 @@ mod tests {
         redis::RedisError::from(io::Error::new(io::ErrorKind::InvalidData, refused))
     }
 
-    /// A refused handshake fails the boot at once, while a dropped connection
-    /// and an internal error on Redis's side are retried — so none of them may
-    /// read like another.
     #[test]
     fn a_refused_handshake_is_told_apart_from_what_may_clear() {
         let refused = negotiation(rustls::Error::InvalidCertificate(
@@ -581,11 +541,6 @@ mod tests {
         assert!(!negotiation_failed(&rejected_here), "{rejected_here}");
     }
 
-    /// Each way a handshake fails sends the operator to the setting that fixes
-    /// it — the authority, the host, the clock, Redis's own certificate, the
-    /// protocol settings, the client certificate, the port — and says the cause
-    /// that setting fixes, so no two causes share a sentence. rustls's reason
-    /// is not repeated: the error keeps it as its source.
     #[test]
     fn a_refusal_names_the_setting_that_fixes_its_cause() {
         use rustls::{AlertDescription, CertificateError, Error, InvalidMessage, PeerIncompatible};
@@ -658,8 +613,6 @@ mod tests {
         }
     }
 
-    /// A key setting holding no private key — empty, or a certificate in its
-    /// place — says so, rather than blaming line breaks it does not have.
     #[test]
     fn a_key_setting_holding_no_private_key_says_so() {
         for (label, key) in [

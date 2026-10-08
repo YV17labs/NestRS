@@ -40,8 +40,6 @@ fn input_struct(
     let graphql_crate = graphql_crate_attr(model);
 
     quote! {
-        // Same routing as the wire DTO: these inputs are generated, so their
-        // derives must not reach for the entity crate's extern prelude.
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,

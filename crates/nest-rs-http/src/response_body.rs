@@ -1,50 +1,17 @@
 //! The response body wrapper — what keeps a request alive until its last byte.
 //!
-//! # A handler returning is not the request ending
+//! hyper writes a body after the handler returns, with the edge's task-locals
+//! unwound and its span exited, so a streamed body (`#[sse]`, a download) would
+//! run under no context: [`carry`] wraps every non-empty body, whatever the
+//! access log is set to.
 //!
-//! An `async fn` handler returns a [`Response`]; hyper writes its body
-//! afterwards, on the connection task, with every task-local the transport edge
-//! installed already unwound and the operation span already exited. For a body
-//! that is `Bytes` in hand that gap is invisible. For a body that is a
-//! **stream** — `#[sse]`, a download, anything a handler builds over a
-//! `Stream` — the stream's own code runs in that gap, and it is still serving
-//! the request the handler was serving.
+//! hyper picks `Content-Length` over chunked from `size_hint().exact()`, and
+//! poem's `Body::from_bytes_stream` reports `(0, None)`: [`Carried`] is a real
+//! `http_body::Body` forwarding `size_hint` and `is_end_stream`, so the framing
+//! is unchanged.
 //!
-//! So without this wrapper an SSE stream emits its events under no span and no
-//! ambient context at all: `trace_id` missing from every line, `actor_id`
-//! missing, `current_trace_id()` answering `None` inside the developer's own
-//! stream. That is the correlation primitive being true for short responses and
-//! false for long ones, which is worse than it being absent — the capability
-//! reads as present.
-//!
-//! [`carry`] therefore wraps **every** non-empty body, whatever the access log
-//! is set to. Correlation cannot be optional, and a config flag is a weaker
-//! condition than a crate: `HttpConfig.access_log = false` turns a *log line*
-//! off, never the identity of the work.
-//!
-//! # Counting the body without changing how it is framed
-//!
-//! hyper picks `Content-Length` over `Transfer-Encoding: chunked` from
-//! `size_hint().exact()`. Wrapping a response through poem's only public stream
-//! constructor (`Body::from_bytes_stream`) produces a `StreamBody`, whose size
-//! hint is the trait default `(0, None)` — so a byte counter written that way
-//! turns **every** response chunked, silently, to report a log field.
-//!
-//! [`Carried`] is therefore a real `http_body::Body` that forwards `size_hint`
-//! and `is_end_stream`: the framing a handler's response would have had is the
-//! framing it gets. poem's public `From<Body>` / `From<BoxBody>` impls are what
-//! let the wrapper sit inside a [`Body`] at all.
-//!
-//! # The way down
-//!
-//! A body is still the request running, so the shutdown window treats it as
-//! one: a body with an end of its own — a download — gets the window, and is
-//! cut at its close. A body with **no** end of its own — an event stream — would
-//! only ever spend the whole window waiting for an end that is not coming, so a
-//! response marked [`OpenEndedBody`] is ended at the shutdown signal instead:
-//! cleanly, its last chunk written, so a client's `EventSource` reads an end and
-//! reconnects rather than reading a cut. Either way the unit did not settle on
-//! its own, and its line says so — the head's `status`, the `bytes` written, and
+//! A body marked [`OpenEndedBody`] is ended cleanly at the shutdown signal; any
+//! other gets the window and is cut at its close. Either way its line files
 //! `outcome = cancelled`.
 
 use std::future::Future;
@@ -70,24 +37,20 @@ use crate::drain::Drain;
 /// `cancelled`.
 ///
 /// A response extension: `response.extensions_mut().insert(OpenEndedBody)`.
-/// An `#[sse]` route is marked already, and so is the MCP edge's standalone
-/// stream; a handler streaming events by hand marks its own. A body that does
-/// end — a download, however long — is not marked: it gets the window, like a
-/// request still running.
+/// An `#[sse]` route is marked already; a body that does end — a download,
+/// however long — is not marked.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OpenEndedBody;
 
 /// The exact type poem converts a [`Body`] to and from in its public `From`
-/// impls. Naming it is what lets the wrapper be an `http_body::Body` rather than
-/// a stream — see the module doc.
+/// impls.
 type PoemBody = BoxBody<Bytes, IoError>;
 
 /// Attach the request to its own response body, and file the access line when
 /// the body ends.
 ///
-/// A body with nothing left to write — a `204`, a `304`, most refusals — is
-/// handed back untouched: there is no code left to run inside it, so there is
-/// nothing to carry a context *for*, and the line is filed here.
+/// A body with nothing left to write — a `204`, a `304` — is handed back
+/// untouched, and the line is filed here.
 pub(crate) fn carry(
     continuation: RequestContinuation,
     span: tracing::Span,
@@ -105,8 +68,6 @@ pub(crate) fn carry(
         }
         return Response::from_parts(parts, body);
     }
-    // Boxed only for the responses that need it: a pinned wait, per open-ended
-    // stream, rather than a field every response pays for.
     let going_away = parts
         .extensions
         .get::<OpenEndedBody>()
@@ -125,9 +86,7 @@ pub(crate) fn carry(
     Response::from_parts(parts, Body::from(PoemBody::new(carried)))
 }
 
-/// A line waiting on the body it will report the size of. `None` on
-/// [`Carried`] when the access log is off — the body is still carried, because
-/// the context is not the log's.
+/// A line waiting on the body it will report the size of.
 struct Pending {
     log: AccessLog,
     status: u16,
@@ -135,21 +94,18 @@ struct Pending {
 
 /// A response body written under the request that produced it.
 ///
-/// `size_hint` and `is_end_stream` are forwarded verbatim; see the module doc
-/// for why that is the load-bearing part rather than a courtesy.
+/// `size_hint` and `is_end_stream` are forwarded verbatim: hyper frames the
+/// response from them.
 struct Carried {
     inner: PoemBody,
     counted: u64,
-    /// Re-installed around every poll, so the stream's own code reads the same
-    /// ambient answers the handler read.
+    /// Re-installed around every poll.
     continuation: RequestContinuation,
-    /// Entered around every poll, so the stream's own *events* are rooted at the
-    /// request rather than at the connection task — and held open until the body
-    /// ends, so `http.response.body.size` lands on a span an exporter still has.
+    /// Entered around every poll, and held open until the body ends so
+    /// `http.response.body.size` lands on a span an exporter still has.
     span: tracing::Span,
     pending: Option<Pending>,
-    /// The transport's way down — read when the body is dropped unfinished, to
-    /// tell a cut by the window from a body that simply ended.
+    /// Read when the body is dropped unfinished, to tell a cut by the window.
     drain: Arc<Drain>,
     /// The shutdown signal, for an [`OpenEndedBody`] only.
     going_away: Option<Pin<Box<WaitForCancellationFutureOwned>>>,
@@ -160,31 +116,21 @@ struct Carried {
 }
 
 impl Carried {
-    /// At most once — the stream ending and the body being dropped both reach
-    /// here, and a request is filed one time or the count is meaningless.
+    /// Files the line at most once: the stream ending and the body being
+    /// dropped both reach here.
     fn file(&mut self) {
-        // The size lands on the span whether or not a line is filed: it is what
-        // an exported server span is read for, and the span is held open until
-        // here precisely so it can.
         self.span.record("http.response.body.size", self.counted);
         let counted = self.counted;
         let outcome = self
             .stopped_unsettled()
             .then_some(nest_rs_core::operation_log::CANCELLED);
         match self.pending.take() {
-            // **The context, not the span.** The line is still nobody's child
-            // event — entering the span would file it under the request it
-            // reports on — but its `trace_id` / `span_id` / `actor_id` come off
-            // the ambient correlation like every other line's, rather than being
-            // spelled a second time as event fields. One source, one position in
-            // the JSON envelope. The line records the outcome on the span.
+            // The context, not the span: the line is nobody's child event.
             Some(pending) => self.continuation.enter(|| {
                 pending
                     .log
                     .emit(&self.span, pending.status, counted, outcome)
             }),
-            // The span says how the unit ended in the line's word whatever the
-            // access log is set to — it is the span a backend counts failures on.
             None => {
                 if let Some(outcome) = outcome {
                     nest_rs_core::operation_log::record_outcome(&self.span, outcome);
@@ -193,14 +139,11 @@ impl Carried {
         }
     }
 
-    /// The transport stopped this body before it ended on its own — at the
-    /// signal, for an open-ended one, or by closing its connection at the end
-    /// of the window.
+    /// The transport stopped this body before it ended on its own, at the
+    /// signal or at the window's close.
     ///
-    /// Read positively, never inferred from a drop alone: hyper drops a body it
-    /// was never going to write — a `HEAD` answer, a `204` — without polling it,
-    /// so "dropped before its end" by itself would call those cut. A body the
-    /// window cut is dropped once the window has closed; nothing else is.
+    /// Never inferred from a drop alone: hyper drops a body it never writes (a
+    /// `HEAD` answer, a `204`) without polling it.
     fn stopped_unsettled(&self) -> bool {
         self.ended_at_signal
             || (!self.reached_end && !self.inner.is_end_stream() && self.drain.is_past_bound())
@@ -216,15 +159,11 @@ impl HttpBody for Carried {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
-        // Ended stays ended: the stream beneath still has events to give, and a
-        // body that said `None` must not hand one out after it.
+        // A body that said `None` must not hand out the stream's next event.
         if this.ended_at_signal {
             return Poll::Ready(None);
         }
-        // The signal ends a body with no end of its own, here rather than in the
-        // stream: what it is, is the response's to say, and the transport's to
-        // act on. Checked before the stream so an end is not raced by one more
-        // event.
+        // Checked before the stream, so an end is not raced by one more event.
         if let Some(going_away) = this.going_away.as_mut()
             && going_away.as_mut().poll(cx).is_ready()
         {
@@ -233,14 +172,8 @@ impl HttpBody for Carried {
             this.file();
             return Poll::Ready(None);
         }
-        // Span and context together, exactly as the edge installed them around
-        // the handler: an event the stream emits carries `trace_id` from the
-        // span, and a `current_trace_id()` inside the stream reads the
-        // task-local. Neither substitutes for the other.
-        //
-        // The span is left behind before the line is filed — it is nobody's
-        // child event — while the context is re-entered around it, so the ids on
-        // that line come from where every other line's come from.
+        // Both: an event reads `trace_id` off the span, `current_trace_id()`
+        // reads the task-local.
         let polled = {
             let Carried {
                 inner,
@@ -308,8 +241,6 @@ mod tests {
         carried.into_body().into()
     }
 
-    /// The signal ends an open-ended body, and it stays ended: polled again, it
-    /// does not reach back into the stream it was ended over.
     #[tokio::test]
     async fn an_open_ended_body_ends_at_the_signal_and_stays_ended() {
         let drain = Arc::new(Drain::default());

@@ -8,15 +8,12 @@ use proc_macro::TokenStream;
 mod processor;
 mod queue;
 
-/// A single provider may carry several `#[process]` methods (different queues)
-/// sharing the same `#[inject]` dependencies — pooling related queue handlers
-/// on one service keeps shared state (clients, repositories) in one place.
+/// Submits each `#[process]` method of a provider's impl block — several, on
+/// different queues, may share one provider.
 ///
 /// The `queue` is named by its `Queue` **type**, declared with
-/// [`queue`](macro@crate::queue) at the feature port. The macro reads the
-/// queue's name into the inventory entry **and** asserts, at compile
-/// time, that this method's job argument is the queue's `Job` — a mismatch is a
-/// build error naming both types, not a job that silently never drains.
+/// [`queue`](macro@crate::queue); the macro asserts at compile time that the
+/// method's job argument is the queue's `Job`, naming both types on a mismatch.
 ///
 /// Keys, on exactly one `#[process]` per method:
 ///
@@ -24,12 +21,10 @@ mod queue;
 /// - `retries = 3` — how many times a failed attempt is run again before the job
 ///   dead-letters; default `0`. Each retry waits first: one second after the
 ///   first failure, doubling after each, at most five minutes, jittered by up to
-///   a fifth either way — the port's backoff, the same on every backend.
+///   a fifth either way.
 /// - `concurrency = 4` — how many attempts of this method one worker replica
 ///   runs at once; default `1`, one at a time. **Per method, per replica**:
-///   another method's jobs never wait on this one's permits. It is the vertical
-///   bound; the horizontal one is the number of replicas the platform runs. Not
-///   a capability — every backend honours it.
+///   another method's jobs never wait on this one's permits.
 /// - `throttle(limit = 10, window = "1m")` — at most `limit` attempts of this
 ///   method **start** per window, **across the deployment**: every replica
 ///   draining the queue counts against the one limit, and a retry is an attempt

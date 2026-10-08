@@ -12,8 +12,7 @@ use nest_rs_testing::mcp::call_tool_as;
 
 pub(crate) use crate::widget;
 
-/// No-op stand-in for a bridge's authentication slot. Both suites wire the same
-/// one, so it lives here rather than being spelled twice.
+/// No-op stand-in for a bridge's authentication slot.
 #[injectable]
 #[derive(Default)]
 pub(crate) struct PassGuard;

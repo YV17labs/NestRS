@@ -17,32 +17,18 @@
 //! handler) → Filter (generic mapper) → Interceptor (observer). Global
 //! interceptors / filters execute at the transport edge instead — outside
 //! routing — same relative nesting. Inside a single kind, the chain runs in
-//! declaration order, with [`Layer::priority`] as an optional intra-kind
-//! tiebreaker; priority orders entries *within* a site, never across sites.
+//! declaration order, with [`Layer::priority`] as the tiebreaker within a site.
 //!
-//! See `nest_rs_guards`, `nest_rs_pipes`, `nest_rs_interceptors`,
-//! `nest_rs_filters`, `nest_rs_exception_filters` for the sub-traits — five
-//! crates, and one [`LayerKind`] each.
+//! The sub-traits live in `nest_rs_guards`, `nest_rs_pipes`,
+//! `nest_rs_interceptors`, `nest_rs_filters` and `nest_rs_exception_filters`.
 
 use std::sync::Arc;
 
 /// What kind of layer this is — one role per sub-trait, and the vocabulary the
 /// fixed execution order across kinds is written in.
 ///
-/// **Vocabulary, not state.** The framework constructs no value of this type and
-/// matches on none: a layer's kind is decided by the sub-trait it implements, so
-/// there is no `kind()` to override and nothing to keep in step at runtime. What
-/// it is for is naming a slot in prose and in a doc link — `nest-rs-pipes` points
-/// at [`Pipe`](Self::Pipe) to say where a global pipe runs.
-///
-/// **Five, and it shipped as four.** `Filter` had no variant while
-/// `nest-rs-filters` shipped a `Layer` sub-trait like its four siblings, under a
-/// module doc that reads "one crate per `LayerKind`" beside a list of five
-/// crates. A vocabulary missing a member is worse than none: the reader counts
-/// the list, finds four, and concludes the fifth family is something else.
-///
-/// Pre-handler request shaping has no dedicated variant: it is expressed as an
-/// `Interceptor`.
+/// Vocabulary, not state: a layer's kind is decided by the sub-trait it
+/// implements. Pre-handler request shaping is an `Interceptor`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LayerKind {
@@ -58,15 +44,8 @@ pub enum LayerKind {
     ExceptionFilter,
 }
 
-/// Where a layer was declared. Used by the dedup logic — when the same
-/// [`TypeId`](std::any::TypeId) appears at several sites, the *broadest*
-/// site wins because a wider declaration signals "this must run
-/// everywhere — don't bypass it locally".
-///
-/// Named *Site* (not *Scope*) to disambiguate from request-scoped DI
-/// resolution ([`RequestScope`](crate::RequestScope)). A Layer's site is
-/// the place it was *declared*; it has nothing to do with the DI scope of
-/// the Layer's provider.
+/// Where a layer was declared. When the same [`TypeId`](std::any::TypeId)
+/// appears at several sites, the broadest one wins.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LayerSite {
@@ -74,12 +53,6 @@ pub enum LayerSite {
     Global,
     /// `#[use_*]` on the **host** struct — a controller, resolver, gateway or
     /// `#[mcp]` host.
-    ///
-    /// Named for the role every edge shares rather than for HTTP's word for it:
-    /// this variant is what a guard declared on an `#[mcp]` host or a
-    /// `#[resolver]` is reported under, and `controller` named a decorator
-    /// their file does not contain. The struct half of every pair is already
-    /// called the host.
     Host,
     /// `#[use_*]` beside an individual handler/method.
     Method,
@@ -100,30 +73,17 @@ impl LayerSite {
 /// `Filter`, `GlobalPipe`, `ExceptionFilter` — extend this to pick up
 /// [`Layer::priority`] and a dedup-friendly identity.
 ///
-/// Named rather than linked, and it is a limit rather than a preference:
-/// rustdoc resolves an intra-doc link only against the dependency graph, and
-/// this crate sits *below* all five, so it cannot have one. The hand-rolled
-/// relative URLs that stood here (`../../nest_rs_guards/trait.Guard.html`)
-/// resolved under a workspace-wide `cargo doc` and 404'd on docs.rs, where each
-/// crate is published under its own root — a dead link on this crate's
-/// most-read page.
-///
-/// The layer's [`LayerKind`] is determined by its sub-trait — there is no
-/// `kind()` method to override.
+/// The sub-traits are named, not linked: this crate sits below theirs, and a
+/// relative URL 404s on docs.rs.
 pub trait Layer: Send + Sync + 'static {
-    /// Tiebreaker inside a kind — lower runs first. Default `0`.
-    /// Most layers should leave this at the default and rely on
-    /// declaration order. Reach for a non-zero priority only when the
-    /// framework's mechanical order doesn't capture a real dependency
-    /// (e.g. a layer that must observe the request *before* every other
-    /// layer of its kind regardless of how callers list it).
+    /// Tiebreaker inside a kind — lower runs first. Default `0`, leaving
+    /// declaration order in charge.
     fn priority(&self) -> i8 {
         0
     }
 
-    /// Display name for boot logs and dedup diagnostics. Default = the
-    /// implementor's type name (works for `Arc<dyn Layer>` via vtable
-    /// monomorphisation per concrete impl).
+    /// Display name for boot logs and dedup diagnostics; defaults to the
+    /// implementor's type name.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }

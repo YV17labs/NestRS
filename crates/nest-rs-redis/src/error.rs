@@ -1,21 +1,11 @@
-//! Typed errors for the Redis substrate.
-//!
-//! Framework crates surface `thiserror` enums, not `anyhow`. Opening the shared
-//! connection is a Redis-specific step, so it carries its own error here; the
-//! producer surface (the `JobProducer` impl on
-//! [`RedisQueueProducer`](crate::RedisQueueProducer)) instead speaks the
-//! backend-agnostic
-//! [`QueueError`](::nest_rs_queue::QueueError), wrapping a Redis push failure as
-//! its opaque `Backend` source.
+//! Typed errors for the Redis substrate. The queue producer speaks
+//! [`QueueError`](::nest_rs_queue::QueueError) instead, wrapping a Redis failure
+//! as its opaque `Backend` source.
 
 use thiserror::Error;
 
 /// A failure opening the shared [`RedisConnection`](crate::RedisConnection)
 /// from its configuration, or binding a port over it.
-///
-/// Concern-prefixed (`RedisError`, not a generic `ConnectionError`) to match
-/// the house pattern — `ConfigError`, `StorageError`, `QueueError` — and avoid
-/// a name collision when an app imports several infra errors at once.
 ///
 /// Every variant names the endpoint as the address the client dials — never the
 /// URL, which may embed a password, and every one of these strings reaches logs
@@ -24,8 +14,7 @@ use thiserror::Error;
 #[non_exhaustive]
 pub enum RedisError {
     /// The URL could not configure a connection — malformed, or a scheme the
-    /// client does not speak. It fails the same way on every attempt, so it is
-    /// refused at once rather than retried for the whole budget.
+    /// client does not speak. Refused at once, never retried.
     #[error(
         "invalid Redis URL {endpoint}: check {url_var}",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
@@ -38,9 +27,8 @@ pub enum RedisError {
         source: redis::RedisError,
     },
 
-    /// A URL asking for RESP3 (`protocol=resp3`). Every binding reads Redis's
-    /// RESP2 replies — the worker's read among them, which would fail on every
-    /// receive — so it is refused at once rather than met by every job.
+    /// A URL asking for RESP3 (`protocol=resp3`): every binding reads Redis's
+    /// RESP2 replies.
     #[error(
         "the Redis URL for {endpoint} asks for RESP3 (`protocol=resp3`), which nestrs does not \
          speak to Redis: remove it from {url_var}",
@@ -54,16 +42,13 @@ pub enum RedisError {
     /// The connect budget is outside the range its variable is held to — a
     /// [`RedisConfig`](crate::RedisConfig) built in code and handed to
     /// [`RedisConnection::connect`](crate::RedisConnection::connect) without a
-    /// config read. A zero budget would give up before the first attempt and
-    /// then blame the URL, so it is refused before anything is dialled, in the
-    /// words the variable is refused in.
+    /// config read. Refused before anything is dialled, in the words the variable
+    /// is refused in.
     #[error(transparent)]
     Budget(nest_rs_config::ConfigError),
 
-    /// A queue lease the connect budget leaves no renewal room in: the port
-    /// renews a third into the lease, and the renewal may wait out the budget,
-    /// so the two thirds left must outlast it or the lease lapses while Redis
-    /// still answers.
+    /// A queue lease the connect budget leaves no renewal room in: a renewal
+    /// sent a third in may wait out the whole budget.
     #[error(
         "the Redis queue lease ({lease:?}) must be more than one and a half times the Redis \
          budget ({budget:?}): a renewal is sent a third into the lease and may wait out the \
@@ -80,10 +65,8 @@ pub enum RedisError {
     },
 
     /// A `rediss://` URL carrying `#insecure`, which asks the client to accept
-    /// whatever certificate it is shown. Encryption nobody verified is open to
-    /// whoever sits between the app and Redis, so it is refused rather than
-    /// honoured: a certificate a private authority signed is trusted by
-    /// configuring that authority.
+    /// whatever certificate it is shown — refused; a private authority is
+    /// trusted by configuring it.
     #[error(
         "the Redis URL for {endpoint} asks to skip certificate verification (`#insecure`), which is \
          refused: remove it from the URL — {url_var}, or `RedisConfig::url` pinned in code — and \
@@ -96,10 +79,8 @@ pub enum RedisError {
         endpoint: String,
     },
 
-    /// TLS material configured beside a URL that is not `rediss://`. The
-    /// connection would be plaintext and the material unused, while whoever
-    /// configured an authority or a client certificate expects it to be — so
-    /// it is refused rather than ignored.
+    /// TLS material configured beside a URL that is not `rediss://`, where it
+    /// would go unused — refused rather than ignored.
     #[error(
         "TLS material is configured for Redis at {endpoint}, but the URL is not `rediss://`, so the \
          material would go unused and the connection unencrypted: point {url_var} at a port serving \
@@ -117,11 +98,8 @@ pub enum RedisError {
 
     /// The TLS settings could not carry a connection: material no handshake
     /// could use, a certificate the client does not accept, a handshake Redis
-    /// refused, or a peer answering in something other than TLS. The same
-    /// settings fail the same way on every attempt, and none of it is an
-    /// outage, so it fails at once with what to change: read off rustls's reason
-    /// when a handshake refused, or off the material check before anything was
-    /// dialled.
+    /// refused, or a peer answering in something other than TLS. Fails at once
+    /// with what to change.
     #[error("TLS with Redis at {endpoint} was refused: {reason}")]
     TlsRefused {
         /// The address the client dials, never the URL.
@@ -136,10 +114,8 @@ pub enum RedisError {
     },
 
     /// Redis answered, and refused in a way every attempt would repeat —
-    /// credentials, an ACL denying the proof, a protocol it does not speak.
-    /// That is not an outage, and retrying it would only tell the operator to
-    /// look at the network — so it fails at once, naming the variable that
-    /// holds the URL, with Redis's answer as the source.
+    /// credentials, an ACL denying the proof, a protocol it does not speak. Fails
+    /// at once, with Redis's answer as the source.
     #[error(
         "Redis at {endpoint} refused the connection: check {url_var}",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
@@ -157,12 +133,6 @@ pub enum RedisError {
     /// user without `+select`, a server in cluster mode, which serves database 0
     /// alone. It fails at once naming the index, with Redis's answer as the
     /// source.
-    ///
-    /// Its own variant rather than [`Refused`](Self::Refused) because the client
-    /// reports every refused `SELECT` under one sentence and drops the server's
-    /// code — `NOPERM`, `ERR` — so the index is the one fact the operator
-    /// cannot read off the answer. The only answer to a `SELECT` that clears is
-    /// a server busy running a script; that one is retried within the budget.
     #[error(
         "Redis at {endpoint} refused to select database {database}, the index {url_var} ends \
          in — its answer follows: the index must be below the server's `databases`, an ACL \
@@ -182,9 +152,6 @@ pub enum RedisError {
     /// The connect budget elapsed with Redis answering every attempt, last with
     /// an answer that may clear — a dataset still loading, a script past its
     /// threshold, a failover in progress, a code this client does not know.
-    /// Redis was reached, so the sentence does not send the operator to the
-    /// URL: the answer travels as the source, and the budget is what to widen
-    /// if it clears on its own.
     #[error(
         "Redis at {endpoint} answered but was not ready within {budget:?} ({attempts} \
          attempt(s)) — its last answer follows; widen the budget with {timeout_var} if it \
@@ -203,10 +170,7 @@ pub enum RedisError {
         source: redis::RedisError,
     },
 
-    /// The connect budget elapsed with the backend still unreachable. Carries
-    /// the redacted endpoint and the knob to widen, because this is the boot
-    /// error an operator reads at 3am — an unreachable queue used to be
-    /// indistinguishable from a hung process.
+    /// The connect budget elapsed with the backend still unreachable.
     #[error(
         "could not reach Redis at {endpoint} within {budget:?} ({attempts} attempt(s)): \
          check {url_var}, or widen the budget with {timeout_var}",

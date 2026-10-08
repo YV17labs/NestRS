@@ -1,6 +1,5 @@
 //! `#[routes]` — bind a `#[controller]` impl block's verb-tagged methods to
-//! HTTP routes; emit `Controller` mount + `Discoverable`; capture per-route
-//! OpenAPI metadata.
+//! HTTP routes, with their mount, discovery and OpenAPI metadata.
 
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
@@ -20,15 +19,11 @@ use nest_rs_codegen::{
 
 use crate::attr::opt_str;
 
-/// One route handler, by named field — a positional tuple here once let a
-/// field-order slip silently swap e.g. `force_guards`/`pipes`.
+/// One route handler.
 struct RouteHandler {
-    /// The HTTP verb ident (`get`, `post`, …).
     verb: syn::Ident,
-    /// The generated wrapper fn's ident.
     wrapper: syn::Ident,
-    /// Whether the verb was `#[sse]` — the endpoint carries the resolved
-    /// `SseSettings` and wraps the handler's stream.
+    /// Whether the verb was `#[sse]`.
     is_sse: bool,
     /// `#[use_guards]` paths on the method.
     guards: Vec<Path>,
@@ -36,24 +31,15 @@ struct RouteHandler {
     filters: Vec<Path>,
     /// `#[use_interceptors]` paths on the method.
     interceptors: Vec<Path>,
-    /// Every declared parameter type, in order — the input the compiler
-    /// answers "is this a response shaper?" for. Arming is type-directed, so
-    /// this list, not a name, is what decides.
+    /// Every declared parameter type, in order: arming a shaper is type-directed.
     param_types: Vec<Type>,
-    /// A parameter whose type is *spelled* `Authorize<..>` / `Bind<..>`, kept
-    /// only for the eager HTTP-D1 diagnostic — a type wearing that name and
-    /// not implementing the shaper trait is a spanned compile error rather
-    /// than a route that quietly arms nothing.
+    /// A parameter *spelled* `Authorize<..>` / `Bind<..>`, kept only so one not
+    /// implementing the shaper trait is a spanned compile error.
     named_shaper: Option<Type>,
-    /// Whether the handler declares any extractor parameter. `false` proves
-    /// no masking extractor can ever run — the run-time mask probe is dead
-    /// weight and is not emitted.
+    /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
-    /// `#[meta(...)]` value expressions.
     metas: Vec<Expr>,
-    /// The `#[public]` flag.
     is_public: bool,
-    /// The `#[no_pipes]` opt-out flag.
     no_pipes: bool,
     /// `#[force_guards]` paths on the method.
     force_guards: Vec<Path>,
@@ -61,30 +47,25 @@ struct RouteHandler {
     pipes: Vec<Path>,
     /// `#[use_exception_filters]` paths on the method.
     exception_filters: Vec<Path>,
-    /// `#[version("2")]` on the method — the subset of the controller's
-    /// versions this route serves. Empty means all of them.
+    /// The subset of the controller's versions this route serves; empty means all.
     versions: Vec<LitStr>,
     /// The method's `#[cfg]` conditions, carried onto every item emitted for the
     /// route outside the method.
     cfgs: Vec<TokenStream2>,
 }
 
-/// Handlers grouped by address in first-seen order. Several verbs may share one
-/// (`GET` + `POST /users`), and poem rejects two `.at(path, ..)` for the same
-/// path, so they must collapse into one method table
-/// (`MethodTable::new().get(h1).post(h2)`), which is also what carries the verb
-/// set to the `Allow` header a `405` owes.
+/// Handlers grouped by address in first-seen order: poem rejects two
+/// `.at(path, ..)` for one path, so the verbs of an address share one method table.
 ///
 /// Grouped by [`RoutePath::identity`], never by the path as written: `/p/:id`
-/// for `GET` and `/p/:other/` for `DELETE` are one address, and two groups were
-/// two poem nodes, the first of which answered `DELETE` with `405`.
+/// and `/p/:other/` are one address.
 type RoutesByPath = Vec<RouteGroup>;
 
 /// One address and every handler serving it.
 struct RouteGroup {
     /// [`RoutePath::identity`] — what makes two paths one address.
     identity: String,
-    /// The path poem mounts, the same for every handler of the group.
+    /// The path poem mounts.
     mount: LitStr,
     /// The method that first declared the address, for the refusal that names it.
     first: syn::Ident,
@@ -127,10 +108,6 @@ const HELPERS: [&str; 12] = [
 ];
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
-    // The impl half collects; it declares nothing. Taking an argument list and
-    // dropping it is the defect `#[processor]` and `#[scheduled]` were fixed
-    // for, and this is the likeliest place of all to reach for `version` —
-    // `#[controller]`, one line up, does declare one.
     if let Err(err) = pair::HTTP.reject_args(
         &TokenStream2::from(args),
         "a controller's `path` and `version` are declared by",
@@ -141,24 +118,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
-    // Silent here until now: `use_guards` is no standalone attribute macro, so
-    // it reached rustc as `cannot find attribute` with no transport, reason or
-    // remedy named.
     if let Err(err) = pair::HTTP.reject_host_layers(&item.attrs) {
         return err.to_compile_error().into();
     }
     let self_ty = item.self_ty.clone();
 
-    // Default OpenAPI tag — routes group by controller unless `#[api(tags(...))]` overrides.
+    // Default OpenAPI tag, unless `#[api(tags(...))]` overrides.
     let ctrl_name = match impl_self_ident(&self_ty, "#[routes]") {
         Ok(name) => name,
         Err(err) => return err.to_compile_error().into(),
     };
     let ctrl_tag = LitStr::new(&ctrl_name.to_string(), ctrl_name.span());
-    // The controller half of an OpenAPI `operationId`, computed here because
-    // this is where the type name is: a runtime crate cannot reach
-    // `nest_rs_codegen` without dragging `syn` into every app's dependency
-    // graph, and the document is rebuilt on every `/api-json` request.
+    // The controller half of an OpenAPI `operationId`, computed at compile time:
+    // the runtime cannot reach `nest_rs_codegen` without pulling `syn` into every app.
     let ctrl_token = LitStr::new(&controller_token(&ctrl_name.to_string()), ctrl_name.span());
 
     let mut wrappers: Vec<TokenStream2> = Vec::new();
@@ -189,21 +161,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let Some(declared_verb) = attr.path().get_ident().cloned() else {
             continue;
         };
-        // Before the arguments are read: a method without `&self` has no
-        // controller to be called on, and its first argument is never taken for
-        // a receiver.
+        // Before the arguments are read: without `&self`, the first argument is
+        // not a receiver.
         if let Err(err) = shared_receiver(method, "#[routes]", &ctrl_name, HostBorrow::Host)
             .and_then(|()| nest_rs_codegen::concrete_signature(method, "#[routes]"))
         {
             return err.to_compile_error().into();
         }
-        // The route travels with the method: its wrapper, its mount and its
-        // document entry are compiled out with it.
+        // The route's wrapper, mount and document entry are compiled out with the method.
         let cfgs = cfg_attrs(&method.attrs);
-        // `#[sse]` is a `GET` that answers `text/event-stream` — a response
-        // shape, not a sixth method. Collapsing it here is what makes
-        // `#[sse("/x")]` beside `#[get("/x")]` the same duplicate-route error
-        // any two verbs get, instead of two handlers racing for one address.
+        // `#[sse]` is a `GET`, so `#[sse("/x")]` beside `#[get("/x")]` is a duplicate route.
         let is_sse = declared_verb == "sse";
         let verb_ident = if is_sse {
             format_ident!("get", span = declared_verb.span())
@@ -215,9 +182,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(path) => path,
             Err(err) => return err.to_compile_error().into(),
         };
-        // Read with poem's grammar here, where the literal is: the address is
-        // what the route's identity, its group, its mount, its log line and its
-        // document entry all name.
         let parsed_path = match RoutePath::parse(&written_path.value()) {
             Ok(parsed) => parsed,
             Err(why) => {
@@ -237,37 +201,21 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let method_name = method.sig.ident.clone();
         let method_name_lit = method_name.to_string();
-        // Qualified by the **controller**, not the method alone. Each verb
-        // becomes a module-level type (poem's `#[handler]` shape), so two
-        // controllers in one file — the documented layout for URI versioning,
-        // where `V1Controller::list` and `V2Controller::list` sit side by
-        // side — collided in a namespace neither knew it shared. `list` /
-        // `get` / `create` are exactly the names that repeat.
+        // Qualified by the controller: each wrapper is a module-level type, and two
+        // controllers in one file (`V1Controller::list`, `V2Controller::list`) share it.
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
 
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
-        // The wrapper declares the developer's arguments under plain names it can
-        // forward by, so a destructured `Path(name): Path<String>` — poem's own
-        // idiom — becomes `name: Path<String>` here and the developer's method
-        // keeps its pattern. Done before the `#[authorize]` insert below, which
-        // adds a wrapper-only parameter that is never forwarded.
+        // Before the `#[authorize]` insert below, whose wrapper-only parameter is
+        // never forwarded.
         let arg_idents = match normalize_forwarded_args(&mut inputs) {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[authorize(Action, Entity)]` — the route's posture, uniform with
-        // `#[resolver]`. Desugars to the shaper extractor the macro writes
-        // itself, so the arming can no longer be broken by how the developer
-        // spelled (or renamed) an import.
         let authorize = match take_authorize(&mut method.attrs) {
             Ok(spec) => spec,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[authorize]` arms response masking, which round-trips the body
-        // through the entity model. A stream of events is not a wire model and
-        // never will be — there is no value to reconcile, and the shaper would
-        // fail closed at 500 on every request. This is the same case as a
-        // presigned URL or a computed report, and it has the same answer.
         if is_sse && let Some(spec) = &authorize {
             return syn::Error::new_spanned(
                 &spec.action,
@@ -279,13 +227,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        // The decorator is not the only way to reach the shaper: `#[public]` +
-        // a hand-written `Authorize<A, E>` is the sanctioned "public reads"
-        // spelling, and `Bind<A, S>` arms it too. On a stream the shaper is
-        // worse than useless — the mask classifies `text/event-stream` as an
-        // opaque body and returns it untouched, so the route reads as masked,
-        // documents itself as masked, and masks nothing. Refuse the parameter,
-        // not just the attribute.
+        // A hand-written `Authorize<A, E>` or `Bind<A, S>` arms the shaper too, and
+        // the mask passes `text/event-stream` through untouched.
         if is_sse && let Some(ty) = named_shaper_type(&inputs) {
             return syn::Error::new_spanned(
                 &ty,
@@ -313,13 +256,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        // Captured before `guards` is moved into the handler tuple — feeds the
-        // route's `scoped_guarded` flag (combined at runtime with any
-        // controller-level guards) for the boot-time posture check.
         let method_guarded = !guards.is_empty();
-        // Likewise for the `throttled` flag (OAPI-O4): a method-level
-        // `ThrottlerGuard` here, or a controller-level one via the runtime call
-        // emitted below.
         let method_throttled = guards.iter().any(guard_path_is_throttler);
         let force_guards = match take_path_list(&mut method.attrs, "force_guards") {
             Ok(paths) => paths,
@@ -342,8 +279,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(paths) => paths,
                 Err(err) => return err.to_compile_error().into(),
             };
-        // `#[public]` marks the route as publicly reachable; global guards still
-        // run and decide whether to admit anonymous callers.
+        // Global guards still run on a `#[public]` route.
         let is_public = match take_flag_attr(&mut method.attrs, "public") {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
@@ -357,52 +293,30 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        // `#[version("2")]` narrows this route to a subset of the controller's
-        // versions — the "v2 adds one endpoint" case, which otherwise costs a
-        // whole second controller.
         let method_versions = match take_version_attr(&mut method.attrs) {
             Ok(versions) => versions,
             Err(err) => return err.to_compile_error().into(),
         };
-        // `#[no_pipes]` opts out of every global pipe for this route.
         let no_pipes = match take_flag_attr(&mut method.attrs, "no_pipes") {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
-        // Internal marker the `#[crud]` macro stamps on its write ops (create /
-        // update / delete) — their write-error mapper can surface a `409` on a
-        // uniqueness violation, so the document advertises that response. Always
-        // stripped here so it never reaches the compiler.
+        // `#[crud]`'s write-op marker: the document advertises the `409` they can answer.
         let may_conflict = match take_flag_attr(&mut method.attrs, "crud_write") {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
-        // The same kind of marker, for the `Location` a `#[crud]` create sends
-        // with its `201`. Stamped by the generated handler because only it knows
-        // it built the header; `#[redirect]` is added to it below, since a
-        // redirect's whole response *is* a `Location`.
+        // `#[crud]`'s create marker: the document declares the `Location` it sends.
         let mut sets_location = match take_flag_attr(&mut method.attrs, "crud_location") {
             Ok(flag) => flag,
             Err(err) => return err.to_compile_error().into(),
         };
 
-        // Drained after the `use_*` attributes so error spans for a misuse of
-        // a response decorator point past the layers — and *before* emitting
-        // the wrapper fn so the wrapper's return type and body reflect any
-        // status / header / redirect override. The method's block is forwarded
-        // so `#[redirect]` can reject a non-empty body (which the macro would
-        // silently drop).
         let response_shapers =
             match crate::response::take_response_shapers(&mut method.attrs, &method.block) {
                 Ok(d) => d,
                 Err(err) => return err.to_compile_error().into(),
             };
-        // A `#[sse]` route answers `200 text/event-stream` and keeps answering
-        // it: there is no status to override, no redirect to send instead of a
-        // stream, and a header shaper would have to run before the first event
-        // rather than around a body that never completes. One sentence for the
-        // three, so a fourth response decorator inherits the refusal rather
-        // than needing its own.
         if is_sse && !response_shapers.is_empty() {
             return syn::Error::new_spanned(
                 &declared_verb,
@@ -414,35 +328,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        // The effective success status the OpenAPI document advertises for this
-        // route (OAPI-O3): a `#[redirect]`/`#[http_code(N)]` overrides the 200
-        // default.
         let success_status = response_shapers.success_status();
         if response_shapers.redirect.is_some() {
-            // A redirect *is* a `Location` — the shaper builds the response
-            // around that one header — so the document declares it without a
-            // marker of its own.
             sets_location = true;
-            // And `#[redirect]` produces the response itself, never calling the
-            // method, so rustc sees a method nothing invokes and reports
-            // `dead_code` on code that is correct and documented. The macro
-            // knows better than the lint here, so it says so — leaving a clean
-            // build clean.
             method.attrs.push(parse_quote! {
                 #[allow(dead_code, reason = "#[redirect] answers without calling the handler")]
             });
         }
 
-        // Every local the wrapper binds for itself sits on `Span::mixed_site()`
-        // — the span that gives *definition-site* hygiene to local variables —
-        // so a handler parameter spelled `req`, `body`, `__ctrl` or `res` binds
-        // a genuinely different variable and cannot shadow the wrapper's own.
-        // Without it, `Json(body): Json<T>` — the idiom `/http/extractors/`
-        // teaches — masked the `RequestBody` every *later* extractor reads, and
-        // the mismatched-type error was reported on `#[routes]`, naming neither
-        // the parameter nor the collision (HTTP-M1). The response shapers bind
-        // three more (`response.rs`); they take the same span, so the guarantee
-        // does not rest on statement order.
+        // Mixed-site, so a handler parameter spelled `req`, `body`, `__ctrl` or `res`
+        // cannot shadow the wrapper's own (`Json(body): Json<T>` masked the request body).
         let req_var = mixed_site_ident("req");
         let body_var = mixed_site_ident("body");
         let ctrl_var = mixed_site_ident("__ctrl");
@@ -450,21 +345,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let call_expr = await_if_async(
             &method.sig,
-            // By path, never `__ctrl.method(..)`: the controller is held in an
-            // `Arc`, and method lookup tries the `Arc` before it derefs, so a trait
-            // method of the handler's name implemented for `Arc<T>` ran instead.
+            // By path, never `__ctrl.method(..)`: method lookup tries the `Arc` before it
+            // derefs, so a same-named trait method on `Arc<T>` would run instead.
             quote! { <#self_ty>::#method_name(&**#ctrl_var, #(#arg_idents),*) },
         );
         let (wrapper_return_type, wrapper_body) = if is_sse {
-            // The handler hands back a stream of `SseEvent`; the decorator owns
-            // turning it into the response, applying the keep-alive and arming
-            // the connection ceiling — none of which the developer should have
-            // to remember, and the ceiling least of all. A fallible open
-            // (`-> Result<impl Stream<…>, E>`) is told from a bare stream by its
-            // **type**, through `nest_rs_core::Answer`, so a `Result` under
-            // another name opens or fails like a spelled one. The return type
-            // is left to inference: naming it would mean naming the handler's
-            // own `impl Stream` opaque type, which no macro can.
+            // A fallible open is told by type through `nest_rs_core::Answer`. The return
+            // type is inferred: no macro can name the handler's `impl Stream`.
             let wrapped = quote! {{
                 use ::nest_rs_core::AnswerFallback as _;
                 let __nestrs_answer = #call_expr;
@@ -494,13 +381,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             )
         };
 
-        // Mirrors poem's own `#[handler]` expansion (split → extract each
-        // parameter → call → `IntoResult` → `IntoResponse`), with one
-        // deliberate difference: the controller `Arc` is a **captured field**
-        // instead of a `Data<&Arc<Self>>` extractor. The `Data` route cost a
-        // per-request extension insert (`.data` middleware) plus the anymap
-        // it allocates — pure overhead on every request for a value that is
-        // fixed at mount time.
+        // Mirrors poem's `#[handler]` expansion, except the controller `Arc` is a
+        // captured field rather than a per-request `Data` extension.
         let extractor_stmts: Vec<TokenStream2> = inputs
             .iter()
             .filter_map(|arg| match arg {
@@ -517,12 +399,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 FnArg::Receiver(_) => None,
             })
             .collect();
-        // The SSE settings are read from `HttpConfig` **once, at mount** and
-        // carried in the endpoint beside the controller `Arc` — they are fixed
-        // for the life of the process, and a container lookup per request on a
-        // route whose whole job is to stay open would be pure overhead. Copied
-        // out of `self` before the async block so the future captures a value
-        // rather than borrowing the endpoint.
+        // Copied out of `self` before the async block so the future captures a
+        // value rather than borrowing the endpoint.
         let (sse_field, sse_binding) = if is_sse {
             (
                 quote! { __sse: ::nest_rs_http::SseSettings, },
@@ -571,9 +449,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        // Which parameter arms the shaper is the compiler's answer, not this
-        // crate's: it collects the types and emits the selection, which keeps
-        // it free of any dep on the authz crate *and* immune to a rename.
+        // The compiler selects the arming parameter, so this crate needs no authz
+        // dependency and a renamed import still arms.
         let param_types = param_types(&inputs);
         let shaper_selection = shaper_selection(&param_types);
 
@@ -596,16 +473,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             versions: method_versions.clone(),
             cfgs: cfgs.clone(),
         };
-        // Two handlers for the same (verb, path) would collapse silently into
-        // `poem::get(h1).get(h2)` — the second wins and the first becomes dead,
-        // unroutable code (HTTP-R2). Refused by the macro when neither carries a
-        // `#[cfg]`, and by rustc through the marker when both are compiled: the
-        // conditions as written say nothing about whether both hold.
-        //
-        // The identity is the address poem routes, not the path as written, and
-        // it is claimed in the versions the route serves: `#[version("1")]` and
-        // `#[version("2")]` on one verb and path are two addresses, `/v1/…` and
-        // `/v2/…`, while an unnarrowed route serves every version beside them.
+        // poem silently keeps the last of two handlers for one (verb, path); refused
+        // here without `#[cfg]`, and by rustc through the marker when both compile.
         let served: Vec<String> = method_versions.iter().map(LitStr::value).collect();
         let route = match served.as_slice() {
             [] => format!(
@@ -627,8 +496,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Err(err) = routes_declared.declare_in(
             Collision::Marker,
             "route",
-            // The verb folds; the path does not — `/Users` and `/users` are two
-            // routes, and the marker's name keeps them apart by its hash.
+            // The verb folds, the path does not: the marker's hash keeps `/Users` and
+            // `/users` apart.
             &format!("{} {}", verb_ident, parsed_path.identity()),
             &served,
             &route,
@@ -642,10 +511,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .iter_mut()
             .find(|group| group.identity == parsed_path.identity())
         {
-            // poem mounts an address once and binds each parameter by the name
-            // it was mounted under. A handler reading `:other` from a node
-            // mounted as `:id` finds nothing — so one address spells its
-            // parameters one way, whatever conditions its routes carry.
+            // poem binds each parameter by the name the address was first mounted under.
             Some(group) if group.mount.value() != route_path.value() => {
                 return syn::Error::new_spanned(
                     &written_path,
@@ -698,15 +564,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { &[#(#tags),*] }
         };
 
-        // The body, as one value pairing its media type with its schema — a
-        // `Json<T>` extractor, `#[api(multipart = T)]` naming the parts of a
-        // form, or a bare `Multipart` parameter whose parts no type states.
         let json_body = first_extractor_payload(&inputs, "Json");
         let form_body = first_extractor_payload(&inputs, "Form");
-        // A route has one request body, so the three ways to declare one are
-        // mutually exclusive. Asked as one table rather than as a check per
-        // pair: the pairs grow quadratically with the ways, and the third way
-        // (`Form<T>`) arrived without the two checks it owed.
+        // A route has one request body, so the ways to declare one are mutually exclusive.
         let declared: Vec<(&str, &dyn ToTokens)> = [
             api.multipart
                 .as_ref()
@@ -745,16 +605,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
                 ))
             },
-            // A handler pulling the parts itself still declares the media type
-            // it accepts: silence would document no body at all.
             (None, None) if takes_multipart(&inputs) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Multipart(
                     ::core::option::Option::None,
                 ))
             },
-            // `Form<T>` is a body like the other two, and matching only `Json`
-            // and `Multipart` documented a form-encoded route as taking none —
-            // silently, since nothing refused the shape either.
             (None, None) => match &form_body {
                 Some(ty) => quote! {
                     ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Form(
@@ -764,15 +619,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 None => quote! { ::core::option::Option::None },
             },
         };
-        // The payload the document advertises: `#[api(response = T)]` when the
-        // handler states it, else the `Json<T>` the return type carries.
-        //
-        // A shaper (`Authorize<_, _>`) no longer suppresses this. It masks
-        // *fields*, so the caller receives a subset of this shape — which the
-        // route records as `masked` and the document says in the response
-        // description. Suppressing the schema instead typed every generated
-        // client's `#[crud]` response as `any`, on exactly the surface
-        // `#[expose]` exists to serve (OAPI-O5).
+        // Kept under a shaper: masking returns a subset of this shape, recorded as `masked`.
         let response = match api
             .response
             .clone()
@@ -783,12 +630,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             },
             None => quote! { ::core::option::Option::None },
         };
-        // The media type of what comes *back*, when it is not JSON. Declared by
-        // `#[api(response_content_type = "...")]`, else read off an `-> SSE`
-        // return: poem serializes that one type as `text/event-stream` and
-        // nothing else, so inferring it states what the framework emits rather
-        // than guessing — the same reading that already infers `response` from
-        // a `Json<T>` return. A declaration always wins.
         if is_sse && let Some(lit) = &api.response_content_type {
             return syn::Error::new_spanned(
                 lit,
@@ -805,16 +646,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
             None => quote! { ::core::option::Option::None },
         };
-        // Read off the same type-directed selection the route arms with, so the
-        // document cannot claim an unmasked body for a shaper spelled under an
-        // alias.
         let masked = quote! { #shaper_selection.is_some() };
 
-        // `Path<T>` extractor types (in path order) and `Query<T>` payload
-        // types — the OpenAPI doc turns the former into real path-param schemas
-        // (`Uuid` → `format: uuid`, `i64` → `integer`) and expands each of the
-        // latter's object properties into individual query parameters. Both
-        // impose `JsonSchema` on the captured type, as `Json<T>` bodies do.
         let path_param_tys = path_param_types(&inputs);
         let path_params = if path_param_tys.is_empty() {
             quote! { &[] }
@@ -827,8 +660,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             quote! { &[#(::nest_rs_http::schema_of::<#query_param_tys> as ::nest_rs_http::SchemaFn),*] }
         };
-        // `Header<T>` payloads, expanded by the document exactly as `Query<T>`
-        // is — one parameter per property, `required` off the schema.
         let header_param_tys = extractor_payloads(&inputs, "Header");
         let header_params = if header_param_tys.is_empty() {
             quote! { &[] }
@@ -837,11 +668,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
 
         let route_versions = quote! { &[#(#method_versions),*] };
-        // A `#[version]` naming something the controller never declared would
-        // otherwise mount nowhere — the transport loops over the *controller's*
-        // versions — so the route would compile, register, appear in the
-        // document, and answer nothing. Assert the subset at the route, in a
-        // `const`, so a typo is a compile error where it was typed.
+        // A version the controller never declared would mount nowhere: the
+        // transport loops over the controller's versions.
         if let Some(first) = method_versions.first() {
             let span = first.span();
             let message = LitStr::new(
@@ -890,11 +718,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         });
     }
 
-    // Per-route layers fold into the access-graph dependencies so an unimported
-    // module fails boot with an `AccessGraphError`, not a silent resolution —
-    // and carry a label each, so the error names the layer instead of reporting
-    // `<unnamed dependency>`. One walk, so the selector below is written once
-    // and a seventh layer family cannot misalign keys against labels.
+    // A layer from an unimported module fails boot with an `AccessGraphError`
+    // rather than resolving through the flat container.
     let route_layers = layer_deps(
         routes_by_path
             .iter()
@@ -916,12 +741,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
 
-    // Every guard declared beside a verb runs `Guard::check_http`, whose default
-    // is `Ok(())` — so one bound per guard, failing at the `#[use_guards]` line
-    // rather than passing every request in silence. `#[force_guards]` re-runs an
-    // already-composed guard at this route, so it owes the same attestation.
-    // Controller-scope guards are bound by `#[controller]`, on the struct where
-    // they are written.
+    // `Guard::check_http` defaults to `Ok(())`, so a guard without the HTTP
+    // capability would pass every request.
     let capability_bounds = guard_capability_bounds(
         routes_by_path
             .iter()
@@ -939,9 +760,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         quote!(::nest_rs_guards::HttpGuard),
     );
 
-    // Emitted only when this controller actually streams — an unused binding
-    // would warn in the developer's build, and the resolve costs a container
-    // lookup no non-streaming controller has any use for.
+    // Only when the controller streams: an unused binding warns in the developer's build.
     let has_sse = routes_by_path
         .iter()
         .flat_map(|group| group.handlers.iter())
@@ -952,19 +771,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    // One entry per path, built *inside* the per-version loop below: a
-    // controller declaring `version = ["1", "2"]` mounts the same handlers at
-    // two prefixes, and a `#[version]`-narrowed verb drops out of the versions
-    // it does not serve. Each verb is therefore added conditionally, and the
-    // path is claimed only if at least one verb survived — an empty method
-    // table at a path answers `405`, which is a worse lie than `404`.
-    //
-    // The table is a `MethodTable` rather than poem's `RouteMethod` because the
-    // verb set is the answer a `405` owes (RFC 9110 §15.5.6, a MUST): it is
-    // known here, at the declaration, and used to be dropped at the mount. The
-    // registering call is what records it, so the served set and the advertised
-    // `Allow` cannot drift — including under `#[version]`, where which verbs
-    // survive is decided at mount time.
+    // Built inside the per-version loop; a path is claimed only if a verb survived,
+    // since an empty method table answers `405`. A `MethodTable` records the verb
+    // set a `405`'s `Allow` owes (RFC 9110 §15.5.6).
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
         .map(|group| {
@@ -1028,25 +837,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         #(#wrappers)*
 
         impl ::nest_rs_http::Controller for #self_ty {
-            // Routes mount FLAT on the transport's route tree
-            // (`.at("<prefix>/<path>")`), not as a nested sub-route: poem's
-            // `nest` re-slices the URI and re-routes on every request, and
-            // the sub-route's `.data(ctrl)` inserted an extension per
-            // request — both pure per-request overhead for a shape known at
-            // mount time. `join_path` is the same helper the transport's
-            // route log and the OpenAPI document use, so served, logged and
-            // documented paths cannot drift.
+            // Mounted flat: poem's `nest` re-slices and re-routes on every request.
             fn mount(
                 container: &::nest_rs_core::Container,
                 route: ::nest_rs_http::poem::Route,
             ) -> ::nest_rs_http::poem::Route {
                 let __ctrl = ::std::sync::Arc::new(<#self_ty>::from_container(container));
-                // Read once per controller mount, and only when one of its
-                // routes streams — see `sse_resolve`.
                 #sse_resolve
                 let mut __route = route;
-                // `[None]` for an unversioned controller: it still mounts, at
-                // one address. Iterating an empty list would unmount it.
+                // `[None]` for an unversioned controller: an empty list would unmount it.
                 let __versions: ::std::vec::Vec<::core::option::Option<&'static str>> =
                     if <#self_ty>::VERSIONS.is_empty() {
                         ::std::vec![::core::option::Option::None]
@@ -1066,9 +865,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::nest_rs_core::Discoverable for #self_ty {
-            // `dependencies` stays empty (controller is built at mount); `injected`
-            // reports `#[inject]` keys + every container-resolved layer for the
-            // access-graph check.
             #injected_methods
 
             fn register(
@@ -1084,10 +880,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 );
                 builder
                     .attach_meta::<#self_ty, ::nest_rs_http::HttpControllerMeta>(__meta)
-                    // Boot-time guard-chain validation for this controller:
-                    // declared phase ordering plus the produced/expected
-                    // principal cross-check (authn's claims vs. authz's actor)
-                    // fail boot with a named error instead of a per-request 500.
                     .attach_meta::<#self_ty, ::nest_rs_http::HttpBootCheck>(
                         ::nest_rs_http::HttpBootCheck::new(|__container| {
                             ::nest_rs_guards::dispatch::boot_validate_guards(
@@ -1125,10 +917,6 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
 }
 
 /// Take `#[authorize(Action, Entity)]` off a route method.
-///
-/// The HTTP twin of `#[resolver]`'s per-operation posture: one attribute,
-/// greppable, and — unlike a parameter the developer spells — impossible to
-/// disarm by renaming an import, because the macro writes the extractor type.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -1144,19 +932,13 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
             nest_rs_codegen::at_most_one_authorize("route"),
         ));
     }
-    // Parsed as `Meta`, not as `Path`, so a key this edge cannot express is
-    // *reachable*. `Punctuated::<Path, _>` died on the `=` of
-    // `bind = Service` with syn's `expected \`,\``, which names neither the key
-    // nor the reason — the silence `unmasked` was already lifted out of
-    // `PostureRules` to end, with its sibling left behind.
+    // Parsed as `Meta`, not `Path`, so `bind = Service` is refused by name rather
+    // than by syn's `expected \`,\``.
     let metas: Vec<Meta> = attr
         .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
         .map_err(|_| malformed_authorize(&attr))?
         .into_iter()
         .collect();
-    // GraphQL's two, refused by name and with the fact that makes them
-    // GraphQL's: they synthesise an id argument and an `Authorized<A, E>` proof,
-    // which no other transport can express.
     for meta in &metas {
         let Meta::NameValue(nv) = meta else {
             continue;
@@ -1208,7 +990,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     Ok(Some(AuthorizeSpec { action, entity }))
 }
 
-/// The shape refusal, worded once: three arms reach it.
+/// The `#[authorize]` shape refusal.
 fn malformed_authorize(attr: &Attribute) -> syn::Error {
     syn::Error::new_spanned(
         attr,
@@ -1218,9 +1000,8 @@ fn malformed_authorize(attr: &Attribute) -> syn::Error {
     )
 }
 
-/// The extractor `#[authorize(Action, Entity)]` desugars to — the same
-/// parameter `#[crud]` emits on its generated ops, so both paths arm the class
-/// gate and the response mask through one mechanism.
+/// The extractor `#[authorize(Action, Entity)]` desugars to, the same one
+/// `#[crud]` emits.
 fn authorize_param(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<FnArg> {
     if let Some(param) = inputs.iter().find(|arg| is_authorize_param(arg)) {
         return Err(syn::Error::new_spanned(
@@ -1235,9 +1016,8 @@ fn authorize_param(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<FnArg>
     })
 }
 
-/// Whether a parameter is a hand-written `Authorize<..>` (not a `Bind<..>`,
-/// which stays a legitimate parameter — it loads the subject, it is not the
-/// posture).
+/// Whether a parameter is a hand-written `Authorize<..>`; a `Bind<..>` loads
+/// the subject and stays.
 fn is_authorize_param(arg: &FnArg) -> bool {
     let FnArg::Typed(pt) = arg else { return false };
     let Type::Path(tp) = pt.ty.as_ref() else {
@@ -1246,7 +1026,6 @@ fn is_authorize_param(arg: &FnArg) -> bool {
     tp.path.segments.iter().any(|s| s.ident == "Authorize")
 }
 
-/// The handler's declared parameter types, in order.
 fn param_types(inputs: &[FnArg]) -> Vec<Type> {
     inputs
         .iter()
@@ -1257,13 +1036,9 @@ fn param_types(inputs: &[FnArg]) -> Vec<Type> {
         .collect()
 }
 
-/// The route's response shaper, selected **by type**: each parameter type is
-/// handed to `nest_rs_http::ShaperProbe`, whose two arms the compiler picks
-/// between after name resolution. The first parameter that is a
-/// `RouteResponseShaper` arms the route; every other type answers `None`.
-///
-/// This is what makes the arm alias-proof — `use Authorize as Az` changes the
-/// spelling, not the type, and the spelling is no longer part of the question.
+/// The route's response shaper, selected by type after name resolution: the
+/// first parameter that is a `RouteResponseShaper` arms the route, so an
+/// aliased import arms too.
 fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
     if param_types.is_empty() {
         return quote! { ::core::option::Option::<::nest_rs_http::CaptureFn>::None };
@@ -1280,10 +1055,8 @@ fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
     }}
 }
 
-/// A parameter *spelled* `Authorize<..>` / `Bind<..>`, for the HTTP-D1
-/// diagnostic only. Arming no longer depends on it (see [`shaper_selection`]):
-/// this exists so a type wearing the name but not implementing the trait is a
-/// spanned compile error instead of a route that silently arms nothing.
+/// A parameter *spelled* `Authorize<..>` / `Bind<..>`, for the diagnostic
+/// only: arming is [`shaper_selection`]'s.
 fn named_shaper_type(inputs: &[FnArg]) -> Option<Type> {
     inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
@@ -1309,21 +1082,9 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
         .any(|s| s.ident == "Authorize" || s.ident == "Bind")
 }
 
-/// Build one routed handler. Layout, inner → outer:
-///
-/// shaper (mask) → exception-filter pool (all scopes — typed catches sit
-/// closest to the handler) → per-route filters (controller + method) →
-/// per-route interceptors (controller + method) → `RouteShaper` (guard +
-/// pipe pools) → metadata data.
-///
-/// Every family composes through the same `compose_chain` dedup (global +
-/// controller + method, broadest scope wins). Global filters / interceptors
-/// participate in the dedup but *execute at the transport edge* (their wrap
-/// covers 404s, self-mounts and guard denials); the route site executes the
-/// controller / method survivors only, inside the guard chain — a denial
-/// short-circuits before any handler-side layer. The relative nesting is the
-/// same at both sites: interceptors outside filters, filters outside
-/// exception-filters.
+/// Build one routed handler. Layout, inner → outer: shaper (mask) →
+/// exception filters → filters → interceptors → `RouteShaper` (guards + pipes)
+/// → metadata. Global filters and interceptors run at the transport edge.
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let RouteHandler {
         verb: _,
@@ -1345,26 +1106,15 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         exception_filters: method_exception_filters,
     } = handler;
     let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
-    // Constructed at mount time, inside `Controller::mount` where `__ctrl`
-    // is in scope — the wrapper endpoint captures the controller `Arc`
-    // directly instead of reading it back through a `Data` extension.
+    // Expanded inside `Controller::mount`, where `__ctrl` and `__sse` are in scope.
     let wrapper_expr = if *is_sse {
         quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl), __sse: __sse } }
     } else {
         quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl) } }
     };
-    // Arming is the compiler's answer over the parameter *types*, so a renamed
-    // import arms exactly like the canonical spelling. What survives from the
-    // old name scan is the run-time probe, now a backstop rather than the net:
-    // it catches a masking extractor reached indirectly (nested inside another
-    // extractor, or a hand-rolled `FromRequest`), which no type-directed scan
-    // of the signature can see. A handler with no extractor parameters at all
-    // cannot run one, so its probe is provably dead and is not emitted.
+    // The run-time probe catches a masking extractor reached indirectly (nested,
+    // or a hand-rolled `FromRequest`), which no scan of the signature can see.
     let shaper_selection = shaper_selection(param_types);
-    // HTTP-D1: a parameter *named* `Authorize`/`Bind` that does not implement
-    // the shaper trait would select nothing and arm nothing. Assert it eagerly
-    // so that is a spanned compile error naming the trait, not a silently
-    // unshaped route.
     let named_shaper_assert = match named_shaper {
         Some(ty) => quote! {
             const _: fn() = || {
@@ -1394,11 +1144,8 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         interceptors,
         quote!(dyn ::nest_rs_interceptors::Interceptor),
     );
-    // The three response-side pools compose in ONE call: every additional
-    // generic wrapper level would add a `Request`-sized slot to the future
-    // poem's route table boxes per request, bare routes included. A route
-    // with no response-side layer passes through generic; a layered route
-    // goes behind a single box.
+    // One call for the three pools: each generic wrapper level adds a
+    // `Request`-sized slot to the future poem boxes per request.
     expr = quote! {
         ::nest_rs_guards::dispatch::wrap_route_response_layers(
             container,
@@ -1413,10 +1160,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         )
     };
 
-    // RouteShaper sits *inside* the metadata wrap so per-route
-    // guards reading `#[meta(...)]` via `Reflector` see it; outside the
-    // per-route layer wraps so a denial short-circuits before any
-    // handler-side work.
+    // Inside the metadata wrap, so guards reading `#[meta(...)]` see it.
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
@@ -1439,15 +1183,11 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         )
     };
 
-    // Metadata is attached *after* the RouteShaper so per-route
-    // guards see the route's `#[meta]` value when the chain runs.
     for m in metas {
         expr = quote! { ::nest_rs_http::poem::EndpointExt::data(#expr, #m) };
     }
 
-    // `#[public]` attaches a `Public` marker as route data. The framework
-    // does not act on it; guards read it via `Reflector::is_public()` and
-    // adjust their own policy.
+    // Guards read the marker via `Reflector::is_public()`.
     if *is_public {
         expr = quote! {
             ::nest_rs_http::poem::EndpointExt::data(#expr, ::nest_rs_http::Public)
@@ -1457,9 +1197,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     expr
 }
 
-/// A verb's one argument, the route's path, read as a string literal — or the
-/// shared value sentence at the verb as written (`#[get]`, `#[sse]`), never
-/// syn's `expected string literal`, which names neither.
+/// A verb's one argument, the route's path, read as a string literal.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -1486,14 +1224,8 @@ fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
     }
 }
 
-/// Whether a guard path names the framework's `ThrottlerGuard` — the signal
-/// that a route is rate-limited and can answer `429`. Matched on the last path
-/// segment's ident so `nest_rs_throttler::ThrottlerGuard`, a `use`-imported
-/// `ThrottlerGuard`, and an aliased re-export all count. Name-based by design:
-/// the same lightweight detection the masking-arm check uses — a user guard
-/// *named* `ThrottlerGuard` that isn't the framework's is a
-/// pathological false-positive we accept over dragging a type dependency into
-/// the macro crate.
+/// Whether a guard path's last segment names `ThrottlerGuard`, so the route
+/// documents a `429`. By name: an alias is missed, a namesake counts.
 pub(crate) fn guard_path_is_throttler(path: &Path) -> bool {
     path.segments
         .last()
@@ -1506,29 +1238,19 @@ struct ApiMeta {
     description: Option<LitStr>,
     tags: Vec<LitStr>,
     /// `#[api(response = T)]` — the payload the document advertises when the
-    /// return type cannot state it: a handler that builds its own `Response`
-    /// (the `#[crud]` paginated list, which carries `x-next-cursor`) returns
-    /// no `Json<T>` for the macro to read.
+    /// return type cannot state it.
     response: Option<Type>,
     /// `#[api(multipart = T)]` — the type describing the parts of a
-    /// `multipart/form-data` body. No extractor states them: a handler reads
-    /// the parts one at a time (or through its own `FromRequest`), so the form's
-    /// shape is declared rather than inferred.
+    /// `multipart/form-data` body.
     multipart: Option<Type>,
     /// `#[api(response_content_type = "audio/mpeg")]` — the media type of a
-    /// success body that is not JSON, for a handler that builds its own
-    /// `Response` (a streamed download, a rendered file).
+    /// success body that is not JSON.
     response_content_type: Option<LitStr>,
 }
 
-/// Every key `#[api]` takes, in the order it declares them — the grammar every
-/// key is taken through, so the keys an unknown one is told about are the keys
-/// a repeat is refused for.
-///
-/// The match in [`parse_api_attr`] is the other half, and a key listed here
-/// that the match does not read would be accepted and dropped;
-/// `every_api_key_is_read_as_the_table_writes_it` reads every key in the form
-/// `API_KEYS_WRITTEN` gives it.
+/// Every key `#[api]` takes. A key the match in [`parse_api_attr`] does not
+/// read is accepted and dropped: `every_api_key_is_read_as_the_table_writes_it`
+/// holds the two together.
 const API_KEYS: [&str; 6] = [
     "summary",
     "description",
@@ -1538,29 +1260,12 @@ const API_KEYS: [&str; 6] = [
     "response_content_type",
 ];
 
-/// `#[api]`'s grammar, over [`API_KEYS`].
 const API: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("api", &API_KEYS);
 
-/// Parse `#[api(...)]` straight into [`ApiMeta`].
+/// Parse `#[api(...)]` into [`ApiMeta`].
 ///
-/// **A repeated key is refused**, and on this decorator that matters more than
-/// on most: `#[api(summary = …, description = …)]` is written *instead of* a
-/// doc comment — prose the framework compiles into behaviour is declared as an
-/// argument, never as a doc comment — so a dropped `description` is published
-/// prose silently replaced by source order.
-///
-/// **The key is judged before its value**, so an unknown key reads as unknown
-/// whatever follows it, and a known one written bare reads as missing its value
-/// — the family's two sentences (`nest_rs_codegen::{unknown_argument,
-/// needs_a_value}`), which every other `key = value` decorator prints.
-/// `tags` is the one key written with a list rather than `=`, and a bare `tags`
-/// is told the list it takes, as `#[process]` tells a bare `throttle`.
-///
-/// Read through [`Grammar`](nest_rs_codegen::Grammar) rather than `syn::Meta`:
-/// a `Meta::NameValue` holds an **expression**, and `response = Vec<Post>` is a
-/// *type* — read as an expression it is a chain of comparisons, so the whole
-/// attribute failed with "comparison operators cannot be chained" pointing at the
-/// decorator, on a type the developer never wrote.
+/// Read through [`Grammar`](nest_rs_codegen::Grammar), not `syn::Meta`, whose
+/// `NameValue` reads `response = Vec<Post>` as chained comparisons.
 fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
     let mut out = ApiMeta::default();
     API.parse_attr(attr, |arg| {
@@ -1585,9 +1290,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
     Ok(out)
 }
 
-/// A type-valued `#[api]` key's value — `response = Vec<Post>` — or the shared
-/// value sentence at the token syn stopped on, rather than its list of the
-/// fifteen tokens a type may start with.
+/// A type-valued `#[api]` key's value — `response = Vec<Post>`.
 fn api_type(input: syn::parse::ParseStream<'_>, key: &str, example: &str) -> syn::Result<Type> {
     input.parse::<Type>().map_err(|stopped| {
         syn::Error::new(
@@ -1601,8 +1304,7 @@ fn api_type(input: syn::parse::ParseStream<'_>, key: &str, example: &str) -> syn
     })
 }
 
-/// `tags("a", "b")` — a list of string literals, each refused at itself when it
-/// is anything else, and the key refused at itself when no list follows it.
+/// `tags("a", "b")` — a list of string literals.
 fn api_tags(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result<Vec<LitStr>> {
     let refused = |at: &dyn ToTokens| {
         syn::Error::new_spanned(
@@ -1632,15 +1334,7 @@ fn api_tags(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result
 }
 
 /// The payload type behind an extractor named `name`: `Name<T>`,
-/// `Valid<Name<T>>` and `Piped<_, Name<T>>` all yield `T`; anything else yields
-/// `None`.
-///
-/// One reader for every extractor the document describes. It was five —
-/// `Json`, `Form`, `Path`, `Query`, `Header` — byte-identical apart from the
-/// name, and the cost was not the line count: the two carriers are the
-/// framework's pipe grammar, so a change to them (or a sixth extractor) had to
-/// land in five places or silently miss one. That is exactly how `Form` came to
-/// be absent from the request-body match while every other extractor was read.
+/// `Valid<Name<T>>` and `Piped<_, Name<T>>` all yield `T`.
 fn extractor_payload(ty: &Type, name: &str) -> Option<Type> {
     if let Some(payload) = nth_generic_type(ty, name, 0) {
         return Some(payload.clone());
@@ -1665,17 +1359,13 @@ fn extractor_payloads(inputs: &[FnArg], name: &str) -> Vec<Type> {
         .collect()
 }
 
-/// The first `Name<T>` payload in the handler signature — for the extractors a
-/// route may only bind once (a request body).
+/// The first `Name<T>` payload in the handler signature.
 fn first_extractor_payload(inputs: &[FnArg], name: &str) -> Option<Type> {
     extractor_payloads(inputs, name).into_iter().next()
 }
 
-/// The path-parameter types a handler binds, in path order. A single
-/// `Path<T>` yields `[T]`; a tuple `Path<(A, B)>` yields `[A, B]` (poem binds
-/// tuple elements to the `:name` segments left-to-right). A handler with no
-/// `Path<…>` extractor (it binds its id via `Bind<_, _>` instead) yields an
-/// empty vec — the doc then guesses `format: uuid` for id-like segments.
+/// The path-parameter types a handler binds, in path order: `Path<(A, B)>`
+/// yields `[A, B]`, as poem binds tuple elements left to right.
 fn path_param_types(inputs: &[FnArg]) -> Vec<Type> {
     match first_extractor_payload(inputs, "Path") {
         Some(Type::Tuple(tuple)) => tuple.elems.into_iter().collect(),
@@ -1684,17 +1374,12 @@ fn path_param_types(inputs: &[FnArg]) -> Vec<Type> {
     }
 }
 
-/// Whether a type's last path segment is `name` — the same lightweight,
-/// resolution-free match `guard_path_is_throttler` and `result_inner` make. It
-/// is what lets a handler binding poem's `Multipart` (or returning its `SSE`)
-/// be recognized without this crate depending on poem's types.
+/// Whether a type's last path segment is `name`, read off the spelling.
 fn last_segment_is(ty: &Type, name: &str) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == name))
 }
 
 /// Whether the handler pulls the parts itself through poem's `Multipart`.
-/// Such a route accepts `multipart/form-data` and nothing types its parts —
-/// which is a media type worth documenting even with no schema to go with it.
 fn takes_multipart(inputs: &[FnArg]) -> bool {
     inputs.iter().any(|arg| match arg {
         FnArg::Typed(pt) => last_segment_is(&pt.ty, "Multipart"),
@@ -1702,10 +1387,7 @@ fn takes_multipart(inputs: &[FnArg]) -> bool {
     })
 }
 
-/// Whether the handler returns poem's `SSE`, possibly behind a `Result`. poem
-/// serializes that one type as `text/event-stream` and nothing else, so this
-/// reports what the framework emits — the same reading that infers a route's
-/// response schema from a `Json<T>` return.
+/// Whether the handler returns poem's `SSE`, possibly behind a `Result`.
 fn returns_sse(output: &ReturnType) -> bool {
     let ReturnType::Type(_, ty) = output else {
         return false;
@@ -1713,14 +1395,11 @@ fn returns_sse(output: &ReturnType) -> bool {
     last_segment_is(result_inner(ty).unwrap_or(ty), "SSE")
 }
 
-/// A media type keys an OpenAPI `content` map, so a malformed one yields a
-/// document no client can match a response against. Checked where it is
-/// written — `#[api]` has the literal in hand — rather than left to a reader of
-/// the generated document.
+/// Refuse a malformed media type: it keys an OpenAPI `content` map no client
+/// could match.
 fn check_media_type(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
-    // `text/event-stream; charset=utf-8` is a media type with a parameter; the
-    // `type/subtype` shape is the part that must be well formed.
+    // Parameters (`; charset=utf-8`) aside.
     let essence = value.split(';').next().unwrap_or_default().trim();
     let mut halves = essence.split('/');
     let well_formed = match (halves.next(), halves.next(), halves.next()) {
@@ -1742,22 +1421,14 @@ fn check_media_type(lit: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-/// `Some(T)` when `ty` is spelled `Result<T, _>`, `None` otherwise — a reading
-/// of the **spelling**, since a proc-macro resolves no name: `use poem::Result
-/// as PoemResult` and `type Outcome<T, E> = Result<T, E>` are not matched.
-///
-/// So it decides only what the route's **document** infers — the payload
-/// schema (`response_payload`) and the `text/event-stream` media type
-/// (`returns_sse`) — and never what the route does. Behaviour is read by type:
-/// a shaper's success-only status and an SSE open both go through
-/// `nest_rs_core::Answer`, which an alias does not fool. A return the spelling
-/// cannot read states its payload with `#[api(response = T)]`.
+/// `Some(T)` when `ty` is spelled `Result<T, _>`. A reading of the spelling,
+/// which an alias defeats: it decides only what the document infers, never what
+/// the route does (that goes through `nest_rs_core::Answer`).
 pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
     nth_generic_type(ty, "Result", 0)
 }
 
-/// The JSON payload type of a handler's return — strips one optional `Result`
-/// then a `Json`. Non-JSON returns yield `None`.
+/// The JSON payload type of a handler's return, under one optional `Result`.
 fn response_payload(output: &ReturnType) -> Option<Type> {
     let ReturnType::Type(_, ty) = output else {
         return None;
@@ -1772,8 +1443,7 @@ mod tests {
 
     use super::*;
 
-    /// How each of [`API_KEYS`] is written, position for position — the form
-    /// the tests below read every key in.
+    /// How each of [`API_KEYS`] is written, position for position.
     const API_KEYS_WRITTEN: [&str; 6] = [
         "summary = \"...\"",
         "description = \"...\"",
@@ -1783,9 +1453,6 @@ mod tests {
         "response_content_type = \"type/subtype\"",
     ];
 
-    // The `429` OAPI-O4 signal is detected on the guard path's last segment, so
-    // it survives a fully-qualified path and a `use`-imported name alike, and a
-    // guard that merely *contains* the substring does not false-positive.
     #[test]
     fn guard_path_is_throttler_matches_the_last_segment_only() {
         let plain: Path = parse_quote!(ThrottlerGuard);
@@ -1800,7 +1467,6 @@ mod tests {
         let module_named: Path = parse_quote!(ThrottlerGuard::helper);
         assert!(!guard_path_is_throttler(&other));
         assert!(!guard_path_is_throttler(&lookalike));
-        // The *last* segment is `helper`, not the guard type — no match.
         assert!(!guard_path_is_throttler(&module_named));
     }
 
@@ -1809,11 +1475,6 @@ mod tests {
         parse_api_attr(&attr)
     }
 
-    // `response = Vec<Post>` is a **type**. Read as `syn::Meta` its value would
-    // be an expression, and a generic argument list reads there as a chain of
-    // comparisons — so the whole `#[crud]` expansion failed with "comparison
-    // operators cannot be chained" pointing at the decorator, on a type the
-    // developer never wrote.
     #[test]
     fn api_response_accepts_a_generic_type_beside_the_string_arguments() {
         let meta = match api_attr(quote! {
@@ -1855,9 +1516,6 @@ mod tests {
         );
     }
 
-    // A media type keys the document's `content` map. Rejecting a malformed one
-    // where it is written beats emitting a document whose response no client
-    // can match.
     #[test]
     fn a_response_content_type_that_is_not_a_media_type_is_rejected() {
         for bad in ["octet-stream", "audio/", "/mpeg", "audio / mpeg", "a/b/c"] {
@@ -1898,9 +1556,6 @@ mod tests {
 
     #[test]
     fn a_payload_is_unwrapped_through_the_pipe_carriers() {
-        // The two carriers are the framework's pipe grammar, and they are read
-        // once for every extractor — so a validated or piped DTO documents
-        // itself like a bare one, whichever extractor it sits in.
         for name in ["Header", "Json", "Form", "Query", "Path"] {
             let name_ident = format_ident!("{name}");
             let shapes: [Type; 3] = [
@@ -1912,7 +1567,6 @@ mod tests {
                 let inner = extractor_payload(&ty, name).expect("a payload");
                 assert_eq!(quote!(#inner).to_string(), quote!(Tracing).to_string());
             }
-            // And an extractor of another name is not this one.
             assert!(extractor_payload(&parse_quote!(Other<PageParams>), name).is_none());
         }
     }
@@ -1934,8 +1588,6 @@ mod tests {
         }
     }
 
-    /// The family's sentence, naming the key as written and every key the table
-    /// lists — bare or with a value, since the key is judged before either.
     #[test]
     fn an_unknown_api_argument_names_itself_and_the_accepted_set() {
         let expected = "unknown #[api] argument `returns`; expected `summary`, `description`, \
@@ -1944,8 +1596,6 @@ mod tests {
         assert_eq!(api_refusal(quote! { returns }), expected);
     }
 
-    /// Every `key = value` key written bare is told it needs a value, never
-    /// syn's `expected =`; `tags` is told the list it takes.
     #[test]
     fn a_bare_api_key_is_told_what_it_is_missing() {
         for (key, written) in API_KEYS.into_iter().zip(API_KEYS_WRITTEN) {
@@ -1965,9 +1615,6 @@ mod tests {
         }
     }
 
-    /// The table's written form of each key is what the parser reads — so a row
-    /// the match does not handle fails here rather than being refused as
-    /// unknown by a sentence that lists it.
     #[test]
     fn every_api_key_is_read_as_the_table_writes_it() {
         for (key, written) in API_KEYS.into_iter().zip(API_KEYS_WRITTEN) {
@@ -1992,12 +1639,9 @@ mod tests {
     }
 }
 
-/// The suffix every controller carries by convention, and which therefore says
-/// nothing about *which* controller this is.
 const CONTROLLER_SUFFIX: &str = "Controller";
 
-/// `PostsController` → `posts`. A name that is *only* the suffix keeps it,
-/// because `_list` names nothing.
+/// `PostsController` → `posts`. A name that is only the suffix keeps it.
 fn controller_token(controller: &str) -> String {
     let stem = controller
         .strip_suffix(CONTROLLER_SUFFIX)
@@ -2014,9 +1658,7 @@ mod token_tests {
     fn a_controller_is_named_by_what_it_serves() {
         assert_eq!(controller_token("PostsController"), "posts");
         assert_eq!(controller_token("HTTPProbeController"), "http_probe");
-        // Not every controller type carries the suffix.
         assert_eq!(controller_token("Posts"), "posts");
-        // And one that is *only* the suffix keeps it.
         assert_eq!(controller_token("Controller"), "controller");
     }
 }

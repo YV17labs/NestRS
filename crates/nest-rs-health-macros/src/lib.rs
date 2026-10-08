@@ -26,30 +26,13 @@ mod indicators;
 /// probes actually answer on.
 ///
 /// Each tagged method takes `&self` and returns `()` — reported `up` once it
-/// completes — or a `Result<(), E: Into<anyhow::Error>>` such as
-/// `anyhow::Result<()>`. `Ok(())` reports the indicator as
-/// `up`; an error reports it as `down` with a **fixed, opaque** reason
-/// (`"check failed"` / `"timed out"` / `"probe deadline exceeded"`) — never
-/// your error's text. `/health/*` is routinely unauthenticated and an `anyhow`
-/// chain carries DSNs, internal hostnames and driver messages, so the full
-/// `{err:#}` goes to a `warn` on `nest_rs::health` instead, carrying
-/// `indicator` and `kind`.
+/// completes — or a `Result<(), E: Into<anyhow::Error>>`. An error reports
+/// `down` with a **fixed, opaque** reason, never your error's text, which goes
+/// to a `warn` on `nest_rs::health`: `/health/*` is routinely unauthenticated.
 ///
-/// Every indicator on a probe runs **concurrently**, under two ceilings a
-/// deployment sets through
-/// [`HealthConfig`](../nest_rs_health/struct.HealthConfig.html): a per-indicator
-/// one, whose expiry names the slow check, and a probe-wide deadline that bounds
-/// the response whatever the indicator count is. Both default inside
-/// Kubernetes' own `timeoutSeconds` default of one second, past which the
-/// kubelet scores the probe as failed with nothing logged at this end.
-///
-/// Multiple decorated methods on the same `#[indicators]` impl block all
-/// share the provider's `#[inject]` dependencies — pool a DB ping, a Redis
-/// ping, and a migration check on a single `AppHealth` service rather than
-/// writing a struct per check.
-///
-/// The impl is re-emitted unchanged, with no `Discoverable` — the host's own
-/// `#[injectable]` owns it.
+/// Every indicator on a probe runs **concurrently**, under a per-indicator
+/// ceiling and a probe-wide deadline set through
+/// [`HealthConfig`](../nest_rs_health/struct.HealthConfig.html).
 #[proc_macro_attribute]
 pub fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(indicators::indicators(args, input).into()).into()

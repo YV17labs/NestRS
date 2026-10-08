@@ -36,10 +36,8 @@ pub struct App {
     container: Container,
 }
 
-/// Fail the boot if any concrete/keyed provider was registered twice — a wiring
-/// mistake that would otherwise silently last-write-wins. Reports the first
-/// duplicate; fixing it re-runs and surfaces the next, same as the other
-/// boot-time wiring checks.
+/// Fail the boot if any unkeyed provider was registered twice, rather than let
+/// the last write win silently.
 fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
     if let Some(dup) = builder.duplicate_providers().first() {
         return Err(DuplicateProviderError {
@@ -66,8 +64,7 @@ fn check_contested_declarations(builder: &ContainerBuilder) -> Result<()> {
 }
 
 /// Fail the synchronous boot when a module queued an async factory: `App::new`
-/// has no factory phase, so the value would never be built and the hole would
-/// only surface as a `None` at first read.
+/// has no factory phase, so the value would never be built.
 fn check_no_queued_factories(builder: &ContainerBuilder) -> Result<()> {
     if let Some(type_name) = builder.queued_factory_names().first() {
         return Err(UnresolvedFactoryError { type_name }.into());
@@ -95,42 +92,29 @@ fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
 }
 
 impl App {
-    /// Build the container from the root module synchronously. Every wiring
-    /// failure is a `Result`: a cross-module reach returns
-    /// [`AccessGraphError`](crate::AccessGraphError), a dependency no module
-    /// provides returns [`MissingDependencyError`](crate::MissingDependencyError),
-    /// a doubly-registered type returns
-    /// [`DuplicateProviderError`], a provider cycle
-    /// [`ProviderCycleError`](crate::ProviderCycleError), and a module's own
-    /// refusal ([`ContainerBuilder::refuse`]) the error it filed. The register
-    /// phase defers a missing dependency to the access-graph check rather than
-    /// panicking ahead of it.
+    /// Build the container from the root module synchronously.
+    ///
+    /// # Errors
+    ///
+    /// Every wiring failure: [`AccessGraphError`](crate::AccessGraphError),
+    /// [`MissingDependencyError`](crate::MissingDependencyError),
+    /// [`DuplicateProviderError`],
+    /// [`ProviderCycleError`](crate::ProviderCycleError),
+    /// [`UnresolvedFactoryError`] for a module that queued an async factory, and
+    /// a module's own refusal ([`ContainerBuilder::refuse`]).
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
-        // `collect` runs first, exactly as the async builder runs it: a static
-        // module whose `collect` queues a factory — a vendor binding, a
-        // `ConfigModule::for_feature` — is then *seen* by the check below and
-        // refused by name, instead of the value being silently absent because
-        // nothing ever asked the module what it would have built.
+        // `collect` runs first so a module queuing a factory is refused below.
         let root = std::any::type_name::<M>();
         let builder = Container::builder()
             .enter_phase(Phase::Collect)
             .enter_root(root)
             .import::<M>()
             .leave_import();
-        // Before the queue check, and for the same reason the async path runs it
-        // before any factory: a contested declaration is a fact that **survives
-        // the remedy the queue check prescribes**. `UnresolvedFactoryError` says
-        // "boot with `App::builder()…` instead", so reporting it first hands the
-        // developer an edit whose only outcome is a second, different boot
-        // failure — while the framework already held the fact that explains it.
-        // A refusal lands at the earliest site that can see the fact
-        // (`.claude/decisions/boot-refusal-order.md`).
+        // Before the queue check: a contested declaration survives the remedy
+        // `UnresolvedFactoryError` prescribes (`.claude/decisions/boot-refusal-order.md`).
         check_contested_declarations(&builder)?;
-        // Nothing drains the queue on this path, so anything a module queued as
-        // an async factory would never exist — refused before `register`, which
-        // builds providers from those outputs and would panic on the hole.
         check_no_queued_factories(&builder)?;
         let mut builder = builder
             .enter_phase(Phase::Register)
@@ -138,19 +122,12 @@ impl App {
             .import::<M>()
             .leave_import();
         check_register_phase(&mut builder)?;
-        // `ReachableProviders` is seeded after register but is global
-        // infrastructure for the access graph, so it must be in `global` up
-        // front regardless of seed ordering.
+        // Seeded after register, yet global infrastructure for the access graph.
         let global: HashSet<TypeId> = HashSet::from([
             TypeId::of::<ReachableProviders>(),
             TypeId::of::<ProviderOrder>(),
             TypeId::of::<Composition>(),
         ]);
-        // The actual registered set (singletons + scoped/transient factories +
-        // imperatively-provided values) — consulted so a dependency provided
-        // outside the declarative graph is not misreported as unmet.
-        // Keyed providers are configured imperatively; the sync path seeds none
-        // up front, so any keyed dependency here is genuinely unmet.
         let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
         let builder = seal(
             builder,
@@ -178,8 +155,6 @@ impl App {
 
     /// Run the init lifecycle phases (`OnModuleInit`, then
     /// `OnApplicationBootstrap`) against the built container, without serving.
-    /// Exposed so a test harness can drive the same startup the server
-    /// performs.
     pub async fn init(&self) -> Result<()> {
         run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
         run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await?;
@@ -189,27 +164,15 @@ impl App {
     /// Configure each transport against the container, run the init lifecycle
     /// hooks, then run all transports concurrently. SIGINT / SIGTERM cancels the
     /// shared token; the first transport that errors also cancels the others.
-    /// Once the transports have stopped, the shutdown lifecycle hooks run, all
-    /// three phases inside one budget,
+    /// Once the transports have stopped, the shutdown hooks run within
     /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
-    /// panics is reported and the rest still run.
-    /// The transports are awaited without a bound of this method's own: each
-    /// owes its own, per [`Transport::serve`], and states it as
-    /// [`Transport::stop_bound`]. Once they are configured, `way down bounded`
-    /// on `nest_rs::app` files the longest of them (`stop_bound_ms`) beside the
-    /// hooks' budget (`hooks_budget_ms`) — the way down this deployment spends,
-    /// before any telemetry flush the binary adds.
+    /// fails or panics is reported and the rest still run.
     ///
-    /// A signal received once the way down has begun exits the process at once,
-    /// with the code a shell gives a process that signal killed (130 for
-    /// `SIGINT`, 143 for `SIGTERM`) and one `error` line naming what it abandons.
-    /// See the `way_down` module.
-    ///
-    /// Every transport is contributed by an imported module via
-    /// [`TransportContribution`] — `HttpModule` brings `HttpTransport`,
-    /// `ScheduleModule` brings `Scheduler`, `QueueModule` brings
-    /// `QueueWorker`. There is no imperative `.transport()` on `App` —
-    /// `AppModule.imports` is the single composition seam.
+    /// Each transport bounds its own stop ([`Transport::stop_bound`]); the
+    /// `way down bounded` boot line files the longest beside the hooks' budget.
+    /// A signal received once the way down has begun exits at once (130 /
+    /// 143). Transports come only from imported modules
+    /// ([`TransportContribution`]).
     pub async fn run(self) -> Result<()> {
         let App { container } = self;
 
@@ -233,9 +196,6 @@ impl App {
         for (_, t) in transports.iter_mut() {
             t.configure(&container).await?;
         }
-        // The way down, as this app will spend it: the transports stop
-        // together, so the longest bound is theirs, then the hooks run. A
-        // deployment that raised a window reads its grace period off this line.
         let stop_bound = transports
             .iter()
             .map(|(_, t)| t.stop_bound())
@@ -248,8 +208,6 @@ impl App {
             "way down bounded",
         );
 
-        // Init phases run after wiring, before serving — nothing is listening
-        // yet, so a failure here aborts cleanly.
         run_phase(&container, LifecyclePhase::OnModuleInit).await?;
         run_phase(&container, LifecyclePhase::OnApplicationBootstrap).await?;
 
@@ -258,8 +216,6 @@ impl App {
         watch_signals(cancel.clone(), Arc::clone(&way_down));
 
         let mut join = JoinSet::new();
-        // Which transport each task serves, so a signal on the way down can say
-        // which ones it is about to abandon.
         let mut serving: HashMap<tokio::task::Id, &'static str> = HashMap::new();
         for (name, transport) in transports {
             let token = cancel.clone();
@@ -295,11 +251,7 @@ impl App {
             }
         }
 
-        // Shutdown is best-effort: every provider's cleanup runs even if one
-        // fails, panics or a transport errored — and the three phases share one
-        // deadline, so the teardown's cost is bounded whatever the hook count.
-        // The runtime's own teardown is held to what they leave of it
-        // (`way_down::__main`), so it is recorded where that can read it.
+        // The three phases share one deadline, which `way_down::__main` reads too.
         let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
         crate::way_down::hooks_deadline(crate::SHUTDOWN_HOOKS_TIMEOUT);
         for phase in [
@@ -321,7 +273,6 @@ impl App {
 struct ModuleHooks {
     type_id: TypeId,
     name: &'static str,
-    /// The root's import, which runs the phase its builder is in.
     import: fn(ContainerBuilder) -> ContainerBuilder,
 }
 
@@ -337,16 +288,11 @@ struct ModuleHooks {
 ///    the async factories its import tree owns. No provider is built yet.
 /// 3. **Factories** — every queued factory is `await`ed; each sees the
 ///    container so far. A factory whose output type a seed already supplies is
-///    **skipped** (a seed wins over a module's `for_root` factory — the path
-///    a test takes to inject a pre-built resource).
+///    **skipped**.
 /// 4. **Register** — each module's [`register`](crate::Module::register) builds
 ///    its providers last, injecting seeds and factory outputs. A module that
 ///    cannot build what it must [`refuse`](ContainerBuilder::refuse)s, and the
 ///    boot fails with its error once the phase ends.
-///
-/// The collect/factory split is what lets a module own an async resource while
-/// still being declared in `#[module(imports = [...])]` — `register` is
-/// synchronous and cannot `await`.
 pub struct AppBuilder {
     builder: ContainerBuilder,
     modules: Vec<ModuleHooks>,
@@ -381,11 +327,8 @@ impl AppBuilder {
     }
 
     /// Seed a **keyed** singleton, resolvable with an `#[inject(key = "…")]`
-    /// field or [`Container::get_keyed`](crate::Container::get_keyed). Several
-    /// instances of one concrete type coexist, one per `name` — the composition
-    /// root is where keyed providers are configured (they are imperative by
-    /// nature). A keyed seed is global infrastructure for the access graph, so
-    /// any provider reachable from the root may inject it.
+    /// field or [`Container::get_keyed`](crate::Container::get_keyed); one
+    /// instance per `name`, injectable by any provider reachable from the root.
     pub fn provide_keyed<T: Any + Send + Sync>(mut self, name: &'static str, value: T) -> Self {
         self.builder = self.builder.provide_keyed(name, value);
         self
@@ -401,19 +344,15 @@ impl AppBuilder {
         self
     }
 
-    /// Seed module-less metadata of type `M` (the [`ContainerBuilder::provide_meta`]
-    /// shortcut at the app root). Used by global builder extensions —
-    /// `use_guards_global`, `use_interceptors_global`, etc. — that need to
-    /// publish a `HttpEndpointWrap`-style descriptor without
-    /// owning a [`Module`].
+    /// Seed module-less metadata of type `M` ([`ContainerBuilder::provide_meta`]
+    /// at the app root), for global builder extensions such as `use_guards_global`.
     pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {
         self.builder = self.builder.provide_meta(meta);
         self
     }
 
-    /// Register an async factory at the composition root — for a resource not
-    /// owned by any module (most module-owned resources expose a `for_root`
-    /// instead). A seed of the same type wins (the factory is skipped).
+    /// Register an async factory at the composition root, for a resource no
+    /// module owns. A seed of the same type wins (the factory is skipped).
     ///
     /// ```
     /// # use anyhow::Context as _;
@@ -455,14 +394,11 @@ impl AppBuilder {
     }
 
     /// Replace a concrete provider of type `T` *after* the module tree
-    /// registers, so this value wins. Intended for tests swapping a real
-    /// provider for a fake.
+    /// registers, so this value wins — for tests swapping a real provider for a
+    /// fake.
     ///
-    /// The override reaches consumers resolved from the **final** container,
-    /// but not providers already constructed in the register phase that
-    /// captured the original `Arc` (the same final-vs-snapshot timing every
-    /// aggregating concern observes). Override the `dyn Trait` instead — see
-    /// [`override_dyn`](Self::override_dyn).
+    /// Providers built in the register phase keep the original `Arc`; override
+    /// the `dyn Trait` instead ([`override_dyn`](Self::override_dyn)).
     pub fn override_value<T: Any + Send + Sync>(mut self, value: T) -> Self {
         self.overrides
             .push(Box::new(move |builder| builder.replace(value)));
@@ -479,8 +415,7 @@ impl AppBuilder {
     }
 
     /// [`override_value`](Self::override_value) for a value the test already
-    /// holds in an `Arc` — a fake carrying state it inspects after the request,
-    /// for instance. Eager-build caveat applies.
+    /// holds in an `Arc`. Eager-build caveat applies.
     pub fn override_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.overrides
             .push(Box::new(move |builder| builder.replace_arc(value)));
@@ -513,24 +448,18 @@ impl AppBuilder {
         for hooks in &modules {
             builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
         }
-        // Before any factory runs: two import sites declared the same type and
-        // one would have to lose silently.
         check_contested_declarations(&builder)?;
         let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
         let roots: Vec<(TypeId, &'static str)> =
             modules.iter().map(|h| (h.type_id, h.name)).collect();
         let ids: Vec<TypeId> = roots.iter().map(|(id, _)| *id).collect();
         let reached = reachable_descriptors(&descriptors, &ids);
-        // A budget is refused as soon as its resource exists — a seed now, a
-        // factory's output once it ran — before a factory after it does its own
-        // I/O and fails on something else first.
+        // Refused as soon as the resource exists, before a later factory's I/O
+        // fails on something else first.
         check_budgets(&builder, &reached, None)?;
-        // A factory whose output type a seed already supplies is skipped, so a
-        // seed wins over a module's `for_root` factory — the path a test takes
-        // to boot against a pre-built resource. Otherwise the next to run is
-        // the first in queue order whose `after` types are all present — or
-        // are nothing still queued will provide, so its own error is the one
-        // to surface. Only a cycle leaves nothing runnable.
+        // A seed supplying a factory's output type skips it. The next to run is
+        // the first whose `after` types are present or provided by nothing still
+        // queued; only a cycle leaves nothing runnable.
         let mut pending = builder.take_factories();
         while !pending.is_empty() {
             let ready = pending.iter().position(|queued| {
@@ -555,22 +484,17 @@ impl AppBuilder {
             }
             check_budgets(&builder, &reached, Some(&queued.provides))?;
         }
-        // `ReachableProviders` is seeded after register but counts as global
-        // infrastructure for the access graph, so it must be in `global` up
-        // front regardless of seed ordering.
+        // Seeded after register, yet global infrastructure for the access graph.
         let mut global = builder.provider_ids();
         global.insert(TypeId::of::<ReachableProviders>());
         global.insert(TypeId::of::<ProviderOrder>());
         global.insert(TypeId::of::<Composition>());
-        // The keyed global set: keyed seeds + keyed factory outputs, snapshotted
-        // before modules register (same timing as the bare global set).
         let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
         builder = builder.enter_phase(Phase::Register);
         for hooks in &modules {
             builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
         }
         check_register_phase(&mut builder)?;
-        // Overrides last so they win over the modules' registrations.
         for ov in overrides {
             builder = ov(builder);
         }
@@ -583,11 +507,8 @@ impl AppBuilder {
 }
 
 /// The boot's last pass, shared by both paths: the access graph checked over
-/// what registered — imperatively-provided values and scoped or transient
-/// factories included, which the declarative graph cannot see — then every
-/// budget against the nets reaching it, those `register` declared included,
-/// and the seeds the transports read off it. `descriptors` is the link-time
-/// registry, read once per boot.
+/// what registered, every budget against the nets reaching it, then the seeds
+/// the transports read.
 fn seal(
     builder: ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
@@ -615,8 +536,6 @@ fn seal(
         .provide(composition))
 }
 
-/// The transports still running, in a stable order, for the line a signal on
-/// the way down files.
 fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'static str> {
     let mut names: Vec<&'static str> = serving.values().copied().collect();
     names.sort_unstable();
@@ -631,8 +550,7 @@ mod tests {
     struct Config(u32);
     struct Doubled(u32);
 
-    // The `#[module]` macro lives in `nest-rs-core-macros`, so this crate's tests
-    // hand-write the trait impl.
+    // `#[module]` lives in `nest-rs-core-macros`, so these tests hand-write the impl.
     struct DoublerModule;
     impl Module for DoublerModule {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -687,8 +605,6 @@ mod tests {
         assert_eq!(app.container().get::<Second>().unwrap().0, 2);
     }
 
-    // A module whose factory reads another module's factory output — a store
-    // bound over a shared connection is the shape — declares it with `_after`.
     struct SecondAfterFirst;
     impl Module for SecondAfterFirst {
         fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
@@ -719,8 +635,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_factory_declared_after_another_runs_after_it_whatever_the_queue_order() {
-        // `Second` is queued first; the drain reorders on the declaration, so
-        // `imports` order stays a readability choice.
         let app = App::builder()
             .module::<SecondAfterFirst>()
             .module::<FirstModule>()
@@ -730,8 +644,6 @@ mod tests {
         assert_eq!(app.container().get::<Second>().unwrap().0, 42);
     }
 
-    // A binding with a config of its own over a shared connection reads two
-    // factory outputs, each from a module of its own.
     struct Third(u32);
     struct ThirdAfterBoth;
     impl Module for ThirdAfterBoth {
@@ -780,9 +692,6 @@ mod tests {
         }
     }
 
-    /// The portable form: a dependent names the `Arc<dyn Port>` a
-    /// `provide_factory_dyn` binds, not the vendor's concrete type. The queue
-    /// entry advertises both keys, so the dependent waits.
     #[derive(Clone)]
     struct PortImpl(u32);
     trait Port: Send + Sync {
@@ -927,8 +836,6 @@ mod tests {
         );
     }
 
-    /// What a port's crate words for two backends, as its declared binding
-    /// carries it.
     const PORT_REMEDY: &str = "Import exactly one port binding.";
     struct DeclaresPortModule;
     impl Module for DeclaresPortModule {
@@ -1139,9 +1046,6 @@ mod tests {
 
     #[test]
     fn the_synchronous_boot_refuses_a_static_modules_queued_factory() {
-        // `App::new` has no factory phase; a static module whose `collect`
-        // queues one is refused by name rather than booted with the value
-        // silently absent.
         let err = match App::new::<BindsPortModule>() {
             Ok(_) => panic!("a queued factory cannot be drained synchronously"),
             Err(e) => e,
@@ -1368,8 +1272,6 @@ mod tests {
             .build()
             .await
             .expect("build succeeds");
-        // The contribution lands in the container's metadata so `App::run`
-        // can drain it at boot.
         let contributions = Discovery::new(app.container()).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "NullTransport");

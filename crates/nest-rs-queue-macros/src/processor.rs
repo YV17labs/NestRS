@@ -1,17 +1,8 @@
 //! `#[processor]` — orchestrator on a provider's `impl` block. Walks the
 //! methods; for each one tagged `#[process(queue = …, …)]` emits a type-erased
 //! handler and a `ProcessMethod` inventory submission the port's
-//! `QueueWorker` runs from boot.
-//!
-//! Like `#[scheduled]`, this does NOT emit `Discoverable` for the host struct —
-//! the user's own `#[injectable]` owns it. Inventory is the seam.
-//!
-//! The handler receives the job's payload — the port already opened the
-//! envelope — and the attempt's `HandlerContext`. It deserializes the payload to
-//! the method's job type, runs a per-argument pipe, resolves the provider, opens
-//! the checkpoint when the method takes one, and dispatches inside the ambient
-//! `JobContext`. Every path is rooted at `::nest_rs_queue::*`, re-rooted to the
-//! umbrella, so the call site declares nothing but `nest-rs`.
+//! `QueueWorker` runs from boot. No `Discoverable` for the host struct: the
+//! user's own `#[injectable]` owns it.
 
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
@@ -85,10 +76,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
 
-        // A bare `#[process]` has no list to read a key from, and what it lacks
-        // is the one key a method cannot do without — so that is the sentence,
-        // not syn's `expected attribute arguments in parentheses`. One written
-        // `#[process = …]` named something, and is told the form it takes.
+        // A bare `#[process]` lacks the one key a method cannot do without: say
+        // that, not syn's `expected attribute arguments in parentheses`.
         match &attr.meta {
             syn::Meta::List(_) => {}
             syn::Meta::Path(_) => {
@@ -200,13 +189,9 @@ fn emit_method(
     };
     // A `Piped<P, T>` / `Valid<T>` job argument is a per-argument pipe: the
     // payload is `T`, the pipe runs after deserialization, and the handler
-    // receives the carrier. Matches the HTTP / GraphQL forms.
+    // receives the carrier.
     let (deser_ty, job_wrap) = pipe_binding(&job_ty);
 
-    // The queue is named by its `Queue` type, which yields the name as a
-    // constant and additionally asserts, at compile time, that the method's
-    // payload is exactly the queue's `Job` — a mismatch is an error naming both
-    // types.
     let QueueId::Type(queue_ty) = &queue;
     let queue_str = quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME);
     let queue_assert = quote! {
@@ -308,9 +293,7 @@ fn emit_method(
                 let __deser: #deser_ty = match ::nest_rs_queue::decode(__payload) {
                     ::std::result::Result::Ok(j) => j,
                     ::std::result::Result::Err(e) => {
-                        // Deterministic: the same bytes never deserialize on
-                        // retry — abort and dead-letter, naming where and what
-                        // kind, never the value.
+                        // Deterministic: the same bytes never deserialize on retry.
                         return ::std::result::Result::Err(
                             ::nest_rs_queue::JobError::undecodable(#queue_str, &e),
                         );
@@ -437,8 +420,7 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
     // so it aborts rather than retries.
     let box_err = quote! {
         |__e: ::nest_rs_pipes::PipeError| {
-            // The message *and* the per-field detail: a dead-lettered job is
-            // read from a log by someone who cannot re-run it.
+            // The message *and* the per-field detail.
             let __msg = __e.message().to_string();
             ::nest_rs_queue::JobError::abort(__msg).with_details(__e.into_details())
         }
@@ -463,10 +445,6 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
 /// How a `#[process]` names its queue: the `Queue` type its `#[queue]` marker
 /// implements (`#[process(queue = AudioQueue)]`), which links the name and the
 /// payload type to the one declaration at the feature port.
-///
-/// A bare string used to be accepted too. It is gone: it named the queue without
-/// naming its payload, so a consumer could deserialize a type the producer never
-/// sends and the job would simply never drain.
 enum QueueId {
     // Boxed: `syn::Type` is a large enum (clippy::large_enum_variant).
     Type(Box<Type>),
@@ -545,11 +523,8 @@ impl Parse for ProcessArgs {
         let mut timeout: Option<u64> = None;
         let mut transactional: Option<bool> = None;
 
-        // The family's table answers first: a key another member takes is not
-        // misspelled here but meaningless, and is refused naming why; a key no
-        // member takes is unknown. Every arm below is one this decorator's
-        // column holds, and a key the table gains is a variant this match must
-        // place before it compiles.
+        // The family's table answers first, refusing a key another member takes;
+        // a key the table gains is a variant this match must place to compile.
         PROCESS.grammar().parse(input, |arg| {
             match job_key(PROCESS, &arg)? {
                 JobKey::Queue => queue = Some(arg.value()?.parse()?),

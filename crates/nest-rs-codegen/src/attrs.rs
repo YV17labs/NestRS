@@ -1,10 +1,6 @@
 //! Attribute-extraction helpers shared by the transport decorator macros —
 //! finding, consuming and validating whole `#[...]` attributes off an item
 //! (as opposed to [`crate::args`], which parses the values *inside* one).
-//!
-//! These gate the Layer-System surface (`#[use_guards]` / `#[force_guards]` /
-//! `#[public]` and their HTTP-only siblings), so every transport reads them
-//! from one place instead of keeping drifting copies.
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
@@ -17,14 +13,9 @@ use syn::{Attribute, Path, Token};
 /// `#[cfg_attr]` — for every item its expansion emits beside the method.
 ///
 /// An attribute macro on an `impl` block receives its methods before any
-/// `#[cfg]` or `#[cfg_attr]` is evaluated, so a method compiled out still
-/// reaches the expansion — and a handler or an inventory entry emitted for it
-/// without the same condition names a method that no longer exists: a compile
-/// error blamed on the decorator, over code that is correct. Only the conditions
-/// travel. A `#[cfg_attr]` is forwarded holding its `cfg(..)`s and nothing else,
-/// since its other attributes are the method's own; an `#[allow]` governs the
-/// method's body and signature, which an emitted handler neither contains nor
-/// restates.
+/// `#[cfg]` is evaluated, so an item emitted for a compiled-out method without
+/// the same condition names a method that does not exist. A `#[cfg_attr]` is
+/// forwarded holding its `cfg(..)`s alone.
 pub fn cfg_attrs(attrs: &[Attribute]) -> Vec<TokenStream> {
     attrs
         .iter()
@@ -45,16 +36,9 @@ pub fn cfg_attrs(attrs: &[Attribute]) -> Vec<TokenStream> {
 /// every `#[cfg]` inside a `#[cfg_attr]` unfolded into a plain `#[cfg]`, and
 /// everything else as written.
 ///
-/// A macro the expansion delegates to — async-graphql's `#[Object]` and
-/// `#[ComplexObject]` — receives the method before rustc evaluates either
-/// attribute, and it reads a plain `#[cfg]` alone: a `#[cfg_attr(p, cfg(x))]`
-/// compiled the method out while the delegate's dispatch still named it.
-///
-/// The unfolding keeps the meaning, which is not `cfg(all(p, x))`: the attribute
-/// applies `cfg(x)` only when `p` holds, so the method is kept when `p` does not
-/// hold *or* `x` does — `cfg(any(not(p), x))`. A nested `cfg_attr` conjoins its
-/// predicate with the enclosing one, and a non-`cfg` attribute inside stays in a
-/// `cfg_attr` of the whole conjunction.
+/// async-graphql's `#[Object]` and `#[ComplexObject]` read a plain `#[cfg]`
+/// alone. `#[cfg_attr(p, cfg(x))]` unfolds to `cfg(any(not(p), x))`, not
+/// `cfg(all(p, x))`.
 pub fn delegated_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
     let mut delegated = Vec::with_capacity(attrs.len());
     for attr in attrs {
@@ -130,8 +114,7 @@ fn unfold_cfg_attr(
 /// resolves — under the `#[cfg]` conditions of that method ([`cfg_attrs`]), for a
 /// helper that emits something per item *outside* the method.
 ///
-/// A plain `&T` converts with no conditions, so a struct half, whose declarations
-/// cannot be compiled out one by one, passes its list unchanged.
+/// A plain `&T` converts with no conditions.
 pub struct Conditional<'a, T> {
     /// The method's conditions, empty when it has none.
     pub cfgs: &'a [TokenStream],
@@ -149,9 +132,8 @@ impl<'a, T> From<&'a T> for Conditional<'a, T> {
 /// `arguments` — a nested `cfg_attr` kept for the `cfg(..)`s inside it — or `None`
 /// when it holds none.
 ///
-/// Read as tokens split at their top-level commas, never as `Meta`: a predicate is
-/// cfg grammar rather than attribute grammar, and `true` in `cfg_attr(true, ..)`
-/// is no path, so a `Meta` parse dropped the whole attribute.
+/// Read as tokens, never as `Meta`: `true` in `cfg_attr(true, ..)` is no path,
+/// and a `Meta` parse drops the whole attribute.
 fn cfg_attr_conditions(arguments: TokenStream) -> Option<TokenStream> {
     let mut entries = split_at_commas(arguments).into_iter();
     let predicate = entries.next().filter(|predicate| !predicate.is_empty())?;
@@ -195,22 +177,8 @@ fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
 /// Extract and remove a flag attribute (no args, no parens) like `#[public]`.
 /// `Ok(true)` when present (and removed), `Ok(false)` when absent.
 ///
-/// **An argument on a flag is a compile error, not a discard**, and that is the
-/// whole reason this returns a `Result`. [`Attribute::path`] answers the same
-/// for `#[public]`, `#[public(admin)]` and `#[public = "x"]`, so a `position` +
-/// `remove` on the path alone accepted all three and dropped what the developer
-/// wrote — never an ignored argument. The doc above this function said "no
-/// args, no parens" while the body enforced nothing, which is the drift the
-/// sentence closes.
-///
-/// **`#[public]` is why it ranks where it does.** It is the posture
-/// declaration — one of the three greppable sites reserved for the
-/// authn/authz decision — and it sits beside `#[authorize(Action, Entity)]`,
-/// which *does* take arguments. A developer writing `#[public(read_only)]` by
-/// analogy shipped an ungated, unmasked operation with the compiler silent.
-/// The other five flags this covers (`on_connect`, `on_disconnect`, `no_pipes`,
-/// `crud_write`, `crud_location`) get the refusal for free, which is what
-/// *"refusals are shared, not per key"* buys.
+/// An argument on a flag is a compile error, never a discard: `#[public(x)]`
+/// must not silently declare a public posture.
 pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bool> {
     let Some(attr) = take_single_attr(attrs, ident)? else {
         return Ok(false);
@@ -229,12 +197,6 @@ pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bo
 
 /// Remove the one `#[<ident>]` on an item, refusing a second copy by name.
 ///
-/// A decorator that takes the first match and leaves the rest let a second copy
-/// reach rustc as `cannot find attribute `public` in this scope` — no decorator,
-/// no reason, no remedy, which is the failure the named refusals exist to end.
-/// `#[public]` at every edge, every flag [`take_flag_attr`] reads, `#[api]` and
-/// `#[inject]` all answered a repeat that way while their siblings
-/// (`#[http_code]`, `#[version]`, `#[use_guards]`, `#[authorize]`) named it.
 /// The span is the second copy, the one to delete.
 pub fn take_single_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Option<Attribute>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
@@ -256,24 +218,8 @@ pub fn repeated_attribute(ident: &str) -> String {
 }
 
 /// Extract and remove a `#[<ident>(PathA, PathB)]` attribute, returning its
-/// comma-separated paths (empty when absent). The attribute is consumed so it
-/// never reaches the compiler as unknown. At most one is accepted; a second of
-/// the same ident is rejected with a clear message.
-///
-/// **The noun is derived from the attribute, not passed in.** It was a
-/// parameter, and the same `#[use_guards]` said "list every **entry** in it" on
-/// a controller and "list every **guard** in it" on a resolver — one attribute,
-/// one rule, two sentences split by edge, which is exactly what *One
-/// declaration, every site the standard permits* exists to remove ("same key,
-/// same grammar, one shared parser… so learning it once is learning it
-/// everywhere"). `"entry"` was a placeholder for a noun rather than a noun, and
-/// it was passed at eleven HTTP sites and three WS ones for elements that
-/// demonstrably were guards, filters and pipes.
-///
-/// **An entry that is not a type path is refused as a value**, in the shared
-/// sentence (``#[use_guards] takes a list of guard types, e.g. …``) at the
-/// token syn stopped on — never syn's own `expected identifier`, which names
-/// neither the attribute nor what it lists.
+/// comma-separated paths (empty when absent). At most one is accepted; an entry
+/// that is not a type path is refused naming the attribute.
 pub fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Vec<Path>> {
     let noun = listed_noun(ident);
     let spoken = noun.replace('_', " ");
@@ -312,15 +258,8 @@ pub fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Ve
     Ok(listed.into_iter().collect())
 }
 
-/// What `#[use_guards]` and its siblings list, one word, derived from the
-/// attribute's own name: `use_guards` / `force_guards` ⇒ `guard`,
-/// `use_filters` ⇒ `filter`, `use_interceptors` ⇒ `interceptor`,
-/// `use_exception_filters` ⇒ `exception_filter` — spoken with a space in a
-/// sentence, cased as `ExceptionFilter` in an example.
-///
-/// A fallback of `entry` for a name that fits no pattern, which is what every
-/// call site used to pass by hand — it stays as the *default* rather than the
-/// answer, so a new family reads as unremarkable until someone names it.
+/// What `#[use_guards]` and its siblings list, derived from the attribute's
+/// name (`use_exception_filters` ⇒ `exception_filter`); `entry` otherwise.
 fn listed_noun(ident: &str) -> String {
     let stem = ident
         .strip_prefix("use_")
@@ -332,18 +271,8 @@ fn listed_noun(ident: &str) -> String {
     }
 }
 
-/// Every layer family whose binding attribute is **HTTP-only**.
-///
-/// Four, not two, and the two that were missing are the reason this is a
-/// constant rather than an inline array: `#[use_pipes]` and
-/// `#[use_exception_filters]` are taken by `#[controller]` / `#[routes]` and
-/// nowhere else, exactly as their two neighbours are, so writing either on a
-/// gateway, a resolver or an `#[mcp]` host reached rustc as
-/// `cannot find attribute … in this scope` — no transport named, no reason, no
-/// remedy. Every layer family an edge does not bridge owes a named compile
-/// error; the list is what makes "every" checkable.
-///
-/// Guards are bridged at all four edges and are deliberately absent.
+/// Every layer family whose binding attribute is **HTTP-only**; guards are
+/// bridged at all four edges.
 const HTTP_ONLY_LAYERS: [&str; 4] = [
     "use_interceptors",
     "use_filters",
@@ -351,19 +280,11 @@ const HTTP_ONLY_LAYERS: [&str; 4] = [
     "use_exception_filters",
 ];
 
-/// Reject the `HTTP_ONLY_LAYERS` binding attributes where they are HTTP-only
-/// today: on transports with no per-message/per-operation seam for those traits,
-/// binding one would be a silent no-op, so it is a named compile error instead.
-/// Guards *are* bridged everywhere, so they stay.
+/// Reject the `HTTP_ONLY_LAYERS` binding attributes on a transport where
+/// binding one would be a silent no-op.
 ///
-/// `transport` (e.g. `"WebSockets"`, `"GraphQL"`) and `site` (e.g. `"gateway"`,
-/// `"resolver"`) name the rejecting context in the diagnostic. The sentence
-/// says "on this {site}" rather than "on a {site}": several callers pass
-/// `"operation"`, and an article baked into the template cannot be right for
-/// every noun a future edge will pass. **Pass the site the compiler is
-/// underlining**, not the host it belongs to: an attribute on a
-/// `#[subscribe_message]` method reported "on this gateway" told the reader to
-/// look at the wrong item.
+/// `transport` (e.g. `"WebSockets"`) and `site` name the rejecting context;
+/// pass the site the compiler is underlining (`"operation"`), not its host.
 pub fn reject_http_only_layers(
     attrs: &[Attribute],
     transport: &str,
@@ -393,9 +314,6 @@ mod tests {
 
     use super::*;
 
-    /// A plain `#[cfg]` travels whole, a `#[cfg_attr]` with its `cfg(..)`s alone —
-    /// nested ones included, whatever its predicate — and everything else stays
-    /// with the method.
     #[test]
     fn only_the_conditions_travel() {
         let method: syn::ImplItemFn = parse_quote! {
@@ -425,9 +343,6 @@ mod tests {
         );
     }
 
-    /// A `cfg` inside a `cfg_attr` becomes the plain `cfg` a delegate reads, with
-    /// the attribute's meaning — kept unless the predicate holds and the
-    /// condition does not — and whatever else it held stays conditional.
     #[test]
     fn a_cfg_inside_a_cfg_attr_is_unfolded_for_a_delegate() {
         let method: syn::ImplItemFn = parse_quote! {
@@ -453,8 +368,6 @@ mod tests {
         );
     }
 
-    /// A `macro_rules!` fragment arrives wrapped in an invisible group, and the
-    /// condition inside travels as a written one does.
     #[test]
     fn a_condition_passed_through_a_macro_fragment_travels() {
         let fragment = proc_macro2::Group::new(Delimiter::None, quote!(cfg(any())));

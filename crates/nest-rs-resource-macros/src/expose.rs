@@ -6,8 +6,7 @@ use syn::{Item, ItemStruct};
 use crate::{active, attr, dto, input, lifecycle, relations, wire};
 
 /// This decorator as written, for the sentence [`#[wire_enum]`](macro@crate::wire_enum) prints when
-/// it is handed the entity struct. Each half names the *other*, from the other's
-/// own constant, so neither message can come to name a decorator that moved.
+/// it is handed the entity struct.
 pub(crate) const NAME: &str = "#[expose(name = \"…\")]";
 
 pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
@@ -79,11 +78,8 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Parse the entity struct, naming [`#[wire_enum]`](macro@crate::wire_enum) when the developer
-/// decorated a column's enum type instead — the mistake this pair exists to
-/// absorb, since "make this reach the wire" is one intent with two item shapes.
-/// The item is parsed as an [`Item`] *before* the shape is judged, so a genuine
-/// syntax error inside a struct reports that error rather than "you wanted the
-/// other decorator".
+/// decorated a column's enum type instead. Parsed as an [`Item`] first, so a
+/// syntax error inside a struct reports that error, not "the other decorator".
 fn parse_struct(item: TokenStream2) -> syn::Result<ItemStruct> {
     match syn::parse2::<Item>(item)? {
         Item::Struct(item) => Ok(item),

@@ -32,9 +32,6 @@ fn reading_within(read_timeout: Duration) -> StorageConfig {
     }
 }
 
-/// A download whose bytes stop is cut at the read bound and resumed from where
-/// it stopped, so the caller gets the whole object — never cut by its size,
-/// never held by a stall for longer than the bound.
 #[tokio::test]
 async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
     let (direct, key, body) = stored("stalled.bin").await;
@@ -65,9 +62,6 @@ async fn a_download_stalled_mid_body_is_cut_at_the_read_bound_and_resumed() {
     direct.delete(&key).await.expect("delete");
 }
 
-/// The read bound runs only while the reader waits for bytes: a reader that
-/// pauses longer than it between two chunks — a slow client behind a
-/// streamed response — reads the rest of the same transfer.
 #[tokio::test]
 async fn a_reader_pausing_past_the_read_bound_is_never_cut() {
     let (direct, key, body) = stored("paused.bin").await;
@@ -96,9 +90,6 @@ async fn a_reader_pausing_past_the_read_bound_is_never_cut() {
     direct.delete(&key).await.expect("delete");
 }
 
-/// A resumed transfer whose body stalls before its first byte is a store that
-/// cannot serve the rest: the download fails at the next read bound, naming
-/// the bound and the variable that sets it, rather than resuming again.
 #[tokio::test]
 async fn a_resumed_download_stalled_before_its_first_byte_fails_naming_the_read_bound() {
     let (direct, key, _) = stored("stalled-again.bin").await;
@@ -127,8 +118,6 @@ async fn a_resumed_download_stalled_before_its_first_byte_fails_naming_the_read_
     direct.delete(&key).await.expect("delete");
 }
 
-/// An empty object reads as no bytes, whole or streamed, and its stream ends
-/// for good.
 #[tokio::test]
 async fn an_empty_object_reads_as_no_bytes() {
     let direct = storage();
@@ -149,9 +138,8 @@ async fn an_empty_object_reads_as_no_bytes() {
     direct.delete(&key).await.expect("delete");
 }
 
-/// A body whose connection breaks once `object_store`'s own resumption is
-/// spent — half the operation budget after the call — is resumed from where it
-/// stopped, and the break is said: a long download outlives its connections.
+/// `object_store` resumes a broken body itself only within half the operation
+/// budget; past it, the client does.
 #[tokio::test]
 async fn a_download_broken_past_the_retries_is_resumed_and_says_so() {
     let (direct, key, body) = stored("broken.bin").await;

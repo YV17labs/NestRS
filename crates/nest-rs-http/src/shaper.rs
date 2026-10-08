@@ -6,16 +6,9 @@
 //! request, installs ambient state around the handler, and rewrites the body
 //! before it ships.
 //!
-//! **Arming is a question for the compiler, not for the macro.** `#[routes]`
-//! cannot see through a renamed import (`use Authorize as Az`), so it does not
-//! try: it hands every handler parameter's *type* to [`ShaperProbe`], and the
-//! compiler answers whether that type implements [`RouteResponseShaper`]. The
-//! name the developer chose can no longer change the answer — which is what
-//! makes the arm alias-proof.
-//!
-//! The trait is implemented outside this crate (`nest_rs_authz::http`,
-//! `nest_rs_seaorm::http`) so the HTTP surface stays unaware of any specific
-//! shaper.
+//! `#[routes]` cannot see through a renamed import (`use Authorize as Az`), so
+//! it hands every handler parameter's *type* to [`ShaperProbe`], and the
+//! compiler answers whether that type implements [`RouteResponseShaper`].
 
 use std::cell::Cell;
 use std::future::Future;
@@ -25,10 +18,8 @@ use std::pin::Pin;
 use poem::http::StatusCode;
 use poem::{Endpoint, Error, IntoResponse, Request, Response, Result};
 
-/// The handler's future, as a [`ResponseShaping`] receives it. Boxed because
-/// the shaping step is selected by value (a function pointer picked per
-/// parameter type) rather than by monomorphising the whole endpoint — one
-/// allocation, on armed routes only.
+/// The handler's future, as a [`ResponseShaping`] receives it; boxed on armed
+/// routes only.
 pub type RouteFuture<'a> = Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
 
 /// A shaper's request-independent half: whatever [`RouteResponseShaper::capture`]
@@ -59,8 +50,7 @@ pub type CaptureFn = fn(&Request) -> Option<Box<dyn ResponseShaping>>;
 /// Both arms below answer `select()`; the inherent one is reachable only when
 /// its bound holds, and inherent methods win over trait methods at the same
 /// autoref step. So [`shaper_of`](crate::shaper_of) answers `Some` exactly when
-/// `T: RouteResponseShaper`, decided after name resolution — the property the
-/// old path-segment scan could not have.
+/// `T: RouteResponseShaper`, decided after name resolution.
 pub struct ShaperProbe<T>(PhantomData<fn() -> T>);
 
 impl<T> Default for ShaperProbe<T> {
@@ -101,9 +91,6 @@ impl<T> UnshapedProbe for &ShaperProbe<T> {
 /// the selection: the extra `&` is what makes the two [`ShaperProbe`] arms
 /// resolve in the right order, so writing the call out by hand invites a
 /// `needless_borrow` "fix" that would quietly disarm the fallback.
-///
-/// Emitted by `#[routes]`, once per handler parameter — a cross-crate seam, not
-/// public API.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! shaper_of {
@@ -198,22 +185,14 @@ where
 }
 
 tokio::task_local! {
-    /// The per-request masking probe (see [`MaskProbe`]). A task-local `Cell`
-    /// instead of a request extension: zero heap allocation per request, and
-    /// extractors run inside the endpoint's own task so the scope provably
-    /// covers them — the same pattern as the ambient executor and ability.
+    /// The per-request masking probe (see [`MaskProbe`]); extractors run inside
+    /// the endpoint's own task, so the scope covers them.
     static MASK_PROBE: Cell<bool>;
 }
 
-/// The run-time backstop behind the type-directed arm.
-///
-/// The arm answers on a *parameter's type*, so it covers every way a masking
-/// extractor is normally written, renamed imports included. What it cannot see
-/// is an extractor reached indirectly — one nested inside another extractor, or
-/// a hand-rolled `FromRequest` that runs the gate itself. Those routes arm
-/// nothing, so they run inside a probe scope
-/// ([`ShapedEndpoint`]): a [`mark`](MaskProbe::mark) on a success response
-/// fails the request closed instead of shipping unmasked fields.
+/// The run-time backstop behind the type-directed arm, for a masking extractor
+/// it cannot see (nested in another, or a hand-rolled `FromRequest`): a
+/// [`mark`](MaskProbe::mark) on an unarmed route's success fails it closed.
 pub struct MaskProbe;
 
 impl MaskProbe {
@@ -256,11 +235,6 @@ mod tests {
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
-        // The 500 is deliberately opaque, so the event is the only place the
-        // cause exists — and the cause is a *code* mistake, not an outage: the
-        // route runs a masking extractor the type-directed arm never saw, so it
-        // would have shipped unmasked columns. Without the route in the fields
-        // an operator has a bare 500 and no way back to the handler.
         let event = logs.expect_one(
             "nest_rs::http",
             "a masking extractor ran but no response shaper armed on this route — \
@@ -279,8 +253,6 @@ mod tests {
         resp.assert_text("ok").await;
     }
 
-    /// A shaper reads the request before the handler consumes it, wraps the
-    /// handler, and rewrites the body — the three things `#[routes]` relies on.
     struct Shout;
 
     struct Shouting(String);
@@ -302,7 +274,6 @@ mod tests {
         }
     }
 
-    /// Stands in for every handler parameter that is not a shaper.
     struct NotAShaper;
 
     #[tokio::test]
@@ -315,7 +286,7 @@ mod tests {
             shaper_of!(NotAShaper).is_none(),
             "any other parameter type leaves it unarmed",
         );
-        // The name the parameter is written under is not part of the answer.
+        // An alias, as a renamed import would be.
         type Renamed = Shout;
         assert!(shaper_of!(Renamed).is_some());
     }
@@ -334,8 +305,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_capture_that_declines_leaves_the_response_untouched() {
-        // No `x-tag`: the shaper captures nothing, so the route falls through
-        // to the unshaped path rather than half-applying.
         let ep = shaped(plain, shaper_of!(Shout), None);
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status_is_ok();
@@ -344,8 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_armed_route_runs_no_probe_scope() {
-        // The probe is the fallback net, not a second layer: an armed route
-        // must not pay for it, and a `mark` inside one must not fail it closed.
+        // A `mark` inside an armed route must not fail it closed.
         static RAN: AtomicBool = AtomicBool::new(false);
 
         #[handler]
@@ -366,8 +334,6 @@ mod tests {
         assert!(RAN.load(Ordering::SeqCst), "the handler ran");
     }
 
-    /// The selection is a value, so a route with several parameters picks the
-    /// first shaper among them exactly as `#[routes]` folds them.
     #[tokio::test]
     async fn the_first_shaping_parameter_wins() {
         let mut selected: Option<CaptureFn> = None;

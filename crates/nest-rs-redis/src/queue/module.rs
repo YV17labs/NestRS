@@ -98,8 +98,6 @@ fn renewable(lease: Duration, budget: Duration) -> Result<(), RedisError> {
 mod tests {
     use super::*;
 
-    /// The defaults fit, and a lease the port's renewal does not fit is refused
-    /// naming both settings.
     #[test]
     fn the_defaults_fit_and_a_lease_no_renewal_fits_is_refused() {
         let budget = crate::RedisConfig::default().connect_timeout;

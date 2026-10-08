@@ -2,45 +2,18 @@
 //!
 //! [`Header<T>`] deserializes `T` from the request's headers: one struct field
 //! per header, `#[serde(rename = "…")]` spelling the wire name, and an
-//! `Option<_>` field marking the header optional. Lookup is case-insensitive,
-//! as HTTP header names are — the typed path asks [`HeaderMap`], which is.
+//! `Option<_>` field marking the header optional. Lookup is case-insensitive;
+//! a header sent twice binds its first value.
 //!
-//! **`#[serde(flatten)]` is the one shape that rule does not reach, and it is a
-//! serde constraint rather than a choice here.** A struct carrying a flattened
-//! field is deserialized through [`FromHeaders::deserialize_map`] instead of
-//! `deserialize_struct` — serde never hands over the field list — so the keys
-//! are the names [`HeaderMap`] *stores*, which are lowercased, and serde then
-//! matches a flattened field's `rename` against them **case-sensitively**. A
-//! flattened field must therefore spell its header in lowercase
-//! (`#[serde(rename = "x-request-id")]`); spelled `X-Request-Id` it binds `None`
-//! on every request. Pinned by
-//! `header::a_flattened_field_matches_its_header_in_lowercase`.
-//!
-//! **A field naming something that is not a header name is refused**, rather
-//! than binding `None` forever: `http` implements its lookup by failing, so
-//! `X-Tenant:` or `X Request Id` would be indistinguishable from a header the
-//! caller never sent.
+//! **A `#[serde(flatten)]` field must spell its header in lowercase**: serde then
+//! deserializes through `deserialize_map`, and matches the stored (lowercased)
+//! names case-sensitively — `X-Request-Id` would bind `None` on every request.
+//! A `rename` that is not a valid header name is refused rather than binding
+//! `None` forever.
 //!
 //! A missing required header, or a value that does not parse into the field's
-//! type, is rejected at the edge with the same RFC-9457
-//! `application/problem+json` `400` a pipe rejection carries.
-//!
-//! **The rejection names the header and never quotes its value.** A header is
-//! where credentials travel (`Authorization`, `Cookie`, an API key), and a `400`
-//! body is logged, cached and proxied — the same reason
-//! [`Valid`](crate::Valid)'s rejection reports the failing field without
-//! echoing what was submitted. serde's own constructors do quote it
-//! (`unknown variant \`…\``), so [`HeaderError`] overrides every one of them
-//! that does — and a type's own `custom` message, which may quote anything, is
-//! said as the header not holding a value its type accepts, the reading
-//! `nest_rs_core::DecodeError` gives a message of no known shape.
-//!
-//! **A header sent twice binds its first value**, on both the typed and the
-//! untyped path — see [`FromHeaders::deserialize_map`].
-//!
-//! `#[routes]` captures each `Header<T>` payload into
-//! [`HttpRouteMeta::header_params`](crate::HttpRouteMeta::header_params), so
-//! the OpenAPI document carries one `in: header` parameter per property of `T`.
+//! type, is an RFC-9457 `400` that names the header and **never quotes its
+//! value**: a header is where credentials travel.
 
 use std::ops::Deref;
 
@@ -119,9 +92,6 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Header<T> {
     }
 }
 
-/// One error format at the edge: the `400` RFC-9457 `application/problem+json`
-/// [`ProblemDetails`] every other edge rejection renders, with the header
-/// diagnostic as `detail`.
 fn reject(err: HeaderError) -> Error {
     Error::from(ProblemDetails::bad_request().with_detail(err.to_string()))
 }
@@ -133,12 +103,8 @@ pub(crate) fn one_of(expected: &'static [&'static str]) -> String {
     format!("one of {}", list.join(", "))
 }
 
-/// Deserializer over a request's [`HeaderMap`].
-///
-/// `deserialize_struct` receives the field names serde derived, so the map is
-/// built by asking the header map for *those* names — the lookup `http`
-/// performs case-insensitively — rather than by iterating stored (lowercased)
-/// names and hoping they match how the developer spelled the rename.
+/// Deserializer over a request's [`HeaderMap`]; `deserialize_struct` asks it for
+/// serde's field names, which `http` looks up case-insensitively.
 struct FromHeaders<'a> {
     headers: &'a HeaderMap,
 }
@@ -155,16 +121,8 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
         let mut parts: Vec<Part> = Vec::with_capacity(fields.len());
         for field in fields {
             let Some(raw) = self.headers.get(*field) else {
-                // Absent — or not a header name at all. `http` implements
-                // `AsHeaderName for &str` by *failing the lookup*, so the two
-                // are one answer here: an `Option<_>` field would bind `None` on
-                // every request forever, and a required one would 400 telling
-                // the caller to send a header no client can send. Neither points
-                // at the mistake, which is in the `rename`.
-                //
-                // Asked only on this branch, and that is the whole cost: a
-                // successful lookup has already proved the name is valid, since
-                // `HeaderMap::get` parses it to answer at all.
+                // `http` answers an invalid name as absent, so a bad `rename` would
+                // bind `None` forever; a hit has already proved its name valid.
                 if poem::http::HeaderName::from_bytes(field.as_bytes()).is_err() {
                     return Err(HeaderError::not_a_header_name(field));
                 }
@@ -182,14 +140,10 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
         visitor.visit_map(Headers::new(parts))
     }
 
-    /// The untyped form (`HashMap<String, String>`). A header whose value is
-    /// not UTF-8 is skipped rather than failing the whole map: no field asked
-    /// for it, so there is nothing to report against.
+    /// The untyped form (`HashMap<String, String>`); a non-UTF-8 value is skipped.
     ///
-    /// Iterates **names** rather than entries, so a header sent twice binds its
-    /// first value — what [`HeaderMap::get`] gives the typed path above. Over
-    /// entries the last one would have won instead, and one extractor answering
-    /// "which value wins" two ways is a difference nobody would look for.
+    /// Iterates **names**, not entries, so a header sent twice binds its first
+    /// value as the typed path does; over entries the last one would win.
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, HeaderError> {
         let parts: Vec<Part> = self
             .headers
@@ -213,12 +167,10 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
     }
 }
 
-/// The headers a visitor asked for, handed to it one by one, each keyed by its
-/// name — and each value's refusal named against the header it was read from.
+/// The headers a visitor asked for, each value's refusal named against its header.
 ///
-/// serde's own `MapDeserializer` cannot name it: a type refusing a header in its
-/// own words (`custom`) does so after the header's deserializer has returned, so
-/// only the map, which knows which value it handed out, can say whose it was.
+/// Not serde's `MapDeserializer`: a type's `custom` refusal arrives after the
+/// header's deserializer returned, so only the map knows whose value it was.
 struct Headers {
     parts: std::vec::IntoIter<Part>,
     value: Option<Part>,
@@ -254,8 +206,7 @@ impl<'de> MapAccess<'de> for Headers {
         &mut self,
         seed: V,
     ) -> Result<V::Value, HeaderError> {
-        // serde's contract asks for a value only after its key; a visitor
-        // breaking it is refused rather than handed nothing.
+        // serde's contract asks for a value only after its key.
         let Some(part) = self.value.take() else {
             return Err(HeaderError::Refused);
         };
@@ -268,11 +219,8 @@ impl<'de> MapAccess<'de> for Headers {
     }
 }
 
-/// One header's value, deserialized into whatever the field's type is.
-///
-/// A header value is a string on the wire, so the numeric and boolean arms
-/// parse it — the same coercion `Query<T>` gets from its form decoder, without
-/// which a `u32` field could only ever be a `String`.
+/// One header's value, deserialized into the field's type; the scalar arms parse
+/// its text, the coercion `Query<T>` gets from its form decoder.
 struct Part {
     name: String,
     value: String,
@@ -282,9 +230,7 @@ impl Part {
     fn new(name: &str, value: &str) -> Self {
         Self {
             name: name.to_owned(),
-            // Header values arrive without their optional surrounding
-            // whitespace, but a client that sent `id: 12 ` should not be told
-            // its integer is malformed.
+            // A client that sent `id: 12 ` must not be told its integer is malformed.
             value: value.trim().to_owned(),
         }
     }
@@ -333,8 +279,8 @@ impl<'de> Deserializer<'de> for Part {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, HeaderError> {
-        // Present, so `Some` — an absent header never reaches here (serde's
-        // derive fills the field through `missing_field`, which answers `None`).
+        // An absent header never reaches here: serde's derive answers `None`
+        // through `missing_field`.
         visitor.visit_some(self)
     }
 
@@ -348,11 +294,8 @@ impl<'de> Deserializer<'de> for Part {
 
     /// An enum-typed field: the header's text names a unit variant.
     ///
-    /// The refusal serde raises for a text that names none is
-    /// [`unknown_variant`](serde::de::Error::unknown_variant), a static
-    /// constructor that cannot know which header it was reading — so the name
-    /// goes back on here, and the value serde would have quoted never existed
-    /// in the message.
+    /// serde's [`unknown_variant`](serde::de::Error::unknown_variant) cannot know
+    /// which header it read, so the name goes back on here.
     fn deserialize_enum<V: Visitor<'de>>(
         self,
         _name: &'static str,
@@ -365,10 +308,8 @@ impl<'de> Deserializer<'de> for Part {
             .map_err(|err: HeaderError| err.against(&name))
     }
 
-    // A header carries one scalar. Rejecting the compound shapes here rather
-    // than forwarding them to `deserialize_any` keeps the diagnostic ours:
-    // serde's own type-mismatch message quotes the unexpected value, and that
-    // value is a header's.
+    // Not forwarded to `deserialize_any`: serde's type-mismatch message quotes
+    // the value, and that value is a header's.
     fn deserialize_seq<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, HeaderError> {
         Err(HeaderError::malformed(&self.name, "a list"))
     }
@@ -458,8 +399,6 @@ mod tests {
 
     #[tokio::test]
     async fn binds_a_renamed_header_case_insensitively() {
-        // The wire spelling is `X-Request-Id`; HTTP/2 (and `http`'s own store)
-        // lowercases it. Both must reach the same field.
         let h: Header<Tracing> = extract(&[("x-request-id", value("abc-123"))])
             .await
             .expect("the header binds");
@@ -481,9 +420,6 @@ mod tests {
         assert_eq!(h.debug, Some(true));
     }
 
-    /// A type refusing a header in its own words — `custom`, from a
-    /// `deserialize_with` or a hand-written `Deserialize` — may quote it. The
-    /// header is named, its value never.
     #[tokio::test]
     async fn a_type_s_own_refusal_names_the_header_and_never_quotes_it() {
         #[derive(Debug)]
@@ -540,9 +476,6 @@ mod tests {
         );
     }
 
-    /// The pendant of `valid_rejection_does_not_echo_the_submitted_value_…`:
-    /// headers are where credentials travel, so a rejection that quoted the
-    /// value would leak one into every log and proxy cache that keeps a `400`.
     #[tokio::test]
     async fn a_rejection_never_echoes_the_header_value() {
         #[derive(Debug, Deserialize)]
@@ -562,9 +495,7 @@ mod tests {
         );
         assert!(detail.contains("X-Api-Key"), "{detail}");
 
-        // The enum arm, which the scalar case above never exercises: serde's
-        // own `unknown_variant` opens with the text it read, so a field typed
-        // as an enum was the one shape that echoed a header into the `400`.
+        // The enum arm: serde's own `unknown_variant` opens with the text it read.
         #[derive(Debug, Deserialize)]
         #[serde(rename_all = "lowercase")]
         enum Mode {

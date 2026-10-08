@@ -42,10 +42,8 @@ fn burn_verify_runs_without_panic() {
 
 #[test]
 fn hash_pins_argon2id() {
-    // Pin the algorithm choice, not just the roundtrip: a PHC hash string leads
-    // with its algorithm id, so an accidental switch to Argon2i / Argon2d (or
-    // any other hasher) surfaces here rather than silently weakening every
-    // stored secret.
+    // A PHC string leads with its algorithm id: a switch away from Argon2id
+    // surfaces here.
     let encoded = hash_password("pin-the-algorithm").expect("hash");
     assert!(
         encoded.starts_with("$argon2id$"),

@@ -1,9 +1,6 @@
-//! An in-memory queue backend over the port's own seams — the worker's loop,
-//! proved in process, and the behaviour kit's run against a backend whose every
-//! state a test can read. It keeps what a real backend keeps: a ready list, the
-//! deliveries held under a lease with their owner and count, the records due
-//! later, the dead letters — and fences every write a delivery makes on its
-//! owner and count, as the contract asks.
+//! An in-memory queue backend over the port's own seams, whose every state a
+//! test can read; it fences every write a delivery makes on its owner and count,
+//! as the contract asks.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,12 +1,8 @@
 //! A **renamed** `Authorize` alias (`use Authorize as Az`) arms the response
 //! shaper exactly like the canonical spelling.
 //!
-//! `#[routes]` no longer scans parameter *names*: it hands each parameter type
-//! to `nest_rs_http::ShaperProbe` and the compiler answers whether that type is
-//! a `RouteResponseShaper`. A rename changes the spelling, not the type — so
-//! the class gate, the ambient ability and the field mask all land under an
-//! alias, and the `MaskProbe` `500` these tests used to pin is unreachable from
-//! here.
+//! `#[routes]` hands each parameter type to `nest_rs_http::ShaperProbe`, so a
+//! rename changes the spelling, not the type.
 
 use std::sync::Arc;
 
@@ -138,16 +134,12 @@ async fn boot() -> TestApp {
 
 #[tokio::test]
 async fn an_aliased_authorize_still_gates_at_class_level() {
-    // Extraction resolves the *type*, not its written name, so the 403 gate
-    // survives a rename.
     let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     let denied = app.http().get("/gadgets/aliased/probe").send().await;
     assert_eq!(denied.0.status(), poem::http::StatusCode::FORBIDDEN);
 
-    // The 403 is what the caller sees; this is what the operator sees, and it
-    // is the half an incident queries. A denial emitted bare — or at `debug` —
-    // is a security gap rather than a style nit.
+    // The operator's half: the denial event an incident queries.
     let event = logs
         .find("nest_rs::authz", "authorization denied")
         .into_iter()
@@ -163,9 +155,6 @@ async fn an_aliased_authorize_still_gates_at_class_level() {
 
 #[tokio::test]
 async fn an_aliased_authorize_installs_the_ambient_ability() {
-    // Arming is type-directed, so the alias and the canonical spelling reach
-    // the same shaper and both install the ambient ability the data layer
-    // scopes its queries by.
     let app = boot().await;
 
     for path in ["/gadgets/aliased/probe", "/gadgets/literal/probe"] {
@@ -185,9 +174,6 @@ async fn an_aliased_authorize_installs_the_ambient_ability() {
 
 #[tokio::test]
 async fn an_aliased_authorize_masks_a_raw_model_body() {
-    // The case that used to be the known gap: under a rename the shaper was not
-    // armed, and the run-time probe turned the response into a `500` rather
-    // than ship `secret`. It now masks and returns a `200`.
     let app = boot().await;
     let resp = app
         .http()

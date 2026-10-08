@@ -1,14 +1,5 @@
-//! B11: `Repo::update` must run `ActiveModelBehavior`.
-//!
-//! The scope filter forces the sea-orm query-builder path (`Update::one`),
-//! which does not call the behaviour hooks — while the create path does, via
-//! `ActiveModelTrait::insert`. The asymmetry meant the `timestamps` flag
-//! stamped `created_at` on insert and **never moved `updated_at`**: the PATCH
-//! succeeded, the row changed, and the column downstream caches, incremental
-//! sync and ETags trust stayed byte-identical to `created_at` forever.
-//!
-//! Asserted against live Postgres on the primitive itself, so it holds for
-//! every behaviour a resource declares, not only the macro-emitted one.
+//! `Repo::update` runs `ActiveModelBehavior`, though the scope filter takes
+//! sea-orm's `Update::one` path, which skips the behaviour hooks.
 
 use std::sync::Arc;
 
@@ -80,9 +71,6 @@ async fn repo_update_runs_active_model_behavior_so_updated_at_moves() {
     let id = Uuid::now_v7();
     let epoch: DateTimeWithTimeZone = chrono::Utc::now().fixed_offset();
 
-    // The create path already runs the hook (`ActiveModelTrait::insert`), so
-    // both stamps land at insert time and are equal — exactly the state the
-    // bug froze forever.
     let inserted = stamped::ActiveModel {
         id: Set(id),
         name: Set("before".to_owned()),
@@ -126,7 +114,6 @@ async fn repo_update_runs_active_model_behavior_so_updated_at_moves() {
     })
     .await;
 
-    // …and the movement is in the database, not only in the returned model.
     let row = stamped::Entity::find_by_id(id)
         .one(&conn)
         .await

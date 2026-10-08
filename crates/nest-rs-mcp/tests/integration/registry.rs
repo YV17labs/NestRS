@@ -1,15 +1,5 @@
-//! `src/registry.rs` + `src/composite.rs`: several `#[mcp]` hosts, one endpoint.
-//!
-//! The MCP spec namespaces tools **per endpoint** and every shipped client
-//! config points at a single URL, so a product exposing several domains over
-//! MCP needs all their tools on one path. That is what makes the merge a
-//! framework concern rather than a convenience: without it a product has to
-//! fold every domain into one god-host, inverting the one-adapter-per-feature
-//! layout.
-//!
-//! This is the capability's **composition witness**: two modules, each with
-//! its own `#[mcp]` provider on one path, booted through `TestApp` and driven
-//! over the real streamable-HTTP endpoint.
+//! `src/registry.rs` + `src/composite.rs`: several `#[mcp]` hosts, one endpoint —
+//! the capability's composition witness.
 
 use std::sync::Arc;
 
@@ -32,14 +22,9 @@ use nest_rs_mcp::{
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
 
-/// The endpoint both `audio`-shaped and `posts`-shaped hosts below mount on:
-/// the prefix itself, which is where a bare `#[mcp]` lands and where a client
-/// config points. Spelled out rather than read from `McpConfig` on purpose — a
-/// test that computed it from the same source as the code would pass through a
-/// change to the default.
+/// Where a bare `#[mcp]` lands. Spelled out, not read from the crate: a test
+/// computing it from the code's own source would pass through a change to it.
 const SHARED: &str = "/mcp";
-
-// --- two features, one endpoint --------------------------------------------
 
 /// Stands in for a feature that serves tools only.
 #[mcp]
@@ -128,8 +113,6 @@ impl ServerHandler for BetaTool {
     }
 }
 
-/// Each host lives in its own module — the one-adapter-per-feature shape,
-/// which is exactly what the merge exists to keep possible.
 #[module(providers = [AlphaTool, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct AlphaMcpModule;
 
@@ -178,8 +161,7 @@ async fn both_tool_sets_answer_on_one_endpoint() {
     let beta = call_tool(app.http(), SHARED, "beta_ping", None).await;
     assert!(
         beta.contains("beta here"),
-        "the second module's tool answers on the *same* path — this is the whole \
-         point of the chantier: {beta}",
+        "the second module's tool answers on the *same* path: {beta}",
     );
 }
 
@@ -202,10 +184,6 @@ async fn tools_list_is_the_union_of_every_host() {
     );
 }
 
-/// A merged endpoint is not tools-only: prompts and resources contributed by one
-/// host stay reachable beside another host's tools, and the capability
-/// declaration advertises the union — a client that reads `tools` alone would
-/// never ask for the rest.
 #[tokio::test]
 async fn prompts_and_resources_survive_the_merge() {
     let app = shared_app().await;
@@ -260,18 +238,7 @@ async fn initialize_advertises_the_union_of_capabilities_and_instructions() {
     );
 }
 
-// --- the endpoint's own identity ---------------------------------------------
-//
-// An MCP endpoint is one server to every client that reaches it: the protocol
-// carries one `serverInfo` and one `instructions`, on `initialize` and on
-// `server/discover` alike — the same shape `new McpServer({name, version})`
-// builds in the TypeScript SDK and a FastMCP parent keeps when it mounts
-// children. Two owners answer for it, and neither can shadow the other: the app
-// names itself once, and at most one host on a path refines that for its own
-// endpoint.
-
-/// The app naming itself once — what every endpoint it exposes reports unless a
-/// host on that endpoint says otherwise.
+/// The app naming itself once, for every endpoint no host on it refines.
 fn app_identity() -> McpSetup {
     McpModule::for_root(McpOptions {
         server: Some(
@@ -328,8 +295,6 @@ async fn the_app_identity_is_what_a_shared_endpoint_reports() {
     );
 }
 
-/// Every operation still routes across both hosts: naming the app is a
-/// declaration, not a takeover.
 #[tokio::test]
 async fn declaring_an_identity_changes_nothing_about_routing() {
     let app = TestApp::for_module::<DeclaredEndpointApp>()
@@ -344,14 +309,9 @@ async fn declaring_an_identity_changes_nothing_about_routing() {
     );
 }
 
-// --- a host declaring for its own endpoint ------------------------------------
-
-/// The path `OwnedTool` lands on — its own second endpoint, written whole.
 const OWNED: &str = "/mcp/owned";
 
-/// A feature whose endpoint stands apart. It renames the server — but
-/// deliberately not the version, which is the binary's and which a shared
-/// feature library cannot know, nor the instructions, which describe the server.
+/// Renames its endpoint; the version and instructions stay the app's.
 #[mcp(path = "/mcp/owned", name = "witness-owned")]
 #[derive(Clone)]
 struct OwnedTool;
@@ -378,8 +338,6 @@ struct OwnedMcpModule;
 #[module(imports = [OwnedMcpModule, app_identity()])]
 struct OwnedEndpointApp;
 
-/// The whole point of declaring at the host: a feature names the endpoint it
-/// owns, in the file that serves it, and inherits everything it cannot know.
 #[tokio::test]
 async fn a_host_declares_its_own_endpoint_and_inherits_the_rest() {
     let app = TestApp::for_module::<OwnedEndpointApp>()
@@ -413,8 +371,7 @@ async fn a_host_declares_its_own_endpoint_and_inherits_the_rest() {
     );
 }
 
-/// A host may name its endpoint in an app that named itself — but not in one
-/// that did not, because the version would then be nobody's.
+/// No app identity, so the host's name has no version behind it.
 #[module(imports = [OwnedMcpModule])]
 struct UnbackedNameApp;
 
@@ -435,11 +392,7 @@ async fn a_name_with_no_version_behind_it_fails_boot() {
     );
 }
 
-// --- two hosts declaring one endpoint ----------------------------------------
-
-/// A peer of `OwnedTool` on the same path, also declaring. One endpoint reports
-/// one `serverInfo`, so this is the ambiguity the framework refuses to resolve
-/// silently.
+/// A peer of `OwnedTool` on the same path, also declaring.
 #[mcp(path = "/mcp/owned", name = "witness-contender")]
 #[derive(Clone)]
 struct ContendingTool;
@@ -463,8 +416,6 @@ struct ContendingMcpModule;
 #[module(imports = [OwnedMcpModule, ContendingMcpModule, app_identity()])]
 struct ContestedDeclarationApp;
 
-/// Picking one silently would put the endpoint's name back where declaring it
-/// was meant to take it from: import order.
 #[tokio::test]
 async fn two_hosts_declaring_one_endpoint_fail_boot() {
     let err = match TestApp::for_module::<ContestedDeclarationApp>().await {
@@ -479,14 +430,9 @@ async fn two_hosts_declaring_one_endpoint_fail_boot() {
     assert!(err.contains(OWNED), "…and the endpoint they contest: {err}",);
 }
 
-// --- a declaration that reaches nothing ---------------------------------------
-
 #[module(imports = [app_identity()])]
 struct OrphanDeclarationApp;
 
-/// A declaration is a statement about a real server. With no `#[mcp]` host in
-/// the app it would otherwise do nothing at all — the one answer a declaration
-/// must never silently get.
 #[tokio::test]
 async fn an_identity_no_host_serves_fails_boot() {
     let err = match TestApp::for_module::<OrphanDeclarationApp>().await {
@@ -500,12 +446,8 @@ async fn an_identity_no_host_serves_fails_boot() {
     );
 }
 
-// --- two apps' worth of identity, and a path that means the same thing --------
-
-/// A second, disagreeing `for_root`. The app identity carries no path, so no
-/// per-path check can see this one: without its own check, `declared_server`
-/// would take whichever the import graph reached first and the endpoint's name
-/// would depend on `imports = [..]` order — the accident the seam removes.
+/// A second, disagreeing `for_root`: the app identity carries no path, so no
+/// per-path check sees it.
 #[module(imports = [
     AlphaMcpModule,
     app_identity(),
@@ -529,9 +471,8 @@ async fn two_disagreeing_server_identities_fail_boot() {
     );
 }
 
-/// Importing one `for_root` twice is not a conflict — `DynamicModule`
-/// registration is deliberately not deduplicated, so the same declaration
-/// arriving twice must stay silent.
+/// `DynamicModule` registration is not deduplicated: one `for_root` imported
+/// twice arrives twice.
 #[module(imports = [AlphaMcpModule, app_identity(), app_identity()])]
 struct RepeatedServerApp;
 
@@ -542,10 +483,8 @@ async fn the_same_identity_declared_twice_is_not_a_conflict() {
         .expect("one declaration imported twice boots");
 }
 
-/// `/mcp/` and `/mcp` are one endpoint to a client and two strings here. Left
-/// alone they would each claim a mount, and poem's `Route::nest` panics on the
-/// duplicate rather than reporting it — so the trailing slash is normalized
-/// away and the host simply joins its peers.
+/// `/mcp/` and `/mcp` are one endpoint; poem's `Route::nest` panics on the
+/// duplicate mount rather than reporting it.
 #[mcp(path = "/mcp/")]
 #[derive(Clone)]
 struct TrailingSlashTool;
@@ -592,10 +531,6 @@ async fn a_trailing_slash_names_the_same_endpoint() {
     );
 }
 
-// --- nobody naming it at all --------------------------------------------------
-
-/// A host that names itself is a whole server on its own path — the shape every
-/// MCP SDK builds — so the framework has nothing to say about it.
 #[mcp(path = "/named")]
 #[derive(Clone)]
 struct SelfNamedTool;
@@ -635,18 +570,13 @@ async fn a_lone_host_that_names_itself_needs_no_declaration() {
     );
 }
 
-/// The two messages the check below carries — one per fact, because a single
-/// message covering both would contradict its own `reports_as` field the moment
-/// a host had named itself.
 const SDK_DEFAULT_IDENTITY: &str = "an MCP endpoint introduces itself with the SDK's own name and \
      version — neither its hosts nor the app named it";
 const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose identity nobody \
      declared — it reports the first host's";
 
-/// rmcp's `ServerConfig::new` leaves `serverInfo` at the **SDK's** build identity,
-/// so an endpoint nobody named introduces itself to every client as `rmcp`, at
-/// rmcp's version. Nothing fails, which is exactly why it has to be said out
-/// loud at boot.
+/// rmcp's `ServerConfig::new` leaves `serverInfo` at the SDK's own identity,
+/// and nothing fails.
 #[tokio::test]
 async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     let logs = LogCapture::install();
@@ -675,8 +605,6 @@ async fn an_undeclared_shared_endpoint_is_reported_at_boot() {
     let logs = LogCapture::install();
     let _app = shared_app().await;
 
-    // Neither Alpha nor Beta names itself, so the SDK-default fact is the true
-    // one here — and it is the only message emitted.
     let event = logs.expect_one("nest_rs::mcp", SDK_DEFAULT_IDENTITY);
     assert_eq!(event.level, "warn");
     assert_eq!(
@@ -686,10 +614,6 @@ async fn an_undeclared_shared_endpoint_is_reported_at_boot() {
     );
 }
 
-/// The other branch, and the reason there are two messages: with hosts that
-/// *did* name themselves, the endpoint answers with whichever registered first.
-/// Reporting that as "introduces itself as the SDK" would be contradicted by the
-/// event's own `reports_as` field.
 #[mcp(path = "/mcp/self-named-peers")]
 #[derive(Clone)]
 struct FirstNamedTool;
@@ -756,17 +680,10 @@ async fn self_named_peers_are_told_the_endpoint_reports_the_first() {
     );
 }
 
-// --- a host that declares no router ------------------------------------------
-
-/// Where the hand-written host and its router-backed peer share a mount.
 const MANUAL: &str = "/manual";
 
-/// A host that hand-writes `call_tool`/`list_tools` instead of using
-/// `#[tool_router]`. `#[mcp]` must sit on it unchanged: the expansion asks
-/// `<Self>::tool_router()` for the statically-known names, and with no inherent
-/// one the empty `DefaultToolRouter` fallback answers. Its tools are still
-/// served — the merge offers an unclaimed name to each host in turn — they are
-/// simply not *statically* known.
+/// Hand-writes `call_tool`/`list_tools`: `DefaultToolRouter` answers its static
+/// names empty, and the merge offers an unclaimed name to each host in turn.
 #[mcp(path = "/manual")]
 #[derive(Clone)]
 struct ManualTool;
@@ -821,13 +738,8 @@ impl ServerHandler for RoutedTool {}
 #[module(providers = [ManualTool, RoutedTool, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct MixedHostModule;
 
-/// The gap this pins is the one the merge could hide. `#[mcp]` reads a host's
-/// tool names through rmcp's default `tool_router()`; a host that keeps its
-/// router under another name — rmcp's own answer for a host with many tools —
-/// declares none, so `check_duplicate_tools` has no candidate names for it and
-/// a clash between two such hosts would go unreported. The framework does not
-/// get to fail silently there: it says so at boot, naming the hosts and the
-/// remedy.
+/// A host with no `tool_router()` gives `check_duplicate_tools` no names, so a
+/// clash through it goes unchecked: said at boot instead.
 #[tokio::test]
 async fn a_host_the_boot_check_cannot_read_is_reported_at_boot() {
     let logs = LogCapture::install();
@@ -866,10 +778,6 @@ async fn a_host_without_a_tool_router_still_serves_beside_one_that_has() {
     );
 }
 
-// --- distinct paths stay distinct -------------------------------------------
-
-/// Where `OtherTool` lands: a second endpoint beside the default, the shape a
-/// product reaches for when one feature deserves its own URL.
 const OTHER: &str = "/mcp/other";
 
 #[mcp(path = "/mcp/other")]
@@ -893,10 +801,6 @@ struct OtherMcpModule;
 #[module(imports = [AlphaMcpModule, BetaMcpModule, OtherMcpModule])]
 struct TwoPathApp;
 
-/// Grouping is **by path**. An app that deliberately serves a second endpoint
-/// keeps it separate — merging every `#[mcp]` host in the process would destroy
-/// the per-endpoint namespacing the spec gives, and `demo` mounts two paths for
-/// exactly that reason.
 #[tokio::test]
 async fn a_second_path_is_a_second_endpoint() {
     let app = TestApp::for_module::<TwoPathApp>()
@@ -922,12 +826,7 @@ async fn a_second_path_is_a_second_endpoint() {
     );
 }
 
-// --- module gating -----------------------------------------------------------
-
-/// Only `AlphaMcpModule` is imported, so `BetaTool` is linked into this binary
-/// but never registered. Per-app subsets are the whole point of module gating,
-/// and here it is structural: metadata is attached from `register`, which never
-/// runs for a provider no imported module owns.
+/// `BetaTool` is linked into this binary but its module is not imported.
 #[module(imports = [AlphaMcpModule])]
 struct AlphaOnlyApp;
 
@@ -950,8 +849,6 @@ async fn an_unimported_host_contributes_nothing() {
         "a host whose module the app does not import stays inert: {body}",
     );
 }
-
-// --- the one new failure mode the merge introduces ----------------------------
 
 #[mcp(path = "/clash")]
 #[derive(Clone)]
@@ -986,10 +883,6 @@ impl ServerHandler for SecondClashingTool {}
 #[module(providers = [FirstClashingTool, SecondClashingTool])]
 struct ClashingModule;
 
-/// MCP addresses a tool by bare name within an endpoint, so two hosts claiming
-/// one name make the loser unreachable — and *which* one loses depends on
-/// registration order. That is a boot error naming both, never a runtime
-/// surprise. The invariant could not even be expressed before the merge.
 #[tokio::test]
 async fn a_duplicate_tool_name_on_one_path_fails_boot() {
     let err = match TestApp::for_module::<ClashingModule>().await {
@@ -1007,14 +900,6 @@ async fn a_duplicate_tool_name_on_one_path_fails_boot() {
     );
 }
 
-// --- where a host lands -------------------------------------------------------
-//
-// A `#[mcp]` path is the whole URL path, and omitting it takes the framework's
-// default — a client is configured with a URL, not a prefix plus a segment.
-
-/// The default is what an app that writes no path gets — including an app that
-/// never imports `McpModule` at all, which is why it lives on the crate rather
-/// than in configuration.
 #[tokio::test]
 async fn a_bare_host_serves_the_default_endpoint() {
     let app = TestApp::for_module::<AlphaOnlyApp>()
@@ -1034,9 +919,6 @@ async fn a_bare_host_serves_the_default_endpoint() {
     );
 }
 
-/// A second endpoint is a second path, written whole — and it does not have to
-/// sit under the first. Nothing nests below an MCP mount, so a host is free to
-/// name any URL its clients will be configured with.
 #[tokio::test]
 async fn a_declared_path_is_served_verbatim() {
     let app = TestApp::for_module::<TwoPathApp>()
@@ -1050,7 +932,6 @@ async fn a_declared_path_is_served_verbatim() {
     );
 }
 
-/// Every MCP mount an app assembled, as the transport sees it.
 fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
     Discovery::new(app.container())
         .meta::<HttpEndpointMeta>()
@@ -1060,17 +941,8 @@ fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
         .collect()
 }
 
-// --- one endpoint, one handshake ----------------------------------------------
-//
-// A client negotiates the protocol version **once per endpoint**, so hosts that
-// share a path share whatever the merge advertises: their intersection. That is
-// the only answer a single handshake can give, and it silently narrows what a
-// host declared — a host built against a newer version finds its endpoint
-// speaking an older one because a peer it never heard of mounted beside it.
-
 const VERSIONS: &str = "/mcp/versions";
 
-/// Two versions apart. Alone it would advertise both.
 #[mcp(path = "/mcp/versions")]
 #[derive(Clone)]
 struct LegacyVersionsTool;
@@ -1090,8 +962,7 @@ impl ServerHandler for LegacyVersionsTool {
     }
 }
 
-/// Its peer, overlapping in exactly one version — so the endpoint boots, and
-/// the newest version this host declared is not the one it gets.
+/// Overlaps `LegacyVersionsTool` in exactly one version.
 #[mcp(path = "/mcp/versions")]
 #[derive(Clone)]
 struct ModernVersionsTool;
@@ -1134,20 +1005,14 @@ async fn hosts_that_disagree_on_the_protocol_boot_on_their_intersection_and_say_
     );
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("path").as_deref(), Some(VERSIONS));
-    // Both names, because neither host is at fault on its own: the narrowing is
-    // a property of the pair, and an operator reading one name would go looking
-    // for a bug in a host that declared exactly what it needed.
     let hosts = event.field("hosts").unwrap_or_default();
     assert!(
         hosts.contains("LegacyVersionsTool") && hosts.contains("ModernVersionsTool"),
         "the event names both hosts sharing the endpoint, got {hosts:?}",
     );
 
-    // The endpoint answers, which is the half `initialize` can show: rmcp
-    // exempts the handshake itself from the `supported_protocol_versions` check
-    // (`uses_inline_negotiation` is false for an `InitializeRequest`), so what
-    // comes back is the version the client asked for, not the intersection.
-    // Asserting on it would be asserting rmcp's lifecycle.
+    // rmcp exempts `initialize` from the `supported_protocol_versions` check, so
+    // it answers the version asked for, not the intersection.
     let handshake = initialize(app.http(), VERSIONS, None).await;
     assert!(
         result(&handshake)["result"]["capabilities"].is_object(),
@@ -1155,8 +1020,6 @@ async fn hosts_that_disagree_on_the_protocol_boot_on_their_intersection_and_say_
     );
 }
 
-/// A lone host advertises what it declared — the check has to be about the
-/// pair, or every app that pins a protocol version warns at boot.
 #[module(providers = [ModernVersionsTool])]
 struct LoneVersionModule;
 
@@ -1176,10 +1039,6 @@ async fn a_host_alone_on_its_path_narrows_nothing() {
     );
 }
 
-/// Its twin, and the reason the warning is only a warning: hosts with *nothing*
-/// in common describe an endpoint that can complete no handshake at all. Every
-/// client would fail at `initialize`, which is a boot fact — so it is refused at
-/// boot rather than discovered by a client.
 #[mcp(path = "/mcp/incompatible")]
 #[derive(Clone)]
 struct AncientOnlyTool;
@@ -1244,18 +1103,8 @@ async fn hosts_with_no_protocol_in_common_fail_boot_naming_both() {
     );
 }
 
-// --- a cursor the merge cannot honour -----------------------------------------
-//
-// Pagination is per host, and the merged page is not. A cursor names a position
-// in *one* host's listing, so following it would return that host's next page
-// with none of its peers' entries — and every entry already merged in, again.
-// The merge therefore drops it, which turns a truncated listing into one that
-// looks complete: a client sees no `nextCursor` and stops asking.
-
 const PAGED: &str = "/mcp/paged";
 
-/// A host with more resources than it returns at once — a perfectly ordinary
-/// host, which is the point: it did nothing wrong and cannot know it is sharing.
 #[mcp(path = "/mcp/paged")]
 #[derive(Clone)]
 struct PagedResourcesTool;
@@ -1292,8 +1141,6 @@ impl ServerHandler for PagedResourcesTool {
     }
 }
 
-/// Its peer. Nothing about it is unusual either — sharing the path is the whole
-/// of what the two of them did.
 #[mcp(path = "/mcp/paged")]
 #[derive(Clone)]
 struct UnpagedResourcesTool;
@@ -1356,9 +1203,7 @@ async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
     )
     .await;
     let listed = &result(&body)["result"];
-    // Distinct schemes on purpose: with `paged://one` and `unpaged://one` the
-    // first check was free — `"unpaged://one".contains("paged://one")` is true —
-    // so dropping the paginating host's entries entirely still passed.
+    // Distinct schemes: `"unpaged://one".contains("paged://one")` would pass vacuously.
     assert!(
         body.contains("paged://one"),
         "the paginating host's entries reach the merged page: {body}",
@@ -1395,8 +1240,6 @@ async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
     );
 }
 
-/// The same host alone: its cursor is its own and a client can still follow it,
-/// so nothing is dropped and nothing is said.
 #[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct LonePagedModule;
 

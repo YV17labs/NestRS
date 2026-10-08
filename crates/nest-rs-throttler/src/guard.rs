@@ -27,12 +27,8 @@ use crate::store::{Decision, HIT_TIMEOUT, ThrottlerStore};
 use crate::throttle::Throttle;
 
 /// The edge a bucket belongs to — the leading segment of every key, and the
-/// `transport` field on every denial.
-///
-/// One store serves all four edges and the units they address share a namespace
-/// of bare names: a `#[query]`, a `#[tool]` and a `#[subscribe_message]` may all
-/// be called `search`. Without this segment they would drain one budget between
-/// them, so a client could exhaust a tool's window by spamming a socket.
+/// `transport` field on every denial: a `#[query]`, a `#[tool]` and a
+/// `#[subscribe_message]` may share a name, and must not share a budget.
 mod transport {
     pub(super) const HTTP: &str = "http";
     #[cfg(feature = "graphql")]
@@ -43,15 +39,11 @@ mod transport {
     pub(super) const WS: &str = "ws";
 }
 
-/// U+001F (unit separator) joins the parts of a bucket key. It can appear in
-/// none of them — a route pattern, a GraphQL field, an MCP operation name, a WS
-/// event, an IP, a connection id — so a composite key never collides across the
-/// join.
+/// U+001F (unit separator) joins the parts of a bucket key: it appears in none
+/// of them, so a composite key never collides across the join.
 const KEY_SEPARATOR: char = '\u{1f}';
 
-/// The sentence a throttled caller reads, whichever edge refused it. One
-/// vocabulary across an HTTP body, a GraphQL error frame, an MCP error and a WS
-/// error frame, because a client speaking two of them must not read two.
+/// The sentence a throttled caller reads, whichever edge refused it.
 const RATE_LIMITED_MESSAGE: &str = "Too Many Requests";
 
 /// The key `parts` address, joined by [`KEY_SEPARATOR`].
@@ -61,8 +53,6 @@ fn bucket_key(parts: &[&dyn fmt::Display]) -> String {
         if index > 0 {
             key.push(KEY_SEPARATOR);
         }
-        // Writing to a `String` cannot fail; `fmt::Write` still returns a
-        // `Result`, and this is a hot path that owes no `expect`.
         #[expect(
             clippy::let_underscore_must_use,
             reason = "fmt::Write for String never fails"
@@ -75,16 +65,8 @@ fn bucket_key(parts: &[&dyn fmt::Display]) -> String {
 /// The wait a caller is told to observe, in whole seconds — **rounded up, and
 /// never `0`**.
 ///
-/// Both stores compute a sub-second remainder (the in-memory one from
-/// `window - elapsed`, the Redis one from the key's real TTL), so truncating
-/// hands every denial in the final second of a window `Retry-After: 0`. RFC 9110
-/// §10.2.3 reads that as "retry immediately", which turns the refusal into an
-/// instruction to hot-retry against the limit the guard just enforced — the load
-/// it exists to shed. `nest_rs_http`'s shed-load `503` states the same rule for
-/// the same reason; this is the throttler's half of it.
-///
-/// Read once here and used twice — the denial the caller receives and the
-/// `warn` the operator reads — so the header and the log line cannot disagree.
+/// Truncating would hand every denial in a window's last second
+/// `Retry-After: 0`, which RFC 9110 §10.2.3 reads as "retry immediately".
 fn retry_after_secs(retry_after: Duration) -> u32 {
     let secs = retry_after
         .as_secs()
@@ -93,8 +75,7 @@ fn retry_after_secs(retry_after: Duration) -> u32 {
     u32::try_from(secs).unwrap_or(u32::MAX)
 }
 
-/// The refusal every edge returns, so the wait and the sentence a caller reads
-/// cannot drift between transports.
+/// The refusal every edge returns.
 fn rate_limited(retry_after: Duration) -> Denial {
     Denial::rate_limited(retry_after_secs(retry_after), RATE_LIMITED_MESSAGE)
 }
@@ -106,43 +87,25 @@ fn rate_limited(retry_after: Duration) -> Denial {
 /// *addresses*, joined with the caller that edge can see: the matched route
 /// pattern and the client's network on HTTP — its address in IPv4, its `/64`
 /// in IPv6 — the field name on GraphQL, the tool or prompt on MCP, the event
-/// and the connection on WS. Three of them are not
-/// reachable through the HTTP chain at all — `/graphql` and `/mcp` are
-/// [`EdgePosture::Exempt`](nest_rs_http::EdgePosture), and a WS message runs
-/// after the upgrade has returned — so a guard that only checked HTTP left them
-/// unmetered at every binding scope.
+/// and the connection on WS.
 ///
 /// **Only HTTP carries per-unit metadata**, so `#[meta(Throttle::...)]`
-/// overrides the module default there and nowhere else: a GraphQL field, an MCP
-/// operation and a WS message have no route data to hang one on, and each counts
+/// overrides the module default there and nowhere else; the other edges count
 /// against [`ThrottlerConfig`](crate::ThrottlerConfig)'s limit.
 ///
-/// Binding scope chooses *which* units are measured, never what the guard
-/// reads: `#[use_guards(ThrottlerGuard)]` measures one host or one operation,
-/// `use_guards_global` measures everything the pool reaches — the units carrying
-/// no `#[meta(Throttle)]` at the module default.
-///
-/// Injects the store as `Arc<dyn ThrottlerStore>`, so **one** guard serves
-/// every backend: [`InMemoryThrottler`](crate::InMemoryThrottler) by default,
-/// or a shared store (Redis) when its module is imported instead. The store
-/// binding is what an app swaps — never the guard.
+/// The store is the bound `Arc<dyn ThrottlerStore>`:
+/// [`InMemoryThrottler`](crate::InMemoryThrottler) by default, or a shared
+/// store when its module is imported instead.
 #[injectable]
 pub struct ThrottlerGuard {
-    /// The limit a route that pins no `#[meta(Throttle)]` runs under — the
-    /// port's policy, resolved from `ThrottlerConfig` and registered by
-    /// `ThrottlerModule::for_root`. It lives on the guard and not on the store
-    /// because a store only counts; swapping the backend must move the counters
-    /// and nothing else. **Injected, never defaulted**: a plain `Throttle` field
-    /// would be filled with 60/minute by any path that builds the guard from
-    /// the container — `providers = [ThrottlerGuard]` without `for_root` — and
-    /// the configured limit would be replaced in silence. As a dependency, that
-    /// composition fails the boot naming `Throttle` instead.
+    /// The limit a route that pins no `#[meta(Throttle)]` runs under.
+    /// **Injected, never defaulted**: a guard built without `for_root` fails the
+    /// boot naming `Throttle` rather than run 60/minute in silence.
     #[inject]
     default: Arc<Throttle>,
-    /// The store, as [`ThrottlerGuard::new`] prepared it. Injected so the
-    /// container's own constructor cannot fill it: no provider registers a
-    /// [`CountingStore`], so a guard built by any path but `new` fails the boot
-    /// rather than hand a store outside the process the client's address.
+    /// The store, as [`ThrottlerGuard::new`] prepared it. No provider registers
+    /// a [`CountingStore`], so a guard built by any path but `new` fails the
+    /// boot rather than hand a store outside the process the client's address.
     #[inject]
     throttler: Arc<CountingStore>,
 }
@@ -155,9 +118,6 @@ impl ThrottlerGuard {
     /// Build the guard over a store, with the default limit for routes that pin
     /// none, counting under pseudonyms when the store's counters leave this
     /// process ([`PseudonymStore::wrap`] — refused without `pseudonym_key`).
-    /// `ThrottlerModule` uses it to register the guard as global
-    /// infrastructure, so `#[use_guards(ThrottlerGuard)]` needs nothing in the
-    /// controller module's `providers`.
     pub(crate) fn new(
         throttler: Arc<dyn ThrottlerStore>,
         default: Throttle,
@@ -175,16 +135,9 @@ impl ThrottlerGuard {
     /// Count one hit for `key` under `limit` on the edge `transport` names,
     /// waiting on the store no longer than [`HIT_TIMEOUT`].
     ///
-    /// A store silent past the bound is a store that cannot answer, and gets the
-    /// answer every such store gives: a denial for the whole window, fail
-    /// closed, which the edge then refuses the caller with as it would any other.
-    /// The line says what the refusal alone cannot — that the store never
-    /// answered, and which store it was.
-    ///
-    /// The store's call is polled once bare before the bound is armed, as the
-    /// HTTP edge arms its request timeout: the in-process store answers on that
-    /// first poll, so the default path pays neither the clock read nor the timer
-    /// entry a bound costs.
+    /// A store silent past the bound is denied for the whole window, fail
+    /// closed. The call is polled once bare before the bound is armed, so the
+    /// in-process store pays no timer.
     async fn count(&self, transport: &'static str, key: &str, limit: Throttle) -> Decision {
         let store = &*self.throttler.0;
         let mut hit = pin!(store.hit(key, limit));
@@ -218,16 +171,11 @@ impl Guard for ThrottlerGuard {
             .copied()
             .unwrap_or(*self.default);
 
-        // Route-specific bucket. The window is per route (each route pins its
-        // own `#[meta(Throttle)]`), so the counter must be per route too —
-        // keying on IP alone lets every `ThrottlerGuard` route share one bucket,
-        // so hammering a lenient route drains a strict route's budget.
+        // Per route: keyed on the IP alone, a lenient route would drain a strict
+        // route's budget.
         let ip = ClientId::from(ClientOrigin::of(req));
-        // Prefer poem's matched-route *pattern* (`/users/:id`) so dynamic path
-        // segments don't fragment the bucket. Fall back to the raw path when no
-        // pattern was attached (e.g. a self-mounted endpoint) — correct for the
-        // static brute-force case (`/login`), at the cost of fragmenting dynamic
-        // paths into a bucket per concrete URL.
+        // The matched pattern, so dynamic segments don't fragment the bucket; a
+        // self-mounted endpoint has none and falls back to the raw path.
         let route = req
             .data::<PathPattern>()
             .map(|pattern| pattern.0.as_ref())
@@ -250,28 +198,14 @@ impl Guard for ThrottlerGuard {
         Err(rate_limited(decision.retry_after))
     }
 
-    /// GraphQL's unit is the **field**: one document may carry several, and the
-    /// per-operation chain reaches this site once per field resolved. `/graphql`
-    /// is `Exempt`, so nothing an HTTP-scope binding does reaches them.
+    /// GraphQL's unit is the **field**, counted once per field resolved.
     ///
-    /// **The caller half is the actor, and it is read rather than invented.**
-    /// The peer address is not reachable here — it lives on the poem `Request`,
-    /// which no `GraphqlContextSeed` forwards — but the *principal* is: the
-    /// operation runs inside the request scope the edge installed, so
-    /// [`current_actor_id`](nest_rs_core::current_actor_id) answers for every
-    /// authenticated caller.
-    ///
-    /// That distinction is the whole security property. Keyed on the field
-    /// alone, every caller shares one bucket, and one client spending the
-    /// window `429`s everybody — a limiter that is a denial-of-service
-    /// amplifier rather than a defence. Keyed on the actor, a caller can only
-    /// exhaust their own.
-    ///
-    /// An **anonymous** caller has no actor, and then the shared bucket is the
-    /// honest answer rather than a chosen one — so it is reported, once per
-    /// process, and only when it actually happens. The per-address half for
-    /// that traffic is this same guard in `use_guards_global`, where `/graphql`
-    /// is one HTTP request keyed on its client.
+    /// **The caller half is the actor**
+    /// ([`current_actor_id`](nest_rs_core::current_actor_id)): the peer address
+    /// is not reachable here, and keyed on the field alone one client would
+    /// `429` everybody. An **anonymous** caller shares one bucket, reported once
+    /// per process; the same guard in `use_guards_global` meters `/graphql` per
+    /// client address.
     #[cfg(feature = "graphql")]
     async fn check_graphql(&self, operation: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
         let field = operation.name();
@@ -303,12 +237,8 @@ impl Guard for ThrottlerGuard {
     /// The kind leads the name because the protocol namespaces them separately:
     /// a `#[tool]` and a `#[prompt]` may share a name and are two addresses.
     ///
-    /// The caller half is the actor, read the same way and for the same reason
-    /// as GraphQL's. The operation does run on a task rmcp spawned — but
-    /// `nest_rs_mcp::propagate` installs the request scope *across* that spawn,
-    /// so the correlation and its actor survive it. "The request is gone" was
-    /// true of the peer address and not of the principal, and keying on neither
-    /// made the limiter a shared kill switch.
+    /// The caller half is the actor, as on GraphQL: `nest_rs_mcp::propagate`
+    /// carries the request scope across the task rmcp spawns.
     #[cfg(feature = "mcp")]
     async fn check_mcp(&self, ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
         let kind = ctx.kind();
@@ -338,16 +268,9 @@ impl Guard for ThrottlerGuard {
         Err(rate_limited(decision.retry_after))
     }
 
-    /// WS's unit is the **event**, and the connection is the caller half this
-    /// site really can see — no invention required, but no address either: a
-    /// message is dispatched long after the upgrade's task-locals unwound, so
-    /// the peer that keyed the `GET` is gone by then.
-    ///
-    /// A reconnect therefore opens a fresh bucket. That is bounded rather than
-    /// open: the upgrade *is* an HTTP `GET`, so the same guard on the
-    /// `#[gateway]` struct meters connection attempts per address, and this
-    /// entry meters the traffic inside one connection — the flood the upgrade
-    /// cannot see.
+    /// WS's unit is the **event**, and the caller half the connection: the peer
+    /// address is gone by dispatch. A reconnect opens a fresh bucket, which the
+    /// same guard on the `#[gateway]` struct meters per address at the upgrade.
     #[cfg(feature = "ws")]
     async fn check_ws_message(
         &self,
@@ -381,8 +304,7 @@ impl nest_rs_guards::HttpGuard for ThrottlerGuard {}
 
 /// …and GraphQL operations, keyed on the field
 /// ([`check_graphql`](Guard::check_graphql)). Declared so a `#[resolver]` or a
-/// single `#[query]` may bind it — the binding that once compiled and throttled
-/// nothing.
+/// single `#[query]` may bind it.
 #[cfg(feature = "graphql")]
 impl nest_rs_guards::GraphqlGuard for ThrottlerGuard {}
 
@@ -400,10 +322,6 @@ impl nest_rs_guards::McpGuard for ThrottlerGuard {}
 impl nest_rs_guards::WsGuard for ThrottlerGuard {}
 
 /// The identity a rate-limit bucket is keyed on.
-///
-/// Carried as a value rather than a `String` so the composite route+client key
-/// is built in **one** allocation: the previous shape rendered the address to
-/// its own `String` only to interpolate it into the real key a line later.
 enum ClientId {
     /// The network the resolved address belongs to, with its prefix length: the
     /// address itself in IPv4 (`/32`), its `/64` in IPv6 — the link one host's
@@ -440,16 +358,10 @@ impl std::fmt::Display for ClientId {
 
 /// Turn the transport's [`ClientOrigin`] into a bucket key, warning on the two
 /// resolutions that collapse every caller into one bucket.
-///
-/// The resolution itself — peer, trusted-proxy gate, rightmost non-trusted hop —
-/// lives in `nest_rs_http::ClientOrigin`, so a bucket and the `ClientIp`
-/// extractor always attribute a request to the same caller.
 impl From<ClientOrigin> for ClientId {
     fn from(origin: ClientOrigin) -> Self {
         match origin {
             ClientOrigin::Peer(ip) | ClientOrigin::Forwarded(ip) => Self::network(ip),
-            // The peer is a trusted proxy that forwarded no client address: it
-            // is still an address, but everyone behind it shares this bucket.
             ClientOrigin::TrustedProxy(ip) => {
                 static SEEN: AtomicBool = AtomicBool::new(false);
                 warn_shared_bucket(
@@ -477,20 +389,7 @@ impl From<ClientOrigin> for ClientId {
 }
 
 /// The caller half of an in-band bucket key: the authenticated principal, or a
-/// reported fallback when there is none.
-///
-/// **This is the difference between a rate limiter and a denial-of-service
-/// amplifier.** Keyed on the operation alone, every caller shares one bucket and
-/// one client spending the window `429`s everybody. The peer address is not
-/// reachable at an in-band site — it lives on the poem `Request` — but the
-/// *actor* is: `nest_rs_mcp::propagate` and the GraphQL edge both install the
-/// request scope around the operation, so `current_actor_id()` answers for
-/// every authenticated caller.
-///
-/// An anonymous caller has none, and then the shared bucket is the honest answer
-/// rather than a chosen one — reported once per process, and only when it
-/// actually happens. The per-address half for that traffic is the same guard in
-/// `use_guards_global`, where the carrying HTTP request is keyed on its client.
+/// reported shared bucket when there is none.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 fn caller_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) -> String {
     match nest_rs_core::current_actor_id() {
@@ -502,28 +401,15 @@ fn caller_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) 
     }
 }
 
-/// What an unauthenticated caller is keyed as.
-///
-/// A named value rather than an empty string: `""` would be indistinguishable
-/// from an actor named that, which is the sentinel `current_actor_id` refuses to
-/// return for the same reason.
+/// What an unauthenticated caller is keyed as; never `""`, which an actor could
+/// be named.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 const ANONYMOUS_CALLER: &str = "<anonymous>";
 
 /// Report a keying degradation **once per process**, at `warn`.
 ///
-/// Both degradations are misconfigurations that stay invisible until an outage:
-/// the throttler keeps answering, it just stops distinguishing callers. They are
-/// a structural fact of the deployment, not a per-request event, so this dedups
-/// rather than spamming a line per request.
-///
-/// The dedup is one flag per reason, supplied by the call site, rather than a
-/// set of reasons behind a process-wide `Mutex`. The reasons are a closed set of
-/// four `&'static str`s that never grows at runtime, so the set could only ever
-/// answer what a `bool` answers — while the lock sat on the anonymous in-band
-/// path, which is every request on an unauthenticated GraphQL or MCP surface.
-/// Serializing all of them through one mutex is a ceiling on exactly the traffic
-/// a rate limiter exists to survive.
+/// One flag per reason, from the call site, rather than a `Mutex` on a path
+/// every anonymous in-band request takes.
 fn warn_shared_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) {
     if !seen.swap(true, Ordering::Relaxed) {
         tracing::warn!(
@@ -542,8 +428,8 @@ mod tests {
     use super::*;
     use crate::DEFAULT_THROTTLE;
 
-    /// A store whose counters leave this process — what the trait presumes of
-    /// any store — recording every key it is handed.
+    /// A store whose counters leave this process, recording every key it is
+    /// handed.
     #[derive(Default)]
     struct Recording(parking_lot::Mutex<Vec<String>>);
 
@@ -555,8 +441,7 @@ mod tests {
         }
     }
 
-    /// A request from `peer` — what poem's builder cannot set, so the parts are
-    /// assembled directly.
+    /// A request from `peer`, which poem's builder cannot set.
     fn from_peer(peer: &str) -> Request {
         use poem::Addr;
         use poem::web::{LocalAddr, RemoteAddr};
@@ -577,10 +462,6 @@ mod tests {
 
     const KEY: &str = "a pseudonym key of at least 32 bytes, for tests";
 
-    /// A client's address is personal data, and a store outside this process
-    /// keeps what it is handed where a backup, a replica or a `SCAN` reads it:
-    /// the key it counts under carries neither the address nor the route, and
-    /// one client keeps one bucket.
     #[tokio::test]
     async fn a_client_address_never_reaches_a_store_outside_the_process() {
         let store = Arc::new(Recording::default());
@@ -603,8 +484,6 @@ mod tests {
         assert_ne!(keys[0], keys[2], "two clients, two buckets");
     }
 
-    /// Without the key, replicas sharing the store would each count their own
-    /// buckets in it: the boot refuses, naming the variable and the store.
     #[test]
     fn a_store_outside_the_process_without_a_key_is_refused() {
         let Err(refused) =
@@ -624,10 +503,8 @@ mod tests {
         s.parse().expect("test literal is an IP")
     }
 
-    // The resolution itself is `nest_rs_http::ClientOrigin`'s contract and is
-    // tested there — including every `X-Forwarded-For` spoofing case (B-HTTP-1).
-    // What belongs here is the mapping onto a bucket: which origins get their
-    // own bucket, and which collapse everyone into one.
+    // The resolution itself, spoofing cases included, is tested with
+    // `nest_rs_http::ClientOrigin`; here only its mapping onto a bucket.
     #[test]
     fn every_resolved_address_gets_its_own_bucket() {
         let addr = ip("203.0.113.50");
@@ -642,10 +519,6 @@ mod tests {
         );
     }
 
-    /// A host picks the low 64 bits of its IPv6 address at will and rotates them
-    /// (RFC 8981), so keyed on the address it would mint a bucket per request:
-    /// IPv6 keys on the `/64`, IPv4 on the address, and an IPv4 client a
-    /// dual-stack socket reports as `::ffff:a.b.c.d` on its IPv4 address.
     #[test]
     fn ipv6_keys_on_its_64_and_ipv4_on_its_address() {
         let id = |addr: &str| ClientId::from(ClientOrigin::Peer(ip(addr))).to_string();
@@ -659,8 +532,6 @@ mod tests {
         assert_ne!(id("203.0.113.7"), id("203.0.113.8"));
     }
 
-    // A proxy that forwards nothing still has an address, so the bucket is
-    // named — but everyone behind it shares it, which is why it warns.
     #[test]
     fn a_trusted_proxy_that_forwards_nothing_keys_on_the_proxy() {
         let proxy = ip("10.0.0.1");
@@ -670,27 +541,16 @@ mod tests {
         );
     }
 
-    // No peer at all (a unix socket, a test stub): one shared bucket. Named
-    // `global` rather than empty so it is legible in metrics.
     #[test]
     fn no_peer_address_falls_back_to_a_named_global_bucket() {
         assert_eq!(ClientId::from(ClientOrigin::Unknown).to_string(), "global");
     }
 
-    /// Both degradations keep the throttler *answering* — it just stops
-    /// distinguishing callers, so one client can exhaust everyone's budget and
-    /// no status code changes. They are invisible until the outage, which is
-    /// why they are `warn` and why the line carries the remedy.
-    ///
-    /// Deduped once per process by reason. That is safe to assert on because
-    /// nextest runs each test in its own process — a sibling burning the same
-    /// reason cannot silence this one, and `cargo test`'s shared binary is
-    /// unsupported here anyway (the runner is nextest).
+    /// Deduped once per process, which nextest's process per test makes safe to
+    /// assert on.
     #[test]
     fn a_degraded_keying_is_reported_once_with_its_remedy() {
         let logs = nest_rs_testing::LogCapture::install();
-        // A unix socket or a proxy that hides the peer: no address at all, so
-        // every caller lands in one bucket.
         assert_eq!(
             ClientId::from(ClientOrigin::Unknown).to_string(),
             ClientId::Shared.to_string(),
@@ -710,8 +570,6 @@ mod tests {
             event.fields,
         );
 
-        // And the second call is silent: a per-request line for a structural
-        // fact would bury the events an incident actually queries.
         #[expect(
             clippy::let_underscore_must_use,
             reason = "the call is made for the line it would emit a second time"

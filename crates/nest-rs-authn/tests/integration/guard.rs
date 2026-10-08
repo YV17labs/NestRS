@@ -1,10 +1,7 @@
 //! Covers `src/guard.rs`.
 //!
-//! The guard's bound on its strategy, `AUTHENTICATE_TIMEOUT`, is driven below
-//! over a strategy that never answers: on the guard alone, then on every edge
-//! the guard authenticates for — a route, the GraphQL POST, the MCP POST and the
-//! WebSocket upgrade — each booted the way an app binds it, on paused time, so
-//! the twenty seconds it waits cost the suite nothing.
+//! `AUTHENTICATE_TIMEOUT` is driven over a strategy that never answers, on the
+//! guard alone and on every edge it authenticates for, on paused time.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -97,10 +94,7 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
         .await
         .expect("a rejected credential still leaves the public route reachable");
 
-    // "and it is logged" is half the promise, and the half nothing read. The
-    // request succeeds, so this event is the *only* trace a forged token
-    // probing a public endpoint leaves — which is why it is `warn` and not the
-    // `debug` its no-credential sibling gets.
+    // The request succeeds, so this `warn` is the only trace a forged token leaves.
     let event = logs.expect_one(
         nest_rs_authn::TARGET,
         "rejected credential on a public route — continuing as anonymous",
@@ -140,9 +134,7 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
     );
     assert_eq!(denial.http_status(), 503, "the caller did nothing wrong");
 
-    // The client message is deliberately opaque, so the outage is only ever
-    // readable here — and an outage that logs a bare line is the one an
-    // operator cannot correlate to a strategy.
+    // The client message is opaque, so the outage is only readable here.
     let event = logs.expect_one(
         nest_rs_authn::TARGET,
         "authentication unavailable — what the strategy asks did not answer",
@@ -158,12 +150,8 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
     assert!(event.field("strategy").is_some(), "{:?}", event.fields);
 }
 
-/// Authentication is the one moment anybody learns who is calling, so it is the
-/// one place the ambient identity can be set. Everything downstream — a service
-/// stamping `created_by`, the queue producer sealing a job, an audit row — reads
-/// it back through `current_actor_id()` rather than having the handler thread it
-/// down, which is what makes the answer available at call sites the handler
-/// never passes through.
+/// Authentication sets the ambient identity everything downstream reads back
+/// through `current_actor_id()`, without the handler threading it down.
 #[tokio::test]
 async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
     let guard = AuthnGuard::new(Arc::new(AuthenticateAs("ada")));
@@ -203,14 +191,8 @@ async fn an_unauthenticated_caller_has_no_ambient_actor() {
     assert_eq!(seen, None);
 }
 
-// --- the bound: a strategy that never answers --------------------------------
-//
-// A strategy that waits on a backend — token introspection, an API-key store,
-// an identity provider — and never hears back held its request for as long, and
-// decided nothing about the credential. The guard waits `AUTHENTICATE_TIMEOUT`
-// and no longer, then gives the answer an unreachable identity store gets: the
-// credential was not evaluated, so the request fails closed on every route,
-// `#[public]` included.
+// The bound: a strategy that never answers fails closed on every route,
+// `#[public]` included, as an unreachable identity store does.
 
 /// A strategy that never answers — a backend holding the call, a network
 /// dropping it without a reset.
@@ -313,10 +295,8 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     assert_the_strategy_was_waited_out(&logs);
 }
 
-/// `#[public]` absorbs a *rejected* credential: the strategy looked and said
-/// no. A strategy that never answered never looked, so admitting the caller as
-/// anonymous would serve every authenticated caller as a visitor for as long as
-/// it hangs — and a public route's visitor rules would decide what they see.
+/// `#[public]` absorbs a *rejected* credential, never one the strategy never
+/// looked at.
 #[tokio::test(start_paused = true)]
 async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
     let logs = LogCapture::install();
@@ -331,10 +311,8 @@ async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
     logs.expect_none(nest_rs_authn::TARGET, "anonymous request on a public route");
 }
 
-/// The other side of the bound: a strategy that answers inside it is waited
-/// for, however slowly, and its answer is the one the request gets. The bound
-/// is a net under a strategy that never answers, never a budget cutting short
-/// one that does.
+/// A strategy that answers inside the bound is waited for, however slowly: the
+/// bound is a net, not a budget.
 #[tokio::test(start_paused = true)]
 async fn a_strategy_answering_inside_the_bound_is_waited_for() {
     let logs = LogCapture::install();
@@ -364,13 +342,9 @@ fn the_bound_answers_before_the_http_edge_times_a_request_out() {
     );
 }
 
-// --- every edge the guard authenticates for ----------------------------------
-//
-// The guard has one entry, `check_http`, and every edge reaches it: a route's
-// chain, the GraphQL and MCP fallbacks the global pool seeds, a gateway's
-// upgrade. Each app below mounts the HTTP edge with its request timeout at the
-// default, so the refusal is shown to come from the guard's bound, before the
-// edge's own.
+// Every edge reaches the guard's one entry, `check_http`. Each app mounts the
+// HTTP edge at its default request timeout, so a refusal is shown to come from
+// the guard's bound first.
 
 /// The HTTP edge the apps below mount — the budget the guard's bound answers
 /// inside.

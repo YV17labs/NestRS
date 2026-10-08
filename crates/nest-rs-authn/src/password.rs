@@ -9,12 +9,8 @@ use crate::error::PasswordError;
 
 static TIMING_DUMMY_HASH: OnceLock<String> = OnceLock::new();
 
-// The work factor, pinned rather than inherited. Source: the OWASP Password
-// Storage Cheat Sheet's Argon2id recommendation — m = 19 MiB, t = 2, p = 1 —
-// which `Argon2::default()` happens to equal today. Riding that default put a
-// security-critical parameter on a value an upstream release can lower without
-// a line changing here, which is the same argument `JwtService::new` makes for
-// pinning `validate_exp`. Pinned, a downstream change is a visible diff.
+// Pinned to OWASP's Argon2id recommendation (m = 19 MiB, t = 2, p = 1) rather
+// than `Argon2::default()`, which an upstream release can lower silently.
 /// Memory cost in KiB (19 MiB).
 const ARGON2_M_COST: u32 = 19 * 1024;
 /// Iteration count.
@@ -22,10 +18,8 @@ const ARGON2_T_COST: u32 = 2;
 /// Degree of parallelism.
 const ARGON2_P_COST: u32 = 1;
 
-/// The pinned Argon2id hasher. `Params::new` validates the three constants
-/// above, so this can only fail if one of them is edited out of range — a
-/// `HashFailed` rather than a panic, since nothing here may `unwrap` on a hot
-/// path.
+/// The pinned Argon2id hasher; fails (`HashFailed`) only if a constant above is
+/// edited out of range.
 fn argon2() -> Result<Argon2<'static>, PasswordError> {
     let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
         .map_err(|error| PasswordError::HashFailed(error.into()))?;
@@ -67,10 +61,8 @@ pub fn verify_password(encoded_hash: &str, password: &str) -> Result<bool, Passw
 /// Run a verify against a dummy hash — call when the account is absent so the
 /// work factor matches a real login attempt.
 ///
-/// The dummy initializes on first use; hashing a constant can only fail on an
-/// Argon2 internal error. That failure degrades to a logged no-op burn rather
-/// than a request panic — the timing equalization is best-effort hardening,
-/// not a correctness gate.
+/// Should the dummy fail to hash, the burn degrades to a logged no-op rather
+/// than a panic.
 pub fn burn_verify(password: &str) {
     let dummy = TIMING_DUMMY_HASH.get_or_init(|| match hash_password("nestrs-timing-dummy") {
         Ok(hash) => hash,
@@ -98,9 +90,7 @@ mod tests {
 
     #[test]
     fn the_work_factor_is_pinned_at_the_owasp_recommendation() {
-        // The values, asserted where a downstream `argon2` release cannot move
-        // them: OWASP Password Storage Cheat Sheet, Argon2id — m = 19 MiB
-        // (19456 KiB), t = 2, p = 1.
+        // OWASP Password Storage Cheat Sheet, Argon2id.
         let hasher = argon2().expect("the pinned parameters are in range");
         assert_eq!(hasher.params().m_cost(), 19_456);
         assert_eq!(hasher.params().t_cost(), 2);
@@ -109,9 +99,6 @@ mod tests {
 
     #[test]
     fn a_stored_hash_records_the_pinned_parameters() {
-        // The proof that reaches the database: a PHC string carries the cost
-        // parameters it was produced with, so this is what a later reader (and
-        // `verify_password`) actually sees.
         let encoded = hash_password("correct horse battery staple").expect("hash");
         assert!(
             encoded.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"),
@@ -119,12 +106,9 @@ mod tests {
         );
     }
 
-    // The two strings below were produced by argon2 0.5.3 — the release this
-    // crate shipped against before the 0.6 bump — with the salt fixed so the
-    // digest is reproducible. They are here because every other test in this
-    // file hashes and verifies with the *same* build, which is exactly the case
-    // that cannot fail: a PHC format or B64 change would sail through it and
-    // lock every account already in a deployment's database out.
+    // Produced by argon2 0.5.3 with a fixed salt: every other test hashes and
+    // verifies with one build, so only these catch a PHC format change that
+    // would lock stored accounts out.
     const LEGACY_PINNED_PARAMS_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$\
                                              bmVzdHJzbGVnYWN5c2FsdA$\
                                              gehrg8ZBw1WMfqozNAlQokF0EvWAwCMyS4ieeePrVZY";
@@ -151,8 +135,6 @@ mod tests {
 
     #[test]
     fn a_hash_made_with_another_work_factor_still_verifies() {
-        // Verification reads the stored parameters, so pinning ours never
-        // invalidates credentials hashed before the pin.
         let weaker = Argon2::new(
             Algorithm::Argon2id,
             Version::V0x13,

@@ -1,19 +1,11 @@
-//! [`InMemoryThrottler`] — fixed-window counter shared process-wide, plus the
-//! [`ThrottlerStore`] trait it implements (the extension seam for alternative
-//! backends like a Redis-backed sliding-window store).
+//! [`InMemoryThrottler`] — the in-process fixed-window counter, plus the
+//! [`ThrottlerStore`] trait every backend implements.
 //!
-//! Each bucket carries its own window: [`InMemoryThrottler::hit`] evicts an
-//! entry only once **its own** window has elapsed (never the current caller's),
-//! so a hit on a short-window route can't purge a counter opened under a
-//! long-window one. A `MAX_KEYS` cap bounds the live set; beyond expiry the map
-//! is otherwise unbounded — acceptable for the in-process default, where a
-//! future Redis store would handle expiry natively.
+//! Each bucket expires against **its own** window, never the current caller's,
+//! so a short-window route cannot purge a long-window route's counter.
 //!
-//! **Scope is per-process, by design.** The counter lives in this replica's
-//! memory, so N replicas of an app give a client up to N× the configured limit
-//! on an auth-sensitive endpoint. That is a deliberate trade for the
-//! zero-dependency default; deployments that need a global limit implement
-//! [`ThrottlerStore`] over a shared store (Redis) and bind that guard instead.
+//! **Scope is per-process**: N replicas give a client up to N× the configured
+//! limit; a shared store bound beside the module counts across them.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -24,36 +16,23 @@ use parking_lot::Mutex;
 
 use crate::throttle::Throttle;
 
-/// Cap distinct throttle keys to resist unbounded memory growth. Held across
-/// the whole store: each of the [`SHARDS`] shards carries `MAX_KEYS / SHARDS`,
-/// so sharding buys concurrency without widening the memory bound.
+/// Cap on distinct throttle keys across the store; each of the [`SHARDS`]
+/// shards carries `MAX_KEYS / SHARDS`.
 const MAX_KEYS: usize = 10_000;
 
-/// Number of independently locked shards.
-///
-/// One mutex over one map serialized **every** throttled request in the
-/// process, including requests for unrelated keys. Buckets are wholly
-/// independent, so they shard by key hash: a hit touches exactly one shard and
-/// contends only with hits that hash to the same one. Power of two, so the
-/// index is a mask rather than a division.
+/// Number of independently locked shards: a hit contends only with hits on its
+/// shard. Power of two, so the index is a mask.
 const SHARDS: usize = 16;
 
 /// Per-shard key cap — see [`MAX_KEYS`].
 const MAX_KEYS_PER_SHARD: usize = MAX_KEYS / SHARDS;
 
-/// Amortize the O(n) expiry sweep: run the full-map `retain` only once every
-/// `SWEEP_INTERVAL` hits (and always at capacity), so the common per-request
-/// path is O(1) under the global mutex rather than an n-key scan (THROT-R1). A
-/// key's own window still resets on its next hit, so per-key correctness holds
-/// between sweeps — only *other* expired buckets linger briefly, bounded by
-/// `MAX_KEYS`.
+/// Run the O(n) expiry sweep only once every `SWEEP_INTERVAL` hits (and always
+/// at capacity); a key's own window still resets on its next hit.
 const SWEEP_INTERVAL: u32 = 128;
 
-/// The outcome of counting one request against a rate limit.
-///
-/// `#[non_exhaustive]`: construct it through [`Decision::allowed`] /
-/// [`Decision::denied`] so a future field (e.g. a `remaining` count) is not a
-/// breaking change for out-of-tree [`ThrottlerStore`] implementors.
+/// The outcome of counting one request against a rate limit, built through
+/// [`Decision::allowed`] / [`Decision::denied`].
 #[non_exhaustive]
 pub struct Decision {
     /// Whether the request is permitted.
@@ -85,76 +64,38 @@ impl Decision {
 /// [`ThrottlerStore::hit`] before it treats the store as one that cannot
 /// answer: **20 seconds**.
 ///
-/// **A net under the store, never the store's budget.** A store that cannot
-/// answer denies — fail closed, since a rate limiter that fails open under a
-/// backend problem is an authentication bypass — and a store that *never*
-/// answers could not even do that: it held the request, the GraphQL field, the
-/// MCP operation or the socket's message for as long, and on the three edges no
-/// request timeout covers, for good. Past this bound the guard gives the answer
-/// every store that cannot answer gives, a denial for the whole window, and says
-/// so at `warn`.
-///
-/// The value sits between the two bounds either side of it, with room on both:
-///
-/// - **Above the store the framework ships over a network.** `RedisThrottler`
-///   bounds every command at its connection's budget
-///   (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default): a healthy Redis
-///   answers in milliseconds, one reopening a dropped connection within that
-///   budget, and one that cannot fails at it with its own sentence — the cause,
-///   and the variable to change. The guard must not pre-empt any of the three,
-///   or it would cut short an answer still coming and replace a named cause
-///   with a bare timeout; twice the default budget leaves room for a
-///   deployment that raised it.
-/// - **Below the HTTP edge's own request timeout** (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`,
-///   30 s by default), which answers `503` with a line naming no store. A hung
-///   store then reads the same on every edge — the guard's denial, and the
-///   guard's line naming the store — rather than one way on HTTP and another on
-///   the edges that have no request timeout.
-///
-/// A constant rather than a setting: no store that answers at all needs longer,
-/// and one that needs a different net has a budget of its own to set instead.
+/// **A net under the store, never the store's budget**: past it the guard denies
+/// for the whole window, fail closed, and says so at `warn`. It sits above
+/// `RedisThrottler`'s per-command budget (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`,
+/// 10 s by default), so it never pre-empts a named cause, and below the HTTP
+/// request timeout (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, 30 s), so a hung store
+/// reads the same on every edge.
 pub const HIT_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Contract a rate-limit backend fulfils so a [`crate::ThrottlerGuard`]-style
-/// guard can interrogate it. The in-process [`InMemoryThrottler`] is the
-/// default impl; a shared-store implementor (Redis) swaps in via its own
-/// module.
+/// Contract a rate-limit backend fulfils for [`crate::ThrottlerGuard`]. The
+/// in-process [`InMemoryThrottler`] is the default; a shared-store implementor
+/// swaps in through its own module.
 ///
-/// `hit` is **async**: the guard runs inside an already-async `check_http`,
-/// so a networked implementor awaits its round-trip directly — no
-/// `block_in_place` bridge occupying a runtime worker per rate-limit check,
-/// and no panic on a current-thread runtime. The in-memory default resolves
-/// immediately.
-///
-/// **`hit` answers within [`HIT_TIMEOUT`], or is treated as unable to.** The
-/// guard waits no longer, then denies. That is the guard's net, not a store's
-/// budget: a networked store bounds each command it sends, as the connection
-/// `RedisThrottler` counts over does, so an outage reaches the caller as the
-/// store's own failure, with its cause, and promptly. And since a call is
-/// dropped where it stands when the bound passes, a store keeps no state a
-/// dropped call would have had to undo — a hit counted by a command whose answer
-/// nobody heard is one more hit counted, which errs toward the limit.
+/// **`hit` answers within [`HIT_TIMEOUT`], or is treated as unable to**: a
+/// networked store bounds each command it sends. A call is dropped where it
+/// stands at the bound, so a store keeps no state a dropped call would have had
+/// to undo.
 #[async_trait]
 pub trait ThrottlerStore: Send + Sync + 'static {
     /// Count one hit for `key` under `limit`. Returns whether the request is
     /// allowed and, when denied, the `Retry-After` duration.
     async fn hit(&self, key: &str, limit: Throttle) -> Decision;
 
-    /// The name the guard reports this store under when it does not answer —
-    /// which backend an operator goes to look at. Defaults to the implementor's
-    /// type name, resolved per implementation through the vtable, so it names
-    /// the store behind an `Arc<dyn ThrottlerStore>` rather than the trait.
+    /// The name the guard reports this store under when it does not answer;
+    /// defaults to the implementor's type name.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
 
     /// Whether this store's counters live in this process's memory alone. One
-    /// whose counters leave it — shared by every replica, kept by a backend —
-    /// is handed each bucket's subject as an HMAC under the deployment's
-    /// [`pseudonym_key`](crate::ThrottlerConfig::pseudonym_key), never the
-    /// client's address or identity, and the boot refuses it without that key.
-    /// `false` unless a store says otherwise, so a store that does not say keeps
-    /// no client.
+    /// whose counters leave it is handed each bucket's subject as an HMAC under
+    /// [`pseudonym_key`](crate::ThrottlerConfig::pseudonym_key), and the boot
+    /// refuses it without that key. `false` unless a store says otherwise.
     fn in_process(&self) -> bool {
         false
     }
@@ -163,33 +104,25 @@ pub trait ThrottlerStore: Send + Sync + 'static {
 struct Window {
     start: Instant,
     count: u32,
-    /// The window duration this bucket was opened under. Eviction and reset
-    /// compare against **this**, not the current caller's `limit.window()`, so a
-    /// short-window route can't expire a long-window route's counter.
+    /// The window this bucket was opened under, which eviction and reset compare
+    /// against rather than the current caller's.
     window: Duration,
-    /// The request cap this bucket was last opened/reset under. Stored so the
-    /// eviction pass can tell a *denying* bucket (`count` over the cap) from an
-    /// allowed one without the caller's `limit`, and never evict an active
-    /// denial (HTTP-S3).
+    /// The cap this bucket was last opened under, so eviction can tell a denying
+    /// bucket without the caller's `limit`.
     limit: u32,
 }
 
 impl Window {
     /// Whether this bucket is currently refusing requests — over its cap, or
-    /// saturated (`u32::MAX` counts as denial even when the cap is `u32::MAX`,
-    /// matching [`InMemoryThrottler::hit`]'s fail-closed overload rule).
+    /// saturated at `u32::MAX`.
     fn is_denying(&self) -> bool {
         self.count > self.limit || self.count == u32::MAX
     }
 }
 
 /// The in-process default [`ThrottlerStore`] — fixed-window counters in a
-/// bounded map. A distributed deployment swaps in a shared-store implementor.
-///
-/// A store counts hits and nothing else: which limit applies to a route, and
-/// **who** a hit belongs to, are the port's answers (`ThrottlerGuard`,
-/// `nest_rs_http::ClientOrigin`), never a backend's — so swapping the store
-/// changes where the counters live and no policy with it.
+/// bounded map. Which limit applies and **who** a hit belongs to are the port's
+/// answers, never a store's.
 pub struct InMemoryThrottler {
     shards: Box<[Shard]>,
 }
@@ -197,8 +130,8 @@ pub struct InMemoryThrottler {
 /// One independently locked slice of the key space.
 struct Shard {
     windows: Mutex<HashMap<String, Window>>,
-    /// Hit counter driving this shard's amortized expiry sweep (THROT-R1).
-    /// Wraps harmlessly — only its value mod [`SWEEP_INTERVAL`] matters.
+    /// Hit counter driving this shard's amortized expiry sweep; only its value mod
+    /// [`SWEEP_INTERVAL`] matters.
     hits: AtomicU32,
 }
 
@@ -225,9 +158,8 @@ impl InMemoryThrottler {
         }
     }
 
-    /// The shard owning `key`. Hashing here (rather than reusing the map's own
-    /// hash) keeps shard choice independent of `HashMap`'s internal seed, so a
-    /// key always lands in the same shard for the process's lifetime.
+    /// The shard owning `key`, hashed independently of `HashMap`'s own seed so a
+    /// key stays in one shard.
     fn shard(&self, key: &str) -> &Shard {
         use std::hash::{BuildHasher, RandomState};
         use std::sync::LazyLock;
@@ -242,22 +174,12 @@ impl InMemoryThrottler {
     /// Count one hit for `key` under `limit`. Fixed window: the first hit opens
     /// a window; the rest are denied until it elapses.
     ///
-    /// The per-window counter uses `saturating_add` so a flood exceeding
-    /// `u32::MAX` requests in one window neither panics in debug nor wraps
-    /// to zero in release. **Saturation is treated as denial** (fail-closed
-    /// overload defense): once the counter reaches `u32::MAX` the decision
-    /// is `denied` until the window elapses, even if `limit.limit()` is
-    /// itself `u32::MAX`.
+    /// **Saturation is denial**: once the counter reaches `u32::MAX` the decision
+    /// is `denied` until the window elapses, even under a `u32::MAX` limit.
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
         let shard = self.shard(key);
         let mut windows = shard.windows.lock();
-        // Amortized expiry sweep (THROT-R1): the full-map `retain` is O(n) under
-        // the global mutex, so run it only every `SWEEP_INTERVAL` hits — and
-        // always at capacity, so the eviction pass below sees fresh liveness.
-        // Between sweeps a bucket still expires against **its own** window on its
-        // next hit (the reset below), so per-key correctness holds; only other
-        // expired buckets linger briefly, bounded by `MAX_KEYS`.
         let due = shard
             .hits
             .fetch_add(1, Ordering::Relaxed)
@@ -265,13 +187,9 @@ impl InMemoryThrottler {
         if due || windows.len() >= MAX_KEYS_PER_SHARD {
             windows.retain(|_, window| now.duration_since(window.start) < window.window);
         }
-        // At capacity with a new key: make room by evicting the oldest bucket
-        // that is NOT actively denying. An over-limit in-window bucket must
-        // never be evicted — dropping it resets a live denial, exactly what an
-        // attacker minting fresh keys wants (this compounds the X-Forwarded-For
-        // keying fix: cheap fresh keys + evictable denials reset every strict
-        // counter — HTTP-S3). If every live bucket is denying, refuse the new
-        // key fail-closed rather than sacrifice a denial.
+        // At capacity, evict the oldest bucket that is NOT denying: dropping a denial
+        // would reset it for an attacker minting fresh keys. If every bucket denies,
+        // refuse the new key.
         if !windows.contains_key(key) && windows.len() >= MAX_KEYS_PER_SHARD {
             let victim = windows
                 .iter()
@@ -325,11 +243,8 @@ impl ThrottlerStore for InMemoryThrottler {
     }
 }
 
-/// What the boot tells you when two vendor bindings both bound the store.
-/// Shared with every store adapter (`nest-rs-redis` today, a third party's
-/// tomorrow — it is part of the store contract) so the two halves of the rule
-/// cannot drift. It sits beside [`ThrottlerStore`] because that contract is
-/// what an adapter reads to write one, and the module only passes it on.
+/// What the boot tells you when two vendor bindings both bound the store,
+/// shared with every store adapter as part of the store contract.
 pub const BACKEND_REMEDY: &str = "Import exactly one throttler store binding beside \
                                   `ThrottlerModule::for_root`: `nest_rs::redis::RedisThrottlerModule` \
                                   shares the counters across instances; with none, they stay \
@@ -355,16 +270,11 @@ mod tests {
 
     #[test]
     fn count_saturates_without_panicking_and_denies_at_u32_max() {
-        // Y2: an unchecked `+= 1` would panic in debug or wrap to 0 in
-        // release once the per-window counter passes `u32::MAX` — silently
-        // releasing the rate limit. `saturating_add` caps it; saturation
-        // is treated as denial (fail-closed overload defense).
         let throttler = InMemoryThrottler::new();
         let limit = Throttle::new(u32::MAX, Duration::from_secs(60));
 
-        // Pre-load the window to one shy of saturation via direct field
-        // access — driving it there with billions of real hits would
-        // dominate the test runtime.
+        // One shy of saturation, set directly: billions of real hits would dominate
+        // the test runtime.
         {
             let mut windows = throttler.shard("k").windows.lock();
             windows.insert(
@@ -378,17 +288,12 @@ mod tests {
             );
         }
 
-        // The next hit pushes the count to `u32::MAX` — saturation point.
-        // Even though the configured limit is `u32::MAX`, the decision
-        // must be `denied` (fail-closed) and must not panic.
         let decision = throttler.hit("k", limit);
         assert!(
             !decision.allowed,
             "saturation must be treated as denial, even when limit == u32::MAX",
         );
 
-        // A further hit stays at `u32::MAX` (saturating) and stays denied
-        // — no wrap-to-zero, no panic.
         let next = throttler.hit("k", limit);
         assert!(!next.allowed, "saturated count must remain denied");
         assert_eq!(
@@ -400,17 +305,10 @@ mod tests {
 
     #[test]
     fn a_short_window_hit_does_not_evict_a_long_window_bucket() {
-        // The cross-window eviction bypass: `retain` must expire each bucket
-        // against ITS OWN window, not the current caller's. Otherwise a client
-        // exhausts a strict long-window limit (e.g. /login 2/min), then pings a
-        // lenient short-window route once *its* window elapses — under the old
-        // code that hit's short `limit.window()` purged EVERY bucket, silently
-        // resetting the strict counter.
         let throttler = InMemoryThrottler::new();
         let long = Throttle::new(2, Duration::from_secs(60));
         let short = Throttle::new(100, Duration::from_millis(10));
 
-        // Exhaust the long-window bucket.
         assert!(throttler.hit("long", long).allowed);
         assert!(throttler.hit("long", long).allowed);
         assert!(
@@ -418,15 +316,11 @@ mod tests {
             "long-window bucket is now over its limit of 2",
         );
 
-        // Use the short-window bucket, let ITS window elapse, then hit it again.
-        // That later hit is the eviction-trigger call: it must purge only the
-        // expired short bucket, never the still-live long one.
+        // This later hit triggers the eviction pass.
         assert!(throttler.hit("short", short).allowed);
         std::thread::sleep(Duration::from_millis(20));
         assert!(throttler.hit("short", short).allowed);
 
-        // The long-window bucket survived: still present, still at its exhausted
-        // count — so the client stays denied. The bypass is closed.
         {
             let windows = throttler.shard("long").windows.lock();
             let long_bucket = windows
@@ -442,11 +336,7 @@ mod tests {
 
     #[test]
     fn eviction_skips_a_denying_bucket_and_removes_an_allowed_one() {
-        // HTTP-S3: at MAX_KEYS the eviction pass must preserve a bucket that is
-        // actively denying — dropping it resets a live denial (what an attacker
-        // minting fresh keys wants). Here the OLDEST bucket is denying; the old
-        // oldest-start eviction would have chosen it. It must survive; an
-        // allowed bucket is evicted instead.
+        // The OLDEST bucket is the denying one.
         let throttler = InMemoryThrottler::new();
         let now = Instant::now();
         // Capacity is per shard, so fill the shard the newcomer will land in.
@@ -475,7 +365,6 @@ mod tests {
             }
         }
 
-        // A brand-new key at capacity triggers exactly one eviction.
         let _ = throttler.hit("newcomer", Throttle::new(100, Duration::from_secs(60)));
 
         let windows = shard.windows.lock();
@@ -496,8 +385,6 @@ mod tests {
 
     #[test]
     fn a_full_table_of_denying_buckets_refuses_new_keys_fail_closed() {
-        // HTTP-S3: when every live bucket is actively denying, a new key must be
-        // refused fail-closed rather than evict a denial to make room.
         let throttler = InMemoryThrottler::new();
         let now = Instant::now();
         let shard = throttler.shard("newcomer");

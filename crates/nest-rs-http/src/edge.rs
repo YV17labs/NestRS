@@ -1,39 +1,9 @@
-//! The fused transport-edge endpoint — one layer carrying the per-request
-//! concerns every route shares: path normalization, request-scope install,
-//! body-size cap, request timeout, and the default response headers
-//! (security + `Server`).
+//! The fused transport-edge endpoint: trailing-slash trim, request scope, body
+//! cap, request timeout and default response headers, in that order, in one layer.
 //!
-//! Before the fusion each concern was its own boxed wrap (an `.around()`
-//! closure or a poem middleware), so every request paid one virtual dispatch
-//! and one future state machine per concern — even when the concern amounted
-//! to a single branch. Fusing them keeps the documented semantics and
-//! relative order exactly (scope, then body cap, then timeout around the
-//! inner tree, headers stamped on the way out) at the cost of a single
-//! dispatch.
-//!
-//! Order and error-path behavior mirror the previous layered composition:
-//!
-//! - The trailing slash is trimmed first, so routing, guards, interceptors and
-//!   the route table all see one spelling of a path. It lives here rather than
-//!   in a `NormalizePath` middleware for the reason the rest of the layer does:
-//!   the fast path is a single `ends_with('/')` test, with no extra boxed
-//!   endpoint and no allocation when the path is already canonical.
-//! - The request scope is installed before anything inward can resolve
-//!   `#[injectable(scope = request)]` providers via [`Scoped`](crate::Scoped).
-//! - A `413` (body cap) and a `503` (timeout) are produced *inside* the
-//!   header stamp, so they carry the security headers — as they did when the
-//!   `SetHeader` middleware wrapped those layers.
-//! - An `Err` escaping the inner tree propagates *without* headers, exactly
-//!   like `SetHeader` (which forwards errors untouched); the transport-edge
-//!   problem normalizer turns it into `problem+json`.
-//!
-//! The problem normalizer itself follows the same fusion logic: when neither
-//! CORS nor compression is configured the edge is the outermost layer, so it
-//! runs [`normalize_error_response`](crate::problem::normalize_error_response)
-//! as its own tail (`normalize = true`), an `Err` rendered first by
-//! [`render_error`](crate::problem::render_error), instead of mounting the
-//! `.around` wrap that used to carry it — one boxed layer less on every
-//! request. With CORS / compression the wrap stays outermost, unchanged.
+//! A `413` or `503` is produced inside the header stamp and carries the security
+//! headers; an `Err` escaping the inner tree carries none, and the problem
+//! normalizer renders it — run by the edge itself when it is outermost (`normalize`).
 
 use std::future::{Future, poll_fn};
 use std::net::IpAddr;
@@ -61,12 +31,8 @@ use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
 use crate::{response_body, trace_context};
 
-/// The route template poem's router matched, off whichever shape came back.
-///
-/// It is attached to the response *and* to the error, so a 404 that never
-/// reached a controller and a handler's `Err` are both answerable — and a
-/// request that matched nothing yields `None`, which is the honest answer rather
-/// than the path it was aiming at.
+/// The route template poem's router matched, off the response or the error;
+/// `None` when nothing matched.
 fn matched_route(result: &Result<Response>) -> Option<&str> {
     let pattern = match result {
         Ok(resp) => resp.data::<PathPattern>(),
@@ -75,32 +41,14 @@ fn matched_route(result: &Result<Response>) -> Option<&str> {
     pattern.map(|PathPattern(pattern)| &**pattern)
 }
 
-/// A bare status-only response — the edge's own rejections (`413`, `503`).
 fn bare(status: StatusCode) -> Response {
     Response::builder().status(status).finish()
 }
 
-/// What a request that outran its budget is answered with.
-///
-/// **`503`, not `504`, and the difference is which server is speaking.** RFC
-/// 9110 §15.6.5 scopes `504 Gateway Timeout` to a server "acting as a gateway
-/// or proxy" that did not get a timely response *from an upstream server it
-/// needed to access*. This transport is the origin: the handler that overran is
-/// this server's own work, there is no upstream, and a `504` invites exactly the
-/// wrong retry — a client SDK or a load balancer reading it as "that node's
-/// upstream is flaky, try another one" retries a handler that will overrun
-/// again.
-///
-/// RFC 9110 §15.6.4 is the origin server's own sentence: `503` is "currently
-/// unable to handle the request due to a temporary overload", it is explicitly
-/// temporary, and it is the status the same section pairs with `Retry-After` to
-/// say how long. The budget is what that value says — waiting less than it means
-/// the attempt that just overran may still be running.
+/// What a request that outran its budget is answered with: `503`, not `504`, since
+/// RFC 9110 §15.6.5 scopes `504` to a gateway and this server is the origin (§15.6.4).
 fn timed_out(timeout: Duration) -> Response {
-    // Whole seconds, rounded up, and never `0`: RFC 9110 §10.2.3 takes either a
-    // delay in seconds or an HTTP-date, and `Retry-After: 0` reads as "retry
-    // immediately", which is the one instruction a server shedding load must
-    // not give.
+    // Never `0`, which reads as "retry immediately" (RFC 9110 §10.2.3).
     let seconds = timeout
         .as_secs()
         .saturating_add(u64::from(timeout.subsec_nanos() > 0))
@@ -111,11 +59,8 @@ fn timed_out(timeout: Duration) -> Response {
         .finish()
 }
 
-/// What a body that outran the cap fails the *stream* with.
-///
-/// Whatever extractor was reading sees this; the caller does not, because the
-/// edge answers the cap itself (see [`CapExceeded`]). Built rather than spelled:
-/// `NESTRS` is the deployment's default prefix, not a fixture.
+/// What a body past the cap fails the stream with; the caller gets the edge's
+/// `413` instead ([`CapExceeded`]).
 fn body_cap_exceeded() -> String {
     format!(
         "request body exceeded the configured cap ({})",
@@ -123,27 +68,12 @@ fn body_cap_exceeded() -> String {
     )
 }
 
-/// Set by [`capped`] when the count runs past the cap, read by the edge once the
-/// inner tree has returned.
-///
-/// The cap is one declaration, so it answers with one status. Without this the
-/// stream error surfaced as whatever the reading extractor made of it — a `500`
-/// from one, a framing error from another — while the *declared-length* branch
-/// answered a clean `413`, which made the status a function of the framing the
-/// caller happened to choose.
+/// Set by [`capped`] past the cap and read by the edge once the inner tree has
+/// returned, so the cap answers `413` whatever the reading extractor made of it.
 type CapExceeded = Arc<AtomicBool>;
 
-/// The cap, enforced on the bytes that actually arrive.
-///
-/// A `Content-Length` within the cap is a *claim*, and one an outer layer can
-/// make false: poem's `Compression` middleware replaces the request body with a
-/// decompressed reader and leaves the header describing the compressed bytes.
-/// Anything downstream that streams the body rather than buffering it — an
-/// upload going to object storage — then has no bound at all.
-///
-/// So the count is what bounds it: the read stops, nothing downstream completes
-/// on a body it was never allowed to receive, and `exceeded` tells the edge to
-/// answer `413` rather than let the failure wear the reader's own error.
+/// The cap, enforced on the bytes that actually arrive: poem's `Compression`
+/// decompresses the body and leaves `Content-Length` describing the compressed bytes.
 fn capped(body: Body, limit: usize, exceeded: CapExceeded) -> Body {
     let mut seen: usize = 0;
     Body::from_bytes_stream(body.into_bytes_stream().map(move |chunk| {
@@ -157,28 +87,18 @@ fn capped(body: Body, limit: usize, exceeded: CapExceeded) -> Body {
     }))
 }
 
-/// The path a trailing slash should have been written as, or `None` when the
-/// path is already canonical (the overwhelming majority — no allocation, no
-/// URI rebuild on the hot path).
-///
-/// `/kitchen/` → `/kitchen`; `//` → `/`; `/` and `/kitchen` are untouched. Only
-/// the trailing run is touched: an interior `//` is left alone, because an
-/// empty segment mid-path is a different path, not a slip of the pen.
+/// The path without its trailing slashes, or `None` when already canonical.
+/// An interior `//` stays: an empty segment mid-path is a different path.
 fn canonical_path(path: &str) -> Option<&str> {
     if !path.ends_with('/') || path == "/" {
         return None;
     }
     let trimmed = path.trim_end_matches('/');
-    // `//`, `///`, … all name the root.
     Some(if trimmed.is_empty() { "/" } else { trimmed })
 }
 
-/// Rewrite the request URI onto [`canonical_path`], query preserved.
-///
-/// Runs before the edge captures [`CallerUri`], so anything echoing the request
-/// back (the `Location` on a `#[crud]` create) names the canonical path rather
-/// than the caller's trailing slash — one spelling per resource, whichever one
-/// was typed.
+/// Rewrite the request URI onto [`canonical_path`], query preserved. Runs before
+/// [`CallerUri`] is captured, so an echoed `Location` names the canonical path.
 fn trim_trailing_slash(req: &mut Request) {
     let Some(path_and_query) = req.uri().path_and_query() else {
         return;
@@ -190,17 +110,13 @@ fn trim_trailing_slash(req: &mut Request) {
         Some(query) => format!("{canonical}?{query}"),
         None => canonical.to_owned(),
     };
-    // Both halves came out of a URI that already parsed, so a failure here is
-    // unreachable — and if it ever were reachable, leaving the path as sent is
-    // the safe outcome: a 404, never a request routed somewhere else.
+    // Unreachable (both halves parsed already); leaving the path as sent 404s
+    // rather than misroutes.
     let Ok(path_and_query) = PathAndQuery::from_str(&rebuilt) else {
         return;
     };
-    // Cloned rather than `mem::take`n out of the request: `Uri::from_parts` is
-    // fallible, and a take that failed would leave the request holding
-    // `Uri::default()` — routing every such request to `/` instead of leaving
-    // it where the caller aimed it. The clone costs one refcount pair, and only
-    // on the branch that already decided to rewrite.
+    // Cloned, not `mem::take`n: a failed `Uri::from_parts` would leave
+    // `Uri::default()` and route the request to `/`.
     let mut parts = req.uri().clone().into_parts();
     parts.path_and_query = Some(path_and_query);
     if let Ok(uri) = Uri::from_parts(parts) {
@@ -208,52 +124,31 @@ fn trim_trailing_slash(req: &mut Request) {
     }
 }
 
-/// The single transport-edge layer assembled by
-/// [`HttpTransport::configure`](crate::HttpTransport). Wraps the fully
-/// composed route tree (per-route layers + `HttpEndpointWrap` globals);
-/// CORS / compression (when configured) wrap *outside* it, with the problem
-/// normalizer outermost — or fused into this edge when neither is present.
+/// The single transport-edge layer around the composed route tree; CORS and
+/// compression, when configured, wrap outside it.
 pub(crate) struct EdgeEndpoint<E> {
     inner: E,
     container: Container,
-    /// Present when the app registers **no** request-scoped or transient
-    /// provider. Such a scope can never cache anything — every resolution
-    /// falls through to the singleton container — so one shared instance is
-    /// indistinguishable from a fresh one, and costs an `Arc` clone instead
-    /// of an allocation on every request.
+    /// Present when no provider is request-scoped or transient: such a scope
+    /// caches nothing, so one shared instance stands in for a fresh one.
     shared_scope: Option<Arc<RequestScope>>,
-    /// Wall-clock budget for the inner tree; `None` ⇒ no timeout enforced.
     timeout: Option<Duration>,
-    /// Raw-body byte cap; `None` ⇒ no cap enforced (body readers fall back
-    /// to their own default via [`current_body_limit`](crate::current_body_limit)).
+    /// `None`: body readers fall back to their own default
+    /// ([`current_body_limit`](crate::current_body_limit)).
     body_limit: Option<usize>,
-    /// Boot-validated response headers (security policy + optional
-    /// `Server`), stamped with replace semantics — the framework value wins
-    /// over a handler-set one, as `SetHeader::overriding` did.
+    /// Stamped with replace semantics: the framework value wins over a handler's.
     headers: Vec<(HeaderName, HeaderValue)>,
-    /// When `true` the edge is the outermost layer (no CORS / compression
-    /// configured) and runs the transport-edge problem normalizer itself —
-    /// the `.around` wrap that used to carry it is not mounted at all.
+    /// The edge is outermost (no CORS or compression) and runs the problem
+    /// normalizer itself.
     normalize: bool,
-    /// When `true` a layer outside this one can replace the request body while
-    /// leaving `Content-Length` describing the old one, so a declared length is
-    /// no longer a bound and the edge counts the bytes instead. Set from the one
-    /// knob that installs such a layer (`HttpConfig.compression`); with it off,
-    /// hyper's length decoder already bounds the body and the count could never
-    /// fire.
+    /// An outer layer (compression) can replace the body under a stale
+    /// `Content-Length`; otherwise hyper's length decoder already bounds it.
     counts_body: bool,
-    /// Whether a request is filed. From `HttpConfig.access_log`; `true` by
-    /// default, and the only thing this toggle decides — the correlation id is
-    /// resolved, installed and echoed on every request regardless.
+    /// Whether a request is filed; the correlation id is echoed regardless.
     access_log: bool,
-    /// `HttpConfig.trusted_proxies`, shared rather than copied per request.
-    /// Transport state, not the access log's: it is what decides whether an
-    /// inbound `X-Forwarded-For` **or** `X-Request-Id` may be believed, and both
-    /// answers are needed whether or not a line is emitted.
+    /// Decides whether `X-Forwarded-For` and `X-Request-Id` may be believed,
+    /// whether or not a line is filed.
     trusted_proxies: Arc<[IpAddr]>,
-    /// The transport's way down, for the response bodies this edge carries:
-    /// one with no end of its own ends at the signal, and one dropped unfinished
-    /// past the window's close was cut by it.
     drain: Arc<Drain>,
 }
 
@@ -275,13 +170,8 @@ impl<E> EdgeEndpoint<E> {
     ) -> Self {
         let shared_scope = (!container.has_dynamic_scopes())
             .then(|| Arc::new(RequestScope::new(container.clone())));
-        // Read once, at boot, from the container the edge already holds — rather
-        // than threaded through the transport as two more constructor
-        // arguments. `ClientOrigin::of` reads the same list off the same place
-        // per request; the edge cannot, because it runs *before* the request
-        // scope that lookup goes through exists. An app with no `HttpConfig` —
-        // an imperatively built transport, a unit test — takes the answer the
-        // defaults describe: the line is on, nothing is trusted.
+        // Read at boot: the edge runs before the request scope `ClientOrigin::of`
+        // reads through. No `HttpConfig` means the defaults: line on, nothing trusted.
         let config = container.get::<crate::HttpConfig>();
         let access_log = config.as_deref().is_none_or(|config| config.access_log);
         let trusted_proxies = config.as_deref().map_or_else(
@@ -303,7 +193,6 @@ impl<E> EdgeEndpoint<E> {
         }
     }
 
-    /// Stamp the configured headers onto an outgoing response.
     fn finish(&self, mut resp: Response) -> Response {
         for (name, value) in &self.headers {
             resp.headers_mut().insert(name.clone(), value.clone());
@@ -317,55 +206,23 @@ where
     E: Endpoint,
     E::Output: IntoResponse,
 {
-    /// The inner tree, under the ambient context `call` built.
-    ///
-    /// The context arrives already assembled rather than being opened here,
-    /// because `call` installs it a second time — around the response *body*,
-    /// which is written after this future has returned. **One value, installed
-    /// twice**, so the two cannot come to disagree about what the request was and
-    /// neither install pays for re-assembling it.
+    /// The inner tree, under the context `call` built and installs again
+    /// around the response body.
     async fn handle(
         &self,
         mut req: Request,
         continuation: &RequestContinuation,
     ) -> Result<Response> {
-        // Trailing-slash normalization, before anything routes on the path.
-        // `/kitchen` and `/kitchen/` are the same resource; the router is
-        // exact-match, so without this the second one 404s — and a 404 leaves
-        // the route's guards, interceptors and filters unrun, which makes the
-        // mistake read as a broken feature rather than a typo.
+        // The router matches exactly: `/kitchen/` would 404 before any guard runs.
         trim_trailing_slash(&mut req);
 
-        // The URI the caller addressed, kept for the handlers that echo it back
-        // (`nest_rs_http::caller_path`). This is the last point that sees it
-        // whole: the router strips a global prefix off `uri()` on the way in,
-        // and poem's `original_uri()` is populated by the hyper path only, so a
-        // `TestApp` request would carry `/`. One refcount bump for the `Uri`
-        // plus the insert a `.data()` middleware would cost anyway.
+        // The last point that sees the URI whole: the router strips a global prefix
+        // off `uri()`, and `original_uri()` is set on the hyper path only.
         let caller_uri = req.uri().clone();
         req.extensions_mut().insert(CallerUri(caller_uri));
 
-        // Body cap (B-HTTP-2) — every extractor sits under it. Three answers,
-        // decided by what the request declares:
-        //
-        // - `Content-Length` over the cap ⇒ `413` before a byte is read.
-        // - An empty body ⇒ pass through: no byte exists for a cap to bound.
-        //   Emptiness is a property of the body object, not the wire framing,
-        //   so `TestApp` and wire traffic agree by construction.
-        // - A declared length within the cap ⇒ **count what arrives**, but only
-        //   where the declaration can be false. It is a claim about the wire,
-        //   and a layer outside this one can invalidate it: poem's
-        //   `Compression` decompresses the request body and leaves
-        //   `Content-Length` describing the *compressed* bytes, so trusting it
-        //   let a 64 KiB gzip body write a 64 MiB object under a 2 MiB cap.
-        //   With no such layer installed, hyper's length decoder cannot yield
-        //   more than the declared bytes, so the count could never fire and the
-        //   wrap is pure per-request cost — hence `counts_body`, set by the
-        //   transport from the one knob that installs a body-rewriting layer.
-        // - No declared length (`Transfer-Encoding: chunked`, an HTTP/2+
-        //   stream) ⇒ buffer up to the cap and reject past it. Buffering rather
-        //   than counting, because nothing declared a length to answer with:
-        //   reading it is what produces the `413`, and the cap bounds the read.
+        // Body cap. A declared length is a claim, counted only where an
+        // outer layer can falsify it (`counts_body`); with none declared, buffer up to the cap.
         let mut exceeded: Option<CapExceeded> = None;
         if let Some(limit) = self.body_limit {
             let declared = req
@@ -397,14 +254,8 @@ where
             }
         }
 
-        // Timeout around the inner tree — guards / interceptors / handler
-        // are all bounded; the edge's own header work is not. The timer arms
-        // lazily: the inner future is polled once bare, and only a `Pending`
-        // — a handler that actually waits on something — reaches the timer
-        // wheel. A synchronous response never pays the clock read or the
-        // wheel entry, with identical semantics: a timeout only ever fires
-        // at an await point, so the synchronous prefix was never
-        // interruptible under the eager timer either.
+        // The timer arms on the first `Pending`: a timeout only fires at an await
+        // point anyway, so a synchronous response skips the timer wheel.
         let inner = continuation.scope(self.inner.call(req));
         let result = match self.timeout {
             Some(timeout) => {
@@ -427,9 +278,6 @@ where
             }
             None => inner.await,
         };
-        // The cap answers once, here, whatever the reading extractor made of
-        // the stream error — otherwise the caller's status depends on which
-        // extractor happened to be reading when the count ran out.
         if exceeded.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
         }
@@ -445,69 +293,42 @@ where
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Response> {
-        // Decided before anything else runs: everything below — the ambient
-        // context, the echoed header, the access line — has to agree on one id,
-        // and the only way to guarantee that is to resolve it once, here. The
-        // client origin is resolved first because the id's gate reads it: one
-        // proxy list, one trust decision, two consumers.
+        // Resolved once so the context, the echoed header and the access line agree
+        // on one id; the origin first, because the id's gate reads it.
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
         let correlation = trace_context::resolve(&req, origin);
         let user_agent = trace_context::user_agent(&req);
-        // The operation span, opened here and **not** gated on anything. It is
-        // what carries `trace_id` onto every event below, and what declares
-        // the `actor_id` field the authn guard records into — a span that only
-        // exists when an observability crate is installed makes both of those
-        // optional, which is the defect this replaces.
+        // Never gated: it carries `trace_id` onto every event and declares the
+        // `actor_id` field the authn guard records into.
         let span = trace_context::request_span(&req, &correlation, origin, user_agent);
-        // Kept because `req` is about to be consumed and the span's name needs it
-        // once the router has answered — one clone of a `Method`, which is an
-        // enum for every standard verb.
         let method = req.method().clone();
-        // Opened before the request is consumed, because only the request can
-        // answer what it was. `None` when the line is off — one `Option`, and
-        // nothing else on the path pays for a disabled access log.
         let log = self.access_log.then(|| AccessLog::open(&req, user_agent));
-        // Where the endpoint the router reaches notes the route it matched, for
-        // the one request whose response cannot carry it out: one dropped before
-        // it answers (`matched`).
+        // Filled by the router's endpoint, for a request dropped before it answers.
         let matched = MatchedRoute::default();
         req.extensions_mut().insert(matched.clone());
 
-        // Request scope, ambient for everything inward — guards, extractors, the
-        // data layer, global pipes — and for the response body afterwards.
-        // Assembled here rather than inside `handle` because a streaming body
-        // outlives that future, and what it continues is *this* request, not a
-        // reconstruction of it.
+        // Built here, not in `handle`: a streaming body outlives that future.
         let scope = match &self.shared_scope {
             Some(shared) => Arc::clone(shared),
             None => Arc::new(RequestScope::new(self.container.clone())),
         };
         let continuation = RequestContinuation::new(Some(scope), correlation.clone());
-        // Held across every await below: a request dropped at one — its connection
-        // cut by the shutdown window, or reset by its client — names its span for
-        // the route it matched, records it failed, and files its line
-        // `cancelled`, instead of exporting an anonymous span and filing nothing.
+        // Held across every await: a request dropped at one (shutdown, client reset)
+        // still names its span, records the failure and files its line `cancelled`.
         let unanswered = Unanswered::hold(log, &continuation, &span, &method, &matched);
 
-        // The configured cap is installed *inside* the continuation and is not
-        // part of it: a whole-body cap is this transport's, and its two readers
-        // are extractors, which have run by the time a streaming body is
-        // written. See `raw_body::with_body_limit`.
+        // The cap wraps the continuation, not part of it: its readers are extractors,
+        // done before a streaming body is written. See `raw_body::with_body_limit`.
         let result = crate::raw_body::with_body_limit(
             self.body_limit,
             self.handle(req, &continuation).instrument(span.clone()),
         )
         .await;
-        // Read here, before anything renders an `Err` into a `Response`: poem's
-        // router attaches the matched template to whichever of the two came back,
-        // and rendering builds a fresh response that carries none of it. This is
-        // the only point where both shapes are still in hand.
+        // Before any `Err` is rendered: rendering builds a fresh response without
+        // the matched template poem attached.
         trace_context::name_route(&span, &method, matched_route(&result));
         let result = if self.normalize {
-            // The transport-edge error boundary this edge absorbs when it is the
-            // outermost layer: an `Err` escaping the inner tree renders without
-            // the header stamp (exactly as the standalone `.around` wrap saw it),
-            // then any raw transport error is lifted onto `problem+json`.
+            // An `Err` renders without the header stamp.
             Ok(match result {
                 Ok(resp) => crate::problem::normalize_error_response(resp).await,
                 Err(err) => {
@@ -523,15 +344,11 @@ where
 
         match result {
             Ok(mut resp) => {
-                // Always, whatever the access log is set to: the status is what
-                // an exported server span is read for, and it costs one record.
                 span.record("http.response.status_code", resp.status().as_u16());
                 trace_context::record_failure(&span, resp.status());
                 trace_context::stamp(&correlation, &mut resp);
-                // Unconditional, unlike the log it may or may not carry: a
-                // streaming body is the request still running, and what
-                // `current_trace_id()` answers inside one cannot depend on
-                // whether an operator wanted an access line.
+                // Unconditional: `current_trace_id()` inside a streaming body
+                // cannot depend on the access log.
                 Ok(response_body::carry(
                     continuation,
                     span,
@@ -540,11 +357,7 @@ where
                     &self.drain,
                 ))
             }
-            // Only reachable with CORS or compression configured, where a wrap
-            // outside this one renders the error. The request is still filed —
-            // a request that failed is exactly the one an operator looks for,
-            // and it would be the only status class silently missing from the
-            // log.
+            // Only with CORS or compression, whose outer wrap renders the error.
             Err(err) => {
                 span.record("http.response.status_code", err.status().as_u16());
                 trace_context::record_failure(&span, err.status());
@@ -579,15 +392,12 @@ mod tests {
             body_limit,
             headers,
             false,
-            // These unit tests drive the edge directly, with nothing wrapped
-            // outside it that could rewrite a body.
             false,
             Arc::default(),
         )
     }
 
-    /// The fused shape `HttpTransport` mounts when no CORS / compression is
-    /// configured — the edge itself runs the problem normalizer.
+    /// The shape mounted without CORS or compression: the edge runs the normalizer.
     fn fused_edge<E>(
         inner: E,
         body_limit: Option<usize>,
@@ -645,8 +455,7 @@ mod tests {
         panic!("the handler panicked");
     }
 
-    /// A handler that panics past an await unwinds through the edge's state
-    /// rather than being dropped from outside, and its line says so.
+    /// Past an await, so the panic unwinds through the edge's state rather than a drop.
     #[tokio::test]
     async fn a_handler_that_panics_files_its_line_panic() {
         use futures_util::FutureExt;
@@ -681,8 +490,6 @@ mod tests {
         resp.assert_text("ok").await;
     }
 
-    /// R9-5: `/kitchen` served and `/kitchen/` 404'd. The router matches
-    /// exactly, so the trailing slash has to go before routing.
     #[test]
     fn a_trailing_slash_is_not_part_of_the_path() {
         assert_eq!(canonical_path("/kitchen/"), Some("/kitchen"));
@@ -691,32 +498,23 @@ mod tests {
             canonical_path("/v1/kitchen/items/"),
             Some("/v1/kitchen/items")
         );
-        // `//` and friends name the root, which is spelled with one slash.
         assert_eq!(canonical_path("//"), Some("/"));
     }
 
-    /// The no-op half: a canonical path is left exactly as it is, so the hot
-    /// path neither allocates nor rebuilds the URI.
     #[test]
     fn a_canonical_path_is_left_alone() {
         assert_eq!(canonical_path("/"), None);
         assert_eq!(canonical_path("/kitchen"), None);
         assert_eq!(canonical_path(""), None);
-        // An interior empty segment is a different path, not a typo to fix.
         assert_eq!(canonical_path("/kitchen//items"), None);
     }
 
-    // The behaviour these two rules produce — the slashed form reaching the
-    // route, the query surviving — is asserted through the real controller /
-    // transport composition in `tests/integration/edge.rs`. Here the pure
-    // function is enough.
+    // The rewritten request through a real controller: `tests/integration/edge.rs`.
 
     #[tokio::test]
     async fn declared_length_over_the_cap_is_rejected_with_headers() {
-        // 413 must still carry the security headers — it used to bubble
-        // through the SetHeader middleware wrapping the body-limit layer.
-        // TestClient bypasses the wire, so the Content-Length hyper would
-        // derive is set by hand.
+        // TestClient bypasses the wire, so the Content-Length hyper would derive
+        // is set by hand.
         let ep = edge(echo_len, None, Some(8), nosniff());
         let resp = TestClient::new(ep)
             .post("/")
@@ -743,9 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn undeclared_length_body_is_buffered_and_capped() {
-        // No Content-Length (chunked wire traffic, or an in-process harness
-        // request) forces the buffered path — the case that must read to
-        // enforce the cap.
+        // No Content-Length forces the buffered path.
         let ep = edge(echo_len, None, Some(8), Vec::new());
         let resp = TestClient::new(ep)
             .post("/")
@@ -762,17 +558,11 @@ mod tests {
         resp.assert_status_is_ok();
     }
 
-    // RFC 9110 §15.6.5 scopes `504` to a gateway or proxy, and this transport is
-    // the origin — so the overrun is a `503` with the `Retry-After` §15.6.4
-    // pairs with it. A `504` here is what makes a retrying client re-run a
-    // handler that will overrun again.
     #[tokio::test]
     async fn overrunning_handler_answers_503_with_a_retry_after_and_headers() {
         let ep = edge(slow, Some(Duration::from_millis(20)), None, nosniff());
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-        // Sub-second budgets round up to the smallest delay the header can
-        // state; `0` would read as "retry immediately".
         resp.assert_header(poem::http::header::RETRY_AFTER, "1");
         resp.assert_header("x-content-type-options", "nosniff");
     }
@@ -797,8 +587,7 @@ mod tests {
 
     #[tokio::test]
     async fn synchronous_response_under_a_timeout_is_forwarded() {
-        // The lazy timer's fast path: a first poll that resolves never arms
-        // the timer wheel — the response must come through untouched.
+        // The lazy timer's fast path: a first poll that resolves never arms it.
         let ep = edge(
             observe_scope,
             Some(Duration::from_secs(30)),
@@ -818,9 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn pending_handler_within_budget_completes_after_arming_the_timer() {
-        // The lazy timer's slow path: the first poll returns `Pending`, the
-        // timer arms, and a handler that finishes inside the budget still
-        // resolves normally.
+        // The lazy timer's slow path: a first `Pending` arms it.
         let ep = edge(
             briefly_slow,
             Some(Duration::from_secs(30)),
@@ -834,8 +621,6 @@ mod tests {
 
     #[tokio::test]
     async fn security_header_replaces_a_handler_set_value() {
-        // Replace semantics — the framework policy wins, as
-        // `SetHeader::overriding` did.
         let ep = edge(sets_header, None, None, nosniff());
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status_is_ok();
@@ -844,9 +629,6 @@ mod tests {
 
     #[tokio::test]
     async fn fused_normalize_lifts_a_413_onto_problem_json_with_headers() {
-        // With the normalizer fused, a body-cap rejection must come out
-        // exactly as it did through the standalone `.around` wrap: an
-        // RFC-9457 body carrying the security headers stamped by the edge.
         let ep = fused_edge(echo_len, Some(8), nosniff());
         let resp = TestClient::new(ep)
             .post("/")
@@ -861,9 +643,6 @@ mod tests {
 
     #[tokio::test]
     async fn fused_normalize_renders_an_inner_error_without_the_header_stamp() {
-        // An `Err` escaping the inner tree renders and normalizes, but never
-        // passes through `finish` — matching the standalone normalizer, which
-        // sat outside the header stamp.
         let failing = poem::endpoint::make(|_| async {
             Err::<Response, poem::Error>(poem::Error::from_status(StatusCode::BAD_REQUEST))
         });
@@ -879,8 +658,6 @@ mod tests {
 
     #[tokio::test]
     async fn an_inner_error_propagates_without_headers() {
-        // SetHeader forwarded errors untouched; the outer problem
-        // normalizer owns their rendering. The edge must do the same.
         let failing = poem::endpoint::make(|_| async {
             Err::<Response, poem::Error>(poem::Error::from_status(StatusCode::BAD_REQUEST))
         });

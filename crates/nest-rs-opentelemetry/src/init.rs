@@ -42,9 +42,8 @@ impl OpenTelemetry {
     }
 
     /// Console-only init for tests. Idempotent; first call wins. No flush
-    /// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`
-    /// (noise control) — an invalid directive falls through rather than
-    /// failing a test run over log config.
+    /// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`; an
+    /// invalid directive falls through rather than failing a test run.
     #[doc(hidden)]
     #[expect(
         clippy::disallowed_methods,
@@ -72,14 +71,13 @@ impl OpenTelemetry {
         mark_initialized();
     }
 
-    /// Install the subscriber from an explicit [`OpenTelemetryConfig`] (the
-    /// programmatic path; [`init`](Self::init) is the env-driven wrapper).
-    /// Returns the flush guard that must outlive `main`, or an error that
-    /// aborts boot on an unparseable filter, a metric interval outside its
-    /// range or a failed exporter build.
+    /// Install the subscriber from an explicit [`OpenTelemetryConfig`]. Returns the
+    /// flush guard that must outlive `main`, or an error that aborts boot on an
+    /// unparseable filter, a metric interval outside its range or a failed exporter
+    /// build.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
-        // A config built in code reaches here without `from_env`, so its
-        // interval is held to the variable's range where it is spent.
+        // A config built in code reaches here without `from_env`, so its interval is
+        // held to the variable's range here.
         crate::config::METRIC_INTERVAL.check(
             crate::config::NAMESPACE,
             "OpenTelemetryConfig::metric_interval",
@@ -92,9 +90,8 @@ impl OpenTelemetry {
         {
             let exporters = crate::otlp::build(&config)?;
             let otel_layer = tracing_opentelemetry::layer().with_tracer(exporters.tracer);
-            // Every span the framework opens, at every edge — see `linker`. It
-            // is seeded here rather than mounted as a module because a queue
-            // worker imports no transport and would otherwise get nothing.
+            // Seeded here rather than mounted by a module: a queue worker imports no
+            // transport.
             crate::linker::install();
 
             // Bridge only when an exporter is present; otherwise it pays the
@@ -155,9 +152,7 @@ impl OpenTelemetry {
 }
 
 /// Parse an `EnvFilter` directive string, mapping a rejection to a named,
-/// boot-aborting error instead of silently falling back to `info`. A
-/// set-but-unparseable filter is a config error, never a degraded default —
-/// same posture as every other `<PREFIX>_*` var (set-but-invalid ⇒ `Err`).
+/// boot-aborting error instead of falling back to `info`.
 fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
     EnvFilter::try_new(spec).map_err(|source| OpenTelemetryError::InvalidLogFilter {
         value: spec.to_owned(),
@@ -166,11 +161,8 @@ fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
 }
 
 /// Boxed because `text` and `json` layers have distinct concrete types.
-/// `FmtSpan::NONE` by default — a span's lifecycle is not an event, so what
-/// reaches the console is the operation line each edge files once per unit of
-/// work on `nest_rs::operation`. (Through 5.1 that was HTTP's access log alone,
-/// on `nest_rs::access`; the concept generalised to every edge and the target
-/// went with it.)
+/// `FmtSpan::NONE`: a span's lifecycle is not an event; the console shows the
+/// operation line each edge files on `nest_rs::operation`.
 fn console_layer<S>(
     format: LogFormat,
     source_location: bool,
@@ -179,11 +171,10 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     match format {
-        // The kernel's formatters, not tracing-subscriber's, and the same ones
-        // the fallback subscriber installs: an app's log lines cannot change
-        // shape because it adopted an exporter, and the ids on a line owe nothing
-        // to one. See `nest_rs_core::logging::TextFormat` for the rule and for
-        // why `with_file` / `with_line_number` are absent here.
+        // The kernel's formatters, the ones the fallback subscriber installs: a line
+        // cannot change shape because the app adopted an exporter. See
+        // `nest_rs_core::logging::TextFormat` for why `with_file` / `with_line_number`
+        // are absent here.
         LogFormat::Text => tracing_subscriber::fmt::layer()
             .event_format(TextFormat::new(source_location))
             .boxed(),
@@ -196,20 +187,13 @@ where
 
 /// How long the final telemetry flush may hold the exit, every provider at once.
 ///
-/// The last bounded step of the way down that a process waits out, after the
-/// transports' windows and the shutdown hooks' budget
-/// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`, which tabulates the sum): 20 + 0.5 +
-/// 5 + 3 = 28.5 seconds by default, under the 30 a Kubernetes pod is given before
-/// `SIGKILL`. The runtime's teardown after it is held to what is left of the
-/// hooks' budget, so it adds nothing. Three seconds is ample for a
-/// collector that answers — a final batch is one request per signal — and a
-/// collector that does not answer is the case the bound exists for.
+/// The last bounded step of the way down, after the transports' windows and the
+/// shutdown hooks' budget (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT` tabulates the
+/// sum, under the 30 s a Kubernetes pod is given before `SIGKILL`).
 ///
-/// **The providers flush concurrently, each on a thread of its own**, because
-/// the SDK's `shutdown` blocks and bounds itself at five seconds per provider:
-/// in turn, a silent collector held the exit for fifteen. What is still
-/// exporting at the bound is abandoned — its thread ends with the process — and
-/// said on stderr, naming the provider.
+/// **The providers flush concurrently, each on a thread of its own**: the SDK's
+/// `shutdown` blocks up to five seconds per provider. What is still exporting at
+/// the bound is abandoned and said on stderr, naming the provider.
 pub const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Drop for OpenTelemetry {
@@ -305,9 +289,7 @@ mod tests {
     #[test]
     fn initialized_reflects_the_mark() {
         let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Snapshot, mutate, restore — leaving the flag set would poison every
-        // other init test in the file (and `init_for_tests` depends on it
-        // returning the prior state).
+        // Restored after: `init_for_tests` depends on the prior state.
         let prior = INITIALIZED.swap(false, Ordering::Relaxed);
         assert!(!initialized());
         mark_initialized();
@@ -317,8 +299,6 @@ mod tests {
 
     #[test]
     fn console_layer_produces_a_text_layer_for_text_format() {
-        // The returned layer is type-erased (`Box<dyn Layer<_>>`); compose it
-        // against a registry to confirm the branch builds a working layer.
         let layer = console_layer::<Registry>(LogFormat::Text, false);
         let _subscriber = Registry::default().with(layer);
     }
@@ -331,7 +311,6 @@ mod tests {
 
     #[test]
     fn console_layer_builds_with_source_location_enabled() {
-        // The `with_file`/`with_line_number` branch composes against a registry.
         let layer = console_layer::<Registry>(LogFormat::Text, true);
         let _subscriber = Registry::default().with(layer);
     }
@@ -339,25 +318,16 @@ mod tests {
     #[test]
     fn init_for_tests_is_idempotent() {
         let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // First call may or may not be the first across the whole test
-        // binary — either way `initialized()` must be true afterwards, and a
-        // second call must not panic.
         OpenTelemetry::init_for_tests();
         assert!(initialized(), "init_for_tests must flip the global flag");
-        // Second call hits the short-circuit branch.
         OpenTelemetry::init_for_tests();
         assert!(initialized());
     }
 
     #[test]
     fn init_with_rejects_a_set_but_unparseable_log_filter() {
-        // `foo=notalevel` names a target with an invalid level — `EnvFilter`
-        // rejects it. The parse happens before any global-subscriber install,
-        // so this asserts the error without touching the `INITIALIZED` flag.
         let config = OpenTelemetryConfig::new("svc").with_log_filter("foo=notalevel");
-        // `OpenTelemetry` has no `Debug` (its otlp providers don't), so match
-        // rather than `expect_err`. The `Ok` arm can't fire — the filter is
-        // definitively invalid, so no global subscriber is ever installed.
+        // `OpenTelemetry` has no `Debug`, so no `expect_err`.
         match OpenTelemetry::init_with(config) {
             Err(OpenTelemetryError::InvalidLogFilter { value, .. }) => {
                 assert_eq!(
@@ -372,14 +342,11 @@ mod tests {
 
     #[test]
     fn parse_log_filter_accepts_a_valid_directive() {
-        // The unset/default path still works — a valid filter parses cleanly.
         assert!(parse_log_filter("debug,hyper=warn").is_ok());
     }
 
-    /// A collector that takes the connection and never answers holds the exit
-    /// for one bound: the three providers flush at once, held to it between
-    /// them — the meter's included, which ignores the one it is handed — on a
-    /// bound shorter than [`FLUSH_TIMEOUT`], which the grace-period test holds.
+    /// A collector that never answers holds the exit for one bound, the meter's
+    /// provider included, which ignores the one it is handed.
     #[cfg(feature = "otlp")]
     #[test]
     fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_for_all_three_providers() {

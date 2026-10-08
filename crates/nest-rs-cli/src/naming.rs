@@ -21,10 +21,7 @@ pub(crate) enum Transport {
 }
 
 impl Transport {
-    /// Every transport, so a check over the whole adapter surface (the
-    /// template↔dependency agreement, say) covers a new one the day it lands
-    /// rather than the day someone remembers to extend the list. Test-only:
-    /// the generators are each reached through one `Transport`, never the set.
+    /// Every transport, for a check over the whole adapter surface. Test-only.
     #[cfg(test)]
     pub(crate) const ALL: [Transport; 7] = [
         Self::Http,
@@ -93,9 +90,8 @@ pub(crate) struct Names {
     pub singular: String,
 }
 
-/// The architecture rules this CLI ships — the *same bytes* `shared::AGENTS_BODY`
-/// embeds, so the refusal below and the rule a generated project is handed
-/// cannot disagree.
+/// The architecture rules this CLI ships — the same bytes `shared::AGENTS_BODY`
+/// embeds.
 static ARCHITECTURE_RULES: &str = include_str!("templates/architecture.md");
 
 /// The structural vocabulary, word → the category that claims it, **derived**
@@ -129,7 +125,7 @@ static RESERVED: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(
 });
 
 /// The category claiming `word`, or `None` when the layout has no meaning for
-/// it. Test-visible so the derivation is asserted rather than assumed.
+/// it.
 pub(crate) fn reserved_category(word: &str) -> Option<&'static str> {
     RESERVED.get(word).copied()
 }
@@ -160,20 +156,15 @@ pub(crate) fn validate_feature_name(raw: &str) -> Result<(), String> {
         return Err("feature name must not start with '.'".into());
     }
     // The derived kebab is the crate/package/module name, so it must be a valid
-    // identifier — otherwise the scaffold fails the next `cargo check` (CLI-I6).
+    // identifier.
     let kebab = to_kebab(trimmed);
     validate_derived_kebab(&kebab)?;
     validate_not_reserved(&kebab)?;
     Ok(())
 }
 
-/// Refuse a name the structural vocabulary has already spent.
-///
-/// *A module may not take a name from the structural vocabulary* — the rule the
-/// CLI ships. Without this the generators wrote `ModuleModule` in `module.rs`,
-/// `ServiceService` in `service.rs`, and an `HttpModule` in the features crate
-/// colliding by name with `nest_rs::http::HttpModule` at every composition root
-/// that imports both — three ambiguities no later error message can untangle.
+/// Refuse a name the structural vocabulary has already spent — `ModuleModule`,
+/// or an `HttpModule` colliding with `nest_rs::http::HttpModule`.
 fn validate_not_reserved(kebab: &str) -> Result<(), String> {
     let Some(category) = reserved_category(kebab) else {
         return Ok(());
@@ -188,8 +179,6 @@ fn validate_not_reserved(kebab: &str) -> Result<(), String> {
 
 /// A derived kebab name must be a valid crate/package name: start with a
 /// lowercase ASCII letter, then only lowercase letters, digits, or hyphens.
-/// Catches `nestrs new "Bad Name!"` (→ `bad-name!`) or a digit-led name before
-/// it scaffolds a project that fails to compile (CLI-I6).
 pub(crate) fn validate_derived_kebab(kebab: &str) -> Result<(), String> {
     if kebab.is_empty() {
         return Err("the name has no letters or digits to form a package name".into());
@@ -278,11 +267,8 @@ impl Names {
         to_kebab(&self.singular).replace('-', "_")
     }
 
-    /// Create form derived from the entity (`CreatePost`). No transfer suffix:
-    /// a CRUD shape derived from the entity has no single boundary — it is the
-    /// service's `Create` type, the GraphQL `input`, and the REST body at once —
-    /// so it joins the entity exception and stays bare. Hand-written transfer
-    /// objects keep their boundary suffix (`…Dto`/`…Input`/`…Command`).
+    /// Create form derived from the entity (`CreatePost`), bare: it is the
+    /// service's `Create` type, the GraphQL input and the REST body at once.
     pub(crate) fn create_op(&self) -> String {
         format!("Create{}", self.singular)
     }
@@ -293,11 +279,8 @@ impl Names {
         format!("Update{}", self.singular)
     }
 
-    /// Default queue payload a `g queue` scaffold emits — an imperative
-    /// **`Command`** ("do this work" → one handler), the common case. Verb-led
-    /// per the convention; the developer renames it to the real action
-    /// (`GenerateMediaVariantCommand`), or switches to an `…Event` (past tense)
-    /// when publishing a fact to several consumers.
+    /// Default queue payload a `g queue` scaffold emits — an imperative, verb-led
+    /// **`Command`** the developer renames to the real action.
     pub(crate) fn command(&self) -> String {
         format!("Process{}Command", self.singular)
     }
@@ -338,15 +321,10 @@ const MIGRATION_VERBS: &[&str] = &[
 const MIGRATION_TARGET_WORDS: &[&str] = &["to", "from", "on", "in", "into", "for"];
 
 /// The table a migration name is about, as [`Names`]: `create_widgets` →
-/// `widgets` (`Widget` / `widget`), `add_status_to_posts` → `posts`,
-/// `drop_orgs_table` → `orgs`. The identifier enum in a generated migration is
-/// the **table**, not the migration — `DeriveIden` snake-cases the enum name
-/// straight into the SQL, so naming it after the file creates a `create_widgets`
-/// table the entity's `table_name = "widget"` can never read.
-///
-/// A name with nothing left to strip (`init`, a bare `widgets`) stands as its
-/// own subject: a placeholder the developer renames beats an empty enum that
-/// doesn't compile.
+/// `widgets`, `add_status_to_posts` → `posts`, `drop_orgs_table` → `orgs`. The
+/// identifier enum is the **table**, not the migration: `DeriveIden` snake-cases
+/// it straight into the SQL. A name with nothing left to strip stands as its own
+/// subject.
 pub(crate) fn migration_subject(raw: &str) -> Names {
     let whole = Names::parse(raw);
     let all: Vec<&str> = whole.snake.split('_').filter(|t| !t.is_empty()).collect();
@@ -377,14 +355,10 @@ pub(crate) fn migration_subject(raw: &str) -> Names {
     }
 }
 
-/// Placement for a boundary object that lives at the feature **port**, mirroring
-/// the entity rule: a lone instance lives in `<role>.rs`; two or more split into
-/// a pluralized `<role>s/` directory with one `<stem>_<role>.rs` per type,
-/// re-exported flat by `<role>s/mod.rs`. `stem` is the snake_case type name
-/// *without* the role suffix (`LoginDto` → `login`, `GenerateMediaVariantCommand`
-/// → `generate_media_variant`). The boundary picks the role word — REST body
-/// `dto`, imperative queue payload `command`, published-fact queue payload
-/// `event` (see [`command_file`]).
+/// Placement for a boundary object at the feature **port**: one lives in
+/// `<role>.rs`; two or more in `<role>s/<stem>_<role>.rs`, re-exported flat by
+/// `<role>s/mod.rs`. `stem` is the snake_case type name without the role suffix
+/// (`LoginDto` → `login`).
 fn port_role_file(role: &str, stem: &str, total: usize) -> String {
     if total <= 1 {
         format!("{role}.rs")
@@ -393,13 +367,8 @@ fn port_role_file(role: &str, stem: &str, total: usize) -> String {
     }
 }
 
-/// File holding an **imperative queue payload** (`Command` — "do this work",
-/// one handler): one → `command.rs`, 2+ → `commands/<stem>_command.rs`. The
-/// payload is a producer↔worker contract, so it lives at the port; the
-/// `queue/` adapter's `processor.rs` imports it. The single-`command.rs` form
-/// is what `g queue` emits today (via [`generate::adapter`](crate::commands));
-/// the `commands/` directory form is the placement authority for the
-/// multi-payload case.
+/// File holding an **imperative queue payload**, at the port: one →
+/// `command.rs`, 2+ → `commands/<stem>_command.rs`.
 pub(crate) fn command_file(stem: &str, total: usize) -> String {
     port_role_file("command", stem, total)
 }
@@ -481,10 +450,8 @@ fn singularize(pascal: &str) -> String {
 mod tests {
     use super::*;
 
-    /// The scrape is silent when it fails: a heading rename or a fence moved in
-    /// `architecture.md` yields an empty map, and every reserved word is then
-    /// quietly accepted as a module name. Asserted per category rather than as
-    /// a count, so the derivation this file claims is the one that runs.
+    /// A failed scrape is silent — every reserved word accepted — so each
+    /// category is asserted.
     #[test]
     fn derives_every_reserved_category_from_the_rules_file() {
         for (word, category) in [
@@ -520,8 +487,7 @@ mod tests {
 
     #[test]
     fn rejects_names_that_derive_an_invalid_package_name() {
-        // `!` survives kebab derivation → `bad-name!`, which won't compile as a
-        // crate name — the scaffold must reject it up front (CLI-I6).
+        // `!` survives kebab derivation → `bad-name!`.
         assert!(validate_feature_name("Bad Name!").is_err());
         assert!(validate_feature_name("has space ok").is_ok()); // → has-space-ok
         assert!(validate_derived_kebab("bad-name!").is_err());
@@ -564,10 +530,8 @@ mod tests {
     #[test]
     fn dto_and_transport_module_names() {
         let names = Names::parse("posts");
-        // CRUD forms derived from the entity carry no transfer suffix.
         assert_eq!(names.create_op(), "CreatePost");
         assert_eq!(names.update_op(), "UpdatePost");
-        // A scaffolded queue payload defaults to an imperative, verb-led Command.
         assert_eq!(names.command(), "ProcessPostCommand");
         assert_eq!(names.processor(), "PostsProcessor");
         assert_eq!(names.module_for(Transport::Http), "PostsHttpModule");
@@ -578,14 +542,11 @@ mod tests {
 
     #[test]
     fn migration_names_resolve_to_the_table_they_touch() {
-        // The defect this guards: `create_widgets` naming its identifier enum
-        // `CreateWidgets`, which `DeriveIden` turns into a `create_widgets`
-        // table the `widget` entity cannot read.
+        // `DeriveIden` would turn a `CreateWidgets` enum into a `create_widgets` table.
         let subject = migration_subject("create_widgets");
         assert_eq!(subject.singular, "Widget");
         assert_eq!(subject.table(), "widget");
 
-        // Every leading verb, the documented singular case, and the `_table` suffix.
         for (name, entity) in [
             ("create_org", "Org"),
             ("add_posts", "Post"),
@@ -598,7 +559,6 @@ mod tests {
             assert_eq!(migration_subject(name).singular, entity, "{name}");
         }
 
-        // A preposition names the target: the columns before it are not the table.
         assert_eq!(migration_subject("add_status_to_posts").singular, "Post");
         assert_eq!(migration_subject("create_index_on_users").singular, "User");
         assert_eq!(
@@ -606,20 +566,14 @@ mod tests {
             "Org"
         );
 
-        // One verb only — a table genuinely named `add_ons` survives.
         assert_eq!(migration_subject("create_add_ons").singular, "AddOn");
-        // Nothing left to strip: the whole name stands in, for the developer to rename.
         assert_eq!(migration_subject("init").singular, "Init");
-        // A bare table name is already the subject.
         assert_eq!(migration_subject("widgets").singular, "Widget");
     }
 
     #[test]
     fn command_file_layout_mirrors_the_dto_rule() {
-        // A lone imperative payload lives directly in `command.rs`.
         assert_eq!(command_file("transcode", 1), "command.rs");
-        // Two or more split into a pluralized `commands/` directory, one
-        // `<stem>_command.rs` per type — simple and multi-word stems.
         assert_eq!(
             command_file("transcode", 2),
             "commands/transcode_command.rs"

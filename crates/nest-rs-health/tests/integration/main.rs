@@ -1,19 +1,5 @@
-//! Integration tests mirroring `src/`.
-//!
-//! Documented gaps (no test file required): `src/lib.rs` re-exports only;
-//! `src/config.rs` is asserted by its own in-file `#[cfg(test)] mod tests`
-//! and through the boot in `module` below.
-//!
-//! `indicator` covers `src/indicator.rs` — not the data, which `service`
-//! exercises through hand-built entries, but the `#[indicators]` expansion
-//! that fills it, which neither umbrella witness executes.
-//!
-//! `controller` is this capability's **composition witness** — the documented
-//! import, booted, answering. It used to be listed among the gaps above, on the
-//! grounds that "every app importing `HealthModule`" exercises it end-to-end;
-//! those apps are in `demo/`, so the capability's own crate proved none of it,
-//! and that proof is an obligation on the capability rather than on its
-//! consumers.
+//! Integration tests mirroring `src/`; `src/config.rs` is covered in-file and
+//! through the boot in `module`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

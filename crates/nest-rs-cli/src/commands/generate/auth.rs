@@ -3,10 +3,8 @@
 //! `AuthzAbility`/`AuthzGuard`/`AuthzModule`.
 //!
 //! The framework is generic over the principal and the policy, so these types
-//! cannot ship in a `nest-rs-*` crate — they are app code, identical in every
-//! project until you edit the rules. Generating them is what makes
-//! `#[use_guards(AuthnGuard, AuthzGuard)]` resolve; without it a guarded
-//! controller names two types nothing defines.
+//! are app code; without them `#[use_guards(AuthnGuard, AuthzGuard)]` names two
+//! types nothing defines.
 
 use std::path::PathBuf;
 
@@ -51,10 +49,9 @@ pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
     Ok(())
 }
 
-/// The `features` crate root declarations the adapter needs. Returned rather
-/// than queued so a caller adding its own can fold them into **one**
-/// `ensure_lines` — two `edit`s on the same file each re-read it from disk, and
-/// the second write would clobber the first.
+/// The `features` crate root declarations the adapter needs, for a caller to
+/// fold into **one** `ensure_lines`: a second `edit` on the same file would
+/// clobber the first.
 pub(super) fn lib_decls() -> Vec<String> {
     [
         "pub mod authn;",
@@ -66,21 +63,12 @@ pub(super) fn lib_decls() -> Vec<String> {
 }
 
 /// Queue every auth file and the `.env` secret — but none of the shared-file
-/// edits ([`lib_decls`], [`auth_deps`]), which a caller adding its own must
-/// fold into a single `edit` per path. Split out so `g resource` can bootstrap
-/// the adapter in the same transaction as the resource that needs it.
-///
-/// `authz_decls` are extra index lines for `authz/mod.rs` — a caller
-/// scaffolding a transport bridge in the same transaction passes
-/// [`AuthzBridge::decls`], since the file is created here and an `edit` targets
-/// what is already on disk.
+/// edits ([`lib_decls`], [`auth_deps`]), which a caller folds into a single
+/// `edit` per path. `authz_decls` are extra index lines for `authz/mod.rs`, which
+/// is created here.
 pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<String>) {
     let src = ws.features_root();
 
-    // Every verbatim file, in one table — the same shape as
-    // [`AuthzBridge::queue`]. The two files below the loop are the ones a
-    // table cannot say: `authz/mod.rs` folds in the caller's index lines, and
-    // `.env` is an edit whenever the file already exists.
     const FILES: [(&str, &str); 12] = [
         ("authn/claims.rs", auth::AUTHN_CLAIMS),
         ("authn/mod.rs", auth::AUTHN_MOD),
@@ -103,12 +91,7 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
         ensure_lines(authz_decls)(auth::AUTHZ_MOD).unwrap_or_else(|| auth::AUTHZ_MOD.to_string());
     s.create(src.join("authz/mod.rs"), authz_mod);
 
-    // Every scaffolded workspace has one; a hand-rolled tree may not, and a
-    // missing `.env` is not a reason to refuse the whole adapter.
-    // Rendered, not copied: the key has to carry this project's prefix, or the
-    // scaffolded secret is a line the app never reads and auth refuses to boot.
-    // One placeholder, so a `Renderer` (and the `Names` it needs) would be two
-    // dozen substitutions for nothing.
+    // Rendered with this project's prefix, or the app never reads the secret.
     let env_prefix = crate::context::env_prefix();
     let env_authn = auth::ENV_AUTHN.replace("{{env_prefix}}", &env_prefix);
     let env = ws.root.join(".env");
@@ -119,14 +102,9 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
     }
 }
 
-/// Both roots are listed at the composition site even though `AuthzModule`
-/// pulls `AuthnModule` in transitively — an app's `module.rs` is the inventory
-/// of the concerns it serves. Returned rather than wired here so a caller
-/// bootstrapping the adapter folds them into its own single `module.rs` edit.
-/// A function rather than a `const` so the third row reads `HTTP_BRIDGE`'s own
-/// fields: that bridge is the one `written_by_g_auth`, and stating its app-side
-/// path twice in one file is how the two wiring paths — this one and
-/// `adapter.rs`'s `imports.push((b.app_path, b.module))` — come to disagree.
+/// The app imports `g auth` wires: both roots, though `AuthzModule` pulls
+/// `AuthnModule` in transitively — an app's `module.rs` is the inventory of what
+/// it serves.
 pub(super) fn app_imports() -> [(&'static str, &'static str); 3] {
     [
         ("features::authn::AuthnModule", "AuthnModule"),
@@ -143,17 +121,8 @@ pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
     ws.features_root().join("authz").is_dir()
 }
 
-// ── authz/<transport>/ — the bridge a guarded adapter is enforced through ───
-//
-// Every transport bridge lives here, HTTP's included: `authz/` is one tree with
-// one layout, and which generator happens to want a bridge first is not a reason
-// to scatter them. One table rather than a trio of near-identical helpers per
-// transport — three copies is how `ws` and `mcp` came to be named by generated
-// code and boot warnings while no generator wrote them.
-
 /// One `authz/<dir>/` bridge: the files, the paths that name it, and the crates
-/// it needs. Plain fields — it is a `pub(super)` table, and a getter per field
-/// would be one more place a row has to be read through.
+/// it needs.
 pub(super) struct AuthzBridge {
     /// Folder under `crates/features/src/authz/`. Empty for the base bridge,
     /// whose providers sit at the `authz/` root — see [`HTTP_BRIDGE`].
@@ -166,8 +135,7 @@ pub(super) struct AuthzBridge {
     pub app_path: &'static str,
     /// `(file name, template)`, mirroring `demo/crates/features/src/authz/<dir>/`.
     pub files: &'static [(&'static str, &'static str)],
-    /// What this bridge buys, printed as the run's next steps. Kept beside the
-    /// files so the explanation and the code cannot drift apart.
+    /// What this bridge buys, printed as the run's next steps.
     pub rationale: &'static [&'static str],
     /// Umbrella features the bridge's own source names.
     pub deps: &'static [&'static super::cargo::Dep],
@@ -182,9 +150,8 @@ impl AuthzBridge {
         ws.features_root().join("authz").join(self.dir).is_dir()
     }
 
-    /// The `authz/mod.rs` index lines this bridge adds — a `Vec` like
-    /// [`lib_decls`], so a caller folds them into whichever single edit (or
-    /// file body) they belong to.
+    /// The `authz/mod.rs` index lines this bridge adds, for a caller to fold into
+    /// its single edit.
     pub(super) fn decls(&self) -> Vec<String> {
         vec![
             format!("pub mod {};", self.dir),
@@ -214,12 +181,9 @@ pub(super) fn bridge_for(transport: Transport) -> Option<&'static AuthzBridge> {
     }
 }
 
-/// The base bridge — and the one with no folder of its own. `AbilityGuard`
-/// answers every transport, so the guard it aliases lives at the `authz/` root
-/// and `AuthzModule` is what provides it; there is no `authz/http/` to write.
-/// `dir` and `files` are therefore empty and never read: `written_by_g_auth`
-/// keeps this row out of every path that would touch them, since `g auth`
-/// writes `authz/module.rs` and `authz/guard.rs` directly.
+/// The base bridge, with no folder of its own: `AbilityGuard` answers every
+/// transport, so its guard and `AuthzModule` sit at the `authz/` root, written
+/// by `g auth` itself. `dir` and `files` are empty and never read.
 static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "",
     module: "AuthzModule",
@@ -236,10 +200,8 @@ static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
 };
 
 /// `/graphql` is one endpoint with no guard at the HTTP edge: authn and the
-/// ability run **in band, per operation**, through a `GraphqlOperationGuard`.
-/// Without these providers the endpoint falls back to a chain that installs no
-/// ability at all, and every `#[authorize]` operation answers on rows nobody
-/// scoped.
+/// ability run **in band, per operation**, through a `GraphqlOperationGuard`;
+/// without it no ability is installed.
 static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "graphql",
     module: "AuthzGraphqlModule",
@@ -288,9 +250,8 @@ static WS_BRIDGE: AuthzBridge = AuthzBridge {
     written_by_g_auth: false,
 };
 
-/// `/mcp` gates in band, per operation. With no `McpOperationGuard` registered
-/// it is **deny-all** — every tool call answers 401, which is the boot warning
-/// `g mcp` prints and the state a reader following the docs used to land in.
+/// `/mcp` gates in band, per operation; with no `McpOperationGuard` registered
+/// it is **deny-all**.
 static MCP_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "mcp",
     module: "AuthzMcpModule",
@@ -317,8 +278,7 @@ static MCP_BRIDGE: AuthzBridge = AuthzBridge {
 /// Append the HS256 dev secret unless the file already sets one — an app with
 /// no `<PREFIX>_AUTHN__*` key material refuses to boot.
 fn append_authn_secret(env_prefix: &str, rendered: String) -> crate::scaffold::Transform {
-    // An empty key yields the namespace prefix `<PREFIX>_AUTHN__` — the same
-    // join every real name uses, rather than a second hand-built one.
+    // An empty key yields the namespace prefix `<PREFIX>_AUTHN__`.
     let marker = crate::context::var_name(env_prefix, "AUTHN", "");
     Box::new(move |content: &str| {
         if content.contains(&marker) {

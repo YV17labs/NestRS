@@ -2,9 +2,7 @@
 //! layer chain into the container. Each transport's shaper resolves them
 //! against the live container at configure time.
 //!
-//! `GuardSpec` and `PipeSpec` are [`LayerSpec`]
-//! aliases — the shared shape and its `resolve` method live in `nest-rs-core`;
-//! only the typed constructor and the erased trait differ per family.
+//! `GuardSpec` and `PipeSpec` are [`LayerSpec`] aliases.
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -99,10 +97,8 @@ impl nest_rs_core::layer_chain::GlobalSpecs for GuardSpecs {
 impl GuardSpecs {
     /// Resolve every spec into the composed global chain — deduped and
     /// priority-ordered through the same `compose_chain` as every other
-    /// Layer System site. For the single-site consumers that execute the
-    /// global pool on their own (the self-mount edge wrap, the GraphQL
-    /// fallback operation guard); the per-route shaper builds its own
-    /// bucket because it composes against controller / method scopes too.
+    /// Layer System site — for the single-site consumers that run the global
+    /// pool on their own (the self-mount edge wrap, the fallback operation guards).
     pub fn resolve_chain(
         &self,
         container: &Container,

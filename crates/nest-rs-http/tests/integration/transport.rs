@@ -1,10 +1,5 @@
-//! `HttpTransport::serve` once shutdown is asked for: what ends at the signal,
-//! the window poem is handed, what it closes at the bound, and what it leaves
-//! open.
-//!
-//! Over real sockets, since the window governs connections and `TestClient` has
-//! none. The clock is paused once the connections are up, so the default window
-//! is proved at its full length without the suite waiting it out.
+//! `HttpTransport::serve` once shutdown is asked for, over real sockets since
+//! `TestClient` has none; the clock is paused once the connections are up.
 
 use std::net::TcpListener as StdTcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,8 +37,7 @@ static STARTED: Notify = Notify::const_new();
 /// Told when the stuck route has started.
 static STUCK: Notify = Notify::const_new();
 
-/// Set when the stuck route's future is dropped — which is what cancelling it
-/// is.
+/// Set when the stuck route's future is dropped.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 
 struct SetOnDrop;
@@ -66,8 +60,7 @@ impl ShutdownController {
         SseStream::new(futures_util::stream::pending())
     }
 
-    /// A body with an end of its own that it never reaches: a download, not an
-    /// event stream, so only the window ends it.
+    /// A body with an end of its own that it never reaches, like a download.
     #[get("/download")]
     #[public]
     async fn download(&self) -> Body {
@@ -91,8 +84,7 @@ impl ShutdownController {
         "quick"
     }
 
-    /// Waits on something that never comes, past the request timeout's reach:
-    /// the window closes first.
+    /// Waits on something that never comes; the window closes first.
     #[get("/stuck")]
     #[public]
     async fn stuck(&self) -> &'static str {
@@ -106,8 +98,8 @@ impl ShutdownController {
 #[module(providers = [ShutdownController])]
 struct ShutdownModule;
 
-/// A WebSocket that echoes text until its peer goes: the connection poem hands
-/// to a handler at the upgrade and stops tracking.
+/// A WebSocket that echoes text until its peer goes; poem stops tracking it at
+/// the upgrade.
 #[handler]
 fn echo(ws: WebSocket) -> impl IntoResponse {
     ws.on_upgrade(|mut socket| async move {
@@ -122,8 +114,7 @@ fn echo(ws: WebSocket) -> impl IntoResponse {
 }
 
 /// A transport serving [`ShutdownModule`] and the echo socket on a local port,
-/// built from the default [`HttpConfig`] — the same path `HttpModule` takes, so
-/// the window under test is the one a deployment gets.
+/// built from the default [`HttpConfig`] as `HttpModule` builds it.
 struct Serving {
     port: u16,
     cancel: CancellationToken,
@@ -235,8 +226,7 @@ async fn read_head(stream: &mut TcpStream) -> String {
     String::from_utf8(head).expect("the head is text")
 }
 
-/// Everything left on the socket, up to its end — which only comes once the
-/// server has closed it.
+/// Everything left on the socket, up to the server's close.
 async fn read_to_end(stream: &mut TcpStream) -> String {
     let mut rest = Vec::new();
     match tokio::time::timeout(PATIENCE, stream.read_to_end(&mut rest)).await {
@@ -249,11 +239,8 @@ async fn read_to_end(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&rest).into_owned()
 }
 
-/// An `#[sse]` stream has no end of its own, so waiting on it could only ever
-/// spend the whole window: it is ended at the signal instead — cleanly, its last
-/// chunk written, so the client's `EventSource` reads an end and reconnects (to a
-/// replica still in the load balancer) rather than a cut — and its line says the
-/// transport, not the stream, ended it.
+/// An `#[sse]` stream is ended cleanly at the signal, and its line files it
+/// `cancelled`.
 #[tokio::test]
 async fn an_event_stream_is_ended_at_the_signal_and_files_its_line_cancelled() {
     let logs = LogCapture::install();
@@ -291,10 +278,8 @@ async fn an_event_stream_is_ended_at_the_signal_and_files_its_line_cancelled() {
     assert_span_cancelled(&logs, "/shutdown/stream");
 }
 
-/// A body with an end of its own is a response still being answered, like a
-/// request still running: it gets the window, and is cut at its close. Its head
-/// was answered, so its line carries the head's `status` and the `bytes` written
-/// before the cut — and `cancelled`, since it never reached its end.
+/// A body with an end of its own gets the window and is cut at its close; its
+/// line carries the head's `status`, the `bytes` written and `cancelled`.
 #[tokio::test]
 async fn a_streamed_download_holds_the_window_and_is_cut_at_its_close() {
     let logs = LogCapture::install();
@@ -357,15 +342,12 @@ fn assert_span_cancelled(logs: &LogCapture, path: &str) {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
-/// A hand-mounted endpoint is the developer's own: the transport cannot see
-/// inside it, so a socket it upgraded is neither waited for nor closed. It is
-/// left open, the line that closes the transport says so, and its handler still
-/// answers after the transport has stopped.
+/// A socket a hand-mounted endpoint upgraded is neither waited for nor closed:
+/// it outlives the transport, and the closing line says so.
 #[tokio::test]
 async fn a_hand_mounted_websocket_is_left_open_and_said_to_be() {
     let logs = LogCapture::install();
     let serving = serve().await;
-    // The listener is up once a plain connection lands.
     drop(connect(serving.port).await);
     let (mut websocket, _) =
         tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/socket", serving.port))
@@ -397,9 +379,8 @@ async fn a_hand_mounted_websocket_is_left_open_and_said_to_be() {
     assert_eq!(echoed, Message::text("still here"));
 }
 
-/// A request already running when shutdown is asked for finishes inside the
-/// window: it is answered, its connection is closed after the answer, and
-/// shutdown comes back as soon as it is — not when the window closes.
+/// A request already running when shutdown is asked for is answered inside the
+/// window, and shutdown returns as soon as it is.
 #[tokio::test]
 async fn a_request_in_flight_when_shutdown_starts_is_answered_inside_the_window() {
     let logs = LogCapture::install();
@@ -410,8 +391,7 @@ async fn a_request_in_flight_when_shutdown_starts_is_answered_inside_the_window(
     let took = serving.stop().await;
 
     // The handler's timer was set before the clock paused and rounds up to the
-    // next millisecond, so "once it answered" is `SLOW`, give or take one tick —
-    // and a world away from the window.
+    // next millisecond, so this is `SLOW` give or take one tick.
     assert!(
         took < SLOW + Duration::from_millis(100),
         "shutdown came back once the request was answered, took {took:?}",
@@ -422,9 +402,8 @@ async fn a_request_in_flight_when_shutdown_starts_is_answered_inside_the_window(
     logs.expect_none(nest_rs_http::target::HTTP, CUT);
 }
 
-/// A request still running when the window closes is cut: its client gets no
-/// answer, its handler is dropped where it waits — over HTTP/1.1, hyper polls
-/// the handler inside the connection poem drops — and the line counts it.
+/// A request still running when the window closes is cut: no answer, its
+/// handler dropped where it waits, and the line counts it.
 #[tokio::test]
 async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
     let logs = LogCapture::install();
@@ -460,15 +439,12 @@ async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
     );
     assert_eq!(line.field("status"), None, "nothing was answered");
     assert_eq!(line.field("bytes"), None, "nothing was written");
-    // Measured on the wall clock, which the paused test clock does not move, so
-    // only its presence is asserted here.
+    // Measured on the wall clock, which the paused clock does not move.
     line.field("duration_ms")
         .expect("the line says how long the request ran")
         .parse::<f64>()
         .expect("a number of milliseconds");
 
-    // And its span exports like an answered one's — under the route the router
-    // had matched before the handler ran — and failed, with the line's word.
     let span = logs
         .spans()
         .into_iter()
@@ -491,8 +467,7 @@ async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
-/// An idle kept-alive connection has nothing in flight, so it is closed at the
-/// signal and the window is not spent on it.
+/// An idle kept-alive connection is closed at the signal.
 #[tokio::test]
 async fn an_idle_connection_is_closed_at_the_signal_without_spending_the_window() {
     let logs = LogCapture::install();
@@ -518,8 +493,7 @@ async fn an_idle_connection_is_closed_at_the_signal_without_spending_the_window(
 }
 
 /// A self-mount whose every request starts one unit of [`DetachedWork`] that
-/// never unwinds: polled once, so it is running, then never again — the shape of
-/// a unit that blocks its thread, which no stop can reach.
+/// is polled once and never again, as a unit blocking its thread would be.
 fn stuck_mount(path: &'static str, owner: &'static str) -> HttpEndpointMeta {
     let work = DetachedWork::new();
     let carried = work.clone();
@@ -561,11 +535,8 @@ impl nest_rs_core::Discoverable for SettleB {
 #[module(providers = [SettleA, SettleB])]
 struct SettleModule;
 
-/// What every self-mount carries is waited for once, not once per mount. Each
-/// stuck unit holds the window — it is work still running — and then the
-/// transport stops them all and waits [`nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT`]
-/// for them together: the sum a grace period is sized against counts one
-/// settle, so `k` mounts paying one each would spend `k − 1` of them past it.
+/// Stuck units on several self-mounts hold the window, then cost one
+/// [`nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT`] together, not one per mount.
 #[tokio::test]
 async fn work_stopped_on_several_mounts_is_waited_for_once() {
     let logs = LogCapture::install();

@@ -3,26 +3,22 @@
 use nest_rs::core::injectable;
 use nest_rs::events::listeners;
 
-/// A bus event — plain `Clone` struct, no serde.
+/// A bus event: plain `Clone`, no serde.
 #[derive(Clone)]
 pub struct HygieneEvent {
-    /// Payload proving field access in the handler compiles.
     pub label: &'static str,
 }
 
-/// Minimal listener host.
 #[injectable]
 pub struct HygieneListener;
 
 #[listeners]
 impl HygieneListener {
-    /// Handler consuming the event by value.
     #[on_event]
     async fn on_hygiene(&self, event: HygieneEvent) {
         let _ = event.label;
     }
 
-    /// A synchronous listener is called without an `.await`.
     #[on_event]
     fn on_hygiene_sync(&self, event: HygieneEvent) {
         let _ = event.label;

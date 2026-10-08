@@ -4,11 +4,9 @@
 //! `#[inject]` deps. Importing [`ScheduleModule`] attaches the [`Scheduler`]
 //! to the app at boot.
 //!
-//! Triggers are validated **at compile time** (string literals) or **at
-//! boot** (`CronExpression` presets); a bad value fails the boot naming the
-//! offending job. `#[cron]`'s `tz` is in the first group with its expression:
-//! it is always a literal over the closed IANA name set, so both keys of that
-//! one attribute are refused at the line that wrote them.
+//! Triggers are validated **at compile time** (string literals, and `#[cron]`'s
+//! `tz`) or **at boot** (`CronExpression` presets); a bad value fails the boot
+//! naming the offending job.
 //!
 //! Every replica of an app fires every occurrence unless a job says otherwise:
 //! `replicas = "one"` on `#[every]` or `#[cron]` fires each occurrence on the one
@@ -21,12 +19,6 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Cron and interval registration, and a tick that failed.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::schedule";
 
 mod error;
@@ -43,9 +35,7 @@ pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
 pub use occurrence::{BACKEND_REMEDY, LOCK_TIMEOUT, Occurrence, OccurrenceClaim, OccurrenceLock};
 pub use replicas::Replicas;
-// Re-exported so `#[every]` / `#[cron]` / `#[after]` emit their
-// `JobTransaction` through this crate's own root, the way every other path the
-// decorators name is routed.
+// The path `#[every]` / `#[cron]` / `#[after]` emit their `JobTransaction` through.
 pub use nest_rs_worker;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};

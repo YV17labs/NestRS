@@ -1,8 +1,7 @@
 //! Typed errors for the WebSocket edge.
 
 /// Why a request-scoped provider could not be resolved inside a WS message
-/// handler. `Display` is what the `#[messages]` reply mapping puts on the error
-/// frame, so a handler can `?` it directly.
+/// handler. Its `Display` goes on the error frame, so a handler can `?` it.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum WsScopeError {

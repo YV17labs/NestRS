@@ -6,56 +6,36 @@ use nest_rs_config::{Config, ConfigService, Namespaced, config};
 use crate::metadata::ProtectedResourceMetadata;
 use nest_rs_authn::AuthError;
 
-/// RFC 9728 §2 default for `bearer_methods_supported`: the framework only ever
-/// reads `Authorization: Bearer`, and the MCP spec forbids the query-string
-/// form outright.
+/// RFC 9728 §2 default for `bearer_methods_supported`: the only form the framework reads.
 const BEARER_METHOD_HEADER: &str = "header";
 /// RFC 9728 §2's closed set for `bearer_methods_supported`, in the order §2
 /// lists them — RFC 6750 §2.1, §2.2, §2.3.
 const BEARER_METHODS_DEFINED: [&str; 3] = [BEARER_METHOD_HEADER, "body", "query"];
 
 /// Identity of this deployment as an OAuth 2.1 protected resource (namespace
-/// `oauth__resource`). Dual-path like every `nest-rs-*` config: `<PREFIX>_OAUTH__RESOURCE__*` env
-/// vars over the base pinned in
-/// [`OAuthResourceModule::for_root`](crate::OAuthResourceModule::for_root),
-/// composing per field.
+/// `oauth__resource`).
 #[config(namespace = "oauth__resource")]
 #[derive(Clone, Debug, Default)]
 pub struct OAuthResourceConfig {
-    /// The canonical URI clients name in their RFC 8707 `resource` parameter,
-    /// and the value tokens must carry as `aud`. Absolute, no fragment, no
-    /// trailing slash — `https://api.example.com` or
-    /// `https://api.example.com/mcp`. Read from `<PREFIX>_OAUTH__RESOURCE__RESOURCE`;
-    /// **required** — the module fails boot without it.
+    /// The canonical URI clients name in their RFC 8707 `resource` parameter, and
+    /// the `aud` tokens must carry: absolute, no fragment, no trailing slash. Required.
     pub resource: Option<String>,
-    /// Issuer identifiers of the authorization servers that mint tokens for
-    /// this resource. Read from `<PREFIX>_OAUTH__RESOURCE__AUTHORIZATION_SERVERS`;
-    /// **at least one is required** (RFC 9728 §2, restated as a MUST by the
-    /// MCP authorization spec).
+    /// Issuers of the authorization servers that mint tokens for this resource; at
+    /// least one is required (RFC 9728 §2).
     pub authorization_servers: Vec<String>,
-    /// The minimal scope set for basic functionality, advertised in the
-    /// metadata document and echoed in the `WWW-Authenticate` challenge so a
-    /// client knows what to ask for. Read from
-    /// `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED`; empty omits both.
+    /// The minimal scope set, advertised in the metadata document and the
+    /// `WWW-Authenticate` challenge; empty omits both.
     pub scopes_supported: Vec<String>,
-    /// How a token may be presented (RFC 9728 §2). Read from
-    /// `<PREFIX>_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED`; defaults to `header` alone,
-    /// which is the only form this framework accepts.
+    /// How a token may be presented (RFC 9728 §2); defaults to `header`, the only
+    /// form this framework accepts.
     pub bearer_methods_supported: Vec<String>,
-    /// Human-readable name for a consent screen. Read from
-    /// `<PREFIX>_OAUTH__RESOURCE__RESOURCE_NAME`.
+    /// Human-readable name for a consent screen.
     pub resource_name: Option<String>,
-    /// URL of developer documentation for this resource. Read from
-    /// `<PREFIX>_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION`.
+    /// URL of developer documentation for this resource.
     pub resource_documentation: Option<String>,
-    /// RFC 9728 §2 `resource_policy_uri` — where a developer reads how the
-    /// protected resource's data may be used. Omitted from the document when
-    /// unset. Shipped because it is an exact peer of
-    /// [`resource_documentation`](Self::resource_documentation): same OPTIONAL
-    /// `String`, same §2.1 internationalization rules, nothing harder.
+    /// RFC 9728 §2 `resource_policy_uri`: how the resource's data may be used.
     pub resource_policy_uri: Option<String>,
-    /// RFC 9728 §2 `resource_tos_uri` — the terms of service. The other peer,
-    /// shipped for the same reason.
+    /// RFC 9728 §2 `resource_tos_uri`: the terms of service.
     pub resource_tos_uri: Option<String>,
 }
 
@@ -104,11 +84,6 @@ impl OAuthResourceConfig {
 
     /// Validate the deployment's identity and freeze it into the document the
     /// well-known endpoint serves.
-    ///
-    /// Every check here is a boot failure rather than a runtime surprise: a
-    /// resource server that cannot name itself canonically cannot bind an
-    /// audience, and a client that trusts a malformed `resource` would request
-    /// a token for something else.
     pub fn into_metadata(self) -> Result<ProtectedResourceMetadata, AuthError> {
         let resource = self.resource.unwrap_or_default();
         let resource = resource.trim();
@@ -138,9 +113,8 @@ impl OAuthResourceConfig {
             validate_canonical_uri(issuer)?;
         }
 
-        // `scope` is a space-delimited list in both the metadata document and
-        // the challenge, so a scope carrying a space or a quote would silently
-        // become two scopes — or break out of the quoted parameter.
+        // `scope` is space-delimited: a space or a quote would split a scope or
+        // break out of the quoted challenge parameter.
         for scope in &self.scopes_supported {
             if !is_scope_token(scope) {
                 return Err(AuthError::Failed(format!(
@@ -151,12 +125,8 @@ impl OAuthResourceConfig {
             }
         }
 
-        // RFC 9728 §2: "Defined values are [\"header\", \"body\", \"query\"],
-        // corresponding to Sections 2.1, 2.2, and 2.3 of [RFC6750]." The set is
-        // closed, and this is the one enumerated field in the struct — an
-        // unvalidated list published a promise the framework's only extractor
-        // refuses, so a client reading it posts the token in a form body and
-        // gets a 401 pointing back at the document that told it to.
+        // RFC 9728 §2's set is closed; an unvalidated value would publish a
+        // promise the extractor refuses.
         let bearer_methods_supported = if self.bearer_methods_supported.is_empty() {
             vec![BEARER_METHOD_HEADER.to_owned()]
         } else {
@@ -167,10 +137,8 @@ impl OAuthResourceConfig {
                          are {BEARER_METHODS_DEFINED:?}",
                     )));
                 }
-                // `bearer_token` reads the `Authorization` header and nothing
-                // else, so advertising another method promises what no code
-                // here honours. Refused rather than warned: the document is
-                // what a client acts on before it ever reaches a handler.
+                // `bearer_token` reads only the `Authorization` header, and a client acts
+                // on the document before reaching a handler: refused, not warned.
                 if method != BEARER_METHOD_HEADER {
                     return Err(AuthError::Failed(format!(
                         "`{method}` is a defined RFC 9728 bearer method, but this framework \
@@ -198,8 +166,7 @@ impl OAuthResourceConfig {
 }
 
 /// RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — printable
-/// ASCII excluding space (`%x20`), `"` (`%x22`) and `\` (`%x5C`). RFC 6750 §3
-/// restates the same constraint for the `scope` auth-param.
+/// ASCII excluding space (`%x20`), `"` (`%x22`) and `\` (`%x5C`).
 fn is_scope_token(scope: &str) -> bool {
     !scope.is_empty()
         && scope
@@ -207,17 +174,9 @@ fn is_scope_token(scope: &str) -> bool {
             .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E))
 }
 
-/// Whether an authority names the loopback interface, which is the one place a
-/// plain-`http` resource identifier is legitimate (local development) and RFC
-/// 9728 §1.2's transport concern does not apply.
-///
-/// Parses the authority the way RFC 3986 §3.2 composes it —
-/// `[ userinfo "@" ] host [ ":" port ]` — because two shortcuts were wrong in
-/// opposite directions: stripping the port with `rsplit_once(':')` split
-/// `[::1]` at a colon *inside* the brackets, refusing a legitimate IPv6
-/// loopback, and it took the port from the wrong side of an `@`, so
-/// `http://localhost:8080@evil.com` passed the https requirement with a real
-/// host of `evil.com`.
+/// Whether an authority names loopback, the one place a plain-`http` resource
+/// identifier is legitimate. Parsed per RFC 3986 §3.2: `[::1]` holds colons, and
+/// `http://localhost:8080@evil.com`'s host is `evil.com`.
 fn is_loopback_authority(rest: &str) -> bool {
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     // Userinfo is everything before the *last* `@`; the host follows it.
@@ -239,10 +198,8 @@ fn is_loopback_authority(rest: &str) -> bool {
     }
 }
 
-/// The canonical-URI rules the MCP authorization spec spells out: absolute,
-/// with a scheme, and no fragment. A trailing slash is legal but discouraged,
-/// so it is a `warn` rather than a refusal — the deployment may genuinely mean
-/// it.
+/// The MCP authorization spec's canonical-URI rules: absolute, with a scheme, no
+/// fragment; a trailing slash is legal but discouraged, so it only warns.
 fn validate_canonical_uri(uri: &str) -> Result<(), AuthError> {
     let Some((scheme, rest)) = uri.split_once("://") else {
         return Err(AuthError::Failed(format!(
@@ -255,13 +212,8 @@ fn validate_canonical_uri(uri: &str) -> Result<(), AuthError> {
             "`{uri}` is not a canonical resource URI: scheme and authority are both required"
         )));
     }
-    // RFC 9728 §1.2 defines the term this function validates: "Resource
-    // Identifier: The protected resource's resource identifier, which is a URL
-    // that **uses the https scheme** and has no fragment component." A `http://`
-    // identifier boots clean and publishes a document a §3.3-validating client
-    // is entitled to refuse, so it is refused here — except on loopback, which
-    // is where the case is real (local development) and where the spec's
-    // transport concern does not apply.
+    // RFC 9728 §1.2: a resource identifier uses the https scheme; loopback is
+    // spared for local development.
     if !scheme.eq_ignore_ascii_case("https") && !is_loopback_authority(rest) {
         return Err(AuthError::Failed(format!(
             "`{uri}` is not a canonical resource URI: RFC 9728 §1.2 requires the https scheme (http is accepted only on localhost/127.0.0.1/[::1] for local development)"
@@ -272,9 +224,7 @@ fn validate_canonical_uri(uri: &str) -> Result<(), AuthError> {
             "`{uri}` is not a canonical resource URI: a fragment is not allowed"
         )));
     }
-    // These end up inside a quoted `WWW-Authenticate` parameter. RFC 3986
-    // forbids them in a URI anyway, so refusing at boot costs nothing and
-    // removes any question of a value escaping its quotes.
+    // These end up inside a quoted `WWW-Authenticate` parameter.
     if uri
         .chars()
         .any(|c| c.is_ascii_control() || matches!(c, '"' | '\\' | ' '))
@@ -329,9 +279,6 @@ mod tests {
 
     #[test]
     fn an_empty_authorization_server_list_fails_boot() {
-        // RFC 9728 metadata whose `authorization_servers` is empty is a
-        // document that satisfies the letter of discovery and none of its
-        // purpose — the client learns nothing and cannot obtain a token.
         let err = OAuthResourceConfig::default()
             .with_resource("https://api.example.com")
             .into_metadata()
@@ -362,8 +309,6 @@ mod tests {
 
     #[test]
     fn a_malformed_issuer_is_refused_too() {
-        // The issuer is what the client builds its AS-metadata URL from; a
-        // scheme-less value would send it probing a relative path.
         let err = valid()
             .with_authorization_servers(["auth.example.com"])
             .into_metadata()
@@ -373,8 +318,6 @@ mod tests {
 
     #[test]
     fn a_scope_carrying_a_space_is_refused() {
-        // `scope` is space-delimited on the wire: accepting this would publish
-        // two scopes the deployment never wrote.
         let err = valid()
             .with_scopes_supported(["posts read"])
             .into_metadata()
@@ -409,9 +352,7 @@ mod tests {
             "a field the env does not set keeps the pinned value",
         );
     }
-    /// A trailing slash is *legal*, so this cannot be a boot failure — which is
-    /// why the warning has to be right: it is the only thing a deployment whose
-    /// clients compare identifiers byte-for-byte will ever see.
+    /// A trailing slash is legal, so it is reported, never refused.
     #[test]
     fn a_trailing_slash_is_accepted_and_reported() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -438,8 +379,6 @@ mod tests {
         );
     }
 
-    /// The other half, and the reason the first is worth pinning: a warning that
-    /// also fires on the good shape teaches operators to filter the target out.
     #[test]
     fn the_canonical_form_is_silent() {
         let logs = nest_rs_testing::LogCapture::install();

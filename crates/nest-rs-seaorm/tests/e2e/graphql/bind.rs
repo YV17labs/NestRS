@@ -1,15 +1,5 @@
-//! `src/graphql/bind.rs`: what a by-id load says when the database refuses it.
-//!
-//! HTTP has a choke point — every opaque `ServiceError` logs once as it renders
-//! — and GraphQL has none, so `bind` logs the real `DbErr` itself and hands the
-//! client a bare `internal error`. That asymmetry is the whole reason the event
-//! exists, and it means the log line is the *only* copy of the cause: schema,
-//! column and constraint names never reach the wire, deliberately, so an
-//! operator with no line here has nothing at all.
-//!
-//! Against live Postgres rather than in-process because the failure under test
-//! is a driver error on a real statement — a hand-made `DbErr` would prove the
-//! branch and not that the branch is reachable.
+//! `src/graphql/bind.rs`: a by-id load the database refuses logs the `DbErr`
+//! and answers a bare `internal error`, GraphQL having no rendering choke point.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
@@ -23,9 +13,7 @@ use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModu
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
 
-/// An entity whose table is never created. Every read against it is a driver
-/// error, which is the point: the failure comes from Postgres rather than from
-/// a stub, so what the test exercises is the path a real outage takes.
+/// An entity whose table is never created, so every read is a driver error.
 mod ghost {
     use sea_orm::entity::prelude::*;
     use serde::{Deserialize, Serialize};
@@ -113,9 +101,8 @@ struct GhostsResolver;
 
 #[operations]
 impl GhostsResolver {
-    /// Calls `bind` rather than a service method: it is `bind` that owns the
-    /// three-way `Found`/`Denied`/`Missing` answer *and* the error branch under
-    /// test, and a resolver written any other way would not reach it.
+    /// Calls `bind`, which owns the `Found`/`Denied`/`Missing` answer and the
+    /// error branch under test.
     #[query]
     #[authorize(Read, ghost::Entity)]
     async fn ghost(&self, ctx: &Context<'_>, id: String) -> GqlResult<Option<Ghost>> {
@@ -151,10 +138,7 @@ const QUERY: &str = r#"query($id: String!) { ghost(id: $id) { id title } }"#;
 
 #[tokio::test]
 async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
-    // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
-    // endpoint's task and every resolver it drives run on this thread. The
-    // global capture is permanent and one per process — spending it where the
-    // ordinary one works is a cost with nothing bought.
+    // Thread-local suffices: `#[tokio::test]` runs every resolver on this thread.
     let logs = LogCapture::install();
 
     let app = TestApp::for_module::<GhostModule>()
@@ -177,8 +161,7 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
         .await
         .expect("a GraphQL response body");
 
-    // What the client is told, and what it is not. A `DbErr` `Display` here
-    // would name the table and, on a constraint violation, the values in it.
+    // A `DbErr` `Display` would name the table and, on a constraint, its values.
     assert!(
         body.contains("internal error") && body.contains("INTERNAL_SERVER_ERROR"),
         "the client gets a generic error with a programmable code: {body}",
@@ -190,9 +173,6 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
 
     let event = logs.expect_one(nest_rs_seaorm::TARGET, "by-id access load failed");
     assert_eq!(event.level, "error");
-    // The service, because the resolver's name is not in the error and one
-    // schema binds many: without it an operator has a driver error and no
-    // subject.
     assert!(
         event.field("service").is_some_and(|s| s.contains("Ghosts")),
         "the event names the bound service, got {:?}",

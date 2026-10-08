@@ -1,11 +1,9 @@
 //! Mount-time composition of the response-side layer pools for one HTTP
 //! route: exception-filters, filters, interceptors.
 //!
-//! Guards and pipes run *inside* [`RouteShaper`] at request time (they are
-//! request-side: gate, then transform the body). The response-side families
-//! wrap the endpoint itself — they need to see the response / error on the
-//! way out — so the `#[routes]` macro composes them here at mount time, all
-//! through the **same** `compose_chain` dedup as every other layer kind.
+//! Guards and pipes run inside [`RouteShaper`] at request time; the
+//! response-side families wrap the endpoint, composed here at mount through the
+//! same `compose_chain` dedup as every other layer kind.
 //!
 //! Execution sites differ by scope for interceptors and filters:
 //!
@@ -22,14 +20,9 @@
 //! around the handler), so **all three scopes** execute here, closest to the
 //! handler — before generic filters get a chance to map the error away.
 //!
-//! The three families compose in **one** call ([`wrap_route_response_layers`])
-//! rather than three nested generic wrappers, deliberately: every enum level
-//! an `async fn call` awaits through adds a `Request`-sized slot (~500 B) to
-//! the route's future — rustc does not overlap moved-out locals — and poem's
-//! route table boxes that future per request for *every* route, bare
-//! included. One level keeps the bare route's future at its previous size;
-//! a route that declared a layer goes through a single boxed endpoint whose
-//! inside stays fully inline (chain runners, no per-entry boxing).
+//! The three families compose in **one** call ([`wrap_route_response_layers`]):
+//! every nested enum level adds a `Request`-sized slot (~500 B) to the route's
+//! future, which poem boxes per request for every route, bare included.
 //!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 

@@ -28,8 +28,8 @@ struct TestClaims {
 }
 
 fn service(label: &str) -> JwtService {
-    // Pad to ≥ 32 bytes so the HS256 min-secret guard (SEC-F3) passes, while the
-    // label keeps each test's secret distinct.
+    // Pad to ≥ 32 bytes for the HS256 min-secret guard; the label keeps each
+    // test's secret distinct.
     let secret = format!("{label}-padding-to-thirty-two-bytes-minimum");
     JwtService::new(JwtOptions::new(secret)).expect("HMAC service")
 }
@@ -45,11 +45,8 @@ fn claims(exp: u64, nbf: Option<u64>) -> TestClaims {
 
 #[test]
 fn short_hmac_secret_is_rejected_by_the_service_constructor() {
-    // SEC-F3: the ≥256-bit rule must hold at the derivation point
-    // (`JwtService::new`), not only on the config-env path — so the documented
-    // honest-API constructor `JwtOptions::new` can't mint a forgeable-key service.
-    // `JwtService` has no `Debug` (secrets must not leak), so match rather than
-    // `.expect_err`.
+    // The ≥256-bit rule holds at `JwtService::new`, for `JwtOptions::new` too.
+    // `JwtService` has no `Debug`, so match rather than `.expect_err`.
     let err = match JwtService::new(JwtOptions::new("too-short")) {
         Ok(_) => panic!("a sub-32-byte HS256 secret must be refused"),
         Err(e) => e,
@@ -193,17 +190,13 @@ fn audience_must_match_when_configured() {
 
 #[test]
 fn audience_omitted_is_rejected_when_configured() {
-    // Regression: a configured audience must be *mandatory*. A validly-signed
-    // token that omits `aud` entirely was silently accepted (set_audience only
-    // compares when the claim is present); it must now fail closed.
+    // A configured audience is mandatory: a validly-signed token omitting `aud` fails closed.
     let secret = "aud-required-secret-padded-to-32-bytes";
     let mut options = JwtOptions::new(secret);
     options.audience = Some("api".into());
     let jwt = JwtService::new(options).expect("service");
 
-    // Forged with the raw encoder — another holder of the shared key minting a
-    // token that omits `aud`. `set_audience` alone only *compares* a present
-    // claim, so this is the case that must fail closed.
+    // Forged with the raw encoder by another holder of the shared key.
     let omitted = claims(jwt.expiry(), None);
     assert!(omitted.aud.is_none());
     let forged = jsonwebtoken::encode(
@@ -217,9 +210,7 @@ fn audience_omitted_is_rejected_when_configured() {
         Err(AuthError::InvalidToken)
     ));
 
-    // Our own signer stamps the configured audience, so a claims struct that
-    // leaves `aud` unset still mints a token this service accepts — the app
-    // never has to restate the scoping its config already declares.
+    // The signer stamps the configured audience onto claims that leave `aud` unset.
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
     let round_tripped: TestClaims = jwt.verify(&token).expect("stamped aud verifies");
     assert_eq!(round_tripped.aud.as_deref(), Some("api"));
@@ -283,13 +274,8 @@ fn invalid_algorithm_is_rejected() {
 
 #[test]
 fn unsigned_alg_none_token_is_rejected() {
-    // The classic alg-confusion / "unsecured JWT" attack: an attacker forges a
-    // token whose header declares `alg: none` and ships an empty signature,
-    // hoping the verifier skips signature checking. `JwtService` must reject it
-    // — an unsigned token is never authentic. jsonwebtoken has no `none` in its
-    // `Algorithm` enum and its encoder cannot emit one, so we hand-craft the
-    // token (base64url header + payload + empty signature) to prove the service
-    // refuses it rather than relying on the encoder to produce the attack.
+    // `alg: none` with an empty signature. jsonwebtoken cannot emit one, so the
+    // token is hand-crafted.
     let jwt = service("alg-none-secret");
     // A valid, non-expired `exp` so rejection can only be due to `alg: none`,
     // never an incidental claim failure.
@@ -342,12 +328,8 @@ fn a_private_key_beside_another_pairs_public_key_is_refused() {
 
 #[test]
 fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
-    // The confused deputy, and the regression this file exists to hold: the
-    // default path (`AuthnModule::for_root(None)` with no audience configured)
-    // switched jsonwebtoken's `validate_aud` off, so a token the shared issuer
-    // minted *for a sibling service* verified here. RFC 7519 §4.1.3 says a
-    // principal that does not identify itself with a value in a present `aud`
-    // MUST reject the JWT — and it binds a verifier naming no audience too.
+    // The confused deputy: with no audience configured, a token the shared
+    // issuer minted for a sibling service is still refused (RFC 7519 §4.1.3).
     let secret = "no-aud-configured-secret-padded-32b";
     let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
     assert!(
@@ -375,9 +357,8 @@ fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
 
 #[test]
 fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
-    // The other half of §4.1.3, and why the clause costs nothing: it fires only
-    // when the claim is *present*. A deployment that names no audience and whose
-    // issuer stamps none is untouched.
+    // §4.1.3 fires only when the claim is present: no audience configured and
+    // none stamped verifies.
     let jwt = service("no-aud-anywhere-secret");
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
     let decoded: TestClaims = jwt.verify(&token).expect("verify");
@@ -386,9 +367,7 @@ fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
 
 #[test]
 fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
-    // The permissive behaviour survives, but only as something a deployment
-    // wrote down — and it says so once per boot, naming the variable, so an
-    // operator can find who disabled the check.
+    // The opt-out is written down and reported once per boot, naming the variable.
     let logs = nest_rs_testing::LogCapture::install();
     let secret = "any-aud-opt-in-secret-padded-32-by";
     let mut options = JwtOptions::new(secret);
@@ -423,8 +402,6 @@ fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
 
 #[test]
 fn allow_any_audience_beside_a_configured_audience_is_refused() {
-    // Two fields stating opposite policies. Letting either win silently is how a
-    // deployment comes to believe the stricter one is in force.
     let mut options = JwtOptions::new("contradiction-secret-padded-to-32b");
     options.audience = Some("api".into());
     options.allow_any_audience = true;
@@ -456,9 +433,7 @@ fn a_minted_token_carries_the_rfc9068_media_type() {
 
 /// RFC 9068 §4: the resource server "MUST verify that the `typ` header value is
 /// `at+jwt` or `application/at+jwt` and reject tokens carrying any other
-/// value". §2.1 names the attack this closes: an OpenID Connect ID Token,
-/// signed by the same issuer with the same key, must not be spendable as an
-/// access token here.
+/// value". An ID Token signed by the same issuer and key must not be spendable here.
 #[test]
 fn a_token_typed_as_anything_else_is_refused() {
     let secret = "typ-fixture-secret-padded-32-byte";
@@ -521,10 +496,8 @@ fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
     assert!(jwt.verify::<TestClaims>(&token).is_ok());
 }
 
-/// A `JwtOptions` built in code reaches the constructor without a config
-/// read, so the constructor holds it to the ranges the variables are held to:
-/// an unbounded lifetime overflowed `expiry()` on every mint, an unbounded
-/// leeway overflowed the verifier's `now - leeway` on every verify.
+/// A `JwtOptions` built in code is held to the variables' ranges too, or the
+/// lifetime and leeway arithmetic overflows.
 #[test]
 fn a_lifetime_or_a_leeway_built_in_code_outside_its_range_is_refused_at_construction() {
     let secret = "this-is-a-32-byte-test-secret!!!";
@@ -560,9 +533,8 @@ fn a_lifetime_or_a_leeway_built_in_code_outside_its_range_is_refused_at_construc
     }
 }
 
-/// The one arithmetic a caller controls saturates instead of wrapping: a
-/// lifetime past the end of `u64` seconds never ends, where a wrapped sum
-/// minted a token already expired.
+/// The one arithmetic a caller controls saturates: a wrapped sum would mint a
+/// token already expired.
 #[test]
 fn an_expiry_past_the_end_of_time_saturates() {
     let jwt = service("saturate");

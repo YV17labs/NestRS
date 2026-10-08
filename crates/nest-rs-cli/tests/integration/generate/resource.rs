@@ -26,11 +26,8 @@ fn generate_resource_creates_crud_slice_and_deps() {
     assert!(entity.contains("name = \"Post\""));
     assert!(entity.contains("table_name = \"post\""));
 
-    // Dependencies spliced into both manifests. `schemars` / `validator` /
-    // `uuid` / `chrono` are absent by design: `#[expose]` carries those derives
-    // and routes them back through the framework. `authz`
-    // are what `#[expose]`/`#[crud]` expand to, so their absence would only
-    // surface as macro-expansion errors on the first `cargo check`.
+    // `schemars` / `validator` / `uuid` / `chrono` are absent: `#[expose]` routes
+    // those derives through the framework.
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
     assert!(root_cargo.contains("nest-rs"));
     assert!(root_cargo.contains("seaorm"), "{root_cargo}");
@@ -42,11 +39,8 @@ fn generate_resource_creates_crud_slice_and_deps() {
     assert!(features_cargo.contains("nest-rs"));
     assert!(features_cargo.contains("authz"), "{features_cargo}");
 
-    // R9-3: `/tutorial/entity/` prints both manifests and says the generator
-    // writes exactly them. Only the feature *set* is asserted — the entry form
-    // (dotted vs inline) follows whatever the manifest already used — but the
-    // set is what the page copies, and `authn` is the one it had missed:
-    // `g resource` bootstraps the auth adapter, so the resource pulls it in.
+    // The feature *set* `/tutorial/entity/` prints; `authn` comes with the auth
+    // adapter `g resource` bootstraps.
     for feature in ["seaorm", "http", "authz", "authn"] {
         let quoted = format!("\"{feature}\"");
         assert!(
@@ -90,7 +84,6 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
         "the http module imports AuthzModule: {module}"
     );
 
-    // The guards it names have to exist — so the adapter came with it.
     let src = dir.path().join("crates/features/src");
     assert!(src.join("authn/strategy.rs").is_file());
     assert!(src.join("authz/ability.rs").is_file());
@@ -98,22 +91,19 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     assert!(src.join("authn/claims.rs").is_file());
 
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
-    // Built through the CLI's own mirror, never spelled: the generator writes
-    // the name under whatever `NESTRS_ENV_PREFIX` the process declares, so a
-    // literal here asserts the default prefix rather than the generator.
+    // Built through the CLI's own mirror: a literal would assert the default
+    // prefix rather than the generator.
     let secret = scaffolded_var("authn", "SECRET");
     assert!(env.contains(&secret), "the .env must name {secret}: {env}");
 }
 
-// Same obligation on the bootstrap path: `g resource` scaffolds the adapter when
-// the workspace has none, so it owes the same composition site the same entries
-// — in the one edit it already spends on `module.rs` for its own module.
+// `g resource` bootstrapping the adapter owes the composition site the same
+// entries.
 #[test]
 fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let app = write_fake_app(dir.path(), "api");
-    // `g resource` wires only into an app that already has a database.
     let module_rs = app.join("src/module.rs");
     let with_db = fs::read_to_string(&module_rs).unwrap().replace(
         "    ],",
@@ -129,10 +119,8 @@ fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
     }
 }
 
-/// B6: `g migration` scaffolds `created_at`/`updated_at`/`deleted_at`, and the
-/// entity declared none — so the out-of-the-box resource hard-deleted against a
-/// table carrying an unused tombstone column, and never wrote the audit ones.
-/// The two generators must agree, and with the `users/` exemplar.
+/// `g resource`'s entity declares the `created_at`/`updated_at`/`deleted_at`
+/// columns `g migration` scaffolds.
 #[test]
 fn generate_resource_declares_the_columns_its_migration_scaffolds() {
     let dir = tempfile::tempdir().unwrap();

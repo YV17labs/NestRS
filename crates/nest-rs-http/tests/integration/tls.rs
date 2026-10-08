@@ -1,11 +1,6 @@
 //! TLS material is watched, and a renewal is swapped into the running
-//! listener.
-//!
-//! The swap is only observable through a real handshake, so this module binds
-//! an actual port and drives it with a real client. Two leaves under one CA,
-//! differing only in their subject name, make "which certificate is serving?"
-//! a question the client can answer: it trusts both, so the hostname the
-//! handshake accepts is the only thing the swap changes.
+//! listener — observed through real handshakes on two leaves differing only in
+//! their name.
 
 use std::net::TcpListener as StdTcpListener;
 use std::path::{Path, PathBuf};
@@ -54,8 +49,7 @@ fn key_b() -> &'static [u8] {
     PKI.b.key.as_bytes()
 }
 
-/// The watch interval the serving tests use — the shortest the seconds-grained
-/// knob allows, so a renewal lands within a tick or two.
+/// The shortest watch interval the seconds-grained knob allows.
 const RELOAD_SECS: u64 = 1;
 
 #[controller(path = "/")]
@@ -107,14 +101,10 @@ impl Drop for Material {
 }
 
 /// A client that trusts the test authority and resolves both test names to the
-/// bound port, so the *only* reason a request can fail is the certificate the
-/// server presents.
+/// bound port.
 ///
-/// The authority is the client's *only* root, verified by rustls itself. Merged
-/// into the platform's store instead, macOS applies Apple's policy for server
-/// certificates on top — the test leaves outlive its 825-day ceiling — and the
-/// handshake fails there for a reason unrelated to the swap under test. The suite asserts which certificate is served, not
-/// what one operating system accepts.
+/// The authority is the client's only root: merged into the platform's store,
+/// macOS's 825-day ceiling on server certificates would fail the test leaves.
 fn client(host: &str, port: u16) -> reqwest::Client {
     reqwest::Client::builder()
         .tls_certs_only([
@@ -126,16 +116,13 @@ fn client(host: &str, port: u16) -> reqwest::Client {
         .expect("client builds")
 }
 
-/// An OS-assigned free port. Bound and released, so the transport can take it —
-/// racy in principle, adequate in practice and the same trick the rest of the
-/// suite's socket tests use.
+/// An OS-assigned free port, bound and released for the transport to take.
 fn free_port() -> u16 {
     let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral port");
     listener.local_addr().expect("local addr").port()
 }
 
-/// A request on `client`'s own connection pool — so a second call reuses the
-/// connection the first one opened, instead of handshaking again.
+/// A request on `client`'s own connection pool, reusing its connection.
 async fn ping_with(
     client: &reqwest::Client,
     host: &str,
@@ -147,14 +134,12 @@ async fn ping_with(
         .await
 }
 
-/// A request on a **fresh** pool: every call handshakes, so what it observes is
-/// the certificate the listener presents right now.
+/// A request on a fresh pool, so every call handshakes.
 async fn ping(host: &str, port: u16) -> reqwest::Result<reqwest::Response> {
     ping_with(&client(host, port), host, port).await
 }
 
-/// Poll until `host` answers, so the test waits on the server being ready
-/// rather than on a fixed sleep.
+/// Poll until `host` answers.
 async fn ping_until_ok(host: &str, port: u16, within: Duration) -> Option<String> {
     let deadline = tokio::time::Instant::now() + within;
     loop {
@@ -170,9 +155,8 @@ async fn ping_until_ok(host: &str, port: u16, within: Duration) -> Option<String
     }
 }
 
-/// Let the watcher take `ticks` intervals on paused time, and pick up what
-/// settled meanwhile. No request is in flight while the clock is paused, so no
-/// timer but the watcher's is passed over.
+/// Let the watcher take `ticks` intervals on paused time. No request is in
+/// flight while the clock is paused, so no other timer is passed over.
 async fn watch(ticks: u32) {
     tokio::time::pause();
     tokio::time::sleep(Duration::from_secs(RELOAD_SECS) * ticks).await;
@@ -215,7 +199,6 @@ async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
     let port = free_port();
     let cancel = serve(port, &material, RELOAD_SECS).await;
 
-    // Before the swap: leaf A is serving, so its name verifies and B's does not.
     let body = ping_until_ok(HOST_A, port, Duration::from_secs(10)).await;
     assert_eq!(body.as_deref(), Some("pong"), "leaf A serves {HOST_A}");
     assert!(
@@ -223,7 +206,6 @@ async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
         "leaf A cannot answer for {HOST_B}",
     );
 
-    // Renew in place. Nothing restarts, nothing rebinds.
     material.write(cert_b(), key_b());
     watch(3).await;
 
@@ -241,16 +223,8 @@ async fn a_renewed_certificate_is_served_without_dropping_the_listener() {
     cancel.cancel();
 }
 
-/// The reason the swap goes through the listener's config *stream* rather than
-/// a rebind: a connection already established keeps the session it handshook
-/// on, so a request in flight when the renewal lands is answered instead of
-/// reset. Rebuilding the listener would drop it, and the test above — which
-/// handshakes afresh every time — could not tell the difference.
-///
-/// The two clients are what make it observable. One is held across the swap and
-/// never handshakes again; the other is built per request, so it does. After
-/// the renewal the held connection answers **for the superseded name**, which a
-/// new connection can no longer be opened for at all.
+/// A connection established before the swap keeps its session: a held client
+/// still answers for the superseded name, which a fresh one is refused.
 #[tokio::test]
 async fn a_connection_open_across_the_swap_is_answered_not_reset() {
     let material = Material::new("in-flight");
@@ -265,8 +239,7 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
         "the server comes up on leaf A",
     );
 
-    // Open the connection under leaf A and read the body to completion, so it
-    // goes back to this client's pool rather than being torn down.
+    // Read the body to completion, so the connection returns to the pool.
     let held = client(HOST_A, port);
     let opened = ping_with(&held, HOST_A, port)
         .await
@@ -277,7 +250,6 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
     material.write(cert_b(), key_b());
     watch(3).await;
 
-    // The swap has landed once a *fresh* handshake is answered under leaf B…
     assert_eq!(
         ping_until_ok(HOST_B, port, Duration::from_secs(10))
             .await
@@ -285,8 +257,6 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
         Some("pong"),
         "the renewal is picked up",
     );
-    // …and, at that same moment, a fresh connection for leaf A is refused. So
-    // anything still answering for {HOST_A} below is not handshaking.
     assert!(
         ping(HOST_A, port).await.is_err(),
         "a new connection can no longer be opened under the superseded leaf",
@@ -307,8 +277,6 @@ async fn a_connection_open_across_the_swap_is_answered_not_reset() {
 
 #[tokio::test]
 async fn watching_off_keeps_serving_the_certificate_it_booted_with() {
-    // `reload_secs = 0` is the opt-out, and it must be a real one: a renewal on
-    // disk changes nothing until the process restarts.
     let material = Material::new("pinned");
     let port = free_port();
     let cancel = serve(port, &material, 0).await;
@@ -333,15 +301,12 @@ async fn watching_off_keeps_serving_the_certificate_it_booted_with() {
     cancel.cancel();
 }
 
-/// poem validates a `RustlsConfig` handed to it directly, but a **stream** of
-/// them takes the blanket `IntoTlsConfigStream` impl, whose `into_stream` is
-/// `Ok(self)`. So material that cannot serve booted, bound the port, accepted
-/// TCP and dropped every connection — healthy by every signal an operator has.
+/// poem does not validate a *stream* of `RustlsConfig` (`into_stream` is
+/// `Ok(self)`), so the transport must refuse material that cannot serve.
 #[tokio::test]
 async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
     let material = Material::new("boot-refused");
-    // Leaf B's certificate beside leaf A's key: both halves parse, and neither
-    // corresponds to the other.
+    // Leaf B's certificate beside leaf A's key: both parse, neither corresponds.
     material.write(cert_b(), key_a());
     let port = free_port();
     let transport = transport_for(port, &material, 0).await;
@@ -362,10 +327,8 @@ async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
     );
 }
 
-/// The renewal half of the same question. A settled read cannot see that two
-/// atomically-written halves do not correspond, nor that a file settled at zero
-/// bytes — and either one, installed, fails **every** handshake. Both used to be
-/// published and announced as `tls certificate renewed on disk`.
+/// A renewal to an empty certificate or a mismatched pair is refused: either,
+/// installed, fails every handshake.
 #[tokio::test]
 async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps_serving() {
     let material = Material::new("renewal-refused");
@@ -380,8 +343,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
         "leaf A is serving to begin with",
     );
 
-    // An empty certificate — a truncate that stalls, or a writer that creates
-    // before it writes. It parses as a chain holding nothing.
+    // An empty certificate parses as a chain holding nothing.
     material.write(b"", key_a());
     watch(3).await;
     assert_eq!(
@@ -392,7 +354,6 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
         "an empty certificate is refused and leaf A keeps serving",
     );
 
-    // A mismatched pair: leaf B's certificate, leaf A's key.
     material.write(cert_b(), key_a());
     watch(3).await;
     assert_eq!(
@@ -407,8 +368,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
         "and leaf B's certificate was never presented",
     );
 
-    // A pair that *does* correspond still lands, so the refusals above did not
-    // leave the watcher stuck on the material it rejected.
+    // A corresponding pair still lands: the watcher is not stuck on the rejection.
     material.write(cert_b(), key_b());
     watch(3).await;
     assert_eq!(

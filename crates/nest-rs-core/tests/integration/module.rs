@@ -1,7 +1,5 @@
-//! Dynamic imports (`Foo::for_root(opts)`) through the real `#[module]` macro
-//! and both boot paths. The contract under test is CORE-I9: the import
-//! expression is evaluated **exactly once**, and the value the collect phase
-//! saw is the value the register phase installs.
+//! Covers `src/module.rs` — a dynamic import (`Foo::for_root(opts)`) is
+//! evaluated exactly once, and the value collected is the value registered.
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -11,23 +9,16 @@ use nest_rs_core::{
     App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError, Module, Registering, module,
 };
 
-/// Counts how many times the import expression ran, and stamps each
-/// construction with a serial so a test can tell *which* value was installed.
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 
-/// What a dynamic module installs — the serial of the value that reached
-/// `register`, resolvable from the built container.
 struct Installed(usize);
 
-/// The value collected, so a test can compare it against the registered one.
 struct Collected(usize);
 
 struct CountingSetup {
     serial: usize,
 }
 
-/// The non-idempotent `for_root` the old contract forbade: every call bumps the
-/// counter. Under CORE-I9 it may be impure, because it runs once.
 fn for_root() -> CountingSetup {
     CountingSetup {
         serial: BUILDS.fetch_add(1, Ordering::SeqCst),
@@ -66,8 +57,6 @@ async fn a_dynamic_import_is_evaluated_once_on_the_async_path() {
         1,
         "collect + register must share one construction of the import expression",
     );
-    // Same value across both phases: whatever `collect` saw is what `register`
-    // installed. A re-evaluated expression would show two different serials.
     let collected: Arc<Collected> = app.container().get().expect("collect ran");
     let installed: Arc<Installed> = app.container().get().expect("register ran");
     assert_eq!(collected.0, installed.0);
@@ -95,8 +84,6 @@ struct SyncModule;
 
 #[test]
 fn a_dynamic_import_is_evaluated_once_on_the_sync_path() {
-    // `App::new` collects first, as the async builder does, so the value is
-    // parked and `register` consumes it — still exactly once.
     BUILDS.store(0, Ordering::SeqCst);
 
     let app = App::new::<SyncModule>().expect("the module boots");
@@ -131,8 +118,6 @@ struct TwoDynamicImportsModule;
 
 #[tokio::test]
 async fn two_dynamic_imports_in_one_module_keep_their_own_values() {
-    // Parked values are keyed by (module, import index): two sites in the same
-    // module must not clobber each other, and each must reach `register`.
     let app = App::builder()
         .module::<TwoDynamicImportsModule>()
         .build()
@@ -166,9 +151,6 @@ impl DynamicModule for MixedSetup {
 #[module]
 struct StaticLeaf;
 
-// A static import *before* the dynamic one: the collect and register passes
-// must agree on the dynamic import's index despite the static entry sharing
-// the same list.
 #[module(imports = [StaticLeaf, MixedSetup {}, StaticLeaf])]
 struct MixedImportsModule;
 
@@ -190,8 +172,6 @@ async fn a_dynamic_import_after_a_static_one_still_resolves_its_site() {
     );
 }
 
-/// What a module's own import opens: its factory is queued only when that
-/// module is collected.
 struct Opened;
 
 struct OpensModule;
@@ -209,7 +189,6 @@ impl Module for OpensModule {
 #[module(imports = [OpensModule])]
 struct OpeningModule;
 
-/// A setup that imports its module in its register alone.
 struct UncollectingSetup;
 
 impl DynamicModule for UncollectingSetup {

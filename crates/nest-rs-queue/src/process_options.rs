@@ -22,10 +22,7 @@ pub struct Throttle {
 
 impl Throttle {
     /// The shortest window a throttle counts over: a millisecond, the resolution
-    /// of the coarsest store the framework ships — Redis's `PEXPIRE` — and the
-    /// same floor as `nest_rs_throttler::Throttle::MIN_WINDOW`, the other rate
-    /// the framework declares. A shorter window limits nothing, and the boot
-    /// refuses one ([`QueueWorker`](crate::QueueWorker)).
+    /// of Redis's `PEXPIRE`. The boot refuses a shorter one.
     pub const MIN_WINDOW: Duration = Duration::from_millis(1);
 
     /// `limit` attempt starts per `window`.
@@ -46,10 +43,6 @@ impl Throttle {
 
 /// Everything a `#[process]` method declares besides its queue — built by the
 /// decorator, read by a backend.
-///
-/// Every setter is `const`, so the decorator writes one expression the
-/// link-time inventory can hold, and a key added later is one more setter
-/// rather than one more field in every literal that builds the value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ProcessOptions {

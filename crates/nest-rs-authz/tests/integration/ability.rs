@@ -1,8 +1,5 @@
-//! The ability engine exercised through its public API: `condition_for` (the
-//! SeaORM query pre-filter), `can`/`can_class` (the access gate), and
-//! `permitted_fields`/`mask`/`mask_many` (response field-masking). No live
-//! database — `condition_for` is rendered to SQL and the in-memory checks run
-//! against a hand-built `Model`.
+//! The ability engine through its public API: `condition_for` is rendered to
+//! SQL, the in-memory checks run against a hand-built `Model`.
 
 use std::any::TypeId;
 
@@ -10,8 +7,6 @@ use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, FieldSet};
 
-// A throwaway SeaORM entity so the engine can be exercised without a live
-// database.
 mod widget {
     use sea_orm::entity::prelude::*;
 
@@ -65,7 +60,6 @@ fn condition_for_scopes_the_query_to_the_org() {
 
 #[test]
 fn no_grant_matches_nothing() {
-    // No `can` rule for Delete → the pre-filter must exclude every row.
     let sql = widget::Entity::find()
         .filter(ability(7, false).condition_for::<widget::Entity>(Action::Delete))
         .build(DatabaseBackend::Postgres)
@@ -82,8 +76,6 @@ fn can_class_is_the_coarse_gate() {
     assert!(user.can_class(Action::Read, TypeId::of::<widget::Entity>()));
     assert!(!user.can_class(Action::Delete, TypeId::of::<widget::Entity>()));
 
-    // `Manage` is the action wildcard, so an admin passes the gate for any
-    // verb on the subject.
     let admin = ability(7, true);
     assert!(admin.can_class(Action::Delete, TypeId::of::<widget::Entity>()));
 }
@@ -133,15 +125,12 @@ fn mask_strips_unpermitted_fields_from_the_body() {
 fn mask_many_drops_unauthorized_instances() {
     let user = ability(7, false);
     let rows = [model(7), model(8), model(7)];
-    // Only the org-7 rows survive the instance check; with no field
-    // restriction every field is kept.
     let masked = user.mask_many::<widget::Entity>(Action::Read, rows.iter());
     assert_eq!(masked.len(), 2);
 }
 
 #[test]
 fn unrestricted_grant_permits_every_field() {
-    // No `.fields(...)` → every field is permitted.
     assert!(matches!(
         ability(7, false).permitted_fields::<widget::Entity>(Action::Read, &model(7)),
         FieldSet::All

@@ -1,8 +1,5 @@
-//! A mount path is its owner's exclusive namespace. Two controllers on one
-//! prefix — or two self-mounted endpoints on one path — make poem panic deep in
-//! route assembly (`duplicate path: <prefix>/*--poem-rest`). `configure` catches
-//! both first and fails boot naming the two owners, so a wiring mistake reads
-//! like every other nestrs boot error.
+//! A mount path is its owner's exclusive namespace: `configure` fails boot
+//! naming both owners before poem would panic on the duplicate path.
 
 use nest_rs_core::{App, Container, ContainerBuilder, Transport, module};
 use nest_rs_http::{HttpEndpointMeta, HttpTransport, controller, routes};
@@ -19,7 +16,6 @@ impl UsersController {
     }
 }
 
-/// A second controller deliberately claiming the same prefix.
 #[controller(path = "/users")]
 struct ShadowController;
 
@@ -34,12 +30,8 @@ impl ShadowController {
 #[module(providers = [UsersController, ShadowController])]
 struct DuplicatePrefixModule;
 
-/// Two self-mounted endpoints sharing one path — the shape `#[gateway]` emits,
-/// and the shape a *cross-family* clash makes (an `#[mcp]` mount beside a
-/// gateway on the same path). Two `#[mcp]` hosts on one path are **not** this
-/// case: `nest-rs-mcp` aggregates them behind a single `HttpEndpointMeta`, so
-/// they never reach this check. Attached by hand here because the rule belongs
-/// to the transport, not to whichever surface happens to emit the meta.
+/// Attached by hand: two `#[mcp]` hosts on one path aggregate behind one
+/// `HttpEndpointMeta` and never reach this check.
 struct FirstEndpoint;
 struct SecondEndpoint;
 
@@ -70,8 +62,6 @@ impl nest_rs_core::Discoverable for SecondEndpoint {
 #[module(providers = [FirstEndpoint, SecondEndpoint])]
 struct DuplicateEndpointModule;
 
-/// A self-mount claiming a path a **controller** already owns — the shape
-/// `#[controller(path = "/chat")]` beside `#[gateway(path = "/chat")]` makes.
 struct ChatSocket;
 
 impl nest_rs_core::Discoverable for ChatSocket {
@@ -118,8 +108,6 @@ async fn two_controllers_on_one_prefix_fail_boot_naming_both() {
 
 #[tokio::test]
 async fn two_self_mounts_on_one_path_fail_boot_instead_of_panicking() {
-    // The regression this pins: a second self-mount on one path used to reach
-    // poem's route assembly and panic there, with no mention of either owner.
     let app = App::builder()
         .module::<DuplicateEndpointModule>()
         .build()
@@ -135,12 +123,6 @@ async fn two_self_mounts_on_one_path_fail_boot_instead_of_panicking() {
 
 #[tokio::test]
 async fn a_controller_and_a_self_mount_on_one_path_fail_boot_instead_of_panicking() {
-    // The regression this pins: the exclusivity rule was enforced per family —
-    // controllers against controllers, self-mounts against self-mounts — in two
-    // maps that never met. A `#[controller(path = "/x")]` beside a
-    // `#[gateway(path = "/x")]` passed both checks, logged both mounts as
-    // successful, and then hit the very poem panic the check exists to prevent:
-    // `panicked at poem/src/route/mod.rs: duplicate path: /x`.
     let app = App::builder()
         .module::<ControllerVersusEndpointModule>()
         .build()
@@ -160,9 +142,6 @@ async fn a_controller_and_a_self_mount_on_one_path_fail_boot_instead_of_panickin
 
 #[tokio::test]
 async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
-    // `format!("a {} endpoint", label())` made the message a tautology —
-    // "a ws endpoint and a ws endpoint both mount there" — useless with several
-    // gateways in one app, while the controller twin named both owners.
     let app = App::builder()
         .module::<DuplicateEndpointModule>()
         .build()
@@ -176,15 +155,8 @@ async fn a_self_mount_collision_names_the_owners_not_just_the_kind() {
     );
 }
 
-/// Two spellings of one mount are one owner.
-///
-/// `Route::nest` appends a trailing `/` internally, so `/x` and `/x/` collapse
-/// to one key inside poem and route assembly panics on the duplicate. Compared
-/// raw, they are two distinct strings — which walks straight past the boot check
-/// written to keep "neither reaches the opaque poem internal". Normalizing at
-/// `HttpEndpointMeta::new` is what makes the check see them, and it covers every
-/// self-mount at once: a GraphQL path is deployment input
-/// (`NESTRS_GRAPHQL__PATH`), not a literal an author controls.
+// `Route::nest` appends a `/`, so `/x` and `/x/` are one key inside poem and
+// panic as duplicates unless canonical before the boot check compares them.
 #[test]
 fn a_mount_path_is_canonical_before_anything_compares_it() {
     let mount = |path: &'static str| HttpEndpointMeta::new(path, "probe", |_c, r| r);

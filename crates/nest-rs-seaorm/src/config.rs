@@ -1,10 +1,3 @@
-//! [`SeaOrmConfig`] — the crate's one `#[config]`: the pool every SeaORM
-//! binding shares. Namespace `seaorm`, read off the path like every other
-//! config's: the pool is the crate's own subject, so it lives at the crate root
-//! under the crate's word, and `<PREFIX>_SEAORM__URL` says which crate parses it.
-//! The `from_env` mapping below is the single source of truth for which
-//! `<PREFIX>_SEAORM__*` variable feeds each field.
-
 use std::time::Duration;
 
 use std::str::FromStr;
@@ -15,12 +8,8 @@ use nest_rs_config::{
 use sea_orm::ConnectOptions;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
 
-/// The acquire budget's range, the variable that sets it, and why. SeaORM hands
-/// it to sqlx as the pool's `acquire_timeout`: how long the boot waits for its
-/// first connection, and every query after it for one from the pool. sqlx adds
-/// it to an `Instant` unchecked, so a value past what a clock holds panicked the
-/// boot inside sqlx naming nothing — the ceiling is what keeps every value the
-/// boot accepts one the library accepts too.
+/// The acquire budget's range: sqlx adds it to an `Instant` unchecked, so the
+/// ceiling keeps it short of a panic inside sqlx.
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "CONNECT_TIMEOUT_SECS",
     "SeaOrmConfig::connect_timeout_secs",
@@ -37,10 +26,8 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
-/// The statement bound's range, the variable that sets it, and why. Postgres
-/// cancels a statement past it (`statement_timeout`), so a row lock or a query
-/// plan gone wrong ends as the database's own error rather than a request's
-/// deadline or a job's silence.
+/// The statement bound's range: Postgres cancels a statement past it
+/// (`statement_timeout`).
 pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "STATEMENT_TIMEOUT_SECS",
     "SeaOrmConfig::statement_timeout_secs",
@@ -57,15 +44,12 @@ pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 /// The statement bound when none is set: under the authentication guard's
-/// 20 s net and the HTTP edge's default 30 s deadline, as the acquire budget
-/// is, so a statement past it is said as the database's own cancellation.
+/// 20 s net and the HTTP edge's default 30 s deadline.
 const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The acquire budget when none is set — Redis's — below the authentication
-/// guard's 20 s net and the HTTP edge's default 30 s deadline, which sqlx's own
-/// 30 s reached, so a pool that ran dry was said as their timeout. The edge's
-/// deadline is the deployment's to lower, so it is ordered by default only,
-/// never held as a net.
+/// The acquire budget when none is set: under the authentication guard's 20 s
+/// net and the HTTP edge's default 30 s deadline, so a dry pool answers with its
+/// own error.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
@@ -86,12 +70,11 @@ pub struct SeaOrmConfig {
     /// 20 s — which is every guard's once
     /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) binds `Repo`.
     pub connect_timeout_secs: Option<u64>,
-    /// How long one statement runs before Postgres cancels it — its
-    /// `statement_timeout` — in whole seconds, from 1 to 3600; `None` waits
-    /// 15 s. It bounds every statement of the app's pool, a job context's
-    /// `BEGIN` / `COMMIT` / `ROLLBACK` included, and the boot refuses it at or
-    /// past the net of a guard whose code reaches the pool, as it refuses
-    /// [`connect_timeout_secs`](Self::connect_timeout_secs). The tools
+    /// How long one statement runs before Postgres cancels it
+    /// (`statement_timeout`), in whole seconds, from 1 to 3600; `None` waits
+    /// 15 s. It bounds every statement of the app's pool, a job's `BEGIN` /
+    /// `COMMIT` / `ROLLBACK` included, and the boot refuses it at or past the net
+    /// of a guard whose code reaches the pool. The tools
     /// ([`connect_from_env`](crate::connect_from_env)) open without it.
     pub statement_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
@@ -100,15 +83,11 @@ pub struct SeaOrmConfig {
     /// Tag a mutating request's commit-time conflict — Postgres `40001`
     /// (`serialization_failure`), `40P01` (`deadlock_detected`), or the
     /// MySQL/SQL-Server analogs (`1213`, `1205`) — as a structured `warn` on
-    /// `nest_rs::orm`, so contention is distinguishable from a generic commit
-    /// error in the logs. Off by default; the response fails closed either way.
+    /// `nest_rs::orm`. Off by default; the response fails closed either way.
     ///
-    /// This observes, it does not retry: replaying a conflict means re-running
-    /// the whole handler, and a handler may already have emitted a
-    /// non-transactional side effect (a queued job, an event, an object write).
-    /// Retrying is the service's call, at a boundary it knows is replayable —
+    /// It never retries: a handler may have emitted a non-transactional side
+    /// effect. Retry at a replayable boundary with
     /// [`retry_on_conflict`](crate::retry::retry_on_conflict).
-    /// `<PREFIX>_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS`.
     pub observe_serialization_conflicts: bool,
 }
 
@@ -213,10 +192,8 @@ impl SeaOrmConfig {
         })
     }
 
-    /// What every connection this config opens shares — the tools' as they
-    /// are: its pool bounds, and TLS verified against the system's authorities
-    /// unless the URL names its own. A tool or a test opening a connection of
-    /// its own opens it with these, and verifies what the app does.
+    /// What every connection this config opens shares: its pool bounds, and TLS
+    /// verified against the system's authorities unless the URL names its own.
     pub fn connect_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new(self.url.clone());
         if let Ok(mode) = self.tls_mode() {
@@ -271,10 +248,6 @@ mod tests {
         );
     }
 
-    /// TLS is never on without its certificate verified: a mode that encrypts
-    /// without verifying — or may — is refused, naming the variable and never
-    /// quoting the URL, which carries the password; a URL naming no mode asks
-    /// for a verified certificate; `disable` is the visible plaintext opening.
     #[test]
     fn tls_is_verified_or_off_and_verified_unless_the_url_says_otherwise() {
         use sea_orm::sqlx::postgres::PgSslMode;
@@ -312,8 +285,6 @@ mod tests {
         }
     }
 
-    /// The pool trusts the system's authorities unless the URL names a file of
-    /// its own: libpq's `system` is the system's too.
     #[test]
     fn the_pool_trusts_the_system_unless_the_url_names_an_authority_file() {
         for (url, system) in [
@@ -346,9 +317,6 @@ mod tests {
         assert_eq!(opts.get_min_connections(), None);
     }
 
-    /// The app's pool bounds every statement, the default included; the tools
-    /// open without the bound, since an operator's migration takes as long as
-    /// its data needs.
     #[test]
     fn the_apps_pool_bounds_its_statements_and_the_tools_do_not() {
         let config = pinned("postgres://localhost/app");
@@ -367,9 +335,6 @@ mod tests {
         );
     }
 
-    /// A statement holds its connection under the authentication guard's net,
-    /// the HTTP edge's deadline and a worker job's, as a query waiting for one
-    /// does.
     #[test]
     fn the_default_statement_bound_sits_below_every_net_a_query_runs_under() {
         assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_authn::AUTHENTICATE_TIMEOUT);
@@ -380,10 +345,6 @@ mod tests {
         assert!(DEFAULT_STATEMENT_TIMEOUT < nest_rs_worker::JOB_TIMEOUT);
     }
 
-    /// A query waits for a pooled connection under the authentication guard's
-    /// net when a strategy resolves an identity, and under the HTTP edge's or a
-    /// worker job's deadline in a handler: the default budget sits below each
-    /// default, so an exhausted pool answers with its own error, never theirs.
     #[test]
     fn the_default_budget_sits_below_every_net_a_query_runs_under() {
         let budget = pinned("postgres://localhost/app")
@@ -456,9 +417,6 @@ mod tests {
         assert!(cfg.observe_serialization_conflicts);
     }
 
-    /// A zero budget reached the pool as a literal zero, so every acquire timed
-    /// out at once and the boot blamed the pool; it is refused naming the
-    /// variable, from the environment or pinned in code, and unset stays unset.
     #[test]
     fn a_zero_connect_timeout_is_refused_from_either_side() {
         let var = nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS");
@@ -492,10 +450,6 @@ mod tests {
         assert_eq!(unset.connect_timeout_secs, None);
     }
 
-    /// config-4r2: the top of the range passed the reader and panicked the boot
-    /// inside sqlx, "overflow when adding duration to instant", naming no
-    /// variable. Past the ceiling it is refused naming the variable, from either
-    /// side.
     #[test]
     fn a_connect_timeout_past_the_ceiling_is_refused_from_either_side() {
         let var = nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS");
@@ -531,7 +485,6 @@ mod tests {
         let cfg =
             SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
                 .expect("ok");
-        // Empty URL ⇒ `SeaOrmModule::for_root` aborts naming the variable.
         assert!(cfg.url.is_empty());
         assert!(cfg.max_connections.is_none());
         assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");

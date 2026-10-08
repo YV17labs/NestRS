@@ -1,22 +1,9 @@
-//! The SDK adopts the framework's ids; it never mints a second pair.
+//! The SDK adopts the framework's ids; it never mints a second pair, which
+//! would name one unit of work twice — once in the logs, once in the exported
+//! trace — with nothing joining them.
 //!
-//! # The duplication this exists to prevent
-//!
-//! An OpenTelemetry SDK generates a trace id and a span id whenever a span is
-//! created. Left alone it would do that here too — and the framework already
-//! decided both, in the kernel, before this crate had a chance to be installed.
-//! The result would be two identifiers for one unit of work: the one on every
-//! log line and in every job envelope, and the one in the exported trace, with
-//! nothing joining them.
-//!
-//! That is precisely the duplication that retiring the framework's homemade
-//! `request_id` removed. Reintroducing it one layer down would be worse, because
-//! it would be invisible: both halves would look correct on their own.
-//!
-//! So the generator is inverted. `nest_rs_core`'s [`operation_span!`] publishes
-//! the ids for the instant a span is created, and this reads them back. What the
-//! backend shows and what the logs say are then the same value by construction
-//! rather than by convention.
+//! `nest_rs_core`'s [`operation_span!`] publishes the ids for the instant a span
+//! is created, and this reads them back.
 //!
 //! [`operation_span!`]: nest_rs_core::operation_span
 
@@ -24,12 +11,8 @@ use opentelemetry::trace::{SpanId, TraceId};
 use opentelemetry_sdk::trace::{IdGenerator, RandomIdGenerator};
 
 /// Takes the framework's ids where the framework opened the span, and falls back
-/// to the SDK's own generator where it did not.
-///
-/// The fallback is not a safety net, it is the correct answer for a span nobody
-/// here opened: a library's internal span, a `#[tracing::instrument]` a developer
-/// wrote inside a handler. Those are genuinely new spans and deserve new ids;
-/// what they inherit — the trace — comes from their parent, as it should.
+/// to the SDK's own generator for a span nobody here opened (a library's, a
+/// `#[tracing::instrument]`).
 #[derive(Debug, Default)]
 pub(crate) struct AdoptFrameworkIds(RandomIdGenerator);
 
@@ -55,9 +38,6 @@ mod tests {
 
     use super::*;
 
-    /// The whole contract: inside an operation span's creation, the SDK is
-    /// handed the framework's ids. Without this the exported trace and the log
-    /// lines name the same request by two different identifiers.
     #[test]
     fn the_frameworks_ids_are_what_the_sdk_receives() {
         let correlation = Correlation::minted(None);
@@ -80,8 +60,6 @@ mod tests {
         );
     }
 
-    /// A span the framework did not open is a real new span — a library's own,
-    /// a `#[tracing::instrument]` inside a handler — and it gets real new ids.
     #[test]
     fn a_span_the_framework_did_not_open_gets_its_own_ids() {
         let generator = AdoptFrameworkIds::default();

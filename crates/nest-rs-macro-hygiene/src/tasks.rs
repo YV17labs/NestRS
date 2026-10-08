@@ -3,20 +3,12 @@
 use nest_rs::core::injectable;
 use nest_rs::schedule::{CronExpression, scheduled};
 
-/// Minimal scheduled host.
 #[injectable]
 pub struct HygieneTasks;
 
 #[scheduled]
 impl HygieneTasks {
-    /// Interval form, carrying every shared key so the trailing named arguments
-    /// are proved on a trigger that owns none of its own. `replicas = "one"` is
-    /// the one that emits a path — `Replicas::One` — through the schedule
-    /// crate's root, and `key`, which only a job firing once takes, emits the
-    /// identity it pins; a method leaving `timeout` out names the default through
-    /// the schedule crate's re-export of `nest_rs_worker`. A scheduled method
-    /// returns `anyhow::Result<()>` by contract, named here through the surface
-    /// re-export.
+    /// Interval form, carrying every shared key.
     #[every(
         "60s",
         timeout = "5m",
@@ -28,17 +20,13 @@ impl HygieneTasks {
         Ok(())
     }
 
-    /// One-shot form, carrying the shared key too: the witness covered three
-    /// of the four sites `transactional` reaches, and the fourth is the one a
-    /// developer meets last.
+    /// One-shot form.
     #[after("1s", transactional = false)]
     async fn warmup(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }
 
-    /// Cron form, with every named argument it takes — `tz` is the trigger's
-    /// own, `transactional` and `replicas` the shared ones, and they parse
-    /// through one list.
+    /// Cron form, with every named argument it takes.
     #[cron(
         CronExpression::EVERY_MINUTE,
         tz = "Europe/Paris",
@@ -49,7 +37,6 @@ impl HygieneTasks {
         Ok(())
     }
 
-    /// A synchronous tick is called without an `.await`.
     #[every("30s")]
     fn sweep(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())

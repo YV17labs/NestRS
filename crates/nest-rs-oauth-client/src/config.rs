@@ -2,11 +2,8 @@
 
 use nest_rs_config::{Config, ConfigService, config};
 
-// No `Debug`: `client_secret` must not leak through a derived format.
-/// Env-driven OAuth2 provider endpoints (namespace `oauth__client`). Every URL/credential
-/// field is required (`length(min = 1)`), so an unconfigured app fails boot
-/// loudly rather than running a broken flow. No `Debug`: `client_secret` must
-/// not leak through a format.
+/// Env-driven OAuth2 provider endpoints (namespace `oauth__client`); every URL and
+/// credential is required. No `Debug`: `client_secret` must not leak through a format.
 #[config(namespace = "oauth__client")]
 #[derive(Clone, Default)]
 pub struct OAuthClientConfig {
@@ -32,8 +29,7 @@ pub struct OAuthClientConfig {
     pub scopes: Vec<String>,
 }
 
-/// A required value holding only whitespace configures nothing, exactly like an
-/// empty one, and is refused the same way.
+/// A required value holding only whitespace is refused like an empty one.
 fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
     if value.trim().is_empty() {
         return Err(validator::ValidationError::new("blank"));
@@ -76,9 +72,6 @@ mod tests {
     fn default_is_invalid_until_every_url_is_filled() {
         let err = OAuthClientConfig::default().validate().unwrap_err();
         let fields = err.field_errors();
-        // Every length-1 validation must trip — including client_secret which
-        // means an unconfigured app fails the boot loudly rather than
-        // accepting the empty default.
         for required in [
             "client_id",
             "client_secret",
@@ -102,9 +95,6 @@ mod tests {
 
     #[test]
     fn each_required_field_is_individually_load_bearing() {
-        // Each of the six URL/credential fields blocks validation on its own —
-        // a regression that allowed any of them to default to "" would let an
-        // app boot with broken OAuth flow.
         type Setter = fn(&mut OAuthClientConfig);
         let setters: [(Setter, &str); 6] = [
             (|c| c.client_id = String::new(), "client_id"),
@@ -125,8 +115,6 @@ mod tests {
         }
     }
 
-    /// Whitespace is not a credential or a URL: each required field holding
-    /// only whitespace fails validation naming that field, like an empty one.
     #[test]
     fn a_whitespace_only_required_field_is_refused_like_an_empty_one() {
         type Setter = fn(&mut OAuthClientConfig);

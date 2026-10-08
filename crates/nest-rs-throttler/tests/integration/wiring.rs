@@ -1,13 +1,6 @@
 //! What an app has to write to rate-limit a route — the boot half of the
-//! contract, as opposed to the counting behaviour the rest of this suite covers.
-//!
-//! The class this closes: the documented wiring is two steps — import
-//! `ThrottlerModule::for_root(None)`, bind `#[use_guards(ThrottlerGuard)]` —
-//! and those two steps used to fail the boot. `#[use_guards]` puts the guard
-//! under the access contract, so the *controller's* module owed a provider for
-//! it; no step supplied one, and a **dynamic** import (`for_root`) contributes
-//! only global infrastructure, so no amount of importing could. The module now
-//! registers the guard alongside the store it reads.
+//! contract: `ThrottlerModule::for_root(None)` plus `#[use_guards(ThrottlerGuard)]`,
+//! nothing in `providers`.
 
 use std::sync::Arc;
 
@@ -31,10 +24,6 @@ impl LimitedController {
 #[module(providers = [LimitedController])]
 struct LimitedModule;
 
-/// The composition site the [Rate limiting] page describes: the throttler goes
-/// in the app's imports, the guard on the controller. Nothing in `providers`.
-///
-/// [Rate limiting]: https://nestrs.dev/rate-limiting/
 #[module(
     imports = [
         HttpModule::for_root(HttpConfig { port: 0, ..Default::default() }),
@@ -52,8 +41,8 @@ async fn the_documented_two_steps_boot() {
         .await
         .expect("importing ThrottlerModule is the whole wiring");
 
-    // The guard really is resolvable — the access graph passing is necessary
-    // but not sufficient (a factory could register the wrong key).
+    // The access graph passing is not enough: a factory could register the wrong
+    // key.
     assert!(
         app.container().get::<ThrottlerGuard>().is_some(),
         "ThrottlerModule registers the guard, not only its store",
@@ -64,10 +53,8 @@ async fn the_documented_two_steps_boot() {
     );
 }
 
-// A guard nothing provides, injecting a trait object — the shape every guard,
-// store and bridge takes. Its dependency has no name the graph can render, so
-// the boot error used to say `<unnamed dependency>`, twice, including in the
-// fix it suggested.
+// A guard nothing provides, injecting a trait object, whose dependency has no
+// name the graph can render.
 trait Nowhere: Send + Sync {}
 
 #[injectable]
@@ -110,11 +97,8 @@ struct UnwiredModule;
 )]
 struct UnwiredAppModule;
 
-/// An attribute-bound layer that no module provides must be **named**. The
-/// access-graph message is the framework's best wiring diagnostic; a layer is
-/// reached by `Container::get::<P>` rather than by an `#[inject]` field, and
-/// the names list used to cover only the fields — so every guard, filter and
-/// interceptor fell off the end of it and printed as a placeholder.
+/// A layer is reached by `Container::get::<P>` rather than an `#[inject]`
+/// field, so it must be named apart from the fields.
 #[tokio::test]
 async fn a_layer_no_module_provides_is_named_in_the_boot_error() {
     let Err(err) = App::builder().module::<UnwiredAppModule>().build().await else {

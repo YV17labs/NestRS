@@ -24,10 +24,8 @@ pub enum CliError {
 
     /// `g entity` on a feature whose entity still lives in `entity.rs`.
     ///
-    /// One role, one file per folder: a module keeps either the lone
-    /// `entity.rs` or an `entities/` directory, never both. The move is left to
-    /// the developer on purpose — see the refusal's reasoning in
-    /// `commands::generate::entity`.
+    /// A module keeps either the lone `entity.rs` or an `entities/` directory; the
+    /// move is left to the developer (`commands::generate::entity`).
     #[error(
         "feature `{feature}` keeps its entity in `entity.rs`, and a module holds either one \
          `entity.rs` or an `entities/` folder — never both. Move the existing one first, then \

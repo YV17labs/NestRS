@@ -1,16 +1,6 @@
 //! [`Queue`] — the compile-time identity of a queue.
 //!
-//! A queue's name would otherwise be a bare string repeated on both sides, one
-//! literal on the consumer and another at the push, with nothing linking the
-//! two nor the payload either side agrees on. [`Queue`] makes that identity a
-//! **type** carrying both, declared once at the feature port with the
-//! [`queue`](macro@crate::queue) attribute, so a typo or a mismatched payload is a
-//! compile error rather than a job that never drains.
-//!
-//! **One queue per declaration.** A queue per runtime key — a prefix every key
-//! extends into a queue of its own — is not offered: the attribute takes a name
-//! and a job type and nothing else, and a key that varies at runtime rides in
-//! the job.
+//! One queue per declaration: a key that varies at runtime rides in the job.
 
 use crate::Job;
 

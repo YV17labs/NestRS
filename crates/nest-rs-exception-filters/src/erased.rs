@@ -1,7 +1,5 @@
-//! Type-erased dispatch — the runtime sees `dyn ExceptionFilterErased`, the
-//! concrete typed exception lives in the impl. Users write [`ExceptionFilter`];
-//! the blanket impl below exposes it as `dyn ExceptionFilterErased` for the
-//! catch chains on every transport.
+//! Type-erased dispatch: the blanket impl exposes every [`ExceptionFilter`] as
+//! `dyn ExceptionFilterErased` for the catch chains.
 
 use std::any::{TypeId, type_name};
 use std::future::Future;
@@ -55,9 +53,8 @@ where
     }
 }
 
-// Manual forward, not `#[async_trait]`: the macro would wrap the inner
-// (already boxed) future in a second box, taxing every call made through an
-// `Arc<dyn ExceptionFilterErased>` without `.as_ref()`.
+// Manual forward, not `#[async_trait]`: the macro would box the already-boxed
+// future a second time on every call through an `Arc<dyn ExceptionFilterErased>`.
 impl<T: ExceptionFilterErased + ?Sized> ExceptionFilterErased for Arc<T> {
     fn exception_type_id(&self) -> TypeId {
         (**self).exception_type_id()

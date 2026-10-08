@@ -5,13 +5,8 @@ use std::time::Duration;
 
 /// At most `limit` requests per `window`, per client.
 ///
-/// **Its window is never under a millisecond**, by construction: the fields are
-/// private and [`new`](Self::new) refuses one. A zero window reset every bucket
-/// on every hit, so the count never passed one and every request was allowed at
-/// any limit — a rate limiter guarding a login failing open without a word —
-/// and on Redis, whose windows are counted in milliseconds, so did any window
-/// under one. The same shape as `nest_rs_queue::Throttle`, the other rate the
-/// framework declares, whose window under a millisecond is refused at boot.
+/// **Its window is never under a millisecond**, by construction: a zero window
+/// resets every bucket on every hit, so every request would be allowed.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Throttle {
@@ -20,10 +15,8 @@ pub struct Throttle {
 }
 
 /// The port's default rate limit when neither config nor a route pins one:
-/// 60/minute. Deliberately **not** `Throttle`'s `Default`: the guard carries the
-/// resolved policy as an injected dependency, and a `Default` here is exactly
-/// what would let a guard built outside `ThrottlerModule::for_root` run the
-/// wrong limit without a word.
+/// 60/minute. Deliberately **not** `Throttle`'s `Default`, so a guard built
+/// outside `ThrottlerModule::for_root` cannot run it silently.
 pub const DEFAULT_THROTTLE: Throttle = Throttle::per_minute(60);
 
 impl Throttle {
@@ -35,12 +28,9 @@ impl Throttle {
     ///
     /// # Panics
     ///
-    /// When `window` is under [`MIN_WINDOW`](Self::MIN_WINDOW), which limits
-    /// nothing. It is a value written in code — a `#[meta(Throttle::new(..))]`
-    /// or a `const` — so the refusal is a compile error in a `const` and a
-    /// failed boot at the route that declares it, never a limiter that silently
-    /// allows everything. A window a deployment sets is read through
-    /// `ThrottlerConfig`, which refuses it by name instead.
+    /// When `window` is under [`MIN_WINDOW`](Self::MIN_WINDOW): a compile error in
+    /// a `const`, a failed boot at the route that declares it. A window a
+    /// deployment sets is refused by `ThrottlerConfig` instead.
     pub const fn new(limit: u32, window: Duration) -> Self {
         assert!(
             window.as_nanos() >= Self::MIN_WINDOW.as_nanos(),

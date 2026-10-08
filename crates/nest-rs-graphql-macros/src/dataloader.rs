@@ -71,9 +71,6 @@ fn dataloader_for_method(
         "{loader_name}: no provider registered for `{}`",
         quote!(#self_ty)
     );
-    // Doc on the generated struct so the correct hand-typed name is
-    // discoverable at the use site (a wrong name is already a type error; this
-    // makes the right one obvious). Naming convention: `{Owner}{PascalMethod}`.
     let loader_doc = format!(
         "Auto-generated DataLoader for `{base}::{method_name}`, emitted by \
          `#[dataloader]`. Its name follows the framework convention \
@@ -83,9 +80,8 @@ fn dataloader_for_method(
          through `Repo` (ability-scoped, per request)."
     );
 
-    // By path, never `self.0.method(..)`: the loader holds its owner in an `Arc`,
-    // and method lookup tries the `Arc` before it derefs, so a trait method of
-    // the same name implemented for `Arc<T>` ran in the batch's place.
+    // By path, never `self.0.method(..)`: method lookup tries the `Arc` first, so
+    // a same-named trait method on `Arc<T>` would run instead.
     let call =
         nest_rs_codegen::await_if_async(sig, quote! { <#self_ty>::#method_name(&*self.0, __keys) });
     let (error_ty, load_body) = match error_ty {
@@ -96,8 +92,6 @@ fn dataloader_for_method(
         ),
     };
 
-    // The method's conditions travel to every item emitted for it: a loader for
-    // a method compiled out would name a method that is not there.
     Ok(quote! {
         #(#cfgs)*
         #[doc = #loader_doc]
@@ -130,14 +124,10 @@ fn dataloader_for_method(
         ::nest_rs_graphql::inventory::submit! {
             ::nest_rs_graphql::GraphqlLoaderRegistration {
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
-                // Built per request from the assembled container (so the
-                // module's import order is irrelevant).
                 seed: |__container, __batches, __request| {
                     let __loader = <#loader_name>::from_container(__container);
-                    // Spawner re-installs the request's ambient executor +
-                    // ability around each batch — a batch runs on a spawned
-                    // task where task-locals are gone — and runs it as the
-                    // mount's carried work, stopped with the transport.
+                    // A batch runs on a spawned task where task-locals are gone:
+                    // the spawner re-installs the executor and ability.
                     __request.data(
                         ::nest_rs_graphql::async_graphql::dataloader::DataLoader::new(
                             __loader,

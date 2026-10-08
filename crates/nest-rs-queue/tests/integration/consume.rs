@@ -53,9 +53,6 @@ async fn an_enveloped_job_reaches_its_method_through_an_attempt() {
     );
 }
 
-/// A value with no envelope — a pre-envelope producer's, or a foreign one's —
-/// still runs, and says so: running it quietly is the same defect as dropping
-/// it, one incident later, and the warn names the queue left to drain.
 #[tokio::test]
 async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -87,7 +84,6 @@ async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
         event.fields,
     );
 
-    // A retry reopens the same stored value; it is not a second legacy job.
     let container = Container::builder().provide(TranscodeProcessor).build();
     consume::attempt(
         method("TranscodeProcessor::transcode"),
@@ -106,9 +102,6 @@ async fn an_unversioned_payload_runs_and_warns_naming_its_queue() {
     );
 }
 
-/// Two deterministic failures the handler reports rather than panics on, so the
-/// job reaches the dead list and the worker keeps draining: a provider no
-/// reachable module registers, and a payload that no longer decodes as the job.
 #[tokio::test]
 async fn a_missing_provider_and_an_undecodable_payload_dead_letter_without_panicking() {
     let missing = consume::attempt(
@@ -173,11 +166,6 @@ impl ChargeProcessor {
     }
 }
 
-/// A payload that does not decode is dead-lettered naming the queue, where the
-/// decode failed and what kind of value it found — never the value. serde's own
-/// sentence quoted it, into the error-level dead-letter line and the backend's
-/// dead-letter record: a field whose type changed between a producer and an
-/// older worker leaked whatever it held.
 #[tokio::test]
 async fn an_undecodable_payload_is_dead_lettered_without_its_values() {
     for (payload, said) in [
@@ -289,12 +277,6 @@ async fn receipt_attempt(
     (outcome, logs)
 }
 
-/// A decode the *body* does — not the one the decorator does for the job — is
-/// said without its value on every line and in the dead-letter record, whichever
-/// shape the handler returns it in. anyhow's own box hid serde's error from the
-/// chain, so the dead-letter line and record quoted the secret; serde's error
-/// returned directly was said twice, raw and then reported; and the record of a
-/// `.context(…)` kept the context alone.
 #[tokio::test]
 async fn a_decode_failure_a_handler_returns_is_said_without_its_value_in_every_shape() {
     for (method_name, queue, said) in [
@@ -369,8 +351,6 @@ impl TrimProcessor {
     }
 }
 
-/// `Piped<P, T>` on a job argument: the queue analog of the HTTP and GraphQL
-/// form, stripped by the decorator, run by the attempt before the body.
 #[tokio::test]
 async fn a_piped_job_argument_runs_its_pipe_before_the_handler() {
     let mut delivery = Delivery::new(
@@ -414,10 +394,6 @@ impl IdListProcessor {
     }
 }
 
-/// A list a pipe refuses is dead-lettered without the item it refused, in the
-/// record an adapter keeps and on every line. `ParseArray`'s refusal quoted the
-/// item, and the attempt files a refusal as the dead-letter reason, so a secret
-/// sent where an id belongs reached the error-level line and the record.
 #[tokio::test]
 async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -437,7 +413,6 @@ async fn a_list_a_pipe_refuses_is_dead_lettered_without_the_refused_item() {
     let AttemptOutcome::DeadLetter(error) = outcome else {
         panic!("a refusal repeats on every attempt, so it dead-letters: {outcome:?}");
     };
-    // The record an adapter keeps, and the details beside it.
     let recorded = format!("{} {error:?}", nest_rs_core::error_message(&error));
     assert!(
         !recorded.contains("sk_live"),
@@ -484,10 +459,7 @@ impl SignupProcessor {
     }
 }
 
-/// A validation failure a handler returns is said without the value it refused,
-/// on the retry's line, on the dead letter's and in the record an adapter
-/// keeps. Each renders the error's whole chain, and validator's own `Display`
-/// prints every rule's parameters, the submitted value among them.
+/// validator's own `Display` prints every rule's parameters, the submitted value among them.
 #[tokio::test]
 async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_value() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -552,9 +524,6 @@ async fn settle(why: nest_rs_worker::Unhonoured) -> AttemptOutcome {
     .await
 }
 
-/// The classification reaches the retry budget. It used to not: every
-/// unsettleable attempt was retried, so a commit failing identically on every
-/// attempt burned the whole budget replaying the job body before dead-lettering.
 #[tokio::test]
 async fn an_attempt_its_context_could_not_settle_carries_the_classification() {
     let transient = settle(nest_rs_worker::Unhonoured::retryable(
@@ -597,9 +566,6 @@ impl FlakyProcessor {
     }
 }
 
-/// The budget is the port's: `retries = 2` is two re-runs after the first
-/// attempt, and the third failure dead-letters — on every backend alike, since
-/// no adapter counts.
 #[tokio::test]
 async fn a_retryable_failure_runs_again_while_the_budget_lasts_then_dead_letters() {
     let container = Container::builder().provide(FlakyProcessor).build();
@@ -656,10 +622,6 @@ impl StuckProcessor {
     }
 }
 
-/// A driver stops an attempt by dropping it — a drain whose window closed on
-/// it. The attempt was a unit of work all the same: it files its `queue.job`
-/// line once, `cancelled`, in the job's trace, and no dead letter or retry is
-/// said for it — what happens to the job next is the driver's.
 #[tokio::test]
 async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -692,7 +654,6 @@ async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace(
         "the line carries the job's trace: {line:#?}"
     );
     assert_eq!(line.trace_id, span.field("trace_id"), "{line:#?}");
-    // The span exports what the line files: the attempt did not complete.
     assert_eq!(
         span.field("error.type").as_deref(),
         Some(nest_rs_core::operation_log::CANCELLED),
@@ -739,12 +700,6 @@ async fn two_attempts(value: serde_json::Value) -> nest_rs_testing::LogCapture {
     logs
 }
 
-/// An operator follows a retried job by its `trace_id`. A value carrying no
-/// usable trace context — no envelope, an envelope naming only its actor, a
-/// corrupt `traceparent` — has its trace minted at the first attempt, and every
-/// later attempt runs as a child of that one: one trace per delivery, never one
-/// per attempt. Every line an attempt files reads the same ids, the early ones
-/// included.
 #[tokio::test]
 async fn every_attempt_at_a_delivery_without_a_usable_trace_runs_in_the_first_attempts_trace() {
     let cases = [
@@ -805,9 +760,6 @@ async fn every_attempt_at_a_delivery_without_a_usable_trace_runs_in_the_first_at
     }
 }
 
-/// The contrast: a job whose envelope carried the producer's trace continues it
-/// at every attempt, each a child of the enqueue — never of an earlier attempt —
-/// and warns about no key of it.
 #[tokio::test]
 async fn every_attempt_at_a_continued_delivery_is_a_child_of_the_enqueue() {
     let enqueue = nest_rs_core::Correlation::minted(None);
@@ -834,11 +786,6 @@ async fn every_attempt_at_a_continued_delivery_is_a_child_of_the_enqueue() {
     );
 }
 
-/// Our push never writes a `traceparent` that does not parse or an `actor_id`
-/// that names nobody, so an envelope carrying one was written around the producer
-/// or damaged. The job still runs, under a trace of its own and for no actor, and
-/// the line saying so — naming the keys in a field of its own, never one called
-/// `actor_id` — is filed once per delivery, inside the attempt's trace.
 #[tokio::test]
 async fn an_envelope_carrying_an_unusable_trace_context_runs_and_says_so_once() {
     let logs = two_attempts(json!({
@@ -883,9 +830,6 @@ async fn an_envelope_carrying_an_unusable_trace_context_runs_and_says_so_once() 
     assert_eq!(spans[0].field("actor_id"), None, "a number names no actor");
 }
 
-/// An envelope continuing its trace with an actor that names nobody — not a
-/// string, or empty, which the kernel refuses to record — runs as a child of the
-/// enqueue and for no actor, and the line says only that.
 #[tokio::test]
 async fn a_usable_trace_beside_an_actor_naming_nobody_says_only_what_the_job_lost() {
     for (case, actor) in [("a number", json!(7)), ("an empty string", json!(""))] {
@@ -922,8 +866,6 @@ async fn a_usable_trace_beside_an_actor_naming_nobody_says_only_what_the_job_los
     }
 }
 
-/// A vendor state that cannot be adopted beside a usable trace is dropped, as the
-/// specification allows — and said: the job continues its trace without it.
 #[tokio::test]
 async fn an_unusable_tracestate_beside_a_usable_trace_is_dropped_and_said() {
     let enqueue = nest_rs_core::Correlation::minted(None);
@@ -974,12 +916,6 @@ async fn two_refiled_attempts(
     (logs, refiled)
 }
 
-/// A job whose trace its first attempt minted keeps that trace on a backend
-/// that re-files every attempt — and the later attempts still say they were not
-/// continued from the producer, and are children of the first attempt, exactly
-/// as on a backend running the budget inside one delivery. They said
-/// `continued_trace=true` from attempt 2: the re-filed `traceparent` could not be
-/// told from a producer's.
 #[tokio::test]
 async fn a_minted_trace_refiled_for_a_later_attempt_is_never_read_as_the_producers() {
     for (case, value) in [
@@ -1013,7 +949,6 @@ async fn a_minted_trace_refiled_for_a_later_attempt_is_never_read_as_the_produce
         }
     }
 
-    // The contrast: a producer's trace re-filed stays the producer's.
     let enqueue = nest_rs_core::Correlation::minted(None);
     let (logs, refiled) = two_refiled_attempts(json!({
         "v": WIRE_FORMAT_VERSION,
@@ -1031,9 +966,6 @@ async fn a_minted_trace_refiled_for_a_later_attempt_is_never_read_as_the_produce
     }
 }
 
-/// The keys a delivery said it could not use are not re-filed for the next
-/// attempt, so the warn naming them is filed once per job — on a backend that
-/// makes each attempt a delivery of its own, it was filed at every attempt.
 #[tokio::test]
 async fn the_keys_a_delivery_could_not_use_are_said_once_per_job_not_per_attempt() {
     let enqueue = nest_rs_core::Correlation::minted(None);
@@ -1096,10 +1028,6 @@ async fn attempt_newer(delivery: &mut Delivery) -> AttemptOutcome {
     consume::attempt(method("FlakyProcessor::flaky"), delivery, container).await
 }
 
-/// A newer release's envelope that adds a key of its own — what a later
-/// version may do, keeping `id` and the trace as they are spelled here — is
-/// still that release's job: handed back unread under its id, never opened as
-/// a foreign payload and run, nor dead-lettered under an id of its own.
 #[tokio::test]
 async fn a_newer_releases_job_carrying_a_key_this_release_never_wrote_is_handed_back() {
     let id = fresh_job_id();
@@ -1121,13 +1049,6 @@ async fn a_newer_releases_job_carrying_a_key_this_release_never_wrote_is_handed_
     assert_eq!(delivery.retry_envelope().into_json(), stored, "as stored");
 }
 
-/// A job a newer release sealed runs nothing here and spends no attempt while
-/// it is within the patience: it is handed back as it was stored, for a
-/// consumer of that release, under the id its push returned — and the delivery
-/// says so once, naming both versions and how long the job has waited, in the
-/// trace the newer producer sealed. It used to be dead-lettered under an id
-/// minted for the delivery, so a rolling deploy lost every such job an old
-/// replica fetched; and its line used to carry no trace at all.
 #[tokio::test]
 async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1190,11 +1111,6 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience(
     );
 }
 
-/// A newer release's job that has waited unread past the patience — its
-/// rollout stopped, its producers rolled back — is dead-lettered rather than
-/// handed back forever: said once at `error`, naming both versions and the
-/// wait, with its unit line, in the job's own trace — and the dead letter's
-/// sentence names both versions too, for whoever reads the dead letters.
 #[tokio::test]
 async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_past_the_patience() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1257,9 +1173,6 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
     );
 }
 
-/// A backend that keeps no record of how long it handed a job back has the port
-/// count from the job's push, read off its id: a job pushed a moment ago is
-/// handed back, one pushed in 2023 is dead-lettered.
 #[tokio::test]
 async fn a_newer_release_job_on_a_backend_keeping_no_record_is_aged_from_its_push() {
     let queue = || QueueName::new("transcode").expect("a valid name");
@@ -1275,10 +1188,6 @@ async fn a_newer_release_job_on_a_backend_keeping_no_record_is_aged_from_its_pus
     ));
 }
 
-/// A newer release's job naming no id this release reads cannot be followed
-/// from one delivery to the next — every delivery runs under an id of its own —
-/// so no wait for it can be counted, and handing it back would hand it back
-/// forever: it is dead-lettered at once, saying why.
 #[tokio::test]
 async fn a_newer_release_job_naming_no_id_is_dead_lettered_at_once() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1304,8 +1213,6 @@ async fn a_newer_release_job_naming_no_id_is_dead_lettered_at_once() {
     );
     assert_eq!(said.field("waited_ms"), None, "no wait was counted");
 }
-
-// --- discovery -----------------------------------------------------------------
 
 type Handled<'a> = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send + 'a>>;
 
@@ -1387,9 +1294,7 @@ fn discover_only<H: 'static>(
     consume::discover(&reaching(&[TypeId::of::<H>()]), backend)
 }
 
-/// The refusal a backend without `capability` owes a method declaring it: at
-/// boot, naming the declaration, the method, the capability and the backend —
-/// and nothing refused on a backend that declares it.
+/// The refusal a backend without `capability` owes a method declaring it, at boot.
 fn assert_refused_at_boot<H: 'static>(site: &str, capability: &str) {
     let refusal = discover_only::<H>(&BARE)
         .expect_err("a backend without the capability refuses the declaration at boot")
@@ -1427,8 +1332,6 @@ fn two_methods_on_one_queue_fail_the_boot_naming_both() {
     )
     .expect_err("two claimants on one queue must not boot")
     .to_string();
-    // Naming both is the point: the loser would take a share of the jobs, so an
-    // error naming only one sends the reader to the wrong file half the time.
     for part in ["contested", "FirstClaimant::drain", "SecondClaimant::drain"] {
         assert!(refusal.contains(part), "{refusal}");
     }
@@ -1445,11 +1348,6 @@ fn an_entry_draining_a_name_outside_the_rule_fails_the_boot() {
     );
 }
 
-/// `#[process]` refuses `window = "0s"` at compile time; an entry built by hand
-/// says nothing until the boot, which is the one place left to say it — on
-/// every backend, since a window of zero limits nothing on any of them. Nor
-/// does one under a millisecond, which a store counting in milliseconds reads
-/// as zero: half a millisecond booted.
 #[test]
 fn an_entry_with_a_throttle_window_under_a_millisecond_fails_the_boot() {
     for (site, refusal) in [
@@ -1481,8 +1379,6 @@ fn a_method_another_app_owns_is_not_this_apps_to_refuse() {
     assert!(methods.is_empty());
 }
 
-/// An attempt's span is named for the queue it drains, as OpenTelemetry's
-/// messaging conventions name a `process` span.
 #[tokio::test]
 async fn an_attempt_is_named_for_its_queue() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1507,9 +1403,6 @@ async fn an_attempt_is_named_for_its_queue() {
     );
 }
 
-/// A record the worker cannot run is still a unit of work: the port files its
-/// dead-letter event and its operation line inside a `queue.job` span, with the
-/// backend's sentence as the error and the queue it was read from.
 #[tokio::test]
 async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1550,11 +1443,6 @@ async fn an_undeliverable_record_is_one_unit_of_work_the_port_reports() {
     logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
 }
 
-// --- the job's identity and its retries ------------------------------------------
-
-/// The job's id is the one its push sealed — never the backend's — and rides
-/// the span as `messaging.message.id` and the line as `job_id`; the backend's
-/// own id rides beside it as `backend_id`.
 #[tokio::test]
 async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1586,9 +1474,6 @@ async fn the_job_id_is_the_envelopes_and_the_backends_own_id_rides_beside_it() {
     assert_eq!(line.field("backend_id").as_deref(), Some("1767225600000-0"));
 }
 
-/// A record no push of this release wrote names no id: the delivery mints one,
-/// and every attempt at the delivery — and the record re-filed for the next —
-/// carries that one.
 #[tokio::test]
 async fn a_record_naming_no_job_id_runs_under_one_minted_for_its_delivery() {
     let container = Container::builder().provide(FlakyProcessor).build();
@@ -1608,9 +1493,6 @@ async fn a_record_naming_no_job_id_runs_under_one_minted_for_its_delivery() {
     assert_eq!(delivery.retry_envelope().id(), &minted);
 }
 
-/// A retry says how long to wait — the port's backoff, the same on every
-/// backend — and says so on its `warn`, so an operator reading the line knows
-/// when the next attempt is due.
 #[tokio::test]
 async fn a_retry_says_how_long_to_wait_before_the_next_attempt() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1646,9 +1528,6 @@ async fn a_retry_says_how_long_to_wait_before_the_next_attempt() {
     );
 }
 
-/// The attempt number travels in the envelope, so a job re-filed for its third
-/// attempt spends the budget from there: on a method with `retries = 2`, that
-/// attempt is the last, and its failure dead-letters.
 #[tokio::test]
 async fn an_envelope_re_filed_for_a_later_attempt_spends_the_budget_from_there() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -1679,9 +1558,6 @@ async fn an_envelope_re_filed_for_a_later_attempt_spends_the_budget_from_there()
     assert_eq!(span.field("attempt").as_deref(), Some("3"));
 }
 
-/// What a backend declaring `DelayedPush` re-files after a `Retry`: the same
-/// job, one attempt on — which a later delivery runs as that attempt, still a
-/// child of the enqueue.
 #[tokio::test]
 async fn the_record_re_filed_after_a_retry_is_delivered_as_the_next_attempt() {
     let logs = nest_rs_testing::LogCapture::install();

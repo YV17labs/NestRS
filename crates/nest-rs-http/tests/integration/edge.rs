@@ -1,11 +1,5 @@
 //! Path normalization at the transport edge (`src/edge.rs`), through the whole
 //! composed stack rather than the layer alone.
-//!
-//! R9-5: the router matches paths exactly, so `/kitchen` served and `/kitchen/`
-//! answered `404` — and that `404` is produced *before* the route's guards,
-//! interceptors and filters, so a trailing slash read as a broken feature
-//! rather than as a spelling. The two are one resource; the edge trims the
-//! slash before anything routes on it.
 
 use nest_rs_core::module;
 use nest_rs_http::{controller, routes};
@@ -26,8 +20,6 @@ impl KitchenController {
         format!("item {}", id.0)
     }
 
-    /// Echoes what survived normalization, so the query assertion below reads
-    /// the rewritten URI rather than a body that would look the same either way.
     #[get("/search")]
     async fn search(&self, req: &poem::Request) -> String {
         req.uri().query().unwrap_or("none").to_owned()
@@ -56,12 +48,9 @@ async fn a_captured_segment_is_the_same_with_the_slash() {
 
     let slashed = client.get("/kitchen/items/42/").send().await;
     slashed.assert_status_is_ok();
-    // The capture must not swallow the slash — `42/` would be a different id.
     slashed.assert_text("item 42").await;
 }
 
-/// Normalizing must not conjure routes: an unmounted path still answers `404`,
-/// and still on the single problem+json envelope.
 #[tokio::test]
 async fn an_unmounted_path_still_answers_404() {
     let client = crate::boot::<KitchenModule>().await;

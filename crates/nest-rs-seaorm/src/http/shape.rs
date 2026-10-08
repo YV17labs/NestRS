@@ -1,7 +1,3 @@
-//! [`Bind`] as a [`RouteResponseShaper`] — route-model binding authorizes the
-//! row; this shaper applies the same field-level masking as
-//! [`nest_rs_authz::http::Authorize`].
-
 use std::sync::Arc;
 
 use nest_rs_authz::http::AbilityShaping;

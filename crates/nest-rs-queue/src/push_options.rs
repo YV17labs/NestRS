@@ -17,11 +17,7 @@ pub enum Delay {
 impl Delay {
     /// The latest instant a job may be due at, as the time since the Unix
     /// epoch: `9999-12-31T23:59:59.999Z`, the last instant RFC 3339 writes.
-    ///
-    /// A bound on the *instant*, not on the delay, because the instant is what
-    /// a backend stores: every store that keeps a timestamp represents one this
-    /// late — Redis's milliseconds and a Lua number among them — which a delay
-    /// alone within that range would not hold to.
+    /// A bound on the instant, which is what a backend stores, not on the delay.
     pub const LATEST_DUE: Duration = Duration::from_millis(253_402_300_799_999);
 
     /// The instant the delay ends for a push made at `pushed_at`, refused with
@@ -119,10 +115,6 @@ impl PushOptions {
     }
 
     /// The optional capabilities these options need from a backend.
-    ///
-    /// `#[doc(hidden)]`: the push refuses an option the backend lacks before
-    /// anything reaches the backend, so a driver never asks. Public because
-    /// `push_values` and the port's own suite read it.
     #[doc(hidden)]
     pub fn required_capabilities(&self) -> Capabilities {
         let mut required = Capabilities::NONE;
@@ -179,9 +171,6 @@ mod tests {
         );
     }
 
-    /// A job is due no later than RFC 3339's last instant, however the delay is
-    /// spelled — and refused at the port, before any backend sees it. A delay of
-    /// 400 million years reached Redis and came back as a backend failure.
     #[test]
     fn a_delay_ending_after_the_latest_due_instant_is_refused_at_the_port() {
         let latest = SystemTime::UNIX_EPOCH + Delay::LATEST_DUE;
@@ -248,8 +237,6 @@ mod tests {
         );
     }
 
-    /// The refusal states the rule with the limit the check reads, so the
-    /// sentence and the check cannot disagree about it.
     #[test]
     fn a_refused_key_is_told_the_limit_the_check_reads() {
         let refused = PushOptions::default()

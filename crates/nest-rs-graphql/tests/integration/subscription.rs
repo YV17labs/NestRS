@@ -1,19 +1,14 @@
 //! `#[subscription]`: the third discovered root, the graphql-ws mount, and the
 //! socket-lifetime ceiling that bounds it.
 //!
-//! The composition witness is `a_subscriber_receives_the_items_the_resolver_emits`:
-//! it boots the documented wiring through [`TestApp`], subscribes, emits, and
-//! asserts what the subscriber received — executed, not merely compiled.
-//! Posture *per item* is `nest-rs-authz`'s witness
-//! (`tests/integration/graphql/mask.rs`), where the entity fixtures live.
+//! Posture *per item* is tested in `nest-rs-authz`'s
+//! `tests/integration/graphql/mask.rs`, where the entity fixtures live.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_graphql::SimpleObject;
-/// async-graphql's own `futures_util` re-export, reached through the framework
-/// so this test declares no stream crate of its own — the same rooting rule the
-/// decorators follow.
+/// async-graphql's own `futures_util` re-export, reached through the framework.
 use async_graphql::futures_util::stream as futures_stream;
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql;
@@ -23,16 +18,13 @@ use nest_rs_pipes::{Piped, Trim};
 use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::broadcast;
 
-/// The event both subscribers read. One source, so a difference in what two
-/// callers receive can only come from the posture.
+/// The event both subscribers read.
 #[derive(Clone, Debug, SimpleObject)]
 struct Tick {
     seq: i32,
 }
 
-/// Capacity is 8 rather than 1: a broadcast channel drops for a *lagging*
-/// receiver, and a test that raced the lag path would fail for a reason that has
-/// nothing to do with what it asserts.
+/// Capacity 8, not 1: a broadcast channel drops for a *lagging* receiver.
 #[nest_rs_core::injectable]
 struct TickResolverState {
     tx: broadcast::Sender<Tick>,
@@ -72,17 +64,14 @@ impl TickResolver {
         })
     }
 
-    /// A synchronous subscription. The method the root publishes is the one
-    /// the expansion emits, and that one is `async`; what the developer writes
-    /// only decides whether it is awaited.
+    /// A synchronous subscription; the method the expansion emits is `async`.
     #[subscription]
     #[public]
     fn counted(&self) -> impl futures_stream::Stream<Item = i32> {
         futures_stream::iter([1, 2])
     }
 
-    /// A per-argument pipe on a subscription: the wire exposes `label`, the pipe
-    /// runs once at subscribe, and the stream carries the transformed value.
+    /// A per-argument pipe on a subscription, run once at subscribe.
     #[subscription]
     #[public]
     async fn labelled_ticks(
@@ -92,8 +81,7 @@ impl TickResolver {
         Ok(futures_stream::iter([label.into_inner()]))
     }
 
-    /// Reaches for a request-scoped provider, which a socket deliberately does
-    /// not carry — the operation must say so rather than resolve one.
+    /// Reaches for a request-scoped provider, which a socket does not carry.
     #[subscription]
     #[public]
     async fn scoped_ticks(
@@ -127,10 +115,8 @@ async fn boot() -> TestApp {
         .expect("a schema carrying a subscription boots and mounts at /graphql")
 }
 
-/// The composition witness. Boots the documented wiring, subscribes over the
-/// **graphql-ws protocol** the mount serves — `connection_init` →
-/// `connection_ack` → `subscribe` → `next` — emits, and asserts what the
-/// subscriber received.
+/// Subscribes over the graphql-ws protocol: `connection_init` →
+/// `connection_ack` → `subscribe` → `next`.
 #[tokio::test]
 async fn a_subscriber_receives_the_items_the_resolver_emits() {
     let app = boot().await;
@@ -143,9 +129,8 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
     socket.connect().await;
     socket.subscribe("ticks", "subscription { ticks { seq } }");
 
-    // The stream registers its receiver on the first poll, which the driver
-    // makes while waiting for a message; emitting before that publishes into a
-    // channel nobody is listening on.
+    // The stream registers its receiver on the first poll; emitting before that
+    // publishes to nobody.
     let emitted = tokio::spawn({
         let state = Arc::clone(&state);
         async move {
@@ -164,8 +149,6 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
     assert_eq!(second["data"]["ticks"]["seq"], 2, "{second}");
 }
 
-/// `fn` and `async fn` are both accepted at every impl half, a subscription
-/// included — the async-ness async-graphql requires is the emitted method's.
 #[tokio::test]
 async fn a_synchronous_subscription_streams_like_an_async_one() {
     let app = boot().await;
@@ -179,10 +162,6 @@ async fn a_synchronous_subscription_streams_like_an_async_one() {
     assert_eq!(second["data"]["counted"], 2, "{second}");
 }
 
-/// A request-scoped provider is **not** the connection's. The upgrade's
-/// `RequestScope` stops at the upgrade, so a subscription reaching `Scoped<T>`
-/// is told the scope is absent rather than handed an instance built once, at
-/// connect, and shared by every operation for the socket's life.
 #[tokio::test]
 async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
     let app = boot().await;
@@ -201,10 +180,6 @@ async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
     );
 }
 
-/// A dropped item is the one thing on this path that leaves no trace on the
-/// wire — the stream simply skips it. So the trace has to be in the log, with
-/// enough on it to find the operation, or an operator debugging "my subscriber
-/// misses events" has nothing at all.
 #[test]
 fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
     let logs = LogCapture::install();
@@ -239,9 +214,6 @@ fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
     );
 }
 
-/// Per-argument pipes bind on a subscription exactly as on a query — the wire
-/// value goes in, the carrier reaches the body, and the pipe runs **once**, at
-/// subscribe, not per item.
 #[tokio::test]
 async fn a_pipe_binds_on_a_subscription_argument() {
     let app = boot().await;
@@ -259,9 +231,8 @@ async fn a_pipe_binds_on_a_subscription_argument() {
     );
 }
 
-/// A `#[public]` subscription is reachable — the posture's other half. (The
-/// unannotated one does not compile: see `nest-rs-macro-hygiene`'s
-/// `tests/integration/diagnostics/graphql/subscription_without_posture.rs`.)
+/// The unannotated one does not compile: `nest-rs-macro-hygiene`'s
+/// `diagnostics/graphql/subscription_without_posture.rs`.
 #[tokio::test]
 async fn a_public_subscription_is_reachable() {
     let app = boot().await;
@@ -295,13 +266,8 @@ async fn a_public_subscription_is_reachable() {
 ])]
 struct PlaygroundApp;
 
-/// `GET <path>` serves two things, and the request decides which. This is the
-/// dispatcher's own seam: a browser gets the playground, an upgrade gets the
-/// socket — one URL, which is what every graphql-ws client assumes.
-///
-/// The completed handshake (`101`) cannot be asserted here: `TestClient` runs
-/// the endpoint in-process, where there is no connection to upgrade. That half
-/// is proven over a real socket by `demo/apps/api`'s e2e suite.
+/// The completed handshake (`101`) cannot be asserted in process; the real
+/// socket tests below and `demo/apps/api`'s e2e suite cover it.
 #[tokio::test]
 async fn an_upgrade_on_the_graphql_path_is_not_answered_by_the_playground() {
     let app = TestApp::builder()
@@ -341,8 +307,6 @@ async fn an_upgrade_on_the_graphql_path_is_not_answered_by_the_playground() {
     );
 }
 
-/// With the playground off — the production default — the path serves POST and
-/// sockets only, so a bare GET is the wrong method rather than a missing route.
 #[tokio::test]
 async fn a_bare_get_without_the_playground_is_a_method_error() {
     let app = boot().await;
@@ -350,9 +314,8 @@ async fn a_bare_get_without_the_playground_is_a_method_error() {
     resp.assert_status(poem::http::StatusCode::METHOD_NOT_ALLOWED);
 }
 
-/// The ceiling is a security control, so its "off" spelling has to be the
-/// deliberate one. `0` disables it; unset keeps the 4-hour default — the same
-/// three cases `NESTRS_WS__MAX_CONNECTION_SECS` carries.
+/// `0` disables the ceiling; unset keeps the 4-hour default, as
+/// `<PREFIX>_WS__MAX_CONNECTION_SECS` does.
 #[test]
 fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
     use nest_rs_config::{Config, ConfigService};
@@ -375,15 +338,7 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
     assert_eq!(pinned.max_connection, Some(Duration::from_secs(30)));
 }
 
-// ── The way down ────────────────────────────────────────────────────────────
-//
-// The socket is a connection poem stops tracking at the upgrade, so the
-// shutdown window neither waited for one nor closed it: every subscription ran
-// on under the shutdown hooks until the process exit cut it — and the lifetime
-// ceiling dropped the socket outright. Both now end the protocol's way: every
-// running subscription is completed, then the socket closes with RFC 6455
-// §7.4.1's 1001 Going Away. These run over a real upgrade, because the close is
-// the socket's and the in-process driver has none.
+// Over a real upgrade: the close is the socket's, and the in-process driver has none.
 
 use nest_rs_testing::ws::{WsApp, WsFrame, WsSocket, WsSocketBuilder};
 use poem::web::websocket::CloseCode;
@@ -413,8 +368,7 @@ async fn subscribe(socket: &mut WsSocket, query: &str) {
         .await;
 }
 
-/// Wait until the `ticks` stream has subscribed to its source — the operation is
-/// running from then on.
+/// Wait until the `ticks` stream has subscribed to its source.
 async fn running(state: &TickResolverState) {
     for _ in 0..250 {
         if state.tx.receiver_count() > 0 {
@@ -438,11 +392,6 @@ async fn ticks_app<M: nest_rs_core::Module + 'static>() -> (WsApp, Arc<TickResol
     (app, state)
 }
 
-/// At the signal a subscription is told it is over with the protocol's own
-/// `complete` — the server's end of an operation that is not an error — and the
-/// socket then closes with 1001 and a reason saying what to do. The transport
-/// waits for that close rather than returning past a socket it never told, and
-/// the socket's line says the server ended it.
 #[tokio::test]
 async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
     let logs = LogCapture::install();
@@ -485,7 +434,6 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
         Some(nest_rs_core::operation_log::CANCELLED),
         "the server ended the socket, not its client",
     );
-    // The socket's span fails with the line's word.
     let span = logs.expect_span(
         nest_rs_graphql::TARGET,
         nest_rs_graphql::unit::SUBSCRIPTION.name(),
@@ -511,17 +459,13 @@ const CEILING: Duration = Duration::from_secs(1);
 ])]
 struct CeilingApp;
 
-/// The ceiling ends a socket the same way: it forces a re-upgrade so the guard
-/// runs again, and a client that read the 1006 a dropped socket gave it could
-/// not tell that from a network fault, nor which of its subscriptions had ended.
 #[tokio::test]
 async fn the_lifetime_ceiling_completes_the_subscriptions_and_closes_going_away() {
     let (app, state) = ticks_app::<CeilingApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
     subscribe(&mut socket, "subscription { ticks { seq } }").await;
     running(&state).await;
-    // The ceiling passes on paused time, while nothing reads: what it sends
-    // waits buffered for the reads below, back on the real clock.
+    // Paused time, while nothing reads: what the ceiling sends waits buffered.
     tokio::time::pause();
     tokio::time::sleep(CEILING + Duration::from_millis(1)).await;
     tokio::time::resume();
@@ -551,9 +495,6 @@ impl ExplodingResolver {
 #[module(imports = [GraphqlModule::for_root(None), TickModule], providers = [ExplodingResolver])]
 struct ExplodingApp;
 
-/// A subscription stream that panics took the socket task down: no line, and a
-/// socket the peer read as 1006. The socket is the unit here, so it files
-/// `panic` and closes with §7.4.1's 1011 Internal Error.
 #[tokio::test]
 async fn a_subscription_that_panics_files_panic_and_closes_with_internal_error() {
     let logs = LogCapture::install();
@@ -607,10 +548,6 @@ impl SlowAnswerResolver {
 #[module(imports = [GraphqlModule::for_root(None), TickModule], providers = [SlowAnswerResolver])]
 struct AnsweringApp;
 
-/// A query sent over the socket is a unit still answering, not a channel
-/// without an end: at the signal it is answered, inside the window as a request
-/// running over HTTP is — while the subscription beside it is completed at
-/// once — and only then does the socket close.
 #[tokio::test]
 async fn a_query_answering_at_the_signal_is_answered_before_the_close() {
     let (app, state) = ticks_app::<AnsweringApp>().await;

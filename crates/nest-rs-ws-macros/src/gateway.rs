@@ -1,6 +1,5 @@
-//! `#[gateway]` — struct decorator (construction + `PATH`/`VERSION` consts +
-//! connection-level guard wrapping). `#[messages]` emits the `Discoverable`/mount
-//! + dispatcher, and reads the mount address back from here.
+//! `#[gateway]` — struct decorator: construction, `PATH`/`VERSION` and the
+//! connection-level guard wrapping `#[messages]` reads.
 
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
@@ -37,7 +36,6 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         return err.to_compile_error().into();
     }
 
-    // `@UseGuards` analog on the struct — run on the WS upgrade.
     let guards = match take_path_list(&mut item.attrs, "use_guards") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
@@ -56,24 +54,15 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // Access-graph deps: `#[inject]` keys + connection-level guards. Exposed
-    // through an inherent fn `#[messages]` reads back (and extends with its
-    // per-message guards) when emitting `Discoverable::injected`.
-    // Keys plus index-aligned labels from one walk, so a connection guard no
-    // module provides is named in the boot error rather than reported as
-    // `<unnamed dependency>`.
     let layers = layer_deps(guards.iter());
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
 
-    // Connection-level guard layers; first listed ends up outermost. With
-    // nothing declared this just boxes the endpoint.
     let guard_layers = guard_layers(&guards);
     let has_edge_guards = !guards.is_empty();
     let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    // A gateway-scope guard runs on the upgrade, which is an HTTP `GET`, so it
-    // attests `HttpGuard` — not `WsGuard`, which `#[messages]` requires of the
-    // per-event ones. That split is the whole point of the two markers here.
+    // The upgrade is an HTTP `GET`: a gateway-scope guard attests `HttpGuard`,
+    // not the `WsGuard` per-event ones owe.
     let capability_bounds =
         guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::HttpGuard));
 
@@ -81,19 +70,10 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Some(path) => quote! { #path },
         None => quote! { ::nest_rs_ws::Global },
     };
-    // The connection registry is a hard dependency of every gateway — the
-    // `WsClient` each handler receives reads it — so it belongs under the
-    // access contract like any `#[inject]` field. Declared here, a missing
-    // `WsModule` is a clean boot error naming the module that provides it
-    // (`AccessGraphError`), instead of a mount-time panic with a backtrace
-    // note: the app used to compile, log `mounted endpoint kind="ws"`, and
-    // *then* die. Namespaced or not, the registry comes from `WsModule`, so the
-    // same declaration and the same diagnostic cover both.
+    // Declared to the access graph so a missing `WsModule` fails boot by name
+    // rather than panicking at mount.
     let registry_key = quote! { ::core::any::TypeId::of::<::nest_rs_ws::WsServer<#ns_ty>>() };
-    // Names the *key*, marker included, because this label is what a missing
-    // import prints. `WsServer` for the default namespace keeps the diagnostic
-    // the docs quote verbatim; `WsServer<NotifyNs>` distinguishes the rest, which
-    // is the whole point of having several.
+    // What a missing import prints; the docs quote the bare `WsServer` verbatim.
     let registry_label: &str = &match &namespace {
         Some(path) => format!(
             "WsServer<{}>",
@@ -105,12 +85,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         None => "WsServer".to_owned(),
     };
 
-    // A namespaced gateway submits its marker to the link-time registry
-    // `WsNamespaces` (a provider of `WsModule`) drains, so `WsModule` owns every
-    // registry — namespaced or `Global` — and the access graph can name it. The
-    // gateway used to install its own from `Discoverable::register`, which left
-    // the key belonging to no module (so the graph waved consumers through) and
-    // made construction order depend on where the gateway sat in the tree.
+    // Submitted to the registry `WsNamespaces` drains, so `WsModule` owns every
+    // `WsServer<N>` and the access graph can name it.
     let namespace_submission = match &namespace {
         Some(_) => quote! {
             ::nest_rs_core::inventory::submit! {
@@ -141,38 +117,21 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         impl #impl_generics #name #ty_generics #where_clause {
             pub const PATH: &'static str = #path_lit;
 
-            /// The URI version segment from `#[gateway(version = "…")]`; `None`
-            /// when the gateway declares none. Same const `#[controller]` emits,
-            /// because a gateway's mount is an address a client selects.
+            /// The URI version segment from `#[gateway(version = "…")]`, if any.
             pub const VERSION: ::core::option::Option<&'static str> = #version_opt;
 
-            /// The address a client actually connects to — `PATH` with the
-            /// declared version folded in. Built by `nest_rs_http::version_path`,
-            /// the single place URI versioning lives, so a gateway's served path
-            /// and a controller's cannot drift.
-            ///
-            /// Read by `#[messages]` three times over — the `HttpEndpointMeta`
-            /// path (which is what the duplicate-mount boot check compares), the
-            /// `Route::at` it mounts at, and the boot log — so those three cannot
-            /// disagree either.
+            /// The address a client connects to — `PATH` with the version folded in.
             #[doc(hidden)]
             pub fn __nestrs_mount_path() -> ::std::string::String {
                 ::nest_rs_ws::nest_rs_http::version_path(Self::VERSION, Self::PATH)
             }
 
-            /// Whether this gateway binds its own guards at the upgrade. The
-            /// transport cannot see inside the mount closure, so it reads this
-            /// to tell a guarded edge from a bare one instead of warning on both.
+            /// Whether this gateway binds its own guards at the upgrade, which the
+            /// transport cannot see inside the mount closure.
             #[doc(hidden)]
             pub const HAS_EDGE_GUARDS: bool = #has_edge_guards;
 
-            /// The upgrade-scope guards, as resolvable specs.
-            ///
-            /// The layers above *apply* them; this is the same list in the shape
-            /// the boot check reads, so `#[messages]` can phase-validate the
-            /// upgrade chain the way `#[routes]` validates a controller's. The
-            /// two halves of the pair are one decorator's worth of information
-            /// split across two item shapes, and this is the seam between them.
+            /// The upgrade-scope guards, as the specs the boot check reads.
             #[doc(hidden)]
             pub fn __nestrs_edge_guard_specs()
                 -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
@@ -200,10 +159,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             pub fn __nestrs_registry(
                 __container: &::nest_rs_core::Container,
             ) -> ::std::sync::Arc<::nest_rs_ws::WsServer<#ns_ty>> {
-                // Unreachable in a booted app: the registry is declared in
-                // `__nestrs_injected`, so the access graph refuses the boot
-                // before any mount runs. Kept as a defensive resolve for a
-                // hand-assembled container that skips that check.
+                // Unreachable once booted: the access graph refuses a missing registry.
                 ::nest_rs_core::Container::get::<::nest_rs_ws::WsServer<#ns_ty>>(__container).expect(
                     "WebSocket gateway requires its connection registry — add `WsModule` to a \
                      module's `imports`; it owns every registry, namespaced or not",
@@ -235,17 +191,14 @@ struct GatewayArgs {
     namespace: Option<Path>,
 }
 
-/// `#[gateway]`'s keys, each once — `namespace` decides which `WsServer<N>` the
-/// gateway fans out on, so a dropped second declaration is which sockets a
-/// broadcast reaches, decided by source order.
 const GATEWAY: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("gateway", &["path", "version", "namespace"]).with_remedies(&[(
         "version",
         "a gateway owns one mount, so it carries one version",
     )]);
 
-/// Parse `#[gateway(path = "/ws", version = "1", namespace = ChatNs)]` — `path`
-/// required, the other two optional. Order-independent; unknown keys rejected.
+/// Parse `#[gateway(path = "/ws", version = "1", namespace = ChatNs)]`; `path`
+/// is required.
 fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let mut path = None;
     let mut version = None;
@@ -253,12 +206,7 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     GATEWAY.parse2(args, |arg| {
         match arg.key() {
             "path" => path = Some(arg.str_lit("/ws")?),
-            // Through `#[controller]`'s own parser, which is what the doc
-            // comment above already claims. Taking it through a bare
-            // `expr_str` made this a *second* grammar wearing one name: no
-            // character-set check, so `version = "a/b"` compiled and mounted at
-            // `/va/b/ws`, and no list form, so the spelling learned next door
-            // failed here with a bare "expected a string literal".
+            // `#[controller]`'s parser, so the version grammar is one.
             "version" => {
                 let value = arg.expr()?;
                 let declared =
@@ -297,9 +245,8 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     })
 }
 
-/// `namespace = ChatNs`'s value: the marker type naming the `WsServer<N>` the
-/// gateway fans out on — read through the invisible group a `macro_rules!`
-/// forwards it in, and refused at itself in the shared sentence otherwise.
+/// `namespace = ChatNs`'s value, read through the invisible group a
+/// `macro_rules!` forwards it in.
 fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
     match nest_rs_codegen::ungrouped_expr(expr) {
         syn::Expr::Path(p) => Ok(p.path.clone()),
@@ -314,19 +261,9 @@ fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
     }
 }
 
-/// Reversed so the first-listed guard ends up outermost (HTTP convention).
-///
-/// Resolves each guard via the container, erases it to `Arc<dyn Guard>`, and
-/// wraps the endpoint with `nest_rs_guards::GuardExt::guard` — which calls
-/// `Guard::check_http` (the WS upgrade is an HTTP GET) and maps a `Denial` to
-/// a poem `Response`.
-///
-/// **Dedup against Global**: the WS upgrade is a `Guarded` self-mount —
-/// the transport applies the global guard chain at its edge via
-/// `SelfMountGuardWrap`, which already runs every global guard's
-/// `check_http`. If a gateway-scope `#[use_guards(X)]` matches a TypeId
-/// that is also seeded as Global, the wrap is skipped here — same
-/// semantics as `RouteShaper` does for HTTP per-route declarations.
+/// The connection-level guard layers, reversed so the first-listed guard ends
+/// up outermost. A guard also seeded globally is skipped: the transport's
+/// `SelfMountGuardWrap` already runs it at the edge.
 fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
     paths
         .iter()
@@ -376,8 +313,7 @@ mod tests {
         parse_gateway_args(args)
     }
 
-    /// `GatewayArgs` holds `syn` types with no `Debug`, so `expect_err` is out;
-    /// the refusal's wording is what these tests are about anyway.
+    /// `GatewayArgs` holds `syn` types with no `Debug`, so `expect_err` is out.
     fn refusal(args: proc_macro2::TokenStream) -> String {
         match parse_gateway_args(args) {
             Ok(args) => panic!(
@@ -407,8 +343,6 @@ mod tests {
         assert!(args.namespace.is_some());
     }
 
-    /// A version is an opaque token, not a number: `#[controller(version =
-    /// "2024-08-11")]` is legal, so the gateway's half must not narrow it.
     #[test]
     fn a_version_is_any_string_token() {
         let args = parse(quote! { path = "/ws", version = "2024-08-11" }).expect("a date version");

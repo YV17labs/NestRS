@@ -1,13 +1,8 @@
 //! An operation's typed arguments — decoded by the framework, and refused
 //! without the value that did not decode.
 //!
-//! rmcp's own `Parameters<P>` answers a decode failure with serde's sentence
-//! (`failed to deserialize parameters: invalid type: string "…", expected u64`),
-//! which quotes what the client sent. That sentence goes back to a language
-//! model, whose transcript keeps it and may repeat it to whoever is chatting —
-//! the same reader [`Opaque`](crate::Opaque) exists for. So the framework's
-//! `Parameters<P>` is its own: rmcp's shape, rmcp's schema, and a refusal worded
-//! by [`DecodeError`].
+//! rmcp's own `Parameters<P>` quotes the value that did not decode back to the
+//! model; this one keeps rmcp's shape and schema and words the refusal by [`DecodeError`].
 
 use nest_rs_core::DecodeError;
 use rmcp::ErrorData as McpError;
@@ -18,11 +13,8 @@ use rmcp::model::JsonObject;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 
-/// What a refusal opens with — rmcp's own words, and they are load-bearing:
-/// rmcp's tool router answers an `invalid_params` that opens with them as a
-/// tool result flagged `isError` rather than a JSON-RPC error, which is how the
-/// MCP specification asks an input error to reach the model (so it can correct
-/// the call). Pinned by the suite, so an rmcp release rewording it fails here.
+/// rmcp's own words: its tool router turns an `invalid_params` opening with them
+/// into an `isError` tool result, as the specification asks. Pinned by the suite.
 const REFUSED: &str = "failed to deserialize parameters";
 
 /// A tool's or a prompt's typed arguments, deserialized from the call.

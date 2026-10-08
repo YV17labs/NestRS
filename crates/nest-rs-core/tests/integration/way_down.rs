@@ -1,11 +1,6 @@
 //! Covers `src/way_down.rs` — a signal received while the process is already
-//! stopping, under `#[main]`; the runtime's teardown is the source file's own
-//! tests, which give it a budget shorter than the hooks'.
-//!
-//! A signal is about the *process*, so it is asserted on one: a child — this
-//! same test binary, re-run on one test — that the parent signals and whose
-//! exit it reads. A process that exits at once cannot be asserted on from
-//! inside.
+//! stopping. A process exiting at once cannot be asserted on from inside, so the
+//! parent signals a child: this same test binary, re-run on one test.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
@@ -18,19 +13,14 @@ use nest_rs_core::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// The role a child process plays, read from its environment. Unset — the
-/// ordinary run of the suite — the child test has nothing to do.
 const CHILD_ROLE: &str = "NEST_RS_CORE_WAY_DOWN_CHILD";
 
-/// What a child prints once its handlers are installed and it serves.
 const READY: &str = "WAY-DOWN-CHILD SERVING";
 
-/// What the child's stuck hook prints once it has started.
 const HOOK_STARTED: &str = "WAY-DOWN-CHILD HOOK STARTED";
 
-/// Serves until the token fires, after saying it serves: the handlers are
-/// installed before any transport serves, so a parent reading this line may
-/// signal.
+/// The handlers are installed before any transport serves, so a parent reading
+/// [`READY`] may signal.
 struct ServesUntilStopped;
 
 #[async_trait::async_trait]
@@ -54,7 +44,6 @@ impl Transport for ServesUntilStopped {
     }
 }
 
-/// Ignores the token: a transport whose stop never comes.
 struct NeverStops;
 
 #[async_trait::async_trait]
@@ -100,7 +89,6 @@ impl Module for ServesUntilStoppedModule {
     }
 }
 
-/// A cleanup that never returns, after saying it started.
 #[injectable]
 #[derive(Default)]
 struct HangsOnDestroy;
@@ -138,8 +126,6 @@ async fn run_child(role: String) -> anyhow::Result<()> {
     }
 }
 
-/// The child half of the signal tests: runs the app its parent named, and is
-/// otherwise a test with nothing to do.
 #[test]
 #[expect(
     clippy::disallowed_methods,
@@ -151,7 +137,6 @@ fn way_down_child_process() {
     }
 }
 
-/// A child process playing `role`, and the lines it prints, as they arrive.
 struct ChildProcess {
     child: Child,
     lines: Receiver<String>,
@@ -183,7 +168,6 @@ impl ChildProcess {
         }
     }
 
-    /// Wait for a line containing `needle`.
     fn expect_line(&mut self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
@@ -215,8 +199,6 @@ impl ChildProcess {
         assert!(sent.success(), "SIG{name} was delivered");
     }
 
-    /// Wait for the child to exit — within `bound`, or the test fails — and
-    /// return its code and everything it printed.
     fn exit_within(&mut self, bound: Duration) -> (Option<i32>, Vec<String>) {
         let asked = Instant::now();
         loop {
@@ -239,7 +221,6 @@ impl ChildProcess {
     }
 }
 
-/// A child is never left running past its test, whichever way the test ends.
 impl Drop for ChildProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -247,15 +228,9 @@ impl Drop for ChildProcess {
     }
 }
 
-/// The line a signal on the way down files.
 const EXITING: &str =
     "shutdown signal received on the way down: exiting at once, abandoning what still runs";
 
-/// A second signal while a shutdown hook hangs exits at once — well inside the
-/// hooks' budget — with `SIGINT`'s code, after a line naming the hook it
-/// abandons. Before, the handlers the first signal installed swallowed it: the
-/// process sat out the budget, and a hook that blocked its thread held it until
-/// the orchestrator's kill.
 #[cfg(unix)]
 #[test]
 fn a_second_signal_while_a_hook_hangs_exits_at_once_naming_the_hook() {
@@ -277,8 +252,6 @@ fn a_second_signal_while_a_hook_hangs_exits_at_once_naming_the_hook() {
     assert!(line.contains("SIGINT"), "{line}");
 }
 
-/// The same, while a transport refuses to stop: the line names it, and the code
-/// is `SIGTERM`'s — what an orchestrator repeating its `SIGTERM` reads back.
 #[cfg(unix)]
 #[test]
 fn a_second_signal_while_a_transport_will_not_stop_exits_at_once_naming_it() {

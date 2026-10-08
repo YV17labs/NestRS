@@ -1,9 +1,5 @@
-//! Integration tests mirroring `src/` — one binary, one module per concern.
-//!
-//! The fixtures below are the ones the shutdown tests share: a transport served
-//! on a real loopback port, and raw HTTP/1.1 the way a client that holds a
-//! stream open speaks it. `TestClient` has no connection for a shutdown window
-//! to close, so these tests cannot use it.
+//! Integration tests mirroring `src/`. The shutdown tests speak raw HTTP/1.1 on a
+//! loopback port: `TestClient` holds no connection for a shutdown window to close.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

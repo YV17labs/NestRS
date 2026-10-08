@@ -16,18 +16,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Authenticates an MCP HTTP request before the streamable handler runs. Bind
 /// with `providers = [MyBridge as dyn McpOperationGuard]`.
 ///
-/// With none registered the endpoint falls back to [`FallbackMcpGuard`] (the
-/// global guard pool, seeded by `use_guards_global`), and with no pool either
-/// to deny-all — `/mcp` is `EdgePosture::Exempt` at the HTTP edge, so this
-/// in-band seam is the *only* place guards run on MCP operations. A registered
-/// guard **replaces** the fallback: it owns the chain (the canonical bridge
-/// runs the same `AuthnGuard` + `AuthzGuard` itself, so nothing runs twice).
-/// **What this guard gates is the HTTP request**, which is all it is handed. An
-/// operation's own `#[use_guards]` chain runs `Guard::check_mcp` against the
-/// operation, and the two never stand in for each other: a guard this endpoint
-/// authenticated is not thereby excused its operation check, and reporting one
-/// as the other is how a `check_mcp` written to refuse a tool call came to be
-/// skipped for it.
+/// A registered guard replaces [`FallbackMcpGuard`] and owns the endpoint's
+/// chain. It gates the HTTP request, and never stands in for an operation's own
+/// `Guard::check_mcp` chain.
 pub trait McpOperationGuard: Send + Sync + 'static {
     /// Gate the operation: inspect/mutate `req` and return `Err` to reject it
     /// before the handler runs.
@@ -36,21 +27,12 @@ pub trait McpOperationGuard: Send + Sync + 'static {
     /// Snapshot what [`around`](Self::around) will need, from the post-`before`
     /// request. `None` (the default) means this guard installs nothing and
     /// `around` is never called for it.
-    ///
-    /// The capture/`around` split is the same one
-    /// [`McpToolContext`](crate::McpToolContext) uses, for the same reason: by
-    /// the time an operation dispatches, rmcp has moved it onto its own task
-    /// and the poem request is gone. Capturing exactly what the guard needs is
-    /// what keeps that crossing off the per-request hot path.
     fn capture(&self, _req: &Request) -> Option<Captured> {
         None
     }
 
     /// Wrap one operation's dispatch to install ambient state for its duration
-    /// (the caller's `Ability`) — the MCP twin of `GraphqlOperationGuard`'s
-    /// `around`, so the *guard* installs the ability on both transports.
-    ///
-    /// Runs **inside** rmcp's spawned dispatch, on whatever
+    /// (the caller's `Ability`), inside rmcp's spawned dispatch, on whatever
     /// [`capture`](Self::capture) returned. Default = pass-through.
     fn around<'a>(
         &'a self,
@@ -61,20 +43,7 @@ pub trait McpOperationGuard: Send + Sync + 'static {
     }
 }
 
-/// Factory slot for the fallback [`McpOperationGuard`]. `nest-rs-guards`'
-/// `use_guards_global` provides one (a fn pointer — the container does not
-/// exist yet at builder time) that folds the global guard pool in-band;
-/// [`resolve_operation_guard`](crate::resolve_operation_guard) invokes it at
-/// mount when no `dyn McpOperationGuard` is registered. It is what lets a
-/// global `ThrottlerGuard` — or the app's global authn/authz pair — reach
-/// `/mcp` under its `EdgePosture::Exempt` edge.
-///
-/// The fallback only ever *widens* what the app explicitly opted into: with no
-/// global pool the endpoint stays deny-all, and unlike `/graphql` the MCP mount
-/// carries no [`Public`](nest_rs_http::Public) marker, so a pooled `AuthnGuard`
-/// still refuses an unauthenticated tool call.
-///
-/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
-/// (lockstep with `nest-rs-mcp`); not a user-constructed type.
+/// Factory slot for the fallback [`McpOperationGuard`], running the global guard
+/// pool in band; a fn pointer, as `use_guards_global` seeds it before the container exists.
 #[doc(hidden)]
 pub struct FallbackMcpGuard(pub fn(&Container) -> Arc<dyn McpOperationGuard>);

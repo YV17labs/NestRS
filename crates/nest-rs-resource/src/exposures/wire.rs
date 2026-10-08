@@ -5,26 +5,17 @@ use sea_orm::EntityTrait;
 use serde_json::{Map, Value};
 
 /// Fills absent JSON keys for server-only columns before deserializing a
-/// handler DTO into `Self::Model`. Emitted by `#[expose]` per unexposed scalar
-/// column; entities without an `#[expose]` impl get the default no-op (their
-/// masking handlers must deserialize without the hidden columns).
+/// handler DTO into `Self::Model`; emitted by `#[expose]`.
 pub trait WireModelDefaults: EntityTrait {
     /// Insert default JSON values for the entity's unexposed columns into `map`
     /// so a wire DTO (which omits them) can deserialize into the full `Model`.
-    /// The default no-op suits entities with no unexposed columns to reconstruct.
     fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
 
-    /// The exposed (`#[expose]`) column names that may cross the wire. Response
-    /// masking retains **only** these keys, so neither an unrestricted field
-    /// grant nor a handler that returns a raw `Model` can leak an unexposed
-    /// column (`password_hash`, `role`, …) — the strainer keys on the entity's
-    /// statically-known exposed set rather than on whatever the response body
-    /// happened to carry.
+    /// The exposed (`#[expose]`) column names that may cross the wire: response
+    /// masking retains **only** these keys, even from a raw `Model`.
     ///
-    /// `None` ⇒ the entity opted out of key-set retention (the default no-op
-    /// impl, used by entities without `#[expose]`); the masker then falls back
-    /// to retaining the response body's own keys, which is only sound when the
-    /// body is already the wire shape.
+    /// `None` (the default, entities without `#[expose]`) retains the body's own
+    /// keys, which is only sound when the body is already the wire shape.
     fn wire_keys() -> Option<&'static [&'static str]> {
         None
     }
@@ -51,9 +42,6 @@ mod tests {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    // The default impl is the regression sentinel: an entity that doesn't ship
-    // a hand-written `WireModelDefaults` impl must leave the wire body
-    // untouched — adding or renaming keys here would silently break masking.
     impl WireModelDefaults for widget::Entity {}
 
     #[test]

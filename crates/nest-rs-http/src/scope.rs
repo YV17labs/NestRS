@@ -1,7 +1,6 @@
-//! HTTP binding for request-scoped providers — the transport edge
-//! (`EdgeEndpoint`) installs a [`RequestScope`](nest_rs_core::RequestScope) per request; [`Scoped<T>`]
-//! reads it back to resolve an `#[injectable(scope = request)]` provider
-//! (or, falling through, a singleton — prefer plain `#[inject]` for those).
+//! HTTP binding for request-scoped providers: [`Scoped<T>`] resolves an
+//! `#[injectable(scope = request)]` provider from the scope the transport edge
+//! installs per request.
 
 use std::any::type_name;
 use std::ops::Deref;
@@ -12,9 +11,7 @@ use poem::{Error, FromRequest, Request, RequestBody, Result};
 
 /// Resolves a provider of type `T` from the current request's
 /// [`RequestScope`](nest_rs_core::RequestScope) the transport edge installed.
-/// Rejects with `500` if the
-/// scope is absent (a transport wiring bug) or if no provider is registered
-/// for `T`.
+/// Rejects with `500` if the scope is absent or no provider is registered for `T`.
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
@@ -72,14 +69,12 @@ mod tests {
     fn scoped_deref_borrows_the_inner_value() {
         let scoped = Scoped(Arc::new(Marker("bye")));
         assert_eq!(scoped.0.as_ref().0, "bye");
-        // Deref reaches the field through `&*scoped`.
         assert_eq!((*scoped).0, "bye");
     }
 
     #[tokio::test]
     async fn scoped_from_request_resolves_a_registered_provider() {
-        // A singleton falls through `RequestScope::get`, the documented escape
-        // hatch for `Scoped<T>` when no scoped factory exists for `T`.
+        // A singleton falls through `RequestScope::get`.
         let container = Container::builder().provide(Marker("registered")).build();
         let scope = Arc::new(RequestScope::new(container));
 
@@ -115,7 +110,6 @@ mod tests {
 
     #[tokio::test]
     async fn scoped_from_request_returns_500_when_no_provider_is_registered() {
-        // Scope installed but `Marker` was never provided.
         let container = Container::builder().build();
         let scope = Arc::new(RequestScope::new(container));
 

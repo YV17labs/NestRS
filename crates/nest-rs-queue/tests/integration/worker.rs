@@ -108,8 +108,6 @@ struct BootModule;
 #[module]
 struct EmptyModule;
 
-/// A reachable `#[process]` method with no queue backend bound to run it fails
-/// the boot, naming the method, its queue and the remedy.
 #[tokio::test]
 async fn a_method_with_no_backend_bound_fails_the_boot_naming_the_remedy() {
     let app = TestApp::builder()
@@ -131,8 +129,6 @@ async fn a_method_with_no_backend_bound_fails_the_boot_naming_the_remedy() {
     }
 }
 
-/// A producer bound on one backend and a consumer on another fail the boot,
-/// naming both: the jobs pushed would never reach the worker.
 #[tokio::test]
 async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
     let producer: Arc<dyn JobProducer> = Arc::new(Memory::new(&PLAIN, LEASE));
@@ -154,8 +150,6 @@ async fn a_producer_and_a_consumer_of_two_backends_fail_the_boot_naming_both() {
     }
 }
 
-/// With no method reachable the worker needs no backend: it starts, idles, and
-/// stops at once on the signal.
 #[tokio::test(start_paused = true)]
 async fn a_worker_with_nothing_to_run_idles_and_stops_at_once() {
     let app = TestApp::builder()
@@ -215,9 +209,6 @@ async fn boot_worker_of<M: nest_rs_core::Module>(
     (app, stop, serving)
 }
 
-/// A record that is not JSON is dead-lettered on its own, kept as stored, with
-/// a reason that says where it failed and never what it held — and the job
-/// filed beside it runs; once both ended, the queue holds nothing.
 #[tokio::test(start_paused = true)]
 async fn a_record_that_is_not_json_is_dead_lettered_alone_without_its_value() {
     let memory = Memory::new(&DELAYING, LEASE);
@@ -351,8 +342,6 @@ async fn settle_failing(failures: u32, within: Duration) -> Memory {
     memory
 }
 
-/// A settle that errs is tried again while the lease holds: two failures, then
-/// the job's outcome lands, and nothing says it was lost.
 #[tokio::test(start_paused = true)]
 async fn a_settle_that_errs_is_retried_while_its_lease_holds() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -367,8 +356,6 @@ async fn a_settle_that_errs_is_retried_while_its_lease_holds() {
     );
 }
 
-/// A settle that keeps failing past the lease is given up, said at `error`, and
-/// the job left to its lease — never reported as settled.
 #[tokio::test(start_paused = true)]
 async fn a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -378,8 +365,7 @@ async fn a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease()
         1,
         "the job is still held"
     );
-    // Each delivery the lapsed lease lets run again meets the same backend, and
-    // says so again.
+    // Every redelivery the lapsed lease allows says so again.
     let said = logs.find(
         nest_rs_queue::TARGET,
         "job outcome not confirmed; unless it was written, the job runs again once its lease lapses",
@@ -448,9 +434,6 @@ impl nest_rs_queue::JobConsumer for PanicsOnce {
     }
 }
 
-/// A delivery whose task panics outside its attempt — here in the backend's
-/// settle — stops renewing its lease, so the lease lapses and the job runs
-/// again.
 #[tokio::test(start_paused = true)]
 async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -569,10 +552,6 @@ impl LongProcessor {
 #[module(providers = [LongProcessor])]
 struct LongModule;
 
-/// A renewal the backend never answers holds no lease past its end: the
-/// attempt is cut once its lease lapses, as one no renewal confirmed — not
-/// once the port's net gives up on the renewal, long after the backend let
-/// another delivery take the job.
 #[tokio::test(start_paused = true)]
 async fn a_renewal_left_unanswered_cuts_its_attempt_when_its_lease_lapses() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -638,9 +617,6 @@ impl HungProcessor {
 #[module(providers = [HungProcessor])]
 struct HungModule;
 
-/// An attempt that never answers — an outbound call with no timeout of its own
-/// — is cut at its `timeout` and fails retryably: retried within its budget,
-/// then dead-lettered, the reason naming the timeout.
 #[tokio::test(start_paused = true)]
 async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it() {
     let memory = Memory::new(&DELAYING, LEASE);

@@ -1,12 +1,6 @@
 //! What a client is told when its request does not decode: the `400` problem's
-//! `detail` names where and what kind, never the value — on every deserialising
-//! extractor, on a handler's own decode, and on both paths an `Err` is rendered
-//! by (the edge's own tail, and the outer wrap CORS or compression mounts).
-//!
-//! poem's extractors answer `parse error: <serde's sentence>`, and serde's
-//! sentence quotes what the client sent; the normalizer passed it through as the
-//! detail. A body field is where a card number or a password travels, and a
-//! `400` is logged by proxies and kept by caches.
+//! `detail` names where and what kind, never the value, on every path an `Err`
+//! is rendered by.
 
 use nest_rs_core::{App, Layer, Transport, injectable, module};
 use nest_rs_http::{
@@ -61,8 +55,7 @@ impl DecodeController {
         format!("{:?}", filter.0.card)
     }
 
-    /// A body the handler decodes itself, failing as a `400` through anyhow —
-    /// the error is the handler's, the reply is still the edge's.
+    /// A body the handler decodes itself, failing as a `400` through anyhow.
     #[post("/own")]
     async fn own(&self, body: String) -> poem::Result<String> {
         let amount: u64 = serde_json::from_str(&body).map_err(|err| {
@@ -87,8 +80,7 @@ impl DecodeController {
         Ok(amount.to_string())
     }
 
-    /// A developer's own sentence in serde's vocabulary is theirs, and reaches
-    /// the client as written.
+    /// A developer's own sentence in serde's vocabulary reaches the client as written.
     #[get("/own-words")]
     async fn own_words(&self) -> poem::Result<String> {
         Err(poem::Error::from_string(
@@ -194,8 +186,6 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
                 "{path}",
             );
         }
-        // A kind serde names without quoting is read off the chain: only the
-        // typed reading says it as the report does.
         for path in ["/decode/json", "/decode/valid"] {
             let resp = client
                 .post(path)
@@ -209,7 +199,6 @@ async fn a_body_that_does_not_decode_is_refused_without_its_value() {
                 "{path}",
             );
         }
-        // A key the client spelled is the client's too.
         let resp = client
             .post("/decode/json")
             .content_type("application/json")

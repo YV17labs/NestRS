@@ -3,17 +3,11 @@
 //!
 //! Same fixed-window semantics as the in-process
 //! [`InMemoryThrottler`](nest_rs_throttler::InMemoryThrottler), but the counter
-//! lives in Redis, so N replicas of an app share **one** budget per client
-//! instead of N× the limit. The window is advanced by a single atomic Lua
-//! script (`INCR` + set-expiry-if-unset + `PTTL`) — one round-trip, no
-//! check-then-act race between replicas.
+//! lives in Redis, so N replicas of an app share **one** budget per client,
+//! advanced by one atomic Lua script.
 //!
-//! **Fail-closed.** [`ThrottlerStore::hit`] is async, so the Redis round-trip
-//! is awaited directly on the guard's request task — no worker thread is
-//! blocked per rate-limit check. When Redis is unreachable the store **denies**
-//! (mirrors the in-memory saturation choice): a rate limiter that fails open
-//! under a backend outage is an auth bypass, so the outage is logged at `warn`
-//! and the request is refused.
+//! **Fail-closed.** When Redis is unreachable the store **denies**, logged at
+//! `warn`: a rate limiter that fails open under an outage is an auth bypass.
 
 use std::time::Duration;
 
@@ -24,22 +18,8 @@ use redis::Script;
 use crate::RedisConnection;
 
 /// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
-/// throttled subject, counting its current window.
-///
-/// `nestrs:<concern>:<structure>[:<member>]`, like every key the framework
-/// writes. The concern is the tail of [`nest_rs_throttler::TARGET`] — the crate
-/// that **owns** the concern, never `redis`, because an operator looking at
-/// Redis is looking for the rate limiter's keys — so a key names the port that
-/// owns it, and the port derives the key. `buckets` is the structure level, read
-/// off the port: `InMemoryThrottler` holds one **bucket** per key, and a window is
-/// the span a bucket counts in rather than the thing the key holds. Without it
-/// the concern had exactly one pattern — itself — so an operator sweeping the
-/// rate limiter could scope a `SCAN` no narrower than the concern.
-///
-/// The prefix is fixed, not the deployment's: `NESTRS_ENV_PREFIX` renames the
-/// developer's variables, while a key is the framework's own machinery, and two
-/// deployments sharing one Redis are separated by the logical database in the
-/// connection URL.
+/// throttled subject, counting its current window. The concern is the tail of
+/// [`nest_rs_throttler::TARGET`], never `redis`.
 pub(crate) const BUCKETS: &str = "nestrs:throttler:buckets";
 
 /// The key `subject`'s window is counted in. The subject is the port's: this
@@ -94,9 +74,7 @@ impl RedisThrottler {
     }
 
     /// Run the window script for `key` over the shared connection. `window_ms`
-    /// is the current limit's window. Awaited on the guard's own request task —
-    /// the [`ThrottlerStore`] seam is async, so no runtime worker is blocked
-    /// and a current-thread runtime works too.
+    /// is the current limit's window.
     async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
         self.conn
             .invoke(self.script.key(bucket(key)).arg(window_ms))
@@ -107,9 +85,8 @@ impl RedisThrottler {
 #[async_trait]
 impl ThrottlerStore for RedisThrottler {
     async fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        // Through the crate's one conversion: Redis refuses an expiry whose
-        // instant overflows its `i64` milliseconds, which `Throttle::new` lets a
-        // window reach — every hit then failed, closed, with a warn apiece.
+        // Redis refuses an expiry whose instant overflows its `i64` milliseconds,
+        // which `Throttle::new` lets a window reach.
         let window_ms = crate::layout::millis(limit.window());
         match self.run(key, window_ms).await {
             Ok((count, ttl_ms)) => {

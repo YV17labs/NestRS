@@ -1,16 +1,9 @@
 //! The **hello** module — the one thing every scaffold ships.
 //!
-//! A freshly created project has to prove it started. A `404` on `/` proves
-//! nothing: the process may be healthy and the transport mounted, but the
-//! developer cannot tell that from a browser. So every path out of
-//! `nestrs new` — greenfield monorepo, or an app added to an existing
-//! workspace — writes a service with a greeting and one `#[public]` `GET /`
-//! that returns it. There is no template flag and no routeless variant:
-//! this *is* the starter.
-//!
+//! A freshly created project has to prove it started, so every path out of
+//! `nestrs new` writes a service with a greeting and one `#[public]` `GET /`.
 //! [`SERVICE`] and [`CONTROLLER`] carry no layout of their own; the `FEATURE_*`
-//! wrappers below adapt them to the workspace's `crates/features/src/<name>/`
-//! shape.
+//! wrappers below adapt them to `crates/features/src/<name>/`.
 
 /// The greeting — a provider with one method.
 pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
@@ -53,11 +46,8 @@ impl {{controller}} {
 }
 "#;
 
-// ── Workspace wrappers ───────────────────────────────────────────────────────
-// The feature is named after the app it serves, because the layout keeps no
-// `service.rs` / `controller.rs` in an app crate. `nestrs new hello` writes the
-// `hello` feature; `nestrs new blog` inside that workspace writes the `blog`
-// one — the same shape either way, so no path ends up with a mute app.
+// The feature is named after the app it serves: an app crate keeps no
+// `service.rs` / `controller.rs`.
 
 pub(crate) const FEATURE_MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
 

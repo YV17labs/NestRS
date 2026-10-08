@@ -1,26 +1,13 @@
-//! A **destructured** handler argument works on all four transports.
-//!
-//! `async fn greet(&self, Path(name): Path<String>)` is poem's own idiom, and
-//! the shape a reader writes first — twelve snippets across five docs pages show
-//! it. It used to be a compile error: `#[routes]` and `#[resolver]` forward each
-//! argument to the generated wrapper *by name*, and a pattern has none, so the
-//! macro rejected it up front. It now forwards under the identifier the pattern
-//! binds and leaves the developer's method alone.
-//!
-//! Pinned here, against one app, rather than per transport: HTTP and GraphQL are
-//! the two that had to change, and WS and queue forward positionally so they
-//! already accepted patterns — which is precisely the kind of asymmetry that
-//! rots unnoticed. All four assert on a **value that travelled through the
-//! destructured binding**, so a wrapper forwarding the wrong thing fails here
-//! rather than merely compiling.
+//! A **destructured** handler argument (`Path(name): Path<String>`) works on
+//! all four transports, each asserting a value that travelled through the
+//! binding.
 
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, injectable, module};
 use nest_rs_graphql::async_graphql::{InputObject, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-// Two `Valid` carriers by design (the orphan rule): the HTTP one wraps a poem
-// extractor, the value-form one wraps the wire value. Both are exercised here.
+// Two `Valid` carriers (the orphan rule): the HTTP one wraps a poem extractor.
 use nest_rs_http::{HttpModule, Valid as HttpValid, controller, routes};
 use nest_rs_pipes::{Pipe, PipeError, Piped, Valid};
 use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
@@ -32,8 +19,6 @@ use poem::web::{Json, Path};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
-
-// --- the payload every transport carries -------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize, Validate, JsonSchema, InputObject)]
 struct Note {
@@ -53,22 +38,17 @@ impl Pipe for Trim {
     }
 }
 
-// --- HTTP: `#[routes]` ------------------------------------------------------
-
 #[controller(path = "/notes")]
 struct NotesController;
 
 #[routes]
 impl NotesController {
-    // The exact snippet from `/http/controllers/`.
     #[get("/greet/:name")]
     #[public]
     async fn greet(&self, Path(name): Path<String>) -> String {
         format!("Hello, {name}!")
     }
 
-    // The pipe carrier: `Valid<Json<Note>>` holds the extractor's *inner*
-    // value, so the pattern binds the `Note` itself.
     #[post("/")]
     #[public]
     async fn create(&self, HttpValid(note): HttpValid<Json<Note>>) -> String {
@@ -76,25 +56,18 @@ impl NotesController {
     }
 }
 
-// --- GraphQL: `#[resolver]` --------------------------------------------------
-
 #[resolver]
 struct NotesResolver;
 
 #[operations]
 impl NotesResolver {
-    // `Valid<T>` destructures, and the SDL argument keeps the name the pattern
-    // binds. `Piped<P, T>` carries a phantom marker for `P`, so it is not a
-    // tuple struct and binds under a plain name — mixed in here so one operation
-    // proves both shapes coexist.
+    // `Piped<P, T>` carries a phantom marker, so it binds under a plain name.
     #[query]
     #[public]
     async fn shout(&self, Valid(note): Valid<Note>, pad: Piped<Trim, String>) -> GqlResult<String> {
         Ok(format!("{}{}", note.text.to_uppercase(), pad.len()))
     }
 }
-
-// --- WebSockets: `#[messages]` -----------------------------------------------
 
 #[gateway(path = "/notes-ws")]
 struct NotesGateway;
@@ -107,8 +80,6 @@ impl NotesGateway {
         note.text.clone()
     }
 }
-
-// --- Queue: `#[processor]` ---------------------------------------------------
 
 /// Where the job handler records what it received, so the assertion can run
 /// outside the container.
@@ -130,8 +101,6 @@ impl NotesProcessor {
     }
 }
 
-// --- the app ----------------------------------------------------------------
-
 #[module(
     imports = [HttpModule::for_root(None), GraphqlModule::for_root(None), WsModule],
     providers = [NotesController, NotesResolver, NotesGateway, NotesProcessor],
@@ -145,8 +114,6 @@ async fn app() -> TestApp {
         .await
         .expect("an app whose handlers destructure their arguments boots")
 }
-
-// --- HTTP -------------------------------------------------------------------
 
 #[tokio::test]
 async fn http_forwards_a_destructured_path_extractor() {
@@ -168,8 +135,6 @@ async fn http_forwards_a_nested_destructured_extractor_and_still_validates() {
     ok.assert_status_is_ok();
     ok.assert_text("kept").await;
 
-    // The pattern must not have swallowed the `Valid` layer: an empty `text`
-    // still trips `#[validate(length(min = 1))]` at the edge.
     let rejected = app
         .http()
         .post("/notes")
@@ -178,8 +143,6 @@ async fn http_forwards_a_nested_destructured_extractor_and_still_validates() {
         .await;
     rejected.assert_status(StatusCode::BAD_REQUEST);
 }
-
-// --- GraphQL ----------------------------------------------------------------
 
 #[tokio::test]
 async fn graphql_forwards_a_destructured_piped_argument() {
@@ -201,11 +164,7 @@ async fn graphql_forwards_a_destructured_piped_argument() {
     );
 }
 
-/// The SDL argument name comes from the wrapper's parameter, so a synthesized
-/// one would silently rewrite the public schema. The query above had to spell
-/// `note` — the identifier the pattern binds — and a different name is refused
-/// by the schema, which is what pins it. (Introspection is off by default, so
-/// this asks the schema rather than reading it.)
+/// Introspection is off by default, so the schema is asked rather than read.
 #[tokio::test]
 async fn graphql_names_the_argument_after_the_pattern_binding() {
     let res = app()
@@ -228,8 +187,6 @@ async fn graphql_names_the_argument_after_the_pattern_binding() {
     );
 }
 
-// --- WebSockets -------------------------------------------------------------
-
 #[tokio::test]
 async fn ws_dispatches_to_a_destructured_payload_argument() {
     let reply = NotesGateway
@@ -245,8 +202,6 @@ async fn ws_dispatches_to_a_destructured_payload_argument() {
         WsReply::None => panic!("expected a reply, got none"),
     }
 }
-
-// --- Queue ------------------------------------------------------------------
 
 /// The attempt runs in process, so the backend it names only labels the span.
 static IN_PROCESS: QueueBackend = QueueBackend::new("in-process", Capabilities::NONE);
@@ -276,9 +231,6 @@ async fn a_process_method_dispatches_to_a_destructured_job_argument() {
     );
 }
 
-/// Keeps `Arc` in use on the same import line the other tests rely on, and
-/// documents that the pattern rewrite is wrapper-only: the developer's method
-/// still sees the whole carrier, so it can be called directly.
 #[tokio::test]
 async fn the_developers_method_keeps_its_pattern() {
     let ctrl = Arc::new(NotesController);

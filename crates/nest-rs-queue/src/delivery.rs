@@ -46,10 +46,8 @@ impl<L> Delivery<L> {
     }
 
     /// How many times the backend handed this record over, this delivery
-    /// included. Every delivery before this one ended without an answer — its
-    /// worker died, froze or lost the backend past its lease — since an answer
-    /// ends the record; past [`STALL_LIMIT`](crate::STALL_LIMIT) of them the
-    /// port dead-letters the job without running it.
+    /// included; past [`STALL_LIMIT`](crate::STALL_LIMIT) the port dead-letters
+    /// the job without running it.
     #[must_use]
     pub fn with_delivery_count(mut self, count: u32) -> Self {
         self.delivery_count = count.max(1);

@@ -1,12 +1,9 @@
 //! `nestrs g resource <name>` — a DB-backed CRUD slice: an `#[expose]` entity,
 //! a `CrudService`, and a `#[crud]` HTTP controller behind the app's guards.
 //!
-//! **Guards are not optional here, by construction.** Every read `Repo` runs is
-//! filtered by the caller's ambient `Ability`, and an HTTP request has no
-//! ability unless an `AbilityGuard` installed one — so an unguarded DB-backed
-//! controller compiles, mounts, and then serves nothing. The generator
-//! therefore emits the guarded shape and bootstraps the `g auth` adapter when
-//! the workspace has none.
+//! **Guards are not optional**: `Repo` filters every read by the ambient
+//! `Ability` only an `AbilityGuard` installs, so the generator emits the guarded
+//! shape and bootstraps `g auth` when the workspace has none.
 
 use std::path::PathBuf;
 
@@ -49,13 +46,11 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         auth::queue(&mut s, &ws, Vec::new());
     }
 
-    // DB-backed port.
     s.create(root.join("entity.rs"), r.render(resource::ENTITY));
     s.create(root.join("service.rs"), r.render(resource::SERVICE));
     s.create(root.join("module.rs"), r.render(resource::MODULE));
     s.create(root.join("mod.rs"), r.render(resource::MOD));
 
-    // HTTP adapter — `#[crud]` behind AuthnGuard + AuthzGuard.
     s.create(root.join("http/mod.rs"), r.render(resource::HTTP_MOD));
     s.create(root.join("http/module.rs"), r.render(resource::HTTP_MODULE));
     s.create(
@@ -63,9 +58,8 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         r.render(resource::HTTP_CONTROLLER),
     );
 
-    // Dependencies + feature registration. Exactly one `edit` per path,
-    // folding in the auth adapter's when this run bootstrapped it: a second
-    // `edit` on the same file re-reads it from disk and clobbers the first.
+    // Exactly one `edit` per path: a second re-reads the file from disk and
+    // clobbers the first.
     let mut deps = resource_deps();
     let mut decls = Vec::new();
     if scaffolded_auth {
@@ -80,10 +74,8 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     s.edit(ws.features_cargo(), ensure_features_deps(deps));
     s.edit(ws.features_lib(), ensure_lines(decls));
 
-    // Wire the HTTP module into the current app — but only when it has a DB,
-    // since the resource module needs `SeaOrmDatabaseModule` at boot. The auth roots
-    // ride along in the same edit when this run scaffolded them, so the
-    // composition site stays the inventory `g auth` would have written.
+    // Only into an app with a DB: the resource module needs
+    // `SeaOrmDatabaseModule` at boot.
     let use_path = format!("features::{}::{}", names.snake, names.http_module());
     let http_module = names.http_module();
     let mut imports = vec![(use_path.as_str(), http_module.as_str())];
@@ -143,10 +135,7 @@ fn print_next_steps(
         println!("Also created the auth adapter (authn/, authz/) the guards need,");
         println!("plus a development HS256 secret in `.env` — replace it before deploying.");
         println!();
-        // The adapter includes a route that mints bearer tokens with no
-        // credential — announced here because `g resource` writes it as a side
-        // effect, so a reader who never ran `g auth` would meet it only in a
-        // boot warning whose remedy is to import it.
+        // `g resource` writes the token route as a side effect, so it is announced.
         println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
         println!("your guarded routes are callable at once. It refuses to boot outside");
         println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");

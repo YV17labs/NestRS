@@ -2,15 +2,10 @@
 //!
 //! Exponential — one second after the first failure, doubling after each, never
 //! more than five minutes — and jittered to between 80% and 120% of that, so
-//! the jobs a shared outage failed together do not all come back in the same
-//! instant and fail together again.
+//! the jobs a shared outage failed together do not all come back together.
 //!
-//! **The jitter is derived, not drawn.** It is a hash of the job's id and the
-//! attempt number, so the wait before any attempt of any job is reproducible —
-//! in a test, and by an operator reading a job's lines after the fact — and the
-//! port needs no random number generator. Two jobs still spread apart, because
-//! their ids differ; one job's attempts spread too, because the attempt number
-//! is hashed with the id.
+//! The jitter is a hash of the job's id and the attempt number, never a random
+//! draw, so every wait is reproducible.
 
 use std::time::Duration;
 
@@ -63,7 +58,6 @@ mod tests {
         JobId::parse(raw).expect("a v7 id")
     }
 
-    /// Within 80% to 120% of the doubling wait, capped at five minutes.
     #[test]
     fn each_wait_doubles_within_its_jitter_up_to_the_ceiling() {
         let job = JobId::mint();
@@ -81,8 +75,6 @@ mod tests {
         assert!(retry_after(&job, u32::MAX) <= CEILING.mul_f64(1.2));
     }
 
-    /// The same job and attempt wait the same, so a test — and an operator —
-    /// can say how long any retry waited.
     #[test]
     fn the_wait_is_a_function_of_the_job_and_the_attempt() {
         let job = JobId::mint();
@@ -90,9 +82,7 @@ mod tests {
     }
 
     /// Pinned to literals computed outside this crate (FNV-1a as its
-    /// specification writes it), so a change to the hash — or to the bytes it
-    /// reads — is a failing test rather than a silent reshuffle of every
-    /// deployment's retry schedule.
+    /// specification writes it).
     #[test]
     fn the_jitter_is_pinned() {
         let job = id("01890a5d-ac96-774b-bcce-b302099a8057");
@@ -107,7 +97,6 @@ mod tests {
         );
     }
 
-    /// Jobs failing together come back apart.
     #[test]
     fn jobs_failing_at_one_instant_do_not_all_wait_the_same() {
         let waits: std::collections::BTreeSet<Duration> =

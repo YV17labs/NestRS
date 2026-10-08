@@ -54,10 +54,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        // One phase per method, through the family's helper — which places the
-        // caret on the repeated attribute — and that one taken through
-        // `take_flag_attr`, so an argument on it (`#[on_module_init(order = 2)]`)
-        // is a named compile error rather than something dropped.
         let accepted: Vec<&str> = HOOK_ATTRS.iter().map(|(name, _)| *name).collect();
         let index = match nest_rs_codegen::one_role_per_method(
             "lifecycle phase",
@@ -92,13 +88,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let run_fn = format_ident!("__nestrs_hook_{}_{}", base, method_name);
         let cfgs = cfg_attrs(&method.attrs);
 
-        // Adapt the method's return to `anyhow::Result<()>`: a method answering
-        // `()` — written or not — is infallible, any other must yield
-        // `Result<(), E: Into<_>>`.
-        //
-        // Called by its path, never as `__provider.method()`: the provider is an
-        // `Arc<Host>`, and method lookup tries the `Arc` first, so a trait method
-        // of the hook's name implemented for `Arc<T>` ran in the hook's place.
+        // Called by its path, never as `__provider.method()`: method lookup tries
+        // the `Arc` first, so a trait method of that name on `Arc<T>` would win.
         let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_name(&__provider)));
         let invoke = if returns_unit(&method.sig.output) {
             quote! {

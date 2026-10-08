@@ -6,8 +6,7 @@ mod authorize;
 mod mask;
 
 /// POST one operation as `role` (empty ⇒ no header, i.e. the anonymous caller)
-/// and return the response body as plain JSON. Both modules drive `/graphql`
-/// the same way, so the driver lives here once instead of per test.
+/// and return the response body as plain JSON.
 pub(crate) async fn query(app: &TestApp, role: &str, query: &str) -> serde_json::Value {
     let mut req = app.http().post("/graphql");
     if !role.is_empty() {

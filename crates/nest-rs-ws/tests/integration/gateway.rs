@@ -1,7 +1,5 @@
-//! `#[messages]`-generated `Gateway::dispatch` — the return-type shape paths
-//! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`) — and the
-//! address the generated `Discoverable` mounts that dispatcher at. The macro
-//! itself lives in `nest-rs-ws-macros`; this file pins its observable behaviour.
+//! `#[messages]`-generated `Gateway::dispatch` — its return-type shapes — and
+//! the address the generated `Discoverable` mounts it at.
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard};
@@ -13,8 +11,7 @@ use poem::http::{StatusCode, header};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-/// A typed error that is **`Serialize`** and whose `Display` deliberately
-/// withholds a field — the shape that made the alias leak matter.
+/// A typed error that is `Serialize` and whose `Display` withholds a field.
 #[derive(Debug, Serialize)]
 struct DbFailure {
     dsn: String,
@@ -29,11 +26,10 @@ impl std::fmt::Display for DbFailure {
 
 impl std::error::Error for DbFailure {}
 
-/// The alias the return-type detection cannot see through.
+/// The alias the syntactic return-type detection cannot see through.
 type ServiceResult<T> = Result<T, DbFailure>;
 
-/// The same shape with an error that is `Display` and **not** `Error` — the one
-/// a bound on the alias path let fall to the blanket impl and ship whole.
+/// The same shape with an error that is `Display` and **not** `Error`.
 #[derive(Debug, Serialize)]
 struct DisplayOnly {
     dsn: String,
@@ -47,7 +43,7 @@ impl std::fmt::Display for DisplayOnly {
 
 type DisplayOnlyResult<T> = Result<T, DisplayOnly>;
 
-/// A pipe that always rejects — exercises the WS pipe error path.
+/// A pipe that always rejects.
 struct Reject;
 
 impl Pipe for Reject {
@@ -123,15 +119,12 @@ impl TestGateway {
     #[public]
     async fn nothing_handler(&self) {}
 
-    // `Piped<Trim, String>`: the wire payload is a `String`; the handler sees it
-    // trimmed — the WS analog of the HTTP / GraphQL / queue pipe forms.
     #[subscribe_message("trim")]
     #[public]
     async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
         name.into_inner()
     }
 
-    // A rejecting pipe replies with an error frame, never reaching the body.
     #[subscribe_message("checked")]
     #[public]
     async fn checked_handler(&self, name: Piped<Reject, String>) -> String {
@@ -164,15 +157,13 @@ impl TestGateway {
         Ok("signed up".to_owned())
     }
 
-    // `Valid<T>`: validates the deserialized payload before the handler runs.
     #[subscribe_message("named")]
     #[public]
     async fn named_handler(&self, input: Valid<NameInput>) -> String {
         input.into_inner().name
     }
 
-    // The two spellings of one type. `literal` is what the macro can see; the
-    // three `renamed_*` handlers are the same `Result` behind an alias.
+    // `literal` is what the macro can see; `renamed_*` hide the `Result` behind an alias.
     #[subscribe_message("literal")]
     #[public]
     async fn literal_handler(&self) -> Result<String, DbFailure> {
@@ -406,11 +397,6 @@ async fn unknown_event_returns_unknown_error() {
         _ => panic!("expected Error for an unrouted event"),
     }
 
-    // A socket stays open after an unrouted event, so nothing surfaces at the
-    // transport: a client typo and a deploy that dropped a `#[subscribe_message]`
-    // look identical from the outside and both keep the connection alive. The
-    // event is what separates them, and it is the only per-message trace on a
-    // long-lived connection.
     let event = logs.expect_one(
         "nest_rs::ws",
         "subscribe_message dispatched to an unknown event",
@@ -478,10 +464,6 @@ async fn a_valid_payload_is_validated_before_the_handler() {
                 msg.error.contains("validation failed"),
                 "want validation error in {msg}"
             );
-            // The finding: the macro formatted only `PipeError::message()`, so a
-            // client learned that validation failed and never which field. The
-            // per-field detail rides the frame as `errors`, the member name HTTP
-            // uses for the same rejection.
             let errors = msg
                 .errors
                 .as_ref()
@@ -495,9 +477,6 @@ async fn a_valid_payload_is_validated_before_the_handler() {
     }
 }
 
-/// The wire shape, not just the reply value: a client parses
-/// `{ event, data: { error, errors } }`, and `errors` is absent — not `null` —
-/// when the failure had no structured detail. Same asymmetry HTTP has.
 #[tokio::test]
 async fn the_error_frame_carries_error_and_errors_under_data() {
     let bad = TestGateway
@@ -527,13 +506,6 @@ async fn the_error_frame_carries_error_and_errors_under_data() {
     );
 }
 
-/// A `Result` reached through a type alias must behave exactly like the literal
-/// form. It did not: return-type detection is syntactic on the last path
-/// segment, so `ServiceResult<T>` read as an ordinary value and the `Err`
-/// variant was serialized into the reply `data` — the whole error struct,
-/// including the field `Display` withholds, in a frame with no `error` key. It
-/// compiled without a warning and logged nothing, because nothing knew a
-/// failure had happened.
 #[tokio::test]
 async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -547,14 +519,11 @@ async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
         WsReply::None => panic!("expected an error frame"),
     }
 
-    // …and the denial is greppable, on the transport's own target.
     let event = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("event").as_deref(), Some("renamed"));
 }
 
-/// An alias whose error is `Display` alone is still a `Result`: it replies with
-/// an error frame and a `warn`, never with the error struct serialized as data.
 #[tokio::test]
 async fn an_aliased_result_with_a_display_only_error_is_an_error_frame() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -574,8 +543,6 @@ async fn an_aliased_result_with_a_display_only_error_is_an_error_frame() {
     logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
 }
 
-/// Both spellings produce the same frame — the point of the fix is that the
-/// contract no longer depends on how the type was written.
 #[tokio::test]
 async fn the_literal_and_aliased_forms_reply_identically() {
     let mut frames = Vec::new();
@@ -595,12 +562,9 @@ async fn the_literal_and_aliased_forms_reply_identically() {
         }
     }
     assert_eq!(frames[0], frames[1]);
-    // The withheld field never reaches the wire on either path.
     assert!(!frames[0].contains("hunter2"), "{}", frames[0]);
 }
 
-/// The `Ok` half still replies with the value, so the fix costs the happy path
-/// nothing — an aliased `Result` is now simply a `Result`.
 #[tokio::test]
 async fn an_aliased_result_still_replies_on_ok() {
     let reply = TestGateway
@@ -612,9 +576,6 @@ async fn an_aliased_result_still_replies_on_ok() {
     }
 }
 
-/// A handler returns at most a `Result` around a `Result`, and the inner `Err` is
-/// a failure like the outer one. It used to be the `Ok` value, serialized whole:
-/// `{"Err": {"dsn": …}}` in a frame shaped like a success, with no `warn`.
 #[tokio::test]
 async fn a_result_inside_a_result_is_an_error_frame_however_it_is_spelled() {
     for event in ["nested_literal", "nested_renamed"] {
@@ -645,10 +606,6 @@ async fn a_result_inside_a_result_replies_with_the_inner_value() {
     }
 }
 
-/// An error that is not `Send + Sync` cannot become a boxed `Send + Sync` one,
-/// and it used to fall to the `Display` fallback — the operator's line carried
-/// its sentence and lost every cause beneath it. It is still an `Error`, so its
-/// chain is walked.
 #[tokio::test]
 async fn an_error_that_is_not_send_logs_its_cause_chain() {
     for event in ["unsendable_boxed", "unsendable_rc"] {
@@ -669,15 +626,8 @@ async fn an_error_that_is_not_send_logs_its_cause_chain() {
     }
 }
 
-// --- E4: a refused dispatch must be greppable, whoever refused it ---
-
-/// `/websockets/messages/` promises "a `warn!` lands in the `nest_rs::ws`
-/// target alongside the frame, so a denied dispatch shows up in logs without
-/// extra instrumentation" — in the paragraph about a `Valid<T>` rejection.
-///
-/// Only a handler-returned `Err` warned. A pipe rejection and a malformed
-/// payload — a *client* sending garbage, which is the case worth alerting on —
-/// produced the right frame and no record at any level.
+/// `/websockets/messages/` promises a `warn!` on `nest_rs::ws` for every denied
+/// dispatch.
 #[tokio::test]
 async fn a_pipe_rejection_warns_on_the_ws_target() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -740,9 +690,6 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
     assert_eq!(event.field("event").as_deref(), Some("named"));
 }
 
-/// A payload that does not decode is reported by where and what kind, never by
-/// the value — in the line and in the frame. serde's sentence quoted the value,
-/// so whatever a client put in the wrong field reached the server's log.
 #[tokio::test]
 async fn a_malformed_payload_is_reported_without_its_value() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -770,9 +717,6 @@ async fn a_malformed_payload_is_reported_without_its_value() {
     );
 }
 
-/// A list item a pipe refuses is said without its value, in the frame and on the
-/// line. `ParseArray`'s refusal quoted the item, and the frame and the `warn`
-/// both carry a pipe's refusal whole.
 #[tokio::test]
 async fn a_refused_list_item_is_quoted_neither_in_the_frame_nor_on_the_line() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -801,11 +745,8 @@ async fn a_refused_list_item_is_quoted_neither_in_the_frame_nor_on_the_line() {
     assert!(quoting.is_empty(), "lines quoting the item: {quoting:#?}");
 }
 
-/// A validation failure a handler returns is said without the value it refused,
-/// in the frame and on the line, whether its error keeps the failure as its
-/// source or spells it. The line renders the error's whole chain and the frame
-/// the error's own sentence, and validator's own `Display` prints every rule's
-/// parameters, the submitted value among them.
+/// validator's own `Display` prints every rule's parameters, the submitted
+/// value among them.
 #[tokio::test]
 async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_value() {
     let mut quoting = Vec::new();
@@ -839,14 +780,6 @@ async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_va
     );
 }
 
-// ── The mount address: `#[gateway(version = …)]` ────────────────────────────
-//
-// A gateway's mount is a path a client selects, so it declares a version the
-// way a controller does and resolves it through the same
-// `nest_rs_http::version_path`. What follows pins the three things that
-// declaration decides: the effective path, what the router serves, and what the
-// boot does with two gateways that share a path.
-
 #[gateway(path = "/ws", version = "1")]
 pub(crate) struct VersionedGateway;
 
@@ -859,9 +792,6 @@ impl VersionedGateway {
     }
 }
 
-/// `version_path` prefixes, so a declared version moves the whole mount under
-/// `/v{n}` — the same address shape `#[controller(version = "1")]` produces, and
-/// the reason the argument is spelled identically on both edges.
 #[test]
 fn a_declared_version_moves_the_mount_under_its_segment() {
     assert_eq!(VersionedGateway::VERSION, Some("1"));
@@ -873,8 +803,6 @@ fn a_declared_version_moves_the_mount_under_its_segment() {
     assert_eq!(VersionedGateway::__nestrs_mount_path(), "/v1/ws");
 }
 
-/// The other half, and the one that guarantees this is additive: a gateway that
-/// declares no version mounts exactly where it always did.
 #[test]
 fn an_undeclared_version_leaves_the_mount_alone() {
     assert_eq!(TestGateway::VERSION, None);
@@ -884,14 +812,9 @@ fn an_undeclared_version_leaves_the_mount_alone() {
 #[module(imports = [WsModule], providers = [VersionedGateway])]
 struct VersionedModule;
 
-/// What a socket-less client can prove about a mount, and it is more than it
-/// looks: `400 invalid protocol` is poem's `WebSocket` extractor refusing a GET
-/// that is not an upgrade, so only a mounted gateway endpoint can answer it.
-/// `500 no upgrade` is that same extractor accepting the *whole* handshake —
-/// method, `Upgrade`, `Connection`, `Sec-WebSocket-Version`, `Sec-WebSocket-Key`
-/// — and finding no hyper upgrade seam, which is exactly as far as an in-process
-/// `TestClient` reaches. Past that seam is `nest_rs_testing::ws`, which binds a
-/// real port; the socket-driven witnesses are at the end of this file.
+/// The status an in-process handshake gets: `500 no upgrade` is poem's
+/// `WebSocket` extractor accepting the whole handshake and finding no hyper
+/// upgrade seam, which only a mounted gateway answers.
 async fn upgrade_status(app: &TestApp, path: &str) -> StatusCode {
     app.http()
         .get(path)
@@ -922,9 +845,6 @@ async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 
-    // …and the undeclared address is not a second door. A gateway that declared
-    // a version and stayed reachable unversioned would be the silent-fallback
-    // failure URI versioning exists to avoid.
     assert_eq!(upgrade_status(&app, "/ws").await, StatusCode::NOT_FOUND);
     app.http()
         .get("/ws")
@@ -933,10 +853,6 @@ async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-/// A boot log naming an address nobody can connect to is worse than none — it is
-/// the first thing read when a socket will not open. Both events the mount emits
-/// carry the effective path: the transport's, and the per-event one `#[messages]`
-/// writes from inside the mount closure.
 #[tokio::test]
 async fn the_boot_log_names_the_address_a_client_connects_to() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -953,10 +869,8 @@ async fn the_boot_log_names_the_address_a_client_connects_to() {
     assert_eq!(message.field("event").as_deref(), Some("ping"));
 }
 
-// A gateway owns its mount, so "which gateway is at this address" is a question
-// with a testable answer: give each version a connection guard that denies with
-// its own reason. The reason rides the problem+json `detail`, so the response
-// names the gateway whose upgrade chain actually ran.
+// Each version's connection guard denies with its own reason, so the response
+// names the gateway whose upgrade chain ran.
 
 #[injectable]
 #[derive(Default)]
@@ -1020,10 +934,6 @@ impl ChatV2Gateway {
 )]
 struct TwoVersionsModule;
 
-/// Two gateways, one declared `path`, two versions. The duplicate-self-mount
-/// boot error compares the **effective** path, so these are two mounts rather
-/// than a collision — and each serves its own upgrade chain, which is what makes
-/// them independent rather than merely distinct.
 #[tokio::test]
 async fn two_versions_of_one_path_both_boot_and_serve_their_own_chain() {
     let app = TestApp::for_module::<TwoVersionsModule>()
@@ -1043,14 +953,12 @@ async fn two_versions_of_one_path_both_boot_and_serve_their_own_chain() {
         );
     }
 
-    // The bare path belongs to neither.
     app.http()
         .get("/chat")
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
 
-    // …and the message tables stayed separate, each answering for itself.
     assert!(matches!(
         ChatV1Gateway.dispatch(&WsClient::for_test(), "say", serde_json::Value::Null).await,
         WsReply::Reply(v) if v.as_str() == Some("v1"),
@@ -1084,9 +992,7 @@ impl TwinBGateway {
 #[module(imports = [WsModule], providers = [TwinAGateway, TwinBGateway])]
 struct TwinModule;
 
-/// The half a version must not weaken: same path *and* same version is still one
-/// address with two owners, and it fails boot naming both rather than letting
-/// poem panic during route assembly.
+/// Fails boot naming both rather than letting poem panic during route assembly.
 #[tokio::test]
 async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
     let Err(err) = TestApp::for_module::<TwinModule>().await else {
@@ -1105,23 +1011,13 @@ async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
     );
 }
 
-// ── Above `dispatch`: the connection itself ─────────────────────────────────
-//
-// Everything up to here calls `Gateway::dispatch` directly, which is the whole
-// of the message table and none of the socket. The upgrade, the `WsConfig` it
-// resolves, the socket-lifetime ceiling, the per-message cap, the writer task,
-// the registry entry's cleanup and every Close frame the server sends live in
-// the connection task `on_upgrade` spawns, and none of them had a witness in
-// this workspace. `nest_rs_testing::ws` binds a real port so they do.
-
 use nest_rs_testing::LogCapture;
 use nest_rs_testing::ws::WsFrame;
 use nest_rs_ws::CloseCode;
 use nest_rs_ws::{WsConfig, WsServer};
 use std::time::Duration;
 
-/// A read budget for asserting *absence*, so a test does not pay the driver's
-/// full timeout to prove a socket stayed quiet.
+/// A read budget for asserting absence, shorter than the driver's full timeout.
 const QUIET: Duration = Duration::from_millis(150);
 
 #[gateway(path = "/socket")]
@@ -1139,10 +1035,6 @@ impl SocketGateway {
 #[module(imports = [WsModule], providers = [SocketGateway])]
 struct SocketModule;
 
-/// The round trip nothing asserted: a real handshake, the connection task, the
-/// writer half, and back. Below it, the three `nest_rs::operation` lines the
-/// edge owes — a socket that opens, serves and closes with nothing on the
-/// console is work no operator can account for.
 #[tokio::test]
 async fn a_message_round_trips_over_a_real_upgrade() {
     let logs = LogCapture::install();
@@ -1167,10 +1059,6 @@ async fn a_message_round_trips_over_a_real_upgrade() {
         "the upgrade registered the connection",
     );
 
-    // §5.5.1: an endpoint that *receives* a Close must send one back. The
-    // protocol layer queues that echo when it decodes the frame — and nothing
-    // ever flushed it, because the writer task simply dropped the `Sink`, so
-    // the client read 1006 on a close it had itself requested.
     let echo = socket
         .close(CloseCode::Normal, "done")
         .await
@@ -1181,9 +1069,7 @@ async fn a_message_round_trips_over_a_real_upgrade() {
         "the peer's own status comes back"
     );
 
-    // The registry entry goes with the connection: `RegistryGuard`'s `Drop`
-    // runs before the echo reaches the wire, so observing the echo is enough
-    // to observe the cleanup.
+    // `RegistryGuard`'s `Drop` runs before the echo reaches the wire.
     assert_eq!(server.connection_count(), 0, "the entry did not outlive it");
 
     for unit in [
@@ -1229,11 +1115,6 @@ const CEILING: Duration = Duration::from_secs(1);
 )]
 struct CeilingModule;
 
-/// The ceiling is a security control — it forces a re-upgrade so `exp` is
-/// checked again — and a client that cannot tell it from a dropped connection
-/// retries blindly and never re-authenticates. It closed by dropping the
-/// `Sink`, so the peer read **1006**, which §7.4.1 reserves for a connection
-/// closed with no Close frame at all: a network fault.
 #[tokio::test]
 async fn the_lifetime_ceiling_closes_with_going_away() {
     let logs = LogCapture::install();
@@ -1260,8 +1141,6 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
         "the peer is told what to do about it, not only that it happened",
     );
 
-    // The operator's half of the same event, so a close on the wire and a line
-    // in the log cannot come to describe different closes.
     let closing = logs.expect_one("nest_rs::ws", "closing socket: max lifetime reached");
     assert_eq!(
         closing.field("close_code").as_deref(),
@@ -1280,10 +1159,8 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
 )]
 struct CappedModule;
 
-/// The per-message cap is enforced at the protocol layer, so an oversize frame
-/// is refused *while reading* (WS-I1) — and the refusal surfaces as a read
-/// error, with the framing gone mid-message. The socket cannot continue, so it
-/// ends; what changed is that it now ends by *saying so*.
+/// The protocol-layer cap surfaces as a read error with the framing gone, so the
+/// socket cannot continue.
 #[tokio::test]
 async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
     let logs = LogCapture::install();
@@ -1318,11 +1195,6 @@ async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-/// RFC 6455 §5.6 makes Binary a first-class data frame, so a client is entitled
-/// to send one. This gateway's contract is a JSON text envelope, so refusing it
-/// is right — refusing it with no reply and no log at any level is a silent
-/// failure, and from the client's side it is indistinguishable from a handler
-/// that never answered.
 #[tokio::test]
 async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
     let logs = LogCapture::install();
@@ -1350,17 +1222,12 @@ async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
     );
     assert_eq!(event.field("bytes").as_deref(), Some("3"));
 
-    // Framing is intact, so the refusal is in band and the connection lives —
-    // the same answer the oversize boundary gives, for the same reason.
     socket.send("echo", serde_json::json!("still here")).await;
     assert_eq!(socket.next_envelope().await["data"], "still here");
 
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-/// An unrouted event answers and keeps the socket open — the frame is the
-/// answer, and nothing follows it. Proves the driver's silence assertion is
-/// real, and pins the one arm of the loop that must *not* close.
 #[tokio::test]
 async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
     let app = nest_rs_testing::TestApp::builder()
@@ -1390,12 +1257,8 @@ async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-// ── Connection hooks under `#[cfg]` ─────────────────────────────────────────
-//
 // An attribute macro reads a method before its `#[cfg]` is evaluated, so every
-// hook reaches the expansion — including one compiled out. Keeping only the
-// last one seen dropped a hook that *is* compiled in whenever a compiled-out
-// one followed it.
+// hook reaches the expansion, including one compiled out.
 
 static CFG_HOOK_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1424,12 +1287,8 @@ async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
     );
 }
 
-/// A decode failure a handler returns reaches neither its frame nor the
-/// operator's line with the value, in every tier a handler's error takes —
-/// `anyhow::Result` with `?`, serde's error itself, an error that is not
-/// `Send`, and a `Display`-only one. The frame carried the error's sentence,
-/// which is serde's, which quotes it; and a value a handler failed to decode
-/// need not even be this client's.
+/// Every tier a handler's error takes: `anyhow::Result` with `?`, serde's error
+/// itself, an error that is not `Send`, and a `Display`-only one.
 #[tokio::test]
 async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
     const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
@@ -1460,9 +1319,6 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
     assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
 }
 
-/// A [`WsError`](nest_rs_ws::WsError) a handler returns through anyhow is the
-/// handler's deliberate frame, and is sent whole: anyhow's own box hid it from
-/// the downcast, and the per-field detail was lost.
 #[tokio::test]
 async fn a_frame_returned_through_anyhow_is_sent_whole() {
     let reply = TestGateway
@@ -1478,16 +1334,6 @@ async fn a_frame_returned_through_anyhow_is_sent_whole() {
     assert_eq!(frame.error, "pick another name");
     assert_eq!(frame.errors, Some(serde_json::json!({ "name": ["taken"] })));
 }
-
-// ── The way down ────────────────────────────────────────────────────────────
-//
-// A socket is a connection poem stops tracking at the upgrade, so the shutdown
-// window neither waited for one nor closed it: the transport returned with
-// every socket still open, the shutdown hooks ran under live handlers, and the
-// process exit cut them — 1006 to a client that could not tell a deploy from a
-// network fault. At the signal a socket is now told RFC 6455 §7.4.1's **1001
-// Going Away**, the code for "a server going down", after whatever message it
-// is already answering.
 
 static SLOW_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static STUCK_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
@@ -1564,9 +1410,6 @@ async fn leaving_app() -> nest_rs_testing::ws::WsApp {
         .expect("a gateway boots on a real port")
 }
 
-/// An idle socket is closed at the signal with 1001 and a reason saying what
-/// to do — reconnect — and the transport waits for that close rather than
-/// returning past a socket it never told.
 #[tokio::test]
 async fn an_idle_socket_is_closed_going_away_at_the_signal() {
     let logs = LogCapture::install();
@@ -1608,9 +1451,6 @@ async fn an_idle_socket_is_closed_going_away_at_the_signal() {
     );
 }
 
-/// A message the socket is already answering at the signal is answered — inside
-/// the window, like a request still running — and the close comes after it, so
-/// no reply is lost to the shutdown.
 #[tokio::test]
 async fn a_message_running_at_the_signal_is_answered_before_the_close() {
     let app = leaving_app().await;
@@ -1630,9 +1470,6 @@ async fn a_message_running_at_the_signal_is_answered_before_the_close() {
     assert_eq!(code, CloseCode::Away);
 }
 
-/// A message still running when the window closes is dropped where it waits,
-/// and files its line `cancelled` — the socket goes with it, cut like a request
-/// the window closed on.
 #[tokio::test]
 async fn a_message_still_running_at_the_window_is_dropped_and_files_cancelled() {
     let logs = LogCapture::install();
@@ -1671,10 +1508,6 @@ async fn a_message_still_running_at_the_window_is_dropped_and_files_cancelled() 
     );
 }
 
-/// A handler that panics took the connection task down with it: no line, and a
-/// socket the peer read as 1006. The panic is contained at the message — the
-/// unit files `panic`, the client is answered with an error frame that says
-/// nothing of what unwound, and the socket goes on serving.
 #[tokio::test]
 async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() {
     let logs = LogCapture::install();
@@ -1711,7 +1544,6 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
         exploded[0].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::PANIC),
     );
-    // The message's span fails with the line's word.
     let span = logs
         .spans()
         .into_iter()
@@ -1778,10 +1610,6 @@ impl BrokenConnectGateway {
 #[module(imports = [WsModule], providers = [BrokenHooksGateway, BrokenConnectGateway])]
 struct BrokenHooksModule;
 
-/// A connect hook that panics leaves a connection set up halfway, so it is not
-/// served: the hook files `panic` and the socket is closed with §7.4.1's **1011
-/// Internal Error**, which a client reads as "the server failed, try again" —
-/// rather than the 1006 the unwinding task left it.
 #[tokio::test]
 async fn a_connect_hook_that_panics_files_panic_and_closes_with_internal_error() {
     let logs = LogCapture::install();
@@ -1816,9 +1644,6 @@ async fn a_connect_hook_that_panics_files_panic_and_closes_with_internal_error()
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-/// A disconnect hook that panics is the last thing a socket does, so the close
-/// it was running for still completes — the §5.5.1 echo reaches the client —
-/// and the hook files `panic`.
 #[tokio::test]
 async fn a_disconnect_hook_that_panics_files_panic_and_the_close_still_completes() {
     let logs = LogCapture::install();
@@ -1857,20 +1682,13 @@ async fn a_disconnect_hook_that_panics_files_panic_and_the_close_still_completes
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-/// The writer that drains a socket's replies owns its sink, and ran on a task
-/// of its own that nothing stopped: a client that stopped reading parked it,
-/// and the socket stayed open after the transport had stopped the connection —
-/// past everything that served it. It goes with its connection now, so the
-/// window's close cuts the socket like any other.
 #[tokio::test]
 async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
     let logs = LogCapture::install();
     let app = leaving_app().await;
     let mut socket = app.socket("/leaving").connect().await;
     socket.send("flood", serde_json::Value::Null).await;
-    // Never read again: the replies fill both kernel buffers and park the
-    // writer. On paused time, which moves only once it is parked, through the
-    // window too.
+    // Paused time moves only once the writer is parked on the full kernel buffers.
     tokio::time::pause();
     tokio::time::sleep(Duration::from_millis(500)).await;
     app.shutdown().await.expect("the transport stops cleanly");
@@ -1890,9 +1708,8 @@ async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
     drop(socket);
 }
 
-/// Refuses every message, and declares no `WsGuard`: the marker is a bound
-/// `#[messages]` emits for the guards declared at its site, and the global pool
-/// — `Arc<dyn Guard>`, with no marker to consult — is not one of them.
+/// Refuses every message, and declares no `WsGuard`: the global pool is
+/// `Arc<dyn Guard>`, with no marker to consult.
 #[injectable]
 #[derive(Default)]
 struct UnmarkedWsGuard;
@@ -1914,10 +1731,7 @@ impl Guard for UnmarkedWsGuard {
 #[module(imports = [WsModule], providers = [SocketGateway, UnmarkedWsGuard])]
 struct UnmarkedPoolModule;
 
-/// A pooled guard checks every message whether or not it declares `WsGuard`, so
-/// a missing marker on a global guard costs a compile-time bound and nothing on
-/// the wire — the other three edges are held in `nest-rs-testing`'s
-/// `guard_markers`.
+/// The other edges are held in `nest-rs-testing`'s `guard_markers`.
 #[tokio::test]
 async fn a_pooled_guard_without_ws_guard_still_checks_every_message() {
     let app = nest_rs_testing::TestApp::builder()

@@ -11,8 +11,7 @@ use syn::{
 };
 
 /// SeaORM marker on a relation field: `HasOne<T>` ⇔ `belongs_to`,
-/// `HasMany<T>` ⇔ `has_many`. Kept typed (not stringly) so a rename or typo
-/// on either side fails at compile rather than as a silent scalar fallback.
+/// `HasMany<T>` ⇔ `has_many`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cardinality {
     One,
@@ -36,11 +35,8 @@ pub(crate) enum RelationKind {
     HasMany {
         /// `crate::users::Entity`.
         target: Path,
-        /// `#[expose(via = "author_id")]` — which of the child's foreign keys
-        /// this relation follows. `None` ⇒ the child's sole key to this parent
-        /// (`SoleForeignKey`), which is a compile error when it has two. Kept
-        /// as the [`LitStr`](struct@LitStr) the developer wrote so a bad column name reports
-        /// at the string, not at the field.
+        /// `#[expose(via = "author_id")]`; `None` ⇒ `SoleForeignKey`. Kept as the
+        /// [`LitStr`](struct@LitStr) written so a bad column name reports at the string.
         via: Option<LitStr>,
     },
 }
@@ -48,10 +44,8 @@ pub(crate) enum RelationKind {
 pub(crate) struct ResourceField {
     pub ident: Ident,
     pub ty: Type,
-    /// `true` when the field carries `#[expose]` in any form — it then appears
-    /// in the wire / GraphQL output, and a relation gets its auto field
-    /// resolver. A field with **no** `#[expose]` is hidden from every transport.
-    /// Exposure is opt-in: silence means hidden, never leaked.
+    /// Whether the field carries `#[expose]` in any form; without it the field
+    /// is hidden from every transport.
     pub read: bool,
     pub in_create: bool,
     pub in_update: bool,
@@ -60,28 +54,17 @@ pub(crate) struct ResourceField {
     pub is_pk: bool,
     /// Re-emitted verbatim as `#[validate(...)]` on the input field.
     pub validate: Vec<TokenStream2>,
-    /// Detected `HasOne<T>` / `HasMany<T>` association. Drives auto-generated
-    /// field resolvers + loader trait impls. Scalar columns leave this `None`.
+    /// Detected `HasOne<T>` / `HasMany<T>` association; `None` on a scalar column.
     pub relation: Option<RelationKind>,
     /// Override async-graphql's per-field complexity for the auto-emitted
-    /// field resolver. Accepts a literal (`complexity = 5`) or an expression
-    /// string (`complexity = "first * child_complexity"`). When `None`, the
-    /// macro picks a safe default per relation kind (see `relations::emit`).
+    /// field resolver; `None` ⇒ a default per relation kind (`relations::emit`).
     pub complexity: Option<Expr>,
-    /// Audited opt-in for the masking placeholder of an **unexposed** column
-    /// whose type the emitter can't default (custom enum, `Uuid`, timestamp,
-    /// `Decimal`). `None` ⇒ absent; `Some(None)` ⇒ bare `#[wire_default]` (the
-    /// column type's `Default`); `Some(Some(expr))` ⇒ `#[wire_default(expr)]`.
-    /// See `wire.rs` for the safety contract (only sound when no `Ability` rule
-    /// predicates on the column, since the placeholder is stripped before the
-    /// body ships).
+    /// `#[wire_default]` (`Some(None)`, the type's `Default`) or
+    /// `#[wire_default(expr)]`; sound only when no `Ability` rule predicates on the column.
     pub wire_default: Option<Option<Expr>>,
 }
 
 impl ResourceField {
-    /// True iff the field belongs in the output struct as a plain column. A
-    /// relation never does — it is materialised by a `#[ComplexObject]` field
-    /// resolver (or skipped entirely).
     pub(crate) fn in_output_struct(&self) -> bool {
         self.read && self.relation.is_none()
     }
@@ -107,9 +90,8 @@ pub(crate) struct ResourceModel {
     /// Path to the entity's service, used as the receiver of auto-generated
     /// `#[dataloader]` impls. Required when any exposed relation is present.
     pub service: Option<Path>,
-    /// Emit `#[graphql(complex)]` on the output. Set explicitly via
-    /// `complex` or implicitly when any exposed relation calls for a
-    /// `#[ComplexObject]`.
+    /// Emit `#[graphql(complex)]` on the output: `complex`, or implied by an
+    /// exposed relation.
     pub complex: bool,
     /// When set, emit GraphQL surface types (SimpleObject, loaders, relations).
     pub graphql: bool,
@@ -120,7 +102,6 @@ pub(crate) struct ResourceModel {
 }
 
 impl ResourceModel {
-    /// True iff at least one exposed (`#[expose]`) relation needs a `#[ComplexObject]`.
     pub(crate) fn has_auto_relations(&self) -> bool {
         self.fields.iter().any(|f| f.read && f.relation.is_some())
     }
@@ -133,11 +114,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let mut graphql = false;
     let mut soft_delete = false;
     let mut timestamps = false;
-    // A repeat is refused here for the reason `args.rs` states once: "Accepting
-    // the repeat means dropping one of two declarations, and which one it drops
-    // is source order." On this decorator that is the **wire**:
-    // `#[expose(name = "User", name = "Account")]` compiled, and the DTO and the
-    // OpenAPI schema took whichever came last.
     MODEL.parse2(args, |arg| {
         match arg.key() {
             "name" => name = Some(type_name(&arg.expr()?)?),
@@ -196,25 +172,17 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut validate = Vec::new();
         let mut complexity: Option<Expr> = None;
         let mut via: Option<LitStr> = None;
-        // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
-        // the same pass. The attrs stay on the field so SeaORM still owns them
-        // — we only read.
         let mut is_pk = false;
         let mut is_belongs_to = false;
         let mut is_has_many = false;
         let mut from_col: Option<Ident> = None;
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
-            // Surface a sea_orm-side parse failure — silently swallowing it
-            // (the previous `let _ = ...`) hid malformed `from = some_expr`
-            // shapes behind a downstream 'missing from' diagnostic.
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("primary_key") {
                     is_pk = true;
                 } else if m.path.is_ident("belongs_to") {
                     is_belongs_to = true;
-                    // Legacy `belongs_to = "Path"` form: accept and ignore the
-                    // value. The flat form (`#[sea_orm(belongs_to, …)]`) is the
-                    // canonical one in this repo.
+                    // Legacy `belongs_to = "Path"` form: accept and ignore the value.
                     if m.input.peek(Token![=]) {
                         let _: syn::Expr = m.value()?.parse()?;
                     }
@@ -227,25 +195,15 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     let written: Expr = m.value()?.parse()?;
                     from_col = Some(foreign_key(&written)?);
                 } else if m.input.peek(Token![=]) {
-                    // Any other key-value pair — consume so the meta parser
-                    // can advance past it without erroring.
+                    // Consume any other value so the meta parser can advance.
                     let _: syn::Expr = m.value()?.parse()?;
                 }
                 Ok(())
             })?;
         }
 
-        // Exposure is opt-in: the mere presence of `#[expose]` (bare or with
-        // options) marks the field for read exposure; `input(...)` additionally
-        // opts it into the write DTOs (and so implies read). A field carrying
-        // no `#[expose]` is hidden from every transport — silence is never a
-        // leak. A column added by a later migration stays invisible until
-        // someone deliberately exposes it.
         // Every `#[expose]` on the field is read as one list, so a key written
-        // in two of them is written twice: a repeat is one declaration dropped
-        // by source order — `via` decides which foreign key a `HasMany`
-        // follows, `complexity` the query-cost limit. A bare `#[expose]` adds
-        // nothing to the list.
+        // in two of them is a repeat the grammar refuses.
         let mut written = TokenStream2::new();
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("expose")) {
             read = true;
@@ -298,16 +256,9 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     syn::parenthesized!(content in input);
                     validate.push(content.parse()?);
                 }
-                // Accepts a literal int (`complexity = 5`) or an expression
-                // string async-graphql parses (`complexity = "first.unwrap_or(20)
-                // as usize * child_complexity"`) — both re-emit verbatim into the
-                // generated `#[graphql(complexity = ...)]`. A `HasMany` resolver
-                // takes `first`/`after`, so the expression may name them; every
-                // other field has no arguments to name.
+                // A literal int or an expression string async-graphql parses,
+                // re-emitted verbatim; only a `HasMany` has `first`/`after` to name.
                 "complexity" => complexity = Some(arg.expr()?),
-                // Which of the child's foreign keys a `HasMany` follows. A column
-                // name, not a path: the marker type the parent resolves it to is
-                // the framework's business.
                 "via" => {
                     let lit = arg.str_lit("author_id")?;
                     if syn::parse_str::<Ident>(&lit.value()).is_err() {
@@ -331,11 +282,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
 
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
-        // The audited masking-placeholder opt-in. Bare `#[wire_default]` emits
-        // the column type's `Default`; `#[wire_default(expr)]` emits `expr`.
-        // Meaningful only for a column the wire DTO omits, so misuse on an
-        // exposed / PK / relation field is a hard error below, not a silent
-        // no-op. Strip it so the ORM derives never see it.
         let mut wire_default: Option<Option<Expr>> = None;
         for attr in field
             .attrs
@@ -352,12 +298,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         }
         field.attrs.retain(|a| !a.path().is_ident("wire_default"));
 
-        // Type-driven relation detection. `HasOne<T>` paired with `belongs_to`
-        // ⇒ BelongsTo; `HasMany<T>` paired with `has_many` ⇒ HasMany. A type
-        // marker without its matching sea_orm marker is a user mistake worth
-        // surfacing — silently treating it as a scalar drops the field into
-        // the `SimpleObject` derive where it explodes with a cryptic
-        // 'HasOne does not impl OutputType' span on the macro expansion.
+        // A type marker without its sea_orm marker is refused: as a scalar it
+        // fails inside the `SimpleObject` expansion with a cryptic span.
         let card = relation_cardinality(&ty);
         let relation = match (card, is_belongs_to, is_has_many) {
             (Some((Cardinality::One, target)), true, _) => {
@@ -388,11 +330,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             _ => None,
         };
 
-        // `via` picks between a child's foreign keys, so it is meaningful on
-        // exactly one shape. The `HasMany` arm above consumed it; anything left
-        // is on a `HasOne` — which already names its column in
-        // `#[sea_orm(from = …)]`, and two spellings of one fact is the "one way
-        // to do a thing" rule — or on a plain column, where it means nothing.
+        // The `HasMany` arm consumed `via`; one left is misplaced.
         if let Some(via) = via {
             let hint = match &relation {
                 Some(RelationKind::BelongsTo { from, .. }) => format!(
@@ -403,9 +341,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             return Err(syn::Error::new_spanned(&via, hint));
         }
 
-        // A relation is materialised by a field resolver, not a column setter —
-        // `input(...)` on it would emit `__am.<rel> = Set(self.<rel>)` against a
-        // `HasOne`/`HasMany` marker and fail deep in expansion. Refuse early.
+        // `input(...)` on a relation would emit `Set(self.<rel>)` against its
+        // marker and fail deep in expansion.
         if relation.is_some() && (in_create || in_update) {
             return Err(syn::Error::new_spanned(
                 &field.ident,
@@ -413,10 +350,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             ));
         }
 
-        // `#[wire_default]` is only meaningful for a column the wire DTO omits.
-        // An exposed column reconstructs from the body; a PK is never
-        // fabricated; a relation is materialised by a field resolver. Refusing
-        // these loudly (solid > silent) keeps the placeholder auditable.
         if wire_default.is_some() {
             if read {
                 return Err(syn::Error::new_spanned(
@@ -492,11 +425,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
 
 /// `#[expose(name = "User")]`'s value: the type the wire DTO is declared as,
 /// and the stem of its `Create…` / `Update…` inputs and OpenAPI schema.
-///
-/// **An identifier or a refusal, never a panic.** It went straight into
-/// `format_ident!`, which panics on a name that is not one — `"my user"`, a
-/// keyword — so the developer read "proc macro panicked" and the name of
-/// nothing they wrote.
+/// Refused unless an identifier, since `format_ident!` panics on one that is not.
 fn type_name(written: &Expr) -> syn::Result<String> {
     let lit = nest_rs_codegen::require_str_lit(written, "expose", "name", "User")?;
     let name = lit.value();
@@ -514,14 +443,8 @@ fn type_name(written: &Expr) -> syn::Result<String> {
 }
 
 /// The entity's own `#[sea_orm(from = "org_id")]`, which `#[expose]` reads to
-/// find the field holding a `HasOne` relation's foreign key.
-///
-/// SeaORM's attribute and SeaORM's key, so the refusal opens with that site —
-/// it is where the value is written. What `#[expose]` adds is only what it needs
-/// of the value: a string, naming a field, since it becomes one of this
-/// struct's identifiers (a name that is not one used to panic in
-/// `format_ident!`). The ident keeps the literal's span, so a later refusal of
-/// the name — a column this entity does not have — lands on the name.
+/// find the field holding a `HasOne` relation's foreign key. The ident keeps the
+/// literal's span, so a later refusal of the column lands on the name.
 fn foreign_key(written: &Expr) -> syn::Result<Ident> {
     let lit = nest_rs_codegen::require_str_lit(written, "sea_orm", "from", "org_id")?;
     let column = lit.value();
@@ -577,8 +500,7 @@ fn listed(arg: &Arg<'_>, takes: &str) -> syn::Result<Vec<Expr>> {
     Ok(listed.into_iter().collect())
 }
 
-/// Match `HasOne<T>` / `HasMany<T>` on the last path segment. Returns the
-/// cardinality and the inner target path.
+/// Match `HasOne<T>` / `HasMany<T>` on the last path segment.
 fn relation_cardinality(ty: &Type) -> Option<(Cardinality, Path)> {
     let Type::Path(TypePath { path, .. }) = ty else {
         return None;
@@ -605,19 +527,14 @@ pub(crate) fn graphql_root() -> TokenStream2 {
 }
 
 /// The same root as the **string** a `crate = ` argument takes, built from
-/// [`graphql_root`]'s tokens rather than re-typed.
-///
-/// The two forms must not drift: a path that no longer resolves is a compile
-/// error at the emit site, while a stale string parses fine and silently sends
-/// the expansion back to the call site's prelude — the failure this override
-/// exists to close.
+/// [`graphql_root`]'s tokens: a stale string would parse fine and silently send
+/// the expansion back to the call site's prelude.
 pub(crate) fn graphql_root_str() -> String {
     graphql_root().into_iter().map(|t| t.to_string()).collect()
 }
 
 /// The trailing async-graphql derive (`SimpleObject` for output objects,
-/// `InputObject` for inputs) to splice into a `#[derive(...)]` list — present
-/// only when `#[expose(graphql)]` is on, empty otherwise.
+/// `InputObject` for inputs) to splice into a `#[derive(...)]` list.
 pub(crate) fn graphql_object_derive(model: &ResourceModel, derive: &str) -> TokenStream2 {
     if !model.graphql {
         return TokenStream2::new();
@@ -627,15 +544,9 @@ pub(crate) fn graphql_object_derive(model: &ResourceModel, derive: &str) -> Toke
     quote! { #root::#derive, }
 }
 
-/// The `crate = ` override those derives need.
-///
-/// An async-graphql derive roots its own expansion at whatever
-/// `proc-macro-crate` finds in the *call site's* manifest, falling back to a
-/// bare `::async_graphql`. Without this the entity crate would have to declare
-/// `async-graphql` — and pin its version by hand — for code it never wrote;
-/// same reason `#[expose]` already spells out serde's and schemars' overrides.
-/// The emitted `#[ComplexObject]` needs the same override, spelled as an
-/// argument rather than an attribute — see `relations::emit_field_resolvers`.
+/// The `crate = ` override those derives need: without it async-graphql roots
+/// its expansion in the call site's manifest. `#[ComplexObject]` takes it as an
+/// argument (`relations::emit_field_resolvers`).
 pub(crate) fn graphql_crate_attr(model: &ResourceModel) -> TokenStream2 {
     if !model.graphql {
         return TokenStream2::new();
@@ -644,15 +555,14 @@ pub(crate) fn graphql_crate_attr(model: &ResourceModel) -> TokenStream2 {
     quote! { #[graphql(crate = #root)] }
 }
 
-/// `true` when the type's last path segment is `Uuid` (rendered as `String` on
-/// the GraphQL output). Purely syntactic: `Option<Uuid>` and aliases pass
-/// through with their native type.
+/// Whether the type's last path segment is `Uuid` (a `String` on the wire).
+/// Purely syntactic: `Option<Uuid>` and aliases keep their native type.
 pub(crate) fn is_uuid(ty: &Type) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == "Uuid"))
 }
 
-/// `true` for SeaORM's `DateTimeWithTimeZone` — rendered as RFC 3339 `String`
-/// on the wire and in GraphQL (async-graphql has no native chrono mapping).
+/// Whether the type is SeaORM's `DateTimeWithTimeZone`, an RFC 3339 `String` on
+/// the wire (async-graphql has no native chrono mapping).
 pub(crate) fn is_datetime_tz(ty: &Type) -> bool {
     matches!(
         ty,

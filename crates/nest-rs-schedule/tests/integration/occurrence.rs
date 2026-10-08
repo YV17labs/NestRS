@@ -1,10 +1,6 @@
 //! The occurrence lock's binding contract, booted the way an app wires it:
 //! `ScheduleModule`, a binding declaring `Arc<dyn OccurrenceLock>` with
-//! `BACKEND_REMEDY` — one declared factory and nothing else, the whole of what a
-//! backend's binding module is — and a `#[scheduled]` host declaring
-//! `replicas = "one"`. Each app is built through the harness and its scheduler
-//! configured against the container that build produced, so what is asserted is
-//! what the imports decide.
+//! `BACKEND_REMEDY`, and a `#[scheduled]` host declaring `replicas = "one"`.
 
 use std::any::TypeId;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -56,8 +52,7 @@ impl LedgerTasks {
 #[module(providers = [LedgerTasks])]
 struct LedgerTasksModule;
 
-/// What `#[every(.., replicas = "one")]` submitted — read rather than retyped,
-/// so the identity the assertions expect is the one the decorator declared.
+/// What `#[every(.., replicas = "one")]` submitted, read rather than retyped.
 fn declared() -> &'static ScheduledMethod {
     nest_rs_core::inventory::iter::<ScheduledMethod>()
         .find(|entry| (entry.provider_type_id)() == TypeId::of::<ReplicatedTasks>())
@@ -100,8 +95,7 @@ impl Module for RecordingLockModule {
     }
 }
 
-/// A second backend's binding, of the same shape — what an app imports by
-/// mistake beside the first.
+/// A second backend's binding, of the same shape.
 struct SecondLockModule;
 
 impl Module for SecondLockModule {
@@ -129,15 +123,6 @@ struct ContestedRoot;
 #[module(imports = [ScheduleModule, ReplicatedTasksModule])]
 struct UnboundRoot;
 
-/// The documented wiring runs: the decorator's `replicas = "one"` reaches the
-/// scheduler, the binding's lock is the one it claims through, every claim is
-/// made under the job's identity — its crate, the provider and the method, a
-/// level each — and an instant on a multiple of the period, each one recording
-/// its own run, and each occurrence the lock granted fired once.
-///
-/// The crate is what keeps two apps of one deployment apart: keyed on
-/// `Provider:method` alone, an API's and a worker's own `MaintenanceTasks::sweep`
-/// claimed each other's occurrences through the lock they share.
 #[tokio::test(start_paused = true)]
 async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     let declared = declared();
@@ -187,9 +172,6 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     assert_eq!(runs.len(), claimed.len(), "each claim records its own run");
 }
 
-/// `key = "…"` reaches the lock verbatim, a level per `::`: the job renamed
-/// from `billing::InvoiceTasks::close_day` claims under the identity it had, so
-/// replicas built before the rename and after it claim the same occurrences.
 #[tokio::test(start_paused = true)]
 async fn a_pinned_job_claims_under_the_key_it_declares() {
     let app = TestApp::builder()
@@ -218,9 +200,6 @@ async fn a_pinned_job_claims_under_the_key_it_declares() {
     }
 }
 
-/// Two bindings for one port are two deliberate declarations, and the boot
-/// refuses to pick between them — naming the port and the one remedy every
-/// binding shares.
 #[tokio::test]
 async fn two_lock_bindings_fail_the_boot_naming_the_remedy() {
     let refusal = TestApp::builder()
@@ -234,9 +213,6 @@ async fn two_lock_bindings_fail_the_boot_naming_the_remedy() {
     assert!(refusal.contains(BACKEND_REMEDY), "{refusal}");
 }
 
-/// A job firing once with nothing to claim through fails the boot — at the
-/// earliest site that sees both facts, the scheduler's configure — naming the
-/// job and the remedy, rather than firing on every replica or on none.
 #[tokio::test]
 async fn a_job_firing_once_with_no_lock_bound_fails_the_boot_naming_it() {
     let declared = declared();

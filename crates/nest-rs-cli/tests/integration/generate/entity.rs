@@ -36,8 +36,6 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
     run_ok(dir.path(), &["g", "entity", "posts", "-p", path]);
 
     let feature = dir.path().join("crates/features/src/posts");
-    // A feature's first entity is the lone `entity.rs`, never `entities/` — one
-    // role, one file per folder.
     assert!(feature.join("entity.rs").is_file());
     assert!(!feature.join("entities").exists());
 
@@ -47,15 +45,11 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
     assert!(entity.contains("table_name = \"post\""), "{entity}");
     assert!(entity.contains("DeriveEntityModel"), "{entity}");
 
-    // The port's index gains both halves in one edit.
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(mod_rs.contains("mod entity;"), "{mod_rs}");
     assert!(mod_rs.contains("pub use entity::*;"), "{mod_rs}");
 
-    // Everything the entity's own source names, in both manifests. `seaorm` is
-    // the single feature behind `#[expose]`: it activates `nest-rs-resource` and
-    // `nest-rs-seaorm` together, because each half's expansion names the other's
-    // crate and two features implying each other is a cycle Cargo rejects.
+    // `seaorm` is the single feature behind `#[expose]`.
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(features_cargo.contains("\"seaorm\""), "{features_cargo}");
@@ -64,18 +58,14 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
         assert!(root_cargo.contains(krate), "{root_cargo}");
         assert!(features_cargo.contains(krate), "{features_cargo}");
     }
-    // `authz` belongs to `#[crud]`, which a bare entity has no part of.
     assert!(
         !features_cargo.contains("authz"),
         "an entity alone needs no authz feature: {features_cargo}",
     );
 }
 
-/// The omission is the design: `#[expose(service = …)]` names the one
-/// `CrudService` whose `type Entity` is this entity, `g entity` writes no
-/// service, and a plain port's service is not a `CrudService` at all — naming it
-/// fails inside the macro expansion, which no text assertion would ever see. So
-/// the file names none and the printed steps say why.
+/// `#[expose(service = …)]` is left out: `g entity` writes no service, and a
+/// plain port's service is no `CrudService`.
 #[test]
 fn generate_entity_names_no_service_it_could_not_name_truthfully() {
     let dir = tempfile::tempdir().unwrap();
@@ -138,8 +128,6 @@ fn generate_entity_joins_a_feature_that_already_keeps_entities_in_a_folder() {
     );
 
     let feature = dir.path().join("crates/features/src/posts");
-    // Bare, singular, snake — beside `post.rs`, exactly as `entities/user.rs`
-    // and `entities/user_identity.rs` sit together in the exemplar.
     assert!(feature.join("entities/publication.rs").is_file());
     assert!(!feature.join("entity.rs").exists());
 
@@ -150,8 +138,6 @@ fn generate_entity_joins_a_feature_that_already_keeps_entities_in_a_folder() {
         "the first one survives: {index}"
     );
 
-    // The module, not a glob: two entities re-exported flat would collide on
-    // `Entity`, `Model` and `Column`.
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(
         mod_rs.contains("pub use entities::publication;"),
@@ -164,10 +150,8 @@ fn generate_entity_joins_a_feature_that_already_keeps_entities_in_a_folder() {
     );
 }
 
-/// A module holds either one `entity.rs` or an `entities/` folder — writing the
-/// second entity beside the first would leave two homes for one role, and moving
-/// the first is a refactor of files the developer has edited. So the generator
-/// refuses, and the refusal has to name the move rather than just decline.
+/// A module holds either one `entity.rs` or an `entities/` folder, so the
+/// generator refuses the second entity, naming the move.
 #[test]
 fn generate_entity_refuses_to_leave_a_feature_with_two_entity_homes() {
     let dir = tempfile::tempdir().unwrap();
@@ -184,13 +168,11 @@ fn generate_entity_refuses_to_leave_a_feature_with_two_entity_homes() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("entities"), "{stderr}");
-    // The remedy names the *existing* entity's file, read from its own
-    // `table_name` — the feature's singular would have said `post.rs` here.
+    // The remedy names the existing entity's file, read from its `table_name`.
     assert!(
         stderr.contains("entities/article.rs"),
         "the remedy names the file the existing entity moves to: {stderr}",
     );
-    // Nothing was written: the refusal happens before the transaction.
     assert!(
         !dir.path()
             .join("crates/features/src/posts/entities")

@@ -1,14 +1,6 @@
-//! The layer-pool contract on the `/graphql` self-mount.
-//!
-//! `/graphql` is `EdgePosture::Exempt`: no guard runs at the HTTP edge. The
-//! per-operation seam is the **only** guard site — the registered
-//! `GraphqlOperationGuard` when the app binds one, otherwise the global-pool
-//! fallback `use_guards_global` seeds. These tests pin the two halves of
-//! that contract: a global guard runs **exactly once** per GraphQL request
-//! (the historical double-run — edge + in-band — must never come back), and
-//! a registered operation guard **replaces** the fallback (the real bridge
-//! runs the same guards itself; a second site would double-run). The
-//! transport-edge interceptor pool still covers the POST.
+//! The layer-pool contract on the `/graphql` self-mount: a global guard runs
+//! **exactly once** per request, and a registered operation guard **replaces**
+//! the global-pool fallback.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 

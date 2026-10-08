@@ -1,9 +1,7 @@
 //! Boot-time guard-chain validation — declared [`GuardPhase`] ordering and
-//! produced/expected [`PrincipalClaim`](crate::PrincipalClaim) cross-checks. Replaces the former
-//! name-substring ordering heuristic: guards **declare** their phase and the
-//! principal type they attach or expect, and a chain whose declarations
-//! cannot line up fails boot with a named error instead of answering `500`
-//! on every request.
+//! produced/expected [`PrincipalClaim`](crate::PrincipalClaim) cross-checks: a
+//! chain whose declarations cannot line up fails boot with a named error
+//! instead of answering `500` on every request.
 
 use nest_rs_core::Container;
 use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
@@ -190,10 +188,8 @@ mod tests {
         let chain = vec![entry(Authz, "Authz")];
         validate_guard_chain("test", &chain).expect("no producer at all is a warn, not an error");
 
-        // A warn rather than a boot error, because a `#[public]` route on the
-        // same chain is legitimate. Which means the app boots, serves, and
-        // answers 500 on every non-public route — and this line is the only
-        // thing said before that starts happening.
+        // A warn, not a boot error: a `#[public]` route on the same chain is
+        // legitimate, so this is all that is said before other routes answer 500.
         let event = logs.expect_one(
             "nest_rs::layers",
             "guard expects a principal but no guard in the chain produces one — \

@@ -14,46 +14,33 @@ use crate::container::{Container, ContainerBuilder, KeyedDependency};
 /// either registers a provider or attaches discovery metadata.
 pub trait Discoverable {
     /// Provider types that must already be registered before
-    /// [`register`](Discoverable::register) can build this one — read by
-    /// `#[module]` to order registration. Empty for providers built lazily
-    /// (controllers, resolvers) so they do not block the register-phase
-    /// fixpoint.
+    /// [`register`](Discoverable::register) can build this one. Empty for
+    /// providers built lazily (controllers, resolvers).
     fn dependencies() -> Vec<TypeId> {
         Vec::new()
     }
 
     /// `TypeId` of each `#[inject]` dependency, recorded for the access-graph
-    /// check. Reported regardless of build timing, so the contract governs
-    /// transport-built logic too.
+    /// check whatever the build timing.
     fn injected() -> Vec<TypeId> {
         Vec::new()
     }
 
-    /// Human-readable label for each [`injected`](Discoverable::injected)
-    /// entry, in the same order, so the access graph can name a dependency no
-    /// module provides — a lazily-built provider's missing dependency is a clean
-    /// boot error naming both the provider and the dependency, not a
-    /// `get(...).expect(...)` panic at first resolution. May be shorter than
-    /// `injected()` (a provider that does not emit names falls back to a
-    /// placeholder); never longer.
+    /// Label for each [`injected`](Discoverable::injected) entry, in the same
+    /// order, for boot errors; may be shorter than `injected()`, never longer.
     fn injected_names() -> Vec<&'static str> {
         Vec::new()
     }
 
-    /// `TypeId` of each `#[inject] Option<Arc<…>>` dependency, reported for
-    /// every scope as [`injected`](Discoverable::injected) is — what the
-    /// provider's code reaches when the dependency is there, which a
-    /// [`Net`](crate::Net) around it follows.
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` dependency, which a
+    /// [`Net`](crate::Net) around the provider follows.
     fn injected_optional() -> Vec<TypeId> {
         Vec::new()
     }
 
-    /// [`ProviderKey`](crate::ProviderKey) of each **keyed** `#[inject(key = "…")]` dependency,
-    /// recorded for the access-graph keyed check. Kept apart from
-    /// [`injected`](Discoverable::injected) — a keyed dependency is validated
-    /// against the global keyed set (seeds + factory outputs), and its boot
-    /// error names both the type and the key. Empty for providers with no keyed
-    /// dependency (the default).
+    /// [`ProviderKey`](crate::ProviderKey) of each **keyed** `#[inject(key = "…")]`
+    /// dependency, validated against the global keyed set (seeds + factory
+    /// outputs).
     fn injected_keyed() -> Vec<KeyedDependency> {
         Vec::new()
     }
@@ -65,36 +52,22 @@ pub trait Discoverable {
         Vec::new()
     }
 
-    /// `TypeId` of each `#[inject] Option<Arc<…>>` optional dependency.
-    /// Not required by the register-phase fixpoint, but
-    /// used to order the provider after an optional dependency the same module
-    /// supplies.
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` optional dependency, to
+    /// order the provider after one the same module supplies.
     fn optional_dependencies() -> Vec<TypeId> {
         Vec::new()
     }
 
     /// Container keys this provider registers **besides itself**, each with the
-    /// label a boot error should use for it.
-    ///
-    /// A provider normally registers exactly one key — its own type — and
-    /// `#[module]` records that automatically. This hook is for the provider that
-    /// also installs a *typed singleton on its module's behalf*, so the access
-    /// graph can attribute that key to the module and produce the same named
-    /// error it gives for any other unimported dependency. `nest-rs-ws` uses it
-    /// for the per-namespace `WsServer<N>` registries `WsModule` owns: without
-    /// it, the key belongs to no module, and the graph's escape hatch for
-    /// imperatively-registered types waves the dependency through — then the
-    /// consumer panics at first resolution, naming the wrong provider.
-    ///
-    /// Empty for every ordinary provider.
+    /// label a boot error should use for it — so the access graph attributes a
+    /// singleton installed on the module's behalf (`nest-rs-ws`'s `WsServer<N>`)
+    /// to that module.
     fn also_provides() -> Vec<(TypeId, &'static str)> {
         Vec::new()
     }
 
     /// Install this provider's construction into the builder — the register
-    /// phase's per-provider step. Emitted by the decorator (`#[injectable]`,
-    /// `#[routes]`, …); resolves the provider's dependencies from the builder
-    /// and stores the built value plus any metadata.
+    /// phase's per-provider step, emitted by the decorator.
     fn register(builder: ContainerBuilder) -> ContainerBuilder;
 }
 
@@ -103,11 +76,8 @@ pub trait Discoverable {
 /// there (`#[hooks]`, `#[scheduled]`, `#[listeners]`, `#[indicators]`,
 /// `#[processor]`).
 ///
-/// Those five resolve with `Container::get::<Host>()` at boot, at a tick, at a
-/// published event, at a probe, at a job — always outside any request. That
-/// call answers correctly for exactly one registration shape, **a singleton
-/// stored under its own type**, and each of the others fails in its own quiet
-/// way:
+/// Those five resolve with `Container::get::<Host>()` outside any request,
+/// which answers correctly only for **a singleton stored under its own type**:
 ///
 /// | Host | What `get` does | Symptom if it were allowed |
 /// |---|---|---|
@@ -115,12 +85,9 @@ pub trait Discoverable {
 /// | `#[injectable(scope = request)]` | `None` — the container holds a factory, not a value | the same `warn`, misnaming the cause |
 /// | `#[injectable(scope = transient)]` | builds a **throwaway** instance | the method runs, its effects are dropped, and nothing warns at all |
 ///
-/// The fact is **stated, never omitted**: every decorator that builds a provider
-/// writes this impl, `true` or `false`. That is what makes contradicting it a
-/// coherence error rather than a second opinion — a marker merely *absent* for
-/// the shapes it refuses can be filled in by hand, and was. The escape hatch
-/// survives only where nothing has spoken, on a provider registered by hand with
-/// [`ContainerBuilder::provide`]:
+/// Every decorator that builds a provider writes this impl, `true` or `false`,
+/// so contradicting it is a coherence error. A provider registered by hand with
+/// [`ContainerBuilder::provide`] writes its own:
 ///
 /// ```
 /// # use nest_rs_core::{Container, ProviderResidency};
@@ -148,46 +115,24 @@ pub trait ProviderResidency {
 }
 
 /// The sentence a discovery site appends when it skips an operation whose host
-/// the booted container does not hold, and the boot cannot tell why — the
-/// run-time half ([`unresolved_host`]), or a container built without the
-/// composition [`inert_host`] reads.
+/// the booted container does not hold, and the cause is unknown — the run-time
+/// half ([`unresolved_host`]), or a container built without a composition.
 ///
-/// Its wording is the third attempt, and the first two are why it **names
-/// causes and prescribes nothing**:
-///
-/// * *"provider unreachable from app's module tree"* was false whenever the
-///   provider was written right there in `providers` — bound as `dyn Trait`,
-///   imported through a `for_root`, or registered by a hand-written `Module`.
-/// * Naming the dyn case and offering *"list it under its own type as well"*
-///   was worse: `providers = [Foo, Foo as dyn Trait]` runs the provider's
-///   constructor **twice**. The decorators then fire on one instance while every
-///   consumer injecting `Arc<dyn Trait>` holds the other, and nothing warns —
-///   the exact silent shape [`ProviderResidency`] exists to refuse, reached by
-///   *following* the advice. On a hand-written `impl Module` the same edit
-///   fails the boot outright with `DuplicateProviderError`.
-///
-/// A remedy is only safe to print where the framework knows which cause it is
-/// looking at. At boot it now does — [`InertHost`] names the cause and its
-/// remedy — so this sentence is left to the two sites that cannot.
+/// It names causes and prescribes nothing: listing a `dyn`-bound host under its
+/// own type too builds it twice, each decorator firing on an instance no
+/// `Arc<dyn Trait>` consumer holds.
 pub const INERT_HOST_HINT: &str = concat!(
     "nothing is registered under that exact type. Common causes: its module is not imported ",
     "by this app (import it, or delete the methods); it is bound only as `dyn Trait`; it is ",
     "imported through a `for_root`; it is registered by hand under a key or a trait",
 );
 
-/// Why a discovered host is inert in this app — which decides whether the boot
-/// says so at all, and what it tells the developer to do. Read by
+/// Why a discovered host is inert in this app — which decides the level the
+/// boot says it at and the remedy it names. Read by
 /// [`report_inert_host!`](crate::report_inert_host!), from [`inert_host`].
 ///
-/// **A host a library crate holds and this app does not import is another
-/// app's**, and is said at `debug`. In a workspace of several binaries one
-/// library crate holds the hosts every binary imports some of, so each binary
-/// links the others': the demo's worker reported three of the api's scheduled
-/// methods and one of its shutdown hooks at `warn` on every boot, with a hint
-/// telling it to import them. The configuration report settled the same shape
-/// the same way — a namespace this binary does not link is another binary's —
-/// and the binary's own crate keeps its `warn`, where leftover code is the
-/// developer's to act on.
+/// A host a library crate holds and this app does not import is another app's,
+/// said at `debug`; the app's own is said at `warn`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InertHost {
     /// A `nest-rs-*` capability the app never opted into — see
@@ -207,14 +152,11 @@ pub enum InertHost {
         module: &'static str,
     },
     /// The app's own host, listed in no `#[module]`'s `providers` and held by
-    /// nothing under its own type: registered by nothing, or by hand or through
-    /// a `for_root` under a trait — which the boot cannot tell apart, and whose
-    /// remedies differ.
+    /// nothing under its own type: registered by nothing, or under a trait —
+    /// which the boot cannot tell apart.
     NotListed,
     /// Held under its own type by this app's container, and listed by no module
-    /// it imports: registered by hand or through a `for_root`, outside the
-    /// `providers` lists discovery reads. A host the app registered is the
-    /// app's, whatever crate it is written in.
+    /// it imports: registered by hand or through a `for_root`.
     RegisteredOutsideModules,
     /// Listed by a module this app imports under another key only — `Foo as
     /// dyn Trait` — while a decorated method resolves its host under its own
@@ -251,9 +193,8 @@ impl InertHost {
         }
     }
 
-    /// What the developer does about it — the remedy the cause has, which the
-    /// boot can name because it knows the cause; [`INERT_HOST_HINT`]'s list of
-    /// causes when it does not.
+    /// The remedy the cause has; [`INERT_HOST_HINT`]'s list of causes when it
+    /// is unknown.
     pub fn hint(self) -> Cow<'static, str> {
         match self {
             Self::Framework => Cow::Borrowed("a capability of the framework this app does not use"),
@@ -294,13 +235,8 @@ impl InertHost {
 /// Why the host `host`, whose decorator recorded `origin` (its
 /// `module_path!()`), is inert in the app `container` was booted for.
 ///
-/// Read off the module descriptors every `#[module]` files, the
-/// [`Composition`] the boot seeds and the container: which modules list the
-/// host, under which key, whether the app reaches them, whether the app holds
-/// it under its own type all the same, and whether the host is written in a
-/// crate the app's roots are. Without a composition — a container built by
-/// hand in a test — the cause is [`Unknown`](InertHost::Unknown), said at
-/// `warn` as every inert host was before the composition existed.
+/// Without a [`Composition`] — a container built by hand in a test — the cause
+/// is [`Unknown`](InertHost::Unknown).
 pub fn inert_host(container: &Container, origin: &str, host: TypeId) -> InertHost {
     if is_framework_owned(origin) {
         return InertHost::Framework;
@@ -320,8 +256,7 @@ pub fn inert_host(container: &Container, origin: &str, host: TypeId) -> InertHos
 }
 
 /// [`inert_host`] over `descriptors`, for a host the framework does not own,
-/// which the app's container holds under its own type when `held`. Pure over
-/// its inputs.
+/// which the app's container holds under its own type when `held`.
 fn classify(
     descriptors: &[&ModuleDescriptor],
     composition: &Composition,
@@ -360,18 +295,6 @@ fn classify(
 /// its own host — the **run-time** half of the concern [`INERT_HOST_HINT`]
 /// answers at boot.
 ///
-/// Here rather than in any one capability's crate, because five decorators
-/// resolve their host the same way (`#[hooks]`, `#[process]`, `#[indicators]`,
-/// `#[listeners]`, `#[scheduled]`) and the fact they report is one fact. Written
-/// at a capability, the second decorator to want it copies it — which is how two
-/// of the five came to print *"add it to a reachable module's `providers =
-/// [...]`"*, an imperative this module's own tests assert the shared sentence
-/// must never carry: following it constructs the provider twice.
-///
-/// An error rather than a panic wherever the caller can carry one: these thunks
-/// run inside a request or a tick, where a panic takes the response down while
-/// an `Err` is an outcome the surface already renders.
-///
 /// A `*-macros` crate reaches this through its own surface crate's re-export
 /// (`::nest_rs_health::unresolved_host`), never across to a sibling.
 pub fn unresolved_host(host: &str) -> anyhow::Error {
@@ -383,54 +306,22 @@ pub fn unresolved_host(host: &str) -> anyhow::Error {
 /// Whether an inert operation belongs to the **framework** rather than to the
 /// app, read from the `module_path!()` its decorator recorded.
 ///
-/// A `nest-rs-*` crate is linked as soon as *any* of its capabilities is used,
-/// so its opt-in providers — the ones behind a `for_root` the app did not
-/// import — are inert in the normal case: `nest_rs_seaorm`'s `db` indicator in
-/// an app that imports `SeaOrmDatabaseModule` without `SeaOrmHealthModule`,
-/// `nest_rs_authn`'s audience check in every app that does not run a resource
-/// server. The developer cannot act on those and they are not mistakes, so they
-/// report at `debug`; the app's own inert code stays at `warn`, where the
-/// module-gated discovery rule wants it.
+/// A `nest-rs-*` crate's opt-in providers are inert whenever the app did not
+/// import their module, which is no mistake, so they report at `debug`.
 ///
-/// Shared, because it belongs to every discovery site and lived at exactly one:
-/// two demo apps warned twice per boot about a `nest-rs-seaorm` indicator —
-/// telling the developer to go bind a framework-internal type — while the
-/// lifecycle site got the same call right in the same boot.
-///
-/// **Known limit.** This tests the origin's *crate segment*, so it answers
-/// `true` for any crate named `nest_rs_…`, including a third-party plugin that
-/// takes the framework's prefix: such a crate's own inert operation is demoted
-/// to `debug` and told it is a framework capability. The authoritative answer
-/// exists at expansion time — `nest_rs_codegen`'s umbrella resolution already
-/// separates "compiled inside the framework" from "compiled against it" — but
-/// carrying it here means a new field on all five inventory structs. Recorded
-/// as an owner question rather than guessed at more cleverly.
+/// **Known limit:** any crate named `nest_rs_…`, a third-party plugin
+/// included, reads as the framework's.
 pub fn is_framework_owned(origin: &str) -> bool {
     let krate = origin.split("::").next().unwrap_or(origin);
     krate == "nest_rs" || krate.starts_with("nest_rs_")
 }
 
 /// Report a discovered operation whose host the booted container does not hold,
-/// at the level its owner earns, with the remedy its cause has: [`inert_host`]
-/// decides. `debug` for a `nest-rs-*` capability the app never opted into and
-/// for another binary's host in a shared library crate; `warn` for the app's
-/// own — leftover code, a module not imported, a provider bound under another
-/// key — with a `cause` and a `hint` naming what to do.
+/// at the level [`inert_host`] decides — `warn` for the app's own, `debug`
+/// otherwise — with a `cause` and a `hint`.
 ///
-/// A macro and not a function, and `tracing` decides that: `target:` and the
-/// level land inside a `static` callsite initializer, so both must be const at
-/// the call site. Its paths are `$crate::tracing::`, never `::tracing::` — an
-/// exported macro's expansion lands in the *caller's* crate and resolves
-/// against the caller's extern prelude, so a bare path is an `E0433` inside an
-/// expansion nobody can read the day a consumer declares no `tracing`. The
-/// kernel's other exported macro was fixed for that reason and wrote it down;
-/// this one had kept the bare form. Folding the five targets into one would move four crates'
-/// skip lines off the target the observability table assigns them.
-///
-/// The branch and its sentences lived five times, and the same refactor had
-/// been performed at two sites and skipped at three — so they live here. A new
-/// edge owes an inert-entry report, so a sixth site is scheduled rather than
-/// hypothetical.
+/// A macro because `tracing` needs `target:` const at the call site; its paths
+/// are `$crate::tracing::`, since the expansion resolves in the caller's crate.
 ///
 /// ```
 /// # use std::any::TypeId;
@@ -482,15 +373,6 @@ macro_rules! report_inert_host {
 mod tests {
     use super::*;
 
-    /// The hint must name the causes and **prescribe nothing**. Its second
-    /// wording offered `providers = [Foo, Foo as dyn Trait]`, which silently
-    /// constructs the provider twice — so this pins both halves: the causes are
-    /// there, and no imperative that could be followed into that shape is.
-    // Which *level* an inert hook is reported at, and why it matters: a `warn`
-    // naming a framework-internal provider shows up on every freshly scaffolded
-    // auth app (`AudienceBinding`, behind a `OAuthResourceModule` nobody
-    // imported), is not actionable, and teaches the reader to ignore a target
-    // that also carries security events.
     #[test]
     fn a_framework_owned_origin_is_not_the_developers_problem() {
         for origin in [
@@ -501,8 +383,6 @@ mod tests {
         ] {
             assert!(is_framework_owned(origin), "{origin}");
         }
-        // An app's own provider still warns — that is leftover code the
-        // developer can act on, and the whole reason the report exists.
         for origin in [
             "features::users::service",
             "api::module",
@@ -512,25 +392,14 @@ mod tests {
         }
     }
 
-    /// The known limit, pinned so it is a decision rather than a surprise: a
-    /// third-party crate that takes the framework's prefix is read as the
-    /// framework's. Found by an audit whose own probe crate was called
-    /// `nest-rs-audit-probe` and watched its app-owned hook get demoted.
+    /// Pins the known limit of [`is_framework_owned`].
     #[test]
     fn a_third_party_crate_taking_the_prefix_is_read_as_the_frameworks() {
         assert!(is_framework_owned("nest_rs_audit_probe"));
     }
 
-    /// The hint must name the causes and **prescribe nothing**.
-    ///
-    /// The first version of this assertion was `!contains("as well")` — a
-    /// tripwire on one historic wording rather than on the property. A mutation
-    /// test put the same forbidden edit back in different words (*"Also add
-    /// `providers = [Foo, Foo as dyn Trait]` …"*) and it passed. So the guard is
-    /// on the **shape**: that remedy cannot be written without naming a
-    /// `providers` list, and a prescription reads as an imperative.
-    /// `listing_a_host_both_ways_builds_it_twice` is what proves the edit must
-    /// never be printed.
+    /// Guards the shape, not one wording: the forbidden remedy cannot be written
+    /// without naming a `providers` list or an imperative.
     #[test]
     fn the_inert_host_hint_names_the_causes_and_prescribes_no_edit() {
         for cause in ["not imported", "dyn Trait", "for_root", "by hand"] {
@@ -640,10 +509,6 @@ mod tests {
             classify(&refs, &composition, origin, host, held)
         }
 
-        /// Q1: a library crate's host whose module another binary imports was
-        /// a `warn` telling this one to import it — the demo's worker filed four
-        /// on every boot of a correct workspace. It is another app's, at
-        /// `debug`.
         #[test]
         fn a_library_hosts_module_this_app_does_not_import_is_another_apps() {
             let inert = classified("features::tasks", TypeId::of::<Tasks>());
@@ -661,8 +526,6 @@ mod tests {
             );
         }
 
-        /// The same host in the app's own crate is leftover code: a `warn`
-        /// naming the module to import.
         #[test]
         fn the_apps_own_host_names_the_module_it_does_not_import() {
             let inert = classified("api::tasks", TypeId::of::<Tasks>());
@@ -680,8 +543,6 @@ mod tests {
             );
         }
 
-        /// A host bound only as `dyn Trait` in a module the app imports is a
-        /// mistake whatever crate it is in: the remedy names the binding.
         #[test]
         fn a_host_bound_under_another_key_names_the_binding() {
             for origin in ["api::bound", "features::bound"] {
@@ -703,11 +564,6 @@ mod tests {
             }
         }
 
-        /// A host no module lists and nothing holds under its own type: the
-        /// app's own is a `warn`, a library's another app's — and neither hint
-        /// claims a module that does not exist. The app's hint names both
-        /// remedies, since a hand-written module binding it under a trait is a
-        /// cause the boot cannot see, and listing it then builds it twice.
         #[test]
         fn a_host_no_module_lists_is_named_so_when_it_is_the_apps() {
             let own = classified("api::unlisted", TypeId::of::<Unlisted>());
@@ -729,11 +585,6 @@ mod tests {
             );
         }
 
-        /// A host the app's container holds under its own type, outside every
-        /// module it imports, was registered by this app — by hand or through a
-        /// `for_root` — so it is the app's whichever crate it is written in, and
-        /// the remedy is to list it where discovery reads, *instead of* the
-        /// hand registration rather than beside it.
         #[test]
         fn a_host_the_app_registers_outside_its_modules_is_the_apps() {
             for (origin, host) in [

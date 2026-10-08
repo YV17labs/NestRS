@@ -20,15 +20,12 @@ use crate::config::{OPERATION_TIMEOUT, READ_TIMEOUT, StorageConfig};
 use crate::error::{Result, StorageError};
 use crate::transfer::download;
 
-/// The longest a dial to S3 waits — DNS, TCP and the TLS handshake:
-/// `object_store`'s default, never scaled down with the budget, since a dial
-/// cut shorter than the endpoint's round trips never connects.
+/// The longest a dial to S3 waits — DNS, TCP and the TLS handshake; never
+/// scaled down with the budget, since a dial cut shorter never connects.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How `object_store` retries within the operation budget `budget`: it stops
-/// once half of it is spent and never backs off more than an eighth, so a call
-/// whose attempts keep failing ends on S3's own error and its cause before the
-/// budget cuts it — only a call S3 never answers reaches the budget.
+/// Retries stop at half of `budget` and back off at most an eighth, so a call
+/// whose attempts keep failing ends on S3's own error before the budget cuts it.
 fn retries_within(budget: Duration) -> RetryConfig {
     let max_backoff = budget / 8;
     RetryConfig {
@@ -42,30 +39,13 @@ fn retries_within(budget: Duration) -> RetryConfig {
     }
 }
 
-/// Bytes buffered before a multipart part is shipped. S3 requires every part
-/// but the last to be at least 5 MiB, so a smaller value would make
-/// [`put_stream`](Storage::put_stream) fail on any upload past one part.
-///
-/// `pub` for the e2e suite alone — a test of the abort path has to build a
-/// payload that provably ships a part *before* it fails, and a copied `5 * 1024
-/// * 1024` there would keep passing while proving less the day this moves.
-/// Hidden because a caller has nothing to do with it: `put_stream` buffers on
-/// its own, whatever size the source yields.
+/// Bytes buffered before a multipart part is shipped: S3 requires every part
+/// but the last to be at least 5 MiB.
 #[doc(hidden)]
 pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 
 /// Thin, injectable S3-compatible object-store client built lazily from
 /// [`StorageConfig`] over the [`object_store`] crate.
-///
-/// The backing driver is `object_store`'s [`AmazonS3`], which implements both
-/// [`ObjectStore`] (byte read/write, head) and [`Signer`] (presigned URLs). It
-/// speaks to real AWS S3 as well as any S3-compatible server (MinIO, RustFS) in
-/// path- or virtual-host style. Because the seam is the `object_store` traits,
-/// swapping to GCS/Azure/local-fs/in-memory later is a one-line builder change,
-/// not a rewrite of this type.
-///
-/// The client is constructed once on first use via [`OnceLock`] so the provider
-/// stays cheap to inject and the (synchronous) builder cost is paid lazily.
 ///
 /// Every call waits on S3 within [`StorageConfig::operation_timeout`], and a
 /// download, while it is read, for its next bytes within
@@ -114,10 +94,6 @@ impl ProviderResidency for Storage {
 
 impl Storage {
     /// Construct directly from a config, bypassing the DI container.
-    ///
-    /// The DI path uses [`from_container`](Self::from_container); this is the
-    /// honest constructor for tests and ad-hoc tooling that hold a
-    /// [`StorageConfig`] without standing up a container.
     pub fn new(config: Arc<StorageConfig>) -> Self {
         Self {
             config,
@@ -138,20 +114,13 @@ impl Storage {
         Self::new(config)
     }
 
-    /// The S3 driver, built once on first use. Returns [`StorageError::Init`]
-    /// instead of panicking when the configured values can't produce a client.
+    /// The S3 driver, built once on first use.
     fn store(&self) -> Result<&Arc<AmazonS3>> {
         if let Some(store) = self.store.get() {
             return Ok(store);
         }
-        // Last line of defence for the plain-HTTP rule. `StorageConfig` already
-        // refuses the `http://` + `allow_http = false` pairing at load, so this
-        // is unreachable through the DI path; it stays for a hand-built
-        // `Storage::new`, where no config resolution ran. Checked here rather
-        // than per method because `object_store`'s own `with_allow_http` only
-        // gates *transfers* — presigning is a local computation, so a plaintext
-        // endpoint would otherwise hand clients a working URL carrying the
-        // SigV4 signature.
+        // For a hand-built `Storage::new`: `object_store`'s `with_allow_http`
+        // gates transfers only, so presigning would mint a plaintext signed URL.
         if crate::config::is_plaintext(&self.config.endpoint) && !self.config.allow_http {
             return Err(StorageError::PlaintextEndpoint {
                 endpoint: self.config.endpoint.clone(),
@@ -174,18 +143,11 @@ impl Storage {
         // One `ClientOptions` value: `with_client_options` replaces the whole
         // set, so a builder call made before it would be undone.
         let mut options = ClientOptions::new()
-            // Opt-in plain-HTTP (default on in dev/test, off in prod — STORAGE-ST2)
-            // so a RustFS/MinIO dev server is reachable while production refuses
-            // to send credentials over an unencrypted endpoint by omission.
             .with_allow_http(self.config.allow_http)
-            // object_store's default bounds each attempt whole, its body
-            // included, which cuts a download for its size. A call is bounded
-            // by the operation budget above it, and a download's stall by
-            // `download`, never by reqwest's read timeout (`transfer.rs`).
+            // `object_store`'s default timeout bounds an attempt's body too,
+            // cutting a download for its size; the budget and `download` do.
             .with_timeout_disabled()
             .with_connect_timeout(CONNECT_TIMEOUT);
-        // A configured authority replaces the system's store, as it does for
-        // Redis: the endpoint's certificate must chain to it.
         if let Some(pem) = &self.config.tls.ca_cert {
             let authorities = crate::tls::authorities(pem)
                 .filter(|found| !found.is_empty())
@@ -208,13 +170,10 @@ impl Storage {
             .with_access_key_id(&self.config.access_key)
             .with_secret_access_key(&self.config.secret_key)
             .with_bucket_name(&self.config.bucket)
-            // `force_path_style` ⇒ path-style addressing, i.e. *not*
-            // virtual-hosted-style.
             .with_virtual_hosted_style_request(!self.config.force_path_style)
             .build()
             .map_err(StorageError::Init)?;
-        // A racing thread may have initialized first — `get_or_init` keeps the
-        // winner and drops our `built`; either way one client is shared.
+        // A racing thread may have won: `get_or_init` keeps its client.
         Ok(self.store.get_or_init(|| Arc::new(built)))
     }
 
@@ -223,9 +182,7 @@ impl Storage {
         &self.config.bucket
     }
 
-    /// Sign a short-lived URL for `method` against `key`. The plain-HTTP rule
-    /// is enforced by [`store`](Self::store), which every operation goes
-    /// through.
+    /// Sign a short-lived URL for `method` against `key`.
     async fn presigned_url(&self, method: Method, key: &str, expires: Duration) -> Result<String> {
         let label = method.to_string();
         let url = self
@@ -238,10 +195,8 @@ impl Storage {
         Ok(url.to_string())
     }
 
-    /// Presigned `PUT` URL the client uploads bytes to directly.
-    ///
-    /// Content-type is set by the uploading client on the PUT and read back at
-    /// confirm time, so it is intentionally not signed here.
+    /// Presigned `PUT` URL the client uploads bytes to directly; the content
+    /// type is not signed, so the uploading client sets it.
     pub async fn presign_put(&self, key: &str, expires: Duration) -> Result<String> {
         self.presigned_url(Method::PUT, key, expires).await
     }
@@ -251,13 +206,10 @@ impl Storage {
         self.presigned_url(Method::GET, key, expires).await
     }
 
-    /// Byte size of an uploaded object (used to finalize a record). Returns
-    /// `None` if the object does not exist yet.
+    /// Byte size of an uploaded object, `None` if it does not exist yet.
     ///
-    /// NOTE: `object_store`'s [`ObjectMeta`](object_store::ObjectMeta) does not
-    /// carry the stored `Content-Type`, so it is not returned here. Callers that
-    /// need the mime type should keep the value they supplied at
-    /// upload-request time rather than relying on `head`.
+    /// `object_store` does not report the stored `Content-Type`: a caller that
+    /// needs it keeps the one it supplied at upload.
     pub async fn head(&self, key: &str) -> Result<Option<ObjectMetadata>> {
         match self.answered(self.store()?.head(&Path::from(key))).await {
             Ok(meta) => Ok(Some(ObjectMetadata {
@@ -269,9 +221,6 @@ impl Storage {
     }
 
     /// Download an object's full bytes (e.g. a media worker reads the original).
-    ///
-    /// Returns [`Bytes`] — an `Arc`-backed buffer that clones cheaply — so the
-    /// body is never copied on the way out, nor at all when S3 sends it whole.
     pub async fn get_bytes(&self, key: &str) -> Result<Bytes> {
         use futures_util::StreamExt;
         let (size, body) = self.transfer(key).await?;
@@ -292,13 +241,7 @@ impl Storage {
     }
 
     /// Stream an object's bytes chunk by chunk instead of buffering the whole
-    /// body ([`get_bytes`](Self::get_bytes) collects; this does not).
-    ///
-    /// The returned stream drives the S3 `GetObject` response directly, so a
-    /// large media file flows to the client without ever sitting whole in
-    /// process memory — feed it to a streaming HTTP body. Each item is a
-    /// [`Result`] so a mid-stream transport error still surfaces rather than
-    /// silently truncating.
+    /// body.
     pub async fn get_stream(
         &self,
         key: &str,
@@ -333,13 +276,8 @@ impl Storage {
         ))
     }
 
-    /// List the objects stored under `prefix`, one entry at a time.
-    ///
-    /// Streamed rather than collected for the same reason as
-    /// [`get_stream`](Self::get_stream): a bucket can hold far more keys than a
-    /// `Vec` should ever hold, and S3 pages the listing anyway — the returned
-    /// stream fetches the next page as it is consumed. Pass `""` for the whole
-    /// bucket.
+    /// List the objects stored under `prefix`, one entry at a time, fetching
+    /// the next page as the stream is consumed. Pass `""` for the whole bucket.
     ///
     /// `prefix` matches on **path segments**, not on characters: `posts/cover`
     /// is a prefix of `posts/cover/a.png` but not of `posts/cover-2.png`. The
@@ -351,8 +289,6 @@ impl Storage {
     {
         use futures_util::StreamExt;
         let budget = self.config.operation_timeout;
-        // An entry is either on a page already fetched or the answer to the
-        // next page's request, so each one waits for S3 within the budget.
         let pages = self.store()?.list(Some(&Path::from(prefix)));
         let entries = Box::pin(futures_util::stream::unfold(
             Some(pages),
@@ -377,10 +313,6 @@ impl Storage {
     }
 
     /// Upload bytes (e.g. a media worker writes a WebP variant).
-    ///
-    /// Takes anything convertible to [`Bytes`], so a `Vec<u8>` and the `Bytes`
-    /// [`get_bytes`](Self::get_bytes) hands back both compose without a copy —
-    /// the read/write round-trip the storage docs show is one expression.
     pub async fn put_bytes(
         &self,
         key: &str,
@@ -404,23 +336,12 @@ impl Storage {
 
     /// Upload an object from a byte stream, without ever holding it whole.
     ///
-    /// The counterpart to [`put_bytes`](Self::put_bytes) for a body whose size
-    /// is unknown or larger than memory — an inbound HTTP upload, a file read
-    /// chunk by chunk. Bytes are buffered into 5 MiB multipart parts, so peak
-    /// memory is one part regardless of the object's size, and the object
-    /// becomes visible only once every part landed.
-    ///
-    /// The source yields [`std::io::Result`] because that is what byte streams
-    /// in this ecosystem speak (poem bodies, `tokio::io`); a
+    /// Bytes are buffered into 5 MiB multipart parts, so peak memory is one
+    /// part, and the object becomes visible only once every part landed. A
     /// [`StorageError`] converts into `std::io::Error`, so a stream read out of
     /// storage can be written straight back into it.
     ///
-    /// Any failure — the store's or the source's — aborts the upload before
-    /// returning, because S3 bills the parts of an interrupted multipart upload
-    /// until something removes them. So does **not returning at all**: a request
-    /// timeout or a client disconnect drops this future mid-part, and
-    /// `UploadGuard` is what turns that into an abort rather than into parts
-    /// nobody will ever collect.
+    /// Any failure, or dropping this future mid-upload, aborts the upload.
     pub async fn put_stream<S>(&self, key: &str, content_type: &str, stream: S) -> Result<()>
     where
         S: futures_util::Stream<Item = std::io::Result<Bytes>> + Send,
@@ -457,9 +378,7 @@ impl Storage {
             if pending_len < MULTIPART_PART_SIZE {
                 continue;
             }
-            // The chunks are shipped as they are rather than re-split to an
-            // exact size: `PutPayload` is a list of `Bytes`, so a part costs no
-            // copy, and S3 only bounds a part from below.
+            // S3 bounds a part only from below, so the chunks ship uncopied.
             let part = upload
                 .get()
                 .put_part(PutPayload::from_iter(pending.drain(..)));
@@ -487,10 +406,6 @@ impl Storage {
 
     /// Delete an object. Absent keys succeed, so retention sweeps and
     /// failed-upload cleanup are idempotent.
-    ///
-    /// Without this an app had to drop to `object_store` directly to implement
-    /// a retention policy or a GDPR erasure — a seam the docs describe as
-    /// internal.
     pub async fn delete(&self, key: &str) -> Result<()> {
         match self.answered(self.store()?.delete(&Path::from(key))).await {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
@@ -509,9 +424,8 @@ impl Storage {
     }
 }
 
-/// `call`'s output, or once `budget` elapses the error `object_store` gives for
-/// a store's own failure, naming the budget and what sets it — as the timeout
-/// object_store reports for an attempt reads.
+/// `call`'s output, or once `budget` elapses a store error naming the budget
+/// and what sets it.
 pub(crate) async fn bounded<F: Future>(
     budget: Duration,
     call: F,
@@ -535,34 +449,17 @@ pub(crate) async fn bounded<F: Future>(
         })
 }
 
-/// Holds a multipart upload so that **not finishing** is an outcome the store
-/// hears about too.
+/// Holds a multipart upload so that a cancelled one is aborted too: S3 bills
+/// orphaned parts until a lifecycle rule sweeps them.
 ///
-/// Every path that returns aborts explicitly, and did before this existed. The
-/// path that does not return is cancellation — a request timeout (30s by
-/// default), a client that reset its connection, the shutdown window closing on
-/// the request — where the future is simply dropped and no
-/// `.await` in it will ever run again. The parts stayed on the store, billed
-/// until a lifecycle rule swept them, and nothing was logged at all: it is the
-/// likeliest interruption for exactly the uploads streaming exists for.
-///
-/// `Drop` cannot await, so it hands the abort to a detached task. That is
-/// best-effort by construction — the process may be shutting down — which is
-/// why it is a `warn` naming the key rather than a silent cleanup: an operator
-/// reading a billing surprise needs the key, and a suite needs something to
-/// assert on.
+/// `Drop` cannot await, so it hands the abort to a detached, best-effort task
+/// and says so at `warn`, naming the key.
 struct UploadGuard {
     upload: Option<Box<dyn MultipartUpload>>,
     key: String,
-    /// The unit of work that opened the upload. `Drop` hands the abort to a
-    /// detached task, and [`TaskContext`] is what keeps the two events
-    /// `abort_upload` emits under it — cancellation is precisely the case where
-    /// the reader holds the timed-out request's `trace_id` and needs the
-    /// outcome line to carry it too.
-    ///
-    /// Captured at `new` rather than at `Drop`: a dropped future is not
-    /// guaranteed to be dropped on the task that owned it, and the span the
-    /// abort belongs to is the one that opened the upload either way.
+    /// The unit of work that opened the upload, so the detached abort carries
+    /// its `trace_id`. Captured at `new`: a dropped future may not drop on the
+    /// task that owned it.
     context: TaskContext,
     /// How long the abort waits for S3, as every other call of the upload does.
     budget: Duration,
@@ -589,8 +486,8 @@ impl UploadGuard {
             .expect("the upload is taken only by `abort` or `finished`, which both consume it")
     }
 
-    /// Abort now, in order, and disarm — so the explicit failure paths keep
-    /// emitting their event synchronously and a test can still assert on it.
+    /// Abort now and disarm, so an explicit failure path emits its event
+    /// before returning.
     async fn abort(&mut self) {
         if let Some(mut upload) = self.upload.take() {
             abort_upload(&mut upload, &self.key, self.budget).await;
@@ -611,10 +508,8 @@ impl Drop for UploadGuard {
         let key = std::mem::take(&mut self.key);
         let context = self.context.clone();
         let budget = self.budget;
-        // Only reachable from inside the runtime the upload was driven by, but
-        // a `Drop` has no way to prove that — and panicking in a destructor
-        // while unwinding a cancellation would replace a billing leak with a
-        // crash.
+        // A `Drop` cannot prove it runs in a runtime, and panicking while
+        // unwinding would replace a billing leak with a crash.
         let runtime = tokio::runtime::Handle::try_current();
         context.span().in_scope(|| {
             tracing::warn!(
@@ -632,8 +527,6 @@ impl Drop for UploadGuard {
             }
         });
         if let Ok(handle) = runtime {
-            // The abort is the outcome half of the event pair above, so it is
-            // filed under the same unit of work.
             handle.spawn(context.carry(async move {
                 abort_upload(&mut upload, &key, budget).await;
             }));
@@ -643,18 +536,8 @@ impl Drop for UploadGuard {
 
 /// Discard the parts of a multipart upload that will never complete.
 ///
-/// Best-effort by necessity: the failure that brought us here is what the
-/// caller needs back, so a failing abort can only be reported. It is reported
-/// loudly — orphaned parts are invisible to a `list` and billed until a
-/// lifecycle rule sweeps them.
-///
-/// The success is reported too, and that is not symmetry for its own sake: an
-/// interrupted upload materializes no object either way, so **whether the parts
-/// were discarded is not observable through the store's API at all** — S3
-/// answers it only through `ListMultipartUploads`, which `object_store` does not
-/// surface. This event is what an operator reads under a billing surprise, and
-/// what the e2e suite asserts on to keep the abort from being refactored away
-/// silently.
+/// Both outcomes are logged: `object_store` cannot list multipart uploads, so
+/// the event is the only trace of whether the parts were discarded.
 async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str, budget: Duration) {
     match bounded(budget, upload.abort())
         .await
@@ -674,7 +557,7 @@ async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str, budget: 
     }
 }
 
-/// Result of a `head` — the metadata we cache onto a stored-file record.
+/// Result of a [`Storage::head`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectMetadata {
     /// The object's size in bytes, as reported by S3.
@@ -682,10 +565,6 @@ pub struct ObjectMetadata {
 }
 
 /// One object yielded by [`Storage::list`].
-///
-/// Deliberately built from `std` types alone: `object_store` reports a
-/// timestamp as a `chrono::DateTime<Utc>`, and re-exporting that would make
-/// every consumer of this crate pin the same `chrono` major to read a listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectEntry {
     /// The object's key, as addressed within the bucket.
@@ -721,11 +600,6 @@ mod tests {
 
     /// A multipart upload that talks to nothing but records whether it was
     /// aborted.
-    ///
-    /// The flag is the point: the in-runtime branch is only observable as an
-    /// *absence* of the fallback line, and an absence is what a branch that does
-    /// nothing at all also produces. Deleting the `handle.spawn(...)` outright
-    /// left the test green.
     #[derive(Debug)]
     struct NeverUploaded(Arc<AtomicBool>);
 
@@ -747,16 +621,7 @@ mod tests {
 
     #[test]
     fn parts_dropped_outside_a_runtime_are_reported_rather_than_silently_leaked() {
-        // An abandoned multipart upload keeps its parts on the store, and the
-        // store keeps billing for them until a lifecycle rule sweeps them — so
-        // the guard aborts on drop. That abort is async, which means it needs a
-        // runtime, and a `Drop` cannot prove it has one. Panicking here would
-        // turn a billing leak into a crash while already unwinding, so the
-        // fallback is to say what was left behind and to whom: the key, and the
-        // fact that only the bucket's lifecycle rule will now clean it up.
-        //
-        // A plain thread is the shape that reaches it — a value carried out of
-        // a runtime and dropped elsewhere.
+        // A plain thread: a value carried out of a runtime and dropped there.
         let handle = std::thread::spawn(|| {
             let logs = nest_rs_testing::LogCapture::install();
             let aborted = Arc::new(AtomicBool::new(false));
@@ -796,9 +661,6 @@ mod tests {
 
     #[tokio::test]
     async fn parts_dropped_inside_a_runtime_are_discarded_rather_than_reported() {
-        // The other direction, and the common one: a cancelled request drops
-        // the guard on the runtime that was driving it, so the abort is
-        // actually issued and the fallback line must not appear.
         let logs = nest_rs_testing::LogCapture::install();
         let aborted = Arc::new(AtomicBool::new(false));
         drop(UploadGuard::new(
@@ -806,9 +668,7 @@ mod tests {
             "uploads/cancelled",
             Duration::from_secs(1),
         ));
-        // The abort is spawned, so it lands on a later poll rather than in the
-        // `drop`. Yield until it does — bounded, so a branch that never issues
-        // it fails here instead of hanging.
+        // The abort is spawned: yield, bounded, until it lands.
         for _ in 0..100 {
             if aborted.load(Ordering::SeqCst) {
                 break;
@@ -841,10 +701,6 @@ mod tests {
         }))
     }
 
-    // G1: presigning is a local computation, so `object_store`'s allow_http
-    // never saw it — production minted working `http://` URLs carrying the
-    // SigV4 signature. `StorageConfig` now rejects the pairing at boot; this
-    // covers the one path that skips config resolution, `Storage::new`.
     #[tokio::test]
     async fn presigning_refuses_a_plaintext_endpoint_when_http_is_disallowed() {
         let storage = client("http://minio.internal:9000", false);
@@ -872,8 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn presigning_over_an_encrypted_endpoint_is_untouched() {
-        // Signing is local, so this needs no server — reaching the signer at
-        // all proves the guard did not fire.
+        // Signing is local: no server is needed.
         let storage = client("https://s3.example", false);
         storage
             .presign_get("k", Duration::from_secs(900))
@@ -881,10 +736,6 @@ mod tests {
             .expect("https is always allowed");
     }
 
-    // Every operation goes through `store()`, so a method added later inherits
-    // the guard — unless it reaches the network before asking for the client.
-    // These two never open a socket: both fail while the endpoint is still a
-    // string.
     #[tokio::test]
     async fn listing_and_streamed_uploads_refuse_a_plaintext_endpoint_too() {
         let storage = client("http://minio.internal:9000", false);
@@ -902,10 +753,8 @@ mod tests {
         }
     }
 
-    /// An S3 that accepts every connection and never answers — a process
-    /// wedged behind a healthy socket. The clock stops once the first
-    /// connection is accepted: the handshake was made in real time, and what is
-    /// left to wait is the budget, which a stopped clock waits out for free.
+    /// An S3 that accepts every connection and never answers. The clock stops
+    /// at the first accept, so the budget is waited out for free.
     async fn silent_store() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -925,8 +774,7 @@ mod tests {
     }
 
     /// A store that answers its first request with a `503`, then stops the
-    /// clock and answers nothing more, so the retry `object_store` sends after
-    /// backing off is the attempt the budget cuts.
+    /// clock and answers nothing more, so the budget cuts the retry.
     async fn store_answering_once() -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -976,9 +824,6 @@ mod tests {
         );
     }
 
-    /// Every attempt fails at once — nothing listens on the store's port — so
-    /// the call ends on S3's own error and its cause, before the budget would
-    /// cut it and say only that it elapsed.
     #[tokio::test]
     async fn a_call_whose_attempts_keep_failing_ends_on_their_cause_before_the_budget() {
         let closed = std::net::TcpListener::bind("127.0.0.1:0")
@@ -1061,9 +906,6 @@ mod tests {
         }
     }
 
-    /// A config handed to `new` skipped the read that holds its ranges, so the
-    /// client holds them where it is built, before a zero budget fails every
-    /// call as a timeout S3 never had.
     #[tokio::test]
     async fn a_hand_built_client_refuses_a_zero_budget_naming_its_field() {
         let storage = Storage::new(Arc::new(StorageConfig {
@@ -1082,8 +924,7 @@ mod tests {
         );
     }
 
-    // G13: the streaming page shows `Body::from_bytes_stream(stream)` fed
-    // straight from `get_stream`, which needs `E: Into<std::io::Error>`.
+    // `Body::from_bytes_stream` fed from `get_stream` needs `E: Into<std::io::Error>`.
     #[test]
     fn a_storage_error_converts_into_io_error_so_streams_compose() {
         let io: std::io::Error = StorageError::PlaintextEndpoint {

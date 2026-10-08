@@ -1,13 +1,4 @@
 //! Wires the shared [`Storage`] provider and its [`StorageConfig`].
-//!
-//! `Storage` is built lazily on first use (see [`Storage`]), so the module only
-//! has to register the provider and feed it the config loaded from
-//! `<PREFIX>_STORAGE__*`.
-//!
-//! Importing the bare [`StorageModule`] declares the dependency and leaves the
-//! config to the environment; [`StorageModule::for_root`] supplies a base those
-//! variables overlay, so a bucket pinned in code is still overridable per field
-//! by the deployment (see `nest_rs_config::Config`).
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::module;
@@ -26,8 +17,6 @@ pub struct StorageModule;
 impl StorageModule {
     /// `None` ⇒ load [`StorageConfig`] from `<PREFIX>_STORAGE__*` over its
     /// defaults; `Some(cfg)` makes `cfg` the base those variables overlay.
-    /// Either way [`Storage`] is provided, so this is a drop-in replacement for
-    /// importing the bare [`StorageModule`].
     pub fn for_root(config: impl Into<Option<StorageConfig>>) -> StorageSetup {
         ConfigModule::setup(config)
     }
@@ -36,11 +25,7 @@ impl StorageModule {
 /// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
 /// [`StorageModule::for_root`]: resolves
 /// [`StorageConfig`] (env over the pinned base), then brings the base
-/// [`StorageModule`] wiring. The factory is queued first, so it wins over — and
-/// skips — the plain env factory the base module queues.
-///
-/// Pin-and-recurse is the whole behaviour, so it is [`ConfigSetup`] rather than
-/// a type of its own.
+/// [`StorageModule`] wiring.
 pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
 
 #[cfg(test)]
@@ -136,10 +121,6 @@ mod tests {
     #[module(imports = [pinned_storage()])]
     struct PinnedStorageHost;
 
-    /// The seam this crate went without: a `#[config]` reachable only from the
-    /// environment breaks the dual-path rule from the other side, and an app had
-    /// no way to pin a bucket short of seeding the value — which would have
-    /// frozen every other `<PREFIX>_STORAGE__*` field against the deployment.
     #[tokio::test]
     async fn for_root_pins_the_config_and_still_provides_the_client() {
         let app = App::builder()

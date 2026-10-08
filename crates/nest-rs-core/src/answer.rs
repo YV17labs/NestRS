@@ -1,24 +1,10 @@
 //! What a handler answered, known by its type — never by how the type is spelled.
 //!
-//! A decorator reads a handler's return type as tokens, and tokens cannot see
-//! through a name: `use async_graphql::Result as GqlResult`, `use poem::Result
-//! as PoemResult` and a type alias all spell a `Result` a macro takes for an
-//! ordinary value. Read that way, an error became a value — reaching the client
-//! as one while the operation line filed `ok` (GraphQL), or having its status
-//! rewritten by `#[http_code]` into a success (HTTP). Method resolution sees
-//! the type the alias names, so the expansions ask this probe instead of the
-//! spelling.
-//!
-//! The shape is `nest_rs_pipes::ValidateProbe`'s: inherent methods, which method
-//! resolution prefers, exist only for a `Result`, and [`AnswerFallback`] answers
-//! for every other type. The probe is zero-sized and resolved by the compiler —
-//! the request pays nothing for it. A return type naming a generic parameter
-//! resolves to the fallback, since nothing proves the parameter a `Result`.
-//!
-//! The edges that ask it are GraphQL's `#[operations]`, HTTP's `#[routes]` and
-//! MCP's `#[tools]`. WebSocket's `#[messages]` answers the same question with
-//! its own probe, `nest_rs_ws::ReplyValue`, because a WS reply splits twice and
-//! reports through tiers no other edge has.
+//! A macro reading tokens cannot see through an alias (`poem::Result as
+//! PoemResult`), so the expansions ask this probe: inherent methods, which
+//! method resolution prefers, exist only for a `Result`, and [`AnswerFallback`]
+//! answers for every other type. A return type naming a generic parameter
+//! resolves to the fallback.
 
 /// A handler's answer, borrowed so the compiler can be asked what it is.
 #[doc(hidden)]
@@ -136,12 +122,9 @@ mod tests {
 
     type Renamed<T> = Result<T, String>;
 
-    /// A type whose name ends in `Result`.
     #[derive(Debug, PartialEq)]
     struct SearchResult(i32);
 
-    /// The probe answers by type: a `Result` under another name is a `Result`,
-    /// and a type whose name ends in `Result` is a value.
     #[test]
     fn a_result_is_known_by_its_type_never_by_its_name() {
         let renamed: Renamed<i32> = Ok(1);
@@ -151,7 +134,6 @@ mod tests {
         let _: ValueAnswer = Answer(&vec![1]).kind();
     }
 
-    /// A `Result` answer's error is lifted out; a value is wrapped as it is.
     #[test]
     fn a_result_answer_splits_its_error_out() {
         let failed: Renamed<i32> = Err("refused".into());
@@ -167,8 +149,6 @@ mod tests {
         assert_eq!(split, Ok(SearchResult(2)));
     }
 
-    /// `map` builds from the value alone, and a `Result` answer's error never
-    /// reaches `f`.
     #[test]
     fn map_builds_from_the_value_and_lifts_the_error() {
         let failed: Renamed<i32> = Err("refused".into());
@@ -187,8 +167,6 @@ mod tests {
         assert_eq!(mapped, Ok(2));
     }
 
-    /// The mapper reaches the value inside a `Result` answer, and the answer
-    /// itself otherwise — what a mask is handed.
     #[test]
     fn the_mapper_reaches_the_value_inside_a_result() {
         let renamed: Renamed<i32> = Ok(1);

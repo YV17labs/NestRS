@@ -1,15 +1,6 @@
-//! Boot-time fail-secure contract of the layer pool, mirroring the access
-//! graph's posture: a wiring error is a **boot error**, never a runtime
-//! surprise.
-//!
-//! Two checks are pinned here:
-//!
-//! - a global layer spec whose provider was never registered fails boot
-//!   (it would otherwise resolve to `None` and silently drop — for a guard
-//!   that means every route quietly loses its fail-secure net);
-//! - an imperative `HttpTransport::mount(...)` endpoint — opaque to the
-//!   shaper — fails boot when global guards are active, unless the app
-//!   explicitly opts down to a warn with `fail_secure_strict(false)`.
+//! Boot-time fail-secure contract of the layer pool: a global layer spec whose
+//! provider was never registered, or two controllers on one prefix, fail the
+//! boot.
 
 use nest_rs_core::{Layer, injectable, module, target};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
@@ -18,7 +9,7 @@ use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
 use poem::{Request, Response};
 
-/// Registered as a provider — the resolvable control case.
+/// Registered as a provider: the resolvable control case.
 #[injectable]
 #[derive(Default)]
 struct WiredGuard;
@@ -109,17 +100,10 @@ async fn an_unresolvable_global_interceptor_fails_boot() {
     );
 }
 
-// The three imperative-mount cases — strict refusal, the `fail_secure_strict`
-// opt-out, and "no global pool, no violation" — live in
-// `nest-rs-http/tests/integration/fail_secure.rs`, the crate that owns
-// `HttpTransport::fail_secure_strict` and emits the warn. They were asserted in
-// both places, more weakly here; a duplicate in the convenient crate is what
-// hides a concern from anyone surveying the crate that owns it.
+// The imperative-mount cases live in `nest-rs-http/tests/integration/fail_secure.rs`.
 
-/// A controller route with no guard and no `#[public]` marker — an *implicit*
-/// access decision. With no global guard pool to cover it, the transport warns
-/// at boot (`access_is_implicit`) but does **not** fail: the warning nudges the
-/// developer to make the decision explicit; it never blocks an honest build.
+/// A controller route with no guard and no `#[public]` marker: an *implicit*
+/// access decision.
 #[controller(path = "/")]
 struct OpenController;
 
@@ -140,14 +124,8 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
     let app = TestApp::for_module::<OpenModule>()
         .await
         .expect("an implicit access decision is a warning, not a boot failure");
-    // The route is served — the posture check observes, it does not gate.
     app.http().post("/thing").send().await.assert_status_is_ok();
 
-    // The whole value of an observing check is the line it prints: the route is
-    // served either way, so a deploy learns its access posture was implicit here
-    // or nowhere. The test asserted the boot and the 200 and never the warning,
-    // which left the one thing that distinguishes this from a working app
-    // unpinned. Single-thread runtime — `LogCapture` is thread-local.
     let event = logs
         .find(target::LAYERS, "unguarded routes detected")
         .into_iter()
@@ -165,10 +143,8 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
     );
 }
 
-/// Two controllers claiming the same prefix. Each `nest`s under it, so the
-/// prefix is an exclusive namespace — poem would panic deep in route assembly
-/// ("duplicate path: /dup/*--poem-rest"). The transport catches it at boot
-/// instead, the same posture as every other wiring error.
+/// Two controllers claiming the same prefix, on which poem would panic deep in
+/// route assembly ("duplicate path: /dup/*--poem-rest").
 #[controller(path = "/dup")]
 struct FirstDupController;
 

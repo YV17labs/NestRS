@@ -1,17 +1,9 @@
-//! [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html) Problem Details for HTTP APIs.
+//! [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html) Problem Details for HTTP APIs,
+//! the single error format at the HTTP boundary.
 //!
-//! The single error format at the HTTP boundary: every modelled failure the
-//! transport renders — a handler's `ServiceError`, an inline [`ProblemDetails`],
-//! a validation rejection, a guard denial, a domain exception filter — is an
-//! `application/problem+json` body. A handler that wants a structured error
-//! returns `Err(ProblemDetails::not_found().with_detail("…"))`; the
-//! [`ResponseError`] impl below renders the JSON envelope and stamps the
-//! `Content-Type`. [`normalize_error_response`] is the transport-edge boundary
-//! that lifts any leftover raw plain-text error (an unmounted-route 404, a 413,
-//! an extractor's bad-path-id 400) onto the same envelope, so no route returns
-//! a bare-text or foreign-shaped body for a modelled failure. RFC 9457
-//! extension members (e.g. field-level errors under `errors`) ride via
-//! [`ProblemDetails::with_extension`].
+//! A handler returns `Err(ProblemDetails::not_found().with_detail("…"))`;
+//! [`normalize_error_response`] lifts any leftover plain-text transport error (an
+//! unmounted-route 404, a 413) onto the same `application/problem+json` envelope.
 
 use nest_rs_core::DecodeError;
 use poem::error::{ParseQueryError, ResponseError};
@@ -19,15 +11,8 @@ use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 use serde::Serialize;
 
-/// Body of an `application/problem+json` response. Stable URIs for the
-/// well-known constructors live at `https://www.rfc-editor.org/rfc/rfc9457` —
-/// `type` is the only field a client may key on, so the URIs are stable across
-/// releases (and overridable via [`with_type`](Self::with_type) when an app
-/// wants to publish its own type registry).
-// `#[non_exhaustive]`: build via the constructors (`from_status`/`from_error`/
-// `bad_request`/…) + `with_*` builders, never a struct literal — so a new RFC
-// 9457 member can be added without a breaking change. Fields stay `pub` for
-// reading a response's problem body.
+/// Body of an `application/problem+json` response. `type` is the only field a
+/// client may key on, so the constructors' URIs are stable across releases.
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct ProblemDetails {
@@ -47,9 +32,7 @@ pub struct ProblemDetails {
     /// when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
-    /// RFC 9457 **extension members** — problem-specific data flattened
-    /// alongside the standard fields (e.g. field-level validation errors under
-    /// an `errors` key). Empty ⇒ no extra keys serialized.
+    /// RFC 9457 **extension members**, flattened alongside the standard fields.
     #[serde(flatten)]
     pub extensions: serde_json::Map<String, serde_json::Value>,
 }
@@ -62,11 +45,8 @@ fn serialize_status<S: serde::Serializer>(
 }
 
 impl ProblemDetails {
-    /// A problem whose `detail` is `err`'s own sentence — with any decode failure
-    /// its chain holds said without its value ([`DecodeError::redact`]), since a
-    /// reply is read, logged and cached by more parties than the payload ever
-    /// was. For a sentence that is not an error's, write
-    /// [`with_detail`](Self::with_detail).
+    /// A problem whose `detail` is `err`'s own sentence, any decode failure its
+    /// chain holds said without its value ([`DecodeError::redact`]).
     pub fn from_error(
         status: StatusCode,
         title: impl Into<String>,
@@ -93,11 +73,8 @@ impl ProblemDetails {
         }
     }
 
-    /// Build a problem from a bare [`StatusCode`], routing the well-known 4xx/5xx
-    /// through their canonical constructor (stable `type` URI + `title`) and
-    /// falling back to `about:blank` + the status' reason phrase for anything
-    /// else. The single seam the transport-edge mapper uses to lift a raw poem
-    /// error (an unmounted-route 404, a 413, a 405) onto the RFC-9457 envelope.
+    /// Build a problem from a bare [`StatusCode`]: a well-known code through its
+    /// canonical constructor, anything else as `about:blank` and its reason phrase.
     pub fn from_status(status: StatusCode) -> Self {
         match status {
             StatusCode::BAD_REQUEST => Self::bad_request(),
@@ -205,9 +182,8 @@ impl ProblemDetails {
         self
     }
 
-    /// Attach an RFC 9457 **extension member** — arbitrary problem-specific data
-    /// serialized alongside the standard fields. Field-level validation errors
-    /// ride here (e.g. `.with_extension("errors", json!({ "email": [...] }))`).
+    /// Attach an RFC 9457 **extension member**, serialized alongside the standard
+    /// fields (e.g. `.with_extension("errors", json!({ "email": [...] }))`).
     pub fn with_extension(
         mut self,
         key: impl Into<String>,
@@ -221,34 +197,19 @@ impl ProblemDetails {
 /// Normalize a response carrying a raw (non-problem) transport error onto the
 /// single RFC-9457 `application/problem+json` envelope.
 ///
-/// The transport-edge boundary the framework installs around the whole route
-/// tree. A `< 400` response, or one already rendered as
-/// `application/problem+json` (a [`ProblemDetails`], a `ServiceError`, a guard
-/// denial, a domain exception filter), passes through untouched. A `>= 400`
-/// response whose body is poem's default `text/plain` (or empty) — an
-/// unmounted-route `404`, a `413`, a `405`, a bad-path-id `400` an extractor
-/// rejected — is rebuilt as `problem+json` keyed on its status, **preserving
-/// the original headers** (`WWW-Authenticate`, `Retry-After`, …). A
-/// client-error (`4xx`) body rides through as `detail`, any of serde's
-/// sentences quoting a value said without it ([`DecodeError::redact`]); a
-/// server-error (`5xx`) body is dropped so a driver or panic message never
-/// reaches the wire. A deliberately-typed body (`application/json`,
-/// `text/html`, …) is left alone.
+/// Only a `>= 400` response with a `text/plain` or empty body is rebuilt, keeping
+/// its headers. A `4xx` body becomes `detail`, said without any value it quotes
+/// ([`DecodeError::redact`]); a `5xx` body is dropped so a driver or panic
+/// message never reaches the wire.
 pub async fn normalize_error_response(resp: Response) -> Response {
     let status = resp.status();
     if !(status.is_client_error() || status.is_server_error()) {
         return resp;
     }
-    // A response a `Filter`/`ExceptionFilter` produced by mapping a handler
-    // error is tagged `MappedError` — its body is a deliberate wire contract
-    // (an app's own envelope, a custom status), never a raw transport error to
-    // rewrite.
+    // A filter-mapped error is a deliberate wire contract, never rewritten.
     if resp.extensions().get::<crate::MappedError>().is_some() {
         return resp;
     }
-    // Only poem's default plain-text (or a bodyless) error is a raw transport
-    // error; a problem, or anything a handler deliberately typed, is left
-    // untouched.
     if !is_raw_text(&resp) {
         return resp;
     }
@@ -265,21 +226,9 @@ pub async fn normalize_error_response(resp: Response) -> Response {
         problem = problem.with_detail(DecodeError::redact(text.trim(), None).into_owned());
     }
     let mut response = problem.as_response();
-    // Carry the original response's headers across — the new body owns
-    // content-type / content-length, everything else (auth challenges, rate
-    // limits) survives. Content/transfer-encoding are dropped too: the
-    // replacement body is fresh and uncompressed, so a stale `Content-Encoding`
-    // copied from a compressed original would make the client fail to decode it.
-    //
-    // **The original wins.** The envelope stamps its own defaults (a bare
-    // `Bearer` on every 401); where the original names the same header it is
-    // strictly more specific — an RFC 9728 pointer, a step-up
-    // `error="insufficient_scope"` — so the first occurrence *replaces* the
-    // default rather than surviving beside it as a uselessly bare duplicate a
-    // client reading only the first value would follow. Later occurrences of a
-    // name append, so a genuinely multi-valued header (`Set-Cookie`) still
-    // arrives whole. Stated generically: the next envelope-level default gets
-    // the same treatment without this function learning its name.
+    // The fresh body is uncompressed: a stale `Content-Encoding` would fail decoding.
+    // An original header replaces the envelope's default (a bare `Bearer`), since a
+    // client reads the first value; later occurrences append (`Set-Cookie`).
     let mut replaced = std::collections::HashSet::new();
     for (name, value) in parts.headers.iter() {
         if name == header::CONTENT_TYPE
@@ -310,16 +259,8 @@ fn is_raw_text(resp: &Response) -> bool {
 /// An `Err` as the response it renders: poem's own rendering, except that a raw
 /// text body says each decode failure in the error's chain without its value.
 ///
-/// The transport renders a still-unhandled `Err` at one of two places — the
-/// [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) band when any
-/// wrap is registered, which is every app with an interceptor pool or a global
-/// guard, and the edge otherwise — and both render through this, because the
-/// rendered body has lost the error and with it the exact reading of a decode
-/// failure. poem's extractors answer `parse error: <serde's sentence>`, which
-/// quotes the value the client sent — a `Json<T>` field, a `Form<T>` field, a
-/// query parameter — into a `400` that proxies log and caches keep, and which
-/// every band above the render point reads. `Query<T>`'s rejection is
-/// transparent over its serde error, so that one is read off the type.
+/// `Query<T>`'s rejection is transparent over its serde error, so that one is
+/// read off the type.
 pub(crate) fn render_error(err: poem::Error) -> Response {
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
@@ -329,9 +270,6 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
     let redacted = (said != sentence).then_some(said);
     let resp = err.into_response();
     match redacted {
-        // The error's own sentence, which differs from the body only for an
-        // error rendering its own text — and is then the one that cannot quote
-        // a decode failure's value.
         Some(said) if is_raw_text(&resp) => {
             let (parts, _) = resp.into_parts();
             Response::from_parts(parts, poem::Body::from_string(said))
@@ -358,8 +296,6 @@ impl<E: poem::Endpoint> poem::Endpoint for ResolvedErrors<E> {
 
 impl std::fmt::Display for ProblemDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The error chain only ever shows in logs; the JSON body is the real
-        // response. Keep the `Display` form short and structured.
         write!(f, "{}: {}", self.status.as_u16(), self.title)?;
         if let Some(detail) = &self.detail {
             write!(f, " — {detail}")?;
@@ -376,18 +312,11 @@ impl ResponseError for ProblemDetails {
     }
 
     fn as_response(&self) -> Response {
-        // Serialize the body once; on the off-chance serialization fails we
-        // fall back to an empty object so the status code still surfaces.
         let body = serde_json::to_vec(self).unwrap_or_else(|_| b"{}".to_vec());
         let mut builder = Response::builder()
             .status(self.status)
             .header(header::CONTENT_TYPE, "application/problem+json");
-        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge, and a
-        // client that never sees one cannot know how to authenticate. Setting
-        // it on the single envelope every 401 travels covers the guard denial
-        // path too — `AuthError::render` used to be the only place that did,
-        // so the header appeared only when a handler returned the error
-        // directly, never on the guard path the docs describe.
+        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge.
         if self.status == StatusCode::UNAUTHORIZED {
             builder = builder.header(header::WWW_AUTHENTICATE, "Bearer");
         }
@@ -431,8 +360,6 @@ mod tests {
 
     #[test]
     fn constructors_preset_type_uri() {
-        // Each well-known constructor must ship with a stable, non-blank URI;
-        // a client may key on it.
         assert!(
             ProblemDetails::not_found()
                 .type_uri
@@ -445,7 +372,6 @@ mod tests {
     fn with_detail_adds_field() {
         let p = ProblemDetails::not_found().with_detail("user 42 missing");
         assert_eq!(p.detail.as_deref(), Some("user 42 missing"));
-        // Body round-trips through serde with the right shape.
         let v: serde_json::Value = serde_json::from_slice(&p.as_response_body()).unwrap();
         assert_eq!(v["detail"], "user 42 missing");
         assert_eq!(v["status"], 404);
@@ -469,9 +395,6 @@ mod tests {
         assert_eq!(p.title, "Order invalid");
     }
 
-    // G8: RFC 9110 §11.6.1 / RFC 6750 §3 require the challenge on every 401.
-    // It used to be set only by `AuthError::render`, so the guard path — the
-    // one the JWT page documents — shipped a bare 401.
     #[test]
     fn every_401_carries_the_www_authenticate_challenge() {
         let resp = ProblemDetails::unauthorized().as_response();
@@ -481,8 +404,7 @@ mod tests {
                 .map(|v| v.as_bytes()),
             Some(b"Bearer".as_slice()),
         );
-        // …and only a 401 — a 403 means authenticated-but-not-permitted, where
-        // a challenge would invite a pointless retry.
+        // A 403 takes none: a challenge would invite a pointless retry.
         assert!(
             ProblemDetails::forbidden()
                 .as_response()
@@ -494,9 +416,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_richer_challenge_replaces_the_envelope_default_rather_than_stacking() {
-        // A client reads the first `WWW-Authenticate` it finds. Two values —
-        // the envelope's bare `Bearer` and the response's RFC 9728 pointer —
-        // would send a conformant client down the useless one.
         let raw = Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(
@@ -535,8 +454,6 @@ mod tests {
 
     #[test]
     fn with_extension_flattens_alongside_standard_members() {
-        // RFC 9457 extension members sit at the top level next to type/title/
-        // status — not nested under a wrapper key.
         let p = ProblemDetails::bad_request()
             .with_detail("validation failed")
             .with_extension("errors", serde_json::json!({ "email": ["not an email"] }));
@@ -556,7 +473,6 @@ mod tests {
             ProblemDetails::from_status(StatusCode::CONFLICT).status,
             StatusCode::CONFLICT,
         );
-        // An uncommon status falls back to about:blank + its reason phrase.
         let teapot = ProblemDetails::from_status(StatusCode::IM_A_TEAPOT);
         assert_eq!(teapot.type_uri, "about:blank");
         assert_eq!(teapot.title, "I'm a teapot");
@@ -564,9 +480,6 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_lifts_a_raw_plain_text_transport_error() {
-        // A raw poem status error renders plain text by default; the edge
-        // boundary lifts it onto problem+json keyed on the status, carrying the
-        // (safe) client-error message through as `detail`.
         let raw = poem::Error::from_string(nest_rs_core::UUID_V7_REQUIRED, StatusCode::BAD_REQUEST)
             .into_response();
         let resp = normalize_error_response(raw).await;
@@ -585,8 +498,6 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_passes_through_an_existing_problem() {
-        // A response already rendered as problem+json is left untouched — its
-        // detail survives.
         let existing = ProblemDetails::conflict()
             .with_detail("dup name")
             .as_response();
@@ -599,8 +510,6 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_leaves_a_deliberate_json_error_body_alone() {
-        // A handler that typed its own 4xx `application/json` body is not a raw
-        // transport error — the boundary must not clobber it.
         let typed = Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .content_type("application/json")
@@ -616,8 +525,6 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_leaves_a_filter_mapped_response_alone() {
-        // A `Filter`/`ExceptionFilter` mapping tags its response `MappedError`;
-        // its deliberate (plain-text) body must survive the edge boundary.
         let mut mapped = Response::builder()
             .status(StatusCode::IM_A_TEAPOT)
             .body("edge-mapped".as_bytes().to_vec());
@@ -630,7 +537,6 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_drops_server_error_detail() {
-        // A 5xx must never echo the error text — only the canonical title.
         let raw = poem::Error::from_string(
             "connection to db-primary refused",
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -652,8 +558,6 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_preserves_headers_on_a_bodyless_error() {
-        // A bodyless 401 (no content-type) is a raw transport error; the
-        // boundary lifts it while preserving an auth challenge header.
         let raw = Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header("WWW-Authenticate", "Bearer")
@@ -675,10 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_drops_a_stale_content_encoding_from_the_original() {
-        // The compression layer sits inside this boundary, so a raw error it
-        // already stamped `Content-Encoding: gzip` must not carry that header
-        // onto the fresh, uncompressed problem+json body — else the client
-        // fails to decode it (ERR_CONTENT_DECODING_FAILED).
+        // The compression layer sits inside this boundary.
         let raw = Response::builder()
             .status(StatusCode::GATEWAY_TIMEOUT)
             .header(header::CONTENT_ENCODING, "gzip")
@@ -705,8 +606,6 @@ mod tests {
 
     #[test]
     fn detail_and_instance_omitted_when_absent() {
-        // RFC 9457: `detail` and `instance` are optional, so a minimal problem
-        // serializes only the four core fields.
         let v: serde_json::Value =
             serde_json::from_slice(&ProblemDetails::not_found().as_response_body()).unwrap();
         assert!(v.get("detail").is_none(), "absent detail must be omitted");
@@ -717,9 +616,6 @@ mod tests {
     }
 
     impl ProblemDetails {
-        // Tiny test helper: drain the response into bytes so the assertions
-        // above can inspect the serialized JSON without going through poem's
-        // async body type.
         fn as_response_body(&self) -> Vec<u8> {
             serde_json::to_vec(self).unwrap()
         }

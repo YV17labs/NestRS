@@ -1,50 +1,15 @@
 //! Server-Sent Events — the response shape `#[sse]` mounts.
 //!
-//! A `#[sse]` route returns a stream of [`SseEvent`] and nothing else: the
-//! decorator turns it into the `text/event-stream` response, applies the
-//! keep-alive comment interval, and closes the stream when the connection
-//! ceiling elapses. The route is a plain `GET` on the HTTP transport — the same
-//! guard chain, the same pipes, the same `#[api]` metadata as any other route.
+//! A `#[sse]` route returns a stream of [`SseEvent`]: the decorator turns it
+//! into the `text/event-stream` response, applies the keep-alive interval, and
+//! closes the stream at `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS` (4 hours by
+//! default, `0` ⇒ unlimited) — a stream authenticates once, so the ceiling
+//! bounds stale privileges.
 //!
-//! **The ceiling is the same security control WS and graphql-ws carry**, for the
-//! same reason and under the same name. A stream authenticates **once**, when
-//! the request arrives, and then emits for as long as it likes: without a
-//! ceiling it keeps the caller's privileges after the bearer token has expired,
-//! the user has logged out, or the grant was revoked.
-//! `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS` bounds that, with the same 4-hour
-//! default and the same `0` ⇒ unlimited spelling as
-//! `<PREFIX>_WS__MAX_CONNECTION_SECS` and `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`.
-//!
-//! **What it bounds is *emission*, and the connection is a reported gap.** The
-//! deadline is composed into the response body, so it is evaluated whenever that
-//! body is polled: no event is ever produced past the ceiling, at any rate a
-//! peer trickles at — which is the stale-privilege window that matters, and it
-//! is measured, not assumed. What outlives it is the **socket**: a peer that
-//! stops reading parks the write, and hyper's connection task, its buffers and
-//! everything the stream holds stay alive until that peer reads again or the
-//! socket dies.
-//!
-//! **Closing that from inside this crate was tried twice and is not sound**, and
-//! the reason is structural rather than a missing effort. The only thing still
-//! polled while a write is parked is the socket — and a socket does not know
-//! which *response* its bytes belong to. Bounding it there truncated unrelated
-//! traffic: a full-speed client downloading 4 MB over a connection that had
-//! carried a stream received 1.4 MB under a declared `content-length`, which is
-//! a protocol lie told to a well-behaved peer, and HTTP/2 multiplexes an
-//! origin's whole traffic onto that one socket. The information needed — *which
-//! response is stalled* — lives in the body, which is precisely what stops being
-//! polled. poem 3.1 and hyper 1 expose no per-response write deadline and no
-//! abort handle usable while parked, so there is nothing here to reach for.
-//!
-//! **Bound idle sockets at the server or the proxy** until there is: poem's own
-//! `Server::idle_timeout` closes a connection with no traffic, which is the
-//! shape that can be enforced without knowing whose bytes are queued.
-//!
-//! The variable sits in the **`http`** namespace rather than an `sse` one of its
-//! own, and that is the one deliberate difference from its two peers: SSE is a
-//! response shape of the HTTP transport, not a module. It owns no `#[config]`,
-//! so under *one seam per config* it gets no `for_root` — `HttpModule::for_root`
-//! is already its in-code path.
+//! The ceiling bounds *emission*, not the socket: a peer that stops reading
+//! parks the write and keeps the connection alive, and poem 3.1 / hyper 1 offer
+//! no per-response write deadline. Bound idle sockets at the server
+//! (`Server::idle_timeout`) or the proxy.
 
 use std::fmt;
 use std::sync::Arc;
@@ -60,23 +25,13 @@ use crate::config::HttpConfig;
 
 /// One event on a `text/event-stream`: a payload, and optionally an event type,
 /// an id a reconnecting client sends back as `Last-Event-ID`, and a retry hint.
-///
-/// Re-exported so a controller streaming events declares no transport crate of
-/// its own — the same reason `#[input]` and `Json` are reached through this
-/// crate rather than through poem.
 pub use poem::web::sse::Event as SseEvent;
 
 /// What an `#[sse]` handler returns: `-> SseStream`, or
 /// `-> Result<SseStream, E>` when opening the stream can fail.
 ///
-/// **A named type rather than `impl Stream<Item = SseEvent>`**, and that is the
-/// whole reason it exists. An `async fn` on `&self` returning an opaque type
-/// captures the `&self` lifetime under the 2024 capture rules, so the opaque
-/// stream is not `'static` and cannot outlive the call — which is exactly what a
-/// response body must do. The developer would have to write
-/// `impl Stream<Item = SseEvent> + use<>` and know why. They write
-/// [`SseStream::new`] instead, and the boxing that makes it `'static` happens
-/// once, where the stream is built.
+/// A named type because an `async fn` on `&self` returning `impl Stream`
+/// captures `&self` under the 2024 capture rules, so it is not `'static`.
 pub struct SseStream(BoxStream<'static, SseEvent>);
 
 impl SseStream {
@@ -96,9 +51,7 @@ impl fmt::Debug for SseStream {
 }
 
 /// The two long-lived-connection controls a `#[sse]` route is mounted with,
-/// read once from [`HttpConfig`] at mount time rather than per request: both are
-/// fixed for the life of the process, and a per-request container lookup on a
-/// route whose whole job is to stay open would be pure overhead.
+/// read once from [`HttpConfig`] at mount time.
 #[derive(Clone, Copy, Debug)]
 pub struct SseSettings {
     keep_alive: Option<Duration>,
@@ -106,14 +59,8 @@ pub struct SseSettings {
 }
 
 impl SseSettings {
-    /// Resolve from the app's [`HttpConfig`].
-    ///
-    /// `#[routes]` emits this only for a controller that carries a `#[sse]`
-    /// route.
-    ///
-    /// A container with no `HttpConfig` cannot be serving HTTP, so the defaults
-    /// stand in rather than panicking: this runs inside `Controller::mount`, and
-    /// failing a boot here would report the wrong cause.
+    /// Resolve from the app's [`HttpConfig`], or its defaults when the
+    /// container has none (it then serves no HTTP).
     pub fn resolve(container: &Container) -> Self {
         let config = container
             .get::<HttpConfig>()
@@ -126,17 +73,10 @@ impl SseSettings {
 
     /// Wrap a handler's event stream into the response the route serves —
     /// marked [`OpenEndedBody`](crate::OpenEndedBody), so the transport ends it
-    /// at the shutdown signal rather than holding its window for an end that
-    /// is not coming.
-    ///
-    /// Emitted by `#[sse]`; there is no reason to call it by hand, and doing so
-    /// on an ordinary route would produce a `text/event-stream` the document
-    /// does not describe.
+    /// at the shutdown signal. Emitted by `#[sse]`.
     pub fn respond(&self, stream: SseStream) -> Response {
         let stream = stream.0;
-        // A ceiling, not an idle timeout: traffic never pushes it out. It is
-        // evaluated whenever the body is polled, so it bounds emission — see the
-        // module docs for what that does and does not cover.
+        // A ceiling, not an idle timeout: traffic never pushes it out.
         let sse = match self.max_connection {
             Some(ttl) => SSE::new(stream.take_until(async move {
                 tokio::time::sleep(ttl).await;

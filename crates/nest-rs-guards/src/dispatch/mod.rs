@@ -10,11 +10,6 @@
 //! The response-side pools (exception-filters / filters / interceptors)
 //! wrap inside it via `route_layers`.
 //!
-//! Note: `#[public]` is NOT a framework-level skip — the macro attaches
-//! a [`Public`](nest_rs_http::Public) marker via the same metadata
-//! mechanism as `#[meta(...)]`, and individual guards decide whether to
-//! honor it.
-//!
 //! ## GraphQL — inline chain call, composed once per site
 //!
 //! The `#[operations]` macro emits a call to `run_layered_graphql_chain` at
@@ -24,9 +19,7 @@
 //! `#[messages]` macro composes its per-event guard table at gateway
 //! mount, wrapping each guard via `GuardAsWsMessageCheck`.
 
-// The per-site chain the two in-band transports share — the memo cell, the
-// scope-tagged sources, and the composition. Only compiled when one of them is
-// served.
+// The per-site chain the two in-band transports share.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 mod chain;
 mod denial_convert;

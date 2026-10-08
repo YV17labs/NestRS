@@ -28,8 +28,7 @@ pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
             .into();
         }
         other => {
-            // Name the shape the developer actually wrote, as `#[input]` does,
-            // rather than syn's `expected struct`.
+            // Name the shape written, rather than syn's `expected struct`.
             let shape = match &other {
                 Item::Enum(_) => "an enum",
                 Item::Union(_) => "a union",
@@ -45,10 +44,8 @@ pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    // A unit struct cannot carry a type or lifetime parameter (`E0392`), but it
-    // *can* carry a const one — and `Q<1>` and `Q<2>` would then share one wire
-    // name, so two markers claim one queue with nothing saying so. The identity
-    // is the type, so the type is concrete.
+    // A unit struct *can* carry a const parameter, and `Q<1>` and `Q<2>` would
+    // then share one wire name.
     if let Some(parameter) = item.generics.params.first() {
         return syn::Error::new(
             parameter.span(),

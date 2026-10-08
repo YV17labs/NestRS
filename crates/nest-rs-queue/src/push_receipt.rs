@@ -7,10 +7,8 @@ use crate::{JobId, QueueName};
 /// What a push returns for each job it filed: the queue it went to, and the
 /// [`JobId`] the port minted for it.
 ///
-/// The id is the one every attempt at the job reports as `messaging.message.id`
-/// on its span and as `job_id` on its operation line, and the receipt is what
-/// [`cancel`](crate::JobProducerExt::cancel) takes to name the job — the queue
-/// travels with the id because a job is only ever looked for on its own queue.
+/// The receipt is what [`cancel`](crate::JobProducerExt::cancel) takes to name
+/// the job, on its own queue.
 ///
 /// A receipt is data: it serializes as `{"queue": …, "id": …}`, so a caller that
 /// cancels later — from another request, another process — keeps it wherever it

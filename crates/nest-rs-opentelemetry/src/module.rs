@@ -6,17 +6,10 @@ use crate::OpenTelemetryError;
 use crate::meter::OpenTelemetryMeter;
 
 /// Registers the global OTel [`OpenTelemetryMeter`] as a provider, under the
-/// `otlp` feature.
-///
-/// **It mounts no per-request layer, and that is the design.** Everything this
-/// crate adds to a span is seeded onto the framework's span constructor at
-/// `init` (see `linker`), so it reaches every edge — a queue job in a headless
-/// worker as much as an HTTP request — instead of the one transport an
-/// interceptor could have been attached to.
+/// `otlp` feature; it mounts no per-request layer.
 ///
 /// **Ordering:** [`crate::OpenTelemetry::init`] must run before this module is
-/// registered, or the global tracer/meter are no-ops and signals are silently
-/// dropped — the boot fails with [`OpenTelemetryError::InitMissing`].
+/// registered, or the boot fails with [`OpenTelemetryError::InitMissing`].
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {

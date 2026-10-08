@@ -1,10 +1,5 @@
 //! A `Checkpoint<S>` parameter through an attempt: what one attempt saves, the
-//! next attempt at the same job reads — the port's promise, on every backend.
-//! Letting it go at the job's end is the backend's, in the step that ends it.
-//!
-//! A store that never answers meets the port's net: a read or a save fails the
-//! attempt, retryably, naming the queue and the call — on a paused clock, so the
-//! suite never waits the net out.
+//! next attempt at the same job reads; a store that never answers meets the net.
 
 use std::sync::{Arc, Mutex};
 
@@ -126,9 +121,6 @@ async fn a_retry_resumes_from_what_the_failed_attempt_saved() {
     );
 }
 
-/// A saved state that no longer decodes dead-letters the job, and the sentence
-/// names what kind of value was found — never the value, which is the job's own
-/// data and would otherwise sit in the dead-letter log line and record.
 #[tokio::test]
 async fn a_checkpoint_that_does_not_decode_is_reported_without_its_value() {
     let store = Arc::new(MemoryStore::default());
@@ -198,8 +190,6 @@ fn silent_delivery(queue: &str, store: &Arc<SilentStore>) -> Delivery {
     .with_checkpoint(store.clone())
 }
 
-/// A store that never answers the read, or the save, fails the attempt at the
-/// net, retryably, and the retry's line names the call and the queue.
 #[tokio::test(start_paused = true)]
 async fn a_checkpoint_the_store_never_reads_or_saves_fails_the_attempt_retryably() {
     for call in ["load", "save"] {

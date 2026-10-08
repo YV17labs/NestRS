@@ -1,20 +1,4 @@
 //! `#[wire_enum]` — the enum mode of `#[expose]`.
-//!
-//! An `#[expose]`d column of a custom enum type passes through `dto.rs`
-//! verbatim, so the enum itself has to carry the wire traits. Hand-written that
-//! is `Serialize`, `Deserialize`, `JsonSchema` and — under `graphql` —
-//! `async_graphql::Enum`, none of which can be reached without naming its crate:
-//! a derive expands against the *call site's* prelude, so the entity crate ended
-//! up declaring `schemars` and `async-graphql` for code it never wrote. That is
-//! the defect *The umbrella is the front door* names.
-//!
-//! This decorator emits those derives with their `crate = ` overrides routed
-//! through `nest-rs-resource`, plus the `Clone`/`Copy`/`Eq` shape both
-//! `async_graphql::Enum` and SeaORM's `DeriveActiveEnum` require of a unit-only
-//! enum. It deliberately emits **no** SeaORM half: `EnumIter`,
-//! `DeriveActiveEnum`, `#[sea_orm(rs_type, db_type)]` and the per-variant
-//! `string_value` are entity-site code the developer's own source legitimately
-//! writes, and the column's storage type is not ours to choose.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -23,13 +7,10 @@ use syn::{Fields, Item, ItemEnum};
 use crate::attr::{graphql_root, graphql_root_str};
 
 /// This decorator as written, for the sentence [`#[expose]`](macro@crate::expose) prints when it
-/// is handed a column's enum. Each half names the *other*, from the other's own
-/// constant, so neither message can come to name a decorator that moved.
+/// is handed a column's enum.
 pub(crate) const NAME: &str = "#[wire_enum]";
 
-/// The sibling decorator a `#[wire_enum]` on the wrong item shape names, so the
-/// diagnostic points at the decorator that *does* take a struct rather than at
-/// syn's `expected enum`.
+/// The sibling decorator a `#[wire_enum]` on the wrong item shape names.
 const HOST: &str = crate::expose::NAME;
 
 pub(crate) fn wire_enum(args: TokenStream2, item: TokenStream2) -> TokenStream2 {
@@ -66,13 +47,8 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
         ));
     }
 
-    // Emitted **before** the developer's own attributes: `#[serde(rename_all =
-    // …)]` and `#[graphql(name = …)]` are derive helper attributes, and one
-    // written above the derive that claims it trips `legacy_derive_helpers`
-    // (warn-by-default, future-incompatible). Our derive therefore leads, and
-    // whatever the developer wrote — including their own
-    // `#[derive(EnumIter, DeriveActiveEnum)]` and the `#[sea_orm(…)]` it claims
-    // — follows in the order they wrote it.
+    // Our derive leads the developer's attributes: a helper (`#[serde(rename_all)]`)
+    // above the derive that claims it trips `legacy_derive_helpers`.
     let graphql_derive = graphql_enum_derive(graphql);
     let graphql_crate = graphql_crate_attr(graphql);
 
@@ -95,11 +71,8 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
     })
 }
 
-/// `graphql` is the only option, and it means what it means on `#[expose]`:
-/// also emit the GraphQL surface. Kept explicit rather than inferred from the
-/// crate feature, because a Cargo feature is additive across a workspace — one
-/// GraphQL app would otherwise silently put an `Enum` derive on every enum in
-/// every sibling crate.
+/// `graphql` is explicit, not inferred from the crate feature: features unify
+/// across a workspace, so one GraphQL app would derive `Enum` on every enum.
 fn parse_args(args: TokenStream2) -> syn::Result<bool> {
     const WIRE_ENUM: nest_rs_codegen::Grammar =
         nest_rs_codegen::Grammar::new("wire_enum", &["graphql"]);
@@ -112,9 +85,8 @@ fn parse_args(args: TokenStream2) -> syn::Result<bool> {
 }
 
 /// Parse the item, naming [`HOST`] when the developer decorated the entity
-/// struct instead. The item is parsed as an [`Item`] *before* the shape is
-/// judged, so a genuine syntax error inside an enum reports that error rather
-/// than "you wanted the other decorator".
+/// struct instead. Parsed as an [`Item`] first, so a syntax error inside an
+/// enum reports that error, not "the other decorator".
 fn parse_enum(item: TokenStream2) -> syn::Result<ItemEnum> {
     match syn::parse2::<Item>(item)? {
         Item::Enum(item) => Ok(item),
@@ -128,10 +100,8 @@ fn parse_enum(item: TokenStream2) -> syn::Result<ItemEnum> {
     }
 }
 
-/// `async_graphql::Enum` spliced into the derive list, routed through the
-/// surface crate. Present only under `#[wire_enum(graphql)]` — an enum reaching
-/// HTTP alone needs no GraphQL impls, and `#[graphql(crate = …)]` would be an
-/// unclaimed attribute without the derive that owns it.
+/// `async_graphql::Enum` spliced into the derive list, under
+/// `#[wire_enum(graphql)]` only.
 fn graphql_enum_derive(graphql: bool) -> TokenStream2 {
     if !graphql {
         return TokenStream2::new();
@@ -140,9 +110,7 @@ fn graphql_enum_derive(graphql: bool) -> TokenStream2 {
     quote! { #root::Enum, }
 }
 
-/// The `crate = ` override that derive needs — see `attr::graphql_crate_attr`
-/// for why a bare `::async_graphql` would put the crate in the *consumer's*
-/// manifest.
+/// The `crate = ` override that derive needs.
 fn graphql_crate_attr(graphql: bool) -> TokenStream2 {
     if !graphql {
         return TokenStream2::new();

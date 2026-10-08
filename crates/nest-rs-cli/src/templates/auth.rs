@@ -1,14 +1,11 @@
 //! **Auth** templates — the app-side authn/authz adapter (`g auth`).
 //!
-//! These types are *app* code, not framework code: the framework is generic
-//! over the principal (`Claims`) and the policy (`AuthzAbility`), so every
-//! project writes the same small set of files once. They mirror
-//! `demo/crates/features/src/{authn,authz}/` — copy that exemplar when
-//! extending, don't invent a second shape.
+//! App code, not framework code: the framework is generic over the principal
+//! (`Claims`) and the policy (`AuthzAbility`). They mirror
+//! `demo/crates/features/src/{authn,authz}/`.
 //!
 //! `authn/module.rs` writes `nest_rs::authn::AuthnModule::for_root(None)`
-//! qualified rather than importing it: the product's own module wears the
-//! same name, and two `AuthnModule` in one type namespace is `E0255`.
+//! qualified: the product's own module wears the same name (`E0255`).
 
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AuthzAbility` reads it to build the caller's rules.
@@ -85,18 +82,8 @@ use super::strategy::{AuthnGuard, AuthnStrategy};
 pub struct AuthnModule;
 "#;
 
-// ── authn/http/ — the development token route ───────────────────────────────
-//
-// Every guarded route needs a bearer token, and until an app writes its real
-// login there is nothing that mints one. The gap used to be filled by the docs
-// telling a reader to hand-sign an HS256 token in a shell heredoc — a
-// cryptography exercise on page five of a tutorial, for a framework whose whole
-// claim is that it carries this kind of work.
-//
-// So `g auth` writes the route instead, and makes it impossible to ship: the
-// module refuses the boot outside `development` / `test`, by name, before a
-// single request is served. Delete `authn/http/` the day the real login lands —
-// nothing else references it.
+// authn/http/ — the development token route, refusing the boot outside
+// `development` / `test`. Deleted the day the real login lands.
 
 pub(crate) const AUTHN_HTTP_MOD: &str = r#"mod audit;
 mod controller;
@@ -106,9 +93,8 @@ mod module;
 pub use module::AuthnHttpModule;
 "#;
 
-/// The route the tutorial `curl`s. `#[public]` because a caller with no token
-/// is exactly who asks for one, and the environment check is what stands in for
-/// the credential this route deliberately does not have.
+/// The route the tutorial `curl`s. `#[public]`: the environment check stands in
+/// for the credential this route deliberately does not have.
 pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::JwtService;
@@ -168,11 +154,8 @@ impl DevTokenController {
 
 /// The boot refusal, on a provider of its own.
 ///
-/// It does **not** live on `DevTokenController`: a `#[controller]` registers
-/// metadata, never an instance, so a `#[hooks]` block on it could only be
-/// skipped at boot — which is why the framework refuses that composition at
-/// compile time (`nest_rs::core::ProviderResidency`). Same shape as the framework's
-/// own `SoftDeleteAudit`: an `#[injectable]` whose only job is to refuse.
+/// Not on `DevTokenController`: a `#[controller]` registers metadata, never an
+/// instance, so its `#[hooks]` could not run (`nest_rs::core::ProviderResidency`).
 pub(crate) const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, injectable};
 use nest_rs::guards::{Denial, Guard, HttpGuard};
 use nest_rs::http::async_trait;
@@ -262,9 +245,8 @@ pub use guard::AuthzGuard;
 pub use module::AuthzModule;
 "#;
 
-/// The whole policy, in one function. Empty on purpose: the data layer denies
-/// every row the ability does not grant, so an app that grants nothing serves
-/// nothing — a legible 403, never a silent empty list.
+/// The whole policy, in one function. Empty on purpose: an app that grants
+/// nothing serves nothing — a legible 403, never a silent empty list.
 pub(crate) const AUTHZ_ABILITY: &str = r#"use nest_rs::authz::{AbilityBuilder, AbilityFactory};
 use nest_rs::core::injectable;
 
@@ -311,10 +293,8 @@ use crate::authn::AuthnModule;
 pub struct AuthzModule;
 "#;
 
-/// The guard sits at the `authz/` root, not under `authz/http/`, because
-/// `AbilityGuard` answers every transport: it implements `check_http`,
-/// `check_graphql`, `check_ws_message` and `check_mcp`. Filing it under one edge
-/// made the other three import that edge's module to reach their own guard.
+/// At the `authz/` root, not under `authz/http/`: `AbilityGuard` answers every
+/// transport.
 pub(crate) const AUTHZ_GUARD: &str = r#"use nest_rs::authz::AbilityGuard;
 
 use crate::authz::AuthzAbility;
@@ -322,13 +302,8 @@ use crate::authz::AuthzAbility;
 pub type AuthzGuard = AbilityGuard<AuthzAbility>;
 "#;
 
-// ── authz/graphql/ — the per-operation bridge (`nestrs g graphql`) ──────────
-//
-// `/graphql` is one endpoint with no guard at the HTTP edge: authn and the
-// ability run **in band, per operation**, through a `GraphqlOperationGuard`.
-// These three providers are what a resolver's `#[authorize]` / `#[public]`
-// posture is enforced against, so a GraphQL adapter without them boots into a
-// deny-all fallback that installs no ability at all.
+// authz/graphql/ — the per-operation bridge (`nestrs g graphql`); without it a
+// GraphQL adapter installs no ability.
 
 pub(crate) const AUTHZ_GRAPHQL_MOD: &str = r#"mod bridge;
 mod module;
@@ -370,14 +345,8 @@ pub struct AuthzGraphqlModule;
 forward_principal!(Claims);
 "#;
 
-// ── authz/ws/ — the socket-side context (`nestrs g ws`) ────────────────────
-//
-// A WS upgrade is an HTTP GET, so the gateway reuses the HTTP guards
-// (`#[use_guards(AuthnGuard, AuthzGuard)]`) rather than a bridge of its own.
-// What it does need is the `dyn SocketContext` that carries the connection's
-// data scope — without it a guarded gateway serves rows nobody scoped, and the
-// generated gateway's own SECURITY comment tells the reader to import a module
-// nothing was writing.
+// authz/ws/ — the `dyn SocketContext` carrying a gateway connection's data
+// scope (`nestrs g ws`); the upgrade reuses the HTTP guards.
 
 pub(crate) const AUTHZ_WS_MOD: &str = r#"mod module;
 
@@ -399,12 +368,8 @@ use crate::authz::AuthzModule;
 pub struct AuthzWsModule;
 "#;
 
-// ── authz/mcp/ — the per-operation bridge (`nestrs g mcp`) ─────────────────
-//
-// `/mcp` is one endpoint gated in band, per operation, through an
-// `McpOperationGuard`. With none registered the endpoint is **deny-all**: every
-// tool call answers 401, which is the boot warning `nestrs g mcp` prints. These
-// three providers are what turn that into a real posture.
+// authz/mcp/ — the per-operation bridge (`nestrs g mcp`); without it `/mcp` is
+// deny-all.
 
 pub(crate) const AUTHZ_MCP_MOD: &str = r#"mod bridge;
 mod module;

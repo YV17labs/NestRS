@@ -1,33 +1,16 @@
-//! Driving an MCP endpoint over streamable HTTP.
-//!
-//! Every MCP operation is a JSON-RPC message that has to carry the same three
-//! headers and follow the same `initialize` → `notifications/initialized` →
-//! *operation* order. Hand-rolling that per suite means each copy re-encodes
-//! the protocol version and the header triple, and they drift — so it lives
-//! here once, next to the [`TestClient`] it drives.
-//!
-//! Nothing here depends on `nest-rs-mcp`: it is JSON over HTTP, so it works
-//! against a [`TestApp`](crate::TestApp)'s client and against a bare
-//! `endpoint(..)` mount alike.
+//! Driving an MCP endpoint over streamable HTTP, through a
+//! [`TestApp`](crate::TestApp)'s [`TestClient`] or a bare `endpoint(..)` mount.
 
 use poem::Endpoint;
 use poem::test::{TestClient, TestResponse};
 use serde_json::{Value, json};
 
-/// The protocol version every suite negotiates — rmcp's own `LATEST`.
+/// The protocol version every suite negotiates — rmcp's own `LATEST`, pinned by
+/// `mcp::the_driver_negotiates_the_sdk_latest`.
 ///
-/// One constant so a bump is one edit, not a grep. That alone let it rot four
-/// revisions behind the SDK, because nothing failed when the bump did not
-/// happen: rmcp keeps accepting the oldest revision forever, so every suite
-/// passed while asserting against a handshake no current client performs. So
-/// the constant is *pinned* rather than merely shared —
-/// `mcp::the_driver_negotiates_the_sdk_latest` compares it to
-/// `nest_rs_mcp::ProtocolVersion::LATEST` and fails the day rmcp moves.
-///
-/// `LATEST`, not `ProtocolVersion::STANDARD_HEADERS` (`2026-07-28`): SEP-2567
-/// serves that revision statelessly, which retires the `mcp-session-id` model
-/// [`open_session`] implements. A driver for the modern stateless path is a
-/// second driver, not a bump of this one.
+/// Not `ProtocolVersion::STANDARD_HEADERS` (`2026-07-28`): SEP-2567 serves that
+/// revision statelessly, retiring the `mcp-session-id` model [`open_session`]
+/// implements.
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// The `initialize` request body, declaring no client capabilities.
@@ -35,10 +18,9 @@ pub fn initialize_request() -> Value {
     initialize_request_with(json!({}))
 }
 
-/// [`initialize_request`] with explicit client `capabilities` — what a suite
-/// needs to reach a capability-gated method (`tasks/*` answers `-32021`
-/// *Missing Required Client Capability* until the client declares
-/// `extensions: { "io.modelcontextprotocol/tasks": {} }`).
+/// [`initialize_request`] with explicit client `capabilities`, to reach a
+/// capability-gated method (`tasks/*` answers `-32021` until the client
+/// declares `extensions: { "io.modelcontextprotocol/tasks": {} }`).
 pub fn initialize_request_with(capabilities: Value) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -67,11 +49,8 @@ pub async fn post_message<E: Endpoint>(
 
 /// [`post_message`] carrying extra request headers.
 ///
-/// The general form, for a suite whose guard chain reads something other than a
-/// bearer token — a tenant header, a test-only role. Hand-rolling the POST
-/// instead is what drops the `host` header rmcp's DNS-rebinding defence
-/// requires, and answers `400` for a reason that has nothing to do with the
-/// assertion.
+/// Prefer it to a hand-rolled POST, which drops the `host` header rmcp's
+/// DNS-rebinding defence requires and answers `400`.
 pub async fn post_message_with<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
@@ -99,8 +78,8 @@ pub async fn post_message_with<E: Endpoint>(
 }
 
 /// Run `initialize` + `notifications/initialized` and return the session id.
-/// Panics if the endpoint refuses the handshake — a suite that expects a
-/// refusal should assert on [`post_message`] directly.
+/// Panics if the endpoint refuses the handshake; assert a refusal on
+/// [`post_message`].
 pub async fn open_session<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
@@ -149,9 +128,8 @@ pub async fn open_session_with<E: Endpoint>(
     session
 }
 
-/// Run `initialize` and return the raw response body — for a suite asserting on
-/// what the handshake *advertises* (capabilities, instructions, protocol
-/// version) rather than on the session it opens.
+/// Run `initialize` and return the raw response body, to assert what the
+/// handshake advertises.
 pub async fn initialize<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
@@ -168,13 +146,12 @@ pub async fn initialize<E: Endpoint>(
 
 /// Decode the JSON-RPC response carried by a body from any of the calls here.
 ///
-/// Streamable HTTP answers as SSE, and the stream opens with an empty `data:`
-/// keep-alive frame — so the payload is the first frame that actually carries a
-/// `result` or an `error`, not the first frame. A suite that greps the raw body
-/// instead re-learns that, or silently asserts against the keep-alive.
+/// The SSE stream opens with an empty `data:` keep-alive frame, so the payload
+/// is the first frame carrying a `result` or an `error`.
 ///
-/// Panics if no frame carries either, which is what a suite wants: the
-/// alternative is an assertion passing against a body it never parsed.
+/// # Panics
+///
+/// If no frame carries either.
 pub fn result(body: &str) -> Value {
     std::iter::once(body)
         .chain(body.lines().filter_map(|line| line.strip_prefix("data: ")))
@@ -186,10 +163,6 @@ pub fn result(body: &str) -> Value {
 /// Send one JSON-RPC **request** on an open session and return the raw
 /// response body. `params` is the method's params object (`json!({})` when it
 /// takes none).
-///
-/// The tool-shaped [`call_tool`] is the common case; this is the general one,
-/// for the rest of the MCP surface — `prompts/get`, `resources/read`,
-/// `completion/complete`, `tasks/get`, a custom method.
 pub async fn call_method<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
@@ -249,7 +222,7 @@ pub async fn notify<E: Endpoint>(
 }
 
 /// Drive the full handshake and call `tool` with no arguments, returning the
-/// response body — what a suite asserts on.
+/// response body.
 pub async fn call_tool<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
@@ -259,8 +232,7 @@ pub async fn call_tool<E: Endpoint>(
     call_tool_with(client, path, tool, bearer, json!({})).await
 }
 
-/// [`call_tool`] with an `arguments` object — what a suite reaches for to drive
-/// an operation's input through its pipes.
+/// [`call_tool`] with an `arguments` object.
 pub async fn call_tool_with<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,
@@ -272,8 +244,7 @@ pub async fn call_tool_with<E: Endpoint>(
 }
 
 /// [`call_tool_with`] under caller-supplied headers, applied to the handshake
-/// and the call alike — the driver for a suite whose guard chain identifies the
-/// caller by something other than a bearer token.
+/// and the call alike.
 pub async fn call_tool_as<E: Endpoint>(
     client: &TestClient<E>,
     path: &str,

@@ -60,11 +60,9 @@
 //! `AuthnGuard` the authorization check runs against an empty principal — a
 //! name-based heuristic logs a `warn` at boot.
 //!
-//! The pool takes no marker bound, and needs none: it holds `Arc<dyn Guard>`
-//! and calls each edge's `check_*` through it, so a pooled guard runs every
-//! check it overrides whether or not it declares the marker. The markers are
-//! what a decorator site binds on — declare them anyway, or the guard cannot
-//! also be bound at one.
+//! The pool holds `Arc<dyn Guard>` and runs every `check_*` a pooled guard
+//! overrides, marker or not; decorator sites bind on the markers, so declare
+//! them anyway.
 //!
 //! ## Marking a handler `#[public]`
 //!
@@ -97,29 +95,6 @@
 //! edge (`SelfMountGuardWrap`), or in-band on `/graphql` (the
 //! `GlobalPoolOperationGuard`
 //! fallback when no bridge is registered).
-//!
-//! **Larger than its siblings on purpose.** Where `nest-rs-interceptors` /
-//! `nest-rs-filters` / `nest-rs-exception-filters` each carry only their own
-//! trait + a builder + a registry, this crate also owns the cross-transport
-//! [`dispatch`] machinery (the [`RouteShaper`] entry, the layer-chain helpers,
-//! the graphql chain runner and the WS message bridge) that the other three
-//! trio members consume.
-//! Splitting it would mean duplicating the chain across crates or routing
-//! through a fifth — both worse than the asymmetry.
-//!
-//! **HTTP-coupled by design, and it costs nothing.** [`Guard`] carries
-//! `check_http` unconditionally and this crate depends on `nest-rs-http`
-//! unconditionally — no `cfg`, no optional flag. That is the deliberate shape:
-//! one trait, one `dyn Guard`, zero duplicated dispatch. It is also why gating
-//! the method would save nothing — every build that links this crate links the
-//! HTTP stack whatever the consumer asked for, so there are no bytes for a
-//! `cfg` to save. A headless worker links neither.
-//!
-//! Moving `check_http` onto an extension trait would therefore buy nothing and
-//! cost a second erasure: every execution site holds `Arc<dyn Guard>`, so a
-//! guard serving HTTP *and* GraphQL would need two container registrations. The
-//! attestation the extension trait was wanted for is what [`HttpGuard`]
-//! provides, at no runtime cost.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -136,12 +111,8 @@ pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
 pub use guard::{Guard, GuardPhase, HttpGuard, PrincipalClaim};
-// Capability markers: which transports a guard actually checks. The impl-half
-// decorators emit a bound against these, so a guard bound where it has no
-// `check_*` is a compile error rather than a chain entry that passes everything.
-// `HttpGuard` is not behind a `cfg`: its three siblings gate a `check_*` that
-// only exists when that edge is compiled in, and HTTP is the substrate the other
-// three mount on.
+// Capability markers the impl-half decorators bind on. `HttpGuard` takes no
+// `cfg`: HTTP is the substrate the other three edges mount on.
 #[cfg(feature = "graphql")]
 pub use guard::GraphqlGuard;
 #[cfg(feature = "mcp")]
@@ -149,26 +120,16 @@ pub use guard::McpGuard;
 #[cfg(feature = "ws")]
 pub use guard::WsGuard;
 pub use scope::{GrantedScopes, NoBearerChallenge, RequiredScopes};
-// The WS bridge the `#[messages]` macro wraps per-event guards in — only
-// exists (and is only needed) when the `ws` feature is on.
+// The bridge `#[messages]` wraps per-event guards in.
 #[cfg(feature = "ws")]
 pub use guard::GuardAsWsMessageCheck;
-// The dedup logic itself lives in `nest_rs_core::layer_chain` — the single
-// home every execution site (route shaper, transport pool folds, graphql/ws
-// in-band chains) composes through. Re-exported for macro-emitted code.
+// Re-exported for macro-emitted code.
 pub use nest_rs_core::layer_chain;
 pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
-// Re-exported so a crate writing an `Guard` impl needs no direct
-// `async-trait` dependency of its own. `nest-rs-http`, `nest-rs-queue` and
-// `nest-rs-ws` already do this; the layer crates did not, so the one import a
-// reader needed most was the one no page could name — and the miss cascades
-// (without the attribute, every trait method reports a lifetime mismatch, so
-// the real cause is buried under four unrelated errors).
+// Re-exported so a `Guard` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;
 
-// Re-export dispatch helpers for macro-emitted code. The chain cell and its
-// sources are shared by the two in-band transports — one memo, one composition,
-// so a fix to either cannot land on only one of them.
+// Re-exported for macro-emitted code.
 #[cfg(feature = "ws")]
 pub use dispatch::denial_to_ws_error;
 #[cfg(feature = "graphql")]

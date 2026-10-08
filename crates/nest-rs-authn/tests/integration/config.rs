@@ -98,9 +98,7 @@ fn leeway_and_audience_are_applied_from_config() {
     assert_eq!(options.audience.as_deref(), Some("api"));
 }
 
-/// A secret beside a whole EdDSA pair describes two signing modes, and choosing
-/// either drops a credential the deployment set — so it is refused, naming the
-/// three settings, rather than resolved in favour of the pair.
+/// A secret beside a whole EdDSA pair is refused, naming the three settings.
 #[test]
 fn a_secret_beside_an_eddsa_pair_is_refused_naming_all_three() {
     use nest_rs_config::{Namespaced, var_name};
@@ -125,9 +123,7 @@ fn a_secret_beside_an_eddsa_pair_is_refused_naming_all_three() {
 
 #[test]
 fn the_audience_opt_out_is_off_by_default_and_carries_through() {
-    // The config path's half of RFC 7519 §4.1.3: absence of an audience is not
-    // absence of the check, and the only thing that turns it off is the named
-    // field.
+    // Absence of an audience is not absence of the RFC 7519 §4.1.3 check.
     let default = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         ..Default::default()
@@ -149,11 +145,8 @@ fn the_audience_opt_out_is_off_by_default_and_carries_through() {
     assert!(opted_out.allow_any_audience);
 }
 
-/// A private key beside a shared secret is refused first as the two signing
-/// modes it is, naming exactly the two settings that are set. With the secret
-/// beside it, the half used to be dropped in silence and the service minted
-/// HS256 — and a refusal that named only the missing public key sent an operator
-/// who set a deployment secret to look for a variable they never meant to set.
+/// A private key beside a shared secret is refused as two signing modes, naming
+/// exactly the two settings that are set.
 #[test]
 fn a_private_key_beside_a_secret_is_refused_naming_both() {
     use nest_rs_config::{Namespaced, var_name};
@@ -268,9 +261,8 @@ fn eddsa_key_material_that_does_not_parse_names_its_setting() {
     );
 }
 
-/// A public key beside a shared secret describes an issuer and a verifier at
-/// once, and either reading breaks one of them — so it is refused, naming the
-/// two settings that are set and not the private key, which is not.
+/// A public key beside a shared secret is refused, naming the two settings that
+/// are set and not the private key.
 #[test]
 fn a_public_key_beside_a_secret_is_refused_naming_both() {
     let refused = AuthnConfig {
@@ -441,11 +433,8 @@ fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
     }
 }
 
-/// `EXPIRES_IN_SECS` and `LEEWAY_SECS` were read with no bound, so a value the
-/// boot accepted overflowed on every mint or every verify — a panic in a debug
-/// build, a token minted already expired in a release one. Each is refused
-/// past its range, naming the variable, from the environment and from a value
-/// pinned in code alike; each end of the range is accepted.
+/// `EXPIRES_IN_SECS` and `LEEWAY_SECS` are refused past their range, naming the
+/// variable, from the environment and from code alike; each end is accepted.
 #[test]
 fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
     use nest_rs_config::{Config, ConfigService, var_name};

@@ -18,20 +18,11 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 /// (RFC 7617). The decoded `id:secret` is split on the **first** colon — a
 /// secret may itself contain colons (RFC 6749 §2.3.1 client auth).
 ///
-/// **Both halves are then form-urldecoded**, because RFC 6749 §2.3.1 says they
-/// were encoded: *"The client identifier is encoded using the
-/// `application/x-www-form-urlencoded` encoding algorithm per Appendix B, and
-/// the encoded value is used as the username; the client password is encoded
-/// using the same algorithm and used as the password."* OAuth 2.1 §2.4.1
-/// retains it verbatim. Skipping the decode made authentication succeed or fail
-/// according to whether the *client library* encoded — a conforming client with
-/// the secret `a b+c%d` sends `a+b%2Bc%25d`, whose constant-time comparison
-/// against the stored secret then fails, and the deployment sees an
-/// unexplained `invalid_client` it cannot tell from a wrong password.
+/// Both halves are then form-urldecoded, as RFC 6749 §2.3.1 says they were
+/// encoded (OAuth 2.1 §2.4.1 keeps it).
 pub fn basic_credentials(req: &Request) -> Option<(String, String)> {
     let value = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
-    // Scheme match mirrors `bearer_token`: RFC 7235 auth schemes are
-    // case-insensitive, so `basic <b64>` is as valid as `Basic <b64>`.
+    // RFC 7235: auth schemes are case-insensitive.
     let (scheme, encoded) = value.split_once(' ')?;
     if !scheme.eq_ignore_ascii_case("basic") {
         return None;
@@ -68,12 +59,8 @@ fn form_urldecode(raw: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
-            // RFC 3986 §2.1: `pct-encoded = "%" HEXDIG HEXDIG`. Digit-by-digit
-            // rather than `u8::from_str_radix`, which accepts a leading sign —
-            // `from_str_radix("+1", 16)` is `Ok(1)`, so `%+1` used to decode to
-            // `\x01` and alias a second wire spelling onto one secret, while a
-            // client whose literal secret contained `%+1` had it silently
-            // rewritten.
+            // RFC 3986 §2.1 `HEXDIG HEXDIG`, digit by digit: `u8::from_str_radix`
+            // accepts a sign, so `%+1` would decode to `\x01`.
             b'%' => match (
                 bytes.get(i + 1).copied().and_then(hex_digit),
                 bytes.get(i + 2).copied().and_then(hex_digit),

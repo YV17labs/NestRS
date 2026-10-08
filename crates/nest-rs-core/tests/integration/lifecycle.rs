@@ -1,14 +1,5 @@
-//! The fourth shape a lifecycle host can take, and the only one left at
-//! runtime: bound as `dyn Trait`.
-//!
-//! [`ProviderResidency`](nest_rs_core::ProviderResidency) refuses the three shapes no
-//! composition can fix (an edge host, `scope = request`, `scope = transient`)
-//! at compile time. This one is the app's composition and the app can fix it:
-//! `providers = [Foo as dyn Trait]` stores `Arc<dyn Trait>`, so nothing sits
-//! under `Foo`, which is what the decorator resolves. Both halves are asserted
-//! here — that it skips, and that listing the host both ways **constructs it
-//! twice**. The second is why the skip line names causes and prescribes no
-//! edit: double-listing is the repair it looks like, and is not one.
+//! Covers `src/lifecycle.rs` — hook shapes, a host bound only as `dyn Trait`,
+//! and shutdown hooks that fail, hang or panic.
 
 use nest_rs_core::target;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,15 +29,11 @@ impl DynOnlyHost {
 #[module(providers = [DynOnlyHost as dyn Bridge])]
 struct DynOnlyModule;
 
-/// Counts constructions. The first version of this file used a unit struct and
-/// asserted only that the hook *ran*, which is true with one instance or two —
-/// so it passed while claiming double-listing is a fix.
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
 struct BothWaysHost {
-    // Nothing reads it. `#[injectable]` builds a *unit* struct as a bare `Self`
-    // and a named-field one through `Default`, so only the second can count.
+    // `#[injectable]` builds a unit struct as a bare `Self`, bypassing `Default`.
     _counted: (),
 }
 
@@ -80,12 +67,6 @@ async fn a_host_bound_only_as_dyn_never_fires() {
     );
 }
 
-/// **Why the skip line prescribes no edit.** Listing a host both ways looks like
-/// the obvious repair and reads as one, but each binding runs the constructor:
-/// the decorators fire on the concrete instance while every consumer injecting
-/// `Arc<dyn Bridge>` holds a different one, and nothing anywhere says so —
-/// `DuplicateProviderError` cannot fire, because the two container keys differ.
-/// A hint that recommended this shipped for exactly one audit round.
 #[tokio::test]
 async fn listing_a_host_both_ways_builds_it_twice() {
     let app = App::new::<BothWaysModule>().expect("the module boots");
@@ -99,14 +80,6 @@ async fn listing_a_host_both_ways_builds_it_twice() {
     );
 }
 
-/// A shutdown hook that fails is **not** propagated — and the event is the
-/// whole of what is left.
-///
-/// The split is deliberate: an init failure aborts the boot and reaches `main`
-/// as an error, so it needs no log to be noticed. Shutdown is best-effort, so
-/// one provider's failed cleanup must not skip another's — which means the
-/// error is swallowed by design, and `lifecycle hook failed` is the only record
-/// that a connection pool, a flush or a lock release did not happen.
 #[injectable]
 #[derive(Default)]
 struct BrokenOnDestroy;
@@ -125,8 +98,7 @@ struct BrokenOnDestroyModule;
 #[tokio::test]
 async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest() {
     let logs = LogCapture::install();
-    // No transports, so `run` drains the serve loop immediately and goes
-    // straight to the shutdown phases — which is the only public path to them.
+    // No transports: `run` goes straight to the shutdown phases.
     App::new::<BrokenOnDestroyModule>()
         .expect("the module boots")
         .run()
@@ -202,11 +174,6 @@ impl r#async {
 #[module(providers = [ShapedHost])]
 struct ShapedModule;
 
-/// Compiling is the first half: a hook compiled out takes its entry with it.
-/// `-> ()` written out is the infallible shape — it was read as a `Result`, and
-/// its `()` handed to `map_err` — `self: &Self` is `&self` spelled out,
-/// `self: &Arc<Self>` borrows what the container holds, and a raw identifier is
-/// labelled by its name: a method's, which the run order sorts on, and a host's.
 #[tokio::test]
 async fn a_compiled_out_hook_is_skipped_and_the_spelled_out_shapes_run() {
     let mut methods: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_core::LifecycleHook>()
@@ -225,8 +192,6 @@ async fn a_compiled_out_hook_is_skipped_and_the_spelled_out_shapes_run() {
     assert_eq!(SHAPED_INITS.load(Ordering::SeqCst), 3);
 }
 
-/// A trait with a method of a hook's name, implemented for every `Arc<T>` — the
-/// shape an extension trait takes.
 #[expect(
     dead_code,
     reason = "the trait exists only to put a hook's name on Arc<T>"
@@ -258,9 +223,7 @@ impl WarmHost {
 #[module(providers = [WarmHost])]
 struct WarmModule;
 
-/// The provider a hook runs on is an `Arc<Host>`, and method-call syntax looks a
-/// name up on the `Arc` first: a trait in scope with a method of the hook's name
-/// implemented for `Arc<T>` ran in the hook's place, and the hook never ran.
+/// Method-call syntax on the `Arc<Host>` finds a trait method on `Arc<T>` first.
 #[tokio::test]
 async fn a_hook_runs_where_a_trait_on_arc_shares_its_name() {
     let app = App::new::<WarmModule>().expect("the module boots");
@@ -268,14 +231,11 @@ async fn a_hook_runs_where_a_trait_on_arc_shares_its_name() {
     assert_eq!(WARMED.load(Ordering::SeqCst), 1);
 }
 
-/// The line an abandoned shutdown hook is named on.
 const ABANDONED: &str = "shutdown hook abandoned: the shutdown hooks' budget was spent while it \
                          waited, and the hooks after it still start";
 
-/// Every shutdown hook that ran after the stuck one.
 static TIDIED: AtomicUsize = AtomicUsize::new(0);
 
-/// A cleanup that never returns — a flush waiting on a peer that went away.
 #[injectable]
 #[derive(Default)]
 struct StuckOnDestroy;
@@ -315,11 +275,6 @@ impl TidyOnDestroy {
 #[module(providers = [StuckOnDestroy, TidyOnDestroy])]
 struct StuckOnDestroyModule;
 
-/// A shutdown hook that never returns used to hold the process until the
-/// orchestrator killed it — skipping every hook after it and the telemetry
-/// flush. It is abandoned when the budget is spent, named at `warn`, and the
-/// rest still run: a hook that finishes without waiting finishes even past the
-/// budget.
 #[tokio::test(start_paused = true)]
 async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_rest_still_run() {
     let logs = LogCapture::install();
@@ -368,8 +323,6 @@ async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_r
     );
 }
 
-/// A cleanup that never returns, in every shutdown phase and twice in the
-/// first.
 #[injectable]
 #[derive(Default)]
 struct StuckEverywhere;
@@ -400,9 +353,6 @@ impl StuckEverywhere {
 #[module(providers = [StuckEverywhere])]
 struct StuckEverywhereModule;
 
-/// The budget is the teardown's, not each hook's: four hooks that hang cost
-/// five seconds, not twenty. A bound per hook let `k` stuck hooks spend `k`
-/// times it, which no grace period can be sized against.
 #[tokio::test(start_paused = true)]
 async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
     let logs = LogCapture::install();
@@ -446,7 +396,6 @@ async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
     );
 }
 
-/// Every hook that ran after the panicking one.
 static AFTER_PANIC: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
@@ -482,9 +431,6 @@ impl ZzAfterPanic {
 #[module(providers = [AaPanicsOnDestroy, ZzAfterPanic])]
 struct PanicOnDestroyModule;
 
-/// A panic in a shutdown hook used to unwind out of `App::run`, skipping every
-/// later hook in its phase and in the phases after, with no line naming it. It
-/// is contained like an error: named at `error`, and the rest still run.
 #[tokio::test]
 async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
     let logs = LogCapture::install();
@@ -540,9 +486,6 @@ impl PanicsOnInit {
 #[module(providers = [PanicsOnInit])]
 struct PanicOnInitModule;
 
-/// Init is strict, so a panicking init hook still aborts the boot — but as the
-/// error a failing one returns, naming the hook, and with the panic's message on
-/// a line, rather than an unwind out of `App::run` that names nothing.
 #[tokio::test]
 async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
     let logs = LogCapture::install();

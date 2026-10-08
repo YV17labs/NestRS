@@ -13,25 +13,18 @@ type BoxedEvent = Box<dyn Any + Send>;
 type ListenerFn = Arc<dyn Fn(BoxedEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// What a listener registered without a declared name is filed as.
-///
-/// A value rather than the event's type name, which the line already carries as
-/// `event` — one value in two fields says nothing the first did not.
 const ANONYMOUS_LISTENER: &str = "<anonymous>";
 
-/// One registered listener, carrying the name its unit of work is filed under.
-///
-/// The name is the qualified `Provider::method` the `#[listeners]` expansion
-/// knows and the erased closure does not — without it the operation line could
-/// only ever say *some listener for this event ran*, which is the anonymity the
-/// line exists to remove.
+/// One registered listener, carrying the `Provider::method` its unit of work is
+/// filed under.
 #[derive(Clone)]
 struct Listener {
     name: &'static str,
     run: ListenerFn,
 }
 
-/// Listeners are filled in once at application bootstrap and the registry is
-/// read-only thereafter, so the `RwLock` is uncontended on the emit path.
+/// The typed in-process event bus; listeners are filled in once at bootstrap,
+/// so the `RwLock` is uncontended on the emit path.
 #[derive(Default)]
 pub struct EventBus {
     listeners: RwLock<HashMap<TypeId, Vec<Listener>>>,
@@ -43,10 +36,8 @@ impl EventBus {
         Self::default()
     }
 
-    /// Subscribe a listener that files its unit of work under `name`.
-    ///
-    /// The seam `#[listeners]` emits, which is the only caller that knows the
-    /// qualified `Provider::method`. Apps reach the bus through the decorator.
+    /// Subscribe a listener that files its unit of work under `name`; the seam
+    /// `#[listeners]` emits.
     #[doc(hidden)]
     pub fn subscribe_named<E, H, Fut>(&self, name: &'static str, listener: H)
     where
@@ -73,10 +64,6 @@ impl EventBus {
 
     /// [`subscribe_named`](Self::subscribe_named) for a listener with no
     /// declared name — a hand-built bus in a test.
-    ///
-    /// The unit is filed under `<anonymous>` rather than under the event type:
-    /// the line already carries `event`, so naming the listener after it put one
-    /// value in two fields and called something a listener that is not one.
     #[doc(hidden)]
     pub fn subscribe<E, H, Fut>(&self, listener: H)
     where
@@ -91,44 +78,20 @@ impl EventBus {
     /// emitter's transaction has committed, when it emits inside one. No-op when
     /// nothing is registered for `E`.
     ///
-    /// **An event is a fact, and a fact is not one until it commits.** Emitted
-    /// inside a unit of work that holds a transaction — a mutating request, a
-    /// WS message, an MCP operation, a job attempt — the dispatch waits for that
-    /// transaction through [`nest_rs_database::after_commit`]: it runs when the
-    /// boundary commits, and is dropped unrun when it rolls back or fails to
-    /// commit, or the unit of work fails. A listener therefore never pushes a job,
-    /// notifies a subscriber or calls out about a write that did not land, and
-    /// never sees one that has not landed yet. It runs outside that
-    /// transaction, on the pool, under the emitter's scope and ability. With no
-    /// transaction to wait for — a safe request, a job on the pool, no data
-    /// layer at all — it runs right here, before `emit` returns, as it always
-    /// did.
+    /// Inside a unit of work holding a transaction, the dispatch waits for it
+    /// through [`nest_rs_database::after_commit`]: it runs on commit, outside
+    /// the transaction, and is dropped unrun on rollback or failure. With no
+    /// transaction it runs before `emit` returns.
     ///
-    /// **Contract — in-process, sequential, failure is local.** Whoever settles
-    /// the dispatch awaits every listener, so a *slow* listener delays the ones
-    /// after it and the unit of work that emitted: the bus is for lightweight
-    /// same-process reactions, and work that must not block its emitter belongs
-    /// on the queue (which buys isolation and retries).
-    ///
-    /// A **panicking** listener is contained to that listener. It is caught,
-    /// logged at `error` on `nest_rs::events`, and the chain continues — the
-    /// containment the events page promises. Without it a single `unwrap()` in
-    /// a fire-and-forget reaction (`email_the_author`, `index_for_search`)
-    /// unwound through `emit` into the emitter: every listener after it was
-    /// skipped, the emitter's own post-emit work never ran, and on HTTP the
-    /// response was destroyed outright — the client saw a dropped connection
-    /// rather than a 500, with the emitter's side effects already committed, so
-    /// a retry re-ran them. The process survived, which made it containment at
-    /// the wrong granularity: the *process*, not the listener.
+    /// A slow listener delays the ones after it and the emitter: work that must
+    /// not block belongs on the queue. A panicking listener is caught, logged at
+    /// `error` on `nest_rs::events`, and the chain continues.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
-        // Clone out the list so the lock is released before awaiting.
+        // Released before awaiting.
         let listeners = self.listeners.read().get(&TypeId::of::<E>()).cloned();
         let Some(listeners) = listeners else { return };
         let event_name = std::any::type_name::<E>();
-        // One emit is one cause, so its listeners share one trace — decided
-        // here rather than per listener, because minting inside the loop gave
-        // each listener a trace of its own whenever nothing ambient carried
-        // one, and two reactions to one fact are not two traces.
+        // Outside the loop: one emit is one trace, even with nothing ambient.
         let cause = nest_rs_core::Correlation::inherited();
         nest_rs_database::after_commit(async move {
             for Listener { name, run } in listeners {
@@ -139,32 +102,16 @@ impl EventBus {
     }
 }
 
-/// One listener invocation — the edge's unit of work.
-///
-/// A listener is a **child** of whatever emitted the event: the emitter is
-/// mid-unit when it calls `emit`, so this continues that trace rather than
-/// minting one, and an event fired outside any unit simply starts one.
-///
-/// The panic is contained here rather than in `emit` so the containment and the
-/// line that reports it are the same statement — a listener that panicked still
-/// files its unit, with `outcome = panic`.
-///
-/// A listener runs inside its emitter's unit, so it is dropped with it — a
-/// request the shutdown window cut, an operation its client cancelled, an
-/// attempt its worker stopped. That end is filed too, by [`DispatchLine`]'s
-/// `Drop`, as `cancelled`: a listener stopped before it settled is exactly the
-/// one an operator looks for afterwards.
+/// One listener invocation — the edge's unit of work, a child of the emitter's
+/// trace; dropped with its emitter, it is filed `cancelled` by [`DispatchLine`].
 async fn dispatch_one(
     cause: &nest_rs_core::Correlation,
     event: &'static str,
     listener: &'static str,
     fut: Pin<Box<dyn Future<Output = ()> + Send>>,
 ) {
-    // A **child** of the emit, not a copy of it. `Correlation::inherited()`
-    // returns the ambient correlation *unchanged*, so filing every listener
-    // under it gave two listeners on one event one `span_id` between them, with
-    // `parent_span_id` naming the emitter's parent rather than the emitter. A
-    // span id names one unit of work; that is the whole property the ids buy.
+    // `Correlation::inherited()` is the ambient one unchanged: without `child()`
+    // two listeners would share one `span_id`.
     let correlation = cause.child();
     let span = nest_rs_core::operation_span!(
         crate::unit::DISPATCH,
@@ -172,12 +119,7 @@ async fn dispatch_one(
         event = event,
         listener = listener,
     );
-    // `None` scope, correlation only: a listener is not a request and holds no
-    // per-request cache, but it is work the framework carries, so
-    // `current_trace_id()` must answer inside it. One value, used twice —
-    // `scope` around the listener and `enter` around the reporting below —
-    // which is the shape `RequestContinuation` documents, rather than
-    // assembling the context a second time to re-enter it.
+    // No request scope, but `current_trace_id()` must answer inside a listener.
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation);
     let line = DispatchLine {
         event,
@@ -211,16 +153,12 @@ async fn dispatch_one(
 /// One listener's `events.dispatch` line, filed exactly once — by the end the
 /// dispatch saw, or by `Drop` when the listener is dropped first.
 ///
-/// Filed **inside** the correlation, re-entered rather than kept open: the line
-/// sits after the `.await` that unwound it, and a line emitted out there carries
-/// no ids at all, which `nest_rs_mcp::propagate` documents having shipped once
-/// and fixed the same way.
+/// Filed inside the re-entered correlation: a line emitted after the `.await`
+/// otherwise carries no ids.
 struct DispatchLine<'a> {
     event: &'static str,
     listener: &'static str,
     continuation: &'a nest_rs_core::RequestContinuation,
-    /// The listener's span, which records the outcome the line files, in the
-    /// same word.
     span: tracing::Span,
     started: std::time::Instant,
     filed: bool,
@@ -268,8 +206,6 @@ mod tests {
     #[derive(Clone)]
     struct OrderShipped;
 
-    // The bus must be a no-op for events that have no listener — apps emit
-    // optimistically, and an unsubscribed event must not panic or alloc.
     #[tokio::test]
     async fn emit_is_a_noop_for_an_unsubscribed_event() {
         let bus = EventBus::new();
@@ -292,8 +228,6 @@ mod tests {
         assert_eq!(seen.load(Ordering::SeqCst), 7);
     }
 
-    // Listeners run in registration order — apps depend on this for setup-
-    // teardown patterns (open a span before, close after).
     #[tokio::test]
     async fn listeners_run_in_registration_order_for_the_same_event() {
         let bus = EventBus::new();
@@ -325,9 +259,6 @@ mod tests {
         assert_eq!(*order.lock(), vec![1, 2, 3]);
     }
 
-    // Two events keyed on distinct types must not cross-fire. The TypeId-keyed
-    // map is the routing primitive — a bug that collapsed types would let an
-    // OrderShipped listener fire on OrderPlaced.
     #[tokio::test]
     async fn listeners_for_distinct_event_types_do_not_cross_fire() {
         let bus = EventBus::new();
@@ -358,10 +289,6 @@ mod tests {
         assert_eq!(shipped.load(Ordering::SeqCst), 1);
     }
 
-    // The event is cloned for each listener — verifies the documented
-    // "registration order, awaited in turn" runs with a fresh copy per
-    // listener. A future "move" optimization that fed only the last listener
-    // would fail this test.
     #[tokio::test]
     async fn the_event_is_handed_to_each_listener_independently() {
         let bus = EventBus::new();
@@ -378,7 +305,6 @@ mod tests {
         }
 
         bus.emit(OrderPlaced { id: 4 }).await;
-        // 3 listeners × event id 4 = 12.
         assert_eq!(counter.load(Ordering::SeqCst), 12);
     }
 }
@@ -397,12 +323,6 @@ mod panic_containment {
         id: &'static str,
     }
 
-    /// The events page makes a containment promise — "**Failure is local** — a
-    /// listener returns `()`; there is no `Result` to propagate, no retry, no
-    /// dead-letter queue, no global rollback." A panic was not local: it
-    /// abandoned the chain mid-way, unwound through `emit` into the emitter, and
-    /// on HTTP destroyed the response — the client got a dropped connection, not
-    /// a 500, with the emitter's side effects already committed.
     #[tokio::test]
     async fn a_panicking_listener_does_not_stop_the_ones_after_it() {
         let bus = EventBus::new();
@@ -436,10 +356,6 @@ mod panic_containment {
             "the listener after the panicking one still runs",
         );
 
-        // Contained, never swallowed: the panic is an `error` event naming the
-        // event type and the panic message. On the field `panic`, which is the
-        // name every transport that contains a panic uses — one query reaches a
-        // contained panic whichever seam caught it.
         let event = logs.expect_one(
             "nest_rs::events",
             "event listener panicked — dispatch continues with the next listener",
@@ -451,9 +367,6 @@ mod panic_containment {
         );
     }
 
-    /// …and `emit` returns normally, so the emitter's own post-emit work runs.
-    /// This is what a request handler depends on: the response is built after
-    /// `emit`, and the panic used to take it with it.
     #[tokio::test]
     async fn emit_returns_to_its_caller_after_a_listener_panics() {
         let bus = EventBus::new();
@@ -466,15 +379,11 @@ mod panic_containment {
         bus.emit(NotifyRequested { id: "boom" }).await;
         std::panic::set_hook(previous);
 
-        // Reaching this line *is* the assertion — before the fix the unwind
-        // carried straight past it into the caller.
+        // Reaching this line is the assertion.
         let emit_returned = true;
         assert!(emit_returned);
     }
 
-    /// The happy path files its unit of work and nothing else — an `error` on
-    /// every emit would be noise, and no line at all would leave the listener
-    /// anonymous, which is the state the operation line exists to remove.
     #[tokio::test]
     async fn a_healthy_dispatch_files_its_unit_and_no_containment_event() {
         let bus = EventBus::new();
@@ -510,14 +419,6 @@ mod panic_containment {
         assert!(line.field("duration_ms").is_some());
     }
 
-    /// Two listeners on one event are two units of work, so they file two
-    /// lines under two span ids inside one trace.
-    ///
-    /// Neither of the first two tests asserted an id, and that is exactly what
-    /// let `Correlation::inherited()` ship here: it returns the ambient
-    /// correlation *unchanged*, so both lines carried the emitter's `span_id`
-    /// and `parent_span_id` named the emitter's parent. A span id names one unit
-    /// of work — a line that reuses one is a line an operator cannot relate.
     #[tokio::test]
     async fn two_listeners_file_two_units_inside_one_trace() {
         let bus = EventBus::new();
@@ -537,9 +438,7 @@ mod panic_containment {
             logs.events()
         );
 
-        // The ids are read off the **span**, never off the line: a log line
-        // renders the ambient correlation and carries no span state, so writing
-        // them as event fields would be a duplicate.
+        // Ids live on the span, never as line fields.
         let units: Vec<_> = logs
             .spans()
             .into_iter()
@@ -564,9 +463,6 @@ mod panic_containment {
         );
     }
 
-    /// A panicking listener still files its unit — with `outcome = panic`, so a
-    /// containment is visible on the operation target an operator already
-    /// queries rather than only on this crate's own.
     #[tokio::test]
     async fn a_panicking_listener_files_its_unit_as_a_panic() {
         let bus = EventBus::new();
@@ -590,11 +486,6 @@ mod panic_containment {
         assert_eq!(line.field("listener").as_deref(), Some("Notifier::boom"));
     }
 
-    /// A listener runs inside the emitter's own unit, so when that unit is
-    /// dropped — a request cut by the shutdown window, an operation its client
-    /// cancelled, an attempt its worker stopped — the listener goes with it.
-    /// It is a unit stopped before it settled, and still files its line,
-    /// `cancelled`, in its own trace.
     #[tokio::test]
     async fn a_listener_dropped_with_its_emitter_files_its_unit_cancelled() {
         let bus = EventBus::new();
@@ -623,7 +514,6 @@ mod panic_containment {
             line.trace_id.is_some(),
             "in the listener's trace: {line:#?}"
         );
-        // The listener's span fails with the line's word.
         let span = logs.expect_span(crate::TARGET, crate::unit::DISPATCH.name());
         assert_eq!(
             span.field("error.type").as_deref(),

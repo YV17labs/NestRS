@@ -6,19 +6,10 @@ use super::Finding;
 use crate::naming::{reserved_category, to_kebab};
 
 /// Stems that are not vocabulary, so are not this rule's business.
-///
-/// The role words (`module`, `service`, `guard`, …) and the pluralized role
-/// folders (`entities/`, `dtos/`, …) are **not** listed here: they are derived
-/// from the *Reserved vocabulary* block of `architecture.md` through
-/// [`reserved_category`] — the same derivation `nestrs new` refuses a feature
-/// name with — so a row added to that table reaches this rule and that refusal
-/// at once, and neither can drift from the file both are written in.
-///
-/// What is left is what the block does not carry: Rust's own file names, and
-/// the recognised custom-provider words, which *architecture.md* names in the
-/// prose of its custom-provider paragraph rather than in the table. Those take
-/// that paragraph's own pairing (`<Subject>Registry`), so they are not this
-/// rule's business either.
+/// The role words and pluralized role folders are not listed: they are derived
+/// from `architecture.md`'s *Reserved vocabulary* through [`reserved_category`].
+/// What is left is Rust's own file names and the recognised custom-provider
+/// words, which take their own pairing (`<Subject>Registry`).
 const NOT_VOCABULARY: &[&str] = &[
     "lib",
     "main",
@@ -33,17 +24,13 @@ const NOT_VOCABULARY: &[&str] = &[
     "inventory",
 ];
 
-/// Directories a scan never descends into. `migrations` is not an exemption
-/// won on merit: sea-orm fixes those filenames to `m<date>_<name>`, so the stem
-/// is a timestamp and no pairing was ever available to check.
+/// Directories a scan never descends into: sea-orm fixes migration filenames to
+/// `m<date>_<name>`.
 const SKIPPED: &[&str] = &["target", ".git", "node_modules", "migrations"];
 
 /// What one scan found, and how much it looked at.
 ///
-/// `checked` is reported rather than inferred so a caller can tell an empty
-/// finding list apart from a walk that read nothing — a scan pointed at the
-/// wrong directory is silently clean, and silence is the one result a
-/// conformance suite must never accept.
+/// `checked` tells an empty finding list apart from a walk that read nothing.
 #[derive(Debug, Default)]
 pub struct Scan {
     /// Files that carried a declared type and were subject to the pairing.
@@ -61,11 +48,8 @@ pub fn scan(root: &Path) -> Scan {
     out
 }
 
-/// `in_src` is carried down rather than re-derived per file: only source is
-/// judged, and a `tests/` tree names its files for the `src/` concern they
-/// cover, which is a different rule with a different table. Reading it off the
-/// path instead would also answer *yes* for every tree the caller happens to
-/// reach through a directory of their own called `src`.
+/// `in_src` is carried down: only source is judged, and a `tests/` tree names
+/// its files for the `src/` concern they cover.
 fn walk(dir: &Path, root: &Path, in_src: bool, out: &mut Scan) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -75,9 +59,8 @@ fn walk(dir: &Path, root: &Path, in_src: bool, out: &mut Scan) {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        // `file_type` reads what the directory listing already carried, where
-        // `is_dir` would pay a `stat` per entry. It does not follow symlinks —
-        // deliberate: a symlinked tree is judged where it really lives, once.
+        // `file_type` does not follow symlinks: a symlinked tree is judged where it
+        // really lives, once.
         if entry.file_type().is_ok_and(|t| t.is_dir()) {
             if !SKIPPED.contains(&name) && !name.starts_with('.') {
                 walk(&path, root, in_src || name == "src", out);
@@ -107,9 +90,8 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     let Ok(source) = std::fs::read_to_string(path) else {
         return;
     };
-    // Rust's own parser, not a scan: a `pub struct` inside a template string is
-    // the exact thing a regex counts and a parser does not, and this crate
-    // ships such a string.
+    // Rust's own parser, not a scan: this crate ships a `pub struct` inside a
+    // template string.
     let Ok(file) = syn::parse_file(&source) else {
         return;
     };
@@ -159,8 +141,7 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
 }
 
 /// `RedisQueueProducer` → `["redis", "queue", "producer"]`, through the same
-/// case splitter `nestrs new` derives a crate name with. Two PascalCase
-/// splitters in one crate is how the two come to disagree about an acronym.
+/// case splitter `nestrs new` derives a crate name with.
 fn words_of(ty: &str) -> Vec<String> {
     to_kebab(ty).split('-').map(str::to_owned).collect()
 }
@@ -171,9 +152,6 @@ fn words_of(ty: &str) -> Vec<String> {
 /// - a compound contains the other word (`part` in `multipart`);
 /// - an inflection shares a root (`scope` / `scoped`, `log` / `logging`);
 /// - an abbreviation is a subsequence from the same letter (`ctx` / `context`).
-///
-/// A tighter test — the stem as the type's first or last word — reads well and
-/// is false on a third of the framework, which is why it is not this one.
 fn reach(a: &str, b: &str) -> bool {
     a == b
         || (a.len() >= 2 && b.contains(a))

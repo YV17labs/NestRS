@@ -1,18 +1,5 @@
-//! What `#[routes]` records and what its generated wrapper binds — the two
-//! halves of `src/controller.rs`.
-//!
-//! **Parameter-name hygiene (HTTP-M1).** The wrapper binds locals of its own
-//! (`req`, `body`, `res`, the controller `Arc`, plus three more from the
-//! response shapers) around the extractors it emits for the developer's
-//! parameters. When those shared one namespace, a parameter
-//! spelled `body` — which is what `Json(body): Json<T>`, the idiom
-//! `/http/extractors/` teaches, normalizes to — masked the `RequestBody` every
-//! *later* extractor reads, and the mismatched-type error landed on the
-//! `#[routes]` attribute naming neither the parameter nor the collision.
-//!
-//! Compiling this module is most of the assertion; the requests below add the
-//! other half, that each handler still receives the value it declared rather
-//! than one of the wrapper's locals under the same name.
+//! What `#[routes]` records and what its generated wrapper binds; the handlers
+//! reuse the wrapper's local names, so compiling them is half the assertion.
 
 use nest_rs_core::module;
 use nest_rs_http::{ClientIp, controller, routes};
@@ -45,32 +32,27 @@ impl Default for HygieneController {
 
 #[routes]
 impl HygieneController {
-    /// `body` — the wrapper's `RequestBody` local, and the name the documented
-    /// `Json(body)` destructure normalizes to. `ClientIp` extracts *after* it,
-    /// so a masked binding fails to compile.
+    /// `body` is the wrapper's `RequestBody` local, which `ClientIp` reads after it.
     #[post("/body")]
     async fn body_named_body(&self, Json(body): Json<Probe>, ip: ClientIp) -> String {
         format!("{} {}", body.name, ip.ip)
     }
 
-    /// `req` — the wrapper's `Request` local. The `Query` extractor after it
-    /// reads the request, so a masked binding fails to compile.
+    /// `req` is the wrapper's `Request` local, which `Query` reads after it.
     #[get("/req/:req")]
     async fn param_named_req(&self, Path(req): Path<String>, filter: Query<Filter>) -> String {
         format!("{req} {}", filter.0.limit)
     }
 
-    /// `__ctrl` — the local holding `&Arc<Self>`. A shadowed one would forward
-    /// the controller where the handler declared a `Path`, so the marker read
-    /// below is what proves the call still targets the real instance.
+    /// `__ctrl` is the wrapper's `&Arc<Self>` local; `marker` proves the real
+    /// instance is called.
     #[get("/ctrl/:value")]
     async fn param_named_ctrl(&self, Path(__ctrl): Path<String>) -> String {
         format!("{} {__ctrl}", self.marker)
     }
 
-    /// The same collision under a response shaper, which re-forwards every
-    /// parameter through a second code path (`apply_response_shapers`) — and
-    /// binds three locals of its own, named here too.
+    /// A response shaper re-forwards every parameter and binds `__out`,
+    /// `__response` and `res` of its own.
     #[post("/shaped/:tag")]
     #[http_code(201)]
     #[response_header("x-hygiene", "ok")]
@@ -100,8 +82,7 @@ async fn a_parameter_named_body_reaches_the_handler_and_leaves_later_extractors_
         .send()
         .await;
     resp.assert_status_is_ok();
-    // `0.0.0.0` is `ClientIp::unknown()` — the test client has no peer socket.
-    // What matters is that the extractor ran at all.
+    // `0.0.0.0` is `ClientIp::unknown()`: the test client has no peer socket.
     resp.assert_text("probe 0.0.0.0").await;
 }
 
@@ -138,10 +119,8 @@ async fn the_collision_stays_closed_under_a_response_shaper() {
     resp.assert_text("shaped tagged 0.0.0.0").await;
 }
 
-/// A trait whose method shares a handler's name, implemented for the `Arc` the
-/// route holds its controller in. Method syntax on that `Arc` finds this
-/// implementation before it derefs to the controller, so a route calling
-/// `__ctrl.named_like_a_trait()` ran this body instead of the handler.
+/// Method syntax on the route's `Arc<Controller>` finds this impl before it
+/// derefs to the handler of the same name.
 #[expect(
     dead_code,
     reason = "never called: the expansion calls the method by its path"
@@ -179,18 +158,11 @@ async fn a_route_calls_its_handler_and_not_a_trait_method_of_the_same_name_on_ar
     resp.assert_text("the handler").await;
 }
 
-// ---------------------------------------------------------------------------
-// A route's identity is the address poem mounts, read with poem's grammar
-// (`nest_rs_codegen::RoutePath`), and it is claimed in the versions the route
-// serves. The refusals are trybuild snapshots; what is pinned here is what the
-// same reading *serves*.
-
 #[controller(path = "/addresses", version = ["1", "2"])]
 struct AddressController;
 
 #[routes]
 impl AddressController {
-    /// One verb and path in two versions is two addresses, `/v1/…` and `/v2/…`.
     #[get("/versioned")]
     #[version("1")]
     async fn versioned_one(&self) -> String {
@@ -203,7 +175,6 @@ impl AddressController {
         "two".into()
     }
 
-    /// Two spellings of one address, two verbs: one poem node answering both.
     #[get("/parcels/:id")]
     async fn read_parcel(&self, Path(id): Path<String>) -> String {
         format!("read {id}")
@@ -214,7 +185,6 @@ impl AddressController {
         format!("dropped {id}")
     }
 
-    /// Declared with the trailing slash the edge trims off every request.
     #[get("/slashed/")]
     async fn slashed(&self) -> String {
         "slashed".into()
@@ -256,11 +226,8 @@ async fn a_route_declared_with_a_trailing_slash_is_served_at_the_address_without
     resp.assert_text("slashed").await;
 }
 
-/// The reading is pinned against poem itself, pair by pair: two paths share a
-/// [`RoutePath::identity`] exactly when poem, behind the edge's trailing-slash
-/// trim, serves them as one address — refusing the second mount, or answering
-/// both probes with one endpoint. A poem upgrade that reads a path differently
-/// fails here.
+// A poem upgrade that reads a path differently from `RoutePath::identity`
+// fails here.
 #[tokio::test]
 async fn a_route_identity_is_the_address_poem_serves() {
     use nest_rs_codegen::RoutePath;

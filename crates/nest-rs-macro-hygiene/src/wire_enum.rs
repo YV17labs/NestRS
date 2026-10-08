@@ -1,37 +1,21 @@
-//! `#[wire_enum]` — the enum mode of `#[expose]`.
-//!
-//! A column's enum type is a plain Rust enum, so the whole expansion —
-//! `Serialize`, `Deserialize`, `JsonSchema`, `async_graphql::Enum` and their
-//! four `crate = ` overrides — has to resolve against a manifest that names
-//! only the umbrella. It is precisely the derive
-//! routing that was invisible to review before this file existed: written by
-//! hand, an exposed enum put `schemars` **and** `async-graphql` in the entity
-//! crate's manifest for code it never wrote.
+//! `#[wire_enum]` — the enum mode of `#[expose]`: its four derives and their
+//! `crate = ` overrides resolve against the umbrella alone.
 
 use nest_rs::resource::wire_enum;
 
-/// The wire-only form: no GraphQL surface, so no `Enum` derive and no
-/// `#[graphql(crate = …)]` — a different arm of the emission from the one
-/// below, and the one an HTTP-only app compiles.
+/// The wire-only arm, without the GraphQL `Enum` derive.
 #[wire_enum]
 #[serde(rename_all = "snake_case")]
 pub enum HygieneWireTier {
-    /// A variant.
     Free,
-    /// Another, so the rename actually has something to rename.
     PayAsYouGo,
 }
 
-/// The GraphQL form. `async_graphql::Enum` is the derive with no `crate = `
-/// story of its own — async-graphql roots it at whatever the call site's
-/// manifest declares — so this is the arm that fails here the day the override
-/// is dropped. Under `graphql` as well as `seaorm`: alone, `seaorm` leaves the
-/// GraphQL arm off, and the decorator says so naming the feature.
+/// The GraphQL arm: async-graphql roots `Enum` at the call site's manifest, so
+/// this fails the day the `crate = ` override is dropped.
 #[cfg(feature = "graphql")]
 #[wire_enum(graphql)]
 pub enum HygieneStage {
-    /// A variant.
     Draft,
-    /// Another.
     Shipped,
 }

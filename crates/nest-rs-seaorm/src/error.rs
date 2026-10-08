@@ -1,58 +1,28 @@
-//! Shared service error: the failure modes a `CrudService` method returns —
-//! plumbing (`Repo` call, `validator` derive, masking) plus the business-rule
-//! outcomes a service expresses against its data — together with their HTTP
-//! mapping. Domain-specific *wire* contracts (an opaque credential rejection,
-//! an RFC 6749 code) still live in their own crates
-//! (`nest_rs_authn::CredentialError`, `nest_rs_oauth_server::TokenError`); features
-//! never re-define those.
-//!
-//! The business variants ([`Invalid`](ServiceError::Invalid),
-//! [`Conflict`](ServiceError::Conflict), [`Forbidden`](ServiceError::Forbidden),
-//! [`NotFound`](ServiceError::NotFound)) carry a **client-facing** message and
-//! map to the matching 4xx — a service signals "empty body" or "insufficient
-//! balance" without hand-rolling a per-feature error or, worse, masking it as a
-//! `DbErr` (HTTP 500). The opaque variants ([`Db`](ServiceError::Db),
-//! [`Internal`](ServiceError::Internal), [`Masking`](ServiceError::Masking))
-//! keep a constant wire string (detail stays for `tracing`); `Validation`
-//! forwards through so the field errors stay structured. `Display` is what both
-//! Poem's `ResponseError` and the WS reply put on the wire.
-//!
-//! **Naming decision (kept, do not re-flag):** this stays `ServiceError`, not a
-//! concern-prefixed `SeaOrmError`. It is developer vocabulary written in every
-//! app service signature (`Result<T, ServiceError>`) and is role-named like
-//! `Service` itself; a prefix would hurt exactly the ergonomics the framework
-//! sells, so the concern-prefix rule (`RedisError`, `StorageError`) is
-//! deliberately not applied here.
+//! `ServiceError` stays unprefixed: it is written in every app service's
+//! signature, like `Service` itself.
 
 use sea_orm::DbErr;
 use validator::ValidationErrors;
 
-/// Failure modes shared by every service method. The plumbing variants come
-/// from `Repo`/`validator`/masking; the business variants are constructed by
-/// services via [`ServiceError::invalid`] & friends.
+/// Failure modes shared by every service method. The business variants carry a
+/// client-facing message and map to their 4xx; the opaque ones (`Db`,
+/// `Internal`, `Masking`) put a constant on the wire and keep the detail for
+/// `tracing`.
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServiceError {
-    /// Edge validation (`validator`) rejected the input — maps to a 400.
-    ///
-    /// The message is the constant every transport already uses for a pipe
-    /// rejection; the offending fields ride structurally, under `errors`
-    /// ([`field_errors`](Self::field_errors)). `transparent` used to render
-    /// `validator`'s own `Debug` payload — `name: Validation error: length
-    /// [{"min": Number(1), "value": String("")}]` — which is unreadable, not
-    /// programmable, and echoes the **rejected value** back out: a too-short
-    /// password or a malformed token into every log and transcript that
-    /// captures the line.
+    /// Edge validation (`validator`) rejected the input — maps to a 422. The
+    /// fields ride under `errors` ([`field_errors`](Self::field_errors)), never
+    /// `validator`'s `Debug`, which echoes the rejected value.
     #[error("validation failed")]
     Validation(#[from] ValidationErrors),
     /// A `Repo`/ORM query failed. The `DbErr` detail stays for `tracing`; the
     /// wire sees a generic message.
     #[error("database error")]
     Db(#[from] DbErr),
-    /// Response masking could not reconcile a loaded row into its wire DTO.
-    /// Fail closed (500) rather than leak an unmasked row — the detail stays
-    /// for `tracing`, never the wire. Carries a `String` (not the source
-    /// `serde_json::Error`) so the enum stays `Clone` for dataloader plumbing.
+    /// Response masking could not reconcile a loaded row into its wire DTO: a
+    /// 500. A `String`, not the `serde_json::Error`, so the enum stays `Clone`
+    /// for dataloaders.
     #[error("response masking failed")]
     Masking(String),
     /// A well-formed request the service rejects on business grounds (empty
@@ -106,14 +76,8 @@ impl ServiceError {
     }
 
     /// The field-level errors a [`Validation`](Self::Validation) failure carries,
-    /// as the JSON every transport ships under `errors`.
-    ///
-    /// One accessor so no transport can disagree about the shape, and it routes
-    /// through `nest_rs_pipes::validation_details` so none can disagree about
-    /// the **policy** either: a raw `serde_json::to_value` keeps a rule's
-    /// parameters, which hold the rejected input, and would put a too-short
-    /// password or a malformed token in every log and transcript that captures
-    /// the response.
+    /// as the JSON every transport ships under `errors`, without the rules'
+    /// parameters, which hold the rejected input.
     pub fn field_errors(&self) -> Option<serde_json::Value> {
         match self {
             Self::Validation(errors) => Some(nest_rs_pipes::validation_details(errors)),
@@ -149,17 +113,9 @@ mod http {
             }
         }
 
-        /// Render the failure as the single RFC-9457 `application/problem+json`
-        /// envelope. `Display` (the wire-safe string — a constant for the opaque
-        /// 5xx variants, the authored message for the 4xx business variants) is
-        /// the `detail`, so a `DbErr`/internal message never reaches the wire;
-        /// `Validation` additionally carries its field errors as an `errors`
-        /// extension member.
-        ///
-        /// This is also the single place the opaque variants' detail is
-        /// **logged**: their whole contract is "wire sees a constant, `tracing`
-        /// sees the cause", and a 5xx nobody can grep for is the same defect as
-        /// no error handling at all.
+        /// Render the failure as an RFC 9457 `application/problem+json` whose
+        /// `detail` is the wire-safe `Display`; the one place an opaque
+        /// variant's cause is logged.
         fn as_response(&self) -> Response {
             let status = self.status();
             log_opaque(self);
@@ -171,12 +127,8 @@ mod http {
         }
     }
 
-    /// Emit the cause behind an opaque 5xx. The 4xx business variants are the
-    /// client's own doing and already carry their message on the wire, so they
-    /// stay silent here.
+    /// Emit the cause behind an opaque 5xx; a 4xx stays silent.
     fn log_opaque(err: &ServiceError) {
-        // Borrow the cause rather than stringify it: the macro formats inside
-        // its own `if enabled`, so a filtered-out event costs nothing.
         let (kind, detail): (&str, &dyn std::fmt::Display) = match err {
             ServiceError::Db(e) => ("db", e),
             ServiceError::Masking(e) => ("masking", e),
@@ -191,15 +143,10 @@ mod http {
         );
     }
 
-    /// Map a `#[crud]` write failure to the status it deserves instead of a
-    /// blanket 500: a unique-constraint violation is a 409, a create the
-    /// ability re-check rolled back (`RecordNotInserted`) is a 403, a row that
-    /// vanished between the access check and the write is a 404. Only a
-    /// genuinely unexpected `DbErr` is a 500 — logged in full here, shipped as
-    /// an empty body so the driver message never reaches the client.
-    ///
-    /// Called by the `#[crud]` expansion; hand-written handlers use
-    /// [`ServiceError`] directly.
+    /// Map a `#[crud]` write failure to its status: a unique-constraint violation
+    /// is a 409, a create the ability re-check rolled back (`RecordNotInserted`)
+    /// a 403, a row that vanished before the write a 404; any other `DbErr` is
+    /// a logged 500 with an empty body. Called by the `#[crud]` expansion.
     #[doc(hidden)]
     pub fn crud_error(err: sea_orm::DbErr) -> poem::Error {
         use sea_orm::{DbErr, SqlErr};
@@ -240,13 +187,6 @@ mod http {
             assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
         }
 
-        /// The opaque half of the same contract: the body carries no cause, so
-        /// the event has to.
-        ///
-        /// A `DbErr` names tables, columns and sometimes values, which is why it
-        /// never reaches the client — and why an operator has exactly one place
-        /// to read it. `kind` is what separates a driver failure from a masking
-        /// failure, and those lead to entirely different files.
         #[test]
         fn a_500_emits_the_cause_it_refuses_to_ship() {
             let logs = nest_rs_testing::LogCapture::install();
@@ -265,11 +205,6 @@ mod http {
             );
         }
 
-        /// `#[crud]`'s own mapper, and the same split one layer down: only the
-        /// blanket 500 is logged, because every other status *is* the
-        /// explanation. A `409` says unique-constraint, a `403` says the create
-        /// re-check rolled it back — an unexpected `DbErr` says nothing at all,
-        /// and ships an empty body.
         #[test]
         fn a_crud_500_emits_the_cause_and_the_mapped_statuses_do_not() {
             let logs = nest_rs_testing::LogCapture::install();
@@ -292,9 +227,6 @@ mod http {
             );
         }
 
-        /// And a 4xx stays silent: it is the client's own doing and already
-        /// carries its message on the wire, so logging it would bury the 5xx
-        /// lines that matter under traffic nobody needs to act on.
         #[test]
         fn a_business_4xx_emits_nothing() {
             let logs = nest_rs_testing::LogCapture::install();
@@ -358,7 +290,6 @@ mod http {
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
             assert_eq!(ct.as_deref(), Some("application/problem+json"));
             assert_eq!(body["status"], 500);
-            // Only the constant wire string — never the SQL that leaked schema.
             assert_eq!(body["detail"], "database error");
             assert!(
                 !body.to_string().contains("password_hash"),
@@ -387,22 +318,18 @@ mod tests {
 
     #[test]
     fn db_display_is_wire_safe_constant() {
-        // The inner `DbErr` may name a column, table, or SQL state that
-        // leaks schema details — the wire string must not.
         let err = ServiceError::Db(DbErr::Custom("SELECT password_hash FROM user".into()));
         assert_eq!(err.to_string(), "database error");
     }
 
     #[test]
     fn internal_display_is_wire_safe_constant() {
-        // Like `Db`, an internal failure keeps its detail for `tracing` only.
         let err = ServiceError::internal("stripe key rejected: sk_live_… ");
         assert_eq!(err.to_string(), nest_rs_core::OPAQUE_CLIENT_MESSAGE);
     }
 
     #[test]
     fn business_variants_forward_their_message() {
-        // 4xx messages are authored, non-sensitive, and meant for the client.
         assert_eq!(
             ServiceError::conflict("insufficient credit balance").to_string(),
             "insufficient credit balance"
@@ -430,9 +357,6 @@ mod tests {
         }
     }
 
-    // `serde_json::to_value(ValidationErrors)` keeps the rule's parameters, the
-    // rejected input among them. Every transport reads the field errors through
-    // `field_errors`, so the redaction has to hold there, not at each renderer.
     #[test]
     fn field_errors_never_echo_the_submitted_value() {
         let mut error = validator::ValidationError::new("length");
@@ -458,22 +382,14 @@ mod tests {
     }
 }
 
-/// A commit-time database failure. Opaque over the ORM's `DbErr` so a sea-orm
-/// version bump is not a semver break through [`FinalizeOutcome`](crate::FinalizeOutcome) (B-DATA): the
-/// public surface exposes only what a caller needs — a [`Display`] for logging
-/// and [`is_retryable_conflict`](CommitError::is_retryable_conflict) for
-/// classification — never the wrapped `DbErr` itself.
-///
-/// [`Display`]: std::fmt::Display
+/// A commit-time database failure, opaque over `DbErr` so a sea-orm bump is not
+/// a semver break through [`FinalizeOutcome`](crate::FinalizeOutcome).
 #[derive(Debug)]
 pub struct CommitError(pub(crate) DbErr);
 
 impl CommitError {
     /// Whether the commit failed on a retryable serialization/deadlock conflict
-    /// (a typed SQLSTATE `40001`/`40P01`/…), matched against the *typed* error
-    /// rather than message text. The interceptor tags these for observability;
-    /// the replay itself belongs at a programmatic transaction boundary
-    /// (`retry::retry_on_conflict`).
+    /// (a typed SQLSTATE `40001`/`40P01`/…).
     pub fn is_retryable_conflict(&self) -> bool {
         crate::retry::is_retryable_conflict(&self.0)
     }

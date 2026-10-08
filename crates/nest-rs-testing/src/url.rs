@@ -136,8 +136,7 @@ mod tests {
                 "postgres://u:p@host:5432/postgres",
                 "postgres://u:p@host:5432/9",
             ),
-            // No path at all: the last `/` is the second of `//`, and
-            // splitting on it dropped the host.
+            // No path: the last `/` is the second of `//`.
             ("postgres://host:5432", "postgres://host:5432/9"),
             (
                 "postgres://host/postgres?sslmode=require",

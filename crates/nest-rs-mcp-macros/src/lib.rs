@@ -1,9 +1,4 @@
-//! `#[mcp]` / `#[tools]` decorators, re-exported by `nest-rs-mcp`. Emits
-//! absolute-path tokens.
-//!
-//! The same struct/impl split every other edge has — `#[controller]`/`#[routes]`,
-//! `#[gateway]`/`#[messages]`, `#[resolver]`/`#[operations]` — with one decorator
-//! per item shape.
+//! `#[mcp]` / `#[tools]` decorators, re-exported by `nest-rs-mcp`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -20,27 +15,11 @@ mod mcp_impl;
 /// fresh.
 ///
 /// Every argument is optional. `path` is the **whole URL path** — omit it to
-/// serve `nest_rs_mcp::DEFAULT_PATH` (`/mcp`), which is what a feature
-/// contributing tools to this app's server wants. Unlike a controller's, the
-/// path is not a namespace the host owns: nothing nests under it, it names the
-/// one endpoint the host joins, and peers that write the same one share it.
-/// `name` / `title` declare which endpoint stands apart from the app's default,
-/// overriding `McpOptions::server` per field; two hosts on one path both
-/// declaring fails boot. Neither `version` nor `instructions` is an argument:
-/// both describe the *server* — a feature library knows neither the binary's
-/// version nor, on a shared endpoint, the whole surface — so they are declared
-/// once on `McpOptions::server`, and what each tool does belongs to its own
-/// `#[tool(description = "…")]`.
-///
-/// # Why the host decorator is not named for its role
-///
-/// Every other host decorator is — `#[controller]`, `#[resolver]`,
-/// `#[gateway]`, `#[processor]`. Here the role word is spoken by the *impl*
-/// half, [`macro@tools`], because that is what a host's methods are; the struct
-/// keeps the protocol's name. `#[mcp]` also cannot be misread as rmcp's
-/// `#[tool]`, which this crate re-exports and which the same file carries. The
-/// role word is elsewhere too — the file (`tool.rs`) and the module
-/// (`<Feature>McpModule`). Accepted asymmetry, not an oversight.
+/// serve `nest_rs_mcp::DEFAULT_PATH` (`/mcp`). Nothing nests under it: it names
+/// the one endpoint the host joins, and peers that write the same one share it.
+/// `name` / `title` override `McpOptions::server` per field for that endpoint;
+/// two hosts on one path both declaring fails boot. `version` and
+/// `instructions` are refused: they are declared once on `McpOptions::server`.
 ///
 /// # Expands to
 ///
@@ -55,10 +34,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(mcp::mcp(args, input).into()).into()
 }
 
-/// The MCP counterpart of `#[routes]`, `#[messages]` and `#[operations]`, named
-/// for what it collects. It carries `#[prompt]` methods as well as `#[tool]` ones:
-/// rmcp routes both through the one `ServerHandler` this expansion writes, so
-/// they are one host's operations, not two blocks.
+/// The operations half of an MCP host: its `#[tool]` and `#[prompt]` methods.
 ///
 /// Takes no arguments — path and identity are `#[mcp]`'s, on the struct.
 ///

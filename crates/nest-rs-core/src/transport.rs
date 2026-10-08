@@ -9,41 +9,24 @@ use tokio_util::sync::CancellationToken;
 use crate::container::Container;
 
 /// Anything that accepts inbound requests on behalf of the app — an HTTP
-/// server, a scheduler, a queue worker, gRPC server, ….
-///
-/// Lifecycle only: protocol-level concerns (message patterns, retries, ack
-/// semantics) live in the transport's own crate.
+/// server, a scheduler, a queue worker, ….
 ///
 /// [`crate::App::run`] awaits `configure` on each transport in registration
-/// order (a transport scans its surfaces via
-/// [`Discovery`](crate::Discovery) here), then spawns every
-/// `serve` future with a shared [`CancellationToken`] that SIGTERM/SIGINT
-/// triggers.
+/// order, then spawns every `serve` future with a shared [`CancellationToken`]
+/// that SIGTERM/SIGINT triggers.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
     /// Scan the container for the surfaces this transport serves and wire them
-    /// up, before any request is accepted. Runs at boot in registration order.
+    /// up, before any request is accepted.
     async fn configure(&mut self, container: &Container) -> Result<()>;
-    /// Accept requests until `cancel` fires, then shut down gracefully — and
-    /// return within a bound of the transport's own, since
-    /// [`App::run`](crate::App::run) awaits every `serve` before the shutdown
-    /// hooks run and holds none of its own: a transport that waits on work that
-    /// never ends holds the process until the orchestrator kills it. The shape
-    /// every framework transport keeps is a window for what it still runs, then
-    /// [`SHUTDOWN_SETTLE_TIMEOUT`](crate::SHUTDOWN_SETTLE_TIMEOUT) for what it
-    /// stopped to unwind, and [`stop_bound`](Self::stop_bound) states it.
-    /// Spawned after every transport has been configured.
+    /// Accept requests until `cancel` fires, then shut down gracefully within
+    /// [`stop_bound`](Self::stop_bound): [`App::run`](crate::App::run) awaits
+    /// every `serve` with no bound of its own.
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()>;
-    /// The longest [`serve`](Self::serve) takes to return once `cancel` fires,
-    /// at the configuration [`configure`](Self::configure) left — the window
-    /// for what it still runs, then the settle for what it stopped.
-    ///
-    /// Required, with no default, because the way down is a sum the grace
-    /// period has to hold: [`App::run`](crate::App::run) files the longest
-    /// bound of the transports it mounted beside the shutdown hooks' budget on
-    /// its boot line, and `nest-rs-testing` sums every framework transport's
-    /// default bound under a Kubernetes pod's default grace. A transport whose
-    /// stop is unbounded says [`Duration::MAX`](std::time::Duration::MAX).
+    /// The longest [`serve`](Self::serve) takes to return once `cancel` fires —
+    /// its drain window, then
+    /// [`SHUTDOWN_SETTLE_TIMEOUT`](crate::SHUTDOWN_SETTLE_TIMEOUT). A transport
+    /// whose stop is unbounded says [`Duration::MAX`](std::time::Duration::MAX).
     fn stop_bound(&self) -> std::time::Duration;
 }
 
@@ -80,16 +63,12 @@ pub trait Transport: Send + Sync + 'static {
 /// # assert_eq!(contributed.iter().map(|c| c.meta.name).collect::<Vec<_>>(), ["Scheduler"]);
 /// ```
 ///
-/// A module that is not imported never runs its `register`, so its
-/// contribution never lands in the container — module-gating is free.
-///
 /// **Internal ABI** — macro/module-constructed, lockstep with `nest-rs-core`;
 /// do not hand-construct.
 #[doc(hidden)]
 pub struct TransportContribution {
     /// Human-readable label used in boot logs.
     pub name: &'static str,
-    /// Build the transport at boot. Sees the assembled container, so the
-    /// transport may resolve providers eagerly if it needs to.
+    /// Build the transport at boot, from the assembled container.
     pub build: fn(&Container) -> Result<Box<dyn Transport>>,
 }

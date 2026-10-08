@@ -1,8 +1,3 @@
-//! [`SeaOrmDatabaseModule`] — the binding of the `nest-rs-database` port:
-//! SeaORM's [`Executor`](crate::Executor) installed around every unit of work.
-//! A bare import beside [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root),
-//! which opens the pool it reads.
-
 use std::sync::Arc;
 
 use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
@@ -14,25 +9,17 @@ use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
 
 /// Binds the ambient executor: the `DbContext` request interceptor for HTTP
 /// (feature `http`), the `WorkerDbContext as dyn JobContext` bridge for jobs,
-/// and the link-time audits this binding brings. Code anywhere then reaches the
-/// pool through `Repo`, so the binding declares its budget ambient: every net
-/// around developer code holds it.
+/// and the link-time audits this binding brings. A bare import beside
+/// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
 pub struct SeaOrmDatabaseModule;
 
 impl Module for SeaOrmDatabaseModule {
-    // Each phase runs once however many modules import the binding: two
-    // importers install one interceptor and one audit, not two — a second
-    // `DbContext` wrap would open a second transaction per request.
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = budgets(BudgetReach::Ambient)
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
-        // The worker bridge is a factory output so it counts as global
-        // infrastructure for every transport that runs jobs — declared, so a
-        // second job context fails the boot naming both, and queued *after*
-        // the pool's and its config's factories, so what it can fail on is
-        // either being absent, which it then names before any later factory
-        // dials anything.
+        // Queued after the pool's and config's factories, so a missing one is
+        // named before any later factory dials.
         builder.provide_declared_factory_after_both::<
             Arc<dyn JobContext>,
             DatabaseConnection,
@@ -46,28 +33,17 @@ impl Module for SeaOrmDatabaseModule {
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        // Read again rather than trusted to the factory above: a seeded
-        // `dyn JobContext` skips it, and its check with it.
+        // A seeded `dyn JobContext` skips the factory above, and its check.
         if let Err(missing) = substrate(&builder.snapshot()) {
             return builder.refuse(missing);
         }
-        // The `DbContext` interceptor only exists with the `http` feature (it is
-        // the HTTP request seam), built eagerly over the pool and config above.
         #[cfg(feature = "http")]
         let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
-        // The link-time invariant checks this import brings — providers that
-        // need neither config nor pool, only what the decorators submitted, and
-        // that refuse boot from `#[on_module_init]`. They ride
-        // `SeaOrmDatabaseModule` because an app without it has no `CrudService`
-        // to mis-wire; an app composing the ORM some other way calls the audit
-        // directly (`audit_soft_delete_bindings`).
         <crate::soft_delete::SoftDeleteAudit as nest_rs_core::Discoverable>::register(builder)
     }
 }
 
-/// The pool and its config, read for their absence: `from_container` would
-/// panic on either, and this is what makes it the named boot error every
-/// binding gives.
+/// The pool and its config, checked present: `from_container` panics on either.
 fn substrate(container: &Container) -> anyhow::Result<()> {
     present::<DatabaseConnection>(container)?;
     present::<SeaOrmConfig>(container)

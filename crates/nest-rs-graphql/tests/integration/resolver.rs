@@ -24,8 +24,7 @@ struct LooseFeatureModule;
 #[module(imports = [GraphqlModule::for_root(None), LooseFeatureModule])]
 struct AppWithLoose;
 
-// The resolver is linked (the inventory is shared with the other test in
-// this binary) but unreachable here — module-gating must skip it.
+// Linked into this binary, but unreachable here.
 #[module(imports = [GraphqlModule::for_root(Some(GraphqlConfig {
     disable_introspection: false,
     ..GraphqlConfig::default()
@@ -95,9 +94,7 @@ async fn an_unreachable_resolver_is_filtered_from_the_schema() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `#[field_resolver]`'s parameter shape. Its position 1 is the **parent**, so a
-// `&Context` correctly comes second — the one operation role where that is true.
+// `#[field_resolver]`'s position 1 is the **parent**, so `&Context` comes second.
 
 #[derive(nest_rs_graphql::async_graphql::SimpleObject)]
 #[graphql(complex)]
@@ -116,10 +113,8 @@ impl ParcelResolver {
         Parcel { id }
     }
 
-    /// The shape the docs teach: parent first, then the context. It compiled and
-    /// then answered `no provider registered for `& Context < '_ >`` on every
-    /// request — the context fell through to the injected-dep arm and was asked
-    /// of the container. Now it is the `__ctx` the wrapper already holds.
+    /// Parent first, then the context: the context is the wrapper's `__ctx`, not
+    /// an injected dependency.
     #[field_resolver]
     async fn tag(
         &self,
@@ -155,12 +150,8 @@ async fn a_field_resolver_takes_the_context_after_its_parent() {
     assert_eq!(body["data"]["parcel"]["tag"], "parcel-3", "{body}");
 }
 
-// ---------------------------------------------------------------------------
-// The call reaches the developer's method, whatever else shares its name. Method
-// syntax resolves on the receiver *before* it derefs: an operation's root holds
-// its resolver in an `Arc`, so a trait implemented for `Arc<T>` answered first,
-// and a field resolver builds its resolver by value, so a trait taking `self`
-// for `T` did.
+// Method syntax resolves on the receiver before it derefs: a root holds its
+// resolver in an `Arc`, a field resolver builds it by value.
 
 #[expect(
     dead_code,
@@ -244,14 +235,8 @@ async fn an_operation_calls_its_method_and_not_a_trait_method_of_the_same_name()
     );
 }
 
-// ---------------------------------------------------------------------------
-// The name a field is served under is the name its identity was checked under.
-// async-graphql's own rule (`Inflector`'s camel case) reads `a1_b` and `a_1b` as
-// one field; through 6.x both compiled and one method's body ran for the other's
-// field. The framework now states every field's name *by that same rule*, so the
-// duplicate check refuses the pair at compile time (`nest-rs-macro-hygiene`'s
-// `diagnostics/graphql/operations_two_methods_one_served_name`) and every name
-// served is the one async-graphql would have served.
+// async-graphql's camel case reads `a1_b` and `a_1b` as one field; the compile-time
+// refusal is `nest-rs-macro-hygiene`'s `operations_two_methods_one_served_name`.
 
 #[derive(nest_rs_graphql::async_graphql::SimpleObject)]
 #[graphql(complex)]
@@ -339,13 +324,8 @@ async fn a_field_resolver_is_named_by_the_same_rule() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The served field name is async-graphql's. `#[operations]` states the name on
-// every field it emits, so the name its duplicate check reads is the name
-// served — and that statement must be invisible: the name async-graphql's own
-// derive would serve for the same method. 7.0's first cut split at `_` only, so
-// `get_2fa` moved from `get2Fa` to `get2fa` and a client query naming it broke.
-// The oracle is async-graphql's derive itself, never a copy of its rule.
+// The name `#[operations]` states must be the one async-graphql's own derive
+// serves; the oracle is that derive, never a copy of its rule.
 
 use nest_rs_graphql::async_graphql;
 

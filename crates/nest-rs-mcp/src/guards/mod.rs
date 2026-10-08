@@ -1,7 +1,5 @@
 //! Ready-made [`McpOperationGuard`](super::guard::McpOperationGuard)
-//! implementations for the two default postures — the explicit allow-all and
-//! the fail-closed deny-all fallback. The trait itself stays at the parent
-//! (`guard.rs`); these are its concrete variants.
+//! implementations: the explicit allow-all and the fail-closed deny-all.
 
 mod allow;
 mod deny;

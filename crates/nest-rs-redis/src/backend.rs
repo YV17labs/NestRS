@@ -25,12 +25,8 @@ use nest_rs_queue::{Capabilities, Capability, QueueBackend};
 /// - **Checkpoints.** A field per job, written only by the delivery holding
 ///   the job, and removed when the job ends.
 ///
-/// What every backend owes regardless — the retry budget the port counts, one
-/// transaction per attempt, a method's `concurrency` — is the port's.
-///
-/// A capability joins this list with the keys that keep it and the e2e that
-/// proves it, one by one — never as `Capabilities::ALL`, so a capability the port
-/// adds later is not claimed before this crate honours it.
+/// A capability joins this list one by one, with the keys that keep it and the
+/// e2e that proves it.
 pub(crate) static BACKEND: QueueBackend = QueueBackend::new(
     "redis",
     Capabilities::NONE
@@ -45,9 +41,6 @@ pub(crate) static BACKEND: QueueBackend = QueueBackend::new(
 mod tests {
     use super::*;
 
-    /// The capabilities this backend keeps, each with the keys and the e2e that
-    /// honour it — and, the port's enum being non-exhaustive, none claimed for
-    /// it by default.
     #[test]
     fn the_backend_declares_what_it_keeps_and_nothing_else() {
         let declared: Vec<Capability> = BACKEND.capabilities().iter().collect();

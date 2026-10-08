@@ -1,14 +1,3 @@
-//! [`SeaOrmModule`] — the substrate seam. `SeaOrmModule::for_root(None)` resolves
-//! [`SeaOrmConfig`] and opens the one `sea_orm::DatabaseConnection` every SeaORM
-//! binding shares: `SeaOrmDatabaseModule` (the `Executor` port and the request
-//! layers), `SeaOrmHealthModule` (the health indicator), the worker context.
-//! Each binding is imported bare beside it and reads the pool from the
-//! container.
-//!
-//! The crate-root `module.rs` a driver is allowed exactly once: a module *of
-//! SeaORM* — the crate's own subject — and not one binding wearing the crate's
-//! name.
-
 use std::any::TypeId;
 use std::time::Duration;
 
@@ -22,9 +11,7 @@ use crate::config::{CONNECT_TIMEOUT, STATEMENT_TIMEOUT};
 /// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
 const NAMESPACE: &str = <SeaOrmConfig as Namespaced>::NAMESPACE;
 
-/// What every binding says when the pool or its config is missing — one
-/// sentence, every site, so a reader who forgot the substrate is told the same
-/// thing by whichever binding noticed first.
+/// What every binding says when the pool or its config is missing.
 pub(crate) const SUBSTRATE_REMEDY: &str = "import `SeaOrmModule::for_root(None)`, which resolves \
                                            `SeaOrmConfig` and opens the one pool every SeaORM \
                                            binding shares";
@@ -35,11 +22,8 @@ pub struct SeaOrmModule;
 
 impl SeaOrmModule {
     /// `None` ⇒ load [`SeaOrmConfig`] from `<PREFIX>_SEAORM__*`; `Some(cfg)` pins
-    /// the base those variables overlay, per field.
-    ///
-    /// A pin is not a test hatch: the deployment's real environment still wins
-    /// over it. A test that must not read the ambient environment seeds the
-    /// value instead — `App::builder().provide(cfg)` short-circuits the factory.
+    /// the base those variables overlay, per field, so the environment still
+    /// wins over it.
     pub fn for_root(config: impl Into<Option<SeaOrmConfig>>) -> SeaOrmSetup {
         SeaOrmSetup {
             pinned: config.into(),
@@ -47,9 +31,7 @@ impl SeaOrmModule {
     }
 }
 
-/// The configured import produced by [`SeaOrmModule::for_root`]. Resolves the
-/// config and queues the async pool factory, so every binding's factory —
-/// wherever it falls in `imports = [..]` — finds the pool already built.
+/// The configured import produced by [`SeaOrmModule::for_root`].
 pub struct SeaOrmSetup {
     pinned: Option<SeaOrmConfig>,
 }
@@ -173,9 +155,8 @@ fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
 }
 
 /// Open a standalone connection from `<PREFIX>_SEAORM__*`, resolving the same
-/// [`SeaOrmConfig`] the app's [`SeaOrmModule`] uses. The single connector for
-/// tools outside the DI container (`migrate`, `seed`) — a new config knob
-/// reaches them without editing each binary.
+/// [`SeaOrmConfig`] the app's [`SeaOrmModule`] uses, for tools outside the DI
+/// container (`migrate`, `seed`).
 pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
     use nest_rs_config::Config;
     let config = SeaOrmConfig::load()?;
@@ -194,9 +175,7 @@ async fn connect(
             nest_rs_config::spellings(NAMESPACE, "URL")
         );
     }
-    // A config seeded on the builder skips `from_env`, and with it the range
-    // the variable is held to: checked again where the budget is spent, before
-    // sqlx adds it to a clock.
+    // A seeded config skipped `from_env`'s range check; sqlx panics past it.
     if let Some(secs) = config.connect_timeout_secs {
         CONNECT_TIMEOUT.check(
             NAMESPACE,
@@ -224,10 +203,6 @@ async fn connect(
 mod tests {
     use super::*;
 
-    /// config-4r2, the seeded path: a config handed to the builder skips
-    /// `from_env`, and the top of the range reached sqlx and panicked the boot.
-    /// The check where the budget is spent refuses it naming the variable, before
-    /// anything is dialled.
     #[tokio::test]
     async fn a_seeded_budget_past_the_ceiling_is_refused_before_sqlx_sees_it() {
         let config = SeaOrmConfig {
@@ -246,8 +221,6 @@ mod tests {
         );
     }
 
-    /// The statement bound a seeded config carries is held to its range where
-    /// the pool is opened, as the acquire budget is.
     #[tokio::test]
     async fn a_seeded_statement_bound_past_the_ceiling_is_refused_before_the_pool_opens() {
         let config = SeaOrmConfig {

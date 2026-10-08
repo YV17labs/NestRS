@@ -4,19 +4,12 @@ use crate::action::Action;
 
 /// A rule whose relational predicate was malformed — [`PredicateBuilder::related`]
 /// rejected it (a composite key, or a relation not pointing at the declared
-/// related entity) and produced the [`Predicate::Deny`] sentinel. Raised by
-/// [`AbilityBuilder::build`] so the misconfiguration fails **loudly** at ability
-/// construction rather than silently.
+/// related entity). Raised by [`AbilityBuilder::build`].
 ///
-/// Left unchecked this is a security defect on the denial side: a malformed
-/// `cannot(...)` lowers its condition to `1 = 0`, and the query pre-filter
-/// combines a denial as `grant AND NOT(deny)` — so `NOT(1 = 0)` is *true* and
-/// the restriction evaporates (fail-*open*). On the grant side the same
-/// sentinel is fail-closed (deny-all) but still hides a developer error, so
-/// both are surfaced.
+/// Unchecked, a malformed `cannot(...)` fails open: its `1 = 0` condition under
+/// `grant AND NOT(deny)` matches every row.
 ///
 /// [`PredicateBuilder::related`]: crate::predicate::PredicateBuilder::related
-/// [`Predicate::Deny`]: crate::predicate::Predicate::Deny
 /// [`AbilityBuilder::build`]: crate::AbilityBuilder::build
 #[derive(Debug, thiserror::Error)]
 #[error(

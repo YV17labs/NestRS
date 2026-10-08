@@ -1,13 +1,7 @@
 //! The `Location` response header, for a route that mints a resource.
 //!
 //! RFC 9110 §15.3.2 asks a `201` to name what it created. The value is composed
-//! with [`join_path`](crate::join_path) — the same function the transport mounts
-//! with and the OpenAPI document documents with — so the URI a caller is handed
-//! back cannot drift from the one that route actually serves.
-//!
-//! It lives here rather than beside `#[crud]`'s data layer because nothing about
-//! it is ORM-shaped: a collection path, an id, a `Response`. The id arrives as
-//! `impl Display` so this crate needs no `uuid` of its own.
+//! with [`join_path`](crate::join_path), as the transport mounts the route.
 
 use std::fmt::Display;
 
@@ -16,46 +10,29 @@ use poem::{Request, Response};
 
 /// The URI the caller addressed, captured at the transport edge.
 ///
-/// poem's own `original_uri()` cannot serve this: it is populated only on the
-/// hyper path, and a request built through `Request::builder()` — which
-/// `TestClient`, and therefore every `TestApp` suite, goes through — carries a
-/// `Default` state whose URI is `/`. Reading it would make a `201` name
-/// `/<id>` in process and `/orgs/<id>` on the wire: the in-process witness
-/// would fail on a route that is correct, which is the opposite of what a boot
-/// test is for.
+/// poem's `original_uri()` is populated only on the hyper path: a request built
+/// through `Request::builder()`, as every `TestApp` sends, reads `/`.
 #[derive(Clone)]
 pub(crate) struct CallerUri(pub(crate) Uri);
 
 /// The path the caller addressed — the collection a `#[crud]` create posted to.
 ///
-/// Read from the edge's capture rather than off `uri()`, which the router
-/// rewrites: a global prefix is mounted with `Route::nest`, which strips itself
-/// off before the handler runs. Same value in process and on the wire, so a
-/// `TestApp` assertion about the `201`'s `Location` means what it says.
+/// Read from the edge's capture: `Route::nest` strips a global prefix off
+/// `uri()` before the handler runs.
 pub fn caller_path(req: &Request) -> &str {
     match req.extensions().get::<CallerUri>() {
         Some(CallerUri(uri)) => uri.path(),
-        // The edge captures on every routed request, so this is an endpoint
-        // driven without one — a bare `Route` in a unit test. `uri()` rather
-        // than `original_uri()`: whoever built the request populated it, and
-        // the only segment it can be missing is a global prefix, which a tree
-        // assembled without the edge has not applied either.
+        // No edge: a bare `Route` in a unit test, which applied no global prefix either.
         None => req.uri().path(),
     }
 }
 
 /// Stamp `Location: <collection_path>/<id>` onto a create response.
 ///
-/// An **absolute-path reference**, which RFC 9110 §10.2.2 permits and which
-/// costs nothing in trust: an absolute URI would have to name a host, and the
-/// only host a request carries is the `Host` header — the one field a client
-/// controls. Pass the collection path as the caller sent it — [`caller_path`]
-/// — so a global prefix or a `/v1` segment is already part of the answer.
+/// An absolute-path reference (RFC 9110 §10.2.2): an absolute URI would name
+/// the client-controlled `Host`. Pass [`caller_path`] as the collection path.
 ///
-/// A header value that will not build is dropped rather than raised: an id that
-/// renders as ASCII and a routed path cannot produce one, and a `201` whose body
-/// already carries the id is not worth failing a completed insert over. Same
-/// posture as the pagination cursor on the `#[crud]` list route.
+/// A header value that will not build is dropped, never raised.
 pub fn set_created_location(resp: &mut Response, collection_path: &str, id: impl Display) {
     let location = crate::join_path(collection_path, &id.to_string());
     if let Ok(value) = HeaderValue::from_str(&location) {
@@ -79,10 +56,6 @@ mod tests {
             .to_owned()
     }
 
-    /// The composition cases `join_path` guarantees, asserted through this
-    /// function so the `201`'s URI is pinned at the surface a caller sees — a
-    /// prefixed or versioned collection keeps its segments, and a trailing
-    /// slash cannot double the separator.
     #[test]
     fn the_location_is_the_collection_path_plus_the_id() {
         assert_eq!(location_of("/posts"), format!("/posts/{ID}"));
@@ -91,9 +64,6 @@ mod tests {
         assert_eq!(location_of("/"), format!("/{ID}"));
     }
 
-    /// The capture wins over `uri()` — the case that separates a request the
-    /// router has already stripped a global prefix from (`/posts`) from what
-    /// the caller actually addressed (`/api/posts`).
     #[test]
     fn caller_path_reads_the_edges_capture() {
         let mut req = Request::builder().uri_str("/posts").finish();
@@ -103,9 +73,6 @@ mod tests {
         assert_eq!(caller_path(&req), "/api/posts");
     }
 
-    /// No edge, no capture: `uri()` answers. `original_uri()` would say `/`
-    /// here — poem populates it on the hyper path only — which is the whole
-    /// reason this function exists.
     #[test]
     fn caller_path_falls_back_to_the_request_uri() {
         let req = Request::builder().uri_str("/posts").finish();

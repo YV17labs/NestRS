@@ -1,35 +1,13 @@
 //! Rendering a caught panic payload as a message.
-//!
-//! Every seam that contains a panic rather than letting it unwind — a queue
-//! consumer, the scheduler, the event bus — has to put *something* structured in
-//! the log, and `Box<dyn Any + Send>` is what `catch_unwind` hands back. Three
-//! crates had written the same downcast ladder, already drifted on the fallback
-//! string and on the field name they logged it under; one home keeps the
-//! vocabulary uniform, which is the point of a structured field an operator
-//! greps across transports.
 
 use std::any::Any;
 
 /// The field name a contained panic is logged under.
-///
-/// [`contained_panic!`](crate::contained_panic) writes it as `{ FIELD }`, the
-/// constant-name form `tracing` has accepted since 0.1.39, and every test that
-/// asserts the field reads it from here — so the name is spelled once. This
-/// module exists because three crates had written the same downcast ladder and
-/// **had already drifted on the fallback string and on the field name they
-/// logged it under**; sharing the ladder and the fallback while leaving the name
-/// to each site is the half that drifts silently.
 pub const FIELD: &str = "panic";
 
-/// Best-effort message from a caught panic payload — the common `&str` /
-/// `String` shapes `panic!` / `unwrap` / `expect` produce — with any of serde's
-/// sentences in it said without the value
-/// ([`DecodeError::redact`](crate::DecodeError::redact)): `.unwrap()` on a
-/// failed decode formats serde's error, value included, into the payload, and
-/// the payload is the one text of a panic the framework files.
-///
-/// Logged under [`FIELD`] by [`contained_panic!`](crate::contained_panic), so
-/// one query reaches a contained panic whichever transport caught it.
+/// Best-effort message from a caught panic payload (`&str` or `String`), with
+/// serde's sentences redacted ([`DecodeError::redact`](crate::DecodeError::redact)):
+/// `.unwrap()` on a failed decode puts the value into the payload.
 pub fn panic_message(payload: &(dyn Any + Send)) -> String {
     let message = payload
         .downcast_ref::<&'static str>()
@@ -53,19 +31,15 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
 /// );
 /// ```
 ///
-/// The one way a seam that contains a panic says so. It writes the field as
-/// `{ FIELD }`, so the name is never spelled at a call site, and it writes the
-/// message before it, as `tracing`'s own positional form does: a `{ CONST }`
-/// field written first after `target:` is not parsed by `tracing`'s grammar,
-/// and the error it gives names the message, not the field. Pass the payload as
-/// `payload.as_ref()` or `&*payload`, never `&payload` — a `Box<dyn Any + Send>`
-/// is itself `Any`, so a borrow of the box unsizes to the box and every
+/// Pass `payload.as_ref()` or `&*payload`, never `&payload`: a `Box<dyn Any +
+/// Send>` is itself `Any`, so a borrow of the box unsizes to the box and every
 /// downcast misses.
 #[macro_export]
 macro_rules! contained_panic {
     (target: $target:expr, $payload:expr, $message:literal $(, $($field:tt)*)?) => {
         $crate::tracing::error!(
             target: $target,
+            // `tracing` does not parse a `{ CONST }` field written first after `target:`.
             message = ::core::format_args!($message),
             { $crate::panic::FIELD } = %$crate::panic_message($payload),
             $($($field)*)?
@@ -85,14 +59,10 @@ mod tests {
         let formatted: Box<dyn Any + Send> = Box::new(format!("panic for {}", "boom"));
         assert_eq!(panic_message(formatted.as_ref()), "panic for boom");
 
-        // `panic_any(42)` — nothing to render, so say that rather than losing
-        // the event.
         let opaque: Box<dyn Any + Send> = Box::new(42u8);
         assert_eq!(panic_message(opaque.as_ref()), "<non-string panic payload>");
     }
 
-    /// `.unwrap()` on a failed decode panics with serde's error in `Debug` form,
-    /// the value inside it; the message files without it.
     #[test]
     fn a_panic_over_a_decode_failure_is_said_without_its_value() {
         let payload = std::panic::catch_unwind(|| {

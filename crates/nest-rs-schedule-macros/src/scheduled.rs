@@ -1,13 +1,7 @@
-//! `#[scheduled]` — orchestrator on a provider's `impl` block. Walks the
-//! methods, finds those tagged with `#[cron(...)]` / `#[every("...")]` /
-//! `#[after("...")]`, strips the attribute, and submits one
-//! `ScheduledMethod` per method to the link-time inventory. The methods stay
-//! on the impl block unchanged so they remain regular methods callable
-//! from anywhere.
-//!
-//! Discoverable is NOT emitted here — the provider's own `#[injectable]` owns
-//! it. Inventory is exactly the seam `#[hooks]` uses for lifecycle methods,
-//! for the same reason.
+//! `#[scheduled]` — orchestrator on a provider's `impl` block: strips each
+//! method's trigger attribute and submits one `ScheduledMethod` per method to the
+//! link-time inventory, leaving the methods unchanged. The provider's own
+//! `#[injectable]` owns `Discoverable`.
 
 use nest_rs_codegen::pair;
 use std::str::FromStr;
@@ -71,8 +65,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         let trigger_attr = method.attrs.remove(index);
 
-        // The trigger as written is the attribute the reader looks at, so it is
-        // the one the shape refusals name — as `#[on_event]`'s refusals name it.
+        // The shape refusals name the trigger as written.
         let key = nest_rs_codegen::key_as_written(trigger_attr.path());
         let member = JobDecorator::named(&key)
             .unwrap_or_else(|| unreachable!("one_role_per_method matched a trigger attribute"));
@@ -91,8 +84,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 .into();
         }
 
-        // Every method's keys are read before the first refusal is returned, so
-        // a host with several wrong triggers learns about all of them at once.
+        // Every method's keys are read before the first refusal is returned, so a
+        // host with several wrong triggers learns about all of them at once.
         let ParsedTrigger {
             trigger: trigger_tokens,
             timeout,
@@ -162,19 +155,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// `#[scheduled]` takes no arguments — the triggers are on the methods it
-/// collects. It used to *ignore* whatever it was handed; `version` is called out
-/// first because it is the one key a developer arrives with from
-/// `#[controller(version = "1")]`, and this transport has an answer of its own
-/// rather than a spelling correction.
+/// collects; `version` gets an answer of its own.
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
     Edge::Schedule.reject_version(&args)?;
     pair::SCHEDULED.reject_args(&args, "the provider's scope is declared by")
 }
 
-/// The closed trigger vocabulary, read by the one-role helper both to find a
-/// method's trigger and to list what is accepted — so the set a method is
-/// checked against and the set it is told about cannot disagree.
+/// The closed trigger vocabulary, read both to find a method's trigger and to
+/// list what is accepted.
 const TRIGGER_ATTRS: [&str; 3] = ["cron", "every", "after"];
 
 /// What a trigger attribute declared: the trigger itself, and the shared keys a
@@ -197,8 +186,7 @@ struct TrailingKeys {
     transactional: Option<bool>,
     /// The replicas the key selected, `None` when unwritten.
     replicas: Option<Replicas>,
-    /// The `tz` a calendar is read in — `#[cron]`'s alone, which the table
-    /// guarantees by refusing it at the other two.
+    /// The `tz` a calendar is read in — `#[cron]`'s alone.
     tz: Option<Expr>,
     /// The identity it pins, with the key as written for the refusal of one
     /// beside a job firing on every replica.
@@ -207,10 +195,8 @@ struct TrailingKeys {
 
 /// The trigger tokens, plus whatever the shared keys said.
 ///
-/// All three triggers take their keys in the same place — after the trigger's
-/// own argument, as named values — so `#[every("30s", transactional = false)]`,
-/// `#[after(..)]` and `#[cron(.., tz = .., replicas = "one")]` are one grammar
-/// rather than three that happen to spell a word alike.
+/// All three triggers take their keys after the trigger's own argument, as
+/// named values: one grammar.
 fn parse_trigger(attr: &Attribute, member: JobDecorator) -> syn::Result<ParsedTrigger> {
     let (trigger, keys) = match member {
         JobDecorator::Every | JobDecorator::After => {
@@ -231,8 +217,8 @@ fn parse_trigger(attr: &Attribute, member: JobDecorator) -> syn::Result<ParsedTr
         JobDecorator::Process => unreachable!("#[scheduled] collects triggers, never #[process]"),
     };
     let replicas = keys.replicas.unwrap_or_default();
-    // A key pins what a job firing once claims under; beside a job firing on
-    // every replica it would be a declaration nothing reads.
+    // Beside a job firing on every replica a key would be a declaration nothing
+    // reads.
     let key = match keys.key {
         Some((path, _)) if replicas != Replicas::One => {
             return Err(syn::Error::new_spanned(
@@ -268,9 +254,8 @@ fn list_tokens(attr: &Attribute, expects: String) -> syn::Result<TokenStream2> {
 
 /// `#[every("30s")]` / `#[after("10s")]`, with the optional shared keys after it.
 ///
-/// The period is read as any expression and judged by the duration grammar, so
-/// `#[every(30)]` gets the grammar's sentence rather than syn's bare "expected
-/// string literal".
+/// Read as any expression, so `#[every(30)]` gets the duration grammar's
+/// sentence rather than syn's "expected string literal".
 fn parse_period(attr: &Attribute, member: JobDecorator) -> syn::Result<(Expr, TrailingKeys)> {
     let key = member.name();
     let tokens = list_tokens(
@@ -288,9 +273,8 @@ fn parse_period(attr: &Attribute, member: JobDecorator) -> syn::Result<(Expr, Tr
     parser.parse2(tokens)
 }
 
-/// The keys `member` takes after its own argument, each written as the
-/// family's table gives it — so the sentence offers exactly what the parser
-/// reads, and a key the table gives a trigger reaches the sentence with it.
+/// The keys `member` takes after its own argument, written as the family's
+/// table gives them.
 fn optional_keys(member: JobDecorator) -> String {
     let written: Vec<String> = job_keys(member)
         .map(|key| format!("`{}`", key.example()))
@@ -303,15 +287,10 @@ fn optional_keys(member: JobDecorator) -> String {
 }
 
 /// The named keys a trigger accepts after its own argument, read against the
-/// family's table (`nest_rs_codegen::job_key`): a key this trigger takes, a key
-/// another member takes and this trigger cannot — `replicas` on the one-shot
-/// `#[after]`, `retries` on any — refused naming why, or a key no member takes,
-/// refused listing this trigger's column.
+/// family's table (`nest_rs_codegen::job_key`): another member's key, or one no
+/// member takes, is refused naming why.
 ///
-/// **A repeated key is refused, not last-write-wins.** `#[cron("…", tz = "A",
-/// tz = "B")]` has no reading a developer could have meant, and accepting it
-/// silently drops one of two declarations — which is the shape of defect this
-/// whole grammar was unified to remove.
+/// **A repeated key is refused, not last-write-wins.**
 fn parse_trailing_keys(
     stream: syn::parse::ParseStream<'_>,
     member: JobDecorator,
@@ -331,10 +310,8 @@ fn parse_trailing_keys(
     if stream.is_empty() {
         return Ok(keys);
     }
-    // Read by the member's grammar, which judges each key before its value: a
-    // key refused here — unknown, another member's, or written twice — is
-    // refused whatever it was given, and a bare one earns a sentence naming the
-    // key rather than syn's `expected `=`` against the enclosing `#[scheduled]`.
+    // Each key is judged before its value, so a bare one earns a sentence naming
+    // the key rather than syn's `expected `=`` against the enclosing `#[scheduled]`.
     member.grammar().parse(stream, |arg| {
         match job_key(member, &arg)? {
             JobKey::Timeout => keys.timeout = Some(timeout_value(member, &arg.expr()?)?),
@@ -382,11 +359,8 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, TrailingKeys)> {
         };
     let (expr, tz, keys) = parser.parse2(tokens)?;
 
-    // Literal cron expressions validate now; `CronExpression::X` paths wait
-    // for boot (the `Scheduler::configure` call). A literal of any other kind is
-    // no expression at all, and is refused here rather than as a type mismatch
-    // inside the expansion. Read through the invisible group a `macro_rules!`
-    // forwards a value in, as every value reader is.
+    // Literal cron expressions validate now; `CronExpression::X` paths wait for
+    // boot. Read through the invisible group a `macro_rules!` forwards a value in.
     match ungrouped_expr(&expr) {
         Expr::Lit(ExprLit {
             lit: Lit::Str(s), ..
@@ -417,17 +391,12 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, TrailingKeys)> {
 }
 
 /// The IANA name set is closed and `tz` is always a literal, so a typo is
-/// knowable here — the same fact `validate_cron_literal` acts on for the key
-/// beside it. Boot-time resolution stays in `Scheduler::configure`: it is what
-/// the *value* is finally parsed by, and a second reader is not a second
-/// authority when the first only ever refuses.
+/// knowable here.
 fn validate_timezone_literal(s: &LitStr) -> syn::Result<()> {
     let name = s.value();
     if name.parse::<chrono_tz::Tz>().is_ok() {
         return Ok(());
     }
-    // Name the fact a reader can check, and point at the register rather than
-    // listing 600 names into a compiler diagnostic.
     Err(syn::Error::new(
         s.span(),
         format!(
@@ -439,10 +408,8 @@ fn validate_timezone_literal(s: &LitStr) -> syn::Result<()> {
     ))
 }
 
-/// Validate a literal cron expression at macro-expansion time, so a bad
-/// expression is a compile error (spanned at the literal) rather than a
-/// boot-time surprise. `CronExpression::X` paths are not literals and validate
-/// at boot instead.
+/// Validate a literal cron expression at expansion time, spanned at the
+/// literal.
 fn validate_cron_literal(s: &LitStr) -> syn::Result<()> {
     croner::Cron::from_str(&s.value()).map(|_| ()).map_err(|e| {
         syn::Error::new(
@@ -461,9 +428,6 @@ mod tests {
     use super::*;
     use proc_macro2::Span;
 
-    /// A key pins what a job firing once claims under, so it is read beside
-    /// `replicas = "one"` and refused beside a job firing on every replica —
-    /// written or defaulted — at the key, naming why.
     #[test]
     fn a_key_is_read_beside_replicas_one_and_refused_beside_each() {
         let attr: Attribute =
@@ -499,9 +463,6 @@ mod tests {
         validate_cron_literal(&lit("0 0 * * *")).expect("a well-formed cron literal validates");
     }
 
-    /// Every key the job-key table gives a trigger is read by this parser,
-    /// written as the table's own example — the spelling the "optionally
-    /// followed by" sentence offers a developer to paste.
     #[test]
     fn every_key_of_each_triggers_column_is_read() {
         for name in TRIGGER_ATTRS {

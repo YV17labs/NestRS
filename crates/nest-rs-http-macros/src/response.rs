@@ -1,12 +1,5 @@
 //! Per-handler response shapers: `#[http_code]`, `#[response_header]`, and
-//! `#[redirect]`. These are **markers** consumed by `#[routes]` — the
-//! proc-macro entries exist so rustc recognizes the attribute name, so they
-//! have a documentation home, and so a marker nothing consumed is refused
-//! ([`unread`]) rather than expanding to the item in silence.
-//!
-//! The actual response transformation is emitted by `#[routes]` around the
-//! generated handler wrapper (see [`take_response_shapers`] and
-//! [`apply_response_shapers`]).
+//! `#[redirect]`, markers consumed by `#[routes]`.
 
 use nest_rs_codegen::{mixed_site_ident, site, takes_value, ungrouped_expr};
 use proc_macro::TokenStream;
@@ -15,24 +8,14 @@ use quote::{ToTokens, quote};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Block, Expr, ExprLit, Lit, LitInt, LitStr, Token};
 
-/// Header names that legitimately appear multiple times in a single response
-/// (per RFC 7230 §3.2.2). The shaper emits `.append()` for these so an
-/// explicit `#[response_header("set-cookie", …)]` is additive, not
-/// overriding. Everything else is single-valued and overrides via `.insert()`
-/// — avoiding the duplicate-header footgun when the handler already set the
-/// same name.
+/// Header names that may repeat in one response (RFC 7230 §3.2.2), appended
+/// rather than inserted.
 fn is_multi_value_header(name: &str) -> bool {
     matches!(name, "set-cookie")
 }
 
 /// Whether `attr` is the shaper `name`, written bare (`#[http_code(201)]`) or
 /// path-qualified (`#[nest_rs::http::http_code(201)]`).
-///
-/// The last segment, because the three are exported attribute macros and a
-/// path is a legitimate way to write one. Matching the bare ident alone let a
-/// qualified shaper survive `#[routes]`, expand to nothing, and leave the route
-/// answering `200` with no header and no `Location` — while OpenAPI documented
-/// the same `200`.
 pub(crate) fn is_shaper(attr: &Attribute, name: &str) -> bool {
     attr.path()
         .segments
@@ -40,14 +23,9 @@ pub(crate) fn is_shaper(attr: &Attribute, name: &str) -> bool {
         .is_some_and(|segment| segment.ident == name)
 }
 
-/// The entry point of every shaper — which runs **only** when `#[routes]` did
-/// not consume the marker, since `#[routes]` expands first and removes each one
-/// it reads. So reaching here is the refusal: the marker sits outside a
-/// `#[routes]` impl, or under a name `#[routes]` cannot recognise (an import
-/// alias), and in either case it would shape nothing. It used to return the
-/// item unchanged, accepting any argument list and answering the route with
-/// its default status. The item is kept beside the error so nothing else about
-/// it is reported as missing.
+/// The entry point of every shaper, reached only when `#[routes]` did not
+/// consume the marker, so it refuses. The item is kept beside the error so
+/// nothing else about it is reported as missing.
 pub(crate) fn unread(shaper: &str, input: TokenStream) -> TokenStream {
     let error = syn::Error::new(
         proc_macro2::Span::call_site(),
@@ -84,11 +62,8 @@ impl ResponseShapers {
         self.http_code.is_none() && self.headers.is_empty() && self.redirect.is_none()
     }
 
-    /// The effective **success** status this handler emits, for the OpenAPI
-    /// document (OAPI-O3): a `#[redirect]`'s code (default `307`), else a
-    /// `#[http_code(N)]`'s `N`, else `200`. The literals are already validated
-    /// by [`take_response_shapers`], so a parse fallback is unreachable but kept
-    /// total.
+    /// The success status this handler emits, for the OpenAPI document: a
+    /// `#[redirect]`'s code (default `307`), else `#[http_code(N)]`'s, else `200`.
     pub(crate) fn success_status(&self) -> u16 {
         if let Some(redirect) = &self.redirect {
             redirect
@@ -105,17 +80,9 @@ impl ResponseShapers {
     }
 }
 
-/// Drain `#[http_code]`, `#[response_header]`, and `#[redirect]` from the
-/// method attributes, validating each. Compile-time validation: status codes
-/// fall in `100..=999`, redirect codes in `300..=399`, header name characters
-/// fit the HTTP token grammar (lowercase ASCII, digits, `-`), header value is
-/// printable ASCII. Strict static checks fail the build before
-/// `HeaderName::from_static` would panic at boot.
-///
-/// `body` is the decorated method's block — required for `#[redirect]`'s
-/// empty-body check (the macro never calls the user method, so any
-/// statements in the body are silently dropped — that is a footgun and
-/// must fail the build).
+/// Drain and validate `#[http_code]`, `#[response_header]`, and `#[redirect]`
+/// from the method attributes, so `HeaderName::from_static` cannot panic at boot.
+/// `body` is the method's block, which `#[redirect]` requires empty.
 pub(crate) fn take_response_shapers(
     attrs: &mut Vec<Attribute>,
     body: &Block,
@@ -161,11 +128,7 @@ pub(crate) fn take_response_shapers(
         ));
     }
 
-    // RFC 7231 §7.1.2: `Location` is single-valued. `#[redirect]` always sets
-    // it; a `#[response_header("location", …)]` next to it would either
-    // duplicate (the pre-`insert()` bug) or silently override (the new
-    // default). Both are surprising — fail at compile time, with the span on
-    // the redundant header.
+    // RFC 7231 §7.1.2: `Location` is single-valued, and `#[redirect]` sets it.
     if out.redirect.is_some()
         && let Some((name_lit, _)) = out
             .headers
@@ -179,10 +142,7 @@ pub(crate) fn take_response_shapers(
         ));
     }
 
-    // `#[redirect]` produces the response itself — the user method is never
-    // called, so any side-effect work inside the body silently disappears.
-    // Reject a non-empty body at compile time, naming the redirect URL so
-    // the operator knows which redirect attribute stole the call.
+    // `#[redirect]` never calls the method, so a body would silently vanish.
     if let Some(spec) = &out.redirect
         && !body.stmts.is_empty()
     {
@@ -201,12 +161,10 @@ pub(crate) fn take_response_shapers(
     Ok(out)
 }
 
-/// `#[http_code(201)]`'s one argument: a status code, refused in one sentence
-/// whatever was written instead — a string, a number outside the three-digit
-/// range, a literal too large for a `u16`, or nothing at all.
+/// `#[http_code(201)]`'s one argument: a status code from 100 to 999.
 ///
 /// Re-emitted unsuffixed: `201u8` is the right number and the wrong type for
-/// `StatusCode::from_u16`, and the value checked is the value sent.
+/// `StatusCode::from_u16`.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -288,9 +246,8 @@ fn header_literal(written: &Expr, position: &str, what: &str) -> syn::Result<Lit
     }
 }
 
-/// HTTP/1.1 header-name token grammar (RFC 7230 §3.2.6) restricted to the
-/// lowercase subset accepted by `HeaderName::from_static` so `from_static`
-/// cannot panic at boot. Empty names rejected.
+/// RFC 7230 §3.2.6 token grammar, restricted to the lowercase subset
+/// `HeaderName::from_static` accepts without panicking.
 fn validate_header_name(lit: &LitStr) -> syn::Result<()> {
     let s = lit.value();
     let accepted = |c: u8| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_');
@@ -303,10 +260,8 @@ fn validate_header_name(lit: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-/// Redirect URL bytes: printable ASCII only (0x21-0x7E), no whitespace. Any
-/// non-printable byte (CR/LF/NUL, control char, or ≥0x80) would either inject
-/// a header line or panic `HeaderValue::from_static` at boot. Internationalized
-/// URLs must be percent-encoded by the caller (RFC 3986).
+/// Redirect URL bytes: printable ASCII only, no whitespace; anything else
+/// injects a header line or panics `HeaderValue::from_static` at boot.
 fn validate_redirect_url(lit: &LitStr) -> syn::Result<()> {
     for b in lit.value().bytes() {
         if !(0x21..=0x7e).contains(&b) {
@@ -338,9 +293,7 @@ fn validate_header_value(lit: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-/// `#[redirect(url[, status])]`: each position refused in its own sentence, at
-/// what was written there — the URL when it is missing or not a string, the
-/// status when it is not a redirect status.
+/// `#[redirect(url[, status])]`, each position refused at what was written there.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -368,10 +321,6 @@ fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
         Some(other) => return Err(url_refused(other)),
         None => return Err(url_refused(attr)),
     };
-    // The URL ends up in the `Location` header; `HeaderValue::from_static`
-    // will panic on any non-printable-ASCII byte. Validate at compile time so
-    // boot cannot fail. RFC 3986 already requires URIs to be ASCII —
-    // internationalized URLs must be percent-encoded by the caller.
     validate_redirect_url(&url)?;
 
     let code = match iter.next() {
@@ -393,8 +342,8 @@ fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
     })
 }
 
-/// `#[redirect]`'s optional status: a `3xx` code, one sentence for anything
-/// else, re-emitted unsuffixed for the reason [`http_code_value`] gives.
+/// `#[redirect]`'s optional status: a `3xx` code, re-emitted unsuffixed as in
+/// [`http_code_value`].
 fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
     let written = ungrouped_expr(written);
     let refused = || {
@@ -419,30 +368,20 @@ fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
     }
 }
 
-/// Expand a handler's response transformation. `call_expr` is the tokens that
-/// evaluate the user method (e.g. `__ctrl.foo(a, b).await`); `wrapper_args`
-/// lists every wrapper-fn parameter name including `__ctrl`, so a
-/// `#[redirect]` body that skips the user call can still silence any
-/// unused-variable warnings on its extractors. The returned tokens produce a
-/// `::nest_rs_http::poem::Result<::nest_rs_http::poem::Response>`.
+/// Expand a handler's response transformation into a
+/// `poem::Result<Response>`. `call_expr` evaluates the user method;
+/// `wrapper_args` lists every wrapper-fn parameter, silenced when `#[redirect]`
+/// skips the call.
 ///
-/// **A failure keeps its own status**: the `#[http_code]` / `#[response_header]`
-/// overrides touch the success path only, and the error short-circuits with
-/// the status its `ResponseError` set. Which answers are failures is read by
-/// **type**, through `nest_rs_core::Answer` — the spelling read here once took
-/// `use poem::Result as PoemResult` for a value, built the error's response,
-/// and rewrote its 403 into the shaper's 201. Building the response from the
-/// success value alone also spares the `Result<T, E>: IntoResponse` bound a
-/// handler whose `E` is only a `ResponseError` would fail.
+/// A failure keeps its own status: the overrides touch the success path only,
+/// and which answers are failures is read by type through `nest_rs_core::Answer`,
+/// since a spelling-based check misses an aliased `Result`.
 pub(crate) fn apply_response_shapers(
     shapers: &ResponseShapers,
     call_expr: TokenStream2,
     wrapper_args: &[syn::Ident],
 ) -> TokenStream2 {
-    // Bound in the same scope as the developer's extractor bindings, so they
-    // take the same definition-site hygiene the wrapper's own locals do — see
-    // the `mixed_site_ident` note in `routes.rs`. Safe by span, not by the
-    // order these statements happen to be emitted in.
+    // Mixed-site: these share a scope with the developer's extractor bindings.
     let out = mixed_site_ident("__out");
     let response = mixed_site_ident("__response");
 
@@ -455,11 +394,6 @@ pub(crate) fn apply_response_shapers(
         let header_writes = headers_tokens(&shapers.headers, &response);
         return quote! {
             {
-                // The user method is not called — `#[redirect]` produces the
-                // response itself; extractor arguments still resolve via
-                // poem's normal pipeline (they are wrapper-fn parameters).
-                // One tuple discard makes the "read but unused" intent explicit
-                // at `cargo expand` time without N repetitive lines.
                 let _ = (#(&#wrapper_args,)*);
                 let mut #response: ::nest_rs_http::poem::Response =
                     ::nest_rs_http::poem::Response::builder()
@@ -503,12 +437,8 @@ pub(crate) fn apply_response_shapers(
     }
 }
 
-/// Emit one header write per `#[response_header]`. Single-valued headers
-/// (the overwhelming majority — `Content-Type`, `Cache-Control`, `Location`,
-/// …) use `.insert()` so the shaper overrides whatever the handler or an
-/// `IntoResponse` impl already set, dodging the duplicate-header footgun.
-/// Multi-value headers in `is_multi_value_header` (today: `Set-Cookie`) use
-/// `.append()` so the shaper stacks instead of clobbering prior cookies.
+/// Emit one header write per `#[response_header]`: `.insert()` overrides what
+/// the handler set, `.append()` for the headers [`is_multi_value_header`] names.
 fn headers_tokens(headers: &[(LitStr, LitStr)], response: &syn::Ident) -> TokenStream2 {
     if headers.is_empty() {
         return quote! {};

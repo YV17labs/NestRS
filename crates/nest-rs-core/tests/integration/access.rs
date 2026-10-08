@@ -1,6 +1,5 @@
-//! End-to-end check of the module access graph through the real `#[module]` /
-//! `#[injectable]` macros and the `App` boot path. The link-time registry is
-//! shared across a test binary, so the graphs below use disjoint types.
+//! Covers `src/access.rs` through the real macros and boot path. The link-time
+//! registry is shared across a test binary, so the graphs below use disjoint types.
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -9,8 +8,6 @@ use nest_rs_core::{
     App, ContainerBuilder, Discoverable, DynamicModule, Registering, injectable, module,
 };
 
-// A type no module provides — the dependency a scoped provider will fail to
-// resolve. Not `#[injectable]`, so nothing ever registers it.
 struct AbsentDep;
 
 #[expect(
@@ -28,9 +25,6 @@ struct ScopedMissingModule;
 
 #[tokio::test]
 async fn a_scoped_providers_missing_dependency_is_a_boot_error_not_a_panic() {
-    // A request-scoped provider builds lazily, so a missing dependency used to
-    // slip through boot and panic at the first `get(...).expect(...)`. The access
-    // graph now catches it up front, naming both the provider and the dependency.
     let err = App::builder()
         .module::<ScopedMissingModule>()
         .build()
@@ -64,9 +58,8 @@ struct ModuleA;
 #[module(providers = [ServiceB])]
 struct LeakyModuleB;
 
-// `ModuleA` listed first lets the flat container's order-dependent fixpoint
-// silently resolve `ServiceA`; the access check turns that into a deterministic
-// boot error.
+// `ModuleA` listed first lets the flat container's fixpoint resolve `ServiceA`
+// anyway; only the access check refuses it.
 #[module(imports = [ModuleA, LeakyModuleB])]
 struct LeakyRoot;
 
@@ -215,9 +208,8 @@ async fn a_dynamic_import_is_the_module_it_declares_whatever_it_registers_first(
         .expect("importing the setup imports the module it is, not the first one it wires");
 }
 
-// A lazily-built provider (controller / cron job / processor shape): empty
-// `dependencies`, non-empty `injected`. The graph reads `injected`, so this is
-// still under contract.
+// A lazily-built provider (controller shape): empty `dependencies`, non-empty
+// `injected`, which is what the graph reads.
 #[injectable]
 struct LazyDep;
 
@@ -260,15 +252,6 @@ async fn lazily_built_provider_injection_is_checked_via_injected_not_dependencie
     assert!(msg.contains("LazyLeakyModule"), "names the module: {msg}");
     assert!(msg.contains("LazyDepModule"), "suggests the import: {msg}");
 }
-
-// --- a singleton may not inject what only exists inside a request ------------
-//
-// It used to fail **silently**, and that is why this is a suite test rather than
-// a unit one: the register phase gates readiness on the singleton map, so such a
-// provider never became ready, was classified unprovided and was dropped — with
-// everything downstream of it — while the boot returned `Ok` and emitted
-// nothing. `Container::get` then answered `None` for a provider written in
-// `providers = [...]`, far from the cause. Only a real boot shows that.
 
 #[injectable(scope = request)]
 #[derive(Default)]
@@ -334,15 +317,6 @@ struct SingletonHoldingTransient {
 #[module(providers = [PerResolution, SingletonHoldingTransient])]
 struct SingletonTransientViolationModule;
 
-/// The check's **second arm**, which had no test while the error's own sentence
-/// described only the first.
-///
-/// A transient is not "only inside a request" — `Container::get` opens a
-/// throwaway scope and builds one, which `Discoverable`'s table states outright.
-/// What it shares with a request-scoped provider is the fact the check actually
-/// reads: neither is ever placed in the singleton map, so the register-phase
-/// fixpoint never marks the consumer ready and drops it with everything
-/// downstream. Same silent drop, same boot error, and now the same coverage.
 #[tokio::test]
 async fn a_singleton_injecting_a_transient_provider_fails_the_boot_by_name() {
     let err = App::builder()
@@ -358,8 +332,6 @@ async fn a_singleton_injecting_a_transient_provider_fails_the_boot_by_name() {
     );
     assert!(msg.contains("PerResolution"), "names the dependency: {msg}");
 }
-
-// --- and the two directions that are legal stay legal ------------------------
 
 #[injectable]
 #[derive(Default)]
@@ -403,10 +375,6 @@ struct TransientOnScoped {
 ])]
 struct LegalScopeDirectionsModule;
 
-/// One level deep is about the *singleton*, not about the scope: a
-/// request-scoped provider resolves its own deps through the scope, so it may
-/// hold another request-scoped provider (sharing the request's instance) and a
-/// transient may hold either. Only the reverse is impossible.
 #[tokio::test]
 async fn a_request_scoped_provider_may_hold_singletons_and_its_own_kind() {
     App::builder()
@@ -416,9 +384,6 @@ async fn a_request_scoped_provider_may_hold_singletons_and_its_own_kind() {
         .expect("scoped→singleton, scoped→scoped and transient→scoped are all legal");
 }
 
-// Two providers of one module, each injecting the other by its concrete type:
-// every dependency is met, so only the register phase can see that none can be
-// built first.
 #[expect(
     dead_code,
     reason = "the dependency is declared for the container to resolve, never read"

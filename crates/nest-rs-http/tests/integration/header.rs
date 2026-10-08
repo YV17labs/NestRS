@@ -1,10 +1,5 @@
-//! `Header<T>` through a mounted route — the half `src/header.rs`'s unit tests
-//! cannot reach.
-//!
-//! Those drive `from_request` directly. These drive a real request through
-//! `#[routes]`, which is where the two things that actually break live: the
-//! extractor running in the wrapper's emitted order, and the rejection reaching
-//! the client as a status rather than a panic.
+//! `Header<T>` through a mounted route: the extractor in the wrapper's emitted
+//! order, and the rejection reaching the client as a status.
 
 use nest_rs_core::module;
 use nest_rs_http::{Header, Valid, controller, routes};
@@ -39,8 +34,7 @@ impl HeadersController {
         format!("{} {}", trace.request_id, trace.retry.unwrap_or_default())
     }
 
-    /// The same carrier every other extractor validates through, so a header
-    /// DTO gets edge validation without a second mechanism.
+    /// A header DTO validated through the same carrier as every extractor.
     #[get("/tenant")]
     async fn tenant(&self, tenant: Valid<Header<Tenant>>) -> String {
         tenant.into_inner().tenant
@@ -106,22 +100,16 @@ async fn a_header_dto_validates_through_the_shared_pipe_carrier() {
     short.assert_status(StatusCode::BAD_REQUEST);
 }
 
-/// A `#[serde(rename)]` naming something that is not a header name.
-///
-/// `http` implements `AsHeaderName for &str` by failing the lookup, so
-/// `HeaderMap::get` answers `None` — the same answer as "the caller did not send
-/// it". An `Option<_>` field bound `None` on every request forever, and a
-/// required one 400'd telling the caller to send a header no client can send.
-/// Neither points at the `rename`, which is where the mistake is.
+/// A `#[serde(rename)]` naming something that is not a header name, which
+/// `HeaderMap::get` would answer like an absent header.
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct BadName {
     #[serde(rename = "X Request Id")]
     request_id: Option<String>,
 }
 
-/// A flattened field. serde routes the whole struct through `deserialize_map`,
-/// whose keys are the lowercased names `HeaderMap` stores, and matches
-/// case-sensitively — so the wire name must be spelled lowercase here.
+/// A flattened field: serde matches the lowercased keys `HeaderMap` stores
+/// case-sensitively, so the wire name must be spelled lowercase here.
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct Flat {
     #[serde(rename = "x-request-id")]
@@ -176,8 +164,7 @@ async fn a_field_naming_something_that_is_not_a_header_is_refused() {
 #[tokio::test]
 async fn a_flattened_field_matches_its_header_in_lowercase() {
     let client = crate::boot::<EdgeModule>().await;
-    // Whatever case the client sends: `HeaderMap` stores it lowercased, which is
-    // the key the flattened field is matched against.
+    // `HeaderMap` stores whatever case the client sends lowercased.
     for sent in ["X-Request-Id", "x-request-id", "X-REQUEST-ID"] {
         let resp = client
             .get("/edge/flat")

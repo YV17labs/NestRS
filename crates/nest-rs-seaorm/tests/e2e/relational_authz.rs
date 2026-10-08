@@ -1,9 +1,5 @@
-//! Relational row-level scoping against live Postgres: an `Ability` rule
-//! predicated on a **parent** entity (`related`) filters reads and by-id writes
-//! on the child, and `access` still distinguishes Found/Denied/Missing. Uses
-//! synthetic `rel_container`/`rel_item` entities — the framework names no
-//! product type — created once and shared across the suite's processes, each
-//! test isolating itself with fresh UUIDs.
+//! Relational row-level scoping: an `Ability` rule predicated on a parent
+//! entity (`related`) filters reads and by-id writes on the child.
 
 use std::sync::Arc;
 
@@ -99,9 +95,6 @@ impl Updatable for ItemsService {
 
 impl Deletable for ItemsService {}
 
-/// Create the synthetic tables once, serialized across nextest processes on a
-/// Postgres advisory lock (each test gets its own process, so a bare
-/// `CREATE TABLE IF NOT EXISTS` would race the catalog).
 async fn setup_tables(conn: &DatabaseConnection) {
     crate::harness::setup_shared_table(
         conn,
@@ -149,8 +142,6 @@ fn items_in_org(org: Uuid) -> Arc<Ability> {
             c.eq(container::Column::OrgId, org)
         })
     });
-    // Update + Delete are scoped the same way, so a caller can only mutate rows
-    // whose parent container is in its org (DATA-S8).
     b.can(Action::Update, item::Entity).when(move |p| {
         p.related::<container::Entity, _>(item::Relation::Container, move |c| {
             c.eq(container::Column::OrgId, org)
@@ -222,10 +213,8 @@ async fn access_distinguishes_found_denied_and_missing() {
                 ),
                 "a cross-org item resolves to Denied, not Missing",
             );
-            // `Denied` and `Missing` reach the client as the same 404 — the row
-            // is hidden either way, deliberately. So the event is the only
-            // place the two are ever distinguishable, and it is what an
-            // incident query for cross-tenant probing actually reads.
+            // `Denied` and `Missing` are the same 404 to the client: the event
+            // alone tells them apart.
             let denial = logs.expect_one(nest_rs_seaorm::TARGET, "access denied");
             assert_eq!(denial.level, "warn");
             assert_eq!(denial.field("entity").as_deref(), Some("rel_item"));
@@ -282,10 +271,6 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
     .await;
 }
 
-// DATA-S8: `Repo::update` / `Repo::delete` scope by the ambient ability against
-// live Postgres — a caller cannot mutate or delete a row outside its scope even
-// with the row's model in hand (previously proven only by rendered-SQL units).
-
 #[tokio::test]
 async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
     let conn = crate::harness::connect().await;
@@ -298,8 +283,7 @@ async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
     seed_container(&conn, cont_b, org_b).await;
     seed_item(&conn, item_b, cont_b, "original").await;
 
-    // Load the cross-org row directly (bypassing the ability), then try to
-    // update it as an org_a caller — the scoped UPDATE must touch zero rows.
+    // Loaded bypassing the ability, so the caller holds a cross-org model.
     let model = item::Entity::find_by_id(item_b)
         .one(&conn)
         .await
@@ -325,7 +309,6 @@ async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
     })
     .await;
 
-    // The row is unchanged on disk — the denied update wrote nothing.
     let after = item::Entity::find_by_id(item_b)
         .one(&conn)
         .await
@@ -367,7 +350,6 @@ async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
     })
     .await;
 
-    // The row survives — the scoped DELETE affected zero rows.
     let survives = item::Entity::find_by_id(item_b)
         .one(&conn)
         .await
@@ -378,13 +360,8 @@ async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
     );
 }
 
-/// `list()` over-fetches by one and truncates at `LIST_CAP`, silently.
-///
-/// The caller gets a `Vec` of exactly the cap and no signal at all — no error,
-/// no flag, no marker on the last element. A "small, finite collection" that
-/// quietly grew past a thousand rows therefore serves a *wrong* answer that
-/// looks like a right one, and this `warn` is the only place that fact exists.
-/// It names the entity because the fix is per collection: paginate it.
+/// `list()` truncates at `LIST_CAP` with no signal to the caller, so a `warn`
+/// naming the entity is the only trace.
 #[tokio::test]
 async fn a_list_that_hits_the_hard_cap_says_so() {
     let conn = crate::harness::connect().await;
@@ -394,9 +371,7 @@ async fn a_list_that_hits_the_hard_cap_says_so() {
     let container = Uuid::now_v7();
     seed_container(&conn, container, org).await;
 
-    // One past the cap, in a single statement: the point is the truncation, not
-    // the seeding, and a thousand round-trips would make this the slowest test
-    // in the suite for no added coverage.
+    // One past the cap, in a single statement.
     conn.execute_unprepared(&format!(
         "INSERT INTO rel_item (id, container_id, label) \
          SELECT gen_random_uuid(), '{container}', 'row ' || g \

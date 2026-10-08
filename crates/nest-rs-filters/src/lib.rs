@@ -16,12 +16,6 @@
 //! it leaves every other error alone. Reach for `Filter` when the mapping is
 //! unconditional: a crate-wide envelope, a last-resort `500` shaper.
 //!
-//! The name is the Layer System's slot name, kept even though "filter" reads
-//! like selection in ordinary English: the five families (`Guard`, `Pipe`,
-//! `Interceptor`, `Filter`, `ExceptionFilter`) are one vocabulary, and it is
-//! the NestJS one. What matters is that this trait **only ever runs on the
-//! error path** — a successful response never reaches it.
-//!
 //! ## Defining a filter
 //!
 //! ```
@@ -66,10 +60,5 @@ pub use builder::AppBuilderFiltersExt;
 pub use ext::FilterExt;
 pub use filter::{Filter, FilterChain, FilterEndpoint, RequestSnapshot};
 pub use registry::{FilterSpec, FilterSpecs, filter};
-// Re-exported so a crate writing an `Filter` impl needs no direct
-// `async-trait` dependency of its own. `nest-rs-http`, `nest-rs-queue` and
-// `nest-rs-ws` already do this; the layer crates did not, so the one import a
-// reader needed most was the one no page could name — and the miss cascades
-// (without the attribute, every trait method reports a lifetime mismatch, so
-// the real cause is buried under four unrelated errors).
+// Re-exported so a `Filter` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;

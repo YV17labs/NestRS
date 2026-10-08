@@ -1,5 +1,5 @@
-//! CORS via `HttpTransport::cors`: a configured poem `Cors` middleware wraps the
-//! whole route tree, exercised end-to-end through the in-process harness.
+//! CORS via `HttpTransport::cors`: a configured poem `Cors` wraps the whole
+//! route tree.
 
 use nest_rs_core::module;
 use nest_rs_http::poem::http::Method;

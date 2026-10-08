@@ -17,10 +17,6 @@ mod update;
 
 /// Where a command reads the tree from: the explicit `-p` / `--path`, or the
 /// directory the developer stands in.
-///
-/// One spelling for every command that takes that flag — the fallback is the
-/// same decision each time, and four copies of it are four places a future
-/// `<PREFIX>_PROJECT` or a friendlier failure would have to be written.
 #[expect(
     clippy::expect_used,
     reason = "a command with no working directory has nothing to resolve a project against"

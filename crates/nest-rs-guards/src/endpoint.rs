@@ -36,9 +36,8 @@ where
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
         match self.guard.check_http(&mut req).await {
             Ok(()) => self.inner.call(req).await.map(IntoResponse::into_response),
-            // Through `deny_http`, not the bare converter: this site is the WS
-            // upgrade's gate, so skipping it left a connection-level denial
-            // invisible while its per-message twin logged at warn.
+            // Through `deny_http`: this is the WS upgrade's gate, and its denial
+            // must log like its per-message twin's.
             Err(denial) => Ok(deny_http(self.guard.name(), denial)),
         }
     }

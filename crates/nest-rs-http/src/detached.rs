@@ -1,32 +1,12 @@
-//! Work a self-mount runs off the connection that asked for it.
+//! Work a self-mount runs off the connection that asked for it — an rmcp
+//! operation, a DataLoader batch, an upgraded socket — which cutting the
+//! connection does not stop.
 //!
-//! The shutdown window closes connections, and an ordinary handler goes with
-//! its connection: poem drops the future where it waits. Some surfaces run work
-//! a connection only *carries*. rmcp runs every MCP operation on a task of its
-//! own, async-graphql runs every DataLoader batch on one, and a WebSocket is
-//! served on the task poem hands an upgraded connection to and stops tracking —
-//! so cutting the connection, or the transport returning, left that work
-//! running on, detached, through the shutdown hooks: writing after
-//! `OnModuleDestroy` had run, and filing `ok` for an answer nobody received.
-//!
-//! A self-mount that runs such work declares a [`DetachedWork`] on its
-//! [`HttpEndpointMeta`](crate::HttpEndpointMeta) and runs each unit through it.
-//! The transport then carries it down the same two instants as everything it
-//! serves:
-//!
-//! - **at the signal** [`going_away`](DetachedWork::going_away) resolves, and a
-//!   unit with no end of its own — a socket, a subscription — ends itself the
-//!   way its protocol ends one, while a unit still answering keeps going;
-//! - **until the window closes** the transport waits for the work to finish, as
-//!   it waits for a request still running;
-//! - **at the bound** what still runs is stopped — dropped where it waits — and
-//!   the transport waits [`SHUTDOWN_SETTLE_TIMEOUT`] at most, once for every
-//!   mount, for it to unwind, so nothing it carried is still running when the
-//!   transport returns.
-//!
-//! The settle is paid **once per transport**, however many mounts declare work:
-//! every mount's units are stopped together and waited for together, so the sum
-//! a grace period is sized against holds one settle whatever the app mounts.
+//! The transport carries it down with everything it serves:
+//! [`going_away`](DetachedWork::going_away) resolves at the signal, the work
+//! gets the window, and what still runs at the bound is dropped where it waits
+//! and given [`SHUTDOWN_SETTLE_TIMEOUT`] to unwind — once for every mount
+//! together.
 //!
 //! [`SHUTDOWN_SETTLE_TIMEOUT`]: nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
 
@@ -53,14 +33,8 @@ pub struct DetachedWork {
 impl DetachedWork {
     /// How long a socket the server ends — at the shutdown signal, or at a
     /// lifetime ceiling — gets to take what it is owed: the replies already
-    /// queued for it, and its Close frame.
-    ///
-    /// A peer reading its socket takes them in milliseconds. One that stopped
-    /// reading parks the write, and a ceiling is a security control with no
-    /// window behind it — so past this the socket is dropped rather than held
-    /// open by the peer it was ending. Five seconds: generous to a slow reader,
-    /// and well inside the default window, which bounds the same close at
-    /// shutdown anyway.
+    /// queued for it, and its Close frame. Past it the socket is dropped: a peer
+    /// that stopped reading would otherwise hold it open.
     pub const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
     /// A fresh set, not yet stopped.
@@ -71,11 +45,9 @@ impl DetachedWork {
     /// Run `work` until it settles or the transport stops it: `None` when it
     /// was stopped, and `work` was dropped where it waited.
     ///
-    /// **A stopped unit is never polled again**, even one woken in the same
-    /// instant. Stopping every mount at once drops units that wait on each
-    /// other — a GraphQL field waits on the DataLoader batch beside it — and a
-    /// unit polled after its partner was dropped meets a channel nobody will
-    /// answer, which async-graphql's loader unwraps.
+    /// **A stopped unit is never polled again** (the `biased` select): a unit
+    /// polled after its DataLoader partner was dropped meets a closed channel,
+    /// which async-graphql's loader unwraps.
     pub async fn run<F: Future>(&self, work: F) -> Option<F::Output> {
         let stop = self.stop.clone();
         self.running
@@ -89,13 +61,8 @@ impl DetachedWork {
             .await
     }
 
-    /// Resolves at the shutdown signal — when the transport carrying this work
-    /// stops accepting and its window opens.
-    ///
-    /// For a unit with no end of its own: a socket closes with RFC 6455's 1001
-    /// Going Away, a subscription completes, and the transport no longer waits
-    /// a whole window on something that was never going to finish. A unit
-    /// still answering has no use for it — it keeps going, inside the window.
+    /// Resolves at the shutdown signal, for a unit with no end of its own to
+    /// end itself (a socket's 1001 Going Away, a subscription's completion).
     pub fn going_away(&self) -> impl Future<Output = ()> + Send + use<> {
         self.going_away.clone().cancelled_owned()
     }
@@ -112,10 +79,8 @@ impl DetachedWork {
     }
 
     /// The transport's half of the way down, for every mount at once: let the
-    /// work finish until `bound` — the end of the shutdown window, `None` when
-    /// none was opened — then stop what still runs, wait
-    /// [`SHUTDOWN_SETTLE_TIMEOUT`] once for all of it, and say per mount what that
-    /// cut.
+    /// work finish until `bound`, then stop what still runs and wait
+    /// [`SHUTDOWN_SETTLE_TIMEOUT`] once for all of it.
     pub(crate) async fn stop_at(works: &[(String, DetachedWork)], bound: Option<Instant>) {
         for (_, work) in works {
             work.running.close();
@@ -205,8 +170,6 @@ mod tests {
         );
     }
 
-    /// The window is the work's, as it is a request's: a unit that finishes
-    /// before the bound is never stopped, and nothing is said about it.
     #[tokio::test(start_paused = true)]
     async fn a_unit_that_finishes_inside_the_window_is_never_stopped() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -233,8 +196,6 @@ mod tests {
         );
     }
 
-    /// The signal reaches the work before the bound does: a unit with no end
-    /// of its own ends itself then, and is never stopped.
     #[tokio::test]
     async fn going_away_resolves_at_the_signal_and_not_before() {
         let work = DetachedWork::new();
@@ -248,9 +209,6 @@ mod tests {
         );
     }
 
-    /// A unit that never unwinds — its task is never polled again, as when it
-    /// blocks its thread — is named at `error` once the settle bound is spent,
-    /// because it runs on through the shutdown hooks.
     #[tokio::test(start_paused = true)]
     async fn stopped_work_that_does_not_unwind_is_named_at_error() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -272,8 +230,6 @@ mod tests {
         );
     }
 
-    /// Two mounts whose units never unwind cost one settle between them, not
-    /// one each.
     #[tokio::test(start_paused = true)]
     async fn every_mount_is_stopped_and_waited_for_together() {
         let (first, second) = (DetachedWork::new(), DetachedWork::new());

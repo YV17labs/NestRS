@@ -1,7 +1,5 @@
-//! Covers `src/pipe.rs`: what every built-in `Pipe` that refuses client input
-//! says when it does. An edge renders a refusal as it is — an HTTP `400`, a WS
-//! frame and its line, a GraphQL or MCP error, a queue's dead-letter record and
-//! line — so a refusal names what was expected, never what was sent.
+//! Covers `src/pipe.rs`: every built-in `Pipe` that refuses client input names
+//! what it expected, never what it was sent.
 
 use std::str::FromStr;
 

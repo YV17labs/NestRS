@@ -10,32 +10,20 @@ use sea_orm::sea_query::{Condition, Expr};
 use crate::action::Action;
 use crate::predicate::Predicate;
 
-/// One place for the fail-closed masking warn, so every branch — HTTP, GraphQL,
-/// and the ambient [`Ability::mask`] — emits the identical queryable event
-/// (`target: "nest_rs::authz"`, same keys) instead of hand-copying it. A
-/// fail-closed branch that forgets to log is then the visible omission. Lives
-/// here (always compiled) rather than in `wire_mask` (gated behind the
-/// `http`/`graphql` transports) so the ambient `Ability::mask` can reach it in
-/// a feature-less build.
+/// The one fail-closed masking warn, for every edge and the ambient
+/// [`Ability::mask`]; here, always compiled, so a feature-less build reaches it.
 pub(crate) fn warn_mask_failure(
     entity: &'static str,
     action: Action,
     reason: &'static str,
     detail: &'static str,
-    // The edge's own two, folded in rather than filed as a second line: an edge
-    // that needs extra context on this event needs it *on* this event, and a
-    // sibling line about the same occurrence is the duplicate "one event, said
-    // once" forbids. `tracing` drops a `None`, so an edge with nothing to add
-    // passes nothing and the field is simply absent.
+    // The edge's own context, on this one event; `tracing` drops a `None`.
     transport: Option<&'static str>,
     event: Option<&str>,
-    // A serde failure over the subject's own values is rendered without them —
-    // `error_message` says a decode failure by where and what kind.
+    // Rendered by `error_message`, which never quotes the value serde refused.
     err: Option<&(dyn std::error::Error + 'static)>,
 ) {
-    // Two arms rather than one, because `tracing` fixes an event's fields at
-    // the macro: an absent `error` has to be a different event, and the whole
-    // point of this function is that it is the *only* place either is worded.
+    // Two arms: `tracing` fixes an event's fields at the macro.
     match err {
         Some(err) => tracing::warn!(
             target: crate::TARGET,
@@ -62,36 +50,16 @@ pub(crate) fn warn_mask_failure(
 }
 
 /// Why a mask fell closed, as a value an incident query groups on.
-///
-/// **`reason` is one value space across this crate**, and it was two: the gate's
-/// exits reported machine tokens (`no_class_grant`, `insufficient_scope`) while
-/// the masking exits reported whole sentences, so a query that grouped denials
-/// by `reason` returned tokens from one half and prose from the other, and
-/// `no_ambient_ability` — which [`gate::reason`](crate::gate::reason)'s own doc
-/// says "every fail-closed exit reports … the masking paths alike" — matched no
-/// mask at all. The sentence is still there; it moved to `detail`, where the
-/// throttler and the inert-host report already put theirs.
 pub(crate) mod mask_reason {
     /// Nothing installed an ability, so nothing decided what may be shown.
     ///
-    /// **Declared here and aliased by [`gate::reason`](crate::gate::reason)**,
-    /// not the other way round, and the direction is a compilation fact rather
-    /// than a preference: `gate` is gated behind the in-band transports while
-    /// this module is always compiled — for the same reason
-    /// [`warn_mask_failure`](super::warn_mask_failure) is, which its own doc
-    /// states. Aliasing the gated one made a feature-less build fail to find
-    /// `crate::gate`, and only the scaffold e2e — which compiles a real
-    /// generated workspace — could see it.
+    /// Declared here and aliased by [`gate::reason`](crate::gate::reason):
+    /// `gate` is feature-gated, this module is not.
     pub(crate) const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
     /// The value could not be turned into, or read back from, JSON.
     pub(crate) const NOT_SERIALIZABLE: &str = "not_serializable";
     /// The wire value and the entity model could not be reconciled, so the
     /// mask had no model to apply.
-    ///
-    /// Gated exactly like the `wire_mask` module that reaches it: a constant
-    /// nothing reads *in this build* is not the defect a constant nothing reads
-    /// at all is, but saying so with a `cfg` keeps dead-code detection working
-    /// for the ones that really would be.
     #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
     pub(crate) const IRRECONCILABLE: &str = "irreconcilable_wire_value";
     /// The response carried no content type, so it could not be classified as
@@ -99,10 +67,7 @@ pub(crate) mod mask_reason {
     /// to be missing.
     #[cfg(feature = "http")]
     pub(crate) const UNCLASSIFIED_BODY: &str = "unclassified_body";
-    // `field_not_granted` is deliberately **not** here: it is a *gate*'s verdict
-    // about a grant, not a mask's failure to run, and
-    // `gate::reason::FIELD_NOT_GRANTED` already owns it. A second constant for
-    // one value is the drift this module exists to remove.
+    // `field_not_granted` is a gate verdict, owned by `gate::reason::FIELD_NOT_GRANTED`.
 }
 
 /// Which fields of a subject may be read back in the response.
@@ -161,21 +126,10 @@ impl Ability {
     /// The scopes that would have granted `action` on `subject`, had this
     /// actor's credential carried them.
     ///
-    /// **Read this only after [`can_class`](Self::can_class) already said no.**
-    /// A withheld rule and a granted one can coexist — a narrow token may still
-    /// reach the subject by another rule — and in that case the operation is
-    /// allowed and there is nothing to ask for. Reading it as "the caller is
-    /// missing these scopes" without checking the gate first would report a
-    /// denial that never happened.
-    ///
-    /// Empty means the refusal was not about scope: the caller may not perform
-    /// this operation at all, and no wider token changes that.
+    /// Read it only after [`can_class`](Self::can_class) said no: a withheld rule
+    /// and a granted one can coexist. Empty means the refusal was not about scope.
     pub fn missing_scopes(&self, action: Action, subject: TypeId) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        // Widened over the same keys as `rules_for`: a `Manage` rule is the
-        // action wildcard, so a scope withheld there is equally the answer to
-        // "why can't I read this?". Encoding that widening twice is how the
-        // refusal comes to name the wrong scopes.
         for scope in keys_for(action, subject)
             .filter_map(|key| self.withheld.get(&key))
             .flatten()
@@ -195,20 +149,9 @@ impl Ability {
     /// [`AbilityFactory::define_visitor`](crate::AbilityFactory::define_visitor)
     /// — i.e. the caller is **anonymous**.
     ///
-    /// A grant is a grant on either branch, so the three enforcement layers
-    /// ignore this. It answers the *other* question, the one a transport whose
-    /// edge admits anonymous callers has to ask before running a gate: is there
-    /// a principal at all? On HTTP that is the route's own posture (a
-    /// non-`#[public]` route never reaches the visitor branch); on GraphQL,
-    /// where the single `/graphql` endpoint is `#[public]` and posture is
-    /// declared per operation, `graphql::authorize`
-    /// reads this so a `define_visitor` grant cannot satisfy an
-    /// `#[authorize(...)]` operation.
-    ///
-    /// Read it from a **guard** or from the gate a posture attribute emits, the
-    /// same rule [`can_class`](Self::can_class) follows — a check buried in a
-    /// service or a parameter type is an authorization decision outside the
-    /// three greppable sites.
+    /// The enforcement layers ignore it; a transport admitting anonymous callers
+    /// reads it so a `define_visitor` grant cannot satisfy an `#[authorize]`
+    /// operation. Read it from a guard or a posture attribute's gate only.
     pub fn is_visitor(&self) -> bool {
         self.visitor
     }
@@ -258,13 +201,7 @@ impl Ability {
 
     /// The single rule scan behind [`can`](Self::can),
     /// [`permitted_fields`](Self::permitted_fields) and
-    /// [`mask_many`](Self::mask_many) — both answers come from the same
-    /// predicates, so computing them together is one pass instead of two per
-    /// row (the masked-list path used to evaluate every predicate twice).
-    ///
-    /// `pub(crate)` for the same reason: a caller needing *both* answers about
-    /// one row asks once here rather than calling `can` and then
-    /// `permitted_fields`.
+    /// [`mask_many`](Self::mask_many): one pass yields both answers.
     pub(crate) fn evaluate<E: EntityTrait>(&self, action: Action, model: &E::Model) -> Verdict {
         let mut granted = false;
         let mut denied = false;
@@ -308,9 +245,7 @@ impl Ability {
     }
 
     /// Layer ③ — serialize a model and strip the fields this ability does not
-    /// permit for `action`. Returns the masked JSON object. Combined with the
-    /// query pre-filter this is defence in depth: the filter keeps the wrong
-    /// rows out of the result, the mask keeps the wrong fields out of the body.
+    /// permit for `action`.
     pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
     where
         E: EntityTrait,
@@ -319,10 +254,7 @@ impl Ability {
         self.mask_with::<E>(action, model, self.permitted_fields::<E>(action, model))
     }
 
-    /// [`mask`](Self::mask) with the field verdict already known — the seam
-    /// [`mask_many`](Self::mask_many) and the per-item subscription path use so
-    /// a row's rules are evaluated once for "may I see it?" and "which
-    /// columns?" together.
+    /// [`mask`](Self::mask) with the field verdict already known.
     pub(crate) fn mask_with<E>(
         &self,
         action: Action,
@@ -335,12 +267,7 @@ impl Ability {
     {
         let mut json = match serde_json::to_value(model) {
             Ok(json) => json,
-            // Practically unreachable for a SeaORM model, but fail *safe* (an
-            // empty body, never the unmasked model) and — unlike the previous
-            // silent `unwrap_or` — leave a queryable trace, matching the
-            // wire-mask paths. A hard fail-closed (500 / GraphQL error) would
-            // need `mask`'s signature to become `Result`, rippling through
-            // `mask_many` and both transports; logged `Null` is the surgical fix.
+            // Fail closed: an empty body, never the unmasked model.
             Err(err) => {
                 warn_mask_failure(
                     std::any::type_name::<E>(),
@@ -394,11 +321,6 @@ impl Ability {
 
 /// The rule-map keys an operation reads: the action itself, plus
 /// [`Action::Manage`] (the action wildcard) unless that *is* the action.
-///
-/// The single encoding of the wildcard's semantics — both the grant side
-/// ([`Ability::rules_for`]) and the refusal side ([`Ability::missing_scopes`])
-/// iterate it, so a change to the action lattice cannot widen one and not the
-/// other.
 fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
     let wildcard = (action != Action::Manage).then_some((Action::Manage, subject));
     std::iter::once((action, subject)).chain(wildcard)
@@ -411,11 +333,8 @@ pub(crate) struct Verdict {
     pub(crate) fields: FieldSet,
 }
 
-/// Recover a rule's typed predicate. The downcast cannot fail in practice —
-/// the rule was stored under `TypeId::of::<E>()`, so its predicate is a
-/// `Predicate<E>` — but this is a per-request authz path, so a mismatch fails
-/// **closed** at the call sites (deny / no grant) instead of panicking,
-/// mirroring `Predicate::to_condition`'s defense-in-depth posture.
+/// Recover a rule's typed predicate. A mismatch cannot happen (rules are keyed
+/// by `TypeId::of::<E>()`), and fails closed at the call sites, never panics.
 fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
     let predicate = rule.predicate.downcast_ref::<Predicate<E>>();
     if predicate.is_none() {
@@ -464,14 +383,7 @@ mod tests {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    /// A rule keyed under one subject carrying another subject's predicate.
-    ///
-    /// `AbilityBuilder` cannot produce this — it stores the predicate under the
-    /// same `TypeId` it built it for — which is exactly why the branch needs a
-    /// test: nothing else will ever exercise it, and what it decides is whether
-    /// a mismatch **denies** or reads as an unrestricted grant. The second
-    /// would turn a framework bug into a silent authorization bypass, so the
-    /// answer is `None` (no grant) and a line loud enough to find.
+    /// A rule keyed under one subject carrying another's — `AbilityBuilder` cannot build it.
     fn mismatched_rule() -> Rule {
         Rule {
             inverted: false,
@@ -507,8 +419,6 @@ mod tests {
 
     #[test]
     fn a_predicate_of_the_keyed_subject_is_recovered_in_silence() {
-        // The other direction: every rule in every ability goes through this,
-        // so a check reading the wrong thing would deny the whole app.
         let logs = nest_rs_testing::LogCapture::install();
         let rule = Rule {
             inverted: false,
@@ -524,9 +434,6 @@ mod tests {
         );
     }
 
-    /// A mask that could not reconcile the subject's values is said without
-    /// them: serde quoted the value it refused, and the value is the subject's
-    /// own data — the very thing a mask exists to guard.
     #[test]
     fn a_mask_failure_names_what_kind_of_value_it_found_never_the_value() {
         #[derive(Debug, serde::Deserialize)]

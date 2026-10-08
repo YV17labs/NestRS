@@ -14,11 +14,9 @@ pub(crate) fn ensure_decl(line: &str) -> Transform {
     ensure_lines(vec![line.to_string()])
 }
 
-/// Ensure several declaration lines are present in one pass — use this rather
-/// than multiple `edit`s on the same file (each `edit` re-reads the file from
-/// disk, so two would clobber each other). Each line is inserted after the
-/// last existing line sharing its leading keyword (`mod` with `mod`, `pub use`
-/// with `pub use`).
+/// Ensure several declaration lines are present in one pass — one `edit` per
+/// file, since two would clobber each other. Each line is inserted after the last
+/// existing line sharing its leading keyword.
 pub(crate) fn ensure_lines(new_lines: Vec<String>) -> Transform {
     let new_lines: Vec<String> = new_lines
         .into_iter()
@@ -48,10 +46,7 @@ pub(crate) fn ensure_lines(new_lines: Vec<String>) -> Transform {
 /// `#[module(imports = [ … ])]` block: `use <use_path>;` among the top-of-file
 /// `use` lines, and the bare `<ident>,` entry before the closing `]`.
 ///
-/// Takes a slice rather than one pair because a caller wiring two modules must
-/// land them in **one** transform: `Scaffold::apply` resolves every edit against
-/// the file on disk, so two edits of the same path would each start from the
-/// original and the second write would drop the first.
+/// A slice, so a caller wiring two modules lands them in **one** transform.
 pub(crate) fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
     let imports: Vec<(String, String)> = imports
         .iter()
@@ -103,11 +98,8 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
     changed
 }
 
-/// Turn on `#[expose(graphql)]` for an entity that does not carry it — what a
-/// port needs before a resolver can name its output type (the flag is what
-/// emits the async-graphql `SimpleObject`, the loaders and the relation
-/// resolvers; without it the generated resolver fails on an unsatisfied
-/// `OutputType` bound).
+/// Turn on `#[expose(graphql)]` for an entity that does not carry it, so a
+/// resolver can name it as its output type.
 ///
 /// Anchored on the **struct-level** attribute: the entity's own `#[expose(`
 /// starts a line at column 0, while every field-level one is indented.
@@ -115,9 +107,6 @@ pub(crate) fn ensure_expose_graphql() -> Transform {
     Box::new(move |content: &str| {
         let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
         let at = lines.iter().position(|l| l.starts_with("#[expose("))?;
-        // The attribute's own argument list, whether written on one line or
-        // spread over several — a field's `#[expose(...)]` is indented, so the
-        // scan stops before reaching one.
         let end = lines[at..]
             .iter()
             .position(|l| l.trim_end().ends_with(")]"))
@@ -219,7 +208,6 @@ mod tests {
         let idx_mod = out.find("pub mod http;").unwrap();
         let idx_use = out.find("pub use module::Foo;").unwrap();
         assert!(idx_mod < idx_use);
-        // re-running is a no-op
         assert!(ensure_decl("pub mod http;")(&out).is_none());
     }
 
@@ -235,7 +223,6 @@ mod tests {
         let entry = out.find("PostsHttpModule,").unwrap();
         let close = out.find("    ],").unwrap();
         assert!(entry < close);
-        // idempotent
         assert!(one()(&out).is_none());
     }
 
@@ -269,9 +256,6 @@ mod tests {
         assert!(ensure_expose_graphql()(src).is_none());
     }
 
-    // The reason this takes a slice: a caller wiring two modules gets one
-    // transform. Split across two `Scaffold::edit`s they would each resolve
-    // against the file on disk and the second write would drop the first.
     #[test]
     fn ensure_module_imports_lands_every_pair_in_one_pass() {
         let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";

@@ -1,8 +1,5 @@
-//! `Creatable::create` is atomic with its scope re-check on **every**
-//! executor shape. The WS message path (and any bare `with_executor` on the
-//! pool) has no ambient request transaction, so `create` opens a local one —
-//! an out-of-scope insert must surface `RecordNotInserted` and leave zero
-//! rows behind.
+//! `Creatable::create` is atomic with its scope re-check on every executor
+//! shape, the bare pool (the WS message path) included.
 
 use std::sync::Arc;
 
@@ -83,8 +80,7 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
     let id = Uuid::now_v7();
     let logs = nest_rs_testing::LogCapture::install();
 
-    // The WS-message executor shape: the shared pool, request-tagged, with an
-    // ambient ability — and no surrounding transaction to roll anything back.
+    // The WS-message shape: the pool, with no surrounding transaction.
     let result = with_request_executor(
         Executor::Pool(conn.clone()),
         with_ability(org_scoped_ability(1), async {
@@ -93,11 +89,8 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
     )
     .await;
 
-    // `RecordNotInserted` is what the caller sees, and it says nothing about
-    // *why* — a unique-constraint clash reads identically. The event is the only
-    // place the attempted write is recorded as an authorization failure rather
-    // than a storage one, which is what makes a caller writing outside its
-    // tenant queryable at all.
+    // `RecordNotInserted` reads like a unique clash: this event alone records
+    // the write as an authorization failure.
     let denied = logs.expect_one(
         nest_rs_seaorm::TARGET,
         "access denied — row outside the caller's scope",
@@ -123,25 +116,13 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
     );
 }
 
-/// The `SAVEPOINT` this create opens is a statement like any other, and its
-/// failure poisons the boundary like any other — which it did not, because
-/// `txn_ref().await?.begin()` applies `?` before the flag is ever consulted.
-///
-/// The consequence is the silent write loss the flag exists to refuse, on the
-/// one path it could not see: a job or handler that swallows this `DbErr` and
-/// returns `Ok` settles a boundary reporting `NoTransaction` — "nothing to
-/// settle" — about work that was meant to land and did not.
-///
-/// Forced by exhausting the pool rather than by faking an error: a one
-/// connection pool with that connection held, and the create as the boundary's
-/// **first** data-layer touch, so the acquire this create issues is the one that
-/// times out. That is the shape a restarted database or a saturated pool
-/// actually presents.
+/// A `SAVEPOINT` that cannot open poisons the boundary, so a swallowed `DbErr`
+/// never settles as `NoTransaction`. The create must be the boundary's first
+/// data-layer touch, so its acquire is the one that times out.
 #[tokio::test]
 async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
     let held = db().await;
     let starved = crate::harness::starved_pool().await;
-    // Its one connection, taken and kept for the length of the test.
     let hog = starved.begin().await.expect("the only connection is held");
 
     let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved, "test"));
@@ -162,7 +143,7 @@ async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
         "the create cannot open its SAVEPOINT on an exhausted pool, got {result:?}",
     );
 
-    // Swallowed, exactly as a real handler would — `let _ = svc.create(..)`.
+    // Swallowed, as `let _ = svc.create(..)` would.
     let outcome = lazy.finalize(true).await;
     assert!(
         matches!(
@@ -202,27 +183,14 @@ async fn in_scope_create_over_the_pool_executor_commits() {
         .expect("the committed row is visible outside the local transaction");
     assert_eq!(persisted.id, id);
 
-    // Cleanup so reruns stay idempotent.
     gadget::Entity::delete_by_id(id)
         .exec(&conn)
         .await
         .expect("cleanup");
 }
 
-// --- when the SAVEPOINT cannot be rolled back --------------------------------
-//
-// `create` opens its own SAVEPOINT (or local transaction) so an out-of-scope
-// insert can be undone without taking the caller's request transaction with it.
-// If that rollback cannot be issued, the error the caller gets back is the
-// insert's — which is the right one to return, and which says nothing about the
-// undo having failed. So the boundary is left in a state nothing reported, and
-// this line is the only record of it.
-//
-// Reached with a trigger that terminates its own backend: the insert fails
-// *and* the session it would be rolled back on is gone. Contrived as a schema,
-// exact as a situation — it is what a `pg_terminate_backend` from an operator,
-// or a database restart, does to a request mid-insert.
-
+// A trigger terminates its own backend: the insert fails and the session its
+// SAVEPOINT would roll back on is gone, as a `pg_terminate_backend` leaves it.
 mod fragile {
     use sea_orm::entity::prelude::*;
 
@@ -267,10 +235,8 @@ impl Creatable for FragileService {
 #[tokio::test]
 async fn a_create_whose_undo_cannot_be_issued_says_so() {
     let logs = nest_rs_testing::LogCapture::install();
-    // Through the shared fixture, not raw DDL: nextest gives each test its own
-    // process, and `CREATE TABLE` races the Postgres catalog between them —
-    // which is the advisory lock's whole reason for existing. Two concurrent
-    // runs of this test failed 6/6 on `pg_type_typname_nsp_index` before.
+    // Through the shared fixture: nextest's per-test processes race raw
+    // `CREATE TABLE` on the Postgres catalog.
     let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(
         &conn,

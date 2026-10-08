@@ -76,7 +76,6 @@ mod tests {
         ConfigService::with_vars("storage", vars.iter().copied())
     }
 
-    /// An authority is read for an `https://` endpoint, replacing the base.
     #[test]
     fn an_authority_is_read_for_an_encrypted_endpoint() {
         let authority = nest_rs_testing::TestAuthority::new();
@@ -96,9 +95,6 @@ mod tests {
         );
     }
 
-    /// An authority beside a plaintext endpoint would go unused, and one
-    /// holding no certificate would trust none: both are refused, naming the
-    /// variable and never quoting what it holds.
     #[test]
     fn an_authority_that_cannot_be_used_is_refused_naming_its_variable() {
         let authority = nest_rs_testing::TestAuthority::new();

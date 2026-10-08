@@ -16,11 +16,8 @@
 //! `App::builder().use_pipes_global([pipe::<StripUnknownFields>()])`. The running
 //! example sits on `nest_rs_guards::pipe`.
 //!
-//! The asymmetry with the other layer families is structural, not an
-//! oversight: `nest-rs-guards` owns the route shaper that *executes* the pipe
-//! pool, and it already depends on this crate for [`GlobalPipe`] — so hosting
-//! `use_pipes_global` here would close a dependency cycle. The pipe trait lives
-//! with the pipes; the registration lives with the dispatch that runs it.
+//! `nest-rs-guards` runs the pipe pool and depends on this crate, so registration
+//! living here would close a dependency cycle.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

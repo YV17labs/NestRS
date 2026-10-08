@@ -1,12 +1,5 @@
-//! What a failing message tells the client, and what it tells the operator — the
-//! WS half of the seam MCP established.
-//!
-//! A message's reply is built from whatever the handler returned, and its *error*
-//! frame from whatever the handler's error type prints. `Display` is the wrong
-//! default for that: a `DbErr` carries SQL, column names and sometimes row values.
-//! The framework's own `ServiceError::Db` is `#[error("database error")]` so
-//! nothing leaks today, but a feature's own error type has no such discipline
-//! imposed on it — and a WS client is exactly as untrusted as a language model.
+//! What a failing message tells the client, and what it tells the operator: an
+//! error frame prints the handler's error, and a `DbErr`'s `Display` carries SQL.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -63,15 +56,10 @@ use crate::envelope::WsError;
 /// Turn a failure the client must not read into one it may.
 ///
 /// Implemented for every `Result` whose error converts into a boxed error, so
-/// the whole cause chain reaches the operator's line — boxed by
-/// [`nest_rs_core::boxed_error`], so an `anyhow::Error` keeps every link and a
-/// decode failure inside it is said without its value. It covers a `DbErr`, a
-/// storage error, an `anyhow::Error` and a feature's own type without any of
-/// them having to know WebSockets exist.
+/// the whole cause chain reaches the operator's line.
 ///
-/// The twin traits on MCP and GraphQL are deliberately separate types rather than
-/// one trait generic over the error: the output is what lets `.opaque()?` infer
-/// from the enclosing handler's return type. See `nest_rs_core::opaque`.
+/// Separate from the MCP and GraphQL twins: the output type is what lets
+/// `.opaque()?` infer from the handler's return type (see `nest_rs_core::opaque`).
 pub trait Opaque<T> {
     /// Log the real error for the operator, hand the client an opaque one.
     fn opaque(self) -> Result<T, WsError>;
@@ -100,7 +88,6 @@ mod tests {
 
     use super::*;
 
-    /// An error whose `Display` carries exactly what must not ship.
     #[derive(Debug)]
     struct Leaky;
 
@@ -139,14 +126,6 @@ mod tests {
         assert_eq!(out.ok(), Some(7));
     }
 
-    /// The other half of the same contract, and the half nobody read.
-    ///
-    /// Withholding the cause from the client is only safe because it is
-    /// recorded somewhere else — here, an error frame on a long-lived socket. If this event ever stopped
-    /// carrying `error`, every `.opaque()?` on this edge would turn a real
-    /// failure into a blank refusal with no trace at all, and the
-    /// nothing-leaks test next door would still pass: it only asserts what is
-    /// *absent* from the wire.
     #[test]
     #[expect(
         clippy::let_underscore_must_use,

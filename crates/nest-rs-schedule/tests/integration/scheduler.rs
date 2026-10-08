@@ -1,6 +1,5 @@
-//! Drive `Scheduler` end-to-end against a hand-built container. Metadata is
-//! attached directly (`attach_meta` only needs a `'static` host type), so the
-//! test needs neither `#[scheduled]` nor a module tree.
+//! Drive `Scheduler` end-to-end against a hand-built container, with metadata
+//! attached directly.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -102,8 +101,8 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
     let cancel = CancellationToken::new();
     let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
 
-    // ~2.2s covers ~10 interval ticks, the one-shot at 300ms, and crosses a
-    // whole-second boundary for the cron.
+    // Covers ~10 interval ticks, the one-shot at 300ms, and a whole-second
+    // boundary for the cron.
     tokio::time::sleep(Duration::from_millis(2200)).await;
     cancel.cancel();
     serving
@@ -140,9 +139,6 @@ fn tick_survivor(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// B-SCHED: a panicking job must not silently and permanently stop its own
-/// schedule, nor take a co-scheduled job's task down with it. Both jobs fire
-/// repeatedly and `serve` returns `Ok` rather than aborting.
 #[tokio::test(start_paused = true)]
 async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
     struct PanicHost;
@@ -222,12 +218,6 @@ fn tick_stuck(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A tick still running when shutdown is asked for gets the shutdown hooks'
-/// budget and no more: `serve` stops it at `Scheduler::SHUTDOWN_TIMEOUT` —
-/// dropped where it waits, its `schedule.tick` line filed `cancelled` in the
-/// tick's own trace, the job named in one `warn` — and returns. Before, it joined
-/// the tick to its end, so one that never returned held the way down until the
-/// orchestrator's kill.
 #[tokio::test(start_paused = true)]
 async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancelled() {
     struct StuckHost;
@@ -353,9 +343,7 @@ async fn invalid_cron_expression_fails_configure() {
     );
 }
 
-// A bound `JobContext` wraps each tick — the seam a database module uses to
-// install a pool executor. The stub here installs an ambient marker the job
-// observes.
+// A `JobContext` stub installing an ambient marker the job observes.
 tokio::task_local! {
     static MARKER: u8;
 }
@@ -427,9 +415,7 @@ async fn jobs_run_inside_the_bound_job_context() {
 }
 
 // A context that cannot honour what the job did — the shape a failed commit
-// takes. A schedule has no retry budget and no dead-letter, so the
-// classification it carries changes nothing here; what must not happen is the
-// attempt passing for a success.
+// takes.
 struct UnsettleableContext(nest_rs_worker::Unhonoured);
 
 impl JobContext for UnsettleableContext {
@@ -455,12 +441,8 @@ fn tick_panic_naming_itself(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A contained panic's only trace is this field, so the field has to carry what
-/// the job said. `a_panicking_job_keeps_firing_and_does_not_stop_others` asserts
-/// the schedule survives and is blind to the sentence — which is how
-/// `panic_message(&panic)` shipped, unsizing the `Box` itself into the trait
-/// object and answering `<non-string panic payload>` to every operator query.
-/// Single-thread runtime for the reason above: `LogCapture` is thread-local.
+/// A contained panic's only trace is this field, so it carries what the job
+/// said. Single-thread runtime: `LogCapture` is thread-local.
 #[tokio::test(start_paused = true)]
 async fn a_panicking_jobs_own_message_reaches_the_operator() {
     struct NamedPanicHost;
@@ -512,9 +494,6 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
          borrowed box downcasts to: {event:?}",
     );
 
-    // And the tick still files the family's line, saying what ran and how it
-    // ended — a clock has no caller, so this is the only place a tick reports
-    // itself at all.
     let ran = logs
         .find(
             nest_rs_core::operation_log::TARGET,
@@ -541,10 +520,6 @@ fn tick_wrapped_failure(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A tick's failure is usually wrapped — a context line over the error that says
-/// what actually went wrong — and the event carried the wrapper alone, which
-/// names nothing an operator can act on. It carries the sentence and every cause
-/// beneath it, as a queue job's failure does.
 #[tokio::test(start_paused = true)]
 async fn a_failed_tick_names_every_cause_beneath_its_error() {
     struct WrappedFailureHost;
@@ -610,8 +585,6 @@ fn tick_decode_failure(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A decode failure a tick returns is said without its value, whatever wraps
-/// it: the line an operator reads is no place for the record the tick read.
 #[tokio::test(start_paused = true)]
 async fn a_failed_tick_says_a_decode_failure_without_its_value() {
     struct DecodingHost;
@@ -662,10 +635,8 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
     );
 }
 
-/// The job body returns `Ok` and its writes never landed, so the schedule has
-/// to say so — its only outcome being the event an operator reads. Single-thread
-/// runtime on purpose: `LogCapture` is thread-local, and the scheduler's spawned
-/// task shares this thread here.
+/// Single-thread runtime: `LogCapture` is thread-local, and the scheduler's
+/// spawned task shares this thread here.
 #[tokio::test(start_paused = true)]
 async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
     struct UnsettleableHost;
@@ -740,10 +711,8 @@ fn tick_hung(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A tick awaiting a call that never answers held its job for as long as the
-/// process lived: a replica runs one occurrence at a time, so every later one
-/// was skipped. Cut at its `timeout`, it is reported failed naming the
-/// deadline, and the next occurrence fires.
+/// A replica runs one occurrence at a time, so a tick that never returns would
+/// skip every later one.
 #[tokio::test(start_paused = true)]
 async fn a_tick_past_its_timeout_is_cut_reported_and_the_schedule_goes_on() {
     struct HungHost;
@@ -806,22 +775,13 @@ fn tick_never(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A schedule that is valid, parses, and will never come round again — a
-/// seven-field croner pattern pinned to a year in the past is the plainest
-/// form, and a February 30th or a `2024-02-29`-shaped one-off is the shape a
-/// real app reaches it by.
-///
-/// Nothing else reports it. `configure` succeeds (the pattern is well-formed),
-/// `serve` returns `Ok`, and the job's task parks on the cancel token exactly
-/// like a job waiting for a real occurrence — so a schedule that will never fire
-/// again is indistinguishable, from the outside, from one that has not fired
-/// yet. This line is the difference.
+/// A schedule that is valid and will never come round again: from the outside,
+/// indistinguishable from one that has not fired yet but for this line.
 #[tokio::test(start_paused = true)]
 async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() {
     struct NeverHost;
 
-    // Global: the job loop runs on a spawned task, so a thread-local capture
-    // installed here would never see the event it exists to read.
+    // Global: the job loop runs on a spawned task.
     let logs = LogCapture::install_global();
 
     let container = crate::hermetic()
@@ -866,8 +826,6 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
         "cron job has no future occurrence; it will not run again",
     );
     assert_eq!(event.level, "warn");
-    // Provider *and* method: an app with several `#[cron]` methods on one host
-    // learns nothing from the host's name alone.
     assert_eq!(event.field("provider").as_deref(), Some("NeverHost"));
     assert_eq!(event.field("method").as_deref(), Some("never"));
 }
@@ -904,8 +862,7 @@ impl OccurrenceLock for SharedLock {
     }
 }
 
-/// The crate this suite is compiled as — the first level of every identity a
-/// job it declares derives.
+/// The crate this suite is compiled as.
 fn crate_name() -> &'static str {
     module_path!()
         .split_once("::")
@@ -930,17 +887,11 @@ fn tick_once(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// D1: two replicas of one app, each with its own scheduler, reach every
-/// occurrence — and exactly one of them fires it. Before `replicas = "one"`
-/// both fired, which is what an `#[every]` that enqueues work did on every
-/// replica of the demo's API.
 #[tokio::test(start_paused = true)]
 async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
     struct OnceHost;
     const PERIOD: Duration = Duration::from_millis(200);
-    // The identity the meta declares and the token the lock is claimed under are
-    // the same two words, so the assertion below reads them rather than retyping
-    // them: a copied spelling is what let this test pass while the token changed.
+    // Read by the assertion below rather than retyped.
     const PROVIDER: &str = "OnceHost";
     const METHOD: &str = "once";
 
@@ -1028,16 +979,9 @@ fn tick_overlapping(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// `replicas = "one"` is once per occurrence, and nothing about runs: a run
-/// outlasting its period holds nothing, so an idle replica claims and fires the
-/// next occurrence while it goes on, and the runs overlap across replicas — the
-/// contract the page and the port state. Every occurrence is still fired once,
-/// on the replica that claimed it; and the replica whose run overran the ones
-/// its peers fired hears that they were claimed elsewhere.
-///
-/// A run lease fails this test: holding the job on every replica, it keeps the
-/// runs apart — and every way it cannot be renewed, released or answered holds
-/// the job for its whole length, the claimer included.
+/// Once per occurrence, and nothing about runs: a run outlasting its period
+/// overlaps the next on another replica. A run lease fails this test
+/// (`.claude/decisions/schedule-run-lease.md`).
 #[tokio::test(start_paused = true)]
 async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() {
     struct OverlapHost;
@@ -1126,8 +1070,6 @@ fn tick_cron_once(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A cron occurrence is the instant its expression names, which every replica
-/// whose clock agrees reaches — so that instant is the key.
 #[tokio::test(start_paused = true)]
 async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() {
     struct CronOnceHost;
@@ -1177,8 +1119,6 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
     }
 }
 
-/// The earliest site that sees both facts refuses: which job declared one
-/// replica is the code's, and whether a lock is bound is the app's imports.
 #[tokio::test]
 async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
     struct LonelyHost;
@@ -1209,8 +1149,6 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
     );
 }
 
-/// A one-shot has no occurrence the replicas share; a job registered by hand
-/// cannot declare one any more than `#[after]` can.
 #[tokio::test]
 async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
     struct OneShotHost;
@@ -1238,8 +1176,8 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
     assert!(err.to_string().contains("OneShotHost::warmup"), "{err}");
 }
 
-/// A zero interval has no next tick: the timer under it panics. The decorator
-/// refuses it at compile time; a job registered by hand is refused at boot.
+/// A zero interval panics the timer; a job registered by hand is refused at
+/// boot.
 #[tokio::test]
 async fn a_zero_interval_fails_the_boot() {
     struct ZeroHost;
@@ -1265,10 +1203,6 @@ async fn a_zero_interval_fails_the_boot() {
     assert!(err.to_string().contains("ZeroHost::spin"), "{err}");
 }
 
-/// The floor under an interval is the duration grammar's millisecond, whatever
-/// the job's `replicas`: finer than that the timer does not resolve, and the
-/// refusal says one sentence for both, which it could only say truthfully once
-/// both were held to it.
 #[tokio::test]
 async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
     struct SubMillisecondHost;
@@ -1303,10 +1237,8 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
     }
 }
 
-/// A failure with a cause beneath it — the shape a real lock's has, where the
-/// wrapper names the operation and only the cause names what refused. A bare
-/// string here would pass whether or not the scheduler renders the chain, which
-/// is how a report naming half the failure survived a green suite.
+/// A failure with a cause beneath it, so the assertion sees whether the
+/// scheduler renders the chain.
 fn unreachable_lock() -> OccurrenceLockError {
     OccurrenceLockError::new(
         anyhow::Error::new(std::io::Error::other("connection refused by redis:6379"))
@@ -1340,9 +1272,6 @@ fn tick_unclaimed(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// Fail closed. A claim nobody can answer skips the occurrence: firing it
-/// unclaimed would fire it on every replica, which is the defect the key
-/// exists to remove. The skip is a `warn` an operator can find, never silence.
 /// Single-thread runtime: `LogCapture` is thread-local.
 #[tokio::test(start_paused = true)]
 async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
@@ -1404,9 +1333,8 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
         "the event carries the failure and the cause beneath it: {event:?}",
     );
 
-    // Filtered by provider: this container seeds no reachable set, so the
-    // scheduler also registers every `#[scheduled]` method linked into the
-    // binary, and each of those files a boot line of its own.
+    // Filtered by provider: with no reachable set seeded, every `#[scheduled]`
+    // method linked into the binary files a boot line too.
     let boot = logs
         .find("nest_rs::schedule", "scheduled job (interval)")
         .into_iter()
@@ -1455,11 +1383,6 @@ fn tick_slowly_claimed(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A claim that blocks past the period overruns occurrences, and the loop
-/// reaches the latest of them late rather than firing them all in a burst,
-/// counting the ones before it. It used to move past them in silence: only the
-/// occurrence the claim was blocked on was ever named, one per connect budget,
-/// and every other was lost unreported.
 #[tokio::test(start_paused = true)]
 async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
     struct OverrunHost;
@@ -1544,10 +1467,6 @@ fn tick_noop(_: &Container) -> RunFuture<'_> {
     Box::pin(async { Ok(()) })
 }
 
-/// Two jobs under one `Provider::method` — two `Tasks` structs in two modules,
-/// each with a `sweep` — file lines nobody can tell apart, since the lines carry
-/// the provider and the method. Refused at boot, every origin named once — two
-/// jobs declared at one site are that site, counted.
 #[tokio::test]
 async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
     struct FirstTasks;
@@ -1610,11 +1529,8 @@ async fn boot_pinning(key: &'static str, replicas: Replicas) -> Result<(), Strin
         .map_err(|refusal| refusal.to_string())
 }
 
-/// `#[every]` and `#[cron]` check a `key` literal at compile time, and the boot
-/// checks the one a `CronJobMeta` attached by hand carries: two copies of one
-/// rule, run here over one corpus, so the two cannot disagree on a key — and
-/// both refusals state one fact, the decorator's being the boot's with the site
-/// in front.
+/// The boot's copy of the decorator's `key` rule, run over the decorator's
+/// corpus so the two cannot disagree.
 #[tokio::test]
 async fn the_decorators_copy_of_the_key_rule_agrees_with_the_boots() {
     const CORPUS: [&str; 13] = [
@@ -1652,9 +1568,6 @@ async fn the_decorators_copy_of_the_key_rule_agrees_with_the_boots() {
     }
 }
 
-/// A key pins what a job firing once claims under, so a job attached by hand
-/// that pins one and fires on every replica fails the boot, as the decorator
-/// refuses it at compile time, with the same fact.
 #[tokio::test]
 async fn a_key_on_a_job_firing_on_every_replica_fails_the_boot() {
     let refusal = boot_pinning("billing::PinnedTasks::sweep", Replicas::Each)
@@ -1670,10 +1583,6 @@ async fn a_key_on_a_job_firing_on_every_replica_fails_the_boot() {
     );
 }
 
-/// Two jobs firing once under one identity — one pinning the identity another
-/// derives — would take turns at its occurrences. The boot refuses them, naming
-/// the identity and each job; the same key on a job firing on every replica is
-/// refused for its own reason, never as a collision.
 #[tokio::test]
 async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
     struct InvoiceTasks;
@@ -1719,10 +1628,6 @@ async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
     );
 }
 
-/// The boot line of a job firing once names the identity it claims under,
-/// spelled as `key = "…"` takes it — so pinning a job before a rename is copying
-/// what its boot said — and a job firing on every replica, which claims nothing,
-/// names none.
 #[tokio::test(start_paused = true)]
 async fn a_job_firing_once_names_its_identity_at_boot() {
     struct OnceTasks;
@@ -1798,9 +1703,6 @@ impl OccurrenceLock for PeerFiredLock {
     }
 }
 
-/// On a job firing once, an overrun is no loss when a peer claimed every
-/// occurrence this replica overran: that is a `debug`, and the `warn` stays for
-/// the occurrences nobody fired.
 #[tokio::test(start_paused = true)]
 async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_skipped() {
     struct PeerFiredHost;
@@ -1869,11 +1771,6 @@ fn tick_a_little_longer_than_its_period(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A job firing once whose run lasts a little longer than its period reaches the
-/// occurrence that fell due meanwhile as soon as the run ends, late, rather than
-/// waiting for the one after the clock and counting it skipped: it runs back to
-/// back, as a job firing on every replica does, and not at every other
-/// occurrence. So its first three runs claim three consecutive occurrences.
 #[tokio::test(start_paused = true)]
 async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_than_skipped() {
     struct BackToBackHost;
@@ -1966,11 +1863,6 @@ fn tick_stalled_cron(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A replica stalled past several occurrences — paused by its platform, its
-/// runtime starved — fires the latest one due as it wakes, late, and moves past
-/// the ones before it. It used to fire the stale occurrence its timer slept for,
-/// and the latest right after it. So no fire of a job firing once, on an interval
-/// or on a cron schedule, comes a period or more after its occurrence.
 #[tokio::test(start_paused = true)]
 async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late() {
     struct StalledIntervalHost;
@@ -2070,12 +1962,8 @@ fn tick_longer_than_its_period(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A job firing on every replica overruns its own ticks when a run outlasts its
-/// period. The timer fires the first overrun tick late and skips the rest rather
-/// than bursting, and those it skips are said the way a job firing once says it —
-/// where they passed in silence. With a 700 ms run every 200 ms, the ticks due at
-/// 200 and 400 fire, the second one late, and 600 and 800 are skipped before the
-/// one due at 1000 fires.
+/// With a 700 ms run every 200 ms, the ticks due at 200 and 400 fire, the second
+/// late, and 600 and 800 are skipped before the one due at 1000 fires.
 #[tokio::test(start_paused = true)]
 async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud() {
     struct LongRunHost;
@@ -2144,11 +2032,8 @@ fn tick_slightly_longer_than_its_period(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A run a few milliseconds over its period fires every tick late, and skips
-/// none until the lateness adds up to a whole period — dozens of ticks past this
-/// half second — so it files no skip: it warned on every tick, counting the late
-/// one as skipped. The clock is paused so the lateness is the run's alone: on a
-/// loaded machine the executor's own delay added up to a period and filed one.
+/// The clock is paused so the lateness is the run's alone: a loaded executor's
+/// own delay would add up to a period.
 #[tokio::test(start_paused = true)]
 async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
     struct SlightlyLongHost;
@@ -2246,14 +2131,7 @@ impl OccurrenceLock for RecordingLock {
     }
 }
 
-/// The token the claim is made under and the token the overrun check asks about
-/// are **the same shape**, because they are the same key in a store.
-///
-/// Nothing asserted this, and that is why it broke: the token was built with a
-/// `format!` at each of the two sites, one was edited, and the lock then answered
-/// "unclaimed" for an occurrence it had just granted — which fires a job every
-/// replica already fired. Every other lock double in this suite ignores its
-/// argument, so the suite stayed green through it.
+/// Every other lock double in this suite ignores its argument.
 #[tokio::test(start_paused = true)]
 async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
     struct RecordedHost;
@@ -2298,8 +2176,6 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
         "a stalled claim overruns, so the overrun check ran: {asked:?}"
     );
 
-    // One identity at both sites — the declaring crate, the provider and the
-    // method, a level each — and the instant last.
     let identity = format!("{}:{PROVIDER}:{METHOD}:", crate_name());
     for token in claimed.iter().chain(&asked) {
         let instant = token
@@ -2312,15 +2188,8 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
     }
 }
 
-/// Every instant of a job firing once is either claimed or counted. The count is
-/// taken where the next instant is chosen, so a slow claim, a long run and the
-/// report itself cannot move the loop past an occurrence without naming it; the
-/// report was timed from before it ran, and lost what fell due while it did.
-///
-/// Counted means counted under any of the report's heads. Most are `skipped`
-/// here, since this lock answers that nobody claimed them — but the report in
-/// flight when shutdown is asked for is cut short, and its instants are counted
-/// `unanswered`, which is still every one of them named once.
+/// Counted under any of the report's heads: the report cut short at shutdown
+/// counts its instants `unanswered`.
 #[tokio::test(start_paused = true)]
 async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
     struct StalledHost;
@@ -2417,9 +2286,6 @@ impl OccurrenceLock for UnanswerableLock {
     }
 }
 
-/// Past the hundred overrun occurrences a report asks about, the rest are counted
-/// unchecked, and the ones the lock could not answer about are counted unanswered
-/// — neither is called skipped, nor fired elsewhere.
 #[tokio::test(start_paused = true)]
 async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unchecked() {
     struct UnanswerableHost;
@@ -2483,9 +2349,6 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             .is_some_and(|n| n >= 100),
         "a 1.1 s claim over a 5 ms period overruns about 220: {event:?}",
     );
-    // `unanswered` says how many and never why, so the report owes the cause
-    // once — named for the whole report rather than once per occurrence asked,
-    // the way a panic answering already is.
     let why = logs
         .find(
             "nest_rs::schedule",
@@ -2531,10 +2394,6 @@ fn tick_behind_a_panicking_lock(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// A lock that panicked while claiming ended the job's loop for good, with
-/// nothing said. The occurrence is skipped now with an `error` carrying the panic
-/// under the field every contained panic is filed under, and the job claims its
-/// next one.
 /// Single-thread runtime: `LogCapture` is thread-local.
 #[tokio::test(start_paused = true)]
 async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
@@ -2608,9 +2467,6 @@ fn tick_panicking_before_its_future(_: &Container) -> RunFuture<'_> {
     panic!("boom before the future");
 }
 
-/// A run function that panicked before handing back its future escaped the catch
-/// around the fire, and its job never ran again, with nothing said. It is caught
-/// as a panicking tick now, and fired again at the next occurrence.
 #[tokio::test(start_paused = true)]
 async fn a_run_panicking_before_its_future_keeps_its_schedule() {
     struct EarlyPanicHost;
@@ -2683,9 +2539,6 @@ fn tick_behind_an_unwritable_lock(_: &Container) -> RunFuture<'_> {
     Box::pin(async { Ok(()) })
 }
 
-/// A job whose loop panics is named at `error` and runs no more, and a schedule
-/// whose every job so ended keeps serving until shutdown, as one with no job does:
-/// returning early ended an app whose only transport it was.
 /// Single-thread runtime: `LogCapture` is thread-local.
 #[tokio::test(start_paused = true)]
 async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
@@ -2761,13 +2614,11 @@ impl OccurrenceLock for HungLock {
 
 struct HungHost;
 
-/// Serve one job firing once across replicas over a [`HungLock`], wait until
-/// its first claim is in flight, ask for shutdown, and return how long `serve`
-/// took to return after that.
+/// How long `serve` took to return after shutdown, with a claim in flight.
 ///
 /// Measured on the runtime's clock, which a paused test moves only when every
-/// task is waiting on a timer: a loop still waiting on its claim shows up as the
-/// time to that claim's stale threshold, and a loop that let go shows up as none.
+/// task waits on a timer: a loop still waiting on its claim shows up as the time
+/// to that claim's stale threshold, and a loop that let go shows up as none.
 async fn shut_down_while_a_claim_hangs(
     method: &'static str,
     trigger: Trigger,
@@ -2807,10 +2658,6 @@ async fn shut_down_while_a_claim_hangs(
     asked.elapsed()
 }
 
-/// What a shutdown that let go of a hung claim leaves behind: one `warn` naming
-/// the job and the occurrence it was claiming, and no word of staleness — the
-/// claim was abandoned because the replica is leaving, not because it waited out
-/// its occurrence.
 fn assert_abandoned_once_at_shutdown(logs: &LogCapture, method: &str) {
     let abandoned = logs.expect_one(
         "nest_rs::schedule",
@@ -2840,12 +2687,6 @@ fn tick_hung_interval(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// Shutdown is bounded by the loops' own teardown, never by a lock. A claim
-/// the lock never answers was awaited until its occurrence went stale — the
-/// hold less the clock skew, most of a minute for an interval job — and `serve`
-/// returns only once every loop has, so the whole scheduler's shutdown waited
-/// on it. It now lets go the moment shutdown is asked for, says so once, and
-/// fires nothing.
 #[tokio::test(start_paused = true)]
 async fn shutdown_lets_go_of_an_interval_claim_its_lock_never_answers() {
     let logs = LogCapture::install();
@@ -2879,10 +2720,8 @@ fn tick_hung_cron(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// The case the bound was worst at: a cron job's claim holds for the gap to its
-/// next occurrence, so its stale threshold — the only thing that ended a hung
-/// claim — was most of a day away for a daily job, and the scheduler's shutdown
-/// with it.
+/// A cron hold runs to the gap to its next occurrence: most of a day for a daily
+/// job.
 #[tokio::test(start_paused = true)]
 async fn shutdown_lets_go_of_a_daily_cron_claim_its_lock_never_answers() {
     let logs = LogCapture::install();

@@ -163,11 +163,8 @@ fn added_lines(old: &str, new: &str) -> Vec<String> {
 impl Report {
     /// The tense to announce this report in — `verb("Created", "Would create")`.
     ///
-    /// Read off the report rather than off the caller's own `dry_run` flag,
-    /// because the two are one fact and only the commit knows it: a command
-    /// that got the flag right here and wrong there would print "Created"
-    /// directly above [`print`](Self::print)'s "Dry run — no files written.",
-    /// which reads as a bug in the tool.
+    /// Read off the report rather than the caller's `dry_run` flag: only the commit
+    /// knows which it was.
     pub(crate) fn verb(&self, past: &'static str, conditional: &'static str) -> &'static str {
         if self.dry_run { conditional } else { past }
     }
@@ -245,7 +242,6 @@ mod tests {
 
         let err = s.apply(false).unwrap_err();
         assert!(matches!(err, CliError::AlreadyExists(_)));
-        // nothing partially written
         assert!(!dir.path().join("new.txt").exists());
         assert_eq!(fs::read_to_string(&existing).unwrap(), "keep");
     }

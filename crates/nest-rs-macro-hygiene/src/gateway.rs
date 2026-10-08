@@ -1,22 +1,15 @@
-//! `#[gateway]` + `#[use_guards]` + `#[messages]` — exercises the guard-layer
-//! emission (`::nest_rs_ws::tracing`, part of the M1 regression), the message
-//! dispatch table, and the versioned mount (`::nest_rs_ws::nest_rs_http::
-//! version_path`, which a use site declaring only the umbrella must never have
-//! to name).
+//! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
+//! the message dispatch table and the versioned mount.
 
 use nest_rs::core::{Layer, injectable};
 use nest_rs::guards::{Denial, Guard, HttpGuard, async_trait};
 use nest_rs::http::poem::Request as HttpRequest;
 use nest_rs::ws::{gateway, messages};
 
-/// Bound on the gateway *struct*, so it runs on the upgrade — an HTTP `GET` —
-/// and the attestation it owes is [`HttpGuard`], reachable through the umbrella
-/// like every other path this crate proves.
+/// Bound on the gateway struct, so it runs on the upgrade and owes [`HttpGuard`].
 ///
-/// It overrides `check_http` rather than inheriting the default, and that is not
-/// decoration: an empty `impl Guard for X {}` beside an `impl HttpGuard` is an
-/// attestation that lies, which is exactly what this crate's trybuild snapshots
-/// exist to refuse. The witness must not ship the shape it witnesses against.
+/// It overrides `check_http`: an empty `impl Guard` beside `impl HttpGuard` is
+/// the lying attestation this crate's trybuild snapshots refuse.
 #[injectable]
 pub struct HygieneWsGuard;
 
@@ -31,26 +24,23 @@ impl Guard for HygieneWsGuard {
 
 impl HttpGuard for HygieneWsGuard {}
 
-/// Minimal gateway consumer, guarded so the `#[use_guards]` wrap is emitted.
+/// Guarded, so the `#[use_guards]` wrap is emitted.
 #[gateway(path = "/hygiene")]
 #[use_guards(HygieneWsGuard)]
 pub struct HygieneGateway;
 
 #[messages]
 impl HygieneGateway {
-    /// Payload-less, reply-less handler — the smallest legal shape.
     #[subscribe_message("hygiene.ping")]
     #[public]
     async fn ping(&self) {}
 
-    /// A synchronous handler is called without an `.await`.
     #[subscribe_message("hygiene.sync")]
     #[public]
     fn sync(&self) -> String {
         "sync".into()
     }
 
-    /// The class gate, against the entity [`crate::entity`] declares.
     #[subscribe_message("hygiene.steady")]
     #[public]
     fn steady(&self) -> Result<String, crate::never::Never> {
@@ -64,12 +54,10 @@ impl HygieneGateway {
         Ok(0)
     }
 
-    /// A synchronous connection hook, likewise.
     #[on_connect]
     fn connected(&self) {}
 
-    /// A message compiled out takes its dispatch arm, its chain and its guard
-    /// with it.
+    /// A message compiled out takes its dispatch arm, chain and guard with it.
     #[cfg(any())]
     #[subscribe_message("hygiene.gone")]
     #[public]
@@ -81,9 +69,8 @@ impl HygieneGateway {
         crate::does_not_exist::answer(data)
     }
 
-    /// One event, and one hook, declared again under a condition that excludes
-    /// the first: at most one of each is compiled, so each is still dispatched
-    /// to one method.
+    /// A duplicate event and hook under an excluding condition are not a
+    /// duplicate dispatch.
     #[cfg(any())]
     #[subscribe_message("hygiene.ping")]
     #[public]
@@ -94,9 +81,7 @@ impl HygieneGateway {
     fn connected_elsewhere(&self) {}
 }
 
-/// The versioned mount. `version_path` lives in `nest-rs-http`, which this crate
-/// does not declare — the expansion reaches it through the umbrella, so a
-/// gateway that versions its address still costs the developer one dependency.
+/// The versioned mount reaches `nest-rs-http`'s `version_path` through the umbrella.
 #[gateway(path = "/hygiene", version = "1")]
 pub struct HygieneVersionedGateway;
 

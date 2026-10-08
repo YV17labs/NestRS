@@ -1,16 +1,14 @@
 use std::time::Duration;
 
-/// `Copy` so static inventory entries can ship a `Trigger` directly without a
-/// boxed allocation.
+/// When a scheduled job fires.
 #[derive(Clone, Copy)]
 pub enum Trigger {
     /// First run one interval in (matches `@Interval`).
     Interval(Duration),
     /// Fire exactly once, this long after boot (matches `@Timeout` / `#[after]`).
     Timeout(Duration),
-    /// `expr` is a 5/6/7-field croner pattern; `tz` is an optional IANA name
-    /// (UTC when `None`). Both parsed at `Scheduler` configure, so a bad value
-    /// fails boot.
+    /// A 5/6/7-field croner pattern in an optional IANA timezone, both parsed
+    /// at boot.
     Cron {
         /// The croner pattern to match against wall-clock time.
         expr: &'static str,
@@ -23,9 +21,8 @@ pub enum Trigger {
 /// a defined second.
 pub struct CronExpression;
 
-/// Declares each preset as an associated constant of [`CronExpression`] and,
-/// under test, names every one in `PRESETS` — so a preset cannot be added
-/// without the suite seeing it and asking for its pinned instants.
+/// Declares each preset on [`CronExpression`] and, under test, names every one
+/// in `PRESETS`, so a new preset fails the suite until it is pinned.
 macro_rules! presets {
     ($($(#[$doc:meta])* $name:ident = $expr:literal;)+) => {
         impl CronExpression {
@@ -93,27 +90,14 @@ mod tests {
     use croner::Cron;
     use std::str::FromStr;
 
-    /// One row per preset: the constant's *name*, so a failure names what a
-    /// reader greps for, and the instants it must fire at.
     macro_rules! pinned {
         ($($name:ident => [$($at:literal),+ $(,)?]),+ $(,)?) => {
             &[$((stringify!($name), CronExpression::$name, &[$($at),+] as &[&str])),+]
         };
     }
 
-    /// Every preset, pinned to the instants it actually fires at.
-    ///
-    /// Asserting that each one *parses* and has *a* next occurrence — all this
-    /// suite used to do — cannot see a preset change meaning, and that is what
-    /// a cron library's major release moves. Eight deliberately wrong tables
-    /// passed the old assertion: `EVERY_WEEKEND` pointing at Monday and
-    /// Tuesday, `EVERY_WEEK` at Wednesday, `EVERY_WEEKDAY` at the weekend,
-    /// `EVERY_QUARTER` every fourth month.
-    ///
-    /// The start is fixed and in UTC, so no daylight-saving rule is in play —
-    /// DST behaviour belongs to the scheduler, not to this table. Second 45 of
-    /// minute 23 of hour 14 aligns with no preset's period, so nothing passes
-    /// by landing on a boundary it started from.
+    /// UTC, so no daylight-saving rule is in play, and aligned with no preset's
+    /// period, so nothing passes by landing on the boundary it started from.
     const START: &str = "2026-03-11T14:23:45Z";
     const PINNED: &[(&str, &str, &[&str])] = pinned![
         EVERY_SECOND => ["2026-03-11T14:23:46Z", "2026-03-11T14:23:47Z", "2026-03-11T14:23:48Z"],
@@ -141,7 +125,6 @@ mod tests {
         EVERY_YEAR => ["2027-01-01T00:00:00Z", "2028-01-01T00:00:00Z", "2029-01-01T00:00:00Z"],
     ];
 
-    /// The prose on each constant, checked against what croner actually does.
     #[test]
     fn every_preset_fires_when_its_documentation_says_it_does() {
         let start: DateTime<Utc> = START.parse().expect("the start instant parses");
@@ -173,8 +156,6 @@ mod tests {
         );
     }
 
-    /// [`PINNED`] says *every* preset, and `presets!` lists every one it
-    /// declares, so a preset added without a row fails here by name.
     #[test]
     fn the_pinned_table_covers_every_preset() {
         let unpinned: Vec<&str> = super::PRESETS

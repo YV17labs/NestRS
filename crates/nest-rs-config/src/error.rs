@@ -10,12 +10,10 @@ use validator::{ValidationErrors, ValidationErrorsKind};
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ConfigError {
-    /// Names the offending variable so the misconfig is obvious at boot.
+    /// A value refused, naming the offending variable.
     ///
-    /// Built only through [`ConfigError::parse`], which says the message
-    /// without any value a decoder quoted in it — so a reason handed over
-    /// whole, a serde or TOML error included, cannot carry a secret into the
-    /// boot error.
+    /// Built only through [`ConfigError::parse`], which strips any value a
+    /// decoder quoted in the message.
     #[error("invalid value for {var}: {message}")]
     #[non_exhaustive]
     Parse {
@@ -26,11 +24,8 @@ pub enum ConfigError {
     },
     /// A structured value that did not decode as its type.
     ///
-    /// Carries [`DecodeError`], never serde's own sentence: that one quotes the
-    /// value it refused, and a structured value is where a deployment writes
-    /// records with credentials in them — an OAuth client list carries each
-    /// client's secret. So the refusal says where the value failed, what kind of
-    /// value it found and what it expected, whichever spelling supplied it.
+    /// Carries [`DecodeError`], never serde's own sentence, which quotes the
+    /// value it refused.
     #[error("invalid value for {var}: {source}")]
     Decode {
         /// The variable that supplied the value — `<KEY>` or `<KEY>_FILE`.
@@ -41,8 +36,7 @@ pub enum ConfigError {
     },
     /// A duration's variable — its key ends in `_SECS` or `_MS` — asked of a
     /// [`ConfigService`](crate::ConfigService) reader, which holds a value to no
-    /// range. A defect in the config's `from_env`, refused at the first boot
-    /// that reads it, whatever the deployment set.
+    /// range — a defect in the config's `from_env`.
     #[error(
         "{var} is a duration, and a duration is read through `DurationBounds`, which holds it \
          to a floor and a ceiling and names its unit — never through a `ConfigService` reader"
@@ -53,11 +47,8 @@ pub enum ConfigError {
     },
     /// A loaded config failed `validator::Validate`.
     ///
-    /// Renders the **namespace** and one line per offending field. The
-    /// namespace is what disambiguates which config failed when several are
-    /// loaded, and rendering `validator`'s own `Debug` payload instead put a
-    /// raw `[{"min": Number(1), "value": String("")}]` — the submitted value
-    /// included — into an operator-facing line.
+    /// Renders the **namespace** and one line per offending field, never
+    /// `validator`'s `Debug` payload, which holds the submitted value.
     #[error(
         "configuration validation failed for '{namespace}'\n{}",
         render(errors)
@@ -65,26 +56,12 @@ pub enum ConfigError {
     Validation {
         /// The `#[config(namespace = "…")]` of the config that failed.
         namespace: &'static str,
-        /// The field-level failures. Deliberately **not** `#[source]`: the
-        /// rendered message already lists them, and a `Display` chain would
-        /// print `validator`'s raw payload underneath the curated list.
+        /// The field-level failures. Not `#[source]`: a `Display` chain would
+        /// print `validator`'s raw payload, submitted value included.
         errors: ValidationErrors,
     },
-    /// Two config types read one environment variable.
-    ///
-    /// `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space, and a
-    /// namespace is read off the declaring file's path, so two types may well
-    /// meet under one prefix — a registry and the members it discovers, a
-    /// config and a sub-struct it delegates to. What may not be shared is a
-    /// **variable**: two types reading one name means
-    /// a deployment setting it configures whichever happens to read it, both
-    /// silently, and what the operator sees is "the value I set did nothing".
-    ///
-    /// Raised at boot, from the resolved name rather than from the key: a key is
-    /// a literal in a position nothing can enumerate — read through a `const`,
-    /// through an inherent sub-struct's `from_env`, or built at the call site —
-    /// so the only place the full name is knowable is where it is actually
-    /// asked for.
+    /// Two config types read one environment variable, raised at boot from the
+    /// resolved name.
     #[error(
         "`{var}` is read by two configuration types — `{owner}` and `{claimant}`. \
          A `<PREFIX>_<DOMAIN>__<KEY>` variable belongs to one type: setting it would \
@@ -99,15 +76,8 @@ pub enum ConfigError {
         /// The type that claimed it second.
         claimant: &'static str,
     },
-    /// Two configuration types declare one namespace.
-    ///
-    /// A namespace is read off the declaring file's path as the type's own name
-    /// is, so from a variable a reader finds the one type that parses it. Two
-    /// types under one namespace break that, and the unclaimed-variable report
-    /// with it: its key check runs once a config of the namespace has been
-    /// read, and the other type's keys were then reported as read by nothing on
-    /// a deployment that set them correctly. Raised at the read of either type,
-    /// whichever comes first.
+    /// Two configuration types declare one namespace, raised at the read of
+    /// either type, whichever comes first.
     #[error(
         "the namespace `{namespace}` is declared by {} configuration types — {}. A namespace \
          belongs to one type, so that a variable under it names the type that reads it: give \
@@ -123,9 +93,8 @@ pub enum ConfigError {
     },
     /// A `<KEY>_FILE` variable names a file that could not be read.
     ///
-    /// The variable's value is never carried: an operator who pastes key
-    /// material where a path belongs would otherwise see it printed, and no
-    /// test of the value's shape tells a path from a headerless base64 key.
+    /// The variable's value is never carried: it may be key material pasted
+    /// where a path belongs.
     #[error("could not read the file named by {var}")]
     File {
         /// The `<PREFIX>_<DOMAIN>__<KEY>_FILE` variable naming the file.
@@ -139,11 +108,8 @@ pub enum ConfigError {
 impl ConfigError {
     /// Build a [`Parse`](Self::Parse) error naming the variable and the reason.
     ///
-    /// The one sink every refusal of a value reaches, so it is where a quoted
-    /// value is removed: a line pointing into the text a parser read — the
-    /// `1 | token = "…"` excerpt a TOML error opens with — is dropped, and a
-    /// sentence in one of serde's quoting shapes is said without its value, as
-    /// [`DecodeError::redact`] says it, whichever format worded it.
+    /// A parser's source excerpt (`1 | token = "…"`) is dropped from `message`,
+    /// and a serde-quoted value removed, as [`DecodeError::redact`] does.
     pub fn parse(var: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Parse {
             var: var.into(),
@@ -167,8 +133,7 @@ fn redacted(message: &str) -> String {
 }
 
 /// A line of a source excerpt — `1 | key = "…"`, or the gutter `  |  ^^^`
-/// under it — which a parser prints to point into the text it read, and which
-/// therefore repeats that text verbatim.
+/// under it — which repeats the parsed text verbatim.
 fn is_source_excerpt(line: &str) -> bool {
     line.trim_start()
         .trim_start_matches(|c: char| c.is_ascii_digit())
@@ -179,11 +144,8 @@ fn is_source_excerpt(line: &str) -> bool {
 /// One `  - field: rule` line per failure, deepest field path flattened into a
 /// dotted name.
 ///
-/// A rule's parameters are never said: `value` is the rejected input, `must_match`
-/// carries the other field's under `other`, and a bound is an expression that can
-/// read another field — any of them would put a secret in every log, shell
-/// history and CI transcript that captures the line. Same posture as
-/// `nest_rs_pipes`' wire rendering.
+/// A rule's parameters are never said: `value` is the rejected input,
+/// `must_match`'s `other` another field's, and a bound can read another field.
 fn render(errors: &ValidationErrors) -> String {
     let mut out = String::new();
     render_into(&mut out, errors, "");
@@ -239,9 +201,6 @@ mod tests {
         ConfigError::validation(namespace, errors).to_string()
     }
 
-    // A11 / G11: the message dropped the namespace — the part that says *which*
-    // config failed when several are loaded — and leaked `validator`'s raw
-    // debug payload, including the rejected value, into an operator-facing line.
     #[test]
     fn a_validation_failure_names_its_namespace_and_lists_the_fields() {
         let text = rendered(
@@ -359,9 +318,6 @@ mod tests {
         );
 
         assert!(text.contains("\n  - page_size: range"), "{text}");
-        // The rejected input would land in every log and CI transcript that
-        // captures the line, and a bound is an expression that can read another
-        // field, so neither is said.
         assert!(
             !text.contains("900"),
             "the submitted value must not be echoed: {text}",

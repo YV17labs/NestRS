@@ -1,20 +1,12 @@
 //! Every error a GraphQL response carries, said without a decode failure's
 //! value.
 //!
-//! A GraphQL error's `message` is the client's to read, and async-graphql builds
-//! it from whatever the failure displays: a resolver's `?` on a serde or anyhow
-//! error goes through its `From<T: Display>`, and its own `Json<T>` scalar
-//! coerces an argument with serde and reports `Failed to parse "JSON": <serde's
-//! sentence>`. serde's sentence quotes the value — a variable the client sent, or
-//! a record the resolver read — so the edge says each message the way every
-//! other edge says a reply ([`DecodeError::redact`]).
+//! async-graphql builds an error's `message` from the failure's `Display`, and
+//! serde's sentence quotes the value; each message is said through
+//! [`DecodeError::redact`].
 //!
-//! An [`Executor`] wrapper rather than an async-graphql extension: an extension
-//! is entered on every field of every request, and this has nothing to do until
-//! a response carries an error. The mount wraps the schema once, which puts
-//! the POST path and the WebSocket path behind it alike, and
-//! [`compose_schema`](crate::compose_schema) — the executor a subscriber's
-//! witness drives — wraps it the same way.
+//! An [`Executor`] wrapper rather than an extension, which would be entered on
+//! every field of every request.
 
 use std::sync::Arc;
 
@@ -23,9 +15,8 @@ use async_graphql::futures_util::stream::BoxStream;
 use async_graphql::{Data, Executor, Request, Response, ServerError};
 use nest_rs_core::DecodeError;
 
-/// The schema, answering with every error message redacted. A batch is
-/// executed request by request through [`execute`](Executor::execute), the
-/// trait's own default, so it is redacted the same way.
+/// The schema, answering with every error message redacted; a batch goes
+/// through [`execute`](Executor::execute), the trait's default.
 #[derive(Clone)]
 pub(crate) struct Redacted<E>(pub(crate) E);
 
@@ -51,10 +42,8 @@ fn redacted(mut response: Response) -> Response {
     response
 }
 
-/// One error's message, redacted against its source when async-graphql kept one
-/// the framework can read as an error: serde's own, or an anyhow chain. Any
-/// other source is `dyn Any` to the framework, and the message is read by
-/// serde's wording alone.
+/// One error's message, redacted against its source when it is serde's or an
+/// anyhow chain; any other source is read by serde's wording alone.
 fn redact(error: &mut ServerError) {
     let source = error.source.as_deref();
     let cause: Option<&(dyn std::error::Error + 'static)> = source

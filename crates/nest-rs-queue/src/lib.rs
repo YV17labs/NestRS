@@ -22,10 +22,8 @@
 //! 1. **Declare the backend once**: a `const` [`QueueBackend`] carrying the
 //!    backend's name (its `messaging.system`) and the [`Capabilities`] it honours.
 //!    Retries, one transaction per attempt and per-method concurrency are not
-//!    capabilities, because no backend may refuse them — and none is yours to
-//!    keep: the port counts the retry budget and times its backoff, the worker
-//!    holds each method's permits, and its `JobContext` owns the transaction.
-//!    See [`Capability`].
+//!    capabilities and not yours to keep: the port and its worker own them. See
+//!    [`Capability`].
 //! 2. **File jobs**: implement [`JobProducer`] — `backend` returns the constant,
 //!    `enqueue` stores sealed [`Envelope`]s, each carrying the [`JobId`] the port
 //!    minted, which is the job's key everywhere the backend keeps something about
@@ -68,11 +66,6 @@
 
 /// This crate's span target — job registration, attempts, dead-letters and the
 /// reason each failed.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from.
 pub const TARGET: &str = "nest_rs::queue";
 
 mod backend;
@@ -98,17 +91,10 @@ mod queue_name;
 pub mod unit;
 mod worker;
 
-/// What one attempt at a job is, run by [`QueueWorker`]. Not a driver's seam —
-/// a backend implements [`JobConsumer`] — and hidden: public only so this
+/// What one attempt at a job is, run by [`QueueWorker`]; public only so this
 /// crate's suite drives an attempt without a worker.
 #[doc(hidden)]
 pub mod consume;
-// The wire envelope a job travels in, sealed and opened by this crate alone. A
-// private module with its type re-exported flat, like every other type here:
-// `seal` and `open` are `pub(crate)`, so the module path reached nothing a
-// caller may call and only offered `Envelope` and `WIRE_FORMAT_VERSION` a second
-// spelling. `unit` stays `pub mod` because its principal export is a constant,
-// read as `unit::JOB`.
 mod envelope;
 
 pub use backend::{BACKEND_REMEDY, BACKEND_TIMEOUT, QueueBackend};
@@ -118,9 +104,7 @@ pub use config::QueueConfig;
 pub use consume::{NEWER_RELEASE_PATIENCE, NEWER_RELEASE_WAIT, STALL_LIMIT};
 pub use consumer::{Ask, BoundConsumer, JobConsumer, LeaseHold, Prepared, Received};
 pub use delivery::Delivery;
-// `CheckpointCell` is the type of a `pub` field on the exported `HandlerContext`,
-// so it is nameable whether or not it is re-exported — and unnameable is the
-// worse of the two. Hidden beside its peers, never shown.
+// The type of a `pub` field on `HandlerContext`, so it stays nameable.
 #[doc(hidden)]
 pub use checkpoint::CheckpointCell;
 pub use destination::Destination;
@@ -141,24 +125,19 @@ pub use queue::Queue;
 pub use queue_name::QueueName;
 pub use worker::{QueueWorker, lease_fits_renewal};
 
-// Re-export `async_trait` so backends implement the async traits this crate
-// defines without depending on it directly.
+// Backends implement this crate's async traits without depending on it.
 pub use async_trait::async_trait;
 
-// `#[processor]`-generated code names `::nest_rs_queue::serde_json::*`, so this
-// crate re-exports it — keeping the macro free of any dependency the call site
-// would have to declare.
+// `#[processor]` expansions name `::nest_rs_queue::serde_json`.
 #[doc(hidden)]
 pub use serde_json;
 
-// Re-exported for `#[processor]`-generated code, which runs every handler inside
-// the ambient `JobContext` a worker transport installs — so writing a processor
-// never requires naming `nest-rs-worker` in the call site's manifest.
+// `#[processor]` expansions name `::nest_rs_queue::nest_rs_worker`.
 #[doc(hidden)]
 pub use nest_rs_worker;
 
-/// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
-/// here so a payload crossing this transport needs no `serde` of its own.
+/// The wire-DTO shorthand, so a payload crossing this transport needs no `serde`
+/// of its own.
 pub use nest_rs_core::input;
 
 /// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
@@ -199,10 +178,9 @@ pub use nest_rs_core::input;
 pub use nest_rs_queue_macros::processor;
 
 /// Stamp a unit struct with a queue's compile-time identity — its wire name and
-/// the `Job` payload it carries — by implementing [`Queue`]. Lives beside the
-/// payload at the feature port; the producer (`queue.push(Q, job, None)`) and
-/// the consumer (`#[process(queue = Q)]`) both name the type, so a typo'd name or
-/// a mismatched payload is a compile error.
+/// the `Job` payload it carries — by implementing [`Queue`]. The producer
+/// (`queue.push(Q, job, None)`) and the consumer (`#[process(queue = Q)]`) both
+/// name the type, so a typo'd name or a mismatched payload is a compile error.
 ///
 /// ```
 /// # use std::any::TypeId;

@@ -1,9 +1,5 @@
-//! Covers `src/module.rs` — the pool `SeaOrmModule` opens declares its budget,
-//! read off the pool itself, so the boot holds it under the net of a guard
-//! whose strategy injects the pool: a pool waiting as long as the
-//! authentication guard would turn a dry pool into a denial that names
-//! neither. Without the binding that installs `Repo`'s executor
-//! (`database/module.rs`), code that does not inject the pool never reaches it.
+//! Covers `src/module.rs`: the pool declares its budget, so the boot holds it
+//! under the net of a guard whose strategy injects the pool.
 
 use std::sync::Arc;
 use std::time::Duration;

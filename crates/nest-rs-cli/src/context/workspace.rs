@@ -16,14 +16,10 @@ const NESTRS_WORKSPACE_MARKERS: &[&str] = &["crates/*", "apps/*"];
 pub(super) const DEFAULT_PORT_BASE: u16 = 3000;
 
 /// The framework's own env-var prefix, and what a project gets unless the
-/// environment names another. Kept as a literal rather than borrowed from
-/// `nest-rs-core`: the CLI depends on no framework crate, so that
-/// `cargo install nest-rs-cli` stays independent of the version a project pins.
+/// environment names another — a literal, since the CLI links no framework crate.
 pub(crate) const DEFAULT_ENV_PREFIX: &str = "NESTRS";
 
-/// The variable the prefix is read from — the one name no prefix can rename,
-/// which is why it is spelled here (`nest_rs_core::EnvPrefix::VAR` is the same
-/// literal, for the same reason).
+/// The variable the prefix is read from — the one name no prefix can rename.
 pub(crate) const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
 
 #[derive(Debug, Clone)]
@@ -91,8 +87,8 @@ impl NestrsWorkspace {
         self.migrations_root().join("lib.rs")
     }
 
-    /// The migration crate's `migrator.rs` (the `MigratorTrait` vec — regenerated
-    /// from the `lib.rs` module list so both registrations always agree).
+    /// The migration crate's `migrator.rs` (the `MigratorTrait` vec, regenerated
+    /// from the `lib.rs` module list).
     pub(crate) fn migrations_migrator(&self) -> PathBuf {
         self.migrations_root().join("migrator.rs")
     }
@@ -111,8 +107,7 @@ impl NestrsWorkspace {
 /// scaffold ([`crate::version::framework_req`]).
 ///
 /// `None` covers both "no `nest-rs` entry" and an entry carrying no version (a
-/// `path` dependency in a contributor's tree): neither is a requirement to
-/// report, and inventing one would be worse than saying nothing.
+/// `path` dependency).
 pub(crate) fn framework_pin(manifest_dir: &Path) -> CliResult<Option<String>> {
     let Some(doc) = read_manifest(manifest_dir)? else {
         return Ok(None);
@@ -203,12 +198,7 @@ fn read_metadata(workspace: &toml_edit::Table) -> Metadata {
 }
 
 /// Where the CLI's idea of the prefix comes from — the same environment the app
-/// will read, so the two cannot disagree about a project they both see.
-///
-/// There is deliberately no project file to fall back on: a second source is
-/// how a rename half-lands, and `doctor` reporting `ACME` from a manifest while
-/// the deployed process resolves `NESTRS` is precisely the failure the single
-/// variable exists to remove.
+/// will read; there is no project file to fall back on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) enum EnvPrefixSource {
     /// Nothing names one; every variable is built from `NESTRS`.
@@ -216,9 +206,8 @@ pub(crate) enum EnvPrefixSource {
     Unset,
     /// The environment names it, and it is usable.
     Environment(String),
-    /// The environment names something the *app* would abort on, so the CLI
-    /// must not quietly build names from the default and look correct. Carries
-    /// the validator's sentence, which already quotes the offending value.
+    /// The environment names something the *app* would abort on. Carries the
+    /// validator's sentence.
     Invalid(String),
 }
 
@@ -232,7 +221,6 @@ impl EnvPrefixSource {
         let Ok(value) = std::env::var(ENV_PREFIX_VAR) else {
             return Self::Unset;
         };
-        // Empty is unset, the way an empty variable is everywhere else.
         if value.is_empty() {
             return Self::Unset;
         }
@@ -259,9 +247,6 @@ pub(crate) fn env_prefix() -> String {
 
 /// A framework variable's full name, `<PREFIX>_<NAMESPACE>__<KEY>` — the CLI's
 /// mirror of `nest_rs_config::var_name`, since it links no framework crate.
-///
-/// One function so the name a command *checks* and the name it *prints* cannot
-/// be two independent `format!`s that drift.
 pub(crate) fn var_name(env_prefix: &str, namespace: &str, key: &str) -> String {
     format!("{env_prefix}_{namespace}__{key}")
 }

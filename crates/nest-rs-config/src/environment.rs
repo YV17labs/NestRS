@@ -5,11 +5,10 @@ use nest_rs_core::EnvPrefix;
 
 use crate::source::real_env_var;
 
-/// Read from the reserved `<PREFIX>_ENV` (`<PREFIX>_ENV` by default). This is the
-/// one framework variable **outside** the `<PREFIX>_<DOMAIN>__<KEY>` scheme —
-/// it selects which `.env` files to load, so it must come from the real process
-/// environment, not a `.env` file.
-/// Unset or unrecognised ⇒ [`Development`](Self::Development).
+/// Read from the reserved `<PREFIX>_ENV`, outside the `<PREFIX>_<DOMAIN>__<KEY>`
+/// scheme: it selects which `.env` files to load, so it comes from the real
+/// process environment alone. Unset or unrecognised ⇒
+/// [`Development`](Self::Development).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Environment {
@@ -25,24 +24,11 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// Call at the top of `main`, before anything that reads the environment
-    /// outside the DI graph. **Not** what
-    /// `ConfigModule::for_root` does: that import registers an [`Environment`] and
-    /// deliberately publishes nothing, so an app that drops this call keeps the
-    /// typed reads and loses the process-env merge every non-config consumer
-    /// depends on — `<PREFIX>_LOG*`, `OpenTelemetry::init`, a `migrate` binary, and
-    /// [`Environment::declared`]. Calling it twice is harmless.
-    ///
-    /// Two effects, both one-shot:
-    ///
-    /// 1. the `.env` cascade is parsed into the in-crate map, so later
-    ///    `env_var` reads see dotenv values without paying the file read
-    ///    mid-request;
-    /// 2. the same values are merged into the **process environment**
-    ///    (set-if-absent — the real env always wins), so the many consumers
-    ///    that only know `std::env::var` behave as the cascade says: the
-    ///    framework's own `<PREFIX>_LOG*` logging setup, `OpenTelemetry::init`,
-    ///    and any `migrate`/`seed` binary of yours.
+    /// Parse the `.env` cascade and merge it into the **process environment**
+    /// (set-if-absent), for every consumer that reads `std::env::var` —
+    /// `<PREFIX>_LOG*`, `OpenTelemetry::init`, a `migrate` binary,
+    /// [`Environment::declared`]. Call it at the top of `main`; calling it twice
+    /// is harmless.
     ///
     /// # Threading
     ///
@@ -52,10 +38,6 @@ impl Environment {
     /// obligation; calling it from a spawned task does not.
     pub fn init() -> Self {
         let env = Self::from_env();
-        // Parses the cascade once and publishes that same map — the one
-        // process-env write a running app makes, and the reason `init` belongs
-        // at the top of `main`: its soundness obligation is discharged by being
-        // single-threaded here, nowhere else.
         crate::dotenv::publish_dotenv_values();
         env
     }
@@ -66,16 +48,9 @@ impl Environment {
         reason = "this runs at the top of main, before any subscriber exists; stderr is the one sink guaranteed visible"
     )]
     pub fn from_env() -> Self {
-        // `<PREFIX>_ENV` selects the cascade, so it must come from the real
-        // process env, never a `.env` file — read it without the dotenv
-        // fallback (which would also recurse through `dotenv_values`).
         let var = Self::var_name();
         let raw = real_env_var(&var);
         let (env, unrecognized) = classify(raw.as_deref());
-        // Set but UNRECOGNIZED (a typo like `producton`) must not silently load
-        // the dev cascade in production (CONF-I4). This runs at the top of
-        // `main`, before any tracing subscriber exists, so surface it on stderr
-        // where it is guaranteed visible rather than as a dropped log.
         if let Some(value) = unrecognized {
             eprintln!(
                 "nestrs: WARNING — unrecognized {var}={value:?}; falling back to \
@@ -88,23 +63,14 @@ impl Environment {
 
     /// The environment the process **declares**, or `None` when nobody set it.
     ///
-    /// [`from_env`](Self::from_env) answers "which `.env` cascade do I load"
-    /// and maps absence to [`Development`](Self::Development) — right for
-    /// picking a file, wrong for arming a development-only affordance. This
-    /// answers the other question: unset, empty and unrecognised are all
-    /// `None`, so a caller gating such an affordance fails closed by
-    /// construction instead of re-deriving the classification — the fork this
-    /// exists to prevent, because a hand-rolled predicate and `classify`
-    /// disagree on exactly the inputs nobody tests (whitespace, a typo).
+    /// Unset, empty and unrecognised are all `None`, so a development-only
+    /// affordance gated on this fails closed — unlike [`from_env`](Self::from_env),
+    /// which maps absence to [`Development`](Self::Development).
     pub fn declared() -> Option<Self> {
         declare(real_env_var(&Self::var_name()).as_deref())
     }
 
-    /// The variable this reads — `<PREFIX>_ENV`, or `<PREFIX>_ENV` under
-    /// [`EnvPrefix::VAR`]. Public because a harness that
-    /// must decide the environment before the framework does (`nest-rs-testing`)
-    /// has to name the same variable, and a second literal there is exactly how
-    /// a rename half-lands.
+    /// The variable this reads — `<PREFIX>_ENV`.
     pub fn var_name() -> String {
         EnvPrefix::var("ENV")
     }
@@ -128,8 +94,7 @@ impl Environment {
 /// Classify a raw `<PREFIX>_ENV` value into an [`Environment`], returning
 /// `Some(value)` in the second slot when the value was **set but
 /// unrecognized** (so the caller can surface it) and `None` when it was unset,
-/// empty, or an explicit development alias. Pure, so it is testable without
-/// mutating the process environment.
+/// empty, or an explicit development alias.
 fn classify(raw: Option<&str>) -> (Environment, Option<String>) {
     match raw.map(str::trim) {
         Some("production" | "prod") => (Environment::Production, None),
@@ -140,9 +105,8 @@ fn classify(raw: Option<&str>) -> (Environment, Option<String>) {
     }
 }
 
-/// [`Environment::declared`]'s pure half, beside [`classify`] so the two read
-/// the same aliases forever: a positively declared value maps through
-/// `classify`, everything else — unset, blank, unrecognised — is `None`.
+/// [`Environment::declared`]'s pure half: a positively declared value maps
+/// through [`classify`], everything else is `None`.
 fn declare(raw: Option<&str>) -> Option<Environment> {
     let value = raw.map(str::trim).filter(|v| !v.is_empty())?;
     match classify(Some(value)) {
@@ -176,9 +140,6 @@ mod tests {
         assert_eq!(Environment::default(), Environment::Development);
     }
 
-    // `declare` is what a development-only affordance gates on, so its failure
-    // direction is the security-relevant one: everything `classify` defaults —
-    // absence, blank, a typo — must come back `None` here, not `Development`.
     #[test]
     fn declare_answers_none_unless_positively_declared() {
         assert_eq!(declare(None), None);
@@ -195,10 +156,6 @@ mod tests {
         assert_eq!(declare(Some("production")), Some(Environment::Production));
     }
 
-    // The merge is what makes a raw `std::env::var` reader — the framework's own
-    // `<PREFIX>_LOG*` setup, a `migrate` binary — see the cascade at all, and it
-    // is the whole reason `init` belongs at the top of `main`. Every other test
-    // in this crate would still pass if that call vanished.
     #[test]
     #[expect(
         clippy::result_large_err,
@@ -254,9 +211,6 @@ mod tests {
 
     #[test]
     fn classify_flags_a_set_but_unrecognized_value_while_defaulting_to_development() {
-        // CONF-I4: a typo like `producton` must fall back to development *and*
-        // report the offending value so the caller can warn, never silently
-        // load the dev cascade in production.
         let (env, unrecognized) = classify(Some("producton"));
         assert_eq!(env, Environment::Development);
         assert_eq!(unrecognized.as_deref(), Some("producton"));

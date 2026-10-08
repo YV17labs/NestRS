@@ -1,12 +1,9 @@
-//! Covers `src/error_message.rs`: the line an operator reads for a chain holding
-//! a `validator` failure. A service's error, or a developer's own, keeps
-//! `ValidationErrors` as its source or spells it, and validator's `Display`
-//! prints every rule's parameters, the submitted value among them.
+//! Covers `src/error_message.rs` for a chain holding a `validator` failure,
+//! whose `Display` prints every rule's parameters, the submitted value among them.
 
 use nest_rs_core::error_message;
 use validator::{Validate, ValidationErrors};
 
-/// A live secret, submitted where a password belongs.
 const SECRET: &str = "sk_live_51HsecretTOKEN";
 
 /// Two fields refusing the secret, so validator's sentence runs to two lines.
@@ -24,12 +21,10 @@ struct Signup {
 #[error("validation failed")]
 struct Refused(#[from] ValidationErrors);
 
-/// A developer's own error inlining the failure it keeps as its source.
 #[derive(Debug, thiserror::Error)]
 #[error("the signup was refused: {0}")]
 struct Inlined(#[from] ValidationErrors);
 
-/// A developer's own error saying the failure as its own.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 struct Transparent(#[from] ValidationErrors);
@@ -51,9 +46,6 @@ fn refusal() -> ValidationErrors {
     .unwrap_err()
 }
 
-/// A validation failure anywhere in the chain is said without the value it
-/// refused, whichever shape holds it, and the line still names the field and
-/// the rule it broke.
 #[test]
 fn a_validation_failure_in_the_chain_is_said_without_the_submitted_value() {
     let said = [

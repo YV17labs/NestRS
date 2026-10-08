@@ -1,29 +1,9 @@
 //! [`DurationBounds`] — the one reader for a duration a deployment sets, and the
-//! one sentence refusing a value outside its range.
+//! one sentence refusing a value outside its range, read or pinned in code.
 //!
-//! **Why it is here rather than beside any one duration.** Three crates wrote
-//! their own — a range struct in `nest-rs-http`, another in the Redis worker, an
-//! inline zero check in the Redis connection — each with its own wording and its
-//! own idea of whether a value pinned in code was held to the range. The inline
-//! one was not, and a pinned zero budget then booted into "could not reach Redis
-//! … within 0ns (0 attempt(s))" against a Redis that answered. A range checked on
-//! one path and not the other is the drift one reader removes: the environment
-//! and the pin are refused by the same code, in the same words.
-//!
-//! **Every range has both ends.** The floor is where the thing stops working; the
-//! ceiling is where a value stops being a setting and becomes a slip — and it is
-//! never above what the library or the kernel the value reaches accepts, so no
-//! value the boot accepts can panic or be refused below it. A Redis budget past
-//! the kernel's keepalive limit failed every dial with `EINVAL`, and a SeaORM
-//! budget past what an `Instant` holds panicked inside sqlx: both were values
-//! with a floor and no ceiling. [`most`](DurationBounds::most) is therefore not
-//! optional.
-//!
-//! **`0` is an off switch only where the declaration says so**
-//! ([`Floor::UnitsOrOff`]): a connection ceiling lifted, a keep-alive not sent —
-//! the settings whose absence a deployment may choose. Everywhere else *off* is
-//! the defect the floor bounds — an unbounded connect, a probe that outlives the
-//! kubelet, a rate limit that limits nothing — and `0` is refused.
+//! Every range has both ends: the floor is where the thing stops working, the
+//! ceiling never above what the library or kernel the value reaches accepts. `0`
+//! is off only under [`Floor::UnitsOrOff`], and refused everywhere else.
 
 use std::fmt;
 use std::time::Duration;
@@ -75,20 +55,13 @@ pub struct Bound {
 /// Where a range starts.
 #[derive(Clone, Copy, Debug)]
 pub enum Floor {
-    /// At least `count` of the variable's unit, whichever side set the value —
-    /// for a floor that is a property of the thing bounded: a lease needs a
-    /// second to renew in, a shutdown window under one cuts every request.
+    /// At least `count` of the variable's unit, whichever side set the value.
     Units(Bound),
-    /// Longer than nothing — for a bound whose only failure is zero, a budget
-    /// that gives up before its first attempt. The variable, written in whole
-    /// units, is held to one of them; a value set in code to anything above
-    /// zero, a sub-unit budget included, is taken. The reason is why zero fails.
+    /// Longer than nothing: the variable is held to one whole unit, and a value
+    /// set in code to anything above zero is taken. The reason is why zero fails.
     AboveZero(&'static str),
     /// At least `count` of the variable's unit — or **off**: `0` from the
-    /// environment, `None` in code. For a bound whose absence is a choice a
-    /// deployment may make deliberately — a connection ceiling lifted, a
-    /// keep-alive not sent — where reading `0` as *zero* would turn a ceiling
-    /// into a kill switch. Off has a value only through
+    /// environment, `None` in code. Off has a value only through
     /// [`read_optional`](DurationBounds::read_optional);
     /// [`read`](DurationBounds::read) has none to return and holds `0` to the
     /// floor.
@@ -98,11 +71,8 @@ pub enum Floor {
 /// The range one duration setting accepts, the variable that sets it, and the
 /// field that pins it in code.
 ///
-/// Declared as a `const` beside the config that reads it, so the numbers, the
-/// reasons and the field doc stay one screen apart. Built only through
-/// [`secs`](Self::secs) or [`millis`](Self::millis), which hold the key to its
-/// unit's suffix — `_SECS` or `_MS` — so a key and the unit its value is read in
-/// cannot disagree: in a `const`, a mismatch does not compile.
+/// Built only through [`secs`](Self::secs) or [`millis`](Self::millis), which
+/// hold the key to its unit's suffix; in a `const`, a mismatch does not compile.
 ///
 /// ```
 /// use std::time::Duration;
@@ -146,11 +116,8 @@ pub struct DurationBounds {
     unit: DurationUnit,
     /// The floor.
     least: Floor,
-    /// The ceiling — where a value stops being a setting and becomes a slip,
-    /// never above what the library or the kernel the value reaches accepts.
-    /// A setting whose range ends at another setting's value states here the
-    /// end that setting's own ceiling implies, and checks the nearer end once
-    /// both are read, through [`BoundedDuration::refuse`].
+    /// The ceiling; a range ending at another setting's value checks that end
+    /// once both are read, through [`BoundedDuration::refuse`].
     most: Bound,
 }
 
@@ -553,8 +520,7 @@ mod tests {
         );
     }
 
-    /// Every range has a ceiling, and the top of `u64` is past every one of them:
-    /// the value that panicked sqlx inside the boot is refused naming its variable.
+    /// The top of `u64` is past every ceiling, and is refused naming its variable.
     #[test]
     fn the_top_of_the_range_is_refused_from_either_side() {
         let text = refused(RANGE.read(

@@ -1,7 +1,5 @@
-//! [`RedisQueueConfig`] — the Redis queue binding's own settings. Namespace
-//! `redis__queue`, read off the path: the crate's word, then the binding
-//! folder's, so `<PREFIX>_REDIS__QUEUE__*` names the type and the file that
-//! parse it. The drain window is the port's (`<PREFIX>_QUEUE__*`).
+//! [`RedisQueueConfig`] — the Redis queue binding's own settings, under
+//! `<PREFIX>_REDIS__QUEUE__*`. The drain window is the port's (`<PREFIX>_QUEUE__*`).
 
 use std::time::Duration;
 
@@ -82,8 +80,6 @@ mod tests {
         assert_eq!(cfg.lease, Duration::from_secs(4));
     }
 
-    /// A lease outside its bounds is refused naming the variable, whichever
-    /// side set it.
     #[test]
     fn a_lease_outside_its_bounds_is_refused_naming_the_variable() {
         let var = nest_rs_config::var_name("redis__queue", "LEASE_SECS");

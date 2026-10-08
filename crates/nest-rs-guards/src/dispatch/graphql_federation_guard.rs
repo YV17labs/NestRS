@@ -1,18 +1,9 @@
 //! [`GlobalPoolFederationGuard`] — the app-wide chain in front of `_service`
 //! and `_entities`.
 //!
-//! Those two root fields are async-graphql's, resolved above the merged root, so
-//! the chain `#[operations]` emits inside a resolver body never reaches them:
-//! `_service` answered a `check_graphql` deny-all pool with the endpoint's whole
-//! SDL, and `_entities` ran the chain once per representation rather than once
-//! per field. `nest_rs_graphql`'s schema extension is the seam; this is what it
-//! runs.
-//!
-//! **The pool is the whole chain here, and that is not a shortcut.** A
-//! federation field belongs to no resolver — the router calls it on the schema —
-//! so there is no `#[use_guards]` scope to compose and no posture to read. The
-//! `#[entity]` bodies reached *through* `_entities` compose everything else, and
-//! deliberately not the pool: it ran here.
+//! Those root fields resolve above the merged root, out of reach of the chain
+//! `#[operations]` emits. The pool is the whole chain here: a federation field
+//! belongs to no resolver, so there is no `#[use_guards]` scope to compose.
 
 use std::sync::Arc;
 
@@ -47,10 +38,7 @@ impl GraphqlFederationGuard for GlobalPoolFederationGuard {
             match self.pool.check_operation(operation).await {
                 Ok(()) => Ok(()),
                 Err((name, denial)) => {
-                    // Same structural floor as `run_layered_graphql_chain`: a
-                    // denial is visible at warn+ whatever the guard itself
-                    // logged, and this is the one site whose route label a
-                    // reader would otherwise have to infer.
+                    // Same structural floor as `run_layered_graphql_chain`.
                     tracing::warn!(
                         target: nest_rs_core::target::LAYERS,
                         guard = name,

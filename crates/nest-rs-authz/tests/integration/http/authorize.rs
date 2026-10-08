@@ -1,11 +1,6 @@
 //! Covers `src/http/authorize.rs` — what the shaper says when the wiring is
-//! wrong.
-//!
-//! `Authorize<A, S>` answers a missing ambient ability with a `500` whose body
-//! is an opaque problem+json, deliberately: a client learns nothing about the
-//! app's authorization state from a wiring bug. That makes the event the *only*
-//! place the cause exists, which is why it is `error` and why it carries the
-//! remedy — and why nothing reading it was a gap rather than a nicety.
+//! wrong. The `500` body is opaque, so the `error` event is the only place the
+//! cause exists.
 
 use nest_rs_authz::{Read, http::Authorize};
 use nest_rs_testing::LogCapture;
@@ -48,11 +43,8 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
         "missing request Ability — route is authorized but no ability guard ran",
     );
     assert_eq!(event.level, "error");
-    // Three fields, and each answers a question the opaque body cannot: which
-    // route, which posture, and what to do about it. The path comes from
-    // `original_uri`, which a hand-built request leaves at `/` — what matters
-    // here is that the field is carried at all, since a bare `warn`+ is itself
-    // a defect.
+    // `original_uri` is `/` on a hand-built request; what matters is that each
+    // field is carried.
     assert!(
         event.field("path").is_some(),
         "the event names the route, got {:?}",

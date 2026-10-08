@@ -1,14 +1,4 @@
 //! Health indicator contract and link-time registry.
-//!
-//! An application opts in by tagging methods on an `#[injectable]` provider's
-//! impl block with `#[indicators]` (orchestrator) plus per-method
-//! `#[liveness]` / `#[readiness]` / `#[startup]`. Each tagged method submits
-//! one [`HealthIndicator`] entry to a link-time `inventory` registry.
-//!
-//! [`crate::HealthService`] drains the registry at probe time and filters by
-//! [`ReachableProviders`](::nest_rs_core::ReachableProviders) — an indicator
-//! whose provider is not in the app's module tree is silently skipped, the
-//! same module-gating as the rest of the discovery system.
 
 use std::any::TypeId;
 use std::future::Future;
@@ -17,8 +7,7 @@ use std::pin::Pin;
 use nest_rs_core::Container;
 use serde::Serialize;
 
-/// Which Kubernetes-style probe an indicator participates in. A method's
-/// `#[liveness]` / `#[readiness]` / `#[startup]` attribute maps one-to-one.
+/// Which Kubernetes-style probe an indicator participates in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProbeKind {
@@ -30,9 +19,7 @@ pub enum ProbeKind {
     Startup,
 }
 
-/// `up` when the indicator's check returned `Ok`; `down` otherwise. Serialized
-/// lowercase so the JSON body matches the Kubernetes/Terminus vocabulary
-/// operators already know.
+/// `up` when the indicator's check returned `Ok`; `down` otherwise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IndicatorStatus {
@@ -51,27 +38,19 @@ pub struct IndicatorReport {
     pub status: IndicatorStatus,
     /// `Some` only when the check failed — a **fixed, opaque** reason
     /// (`"check failed"` / `"timed out"` / `"probe deadline exceeded"`), never
-    /// the indicator's own error.
-    ///
-    /// Deliberate: `/health/*` is routinely unauthenticated, and an
-    /// `anyhow` chain from a connection check carries a DSN, an internal
-    /// hostname or a driver message. The full `{err:#}` is emitted instead as
-    /// a `warn` on `nest_rs::health` carrying `indicator` and `kind`, so
-    /// triage is one filtered log query — not a value anyone can read off an
-    /// open port.
+    /// the indicator's own error, which is logged at `warn` on
+    /// `nest_rs::health`: `/health/*` is routinely unauthenticated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-/// Aggregated outcome of a probe: an overall `status` plus per-indicator
-/// reports. The HTTP status maps from `status` — `200` for `up`, `503` for
-/// `down`.
+/// Aggregated outcome of a probe: an overall `status` (`200` up, `503` down)
+/// plus per-indicator reports.
 #[derive(Clone, Debug, Serialize)]
 pub struct ProbeReport {
     /// The overall probe result — `down` if any indicator is down.
     pub status: IndicatorStatus,
-    /// Up indicators, keyed by name (Terminus-style: easy to grep in JSON
-    /// logs without iterating a list).
+    /// Up indicators, keyed by name.
     pub info: std::collections::BTreeMap<&'static str, IndicatorReport>,
     /// Down indicators, keyed by name. Empty when `status == Up`.
     pub error: std::collections::BTreeMap<&'static str, IndicatorReport>,
@@ -80,8 +59,6 @@ pub struct ProbeReport {
 }
 
 impl ProbeReport {
-    /// Empty up — no indicators ran for this probe (the framework default
-    /// before any app registers one).
     pub(crate) fn empty_up() -> Self {
         Self {
             status: IndicatorStatus::Up,
@@ -117,33 +94,22 @@ impl ProbeReport {
     }
 }
 
-/// The boxed future one indicator check resolves to. Borrowed from the
-/// [`Container`] it was handed, so a check may hold a resolved provider across
-/// its own await points without cloning the container.
+/// The boxed future one indicator check resolves to, borrowing the [`Container`].
 pub type IndicatorFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
-/// The thunk stored in [`HealthIndicator::run`]: resolve the owning provider
-/// from the container, then invoke the check. A function pointer rather than a
-/// boxed closure because `inventory` submits it from a `const` context.
+/// The thunk stored in [`HealthIndicator::run`]; a function pointer because
+/// `inventory` submits it from a `const` context.
 pub type IndicatorRun = for<'a> fn(&'a Container) -> IndicatorFuture<'a>;
 
-/// One indicator submitted to the link-time registry by `#[indicators]`. The
-/// `run` thunk resolves the owning provider from the container and invokes
-/// the method.
+/// One indicator submitted to the link-time registry by `#[indicators]`.
 pub struct HealthIndicator {
-    /// `module_path!()` of the crate that declared it — read by
-    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
-    /// report level, and emitted as a field so a skip line names a type the
-    /// developer can find.
+    /// `module_path!()` of the crate that declared it.
     pub origin: &'static str,
-    /// `"<method_name>"` — the indicator's stable id (snake_case method
-    /// name), used as the JSON key and the structured-log field.
+    /// The indicator's stable id (snake_case method name), its JSON key.
     pub name: &'static str,
     /// The probe this indicator participates in.
     pub kind: ProbeKind,
-    /// `TypeId::of::<Provider>()` — checked against
-    /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so an
-    /// unreachable provider's indicators do not run.
+    /// `TypeId` of the owning provider, matched against the reachable set.
     pub provider_type_id: fn() -> TypeId,
     /// Resolves the owning provider and runs the check method.
     pub run: IndicatorRun,

@@ -85,10 +85,7 @@ pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -
             path: root,
         });
     }
-    // Same shape as the root scaffold: the app gets a `hello` feature named
-    // after it, so `nestrs run dev <app>` answers on `/` the first time. A
-    // feature already owning that name would be clobbered, so refuse instead —
-    // the app name is the one thing the caller can change for free.
+    // A feature already owning the app's name would be clobbered, so refuse.
     if ws.feature_exists(&names.snake) {
         return Err(CliError::FeatureExists {
             name: names.snake.clone(),
@@ -107,9 +104,8 @@ pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -
         ]),
     );
     queue_app(&mut s, &root, names, port);
-    // Adding an app to an existing workspace: the prefix belongs to the
-    // environment that runs it, so it is read from there rather than chosen
-    // again.
+    // The prefix belongs to the environment that runs the app, so it is read
+    // from there.
     queue_root_files(&mut s, &ws.root, names, &crate::context::env_prefix());
 
     let report = s.apply(dry_run)?;
@@ -134,8 +130,7 @@ pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -
 }
 
 /// The app's `hello` feature — port (module + service) plus its HTTP adapter,
-/// the shared [`hello`] templates in the workspace's feature layout. Every
-/// identifier derives from `names`, so `hello` and any later app are one shape.
+/// the shared [`hello`] templates in the workspace's feature layout.
 fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
     let r = Renderer::new(names);
     s.create(feature_root.join("mod.rs"), r.render(hello::FEATURE_MOD));
@@ -168,9 +163,7 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
         r.render(workspace::APP_MODULE),
     );
 
-    // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
-    // The *feature's* HTTP module, not the app root: the root accumulates every
-    // transport and connection the app serves, and this suite must stay
+    // The feature's HTTP module, not the app root, so the suite stays
     // infrastructure-free however the app grows.
     let smoke = r
         .clone()
@@ -189,9 +182,7 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
 }
 
 fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names, env_prefix: &str) {
-    // Seeded, not bare: the Justfile below is what sets the prefix on every
-    // process `nestrs run` starts, so a renderer that does not know it would
-    // write the placeholder out verbatim.
+    // Seeded: the Justfile sets the prefix on every process `nestrs run` starts.
     let r = with_env_prefix(Renderer::new(names), env_prefix);
     queue_env_files(s, base, &r);
     s.create_if_missing(base.join("Justfile"), r.render(workspace::JUSTFILE));
@@ -199,8 +190,6 @@ fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names, env_prefix: &s
     s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create_if_missing(base.join("compose.yml"), r.render(shared::COMPOSE));
     s.create_if_missing(base.join(".gitignore"), r.render(shared::GITIGNORE));
-    // No `.dockerignore`: the scaffold ships no Dockerfile, so there is
-    // nothing for it to scope.
 }
 
 fn print_root_next_steps(root: &Path) {

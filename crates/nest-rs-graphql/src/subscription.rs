@@ -1,18 +1,10 @@
 //! The graphql-ws half of the `/graphql` mount, and the per-item posture seam
 //! `#[subscription]` expands into.
 //!
-//! A subscription is an operation, so it goes through the gate every other
-//! operation goes through — the same [`GraphqlOperationGuard`](crate::GraphqlOperationGuard), the same
-//! `#[authorize]`/`#[public]`. What differs is *when* it answers: once at
-//! subscribe, then repeatedly, for as long as the socket lives. That produces
-//! the two obligations this module carries and the POST path does not:
-//!
-//! - **the guard's decision is made once and must keep applying**, so every
-//!   item is filtered against the ability captured at subscribe
-//!   ([`keep_masked_item`], fed by `nest_rs_authz::graphql::masked_item_for`);
-//! - **the socket must not outlive that decision**, so it carries the same
-//!   lifetime ceiling a WebSocket gateway does
-//!   ([`GraphqlConfig::max_connection`](crate::GraphqlConfig::max_connection)).
+//! A subscription goes through the same gate as every operation, decided once at
+//! subscribe, so every item is filtered against the ability captured then
+//! ([`keep_masked_item`]) and the socket carries a lifetime ceiling
+//! ([`GraphqlConfig::max_connection`](crate::GraphqlConfig::max_connection)).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -37,25 +29,11 @@ use tracing::Instrument;
 use crate::config::GraphqlConfig;
 use crate::context::OperationBridge;
 
-/// The composed schema as a bare [`Executor`] — the seam a *subscriber* needs.
-///
-/// Queries and mutations are testable through the mounted endpoint, because
-/// `TestApp`'s client speaks the protocol they use. A subscription's protocol is
-/// graphql-ws, and the thing that speaks it
-/// ([`async_graphql::http::WebSocket`], and `GraphQLWebSocket` above it) takes
-/// an executor rather than a URL — so a witness that boots the documented wiring
-/// and then asserts *what a subscriber actually receives* has to reach the
-/// executor the mount serves.
-///
-/// It hands back the schema opaquely: the discovered roots stay `pub(crate)`,
-/// and the only thing a caller can do with the value is execute against it,
-/// which is the whole point. And it is the mount's executor whole — the schema
-/// behind [`Redacted`](crate::redact::Redacted), so a subscriber reads errors
-/// as a client of the mount does.
+/// The composed schema as a bare [`Executor`], as the mount serves it: a
+/// graphql-ws driver ([`async_graphql::http::WebSocket`]) takes an executor,
+/// not a URL, so a test subscriber needs this.
 #[doc(hidden)]
 pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Executor + 'static {
-    // No transport carries what a subscriber drives by hand, so its batches are
-    // carried by work nothing stops.
     crate::redact::Redacted(crate::resolver::build_schema(
         container,
         config,
@@ -63,20 +41,9 @@ pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Exec
     ))
 }
 
-/// Keep or drop one masked subscription item.
-///
-/// Called per item by the `#[subscription]` expansion, so the three outcomes are
-/// worded once rather than inlined into every operation:
-///
-/// - masked and allowed ⇒ push it;
-/// - the subscriber's ability refuses the row ⇒ drop it. This is the steady
-///   state of a stream two principals read differently, not an anomaly, so it
-///   logs at `debug`;
-/// - masking failed ⇒ drop it and say so at `warn`. A stream item has no error
-///   channel of its own (the field's type is the item's, not a `Result`), so
-///   failing closed *is* dropping it — and an item silently vanishing because a
-///   wire value would not reconcile is exactly the thing an operator has to be
-///   able to find.
+/// Keep or drop one masked subscription item, called per item by the
+/// `#[subscription]` expansion: a refused row is dropped at `debug`; a mask
+/// failure is dropped at `warn`, since an item has no error channel.
 #[doc(hidden)]
 pub fn keep_masked_item<T>(
     operation: &'static str,
@@ -106,47 +73,19 @@ pub fn keep_masked_item<T>(
     }
 }
 
-/// The data handle a socket runs on, taken from the **upgrade request** — the
-/// last moment ambient state exists.
+/// The data handle a socket runs on, taken from the **upgrade request**: poem
+/// answers the `101` before the connection task runs.
 ///
-/// poem answers the `101` before the connection task runs, so the request
-/// boundary's executor is already gone by the time an operation on that socket
-/// resolves. Without this a `Repo`-backed subscription fails on every item for
-/// want of one, which is fail-closed but useless.
-///
-/// Always **non-transactional**, and that is the load-bearing half. A request
-/// transaction belongs to the request that opened it and is finalized when the
-/// `101` returns; carrying it onto a connection that may live for hours would
-/// pin a pooled connection for that whole time and write through a transaction
-/// nobody will ever commit. [`non_transactional`] steps out of it; a handle that
-/// is already the pool has nothing to step out of and is kept. The atomicity
-/// given up here is atomicity nothing on this path can use — a subscription
-/// reads, and a mutation is not a subscription.
-///
-/// [`non_transactional`]: nest_rs_database::Executor::non_transactional
+/// Always **non-transactional**: the request transaction is finalized with the
+/// `101`, and carrying it onto an hours-long socket would pin a pooled connection
+/// behind a transaction nobody commits.
 fn socket_executor() -> Option<Arc<dyn nest_rs_database::Executor>> {
     nest_rs_database::current_executor()
         .map(|executor| executor.non_transactional().unwrap_or(executor))
 }
 
-/// The identity a socket runs under, taken from the **upgrade request** — the
-/// same last moment [`socket_executor`] reads, and for the same reason.
-///
-/// The upgrade *is* an HTTP request, so the socket inherits that request's id,
-/// and its actor: the guard that just ran resolved one, and nothing on this
-/// socket ever re-authenticates anybody. Without it every subscription item,
-/// every withheld row and every mask failure below files under no request at
-/// all — poem answers the `101` before the connection task runs, so the request
-/// boundary is gone by the time the first item is produced.
-///
-/// A mint is the honest answer where there is nothing to inherit — an endpoint
-/// mounted outside the HTTP edge. The socket's own events still group with each
-/// other, which is strictly more than nothing.
-///
-/// **Identity, never the upgrade's resources.** The socket already steps out of
-/// the request transaction ([`socket_executor`]) and holds no request scope, for
-/// one reason: a connection that may live for hours would pin whatever the
-/// upgrade resolved for that whole time.
+/// The identity a socket runs under — id and actor — taken from the **upgrade
+/// request**, as [`socket_executor`] is; nothing on the socket re-authenticates.
 fn socket_correlation() -> Correlation {
     Correlation::inherited()
 }
@@ -170,14 +109,11 @@ impl Ending {
     }
 }
 
-/// RFC 6455 §7.4.1 **1001 Going Away**, the code it gives for "a server going
-/// down". The client reconnects, to a replica still in the load balancer, and
-/// subscribes again.
+/// RFC 6455 §7.4.1 **1001 Going Away**, its code for "a server going down".
 const GOING_AWAY: &str = "the server is going away, reconnect to continue";
 
-/// §7.4.1 **1001 Going Away** too: the server is deliberately ending a socket it
-/// will no longer serve, and what it asks for is a fresh upgrade — which re-runs
-/// the guard and re-checks `exp`. The sentence a WebSocket gateway closes with.
+/// §7.4.1 **1001 Going Away** too, asking for a fresh upgrade that re-runs the
+/// guard; the sentence a WebSocket gateway closes with.
 const LIFETIME_REACHED: &str = "connection lifetime reached, re-upgrade to continue";
 
 /// §7.4.1 **1011 Internal Error** — a subscription unwound, an unexpected
@@ -185,13 +121,8 @@ const LIFETIME_REACHED: &str = "connection lifetime reached, re-upgrade to conti
 const UNWOUND: &str = "the subscription failed on the server";
 
 /// The end the socket's server half arms: the shutdown signal, or the lifetime
-/// ceiling, whichever comes first — `None` ⇒ no ceiling.
-///
-/// The ceiling is a security control: a principal captured once at the upgrade
-/// would otherwise keep its privileges after token expiry, logout or
-/// revocation, for as long as the peer holds the socket open. The deadline is
-/// **absolute**, armed once: a ceiling on the connection's life, not an idle
-/// timeout, so traffic never pushes it out.
+/// ceiling (`None` ⇒ none), whichever comes first. The deadline is **absolute**,
+/// not an idle timeout, so traffic never pushes it out.
 async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) -> Ending {
     let ceiling = async {
         match ttl {
@@ -202,9 +133,7 @@ async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) ->
     tokio::select! {
         biased;
         () = going_away => {
-            // `debug`: the deployment asked for this and said so once; a line
-            // per socket at `info` is the fleet's size in noise. The socket's
-            // `graphql.subscription` line still files, `cancelled`.
+            // `debug`: shutdown is logged once; a line per socket is noise.
             tracing::debug!(
                 target: crate::TARGET,
                 close_code = u16::from(CloseCode::Away),
@@ -237,18 +166,14 @@ enum Ended {
     Unwound(Box<dyn std::any::Any + Send>),
 }
 
-/// The graphql-ws endpoint served on the same path as the POST endpoint.
-///
-/// It is reached through [`crate::module`]'s GET dispatcher, which sends a
-/// WebSocket upgrade here and everything else to the playground — one URL, the
-/// shape every graphql-ws client expects.
+/// The graphql-ws endpoint, reached through the GET dispatcher on the POST
+/// endpoint's path.
 pub(crate) struct SubscriptionEndpoint<E> {
     executor: E,
     bridge: Arc<OperationBridge>,
     max_connection: Option<Duration>,
-    /// Every socket this mount serves. poem stops tracking a connection at its
-    /// upgrade, so without this the shutdown window neither waited for a socket
-    /// nor closed it, and every subscription ran on under the shutdown hooks.
+    /// Every socket this mount serves: poem stops tracking a connection at its
+    /// upgrade, so the shutdown window waits on this instead.
     sockets: DetachedWork,
 }
 
@@ -273,13 +198,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
         let (mut req, mut body) = req.split();
-        // The guard runs on the **upgrade**, before any operation exists: this
-        // is where the principal is established, exactly as `before` does on the
-        // POST path. A denial is answered as an ordinary HTTP response, so the
-        // socket is never opened.
-        //
-        // `around` runs too, below — over the whole socket rather than over one
-        // operation.
+        // A denial at the upgrade is an ordinary HTTP response: no socket opens.
         if let Some(guard) = &self.bridge.op_guard
             && let Err(resp) = guard.before(&mut req).await
         {
@@ -291,41 +210,27 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let executor = self.executor.clone();
         let max_connection = self.max_connection;
         let socket_executor = socket_executor();
-        // The guard's ambient state is installed around the **whole socket**,
-        // not per operation: one upgrade, one principal, for every operation and
-        // every item the connection carries. That is the same model a WebSocket
-        // gateway uses, and it is what makes `Guard::check_graphql` and the
-        // ability-scoped data layer read the same ability here as on the POST
-        // path — `around` never runs otherwise, since a socket has no response
-        // future to wrap.
+        // `around` wraps the **whole socket**: one upgrade, one principal.
         let guard = self.bridge.op_guard.clone();
-        // Read here, on the request task, for the same reason the executor is.
+        // Read on the request task, before poem answers the `101`.
         let correlation = socket_correlation();
         let sockets = self.sockets.clone();
 
         Ok(websocket
             .protocols(ALL_WEBSOCKET_PROTOCOLS)
             .on_upgrade(move |stream| async move {
-                // One span for the whole socket, and that granularity is the
-                // honest one: async-graphql's protocol engine dispatches the
-                // operations, so this crate never sees an operation boundary to
-                // open a span at. Where it *does* see one — a WebSocket gateway's
-                // messages — the message is the unit and the connection is a
-                // field. Here the connection is all there is.
+                // One span per socket: async-graphql's engine hides operation
+                // boundaries from this crate.
                 let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
                 let line = SubscriptionLine::new(correlation.clone(), span.clone());
                 let end = ends_at(sockets.going_away(), max_connection);
-                // The socket answers through a local slot because the guard
-                // scopes a `()` future — see `GraphqlOperationGuard::around` —
-                // and the end is the line's to report.
+                // A local slot, since the guard scopes a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
                     let served = serve_socket(stream, executor, protocol.0, data, end);
                     ended = Some(match max_connection {
-                        // The ceiling's hard edge: a socket that has not taken its
-                        // close within the grace is dropped, as the ceiling always
-                        // did — a peer that stopped reading cannot hold it open.
-                        // At the signal the window is that edge.
+                        // A peer that stopped reading cannot hold the socket past
+                        // the ceiling plus the close grace.
                         Some(ttl) => tokio::time::timeout(
                             ttl.saturating_add(DetachedWork::CLOSE_GRACE),
                             served,
@@ -350,18 +255,14 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                     Some(guard) => guard.around(&req, serving),
                     None => serving,
                 };
-                // Executor outermost, ability inside — the same nesting the POST
-                // path uses (`without_transaction` over the guarded operation),
-                // so the two cannot come to disagree about which is in scope.
+                // Executor outermost, ability inside, as on the POST path.
                 let served: crate::BoxFuture<'_, ()> = match socket_executor {
                     Some(executor) => {
                         Box::pin(nest_rs_database::with_request_executor(executor, guarded))
                     }
                     None => guarded,
                 };
-                // Carried by the transport: told at the signal, given the window
-                // to finish, and dropped where it waits if it has not by the
-                // window's close — which `line`'s `Drop` files `cancelled`.
+                // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
                 let _ = sockets
                     .run(nest_rs_core::with_request_scope(None, correlation, served))
                     .instrument(span)
@@ -375,19 +276,12 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
 }
 
 /// Serve one graphql-ws socket until its peer ends it, the protocol refuses
-/// it, or `end` resolves — and end it the protocol's way, which async-graphql's
-/// own loop has no seam for: every subscription still running is completed,
-/// what is still answering — a query or a mutation sent over the socket — is
-/// answered, then the socket closes with 1001.
+/// it, or `end` resolves — then complete every running subscription, answer
+/// what is still answering, and close with 1001, a seam async-graphql's loop
+/// lacks.
 ///
-/// The completions are async-graphql's own. At `end`, the inbound half
-/// ([`Inbound`]) stops reading the peer and hands the protocol engine a `stop`
-/// for every subscription the peer started and nobody finished; the engine
-/// answers each still-running one with `complete` — in the negotiated
-/// protocol's wording, `graphql-transport-ws` and the legacy `graphql-ws` alike
-/// — and ignores the rest. So no `complete` is written twice, and none is
-/// written in a shape this crate spelled. The engine ends once nothing is left
-/// answering, and the socket with it.
+/// At `end`, [`Inbound`] hands the engine a `stop` per running subscription,
+/// so the engine writes each `complete` in the negotiated protocol's wording.
 async fn serve_socket<E: Executor>(
     stream: WebSocketStream,
     executor: E,
@@ -409,9 +303,8 @@ async fn serve_socket<E: Executor>(
         async_graphql::http::WebSocket::from_message_stream(executor, inbound, protocol)
             .connection_data(data);
     loop {
-        // A subscription's stream is developer code polled right here, so this
-        // is where one that panics is contained: the socket closes with 1011,
-        // where an unwinding task left it 1006 and filed no line.
+        // A subscription's stream is developer code polled here: a panic closes
+        // the socket with 1011.
         let next = match AssertUnwindSafe(engine.next()).catch_unwind().await {
             Ok(next) => next,
             Err(payload) => {
@@ -441,8 +334,7 @@ async fn serve_socket<E: Executor>(
             Ended::ByServer
         }
         None => {
-            // The peer ended it. Its Close is echoed by the protocol layer, and
-            // the flush is what puts that echo on the wire.
+            // The flush puts the protocol layer's queued Close echo on the wire.
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "the peer already closed; the flush only echoes its Close"
@@ -462,22 +354,18 @@ fn lock(started: &Started) -> std::sync::MutexGuard<'_, HashMap<String, Operatio
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// What an operation sent over the socket is, for how the socket's end treats
-/// it.
+/// How the socket's end treats an operation sent over it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operation {
     /// A subscription has no end of its own, so the socket's end completes it.
     Subscription,
-    /// A query or a mutation is still answering, so it is answered first —
-    /// inside the window at shutdown, as a request still running is.
+    /// A query or a mutation, answered first.
     Answer,
 }
 
 impl Operation {
-    /// Read off the request's document — which async-graphql caches on the
-    /// request and reuses when it executes it, so this is not a second parse.
-    /// A document that does not parse, or names no operation it holds, is
-    /// answered with an error at once, so it is an [`Operation::Answer`].
+    /// Read off the request's document, parsed once (async-graphql caches it).
+    /// One that does not parse is answered at once, so it is an [`Operation::Answer`].
     fn of(request: &mut async_graphql::Request) -> Self {
         let selected = request.operation_name.clone();
         let Ok(document) = request.parsed_query() else {
@@ -502,17 +390,13 @@ impl Operation {
 
 /// The id of the operation a server frame completes, when it is a `complete`.
 ///
-/// Read off the frame's opening rather than by parsing every frame: a `next`
-/// carries a result of any size, and is by far the commonest frame. serde writes
-/// an internally tagged enum's tag first, and async-graphql's `complete` is that
-/// enum with nothing but an `id` beside it, so the opening is exact — and pinned
-/// by a test against async-graphql's own output. Missing one only leaves an id
-/// in [`Started`]: the engine ignores a `stop` for an operation it has finished.
+/// Read off the frame's opening rather than by parsing every `next`: serde
+/// writes the tag first, pinned by a test against async-graphql's output.
+/// Missing one only leaves an id in [`Started`], whose `stop` the engine ignores.
 fn completed_id(frame: &str) -> Option<String> {
     if !frame.starts_with(r#"{"type":"complete""#) {
         return None;
     }
-    // A `complete` is a type and an id, so reading it whole costs nothing.
     match serde_json::from_str::<serde_json::Value>(frame)
         .ok()?
         .get("id")?
@@ -522,13 +406,9 @@ fn completed_id(frame: &str) -> Option<String> {
     }
 }
 
-/// The peer's half of a socket, as the protocol engine reads it — and the one
-/// place the server's end of the socket can enter the protocol.
-///
-/// It parses each frame as the engine would, so it can track which operations
-/// are running; once `end` resolves it reads the peer no more, yields a `stop`
-/// for each running subscription instead, and ends once nothing is left
-/// answering.
+/// The peer's half of a socket, as the protocol engine reads it, tracking which
+/// operations run; once `end` resolves it yields a `stop` per running
+/// subscription instead, and ends once nothing is left answering.
 struct Inbound<S> {
     socket: S,
     end: std::pin::Pin<Box<dyn Future<Output = Ending> + Send>>,
@@ -567,9 +447,7 @@ where
             if let Some(id) = stopping.next() {
                 return Poll::Ready(Some(Ok(ClientMessage::Stop { id })));
             }
-            // Every subscription is stopped. What is still answering keeps
-            // going; the engine wakes on its output, and asks again — each
-            // `complete` it writes is pruned before it does.
+            // The engine wakes on what is still answering, and asks again.
             return if lock(&this.started).is_empty() {
                 Poll::Ready(None)
             } else {
@@ -579,8 +457,6 @@ where
         loop {
             match std::pin::Pin::new(&mut this.socket).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
-                // A read error ends the peer's half, as it ends the engine's
-                // own reading of it.
                 Poll::Ready(None | Some(Err(_))) => return Poll::Ready(None),
                 Poll::Ready(Some(Ok(message))) => {
                     if !(message.is_text() || message.is_binary()) {
@@ -630,18 +506,12 @@ async fn close_socket(
     let _ = SinkExt::close(sink).await;
 }
 
-/// Files the subscription's line when the connection ends.
+/// Files the subscription's line **on drop**, so an aborted socket files
+/// `cancelled` (or `panic`); one that finishes says how through
+/// [`settle`](Self::settle).
 ///
-/// **On drop, not after the await**, and that distinction is the whole reason
-/// this type exists rather than a `tracing::info!` at the end of the block: a
-/// socket that is aborted — the transport stopping it at the close of its
-/// window, the runtime going down, its task unwinding — never completes, so its
-/// future is dropped rather than finished, and that end is `cancelled` (or
-/// `panic`). A socket that does finish says how through [`settle`](Self::settle).
-///
-/// The correlation is held rather than read from the ambient context: a `Drop`
-/// runs while the future is being torn down, which is not reliably inside the
-/// scope that future installed.
+/// The correlation is held: a `Drop` runs while the future is torn down, not
+/// reliably inside the scope that future installed.
 struct SubscriptionLine {
     correlation: nest_rs_core::Correlation,
     /// The subscription's span, which the outcome is recorded on for the export.
@@ -660,10 +530,8 @@ impl SubscriptionLine {
         }
     }
 
-    /// Say how the socket ended. `ok` when its peer ended it, `error` when the
-    /// protocol refused it, `cancelled` when the server ended it — the
-    /// subscriber did not — and `panic` when a subscription unwound, which is
-    /// also told to the operator here.
+    /// Say how the socket ended: `ok` by its peer, `error` refused by the
+    /// protocol, `cancelled` by the server, `panic` when a subscription unwound.
     fn settle(mut self, ended: Ended) {
         use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
         self.outcome = Some(match ended {
@@ -696,8 +564,6 @@ impl Drop for SubscriptionLine {
             nest_rs_core::operation_log::CANCELLED
         });
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
-            // Its duration is how long it stayed open, which on a subscription
-            // is the number an operator actually reads.
             nest_rs_core::operation_line!(
                 crate::unit::SUBSCRIPTION,
                 span: &self.span,
@@ -715,21 +581,13 @@ mod tests {
 
     use super::*;
 
-    /// The line is filed from `Drop`, so two properties matter more than what it
-    /// says: it fires **once**, and it cannot panic.
-    ///
-    /// A panic inside a `Drop` that runs during an unwind aborts the process, and
-    /// this `Drop` reaches a `tokio` task-local. A socket is torn down on paths
-    /// this crate does not choose — the runtime shutting down, the transport
-    /// stopping it, a handler unwinding — so "does it work on the happy path" is
-    /// not the question. A socket dropped before it said how it ended was
-    /// stopped, and says `cancelled`.
+    /// A panic inside a `Drop` during an unwind aborts the process, and this
+    /// `Drop` reaches a `tokio` task-local.
     #[test]
     fn the_subscription_line_fires_once_and_cannot_panic_off_a_runtime() {
         let logs = nest_rs_testing::LogCapture::install();
 
-        // No `#[tokio::test]`: this is the teardown case, where there may be no
-        // runtime left to reach a task-local through.
+        // No `#[tokio::test]`: at teardown there may be no runtime left.
         drop(SubscriptionLine::new(
             nest_rs_core::Correlation::minted(None),
             tracing::Span::none(),
@@ -751,8 +609,6 @@ mod tests {
         assert!(served[0].field("duration_ms").is_some());
     }
 
-    /// Each end the socket loop sees is its own word, and the line files it
-    /// once.
     #[test]
     fn a_settled_socket_files_the_end_it_saw() {
         use nest_rs_core::operation_log::{CANCELLED, ERROR, OK};
@@ -776,9 +632,6 @@ mod tests {
         }
     }
 
-    /// And once inside a runtime too, since that is where it normally runs — the
-    /// two paths reach the task-local differently and only one of them is the
-    /// happy one.
     #[tokio::test]
     async fn the_subscription_line_fires_once_inside_a_runtime() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -799,11 +652,9 @@ mod tests {
         );
     }
 
-    /// A request's lazy transaction handle: `non_transactional` steps out of it
-    /// onto the pool, exactly as the ORM's does.
+    /// A request's lazy transaction handle, stepping out onto the pool.
     struct Transaction;
-    /// The pool handle it steps out onto — already outside a transaction, so it
-    /// has nothing to step out of.
+    /// The pool handle it steps out onto.
     struct Pool;
 
     impl nest_rs_database::Executor for Transaction {
@@ -821,10 +672,6 @@ mod tests {
         }
     }
 
-    /// The rule a socket cannot break: a connection that may live for hours
-    /// never carries the upgrade's transaction. Carrying it would pin a pooled
-    /// connection for that whole time and write through a transaction the `101`
-    /// already finalized.
     #[tokio::test]
     async fn a_socket_never_carries_the_upgrades_transaction() {
         let captured = nest_rs_database::with_request_executor(Arc::new(Transaction), async {
@@ -839,10 +686,6 @@ mod tests {
         );
     }
 
-    /// The identity half of the same capture. Every event a subscription
-    /// produces — an item withheld, a mask that failed — is filed in the trace
-    /// that opened the socket, so "what did this subscriber see?" is one query
-    /// against the trace the client already has from its upgrade.
     #[tokio::test]
     async fn a_socket_runs_in_the_upgrades_trace() {
         let upgrade = Correlation::minted(None);
@@ -853,8 +696,6 @@ mod tests {
         assert_eq!(captured.trace_id(), upgrade.trace_id());
     }
 
-    /// And its actor, because nothing on a socket re-authenticates: what the
-    /// upgrade's guard resolved is the only answer there will ever be.
     #[tokio::test]
     async fn a_socket_runs_under_the_upgrades_actor() {
         let captured = nest_rs_core::with_request_scope(None, Correlation::minted(None), async {
@@ -866,18 +707,12 @@ mod tests {
         assert_eq!(captured.actor_id(), Some("alice-42"));
     }
 
-    /// Mounted outside the HTTP edge there is nothing to inherit. A fresh id
-    /// still groups the socket's own events with each other, which is the point
-    /// — an unidentified socket is the one outcome that helps nobody.
     #[tokio::test]
     async fn a_socket_with_no_upgrade_to_inherit_from_starts_its_own_trace() {
         assert!(nest_rs_core::current_trace_id().is_none());
         assert!(socket_correlation().actor_id().is_none());
     }
 
-    /// The other half: a handle that is *already* the pool is kept, rather than
-    /// dropped for want of something to step out of — which would leave a
-    /// `Repo`-backed subscription with no executor at all.
     #[tokio::test]
     async fn a_socket_keeps_a_handle_that_is_already_the_pool() {
         let captured =
@@ -890,17 +725,13 @@ mod tests {
         );
     }
 
-    /// No ORM installed at all: nothing to carry, and the socket runs untouched
-    /// rather than failing to open.
     #[tokio::test]
     async fn a_socket_without_an_orm_carries_nothing() {
         assert!(socket_executor().is_none());
     }
 
-    /// [`completed_id`] reads a frame's opening rather than parsing every frame,
-    /// so the opening it reads is pinned here against the frame async-graphql
-    /// itself writes for an operation that completed — in both protocols the
-    /// mount negotiates.
+    /// Pins the opening [`completed_id`] reads against async-graphql's own
+    /// `complete` frame, in both negotiated protocols.
     #[tokio::test]
     async fn the_complete_async_graphql_writes_is_the_one_read() {
         use async_graphql::futures_util::stream;
@@ -946,9 +777,6 @@ mod tests {
         }
     }
 
-    /// At its end the peer's half stops reading and hands the engine a `stop`
-    /// for every operation still running, then ends — which is how the engine
-    /// comes to write a `complete` for each.
     #[tokio::test]
     #[expect(
         clippy::let_underscore_must_use,
@@ -999,9 +827,6 @@ mod tests {
         assert_eq!(ending.get(), Some(&Ending::GoingAway));
     }
 
-    /// A query or a mutation sent over the socket is still answering at the
-    /// socket's end, so it is not stopped: the peer's half waits for its
-    /// `complete` — pruned by the outbound half — before it ends.
     #[tokio::test]
     #[expect(
         clippy::let_underscore_must_use,

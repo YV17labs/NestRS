@@ -1,7 +1,5 @@
-//! `RedisQueueModule`'s composition, in process: the portable producer and the
-//! consumer are *declarations*, so a second queue backend imported beside it
-//! fails the boot naming the remedy — before any factory runs, so before Redis
-//! is dialled.
+//! `RedisQueueModule`'s composition, in process: a second queue backend imported
+//! beside it fails the boot before any factory runs, so before Redis is dialled.
 
 use std::sync::Arc;
 
@@ -56,9 +54,6 @@ impl Module for ElsewhereQueueModule {
 ])]
 struct TwoBackendsModule;
 
-/// Without the declaration, whichever binding `imports` listed last would serve
-/// every push in silence — and a feature injecting `Arc<dyn JobProducer>` never
-/// names the backend, so nothing else would ever say which one it got.
 #[tokio::test]
 async fn a_second_queue_backend_beside_redis_fails_the_boot_naming_the_remedy() {
     let Err(error) = App::builder().module::<TwoBackendsModule>().build().await else {
@@ -135,9 +130,6 @@ impl Module for ElsewhereConsumerModule {
 ])]
 struct TwoConsumersModule;
 
-/// The consumer is declared too: without it, whichever binding `imports`
-/// listed last would run every job in silence, and the producer and the
-/// consumer could each be another backend's.
 #[tokio::test]
 async fn a_second_queue_consumer_beside_redis_fails_the_boot_naming_the_remedy() {
     let Err(error) = App::builder().module::<TwoConsumersModule>().build().await else {

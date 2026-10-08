@@ -1,7 +1,5 @@
-//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`) must
-//! satisfy the access contract: binding a layer whose module isn't imported
-//! fails the boot with `AccessGraphError`, never silently resolves or panics
-//! at mount.
+//! Attribute-referenced layers (`#[use_guards/filters/interceptors]`) satisfy
+//! the access contract: a layer whose module isn't imported fails the boot.
 
 use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard};
@@ -126,15 +124,11 @@ struct EagerConsumer {
     _dep: std::sync::Arc<UnprovidedDep>,
 }
 
-// `EagerConsumer` injects `UnprovidedDep`, which no module provides.
 #[module(providers = [EagerConsumer])]
 struct EagerMissingModule;
 
 #[test]
 fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic() {
-    // The register phase used to panic on this before the access-graph check
-    // could run; it now defers to the graph, so the failure is the same named
-    // boot error as every other wiring mistake.
     match App::new::<EagerMissingModule>() {
         Ok(_) => panic!("an unprovided eager dependency must fail the boot"),
         Err(err) => {
@@ -153,8 +147,6 @@ fn an_eager_provider_with_a_missing_dependency_is_a_named_boot_error_not_a_panic
 
 #[test]
 fn two_modules_providing_the_same_concrete_type_fail_the_boot() {
-    // A concrete type registered by two modules used to silently last-write-wins;
-    // it now fails the boot, uniform with every other wiring error.
     match App::new::<DuplicateRoot>() {
         Ok(_) => panic!("a duplicate concrete provider must fail the boot"),
         Err(err) => {

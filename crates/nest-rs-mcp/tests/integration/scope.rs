@@ -1,16 +1,5 @@
-//! Ambient request state reaches a tool body.
-//!
-//! rmcp dispatches each tool call on its own spawned task, so a task-local
-//! installed around the poem endpoint does not reach it. `PropagatingHandler`
-//! closes that gap: the endpoint stashes the scope in the request extensions,
-//! rmcp forwards them as `http::request::Parts` into the operation's
-//! `RequestContext`, and the handler re-installs the task-local *inside* the
-//! spawned dispatch.
-//!
-//! This drives a real `tools/call` through the real endpoint. If it regresses,
-//! `Scoped<T>` silently stops resolving and `Repo`-backed tools fall back to
-//! failing closed — so the assertion is on what the tool body actually saw,
-//! not on the transport succeeding.
+//! Ambient request state reaches a tool body across rmcp's spawned dispatch,
+//! asserted on what the body saw rather than on the transport succeeding.
 
 use std::sync::{Arc, Mutex};
 
@@ -24,8 +13,6 @@ use poem::test::TestClient;
 use poem::{Endpoint, EndpointExt, IntoEndpoint};
 use tracing::Instrument;
 
-/// A request-scoped provider the tool tries to resolve. Its presence is the
-/// signal; nothing reads the payload.
 struct Probe;
 
 #[derive(Clone)]
@@ -33,8 +20,6 @@ struct ScopeProbeTool;
 
 #[tool_router]
 impl ScopeProbeTool {
-    /// Reports over the wire whether `Scoped::from_context` found the
-    /// task-local — the response *is* the assertion.
     #[tool(description = "Report whether the request scope reached this tool body.")]
     async fn probe_scope(&self) -> Result<CallToolResult, McpError> {
         let seen = Scoped::<Probe>::from_context().is_ok();
@@ -49,8 +34,7 @@ impl ScopeProbeTool {
 #[tool_handler]
 impl ServerHandler for ScopeProbeTool {}
 
-/// Mirrors the HTTP transport edge: run the inner endpoint under the ambient
-/// request context so the MCP endpoint re-installs it across rmcp's spawn.
+/// Mirrors the HTTP transport edge, which installs the request scope.
 fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
     let container = Container::builder()
         .provide_scoped::<Probe, _>(|_| Probe)
@@ -81,9 +65,7 @@ async fn ambient_request_scope_reaches_a_tool_body() {
     );
 }
 
-/// The span identity a tool body ran under, reported back to the test.
-/// What the tool body observed: the span it ran under, and the trace it was
-/// filed in.
+/// What the tool body observed: the span it ran under, and its trace.
 type SeenSpan = Arc<Mutex<Option<(Option<&'static str>, Option<String>)>>>;
 
 #[derive(Clone)]
@@ -93,8 +75,6 @@ struct SpanProbeTool {
 
 #[tool_router]
 impl SpanProbeTool {
-    /// Records the ambient span rather than asserting on it: the tool body is
-    /// the only place that can answer what the dispatch installed.
     #[tool(description = "Record the span this tool body ran under.")]
     async fn probe_span(&self) -> Result<CallToolResult, McpError> {
         *self.seen.lock().expect("probe lock") = Some((
@@ -110,9 +90,7 @@ impl SpanProbeTool {
 #[tool_handler]
 impl ServerHandler for SpanProbeTool {}
 
-/// Mirrors what the HTTP transport's outermost band does: run the whole request
-/// under one span, the way the OTel interceptor's `http.request` wraps
-/// everything below it.
+/// Mirrors the OTel interceptor's `http.request` span around the whole request.
 fn under_span(inner: impl IntoEndpoint, span: tracing::Span) -> impl Endpoint {
     let inner = Arc::new(inner.into_endpoint().map_to_response());
     poem::endpoint::make(move |req| {
@@ -124,9 +102,7 @@ fn under_span(inner: impl IntoEndpoint, span: tracing::Span) -> impl Endpoint {
 
 #[tokio::test]
 async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
-    // A subscriber, so spans have identities at all. Thread-local is enough:
-    // `#[tokio::test]` is a current-thread runtime, so rmcp's spawned dispatch
-    // stays on this thread.
+    // Thread-local is enough: on a current-thread runtime rmcp's spawn stays here.
     let logs = nest_rs_testing::LogCapture::install();
 
     let seen: SeenSpan = Arc::default();
@@ -145,9 +121,6 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         .clone()
         .expect("the tool ran and reported what it ran under");
 
-    // rmcp dispatches every operation on a spawned task, so without the ambient
-    // being carried across it every event a tool and the services below it emit
-    // is rooted at the spawn — attributable to no request at all.
     assert_eq!(
         span_name,
         Some("mcp.operation"),
@@ -160,8 +133,7 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         .into_iter()
         .filter(|span| span.target == "nest_rs::mcp" && span.name == "mcp.operation")
         .collect();
-    // The handshake and the call are separate operations, so several spans are
-    // captured — which is itself the point: each is its own unit of work.
+    // The handshake and the call are separate operations, so several spans.
     let spans: std::collections::HashSet<_> = operations
         .iter()
         .filter_map(|span| span.field("span_id"))
@@ -188,9 +160,6 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         ran_under.field("parent_span_id"),
         "the operation is not a second name for the request that carried it",
     );
-    // The span says what the work was, in the conventions' dotted shape. It
-    // opened with the correlation and nothing else, so an exported trace showed
-    // one indistinguishable `mcp.operation` per call.
     assert_eq!(
         ran_under.field("mcp.method.name").as_deref(),
         Some("tools/call"),
@@ -202,18 +171,11 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         "{ran_under:?}",
     );
 
-    // Each operation also files the family's line. It is the only place a tool
-    // call reports itself: rmcp addresses many operations over one HTTP request,
-    // so the endpoint's access line names the session and says nothing about the
-    // work.
     let served = logs.find(
         nest_rs_core::operation_log::TARGET,
         nest_rs_mcp::unit::OPERATION.name(),
     );
-    // At least one line per operation span, and possibly more: a **notification**
-    // is dispatched work and files a line, but opens no `mcp.operation` span of
-    // its own — it runs under the request's. So the counts are not equal, and
-    // asserting they were would forbid the notification line rather than check it.
+    // `>=`: a notification files a line but opens no `mcp.operation` span.
     assert!(
         served.len() >= operations.len(),
         "every operation files a line: {} lines for {} operations: {served:?}",
@@ -224,23 +186,17 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         served.iter().all(|line| line.field("method").is_some()),
         "every line names the JSON-RPC method a client addressed: {served:?}",
     );
-    // The protocol's word for it, never rmcp's Rust ident: `call_tool` appears
-    // in no MCP document, and a line spelling it cannot be joined against a
-    // capture of the wire.
+    // The protocol's method name, never rmcp's ident (`call_tool`).
     let tool_call = served
         .iter()
         .find(|line| line.field("method").as_deref() == Some("tools/call"))
         .unwrap_or_else(|| panic!("the tool call files a line: {served:?}"));
-    // The half that makes the line worth reading: every `tools/call` in a
-    // deployment carries the same method, so without the tool's own name they
-    // are byte-identical and the work stays anonymous.
     assert_eq!(
         tool_call.field("operation").as_deref(),
         Some("probe_span"),
         "the line names the tool the request addressed: {served:?}",
     );
-    // And absent — not empty, not a sentinel — where the protocol addresses
-    // nothing, so a query for a named operation can never match `initialize`.
+    // Absent, not empty, where the protocol addresses nothing.
     let handshake = served
         .iter()
         .find(|line| line.field("method").as_deref() == Some("initialize"))
@@ -252,11 +208,6 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
             .all(|line| line.field("duration_ms").is_some()),
         "every line is timed: {served:?}",
     );
-    // The ids are deliberately *not* asserted here, and the reason is worth
-    // writing down: they are not fields of this event. The formatter reads them
-    // off the ambient context at emission, so `LogCapture` — which records what
-    // an event declared — cannot see them at any layer. That the line sits inside
-    // a context at all is what `nest-rs-core`'s own formatter tests cover, and
-    // this line emits through `RequestContinuation` precisely because the
-    // dispatch installs its scope deeper than the line is written.
+    // The ids are not asserted: the formatter reads them off the ambient context,
+    // which `LogCapture` cannot see; `nest-rs-core`'s formatter tests cover them.
 }

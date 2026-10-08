@@ -1,6 +1,5 @@
-//! Integration tests organized by concern — the exception the test layout
-//! grants this crate rather than mirroring `src/`. One binary, one module per
-//! concern.
+//! Integration tests organized by concern rather than mirroring `src/`: this
+//! crate's suite drives the whole framework.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

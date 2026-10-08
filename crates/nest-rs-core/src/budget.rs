@@ -11,13 +11,9 @@ use crate::Container;
 /// cause.
 ///
 /// Declared at collect (`builder.provide_meta(Budget::of::<R>(…))`) by the
-/// module that opens the resource and by each binding that hands it to a port
-/// or reaches it from every unit of work, so a resource seeded without its
-/// module is held too; declared twice, it is one budget, ambient if either
-/// declaration is. The boot reads it off the provider the container holds, as
-/// soon as that provider exists — a seed before any factory runs, a factory's
-/// output once that factory ran. A budget whose provider was never built is
-/// not held at all.
+/// module that opens the resource and by each binding that hands it on; declared
+/// twice, it is one budget. The boot reads it as soon as the provider exists; a
+/// budget whose provider was never built is not held.
 pub struct Budget {
     resource: &'static str,
     setting: String,

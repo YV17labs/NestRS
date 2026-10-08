@@ -199,8 +199,7 @@ pub enum LeaseHold {
 /// Built from any [`JobConsumer`] and declared with
 /// `ContainerBuilder::provide_declared_factory_after`, carrying
 /// [`BACKEND_REMEDY`](crate::BACKEND_REMEDY): two backends imported is a boot
-/// error naming both, as for `Arc<dyn JobProducer>`. The consumer keeps its own
-/// type behind it, so the worker's loop calls it without a box per job.
+/// error naming both, as for `Arc<dyn JobProducer>`.
 pub struct BoundConsumer {
     run: Box<dyn Run>,
 }

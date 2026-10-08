@@ -69,12 +69,6 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Relation dataloaders and their batches.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::loader";
 
 mod exposures;
@@ -172,20 +166,11 @@ pub use nest_rs_resource_macros::expose;
 /// ```
 pub use nest_rs_resource_macros::wire_enum;
 
-// Re-exported so `#[expose]`-generated code resolves these through this crate
-// instead of the consumer's extern prelude. Only the *derive* paths the macro
-// emits (`::serde`, `::validator`, `::schemars`) remain call-site deps — a
-// derive's own expansion targets the consuming crate's prelude, so routing the
-// derive path through a re-export would be false hygiene.
+// Paths `#[expose]` emits, so an entity crate declares none of these; each
+// derive carries a `crate = ` override pointing back here.
 pub use async_trait::async_trait;
 pub use serde_json;
-// `#[expose]` derives on the wire DTO and the create/update inputs it
-// generates; each derive carries a `crate = ` override pointing back here, so
-// an entity crate declares none of the three.
-// The entity-site trio. `#[expose]` emits `::sea_orm::`, `::uuid::` and
-// `::chrono::` for the ActiveModel plumbing and the lifecycle impl it
-// generates — code the entity crate never writes, so it must not have to
-// declare them either.
+
 #[doc(hidden)]
 pub use chrono;
 #[doc(hidden)]

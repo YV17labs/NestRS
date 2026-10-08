@@ -1,15 +1,7 @@
 //! What a job attempt *is*, written once for every backend and run by the
-//! port's [`QueueWorker`](crate::QueueWorker): discovery, which drains the
-//! `#[process]` inventory module-gated and refuses two methods on one queue and
-//! any declaration the backend cannot honour, and [`attempt`](crate::consume::attempt), which opens the
-//! envelope, continues or mints the trace, opens the `queue.job` span and the
-//! ambient scope, catches a panic, spends or ends the retry budget and says how
-//! long to wait before the next attempt, and files the events and the
+//! port's [`QueueWorker`](crate::QueueWorker): discovery of the `#[process]`
+//! inventory, and [`attempt`](crate::consume::attempt), from the envelope to the
 //! `nest_rs::operation` line.
-//!
-//! Not a driver's seam: a backend implements
-//! [`JobConsumer`](crate::JobConsumer), and the worker calls these. Public, and
-//! hidden, so this crate's suite drives an attempt without a worker.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -33,43 +25,26 @@ use crate::{
     Throttle, backoff, unit,
 };
 
-/// A job span's `messaging.operation.name` and `messaging.operation.type`:
-/// OpenTelemetry's messaging conventions call the consumer's unit of work
-/// `process`.
+/// A job span's `messaging.operation.name` and `messaging.operation.type`, per
+/// OpenTelemetry's messaging conventions.
 const PROCESS: &str = "process";
 
 /// How long a job sealed by a newer release waits before it is delivered again,
 /// when a consumer of this release hands it back — [`AttemptOutcome::Defer`].
-///
-/// Long enough that a backlog of such jobs is not fetched and handed back
-/// continuously while old replicas outnumber new ones; short enough that, once a
-/// rolling deploy has put a consumer of the newer release in place, the jobs
-/// reach it within a minute.
 pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
 
 /// How long a job sealed by a newer release may go unread before a consumer of
 /// this release dead-letters it: a day, counted from the first time it was
 /// handed back unread ([`Delivery::with_deferred_for`]) — or from its push, on a
 /// backend that keeps no such record.
-///
-/// A rolling deploy mixes releases for minutes. A day of a newer release's jobs
-/// handed back every minute is a rollout that stopped — its producers rolled
-/// back, its consumers never coming — and without a bound those jobs would wait
-/// forever, each warned about once a minute. Dead-lettered, each is said once,
-/// naming both versions, and its record is kept with the dead letters — a week,
-/// on Redis — for a consumer of that release.
 pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How many deliveries of one record may end without an answer before the
 /// port dead-letters the job without running it.
 ///
-/// An answer ends a record — the job completes, is dead-lettered, or is filed
-/// again for its next attempt — so every earlier delivery of the record a
-/// backend hands over ended without one: its worker was killed, froze, or lost
-/// the backend past its lease. The retry budget counts attempts that answered;
-/// this counts the ones that never did, so a job that takes its worker down
-/// stops after three tries instead of forever, and a job whose delivery merely
-/// went missing — a reply lost, a worker restarted — still runs.
+/// The retry budget counts attempts that answered; this counts the deliveries
+/// that never did — a worker killed, frozen, or cut from the backend past its
+/// lease.
 pub const STALL_LIMIT: u32 = 3;
 
 /// The boot's refusal of each declaration on `method` that `backend` does not
@@ -93,8 +68,6 @@ pub(crate) fn unsupported_by<'a>(
 /// drains a queue whose name breaks the rule, declares something `backend`
 /// cannot honour, or claims a queue another method already drains. Checked after
 /// module-gating, so a method another app owns cannot fail this app's boot.
-///
-/// What [`QueueWorker`](crate::QueueWorker) runs at boot.
 pub fn discover(
     container: &Container,
     backend: &QueueBackend,
@@ -137,9 +110,7 @@ pub(crate) fn check(
     let mut refusals = Vec::new();
     let mut checked = Vec::with_capacity(methods.len());
     for method in &methods {
-        // A decorator's literals were checked at compile time; an entry built by
-        // hand reaches the boot unchecked, so the boot checks what the decorator
-        // would have — in the sentence the port already words.
+        // An entry built by hand, not by the decorator, reaches the boot unchecked.
         match QueueName::new(method.queue()) {
             Ok(queue) => checked.push((*method, queue)),
             Err(refused) => refusals.push(format!(
@@ -165,9 +136,6 @@ pub(crate) fn check(
         anyhow::bail!("{}", refusals.join("\n"));
     }
 
-    // Aggregating a queue is like aggregating a mount: the one failure mode it
-    // adds is two contributions claiming one addressable name, and that is a
-    // boot error naming both.
     check_duplicate_queue_claims(&methods).map_err(anyhow::Error::msg)?;
     for method in &methods {
         let options = method.options();
@@ -188,13 +156,6 @@ pub(crate) fn check(
 }
 
 /// Two `#[process]` methods may not drain one queue.
-///
-/// A queue is addressed by name and carries exactly one job type
-/// (`#[process(queue = Q)]` asserts the handler's payload is `Q::Job`), so
-/// draining it twice is never the shape a developer meant: each job would go to
-/// whichever handler a backend happened to hand it to, and the retry budget would
-/// fork with it. The way to run more jobs at once is `concurrency`, not a second
-/// handler.
 fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String> {
     let mut claimants: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
     for method in methods {
@@ -221,8 +182,8 @@ fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String
     ))
 }
 
-/// How one attempt ended, in the port's vocabulary. The adapter translates it
-/// into its backend's — and nothing else about the outcome is its to decide.
+/// How one attempt ended, in the port's vocabulary; the adapter translates it
+/// into its backend's.
 #[derive(Debug)]
 pub enum AttemptOutcome {
     /// The handler returned `Ok`, and its data context settled. The job is done:
@@ -233,8 +194,7 @@ pub enum AttemptOutcome {
     /// `after` has passed.
     ///
     /// `after` is `min(5 min, 1 s · 2^(n − 1))` for failed attempt `n`, scaled by
-    /// a jitter between 0.8 and 1.2 derived from the job's id and `n` — the same
-    /// wait on every backend, and for any job reproducible from its id.
+    /// a jitter between 0.8 and 1.2 derived from the job's id and `n`.
     ///
     /// The [`Delivery`] already counts the next attempt. A backend declaring
     /// [`DelayedPush`](crate::Capability::DelayedPush) re-files
@@ -251,11 +211,9 @@ pub enum AttemptOutcome {
     /// an older version), or retryably on its last attempt: dead-letter it.
     ///
     /// The record an adapter keeps of the failure is
-    /// [`error_message`](fn@nest_rs_core::error_message)'s rendering — the sentence
-    /// the dead-letter line carries, every cause and each decode failure said
-    /// without its value — never the error's own `Display` or its `source`
-    /// alone: the first may spell a decode failure in serde's words, and the
-    /// second drops what a `.context(…)` wrapped.
+    /// [`error_message`](fn@nest_rs_core::error_message)'s rendering, never the
+    /// error's own `Display` (it may spell a decode failure in serde's words) or
+    /// its `source` alone (it drops what a `.context(…)` wrapped).
     DeadLetter(JobError),
     /// The job was sealed by a newer release than this consumer's, which cannot
     /// read it: nothing ran and no attempt is spent. Hand the stored record
@@ -264,13 +222,8 @@ pub enum AttemptOutcome {
     /// acknowledge this delivery; a backend that counted an attempt start for
     /// it takes the start back, as for any delivery handed back without an
     /// answer, and one that keeps how long a job has waited unread records the
-    /// first such hand-back ([`Delivery::with_deferred_for`]).
-    ///
-    /// A rolling deploy is the case: an older replica meets a newer producer's
-    /// job, and the job waits for a replica of the newer release instead of
-    /// being dead-lettered by one that is leaving — for
-    /// [`NEWER_RELEASE_PATIENCE`] at the most. `after` is
-    /// [`NEWER_RELEASE_WAIT`].
+    /// first such hand-back ([`Delivery::with_deferred_for`]). `after` is
+    /// [`NEWER_RELEASE_WAIT`], for [`NEWER_RELEASE_PATIENCE`] at the most.
     Defer {
         /// How long the job waits before it is delivered again.
         after: Duration,
@@ -279,16 +232,13 @@ pub enum AttemptOutcome {
 
 /// One job as its backend delivered it — what every attempt at it reads.
 ///
-/// Built once per delivery by the adapter and handed to each [`attempt`], so
-/// what the delivery holds — the stored value, the job's id, the attempt it is
-/// at, the checkpoint read so far — is shared by the attempts a retry budget
-/// runs inside it.
+/// Built once per delivery by the adapter and handed to each [`attempt`] a retry
+/// budget runs inside it.
 #[non_exhaustive]
 pub struct Delivery {
     backend: &'static QueueBackend,
     queue: QueueName,
     id: JobId,
-    /// The attempt the next call to [`attempt`] runs.
     attempt: u32,
     /// How many earlier deliveries of this record ended without an answer.
     stalls: u32,
@@ -299,9 +249,8 @@ pub struct Delivery {
     backend_id: Option<String>,
     message: Value,
     checkpoints: Option<Arc<CheckpointCell>>,
-    /// The trace the first attempt minted, when the stored value carried none
-    /// to continue: every later attempt at this delivery runs inside it, so the
-    /// attempts at one job are one trace whether or not the envelope had one.
+    /// The trace the first attempt minted when the stored value carried none:
+    /// every later attempt at this delivery runs inside it.
     minted: Option<Correlation>,
     /// Whether the lines said once per delivery — a legacy payload, an
     /// unusable key — have been filed.
@@ -351,15 +300,11 @@ impl Delivery {
     /// How long the backend has handed this job back unread for a newer release
     /// — since the first of an unbroken run of [`AttemptOutcome::Defer`]
     /// answers, zero when there is none — for a backend that can keep it per
-    /// job.
+    /// job; without it, the port counts from the job's push, delay included.
     ///
-    /// A job a newer release sealed is dead-lettered once it has waited unread
-    /// past [`NEWER_RELEASE_PATIENCE`]. Counted from its first hand-back, a job
-    /// pushed with a delay is not charged for the delay; without this, the port
-    /// counts from the job's push — the instant its id was minted — which
-    /// charges a delayed job its delay too. A backend keeps the instant of the
-    /// first hand-back answering `Defer`, clears it once a delivery reads the job
-    /// or the job settles, and passes how long ago that was.
+    /// A backend keeps the instant of the first hand-back answering `Defer`,
+    /// clears it once a delivery reads the job or the job settles, and passes how
+    /// long ago that was.
     pub fn with_deferred_for(mut self, waited: Duration) -> Self {
         self.deferred_for = Some(waited);
         self
@@ -415,30 +360,18 @@ impl Delivery {
 /// Run the attempt `delivery` is at (1 for the first) of `method` — the whole of
 /// what an attempt is, from the envelope to the line that reports it.
 ///
-/// The job's id and the attempt ride the span and the operation line, so the
-/// attempts at one job are one `job_id` and distinct `attempt`s. The budget is
-/// the port's: a retryable failure is [`AttemptOutcome::Retry`] while the
-/// attempt is within `retries` re-runs of the first — and the delivery counts
-/// the next one — and [`AttemptOutcome::DeadLetter`] on the last, so an adapter
-/// never counts, and every backend spends a budget alike. A delivery past
-/// [`STALL_LIMIT`] deliveries that ended without an answer is dead-lettered
-/// without running.
+/// A retryable failure is [`AttemptOutcome::Retry`] while the attempt is within
+/// `retries` re-runs of the first — and the delivery counts the next one — and
+/// [`AttemptOutcome::DeadLetter`] on the last, so an adapter never counts. A
+/// delivery past [`STALL_LIMIT`] is dead-lettered without running.
 ///
-/// A job sealed by a newer release runs nothing: the delivery says so once, at
-/// `warn`, naming both versions, and the answer is [`AttemptOutcome::Defer`] —
-/// until the job has waited unread past [`NEWER_RELEASE_PATIENCE`], or at once
-/// when it names no id this release reads, since nothing can then follow it
-/// from one delivery to the next: it is then dead-lettered, as a unit of work
-/// with its line. Both are filed in the newer envelope's trace when it spells
-/// one as this release does.
+/// A job sealed by a newer release runs nothing and answers
+/// [`AttemptOutcome::Defer`], until it has waited unread past
+/// [`NEWER_RELEASE_PATIENCE`] — or at once when it names no id this release
+/// reads — when it is dead-lettered.
 ///
-/// **An attempt its driver drops still files its line.** A driver stops an
-/// attempt by dropping this future — a drain whose window closed on it, a
-/// worker torn down — and the handler is dropped where it waits. That attempt
-/// was a unit of work all the same, so it files its `queue.job` line with
-/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) and the time it ran,
-/// in the job's own trace; what the driver does with the job next — hand it
-/// back, take the attempt back — is the driver's to say.
+/// An attempt its driver drops still files its `queue.job` line, with
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
 pub async fn attempt(
     method: &'static ProcessMethod,
     delivery: &mut Delivery,
@@ -492,19 +425,8 @@ pub async fn attempt(
         (None, Ok(payload)) => Input::Payload(payload),
         (None, Err(refused)) => Input::Refused(refused),
     };
-    // The producer sealed its W3C trace context into the envelope, because a
-    // queue is the one hop the framework crosses that is a *process* boundary
-    // rather than a task one. Continuing it here is what makes the HTTP request
-    // that enqueued, and this worker minutes later in another binary, one trace
-    // with the job a child of the enqueue — every attempt a child of it, so the
-    // attempts at one job share its trace. A value carrying nothing to continue
-    // gets a trace minted at the first attempt (for the actor it names, when it
-    // names one), and every later attempt runs as a child of that first one:
-    // one trace per delivery either way — and a driver runs every attempt of a
-    // budget inside its delivery — which is what an operator following a retried
-    // job by its `trace_id` is promised. A backend re-filing each attempt carries
-    // the first attempt's trace in the record, marked as minted: continued, it
-    // joins the job's own trace and is still not the producer's.
+    // One trace per job: the producer's, continued, or one minted at the first
+    // attempt — which a re-filed record carries marked as minted, never as the producer's.
     let continued_trace = !minted_trace
         && inherited
             .as_ref()
@@ -521,12 +443,7 @@ pub async fn attempt(
     let first_opening = !delivery.announced;
     delivery.announced = true;
     let queue = delivery.queue.as_str();
-    // One span per attempt; `.instrument` (not an entered guard held across
-    // `.await`) keeps it current for the whole poll. Through `operation_span!` so
-    // a job declares the canonical fields every edge does, and in OpenTelemetry's
-    // messaging vocabulary so a messaging view recognises it: a `process` span of
-    // `messaging.system` on `messaging.destination.name`, named as the
-    // conventions name it.
+    // `.instrument`, never an entered guard held across `.await`.
     let span = nest_rs_core::operation_span!(
         unit::JOB,
         &correlation,
@@ -539,14 +456,8 @@ pub async fn attempt(
         backend_id = delivery.backend_id.as_deref(),
         processor = method.name(),
         attempt,
-        // Whether this job is traceable back to what enqueued it, or starts a
-        // trace of its own. An operator chasing a lost request needs to tell
-        // the two apart.
         continued_trace,
     );
-    // What the job's own line reports it *was*. The span carries the same facts
-    // for the export; a log line renders no span state, so the line that names
-    // the work has to carry them as event attributes of its own.
     let identity = JobIdentity {
         queue: delivery.queue.clone(),
         processor: method.name(),
@@ -560,15 +471,12 @@ pub async fn attempt(
         checkpoints: checkpoints.clone(),
     };
     let retry_after = backoff::retry_after(&delivery.id, attempt);
-    // The ambient context too, not just the span: a `#[process]` body that
-    // enqueues a follow-up job must seal *this* trace, not mint a third one and
-    // break the chain — and every line below, the attempt's own included, reads
-    // its trace ids off the ambient context, not off the span.
+    // The ambient context too: a job the body pushes seals *this* trace, and
+    // every line below reads its trace ids off it, not off the span.
     let scope = Arc::new(RequestScope::new(container));
     let outcome = with_request_scope(Some(scope), correlation, async move {
         tracing::debug!(target: TARGET, attempt, "job started");
-        // Said once per delivery: every attempt reopens the same stored value,
-        // and a retry is not a second legacy job.
+        // Said once per delivery: a retry is not a second legacy job.
         if first_opening {
             if unversioned {
                 tracing::warn!(
@@ -612,18 +520,14 @@ fn waited_unread(delivery: &Delivery) -> Option<Duration> {
     Some(delivery.deferred_for.unwrap_or_else(|| id.age()))
 }
 
-/// What to do about a job a newer release sealed that this release keeps
-/// handing back — the remedy every line about one names.
+/// The remedy every line about a job a newer release sealed names.
 const NEWER_RELEASE_REMEDY: &str = "a newer release sealed this job and only its consumers can \
      run it: finish rolling them forward, or, rolling back, keep one running until the queue \
      holds none of its jobs — a job still unread a day after it was first handed back is \
      dead-lettered, naming both versions, and kept with the dead letters for a consumer of that \
      release";
 
-/// Hand back a job a newer release sealed: nothing runs, and the delivery says
-/// once, at `warn` and in the job's own trace when its envelope spells one as
-/// this release does, which release sealed it, which this one reads, and how
-/// long it has waited.
+/// Hand back a job a newer release sealed, saying so once per delivery at `warn`.
 async fn defer_newer(delivery: &mut Delivery, version: u64, waited: Duration) -> AttemptOutcome {
     if !delivery.announced {
         delivery.announced = true;
@@ -651,19 +555,13 @@ async fn defer_newer(delivery: &mut Delivery, version: u64, waited: Duration) ->
     }
 }
 
-/// `duration` in whole milliseconds, for a line's field.
 pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Dead-letter a delivery the worker cannot run — a record its backend could
-/// not hand over, or one that is not JSON — as a unit of work of its own.
-///
-/// It opens the `queue.job` span, files the dead-letter event and the
-/// `nest_rs::operation` line as an attempt does, under a trace of its own, since
-/// a record not read that far carries none, and hands back the error the job is
-/// dead-lettered with. `backend_id` is the backend's own id for the record, when
-/// it has one.
+/// not hand over, or one that is not JSON — as a unit of work of its own, and
+/// hand back the error the job is dead-lettered with.
 pub async fn refuse(
     backend: &'static QueueBackend,
     queue: &QueueName,
@@ -740,10 +638,8 @@ enum Unrun {
     },
 }
 
-/// What one job attempt is, for the line that reports it ran.
-///
-/// Held as a value rather than read back off the span: `tracing` gives no way to
-/// read a span's fields, and a log line renders none of them anyway.
+/// What one job attempt is, for the line that reports it ran: `tracing` cannot
+/// read a span's fields back, and a log line renders none of them.
 struct JobIdentity {
     queue: QueueName,
     processor: &'static str,
@@ -755,14 +651,9 @@ struct JobIdentity {
 /// An attempt's `queue.job` line, filed exactly once: with the outcome the
 /// attempt settled on, or — dropped before it settled — with
 /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
-///
-/// Dropped inside the attempt's span and ambient scope, since both wrappers
-/// drop the future they wrap inside what they install, so the cancelled line
-/// carries the job's trace like every other line of the attempt.
 struct JobLine {
     identity: JobIdentity,
     started: Instant,
-    /// The attempt's span, which the outcome is recorded on for the export.
     span: tracing::Span,
     filed: bool,
 }
@@ -779,7 +670,6 @@ impl JobLine {
         }
     }
 
-    /// File the line for an attempt that settled on `outcome`.
     fn file(mut self, outcome: &'static str) {
         self.emit(outcome);
         self.filed = true;
@@ -806,9 +696,7 @@ impl Drop for JobLine {
         if self.filed {
             return;
         }
-        // Unwinding out of the port's own code rather than dropped by a driver:
-        // the handler's panics are caught before here, so this one is ours, and
-        // the unit still ended in one.
+        // The handler's panics are caught before here: this unwind is the port's own.
         let outcome = if std::thread::panicking() {
             nest_rs_core::operation_log::PANIC
         } else {
@@ -820,8 +708,7 @@ impl Drop for JobLine {
 
 /// Run one job handler — or refuse the envelope it would have run on — and turn
 /// the outcome into the event it logs plus the [`AttemptOutcome`] the adapter
-/// translates. Lifted out of [`attempt`] so every terminal state is reachable
-/// from a test.
+/// translates.
 ///
 /// | outcome | event | [`AttemptOutcome`] |
 /// | --- | --- | --- |
@@ -833,8 +720,7 @@ impl Drop for JobLine {
 /// | deliveries past [`STALL_LIMIT`] ended without an answer | `job dead-lettered: its deliveries ended without an answer past the stall limit` (`error`) | `DeadLetter` |
 /// | a newer release's, unread past the patience | `job dead-lettered: a newer release sealed it, and none of its consumers ran it in time` (`error`) | `DeadLetter` |
 ///
-/// The panic is caught **here** rather than left to a backend's panic layer,
-/// which would contain it correctly and unwind past this function — skipping the
+/// The panic is caught **here**: a backend's panic layer would unwind past the
 /// per-job span and every event below.
 async fn run(
     handler: JobHandler,
@@ -849,9 +735,8 @@ async fn run(
     let line = JobLine::open(identity);
     // `Err` when nothing ran, saying why.
     let outcome = match input {
-        // Cut at its timeout, an attempt fails retryably: the worker awaits
-        // developer code no edge deadline bounds, and a call that never answers
-        // would hold its permit for as long as the process lives.
+        // No edge deadline bounds developer code here: a handler that never
+        // answers would hold its permit for as long as the process lives.
         Input::Payload(payload) => Ok(
             match tokio::time::timeout(
                 timeout,
@@ -865,15 +750,10 @@ async fn run(
                 }))),
             },
         ),
-        // An envelope of another version never reaches the handler: the refusal
-        // is the attempt's outcome.
         Input::Refused(refused) => Ok(Ok(Err(refused))),
         Input::Stalled { deliveries } => Err(Unrun::Stalled { deliveries }),
         Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
     };
-    // Every terminal state, one detail event and one line. The detail says
-    // *why* and stays on `nest_rs::queue`; the line says the job ran, and is the
-    // family's. Neither restates the other's fields.
     let (settled, result) = match outcome {
         Err(Unrun::Unread { version, waited }) => {
             let supported = crate::WIRE_FORMAT_VERSION;
@@ -919,14 +799,8 @@ async fn run(
         }
         Ok(Ok(Ok(()))) => (nest_rs_core::operation_log::OK, AttemptOutcome::Ok),
         Ok(Ok(Err(error))) if !error.retryable => {
-            // `errors` carries the rejection's per-field detail when it had any —
-            // the member name HTTP and the WebSocket error frame use, so one query
-            // shape finds a validation failure on any transport.
-            //
-            // `error` is the failure's own sentence *and every cause beneath it*:
-            // a wrapper names none of them — `the queue backend failed` is what a
-            // checkpoint save finding no record displays — and the cause is what an
-            // operator acts on. The dead-letter record is rendered the same way.
+            // `errors` is the member name HTTP and the WebSocket error frame use;
+            // `error` is the whole chain, since a wrapper names no cause.
             tracing::error!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
@@ -968,9 +842,6 @@ async fn run(
                 panic.as_ref(),
                 "job dead-lettered: handler panicked",
             );
-            // A panic is deterministic as far as the queue can tell — the same
-            // payload panics again — so it dead-letters rather than burning the
-            // retry budget.
             (
                 nest_rs_core::operation_log::PANIC,
                 AttemptOutcome::DeadLetter(JobError::abort(panic_message(panic.as_ref()))),
@@ -1022,9 +893,6 @@ mod tests {
         .await
     }
 
-    /// A backend's panic layer dead-letters a panicking job correctly, and
-    /// `nest_rs::queue` used to say **nothing** about it. The panic branch emits
-    /// the same shape a deserialization failure does.
     #[tokio::test]
     async fn a_panicking_handler_is_dead_lettered_with_an_event() {
         fn boom(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1032,8 +900,7 @@ mod tests {
         }
 
         let logs = LogCapture::install();
-        // The default hook would print the panic to stderr and drown the test
-        // output; the event under test is the structured one.
+        // The default hook would print the panic and drown the test output.
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let result = run_payload(boom, false).await;
@@ -1063,8 +930,6 @@ mod tests {
         assert!(ran.field("duration_ms").is_some());
     }
 
-    /// A dead-lettered job is read from a log, days later, by someone who cannot
-    /// re-run it; the rejection's per-field detail rides the event as `errors`.
     #[tokio::test]
     async fn a_dead_lettered_pipe_rejection_logs_its_field_errors() {
         fn rejected(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1079,9 +944,6 @@ mod tests {
 
         let logs = LogCapture::install();
         let result = run_payload(rejected, false).await;
-        // The classification, not merely the failure: a non-retryable error that
-        // stopped dead-lettering would spend the whole budget re-running a payload
-        // that cannot succeed, and every assertion below would still pass.
         assert!(
             matches!(result, AttemptOutcome::DeadLetter(_)),
             "a non-retryable failure dead-letters so the budget is never spent on it",
@@ -1097,8 +959,6 @@ mod tests {
         );
     }
 
-    /// A failure with nothing structured to say must not invent an `errors`
-    /// field — an empty one reads as "checked, nothing found".
     #[tokio::test]
     async fn a_dead_letter_without_detail_logs_no_errors_field() {
         fn bare(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1117,7 +977,6 @@ mod tests {
         );
     }
 
-    /// The outcomes that are not panics, pinned against each other.
     #[tokio::test]
     async fn every_other_outcome_keeps_its_own_event() {
         fn ok(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1141,7 +1000,6 @@ mod tests {
             AttemptOutcome::Retry { .. }
         ));
 
-        // Success is said once, and it is the family's line that says it.
         assert!(
             logs.find(TARGET, "job ok").is_empty(),
             "a successful job reports through `nest_rs::operation`, not twice",
@@ -1158,9 +1016,6 @@ mod tests {
         );
     }
 
-    /// The retryable half: a transient failure that eventually succeeds leaves
-    /// the queue looking healthy, and this `warn` is the only signal before a
-    /// job succeeding on attempt four every time falls over.
     #[tokio::test]
     async fn a_retryable_failure_with_budget_left_is_reported_before_it_runs_again() {
         fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1192,11 +1047,6 @@ mod tests {
         assert!(ran.field("duration_ms").is_some());
     }
 
-    /// A wrapper names no cause — `the queue backend failed` is what a checkpoint
-    /// save finding no record displays — so a failure event carries the sentence
-    /// and every cause beneath it, as the dead-letter record already did. It
-    /// carried the wrapper alone, and the cause reached the console only from the
-    /// backend's own line, on another target.
     #[tokio::test]
     async fn a_failure_event_carries_every_cause_beneath_the_error() {
         fn wrapped(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1220,9 +1070,6 @@ mod tests {
         );
     }
 
-    /// The last attempt of a budget: the job dead-letters, and the line saying
-    /// so is not the one promising a retry that will never come — which is what
-    /// every backend logged while each counted the budget for itself.
     #[tokio::test]
     async fn a_retryable_failure_on_the_last_attempt_dead_letters_and_says_the_budget_is_spent() {
         fn flaky(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {
@@ -1252,8 +1099,6 @@ mod tests {
         );
     }
 
-    /// An envelope of another version is refused before the handler runs, and
-    /// dead-letters like any deterministic failure.
     #[tokio::test]
     async fn a_refused_envelope_never_reaches_the_handler() {
         fn unreachable_handler(_job: Cow<'_, Value>, _context: HandlerContext) -> Handler<'_> {

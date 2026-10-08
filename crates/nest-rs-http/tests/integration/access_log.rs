@@ -21,9 +21,6 @@ impl GreetingsController {
 #[module(providers = [GreetingsController])]
 struct GreetingsModule;
 
-/// The line names no client: an address is personal data, and a line is kept
-/// wherever the deployment ships its logs. Neither the address nor where it was
-/// read from is written.
 #[tokio::test]
 async fn the_line_carries_no_client_address() {
     let logs = LogCapture::install();

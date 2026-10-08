@@ -7,11 +7,8 @@ use std::time::Duration;
 
 use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 
-/// Default drain window on shutdown: 20s, the HTTP transport's, for the same
-/// arithmetic. The way down is the transports' windows, then the shutdown hooks'
-/// five seconds, then the telemetry flush's three, and it fits the 30 seconds
-/// Kubernetes gives a pod between `SIGTERM` and `SIGKILL` by default;
-/// `nest-rs-testing` pins the sum.
+/// Default drain window on shutdown: 20s, which with the hooks' 5s and the
+/// telemetry flush's 3s fits Kubernetes' default 30s grace; `nest-rs-testing` pins the sum.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 20;
 
 /// The drain window's bounds, the variable that sets it, and why.

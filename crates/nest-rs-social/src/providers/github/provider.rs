@@ -6,9 +6,7 @@ use super::config::GithubSocialConfig;
 use crate::provider::{ProfileFuture, SocialProfile, SocialProvider};
 use crate::registry::{SocialProviderEntry, resolve_provider};
 
-/// The GitHub social provider. Holds the shared [`OAuthClient`] and overrides
-/// only [`SocialProvider::profile`] — the redirect and code-exchange legs use
-/// the trait defaults.
+/// The GitHub social provider; overrides only [`SocialProvider::profile`].
 pub struct GithubSocialProvider {
     client: OAuthClient,
 }
@@ -21,11 +19,8 @@ impl GithubSocialProvider {
         Self { client }
     }
 
-    /// GitHub's `GET /user` does not attest email verification (and often
-    /// omits the email entirely), so prefer the primary **verified** address
-    /// from the dedicated emails endpoint. Fall back to the profile email as
-    /// *unverified* when the emails endpoint is unavailable (scope not granted)
-    /// or yields nothing verified.
+    /// GitHub's `GET /user` does not attest verification: prefer the primary
+    /// verified address from the emails endpoint, else the profile email, unverified.
     async fn resolve_email(
         &self,
         profile_email: Option<String>,
@@ -87,8 +82,6 @@ impl SocialProvider for GithubSocialProvider {
 
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
         Box::pin(async move {
-            // `/user` is the configured `userinfo_url` — go through `userinfo`
-            // so the endpoint has a single home (the config), like Google.
             let user: GithubUser = self.client.userinfo(&tokens.access_token).await?;
             let display_name = user.name.or(user.login);
             let (email, verified) = self.resolve_email(user.email, &tokens.access_token).await;
@@ -160,13 +153,8 @@ mod tests {
         );
     }
 
-    /// A GitHub login makes three calls through the client, one after another —
-    /// the code exchange, `/user` in [`SocialProvider::profile`], `/user/emails`
-    /// in `resolve_email` — the most any provider this crate ships makes. Each
-    /// may run to `CALL_TIMEOUT` before the client reports it, so the three
-    /// together must fit inside `AuthnGuard`'s net: past it, the guard would cut
-    /// short a login still being answered and replace the client's sentence,
-    /// which names the endpoint, with its own, which names only the strategy.
+    /// GitHub's three sequential calls must fit inside `AuthnGuard`'s net, or it
+    /// would replace the client's sentence naming the endpoint with its own.
     #[test]
     fn a_login_s_provider_calls_fit_inside_the_guard_s_net() {
         const CALLS: u32 = 3;
@@ -180,8 +168,6 @@ mod tests {
 
     #[test]
     fn profile_email_maps_to_unverified_when_it_is_the_only_source() {
-        // The `resolve_email` fallback path: an email the emails endpoint never
-        // confirmed is reported unverified, so it can never silently link.
         let profile = SocialProfile::new(GithubSocialProvider::KEY, "42")
             .with_email(Some("ada@example.com".into()), false);
         assert_eq!(profile.email.as_deref(), Some("ada@example.com"));

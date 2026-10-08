@@ -1,16 +1,9 @@
 //! `nestrs info` — what **this project** is.
 //!
-//! The split with `nestrs about` is the reason both exist. `about` answers *what
-//! NestRS is* — version, tagline, docs, licence, author — and prints the same
-//! lines on every machine in every directory. `info` answers *where you are
-//! standing*: which layout, which root, which apps and features it holds, the
-//! framework line its manifests pin, the env prefix in force, and the toolchain
-//! that will build it. Every line here needs the tree read; no line in `about`
-//! does.
-//!
-//! It never fails on "there is no project". A reader who ran it in the wrong
-//! directory is told so plainly — that is the answer they asked for, and an
-//! error exit would make `info` unusable as the first thing you type.
+//! `about` answers *what NestRS is*, the same on every machine; `info` answers
+//! *where you are standing* — layout, root, apps, features, the framework line
+//! the manifests pin, the env prefix in force and the toolchain. Outside a
+//! project it says so rather than failing.
 
 use std::path::{Path, PathBuf};
 
@@ -34,9 +27,6 @@ pub(crate) fn run(opts: InfoOptions) -> CliResult<()> {
         None => row("Layout", "none — not inside a nestrs workspace"),
     }
 
-    // Read from *this* environment, which is the source an app started here
-    // would read — the same reason `doctor` reports it rather than resolving it
-    // silently.
     row("Env prefix", &env_prefix_line());
     row(
         "Toolchain",
@@ -54,8 +44,7 @@ fn print_workspace(ws: &NestrsWorkspace, ctx: &Context, here: &Path) -> CliResul
     row("Framework", &framework_line(&ws.root)?);
     row("Apps", &list(&dir_names(&ws.apps_root())));
     row("Features", &list(&dir_names(&ws.features_root())));
-    // Which app a generator would wire into — the one thing about the cursor
-    // that changes what `nestrs g` does.
+    // Which app a generator would wire into.
     if let Some(app) = ctx.current_app.as_ref().and_then(|app| app.file_name()) {
         row("Current app", &app.to_string_lossy());
     }
@@ -84,8 +73,7 @@ fn env_prefix_line() -> String {
     }
 }
 
-/// The project's name: the workspace directory's own, since the project name
-/// stops at the workspace and appears nowhere below it.
+/// The project's name: the workspace directory's own.
 fn project_name(root: &Path) -> String {
     root.file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -93,11 +81,7 @@ fn project_name(root: &Path) -> String {
 }
 
 /// `root` as seen from `here` — `.` when they are the same, otherwise the climb.
-///
-/// The absolute path is a machine-local detail: a report worth pasting into an
-/// issue should not carry someone's home directory, and the relative form is
-/// also the one a reader can act on. The absolute path is the fallback for the
-/// case that cannot be relativized, which discovery makes unreachable.
+/// Relative, so a report pasted into an issue carries no home directory.
 fn relative(root: &Path, here: &Path) -> String {
     match here.strip_prefix(root) {
         Ok(rest) => match rest.components().count() {
@@ -108,8 +92,7 @@ fn relative(root: &Path, here: &Path) -> String {
     }
 }
 
-/// Sub-directory names, sorted. Dot-directories are excluded: nothing the
-/// layout defines starts with one, so they are always someone's tooling.
+/// Sub-directory names, sorted, dot-directories excluded.
 fn dir_names(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -147,8 +130,6 @@ mod tests {
         );
     }
 
-    // A report that leaks `/home/<someone>` is one nobody can paste into an
-    // issue; only a root the climb cannot reach falls back to the absolute path.
     #[test]
     fn an_unrelated_root_falls_back_to_the_path_it_has() {
         assert_eq!(

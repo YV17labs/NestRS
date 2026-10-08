@@ -1,7 +1,6 @@
 //! Single condition AST shared by the query pre-filter
 //! ([`Predicate::to_condition`] → SQL `WHERE`) and the response check
-//! ([`Predicate::matches`] → in-memory). Sharing one AST keeps the rows a
-//! query returns and the rows the response check accepts from drifting apart.
+//! ([`Predicate::matches`] → in-memory).
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -11,9 +10,7 @@ use sea_orm::{
     ColumnTrait, EntityTrait, Identity, ModelTrait, RelationDef, RelationTrait, RelationType, Value,
 };
 
-/// Scalar comparison operator for [`Predicate::Cmp`]. Equality already has its
-/// own variant ([`Predicate::Eq`]); this covers the remaining ordered/inequality
-/// comparisons. Deliberately minimal — extend on demand, not speculatively.
+/// Scalar comparison operator for [`Predicate::Cmp`]; equality is [`Predicate::Eq`].
 #[derive(Clone, Copy, Debug)]
 pub enum CmpOp {
     Ne,
@@ -29,17 +26,9 @@ pub enum Predicate<E: EntityTrait> {
     /// Unconditional match — an unrestricted grant/denial over every row.
     #[default]
     Always,
-    /// Malformation sentinel: renders an always-false SQL condition (`1 = 0`)
-    /// and matches no row in memory. Produced when [`PredicateBuilder::related`]
-    /// rejects an invalid relation predicate (composite key or a relation not
-    /// pointing at `R`). A rule carrying this sentinel fails
-    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build) with a
-    /// [`MalformedRuleError`](crate::MalformedRuleError) — the misconfiguration
-    /// surfaces loudly at ability construction. This matters most on the
-    /// *denial* side: a `cannot(...)` lowering to `1 = 0` would combine as
-    /// `grant AND NOT(1 = 0)`, i.e. fail-*open*; failing construction closes
-    /// that hole. On the grant side the same sentinel is fail-closed (deny-all),
-    /// but a silent developer error is still worth surfacing.
+    /// Malformation sentinel: renders `1 = 0` and matches no row in memory.
+    /// Produced when [`PredicateBuilder::related`] rejects a relation; a rule
+    /// carrying it fails [`AbilityBuilder::build`](crate::AbilityBuilder::build).
     Deny,
     /// Column equals a bound value — `col = value`.
     Eq(E::Column, Value),
@@ -67,14 +56,10 @@ pub enum Predicate<E: EntityTrait> {
 /// A condition that scopes `E` by a sub-condition on a *related* entity `R`,
 /// reached through a typed SeaORM relation. Type-erased over `R`: the
 /// sub-condition is pre-lowered to SQL (over `R`'s columns) at rule-definition
-/// time, and the join metadata comes from the [`RelationDef`]. Nothing here is
-/// generic over `R`, so it lives inside the monomorphic [`Predicate<E>`] without
-/// a type parameter.
+/// time, and the join metadata comes from the [`RelationDef`].
 ///
-/// The in-memory interpreter cannot traverse the relation without loading the
-/// parent, so [`Predicate::matches`] defers to SQL for relational row
-/// visibility (returns `true`); the by-id / create paths re-check against the
-/// same lowered condition in SQL instead (one source of truth).
+/// [`Predicate::matches`] cannot traverse the relation without loading the
+/// parent, so it defers row visibility to SQL (returns `true`).
 #[derive(Clone)]
 pub struct RelatedPredicate {
     /// `E -> R` relation: yields the from-column (on `E`), the to-column (on
@@ -92,11 +77,8 @@ impl RelatedPredicate {
     /// widened past the join.
     fn to_condition(&self) -> Condition {
         let def = &self.relation;
-        // v1 supports single-column keys only. A composite key is rejected in
-        // `PredicateBuilder::related` (which returns `Predicate::Deny` rather
-        // than building a `Related`), so this path is unreachable in practice;
-        // it stays as fail-closed defense-in-depth — deny every row rather than
-        // panic the request.
+        // Unreachable: `PredicateBuilder::related` rejects a composite key. Fail
+        // closed rather than panic the request.
         let (Some(from_col), Some(to_col)) = (unary_iden(&def.from_col), unary_iden(&def.to_col))
         else {
             tracing::error!(
@@ -225,22 +207,15 @@ impl<E: EntityTrait> Predicate<E> {
             Predicate::And(parts) => parts.iter().all(|p| p.matches(model)),
             Predicate::Or(parts) => parts.iter().any(|p| p.matches(model)),
             Predicate::Not(inner) => !inner.matches(model),
-            // Row visibility for a relational rule is decided in SQL (system 2):
-            // the list filter already excluded out-of-scope rows, and the
-            // by-id/create paths re-check against the same lowered condition.
-            // The in-memory check cannot traverse the relation without loading
-            // the parent (it would have to be async and would load rows on the
-            // fly), so it defers rather than guessing. Field masking still runs.
+            // Row visibility for a relational rule is decided in SQL: the
+            // in-memory check cannot traverse the relation, so it defers.
             Predicate::Related(_) => true,
         }
     }
 }
 
-/// Order two [`Value`]s of the same variant. `Value` derives `PartialEq` but not
-/// `PartialOrd`, so the ordered `Cmp` operators need this. Returns `None` for
-/// `NULL` operands or mismatched variants — the in-memory `Cmp` arm treats that
-/// as "no match" (fail closed). Covers the scalar and temporal column types a
-/// row-level rule realistically orders; equality/`Ne` does not route through here.
+/// Order two [`Value`]s of the same variant (`Value` is not `PartialOrd`).
+/// `None` for `NULL` operands or mismatched variants, which `Cmp` reads as no match.
 fn value_ordering(a: &Value, b: &Value) -> Option<Ordering> {
     use Value::*;
     match (a, b) {
@@ -406,17 +381,9 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     /// # }
     /// ```
     ///
-    /// Two runtime checks close the gap that type erasure opens. `related()`
-    /// runs inside `AbilityFactory::define` — i.e. per authenticated request —
-    /// so a violation never panics the request: each check logs an `error!`
-    /// (target `nest_rs::authz`) and returns [`Predicate::Deny`]. A rule that
-    /// carries that sentinel then fails
-    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build), so the
-    /// misconfiguration is rejected loudly rather than silently going fail-open
-    /// on the denial side. Both cases are a developer misconfiguration:
-    /// - the relation must point at `R` (its `to_tbl` must be `R`'s table);
-    /// - the relation must be single-column (composite keys are unsupported in
-    ///   v1).
+    /// A relation not pointing at `R`, or a composite key, logs an `error!` and
+    /// returns [`Predicate::Deny`], which fails
+    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build).
     pub fn related<R, F>(&self, relation: E::Relation, build: F) -> Predicate<E>
     where
         R: EntityTrait,
@@ -494,9 +461,7 @@ mod tests {
         }
     }
 
-    // A parent/child pair for relational tests: `child` belongs_to `parent`,
-    // and the tenant key (`org_id`) lives only on the parent — exactly the
-    // shape the relational filter exists for.
+    // `child` belongs_to `parent`; the tenant key lives only on the parent.
     mod parent {
         use sea_orm::entity::prelude::*;
 
@@ -555,10 +520,6 @@ mod tests {
     fn b() -> PredicateBuilder<widget::Entity> {
         PredicateBuilder::new()
     }
-
-    // The SQL pre-filter and the in-memory check must agree row-by-row —
-    // tests pin both branches per variant on the same models so a future
-    // refactor of one can't silently diverge from the other.
 
     #[test]
     fn always_matches_every_row_in_memory_and_renders_unconstrained_sql() {
@@ -706,11 +667,8 @@ mod tests {
 
     #[test]
     fn ordered_cmp_on_a_null_column_fails_closed() {
-        // `tag IS NULL`, so the ordered comparison is undecidable — the
-        // in-memory check must report no match, never silently admit the row.
         let p = b().lt(widget::Column::Tag, "m");
         assert!(!p.matches(&tagged(1, 7, "a", None)));
-        // A present value still orders normally.
         assert!(p.matches(&tagged(1, 7, "a", Some("abc"))));
         assert!(!p.matches(&tagged(1, 7, "a", Some("zzz"))));
     }
@@ -768,8 +726,6 @@ mod tests {
 
     #[test]
     fn related_defers_row_visibility_to_sql_in_memory() {
-        // The in-memory check cannot traverse the relation, so it returns true
-        // and lets the SQL filter (and the by-id/create re-check) decide.
         let p = PredicateBuilder::<child::Entity>::new()
             .related::<parent::Entity, _>(child::Relation::Parent, |c| {
                 c.eq(parent::Column::OrgId, 7)
@@ -812,9 +768,7 @@ mod tests {
 
     #[test]
     fn related_rejects_a_relation_not_pointing_at_r() {
-        // The relation targets `parent`, but R is declared as `child` — the
-        // mismatch type erasure would hide must be rejected fail-closed
-        // (deny-all), not panic the per-request `AbilityFactory::define`.
+        // The relation targets `parent`, but `R` is declared as `child`.
         let p = PredicateBuilder::<child::Entity>::new()
             .related::<child::Entity, _>(child::Relation::Parent, |c| c.eq(child::Column::Id, 1));
         assert!(matches!(p, Predicate::Deny));

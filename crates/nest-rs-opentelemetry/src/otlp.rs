@@ -1,7 +1,6 @@
-//! OTel SDK wiring. Always installs a local tracer + W3C propagator so
-//! `tracing` spans get trace ids and `traceparent` propagates without an
-//! exporter. When an OTLP endpoint is set, attaches batch exporters for
-//! traces/metrics/logs over HTTP/protobuf.
+//! OTel SDK wiring: a local tracer and W3C propagator always, and batch OTLP
+//! exporters for traces, metrics and logs over HTTP/protobuf when an endpoint is
+//! set.
 
 use opentelemetry::KeyValue;
 use opentelemetry::global;
@@ -41,9 +40,8 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
     let mut tracer_builder = SdkTracerProvider::builder()
         .with_resource(resource.clone())
         .with_sampler(sampler)
-        // The framework decided this unit of work's ids before this crate was
-        // installed, so the SDK adopts them rather than minting a second pair
-        // nothing could join against. See `id_generator`.
+        // The SDK adopts the framework's ids rather than minting a second pair; see
+        // `id_generator`.
         .with_id_generator(crate::id_generator::AdoptFrameworkIds::default());
 
     let endpoint = config
@@ -72,9 +70,8 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
             .with_protocol(Protocol::HttpBinary)
             .build()
             .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
-        // Explicit, because the SDK's default is 60 s and nothing else says so:
-        // traces and logs land immediately while metrics do not, which reads as
-        // a broken metrics pipeline for a full minute during setup.
+        // Explicit: the SDK's 60 s default reads as a broken metrics pipeline for a
+        // full minute during setup.
         let reader = PeriodicReader::builder(metric_exporter)
             .with_interval(config.metric_interval)
             .build();
@@ -123,11 +120,9 @@ fn build_resource(config: &OpenTelemetryConfig) -> Resource {
     if let Some(d) = &config.deployment_environment {
         attrs.push(KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, d.clone()));
     }
-    // Order is load-bearing. `with_schema_url` merges *under* the resource the
-    // builder seeded from its detectors (`SdkProvidedResourceDetector` always
-    // supplies a `service.name` — env override or the `unknown_service:*`
-    // sentinel), so attrs passed there would silently lose. `with_attributes`
-    // merges *over* the current state — the configured values must win.
+    // Order is load-bearing: `with_schema_url` merges *under* the detectors'
+    // resource (which always supplies a `service.name`), `with_attributes` *over*
+    // it, so the configured values win.
     Resource::builder()
         .with_schema_url(Vec::<KeyValue>::new(), SCHEMA_URL)
         .with_attributes(attrs)
@@ -144,16 +139,12 @@ mod tests {
 
     use super::*;
 
-    /// `build` mutates `opentelemetry::global` (set_tracer_provider /
-    /// set_meter_provider / set_text_map_propagator) — concurrent tests would
-    /// race for the slot. Serialize every `build()` invocation in this file.
+    /// `build` mutates `opentelemetry::global`, so every `build()` in this file is
+    /// serialized.
     static GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Regression: `SdkProvidedResourceDetector` (seeded by
-    /// `Resource::builder()`) always supplies a `service.name` — the
-    /// `unknown_service:<binary>` sentinel when no `OTEL_SERVICE_NAME` env is
-    /// set. The configured `service.name` must win over it (`build_resource`
-    /// applies the config attrs *after* the detector merge).
+    /// `SdkProvidedResourceDetector` always supplies a `service.name` (the
+    /// `unknown_service:<binary>` sentinel); the configured one must win.
     #[test]
     fn configured_service_name_wins_over_detector_sentinel() {
         let cfg = OpenTelemetryConfig::new("configured-svc");
@@ -192,8 +183,6 @@ mod tests {
 
     #[test]
     fn service_instance_id_falls_back_to_a_v7_uuid_per_call() {
-        // Restarts must get distinct identities in the backend; two calls
-        // produce two ids.
         let cfg = OpenTelemetryConfig::new("svc");
         let a = build_resource(&cfg)
             .get(&Key::new(SERVICE_INSTANCE_ID))
@@ -226,8 +215,6 @@ mod tests {
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = OpenTelemetryConfig::new("svc-no-endpoint");
         let exporters = build(&cfg).expect("build succeeds without endpoint");
-        // Tracer is always set up so trace ids + traceparent propagation work
-        // even when no exporter is configured.
         assert!(
             exporters.meter_provider.is_none(),
             "meter provider must stay None until an endpoint is set",
@@ -264,13 +251,8 @@ mod tests {
 
     #[test]
     fn build_with_trailing_slash_endpoint_does_not_double_slash_paths() {
-        // A trailing-slash base ("…:4318/") must produce the same
-        // "/v1/{traces,metrics,logs}" suffixes — not "//v1/…". The function
-        // is `pub(crate)` and the resulting providers expose no public endpoint
-        // accessor, so the assertion is on the success of the build: a
-        // double-slash URL is still a valid http URI, so we can't observe
-        // the difference from outside; the test pins that trailing-slash input
-        // continues to build successfully and remains the documented contract.
+        // A double-slash URL is still a valid URI and the providers expose no
+        // endpoint, so this pins only that a trailing-slash base still builds.
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg =
             OpenTelemetryConfig::new("svc-trailing").with_otlp_endpoint("http://localhost:4318/");
@@ -286,12 +268,9 @@ mod tests {
         }
     }
 
-    /// The tracer provider holds its final export to the bound it is handed,
-    /// which is how `OpenTelemetry`'s `Drop` calls it, with
-    /// [`crate::FLUSH_TIMEOUT`]. `Drop` holds all three providers to that bound
-    /// itself, but a flush thread it abandons still runs until the SDK's own,
-    /// so an SDK bump that stops honouring it fails here rather than leaving
-    /// such a thread exporting forever.
+    /// The tracer provider holds its final export to the bound `Drop` hands it
+    /// ([`crate::FLUSH_TIMEOUT`]), so an SDK bump that stops honouring it fails
+    /// here rather than leave an abandoned flush thread exporting forever.
     #[test]
     fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_it_is_handed() {
         use opentelemetry::trace::Tracer as _;
@@ -330,9 +309,8 @@ mod tests {
 
     #[test]
     fn build_propagates_sample_ratio_through_resource() {
-        // The sampler itself has no public accessor; what we can pin is that
-        // a non-default ratio still produces a working build (the clamp ran
-        // at config-construction time).
+        // The sampler has no public accessor, so this pins only that a non-default
+        // ratio builds.
         let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = OpenTelemetryConfig::new("svc-sampled").with_trace_sample_ratio(0.5);
         let exporters = build(&cfg).expect("build succeeds with custom sampler");

@@ -61,23 +61,15 @@ impl PrincipalClaim {
 /// this guard has work to do; the rest inherit `Ok(())` defaults — a
 /// no-op means "doesn't apply to this transport," not "skip security."
 ///
-/// `Guard` extends [`Layer`] (priority + name + dedup-by-TypeId). The
-/// `#[public]` marker is NOT a framework skip: it attaches the
-/// [`Public`](nest_rs_http::Public) data to the request and each guard
-/// decides whether to honor it. An `AbilityGuard` may want to apply
-/// visitor rules on public routes; an `AuthnGuard` may want to skip
-/// rejection when no token is present. Both are policy decisions the
-/// guard owns, not the framework.
-///
-/// See the crate-level docs for copy-paste templates.
+/// `#[public]` is not a framework skip: each guard reads the
+/// [`Public`](nest_rs_http::Public) marker and decides. See the crate-level docs
+/// for templates.
 #[async_trait]
 pub trait Guard: Layer {
     /// HTTP request entry. Default = no-op (this guard doesn't apply to HTTP).
     ///
     /// A guard bound on a `#[controller]` / `#[routes]` must attest it with
-    /// [`HttpGuard`], the same way the three edges below are attested — the
-    /// default is what makes an unattested binding pass every request in
-    /// silence.
+    /// [`HttpGuard`].
     async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
         Ok(())
     }
@@ -85,12 +77,9 @@ pub trait Guard: Layer {
     /// GraphQL operation entry. Default = no-op. Available with the `graphql`
     /// feature on this crate.
     ///
-    /// Takes a [`GraphqlOperationContext`] rather than async-graphql's `Context`
-    /// because the operation has **two** sites: a resolver field, and the
-    /// `_service` / `_entities` root fields async-graphql resolves above the
-    /// merged root, where a schema extension is the only seam and no `Context`
-    /// exists. One declaration, both sites; `operation.context()` is how a guard
-    /// that genuinely needs the selection set asks for it.
+    /// A [`GraphqlOperationContext`] rather than async-graphql's `Context`: the
+    /// `_service` / `_entities` root fields have none, and `operation.context()`
+    /// reaches it where it exists.
     #[cfg(feature = "graphql")]
     async fn check_graphql(&self, _operation: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
         Ok(())
@@ -111,16 +100,10 @@ pub trait Guard: Layer {
     /// MCP per-operation entry. Default = no-op. Available with the `mcp`
     /// feature on this crate.
     ///
-    /// Runs inside rmcp's spawned dispatch, *after* the endpoint's
-    /// [`McpOperationGuard`](nest_rs_mcp::McpOperationGuard) has authenticated
-    /// the request and installed the caller's `Ability` — so a capability-only
-    /// guard reads the ability with `nest_rs_authz::current_ability` here, the
-    /// same way `check_http` reads it off the request.
-    ///
-    /// The context deliberately carries no arguments: rejecting a *payload* is
-    /// a pipe's job (`Valid<T>` / `Piped<P, T>` run on the wire value before the
-    /// body), and a guard that reads arguments is one step from deciding access
-    /// from them.
+    /// Runs after the endpoint's
+    /// [`McpOperationGuard`](nest_rs_mcp::McpOperationGuard) installed the
+    /// caller's `Ability`. The context carries no arguments: rejecting a payload
+    /// is a pipe's job.
     #[cfg(feature = "mcp")]
     async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
         Ok(())
@@ -155,12 +138,8 @@ pub trait Guard: Layer {
 /// `#[use_guards]`, and by `#[gateway]` of every guard on the gateway struct:
 /// those run on the WS upgrade, which is an HTTP `GET`.
 ///
-/// **The one marker with no feature behind it.** Its three siblings gate a
-/// `check_*` that only exists when its edge is compiled in; HTTP is the
-/// substrate the other three mount on — `/graphql`, `/mcp` and a WS upgrade are
-/// all HTTP requests — so there is no build of this crate in which `check_http`
-/// is absent, and nothing to gate. The *attestation* is what makes the four
-/// edges symmetric, not the `cfg`.
+/// The one marker with no feature behind it: HTTP is the substrate the other
+/// three edges mount on.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not check HTTP requests",
     label = "this guard has no `check_http`",
@@ -178,16 +157,9 @@ pub trait HttpGuard: Guard {}
 /// A guard that checks GraphQL operations — declared by overriding
 /// [`Guard::check_graphql`] and then writing `impl GraphqlGuard for X {}`.
 ///
-/// Every `check_*` defaults to `Ok(())`, which is right ("does not apply to this
-/// transport") and was also the answer to a question nobody asked:
-/// `#[use_guards(ThrottlerGuard)]` beside a `#[query]` compiled, read as a
-/// protection, and throttled nothing — that guard implements only `check_http`, so
-/// the per-operation chain called the default and passed. `#[resolver]` and
-/// `#[operations]` now emit a bound against this marker for every guard declared
-/// at their site, so the mistake is a compile error at the `#[use_guards]` line.
-///
-/// Declaring the marker without overriding the method is the one mistake left. It
-/// is a deliberate line, written next to the method it should have been.
+/// `#[resolver]` and `#[operations]` bound every guard declared at their site
+/// on it, so a guard that does not check GraphQL is a compile error at the
+/// `#[use_guards]` line.
 #[cfg(feature = "graphql")]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not check GraphQL operations",
@@ -203,9 +175,8 @@ pub trait GraphqlGuard: Guard {}
 /// [`Guard::check_ws_message`] and then writing `impl WsGuard for X {}`.
 ///
 /// Required by `#[messages]` of every guard in a `#[use_guards]` beside a
-/// `#[subscribe_message]`. **Not** of a `#[gateway]`-struct guard: those run on the
-/// upgrade, which is an HTTP `GET`, so they are HTTP guards — and that distinction
-/// is exactly what this bound makes visible instead of leaving to a reader.
+/// `#[subscribe_message]`. **Not** of a `#[gateway]`-struct guard: those run on
+/// the upgrade, an HTTP `GET`, so they are HTTP guards.
 #[cfg(feature = "ws")]
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not check WebSocket messages",
@@ -236,10 +207,8 @@ pub trait WsGuard: Guard {}
 )]
 pub trait McpGuard: Guard {}
 
-// Manual forwards, not `#[async_trait]`: the macro would wrap each inner
-// (already boxed) future in a second box, taxing every check made through an
-// `Arc<dyn Guard>` without `.as_ref()` — the double-box the dispatch sites
-// individually dodge today.
+// Manual forwards, not `#[async_trait]`: the macro would box each already-boxed
+// inner future a second time.
 impl<T: Guard + ?Sized> Guard for Arc<T> {
     fn check_http<'s, 'r, 'fut>(
         &'s self,

@@ -1,10 +1,5 @@
-//! `HttpConfig.global_prefix` — boot the real `App`, mount two controllers,
-//! drive them through `poem::TestClient`, and pin that the prefix is applied
-//! exactly once at the root (200 on `/api/<ctrl>`, 404 without it).
-//!
-//! Also the executed witness for `caller_path`: the prefix is the one segment
-//! the router strips off `uri()` before a handler runs, so a `Location` built
-//! from anything else silently drops it.
+//! `HttpConfig.global_prefix` is applied exactly once at the root, and
+//! `caller_path` keeps it in a `Location`.
 
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::module;
@@ -14,8 +9,7 @@ use nest_rs_http::{
 use poem::http::StatusCode;
 use poem::test::TestClient;
 
-/// The id the create route below hands back — a fixture, not a generated value:
-/// the assertions compare the whole `Location`, so it has to be nameable.
+/// The id the create route below hands back.
 const NEW_ORG_ID: &str = "018f3f9c-0000-7000-8000-000000000001";
 
 #[controller(path = "/users")]
@@ -39,9 +33,7 @@ impl OrgsController {
         "orgs"
     }
 
-    /// What `#[crud]`'s generated create does, by hand: the two calls its
-    /// expansion emits, on a route this crate can mount without an entity or a
-    /// service behind it.
+    /// What `#[crud]`'s generated create does, by hand.
     #[post("/")]
     async fn create_org(&self, req: &poem::Request) -> poem::Response {
         let mut resp = poem::Response::builder()
@@ -78,11 +70,8 @@ async fn global_prefix_serves_controllers_under_the_prefix() {
     orgs.assert_text("orgs").await;
 }
 
-/// The `Location` on a `201` names the collection **the caller addressed** —
-/// prefix included. Read off `uri()` it would say `/orgs/<id>`, a path that
-/// 404s on this very app; read off `original_uri()` it would say `/<id>` under
-/// the test client. Both spellings of the collection are driven, since the edge
-/// canonicalizes the trailing slash before the capture.
+/// The `Location` on a `201` names the collection the caller addressed, prefix
+/// included; the edge canonicalizes a trailing slash before the capture.
 #[tokio::test]
 async fn a_created_location_carries_the_global_prefix() {
     let client = boot_with_prefix(Some("/api")).await;
@@ -97,8 +86,6 @@ async fn a_created_location_carries_the_global_prefix() {
     }
 }
 
-/// The same route with no prefix configured — pins that the capture is the
-/// path as sent, not a prefix bolted on unconditionally.
 #[tokio::test]
 async fn a_created_location_without_a_prefix_is_the_declared_collection() {
     let client = boot_with_prefix(None).await;
@@ -124,8 +111,6 @@ async fn global_prefix_hides_controllers_from_their_unprefixed_paths() {
 
 #[tokio::test]
 async fn global_prefix_none_serves_controllers_at_their_declared_paths() {
-    // Smoke test that `global_prefix = None` is a true no-op — the same module
-    // serves /users and /orgs without rewriting.
     let client = boot_with_prefix(None).await;
 
     let users = client.get("/users").send().await;
@@ -139,9 +124,7 @@ async fn global_prefix_none_serves_controllers_at_their_declared_paths() {
 
 #[tokio::test]
 async fn global_prefix_normalizes_input_variants() {
-    // `"api/"` ⇒ `/api`. Same served paths as the `/api` test — pins that the
-    // builder normalization (no leading slash + trailing slash) reaches the
-    // mount.
+    // `"api/"` ⇒ `/api`.
     let client = boot_with_prefix(Some("api/")).await;
 
     let users = client.get("/api/users").send().await;
@@ -153,16 +136,15 @@ async fn global_prefix_normalizes_input_variants() {
 
 #[tokio::test]
 async fn global_prefix_root_slash_is_a_noop() {
-    // `"/"` collapses to no prefix — the controllers serve at their declared
-    // paths, not under `/`.
+    // `"/"` collapses to no prefix.
     let client = boot_with_prefix(Some("/")).await;
 
     let users = client.get("/users").send().await;
     users.assert_status_is_ok();
 }
 
-/// Boot the same controller surface but resolve the prefix through
-/// `HttpConfig::from_env` — pins the dual-path rule from the env side.
+/// Boot the same controller surface, resolving the prefix through
+/// `HttpConfig::from_env`.
 async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>
 {
     let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"), Default::default())
@@ -180,11 +162,8 @@ async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'stati
     reason = "figment::Jail fixes the closure's error type"
 )]
 fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
-    // The whole dual-path rule the fix is about — set the env var, let the
-    // module-side wiring read it through `HttpConfig::from_env`, observe the
-    // controllers under `/api/<x>`. Sync test on purpose: figment::Jail is
-    // sync (it scopes env to one thread) so the tokio runtime is opened
-    // *inside* the closure.
+    // Sync on purpose: figment::Jail scopes env to one thread, so the tokio
+    // runtime is opened inside the closure.
     figment::Jail::expect_with(|jail| {
         jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "/api");
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");

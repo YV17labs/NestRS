@@ -1,12 +1,6 @@
-//! What a failing operation tells the client, and what it tells the operator — the
-//! GraphQL half of the seam MCP established.
-//!
-//! An operation's error frame is built from whatever the resolver's error type
-//! prints, and `Display` is the wrong default for that: a `DbErr` carries SQL,
-//! column names and sometimes row values. The framework's own `ServiceError::Db`
-//! is `#[error("database error")]` so nothing leaks today, but a feature's own
-//! error type has no such discipline imposed on it — and a GraphQL client is
-//! exactly as untrusted as a language model.
+//! What a failing operation tells the client, and what it tells the operator:
+//! an error is built from the resolver error's `Display`, and a `DbErr`'s
+//! carries SQL.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -69,15 +63,10 @@ use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 /// Turn a failure the client must not read into one it may.
 ///
 /// Implemented for every `Result` whose error converts into a boxed error, so
-/// the whole cause chain reaches the operator's line — boxed by
-/// [`nest_rs_core::boxed_error`], so an `anyhow::Error` keeps every link and a
-/// decode failure inside it is said without its value. It covers a `DbErr`, a
-/// storage error, an `anyhow::Error` and a feature's own type without any of
-/// them having to know GraphQL exists.
+/// the whole cause chain reaches the operator's line.
 ///
-/// The twin traits on MCP and WS are deliberately separate types rather than one
-/// trait generic over the error: the output is what lets `.opaque()?` infer from
-/// the enclosing resolver's return type. See `nest_rs_core::opaque`.
+/// Separate from the MCP and WS twins: the output type is what lets `.opaque()?`
+/// infer from the resolver's return type (see `nest_rs_core::opaque`).
 pub trait Opaque<T> {
     /// Log the real error for the operator, hand the client an opaque one.
     fn opaque(self) -> Result<T, GraphqlError>;
@@ -95,9 +84,7 @@ where
                 error = %nest_rs_core::error_message(&*err),
                 "graphql operation failed",
             );
-            // Extended with the same `INTERNAL` code an internal denial carries, so
-            // a client cannot tell an unexpected failure from a refused one — which
-            // is the point of both.
+            // The `INTERNAL` code an internal denial carries, so the two are indistinguishable.
             use async_graphql::ErrorExtensions;
             GraphqlError::new(OPAQUE_CLIENT_MESSAGE).extend_with(|_, e| e.set("code", "INTERNAL"))
         })
@@ -110,7 +97,6 @@ mod tests {
 
     use super::*;
 
-    /// An error whose `Display` carries exactly what must not ship.
     #[derive(Debug)]
     struct Leaky;
 
@@ -155,14 +141,6 @@ mod tests {
         assert_eq!(out.ok(), Some(7));
     }
 
-    /// The other half of the same contract, and the half nobody read.
-    ///
-    /// Withholding the cause from the client is only safe because it is
-    /// recorded somewhere else — here, an error frame a client reads as untrusted. If this event ever stopped
-    /// carrying `error`, every `.opaque()?` on this edge would turn a real
-    /// failure into a blank refusal with no trace at all, and the
-    /// nothing-leaks test next door would still pass: it only asserts what is
-    /// *absent* from the wire.
     #[test]
     #[expect(
         clippy::let_underscore_must_use,

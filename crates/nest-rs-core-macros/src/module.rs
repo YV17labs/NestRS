@@ -11,23 +11,18 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let name_str = name.to_string();
 
-    // Every import's phase runs between `enter_import` and `leave_import`, so a
-    // declaration it makes is named by the module and the position that
-    // imported it — what a contested declaration's boot error points at.
+    // `enter_import`/`leave_import` let a contested declaration's boot error
+    // name the module and position that imported it.
     let import_calls = args.imports.iter().enumerate().map(|(i, import)| {
         let at = proc_macro2::Literal::usize_unsuffixed(i);
         let label = import_label(import);
         let call = match import {
-            // Bare type path → static `Module`, through the one way into its
-            // phases.
             Expr::Path(p) => {
                 let path = &p.path;
                 quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
             }
-            // Anything else → `DynamicModule` value (e.g. `Module::for_root(opts)`).
-            // The collect phase built the value and parked it at this site, so
-            // register consumes *that* value: the expression is written, and
-            // evaluated, once (CORE-I9).
+            // The collect phase built the value and parked it at this site, so the
+            // expression is evaluated once.
             _ => quote! {
                 builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
                     builder,
@@ -43,8 +38,6 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
-    // Collect phase only queues async factories; providers untouched here. The
-    // dynamic import is constructed here and parked for the register phase.
     let collect_calls = args.imports.iter().enumerate().map(|(i, import)| {
         let at = proc_macro2::Literal::usize_unsuffixed(i);
         let label = import_label(import);
@@ -69,9 +62,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
-    // Access-graph descriptor submitted to the link-time registry. A dynamic
-    // import is named by the module its value's type declares, read off the
-    // expression without evaluating it.
+    // A dynamic import is named by its value's type, without evaluating it.
     let import_type_ids = args.imports.iter().map(|import| match import {
         Expr::Path(p) => {
             let path = &p.path;
@@ -130,8 +121,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     } else {
         let count = proc_macro2::Literal::usize_unsuffixed(args.providers.len());
-        // Three token streams per provider: hot register attempt, its provided
-        // key, and a stall-time classification of why it is still pending.
+        // Per provider: its register attempt, its provided key, and a stall-time
+        // classification of why it is still pending.
         let parts: Vec<(
             proc_macro2::TokenStream,
             proc_macro2::TokenStream,
@@ -166,9 +157,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 };
                 let step = quote! {
                     if !__done[#idx] {
-                        // Ready when every required dep is present and every
-                        // optional dep is present or unsupplied by any pending
-                        // provider — keeps order irrelevant.
+                        // An optional dep waits only while a pending provider supplies it.
                         let __required_ready =
                             <#provider as ::nest_rs_core::Discoverable>::dependencies()
                                 .iter()
@@ -208,8 +197,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                             }
                             __k += 1;
                         }
-                        // Pure cycle: every missing dep is one another pending
-                        // provider would supply. Otherwise a dep is just absent.
+                        // A cycle when every missing dep is one a pending provider supplies.
                         if !__missing_ids.is_empty()
                             && __missing_ids.iter().all(|__id| __pending_keys.contains(__id))
                         {
@@ -233,8 +221,6 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             #(#import_calls)*
             let mut __done = [false; #count];
             loop {
-                // Provided keys still pending this round — lets an optional dep
-                // wait for a same-module provider, and classifies failures.
                 let mut __pending_keys: ::std::vec::Vec<::std::any::TypeId> =
                     ::std::vec::Vec::new();
                 #(#key_pushes)*
@@ -245,13 +231,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     break;
                 }
                 if !__progressed {
-                    // Stalled: split the two failure modes. A genuinely-missing
-                    // dependency is *deferred* to the boot-time access-graph check
-                    // (`App::new` / `App::builder().build()`), which fails with a
-                    // named `MissingDependencyError` / `AccessGraphError`. A true
-                    // cycle (no missing dep, providers only waiting on each other)
-                    // is invisible to the graph, so it is refused here — either
-                    // way every wiring failure surfaces through the same `Result`.
+                    // A missing dependency is left to the access-graph check; a
+                    // cycle is invisible to it, so it is refused here.
                     let mut __cyclic: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
                     let mut __unprovided: ::std::vec::Vec<::std::string::String> =
                         ::std::vec::Vec::new();
@@ -262,8 +243,6 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                             type_names: __cyclic,
                         });
                     }
-                    // Leave the unbuilt providers out; the access-graph check
-                    // names a missing dependency and fails the boot cleanly.
                     break;
                 }
             }
@@ -297,10 +276,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// An import as a boot error names its site: a module by its path, a dynamic
-/// import by the function that builds it — `HttpModule::for_root(..)`, the
-/// arguments left out, since a pinned config is no part of where it was
-/// declared and may hold a secret.
+/// An import as a boot error names it — `HttpModule::for_root(..)`, the
+/// arguments left out, since a pinned config may hold a secret.
 fn import_label(import: &Expr) -> String {
     let spelled = |tokens: proc_macro2::TokenStream| {
         tokens.to_string().split_whitespace().collect::<String>()
@@ -315,12 +292,10 @@ fn import_label(import: &Expr) -> String {
     }
 }
 
-/// Last path segment for readable boot-time panics.
 fn path_tail(p: &Path) -> String {
     last_segment_ident(p).to_string()
 }
 
-/// Last path segment of a `dyn Trait` for the access-graph descriptor label.
 fn path_tail_of_type(ty: &Type) -> String {
     if let Type::TraitObject(obj) = ty {
         for bound in &obj.bounds {
@@ -340,16 +315,13 @@ struct ModuleArgs {
     providers: Vec<ProviderBinding>,
 }
 
-/// What `imports` takes, in the sentence a value of another kind is refused with.
 const IMPORTS_TAKE: &str =
     "a list of modules, e.g. `imports = [UsersModule, HttpModule::for_root(None)]`";
 
-/// What `providers` takes — including the one spelling beside a bare type.
 const PROVIDERS_TAKE: &str = "a list of provider types, e.g. `providers = [UsersService]`, or \
      `Store as dyn Cache` to register one under a trait object";
 
-/// `MyService` or `MyService as dyn MyTrait` (trait-object binding registered
-/// under the trait's `TypeId`).
+/// `MyService` or `MyService as dyn MyTrait`.
 enum ProviderBinding {
     Concrete(Path),
     Dyn { provider: Path, trait_ty: Box<Type> },
@@ -371,33 +343,15 @@ impl Parse for ProviderBinding {
     }
 }
 
-/// `#[module]`'s two keys.
 const MODULE: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("module", &["imports", "providers"]);
 
 impl Parse for ModuleArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut args = ModuleArgs::default();
-        // Each key is judged **before** its value is read — by the grammar, which
-        // hands over only a known key written for the first time. Reading `= [`
-        // first meant the unknown-key sentence was reachable only when the wrong
-        // key happened to take a bracketed value: `#[module(exports = [Foo])]`
-        // named the key, `#[module(porviders = Foo)]` answered `expected square
-        // brackets`.
-        //
-        // A repeat is refused rather than merged. It is legible here — two
-        // `providers = [...]` lists concatenate — so nothing is *dropped*, which
-        // is why `duplicate_argument`'s own reasoning does not apply verbatim.
-        // What applies is that every other member of the `key = value` family
-        // refuses it, and a grammar the framework interprets accepting a
-        // spelling its siblings reject is the asymmetry a shared sentence exists
-        // to remove: one list is what a reader can see whole.
         MODULE.parse(input, |arg| {
             let name = arg.key();
             let input = arg.value()?;
-            // Both keys take a list, and a value that is not one is refused as
-            // a value — at the value, naming the decorator and the key — where
-            // `bracketed!` answered syn's `expected square brackets`.
             let takes = if name == "imports" {
                 IMPORTS_TAKE
             } else {
@@ -415,8 +369,6 @@ impl Parse for ModuleArgs {
                 let exprs: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated(&content)?;
                 args.imports.extend(exprs);
             } else {
-                // An entry that is not a type path is the same mistake one
-                // level in, and syn's `expected identifier` named nothing.
                 let bindings: Punctuated<ProviderBinding, Token![,]> =
                     Punctuated::parse_terminated(&content).map_err(|stopped| {
                         syn::Error::new(

@@ -11,8 +11,7 @@ use nest_rs_http::{HttpConfig, HttpModule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// A trait whose method shares the batch's name, implemented for the `Arc` the
-/// loader holds its owner in. Method syntax on that `Arc` finds this before it
-/// derefs to the owner, so a loader calling `self.0.labels(..)` ran this body.
+/// loader holds its owner in: method syntax finds it before it derefs.
 #[expect(
     dead_code,
     reason = "never called: the expansion calls the method by its path"
@@ -105,11 +104,6 @@ impl SlowShelfResolver {
 )]
 struct SlowShelfApp;
 
-/// async-graphql runs every DataLoader batch on a task of its own, so a batch
-/// in flight when the shutdown window cut its request ran on after the
-/// transport returned — through the shutdown hooks, its reads landing after
-/// `OnModuleDestroy`, with nobody left to read them. It is work the connection
-/// only carried, so it stops with the transport: dropped before `serve` returns.
 #[tokio::test]
 async fn a_batch_still_running_when_the_transport_stops_is_dropped_with_it() {
     let app = nest_rs_testing::TestApp::builder()
@@ -132,7 +126,6 @@ async fn a_batch_still_running_when_the_transport_stops_is_dropped_with_it() {
         .expect("the request is sent");
     SLOW_BATCH_STARTED.notified().await;
 
-    // The window passes on paused time: nothing reads the connection meanwhile.
     tokio::time::pause();
     app.shutdown().await.expect("the transport stops cleanly");
     tokio::time::resume();

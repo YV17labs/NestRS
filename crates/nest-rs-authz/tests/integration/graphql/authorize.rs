@@ -1,11 +1,7 @@
-//! The resolver gate end-to-end through the **in-band** path: the
-//! `GraphqlAbilityBridge` (registered as the `dyn GraphqlOperationGuard`)
-//! runs the guard chain per operation and builds the actor's `Ability`, the
-//! `GraphqlContextSeed` forwards it into the GraphQL context, and the declared
-//! `#[authorize(Read, …)]` posture admits or rejects the query by the caller's
-//! role. `/graphql` is
-//! `EdgePosture::Exempt` — no guard runs at the HTTP edge; this bridge is
-//! the only execution site.
+//! The resolver gate end-to-end through the in-band path: `GraphqlAbilityBridge`
+//! builds the ability per operation and `#[authorize(Read, …)]` admits or rejects
+//! by role. `/graphql` is `EdgePosture::Exempt`, so the bridge is the only
+//! execution site.
 
 use std::sync::Arc;
 
@@ -55,9 +51,7 @@ impl Guard for PassGuard {}
 /// header and builds the matching `Ability` onto the request. An admin gets a
 /// Read grant on widgets; anyone else gets nothing.
 ///
-/// A request with **no** `x-role` header is the anonymous caller, and takes the
-/// factory's visitor branch (`build_visitor`) — which here grants the same Read
-/// a `define_visitor` written for a `#[public]` query would.
+/// No `x-role` header is the anonymous caller, taking the visitor branch.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -147,12 +141,7 @@ async fn admin_passes_the_resolver_gate() {
     assert_eq!(json["data"]["widgetName"], "ada", "{json}");
 }
 
-/// The `#[authorize]`/`#[public]` split is the whole review contract of
-/// `define_visitor`: a grant written there opens the `#[public]` operations and
-/// **nothing else**. `/graphql` admits the anonymous caller at the edge (one
-/// endpoint, posture declared per operation), so the gate is what has to hold
-/// the line — otherwise a visitor grant added for a public feed silently opens
-/// every guarded operation on the same entity.
+/// A `define_visitor` grant opens the `#[public]` operations and nothing else.
 #[tokio::test]
 async fn a_visitor_grant_does_not_satisfy_a_guarded_operation() {
     let app = boot().await;
@@ -177,11 +166,8 @@ async fn a_visitor_grant_still_reaches_a_public_operation() {
     assert_eq!(json["data"]["widgetMotd"], "hello", "{json}");
 }
 
-/// The refusal reaches the caller *and* the operator. The second half is what
-/// an incident queries, and it was asserted nowhere: `warn_denied` is the one
-/// emitter all four transports reach, so a field dropped here goes dark
-/// everywhere at once. Single-thread runtime on purpose — `LogCapture` is
-/// thread-local.
+/// The refusal reaches the caller and the operator. Single-thread runtime:
+/// `LogCapture` is thread-local.
 #[tokio::test]
 async fn non_admin_is_forbidden_by_the_resolver_gate() {
     let logs = nest_rs_testing::LogCapture::install();

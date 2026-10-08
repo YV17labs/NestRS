@@ -1,40 +1,22 @@
-//! `#[mcp]` + `#[tools]` — the tool host mounts on the HTTP transport, so its
-//! expansion names the container, the endpoint meta and the mount resolution.
-//! None of those is a crate a tool host declares.
+//! `#[mcp]` + `#[tools]`, through the umbrella alone.
 //!
-//! It now also names the **request layers**: the per-operation guard chain
-//! (`nest-rs-guards`) and the per-argument pipe carrier (`nest-rs-pipes`). Both
-//! are unconditional in the expansion of a decorated operation, and neither
-//! appears in this crate's manifest — which is the whole assertion.
-//!
-//! The sharper half of the witness is what is **not** written below. rmcp's own
-//! `#[tool_router]` / `#[tool_handler]` / `#[prompt]` family expands to bare
-//! `rmcp::` paths resolved against the *call site*, which used to force a
-//! `use nest_rs::mcp::rmcp;` into every host file. `#[tools]` now emits those
-//! inside a private module that carries the import itself, so this
-//! file names neither `rmcp` nor `ServerHandler` nor a router — and if that ever
-//! regresses, this crate needs a second dependency and stops compiling, which is
-//! the whole point of it.
+//! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
+//! paths resolved at the call site; this file names no `rmcp`, so it stops
+//! compiling if `#[tools]` ever stops carrying that import itself.
 
 use nest_rs::core::Layer;
 use nest_rs::guards::{Denial, Guard, McpGuard, async_trait};
 use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Role};
 use nest_rs::mcp::{McpError, McpOperationContext, Parameters, Valid, input, mcp, tools};
 
-/// The typed input a tool takes. `#[input]` carries the `serde`, `schemars` and
-/// `validator` derives with their `crate = ` overrides, so this file declares
-/// none of them — and `Valid<HygieneArgs>` below is what makes the last one
-/// load-bearing.
+/// The typed input a tool takes, validated through `Valid<HygieneArgs>`.
 #[input]
 pub struct HygieneArgs {
-    /// Echoed straight back — the payload is irrelevant, the derives are not.
     #[validate(length(min = 1))]
     pub value: String,
 }
 
-/// A guard bound per operation, so the expansion's chain call has something real
-/// to resolve. `#[injectable]` and the `Guard`/`Layer` pair both come from the
-/// umbrella; a host binding a guard declares no layer crate of its own.
+/// A guard bound per operation, so the expansion's chain call resolves.
 #[nest_rs::core::injectable]
 pub struct HygieneGuard;
 
@@ -49,24 +31,16 @@ impl Guard for HygieneGuard {
 
 impl McpGuard for HygieneGuard {}
 
-/// A description only the compiler evaluates.
 const STAMP: &str = "Answer with this sentence.";
 
-/// A host serving both halves of the decorator surface: tools and prompts, with
-/// a host-scope guard the way a controller or a resolver declares one.
+/// Tools and prompts, under a host-scope guard.
 #[mcp(path = "/hygiene")]
 #[use_guards(HygieneGuard)]
 #[derive(Clone, Default)]
 pub struct HygieneTool;
 
-/// One authored block feeds both of rmcp's routers.
-///
-/// The operations also witness the three ways a description is stated: `echo`
-/// declares it as an argument — the form `demo/` and every scaffold use, and the
-/// only one available to a codebase that carries no comments — `greet` lets the
-/// doc comment fall through, and `stamp` states a constant, which the expansion
-/// checks for blankness in a `const` of its own: a seam rooted like any other.
-/// An operation stating neither does not compile, nor one stating a blank.
+/// A description stated three ways: an argument (`echo`), the doc comment
+/// (`greet`) and a constant (`stamp`).
 #[tools]
 impl HygieneTool {
     #[tool(description = "Echo the argument back.")]
@@ -95,15 +69,12 @@ impl HygieneTool {
         Ok(STAMP.into())
     }
 
-    /// A synchronous tool is called without an `.await`; its wrapper still
-    /// awaits the guard chain.
     #[tool(description = "Answer at once.")]
     #[public]
     fn ping(&self) -> Result<String, McpError> {
         Ok("pong".into())
     }
 
-    /// The class gate, against the entity [`crate::entity`] declares.
     #[cfg(feature = "seaorm")]
     #[tool(description = "Count what the caller may read.")]
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
@@ -111,8 +82,7 @@ impl HygieneTool {
         Ok("0".into())
     }
 
-    /// An operation compiled out takes its wrapper, its route and its guard with
-    /// it — rmcp's router would otherwise route a function that is not there.
+    /// An operation compiled out takes its wrapper, route and guard with it.
     #[cfg(any())]
     #[tool(description = "Not in this build.")]
     #[public]
@@ -121,7 +91,6 @@ impl HygieneTool {
         crate::does_not_exist::answer(input)
     }
 
-    /// The same, through a `#[cfg_attr]`.
     #[cfg_attr(all(), cfg(any()))]
     #[tool(description = "Not in this build either.")]
     #[public]
@@ -129,8 +98,7 @@ impl HygieneTool {
         crate::does_not_exist::answer()
     }
 
-    /// One tool name under conditions that exclude each other: at most one is
-    /// compiled, so the router still routes `ping` to one method.
+    /// A duplicate tool name under an excluding condition is not a duplicate route.
     #[cfg(any())]
     #[tool(name = "ping", description = "Answer at once, elsewhere.")]
     #[public]

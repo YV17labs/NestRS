@@ -1,6 +1,5 @@
-//! Covers `src/database/module.rs` — the binding installs the executor `Repo`
-//! reads in every unit of work, so it declares the pool's budget ambient: every
-//! net around developer code reaches it, a strategy injecting nothing included.
+//! Covers `src/database/module.rs`: the binding declares the pool's budget
+//! ambient, so every net reaches it, a strategy injecting nothing included.
 
 use async_trait::async_trait;
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, AuthError, AuthnGuard, Strategy};

@@ -14,36 +14,22 @@ use crate::environment::Environment;
 /// [`provide_feature`](Self::provide_feature) is the primitive both route
 /// through.
 ///
-/// **What makes the `.env` cascade visible is [`Environment::init`] at the top
-/// of `main`, not an import.** Config reads consult a lazily-built, in-crate map
-/// (real env vars always win, and the process env is never mutated by a read),
-/// so they see dotenv values whether or not anything registered
-/// [`Environment`]. `init` additionally publishes the cascade into `std::env`,
-/// which is what lets *non-config* consumers — a log filter, a spawned
-/// `migrate` binary — see it too.
+/// Config reads see the `.env` cascade without any import; [`Environment::init`]
+/// at the top of `main` also publishes it into `std::env` for non-config readers.
 pub struct ConfigModule;
 
 impl ConfigModule {
     /// Register the active [`Environment`] so a provider can inject
-    /// `Arc<Environment>` and branch on the profile.
-    ///
-    /// It is **not** what makes the `.env` cascade readable — see the type
-    /// docs — so its position among `imports` carries no meaning: every
-    /// module's `collect` runs before any config factory does. Listing it first
-    /// is a readability convention.
+    /// `Arc<Environment>` and branch on the profile. Its position among
+    /// `imports` carries no meaning.
     pub fn for_root() -> ConfigRootSetup {
         ConfigRootSetup
     }
 
     /// **Declare** that `C` exists and must be loaded — it does not configure
     /// it. Loads in the factory phase from the environment over `C::defaults()`,
-    /// becoming global infrastructure; a test that seeds `C` wins over it.
-    ///
-    /// Taking no value is the point, not an omission: `for_root` configures,
-    /// `for_feature` registers, and a config reached through two seams is a
-    /// config whose value depends on import order. The module that lists this
-    /// import is the one that owns `C`, so its own `for_root(cfg)` is where a
-    /// base is pinned.
+    /// becoming global infrastructure; a test that seeds `C` wins over it. A
+    /// base is pinned on the owning module's own `for_root(cfg)`.
     pub fn for_feature<C: Config>() -> ConfigFeatureSetup<C> {
         ConfigFeatureSetup(PhantomData)
     }
@@ -54,25 +40,13 @@ impl ConfigModule {
     /// `Module::for_root(config)`. Every configurable module's `for_root` routes
     /// through this.
     ///
-    /// **Both arms resolve through [`Config::resolve`]**, which is what makes
-    /// the override per field. `Some` used to call
-    /// [`ContainerBuilder::provide`], registering the struct verbatim and making
-    /// every `<PREFIX>_<NS>__*` variable in that namespace inert: pinning a port
-    /// with `..Default::default()` silently froze the fourteen other HTTP
-    /// fields, so a deployment setting `<PREFIX>_HTTP__PORT` or
-    /// `<PREFIX>_HTTP__TLS_CERT_FILE` got nothing and no warning. A test's seed
-    /// still wins over either arm — a seed short-circuits the factory.
-    ///
-    /// **They differ in one way, and only one: precedence in the queue.** A
-    /// pinned base is a *declaration*
-    /// ([`provide_declared_factory`](ContainerBuilder::provide_declared_factory)),
-    /// so it supersedes the environment-only factory a bare import of the same
-    /// module queues, wherever the two fall in `imports = [..]`. Without that,
-    /// `imports = [AudioModule, StorageModule::for_root(cfg)]` dropped `cfg`
-    /// silently, because `AudioModule` imports `StorageModule` and got there
-    /// first. Two pinned bases for one config fail the boot naming it
-    /// ([`ContestedDeclarationError`](nest_rs_core::ContestedDeclarationError))
-    /// rather than letting import order decide.
+    /// Both arms resolve through [`Config::resolve`], so the override is per
+    /// field. A pinned base is a declaration
+    /// ([`provide_declared_factory`](ContainerBuilder::provide_declared_factory)):
+    /// it supersedes the environment-only factory a bare import of the same
+    /// module queues, wherever the two fall in `imports = [..]`, and two pinned
+    /// bases fail the boot
+    /// ([`ContestedDeclarationError`](nest_rs_core::ContestedDeclarationError)).
     pub fn provide_feature<C: Config>(
         pinned: Option<C>,
         builder: ContainerBuilder,
@@ -90,7 +64,7 @@ impl ConfigModule {
     }
 
     /// The whole body of a `for_root` whose module pins a config and does
-    /// nothing else — `WsModule` and `StorageModule` today:
+    /// nothing else:
     ///
     /// ```
     /// # use nest_rs_config::{Config, ConfigModule, ConfigService, ConfigSetup, config};
@@ -124,12 +98,6 @@ impl ConfigModule {
     /// #     Ok(())
     /// # }
     /// ```
-    ///
-    /// Lives on `ConfigModule` rather than as `ConfigSetup::new` so the setup
-    /// type keeps **no public method of its own** — the *one seam, one value*
-    /// rule holds for a shared setup exactly as for a hand-written one. A module
-    /// whose `collect` queues more than the config, or whose `register` does
-    /// more than recurse, still writes its own type.
     pub fn setup<M: Module, C: Config>(pinned: impl Into<Option<C>>) -> ConfigSetup<M, C> {
         ConfigSetup {
             pinned: pinned.into(),
@@ -140,11 +108,8 @@ impl ConfigModule {
 
 /// The [`DynamicModule`] behind a `for_root` that only pins a config: resolves
 /// `C` (environment over the pinned base, per field) in the factory phase, and
-/// imports `M`, its ordinary wiring, in both phases. The pinned base supersedes the plain env
-/// factory `M` itself queues via [`for_feature`](ConfigModule::for_feature),
-/// wherever the two fall in `imports = [..]`.
-///
-/// Built by [`ConfigModule::setup`]; it deliberately exposes nothing else.
+/// imports `M`, its ordinary wiring, in both phases. Built by
+/// [`ConfigModule::setup`].
 pub struct ConfigSetup<M, C> {
     pinned: Option<C>,
     module: PhantomData<fn() -> M>,
@@ -173,9 +138,6 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
         TypeId::of::<ConfigModule>()
     }
 
-    // Loading is sync-but-fallible and `register` cannot return an error, so
-    // we queue a factory the build awaits — an Err there aborts boot with the
-    // variable named.
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         ConfigModule::provide_feature::<C>(None, builder)
     }
@@ -191,10 +153,7 @@ impl DynamicModule for ConfigRootSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-        // `Environment::from_env` reads `<PREFIX>_ENV` from the real process env;
-        // dotenv values reach config reads lazily via `env_var` (the in-crate
-        // map), so collect mutates no process state — no `set_var` on the boot
-        // path that a spawned worker's `getenv` could race.
+        // No `set_var` on the boot path: a spawned worker's `getenv` could race it.
         builder.provide(Environment::from_env())
     }
 }
@@ -206,11 +165,6 @@ impl DynamicModule for ConfigRootSetup {
 )]
 mod tests {
     /// The `for_root` / `for_feature` seam, exercised through a real boot.
-    ///
-    /// A nested module rather than a second file-level `#[cfg(test)] mod`:
-    /// the shape is one per file, `#[cfg(test)] mod tests` in the file under
-    /// test, and a `seam::…` filter path existed nowhere else in either
-    /// workspace, so "where is this asserted?" had two answers inside one file.
     mod seam {
         use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, module};
         use validator::Validate;
@@ -272,10 +226,8 @@ mod tests {
         #[module(imports = [FirstPinner, SecondPinner])]
         struct PinnedInTwoModules;
 
-        /// The bug this replaced: factories are first-queued-wins, so a bare import
-        /// listed above the pin — the shape you get for free when another module
-        /// imports the same one — dropped the pinned value on the floor with no
-        /// warning. Both orders must now yield the pin.
+        /// Factories are first-queued-wins, yet a pin beats a bare import in
+        /// either order.
         #[tokio::test]
         async fn a_pin_survives_a_bare_import_listed_before_it() {
             for (label, cfg) in [
@@ -289,8 +241,6 @@ mod tests {
             }
         }
 
-        /// Two pins cannot both win, and picking one by position is the silent drop
-        /// under another name — so the boot fails naming the config.
         #[tokio::test]
         async fn two_pinned_bases_for_one_config_fail_the_boot() {
             let err = match App::builder().module::<TwoPins>().build().await {
@@ -315,9 +265,6 @@ mod tests {
             );
         }
 
-        /// Q16: the failure named the config and not where it was pinned, so two
-        /// pins in two modules sent the reader searching the tree for both. It
-        /// names each declaration by the module that imports it.
         #[tokio::test]
         async fn two_pins_in_two_modules_are_both_named() {
             let err = match App::builder().module::<PinnedInTwoModules>().build().await {
@@ -332,8 +279,7 @@ mod tests {
         }
 
         /// `App::new` runs `register` but never `collect`, so a queued factory would
-        /// never be built. It used to boot anyway and leave the config missing —
-        /// readable only as a `None` at first use, far from the cause.
+        /// never be built.
         #[test]
         fn the_synchronous_boot_refuses_a_config_it_could_never_resolve() {
             let err = match App::new::<PinFirst>() {
@@ -406,15 +352,8 @@ mod tests {
     #[module(imports = [ConfigModule::for_root()])]
     struct RootOnly;
 
-    /// `ConfigModule::for_root()`'s collect registers the active [`Environment`]
-    /// and **nothing else** — in particular it does not merge the `.env` cascade
-    /// into the process environment. Pinned because the docs used to claim the
-    /// opposite (that building any default-source reader, or importing
-    /// `for_root`, published the cascade under a `Once`), and the advice that
-    /// followed from it — "a hermetic test must avoid `for_namespace` /
-    /// `ConfigModule::for_root()`" — sent readers away from calls that are
-    /// side-effect-free. `Environment::init` is the one publisher, and it is
-    /// tested where it lives.
+    /// `ConfigModule::for_root()` registers the active [`Environment`] and does not
+    /// merge the `.env` cascade into the process environment.
     #[test]
     #[expect(
         clippy::disallowed_methods,
@@ -459,13 +398,6 @@ mod tests {
                 &format!("{}=from_dotenv", var_name("readpath_guard", "URL")),
             )?;
 
-            // Asserted unconditionally. It was guarded on `value.is_some()`,
-            // reasoning that "the cascade is parsed once per process, so a
-            // sibling test may have frozen it against a different working
-            // directory" — but the runner is nextest, which gives every test its
-            // own process, so the `OnceLock` is always this test's. The guard
-            // made the read half of the cell unfailable, which is worse than
-            // empty.
             let value = crate::ConfigService::for_namespace("readpath_guard")
                 .get("URL")
                 .unwrap();

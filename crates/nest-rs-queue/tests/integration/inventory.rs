@@ -55,12 +55,8 @@ impl SyncProcessor {
 #[test]
 fn every_key_reaches_the_options_and_the_capabilities_it_needs() {
     let sync = method("SyncProcessor::sync");
-    // The literal is right here, and reading it as a copy was the mistake: the
-    // fixture *declares* `name = "sync"` in the suite root, so `"sync"` is this
-    // test's own input, while `<SyncQueue as Queue>::NAME` is the very const
-    // `#[processor]` emits — asserting one against the other can only fail if
-    // the macro stops emitting it, never if it emits the wrong name. Proved:
-    // mangling `#[queue]`'s emitted `NAME` keeps this assertion green.
+    // A literal on purpose: `<SyncQueue as Queue>::NAME` is the const the macro
+    // emits, and asserting against it would pass a wrong name.
     assert_eq!(sync.queue(), "sync");
     let options = sync.options();
     assert_eq!(options.retries(), 2);
@@ -87,12 +83,8 @@ fn every_key_reaches_the_options_and_the_capabilities_it_needs() {
     );
 }
 
-/// Keys read through a `macro_rules!` fragment.
-///
-/// `syn` wraps a `$value:expr` substitution in an invisible-delimiter group, and
-/// whether it unwraps depends on how the argument list was parsed — so the same
-/// value was once accepted at one site and refused at another. The job
-/// decorators answer identically or a shared key is a fiction.
+/// Keys read through a `macro_rules!` fragment: `syn` wraps a `$value:expr`
+/// substitution in an invisible-delimiter group, unwrapped by one parse and not another.
 macro_rules! declare_fragment_jobs {
     ($settle:expr, $slots:expr) => {
         struct FragmentProcessor;
@@ -120,9 +112,6 @@ declare_fragment_jobs!(false, 3);
 
 #[test]
 fn a_fragment_is_read_the_same_wherever_the_key_sits() {
-    // Compiling is most of the assertion; this pins that both methods reached
-    // the inventory, and that a number forwarded through a fragment is the
-    // number written.
     let entries: Vec<&ProcessMethod> = nest_rs_core::inventory::iter::<ProcessMethod>()
         .filter(|method| method.name().starts_with("FragmentProcessor::"))
         .collect();
@@ -218,13 +207,6 @@ impl r#yield {
     }
 }
 
-/// Compiling is the first half: a method compiled out — by a `#[cfg]`, or a
-/// `#[cfg]` inside a `#[cfg_attr]`, whatever its predicate — takes its handler,
-/// its payload check and its entry with it; without them the expansion names a
-/// method, a queue and a job that do not exist. The typed `self: &Self` is `&self`
-/// spelled out, `self: &Arc<Self>` borrows what the container holds, and a raw
-/// identifier is its name — a method's, where the expansion panicked building a
-/// handler from `r#`, and a host's.
 #[test]
 fn a_compiled_out_method_submits_nothing_and_a_typed_receiver_is_served() {
     let mut names: Vec<&str> = nest_rs_core::inventory::iter::<ProcessMethod>()

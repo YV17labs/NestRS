@@ -15,9 +15,7 @@ impl<T: Validate> Pipe for ValidationPipe<T> {
     fn transform(input: T) -> Result<T, PipeError> {
         match input.validate() {
             Ok(()) => Ok(input),
-            // Shared with the global `ValidateProbe` path so a rule's
-            // parameters, which can hold what was submitted, are dropped from
-            // the details on every transport.
+            // Shared with `ValidateProbe`: a rule's parameters are dropped on every transport.
             Err(errors) => Err(crate::validate::validation_error(errors)),
         }
     }
@@ -50,8 +48,6 @@ mod tests {
 
     #[test]
     fn rejection_details_never_echo_the_submitted_value() {
-        // A too-short secret must not come back in the details: the field and
-        // the rule survive, and none of the rule's parameters.
         #[derive(Debug, Validate)]
         struct Login {
             #[validate(length(min = 8))]

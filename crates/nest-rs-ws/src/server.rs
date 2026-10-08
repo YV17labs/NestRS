@@ -1,17 +1,6 @@
-//! Connection registry and the two handles that read it: [`WsServer`] (the
-//! `@WebSocketServer` analog, an injectable singleton tracking every live
-//! connection) and [`WsClient`] (the `@ConnectedSocket` analog handed to a
-//! handler).
-//!
-//! [`WsServer`] is generic over a zero-sized namespace marker `N`
-//! (default [`Global`]). The flat container keys by type, so `WsServer<Global>`
-//! and `WsServer<MyNs>` are wholly separate registries — `#[gateway(namespace
-//! = MyNs)]` mounts against its own. Both come from [`WsModule`]
-//! (`crate::namespace` covers how, and what it replaced). [`WsClient`] holds the
-//! registry as a type-erased [`Registry`] so the handler surface stays free of
-//! the namespace parameter.
-//!
-//! [`WsModule`]: crate::WsModule
+//! Connection registry and the two handles that read it: [`WsServer`], an
+//! injectable singleton per namespace marker tracking every live connection, and
+//! [`WsClient`], handed to a handler.
 
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -29,17 +18,15 @@ use crate::envelope::WsEnvelope;
 /// never reused within a process run.
 pub type ConnId = u64;
 
-/// Bounded per-connection outbox capacity. A slow consumer that cannot drain
-/// this many queued frames sheds further pushes (`try_send` fails) instead of
-/// growing memory without bound — backpressure over a memory-DoS vector.
+/// Bounded per-connection outbox capacity: a slow consumer sheds further pushes
+/// rather than growing memory without bound.
 pub(crate) const OUTBOX_CAPACITY: usize = 256;
 
 /// Default namespace marker for [`WsServer`].
 pub struct Global;
 
-/// An encoded outbound frame. Shared rather than owned: a broadcast hands the
-/// *same* bytes to every recipient, so cloning a `String` per connection made
-/// fan-out cost O(recipients × frame size) instead of O(recipients).
+/// An encoded outbound frame, shared so a broadcast hands the same bytes to
+/// every recipient.
 pub(crate) type Frame = Arc<str>;
 
 struct Conn {
@@ -47,10 +34,8 @@ struct Conn {
     rooms: HashSet<String>,
 }
 
-/// Connection registry shared across every connection of a gateway — the
-/// `@WebSocketServer` analog. Registered as a singleton by [`WsModule`] for
-/// the [`Global`] namespace; any service can `#[inject] Arc<WsServer>` to
-/// push to clients in reaction to a domain event.
+/// Connection registry shared across every connection of a gateway, provided
+/// by [`WsModule`]; any service can `#[inject] Arc<WsServer>` to push to clients.
 ///
 /// [`WsModule`]: crate::WsModule
 #[injectable]
@@ -205,12 +190,8 @@ impl<N: 'static> Registry for WsServer<N> {
     }
 }
 
-/// Push one frame to each recipient, returning `(sent, shed)`.
-///
-/// Deliberately takes an already-snapshotted list: the registry lock is held
-/// only long enough to clone the `Sender`s (a pointer bump each), never across
-/// the O(N) push loop — so a broadcast to a large fleet cannot stall a
-/// concurrent connect or disconnect.
+/// Push one frame to each recipient, returning `(sent, shed)`. Takes a snapshot
+/// so the registry lock is never held across the push loop.
 fn fan_out(recipients: Vec<Sender<Frame>>, frame: Frame) -> (usize, usize) {
     let (mut sent, mut shed) = (0usize, 0usize);
     for outbox in recipients {
@@ -223,12 +204,8 @@ fn fan_out(recipients: Vec<Sender<Frame>>, frame: Frame) -> (usize, usize) {
     (sent, shed)
 }
 
-/// Surface shed frames at `warn` — one aggregated event per send call (so a
-/// broadcast to N slow clients logs once, not N times), turning the previously
-/// silent server→client frame loss into a queryable signal (WS-I3). A shed
-/// frame means the recipient's bounded outbox is full: a slow or dead client
-/// not draining. The frame is dropped, not retried; the socket-lifetime ceiling
-/// and reply-path disconnect bound such clients over time.
+/// Surface shed frames at `warn`, one aggregated event per send call. A shed
+/// frame is dropped, not retried.
 fn warn_if_shed(event: &str, kind: &'static str, sent: usize, shed: usize) {
     if shed > 0 {
         tracing::warn!(
@@ -243,25 +220,21 @@ fn warn_if_shed(event: &str, kind: &'static str, sent: usize, shed: usize) {
 }
 
 /// Per-connection handle a `#[subscribe_message]` handler receives by
-/// declaring a `&WsClient` parameter — the `@ConnectedSocket` analog. Holds
-/// its gateway's registry as a type-erased [`Registry`] so the handler
-/// surface stays free of the namespace parameter.
+/// declaring a `&WsClient` parameter. Holds its gateway's registry as a
+/// type-erased [`Registry`], free of the namespace parameter.
 pub struct WsClient {
     id: ConnId,
     registry: Arc<dyn Registry>,
 }
 
 impl WsClient {
-    /// Build a client handle over a connection id and its gateway's registry —
-    /// used by the mount code; tests usually reach for [`for_test`](Self::for_test).
+    /// Build a client handle over a connection id and its gateway's registry.
     pub fn new(id: ConnId, registry: Arc<dyn Registry>) -> Self {
         Self { id, registry }
     }
 
-    /// Throwaway client backed by a fresh [`WsServer`] and a closed outbox —
-    /// for unit-testing `Gateway::dispatch` in isolation. Sends silently
-    /// drop (return `0` / `false`). Tests asserting on outbound frames must
-    /// build the client manually with a kept `Receiver`.
+    /// Throwaway client backed by a fresh [`WsServer`] and a closed outbox, for
+    /// unit-testing `Gateway::dispatch`. Sends drop (return `0` / `false`).
     pub fn for_test() -> Self {
         let server: Arc<WsServer> = Arc::new(WsServer::default());
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -405,7 +378,6 @@ mod tests {
     #[test]
     fn emit_to_an_unknown_connection_returns_false() {
         let server = WsServer::<Global>::default();
-        // 99 was never connected.
         let id: ConnId = 99;
         assert!(!server.emit(id, "x", &"y").expect("serializes"));
     }
@@ -488,8 +460,6 @@ mod tests {
 
     #[test]
     fn ws_client_to_emits_into_the_named_room_only() {
-        // `WsClient::to(room, event, data)` is the `@ConnectedSocket.to` analog —
-        // sends to peers in `room` regardless of whether `self` joined it.
         let server = Arc::new(WsServer::<Global>::default());
         let (tx_a, mut rx_a) = unbounded_channel();
         let (tx_b, mut rx_b) = unbounded_channel();
@@ -513,14 +483,11 @@ mod tests {
         let id = server.connect(tx);
         let registry: Arc<dyn Registry> = server;
         let client = WsClient::new(id, registry);
-        // No-one joined "ghost" — the count is zero, no error.
         assert_eq!(client.to("ghost", "msg", &"hi").expect("serializes"), 0);
     }
 
     #[test]
     fn ws_client_id_returns_the_allocated_connection_id() {
-        // The `id()` accessor is part of the handler-facing surface — gateways
-        // store it to keep per-connection state.
         let server = Arc::new(WsServer::<Global>::default());
         let (tx, _rx) = unbounded_channel();
         let assigned = server.connect(tx);
@@ -531,15 +498,12 @@ mod tests {
 
     #[test]
     fn ws_client_registry_accessor_returns_the_underlying_registry() {
-        // Handlers reach `WsServer` through this dyn handle without naming `N`.
         let server = Arc::new(WsServer::<Global>::default());
         let (tx, mut rx) = unbounded_channel();
         let id = server.connect(tx);
         let registry: Arc<dyn Registry> = server.clone();
         let client = WsClient::new(id, registry);
 
-        // Calling `broadcast_value` through the accessor reaches the same
-        // backing server.
         let sent = client
             .registry()
             .broadcast_value("evt", serde_json::json!({"k": 1}));
@@ -549,13 +513,7 @@ mod tests {
 
     #[test]
     fn registry_dyn_dispatch_routes_join_and_leave_through_the_namespace() {
-        // The trait object is what `WsClient` actually holds — verify each
-        // method dispatches to the underlying `WsServer<N>` impl.
         let server: Arc<dyn Registry> = Arc::new(WsServer::<Global>::default());
-        // Build a real connection on the underlying server through the trait —
-        // we can't call `connect` through `dyn Registry`, so reach the impl.
-        // Instead, exercise the four message-routing methods on an unknown id /
-        // unknown room: each should return the documented "no-op" value.
         Registry::join(&*server, 999, "room");
         Registry::leave(&*server, 999, "room");
         assert_eq!(
@@ -576,9 +534,7 @@ mod tests {
 
     #[test]
     fn ws_server_with_a_custom_namespace_carries_its_own_connections() {
-        // Tag `WsServer<MyNs>` with a non-`Default` marker — covers the
-        // namespace-typed path and the manual `Default` impl that does not
-        // bound `N: Default`.
+        // A non-`Default` marker covers the manual `Default` impl.
         struct MyNs;
         let server = WsServer::<MyNs>::default();
         let (tx, mut rx) = unbounded_channel();
@@ -598,33 +554,16 @@ mod tests {
         reason = "the test proves an emit into a dropped outbox does not panic; its result is not the point"
     )]
     fn ws_client_for_test_yields_a_dropable_outbox() {
-        // `for_test` is the documented shim for unit-testing gateway handlers
-        // without a real server — sends are accepted (registry exists) but
-        // the rx is dropped so frames are silently shed.
         let client = WsClient::for_test();
-        // `emit` writes to a closed channel — registry's send returns false,
-        // but the constructor doesn't panic and the public API stays usable.
         let _ = client.emit("hello", &"world");
-        // `id()` and `registry()` are usable trivial accessors.
         let _ = client.id();
         let _ = client.registry();
     }
 
-    /// A frame the server could not hand to a client is **dropped**, not
-    /// retried — the socket stays open and both sides believe the message was
-    /// delivered.
-    ///
-    /// That is deliberate (a slow client must not stall a broadcast), and it is
-    /// exactly why the loss has to be queryable: without this event a
-    /// notification fleet silently degrades as clients stop draining, and the
-    /// first report is a user saying they never got it. One aggregated line per
-    /// send call, so a broadcast to N slow clients logs once rather than N
-    /// times.
     #[test]
     fn a_full_outbox_reports_the_frames_it_dropped_rather_than_losing_them_silently() {
         let logs = nest_rs_testing::LogCapture::install();
         let server = WsServer::<Global>::default();
-        // Capacity one, already full: the next frame has nowhere to go.
         let (tx, _rx) = tokio::sync::mpsc::channel::<Frame>(1);
         let id = server.connect(tx.clone());
         tx.try_send(Frame::from("occupied"))

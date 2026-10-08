@@ -1,13 +1,5 @@
-//! What the operation span reports about the request it served.
-//!
-//! These are the two OpenTelemetry HTTP conventions that need an answer only the
-//! **router** has, which is why they are asserted through a mounted app rather
-//! than as a unit: `http.route` must be the low-cardinality template, and the
-//! exported span name must be `{method} {route}`.
-//!
-//! Both are read off the span rather than off the response, because that is
-//! where they live — and a field declared and never recorded is absent here,
-//! which is what makes the assertion mean something.
+//! What the operation span reports about the request it served: `http.route`
+//! and `{method} {route}` need the router, so they are asserted through a mounted app.
 
 use nest_rs_core::module;
 use nest_rs_http::{controller, routes};
@@ -22,8 +14,7 @@ struct OrgsController;
 
 #[routes]
 impl OrgsController {
-    /// Parameterised on purpose: the raw path and the template differ here, and
-    /// nowhere else can tell them apart.
+    /// Parameterised, so the raw path and the template differ.
     #[get("/:org/members/:id")]
     #[public]
     async fn member(&self, org: poem::web::Path<String>, id: poem::web::Path<String>) -> String {
@@ -71,10 +62,7 @@ impl JobsController {
 #[module(providers = [OrgsController, JobsController])]
 struct OrgsModule;
 
-/// `http.route` is what a backend groups latency and error rates on, so it has
-/// to be the template. With the addressed path there instead, every identifier
-/// is its own group and the aggregate says nothing — which is the state this
-/// replaced.
+/// `http.route` is the template a backend groups on, never the addressed path.
 #[tokio::test]
 async fn the_span_reports_the_route_template_and_the_path_separately() {
     let logs = LogCapture::install();
@@ -97,8 +85,7 @@ async fn the_span_reports_the_route_template_and_the_path_separately() {
     );
 }
 
-/// The span names no client: an address is personal data, and a span is kept by
-/// whatever collector receives it.
+/// The span names no client: an address is personal data.
 #[tokio::test]
 async fn the_span_carries_no_client_address() {
     let logs = LogCapture::install();
@@ -110,9 +97,8 @@ async fn the_span_carries_no_client_address() {
     assert_eq!(span.field("client.address"), None, "{:?}", span.fields);
 }
 
-/// `tracing` fixes a span's name to a literal, so one name would have to serve
-/// every route and a trace list would render the whole deployment as a single
-/// line. `otel.name` is the override an exporter reads.
+/// `tracing` fixes a span's name to a literal; `otel.name` is the override an
+/// exporter reads.
 #[tokio::test]
 async fn the_exported_span_is_named_method_and_route() {
     let logs = LogCapture::install();
@@ -128,10 +114,7 @@ async fn the_exported_span_is_named_method_and_route() {
     );
 }
 
-/// A request that matched nothing has no template, and the conventions' fallback
-/// is the method alone. Naming it after the URL instead is how one scanner fills
-/// a tracing backend with junk span names — so the absence is asserted, not
-/// merely tolerated.
+/// A request that matched nothing is named for its method alone, never its URL.
 #[tokio::test]
 async fn an_unmatched_request_is_named_by_its_method_alone() {
     let logs = LogCapture::install();
@@ -149,15 +132,8 @@ async fn an_unmatched_request_is_named_by_its_method_alone() {
     );
 }
 
-/// A request dropped before it answered — its client reset the connection, or
-/// the shutdown window closed on it — exports its span like an answered one,
-/// named for the route the router had matched: the router answers before the
-/// handler runs, and the drop takes only the response. Before, the name was read
-/// off the response alone, so every cancelled request of a deployment exported
-/// under the literal `http.request` with no `http.route`.
-///
-/// And it exports failed, in the conventions' terms: `error.type` is the word
-/// its line files under `outcome`, and the span's status is `Error`.
+/// A request dropped before it answered exports its span named for the route
+/// the router matched, failed: `error.type` is its `outcome`, the status `Error`.
 #[tokio::test]
 async fn a_request_dropped_before_it_answers_exports_its_span_under_its_route_and_failed() {
     let logs = LogCapture::install();
@@ -196,10 +172,8 @@ async fn a_request_dropped_before_it_answers_exports_its_span_under_its_route_an
     );
 }
 
-/// A `5xx` is the one status class the HTTP conventions read as a failed server
-/// operation: `error.type` is the status code, as a string, and the status is
-/// `Error`. A `4xx` is the caller's error and an answered `2xx` succeeded — both
-/// leave the two fields unset.
+/// Only a `5xx` fails a server span: `error.type` is the status code and the
+/// status `Error`; a `4xx` or `2xx` leaves both unset.
 #[tokio::test]
 async fn only_a_server_error_exports_its_span_failed() {
     for (path, status, failed) in [

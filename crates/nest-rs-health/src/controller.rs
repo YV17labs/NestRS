@@ -46,9 +46,7 @@ fn respond(report: ProbeReport) -> Response {
         IndicatorStatus::Up => StatusCode::OK,
         IndicatorStatus::Down => StatusCode::SERVICE_UNAVAILABLE,
     };
-    // A report that fails to serialize (out-of-memory territory — the shape is
-    // plain strings/maps) must not ship a silent empty 200: an orchestrator
-    // would read that as healthy. Fail loud with a 500 instead.
+    // Never an empty 200 on failure: an orchestrator would read it as healthy.
     match serde_json::to_vec(&report) {
         Ok(body) => Response::builder()
             .status(status)
@@ -68,24 +66,8 @@ fn respond(report: ProbeReport) -> Response {
 }
 
 /// Name the paths the probes are **actually** served at, once, at boot, when
-/// `HttpConfig::global_prefix` has moved them off the documented ones.
-///
-/// A probe path is a contract with an orchestrator rather than part of the
-/// app's API namespace, so `/health/live` under `global_prefix = "/api/v1"` is
-/// not a cosmetic difference: a manifest written from this crate's docs gets a
-/// `404`, the kubelet reads `404` as a failed probe, and on a liveness probe
-/// that is `CrashLoopBackOff` caused by the framework's own documentation.
-///
-/// Exempting the mount would be the better answer and it is not this crate's to
-/// give: `HttpTransport` nests the fully-assembled tree — controllers,
-/// self-mounts and imperative mounts alike — inside the prefix, so nothing a
-/// module contributes can land outside it. Making the surprise *loud and
-/// exact* is what remains available here, and a knob that could not move the
-/// mount would have been a false statement rather than a smaller answer.
-///
-/// `warn`, not `info`: the operator has to act on it before the next rollout,
-/// and it fires only when the paths differ from the documented ones — an app
-/// with no prefix is silent.
+/// `HttpConfig::global_prefix` has moved them off the documented ones: a
+/// manifest pointing at `/health/live` would get a `404`, a failed probe.
 pub(crate) fn report_prefixed_probe_paths(container: &Container) {
     let Some(prefix) = container
         .get::<HttpConfig>()
@@ -96,9 +78,6 @@ pub(crate) fn report_prefixed_probe_paths(container: &Container) {
         return;
     };
 
-    // Keyed on the provider's `TypeId` rather than on the controller's name or
-    // its declared path: both are written in the decorator above, and a boot
-    // line that names a path the decorator no longer mounts is worse than none.
     let discovery = Discovery::new(container);
     let Some(meta) = discovery
         .meta::<HttpControllerMeta>()

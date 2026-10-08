@@ -1,10 +1,8 @@
 //! A download's body: bounded by its stall while its reader waits, never by its
 //! size, and resumed from where it stopped, however long it runs.
 //!
-//! The bound is this crate's, not the HTTP client's: reqwest's read timeout
-//! keeps running between two reads of a body, so it cuts a reader that pauses
-//! — a slow client behind a streamed response — and its per-request timer runs
-//! through an upload's body too.
+//! The bound is this crate's, not reqwest's: its read timeout keeps running
+//! between two reads of a body, so it cuts a reader that pauses.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -23,14 +21,9 @@ use crate::error::{Result, StorageError};
 /// The object at `path` from the answer `first` S3 gave, read within
 /// `read_timeout` per wait for its next bytes.
 ///
-/// A body silent that long while its reader waits, or broken past
-/// `object_store`'s own resumption, is resumed with a ranged `GET` of what is
-/// still owed, said at `warn`, and fenced on the object's `ETag` — sent as
-/// `If-Match` and checked on the answer — so a version written since is
-/// refused rather than spliced in; each resume waits for S3's answer within
-/// `operation_timeout`. A resumed body that stops before its
-/// first byte fails the download on what stopped it — a stall naming the
-/// bound.
+/// A body that stalls or breaks is resumed with a ranged `GET` of what is still
+/// owed, fenced on the object's `ETag` so a version written since is refused;
+/// a resumed body that stops before its first byte fails the download.
 pub(crate) fn download(
     store: Arc<dyn ObjectStore>,
     path: Path,
@@ -232,9 +225,6 @@ mod tests {
         }
     }
 
-    /// A resume is fenced on the version the download started on: the rest of
-    /// a version written since is refused, never spliced onto what was read,
-    /// even from a store that ignores the fence.
     #[tokio::test]
     async fn a_resume_answered_from_a_version_written_since_is_refused_not_spliced() {
         let store = Arc::new(FenceIgnoring(InMemory::new()));

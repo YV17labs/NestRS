@@ -6,8 +6,6 @@ use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Namesp
 
 use crate::JwtOptions;
 use crate::error::AuthError;
-// Single source of truth: the min-secret rule is enforced in `JwtService::new`;
-// the config path checks it too only to surface an env-var-named message.
 
 /// The token lifetime's range, the variable that sets it, and why.
 pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
@@ -41,7 +39,6 @@ pub(crate) const LEEWAY: DurationBounds = DurationBounds::secs(
     },
 );
 
-// No `Debug`: secrets must not leak through a derived format.
 /// Env-driven JWT key material (namespace `authn`). The combination of keys
 /// present selects the signing mode; see [`into_options`](Self::into_options).
 /// No `Debug` derive: secrets must not leak through a format.
@@ -65,14 +62,9 @@ pub struct AuthnConfig {
     /// Expected `aud` claim (key `AUDIENCE`). Set ⇒ the claim is **mandatory**
     /// and must name this service.
     ///
-    /// **Omitting it is not omitting the check.** RFC 7519 §4.1.3 obliges a
-    /// verifier to reject a token that *carries* an `aud` it is not named in,
-    /// and that clause binds a service naming no audience of its own too — so
-    /// an unconfigured verifier accepts a token with no `aud` and refuses one
-    /// minted for a sibling service by the same issuer. What configuring it
-    /// adds is the *other* direction: a token omitting `aud` entirely then
-    /// fails closed as well. The opt-out is
-    /// [`allow_any_audience`](Self::allow_any_audience), and only that.
+    /// Unset, a token whose `aud` does not name this service is still refused
+    /// (RFC 7519 §4.1.3); set, a token with no `aud` is refused too. The opt-out
+    /// is [`allow_any_audience`](Self::allow_any_audience), and only that.
     pub audience: Option<String>,
     /// Expected `iss` claim (key `ISSUER`). Omitted ⇒ no issuer check.
     pub issuer: Option<String>,
@@ -82,10 +74,8 @@ pub struct AuthnConfig {
     /// Opt out of RFC 7519 §4.1.3 (key `ALLOW_ANY_AUDIENCE`, default `false`):
     /// accept a token whose `aud` names a service this one is not.
     ///
-    /// Named, explicit and off by default, because the behaviour it restores is
-    /// the confused deputy — any app the issuer mints for becomes a credential
-    /// for this one. It is refused beside [`audience`](Self::audience), which
-    /// declares the opposite, and it reports itself at `warn` once per boot.
+    /// Restores the confused deputy, so it is refused beside
+    /// [`audience`](Self::audience) and reports itself at `warn` once per boot.
     pub allow_any_audience: bool,
     /// RFC 9068 explicit typing — stamp `typ: at+jwt` when minting and refuse a
     /// token typed anything else when verifying. Defaults to **on**: §4 states
@@ -143,11 +133,9 @@ fn pem_text(env: &ConfigService, key: &str) -> nest_rs_config::Result<Option<Str
     }
 }
 
-/// A PEM key's setting, every way it can be given. By the time an [`AuthnConfig`]
-/// is judged, which spelling supplied a field — or whether code pinned it — is
-/// no longer known, so the message names the setting rather than claim one
-/// variable that may not exist. A sentence continuing past it sets it off with
-/// commas.
+/// A PEM key's setting, every way it can be given: which spelling supplied a
+/// field is unknown once an [`AuthnConfig`] is judged. A sentence continuing
+/// past it sets it off with commas.
 pub(crate) fn spellings(key: &str, field: &str) -> String {
     format!(
         "{}, or `{field}` in an AuthnConfig or JwtOptions built in code",
@@ -155,9 +143,7 @@ pub(crate) fn spellings(key: &str, field: &str) -> String {
     )
 }
 
-/// The secret's setting, every way it can be given — the same shape as
-/// [`spellings`], since a secret is a variable like any other and takes its
-/// `_FILE` spelling too.
+/// The secret's setting, every way it can be given, `_FILE` spelling included.
 pub(crate) fn secret_setting() -> String {
     spellings("SECRET", "secret")
 }
@@ -166,17 +152,10 @@ impl AuthnConfig {
     /// Infer signing mode from the keys present. Fails the boot when no usable
     /// combination exists.
     ///
-    /// Each field was read on its own, from whichever tier set it, so the
-    /// combination is judged here, whole, and never chosen from: a pair signs
-    /// and verifies EdDSA, a public key alone verifies it, a secret alone signs
-    /// and verifies HS256.
-    ///
-    /// The refusals run in one order, so the first thing an operator reads is
-    /// the most fundamental: a secret — any value, empty included — beside
-    /// either key (two signing modes, nothing says which is meant), naming every
-    /// setting that is set; then a private key without its public key; then
-    /// nothing set at all. Whether each value is usable is judged once, by
-    /// [`JwtService::new`](crate::JwtService::new).
+    /// A pair signs and verifies EdDSA, a public key alone verifies it, a secret
+    /// alone signs and verifies HS256. Refused in order: a secret beside either
+    /// key, a private key without its public key, nothing set. Whether each value
+    /// is usable is [`JwtService::new`](crate::JwtService::new)'s to judge.
     pub fn into_options(self) -> Result<JwtOptions, AuthError> {
         let leeway = Duration::from_secs(self.leeway_secs.unwrap_or(30));
         let audience = self.audience;
@@ -208,10 +187,6 @@ impl AuthnConfig {
                 spellings("PUBLIC_KEY", "public_key"),
             )));
         }
-        // Only the combination is judged here — which key the settings make.
-        // Whether each value is usable (a secret long enough, PEM that parses, two
-        // keys of one pair) is `JwtService::new`'s, the one constructor a config
-        // and a value built in code both reach.
         let mut options = match (secret, private, public) {
             (Some(secret), _, _) => JwtOptions::new(secret),
             (None, private, Some(public)) => match private {

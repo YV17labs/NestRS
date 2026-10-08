@@ -1,17 +1,10 @@
 //! Worker-execution primitives shared by every transport that runs jobs off the
 //! request path — schedulers, queue workers, future stream consumers.
 //!
-//! A worker transport runs work that no client is actively awaiting, so it has
-//! no HTTP request to hang ambient state from. The seam in this crate
-//! ([`JobContext`]) lets a bridge (e.g. an ORM module) install per-job ambient
+//! [`JobContext`] lets a bridge (e.g. an ORM module) install per-job ambient
 //! state — an executor (by default a transaction settled on the job's own
-//! outcome, see [`JobTransaction`]), a tenant scope, a trace span — without
-//! coupling the worker transport to that bridge's domain.
-//!
-//! Vocabulary: *worker* = transport role (drives execution off the request
-//! path); *job* = unit of work executed. [`JobContext`] is per-**job** ambient
-//! state, not per-worker — installed once around each unit of work the
-//! transport drives.
+//! outcome, see [`JobTransaction`]), a tenant scope — without coupling the
+//! worker transport to that bridge's domain.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -19,8 +12,7 @@ mod constants;
 pub mod context;
 mod error;
 
-/// This crate's span target, at the root like every other crate's — the module
-/// it is declared in is an implementation detail of where the emission lives.
+/// This crate's span target.
 pub use context::TARGET;
 
 pub use constants::JOB_TIMEOUT;

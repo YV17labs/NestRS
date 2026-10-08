@@ -1,9 +1,5 @@
-//! Layer-System token emission shared by the transport decorators. Every
-//! scope on every transport (controller/resolver/gateway struct, per-method,
-//! per-operation) turns its `#[use_*(...)]` paths into the same
-//! `Vec<ScopedLayerSpec>` shape; only the erased `dyn Trait` the guard/pipe/
-//! filter/interceptor is coerced to differs. One helper here replaces the
-//! per-family copies that had begun to drift.
+//! Layer-System token emission shared by the transport decorators: every
+//! scope's `#[use_*(...)]` paths become one `Vec<ScopedLayerSpec>` shape.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;

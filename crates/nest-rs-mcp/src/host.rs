@@ -1,25 +1,9 @@
-//! [`McpHost`] — one MCP host, seen through a `dyn`-compatible view.
+//! [`McpHost`] — one MCP host, seen through a `dyn`-compatible view of rmcp's
+//! [`ServerHandler`], which is not object-safe.
 //!
-//! [`ServerHandler`] is not object-safe: every method returns an opaque
-//! `impl Future`, and `Sized` is a supertrait. A mount that merges several
-//! hosts has to hold them behind one pointer type, so this module restates the
-//! trait with boxed futures and blanket-implements it for every
-//! `ServerHandler`. Same shim [`GraphqlResolverObject`-style composition uses
-//! next door, for the same reason.
-//!
-//! **The surface has to stay exhaustive.** A method missing here is a method
-//! [`CompositeHandler`](crate::CompositeHandler) cannot delegate, which means
-//! rmcp's *default* answers for the host — an empty `tools/list`, a `-32601` on
-//! `prompts/get` — silently, and only on the wire. Nothing needs to police this
-//! list directly: `CompositeHandler`'s impl carries
-//! `#[deny(clippy::missing_trait_methods)]` and delegates through `dyn McpHost`,
-//! so a method rmcp adds fails that impl's build until it is added here.
-//!
-//! [`GraphqlResolverObject`]: https://docs.rs/nest-rs-graphql
+//! A method missing here would answer with rmcp's default, silently; a method rmcp
+//! adds fails `CompositeHandler`'s `#[deny(clippy::missing_trait_methods)]` until added.
 
-// `subscribe` / `unsubscribe` are SEP-2575-deprecated in rmcp but still part of
-// the trait for legacy protocol versions; a view that drops them drops real
-// traffic.
 #![expect(
     deprecated,
     reason = "rmcp still routes the deprecated methods for legacy protocol versions"
@@ -43,13 +27,8 @@ use rmcp::service::{NotificationContext, RequestContext, RoleServer, Subscriptio
 use crate::McpError;
 use crate::guard::BoxFuture;
 
-/// Restate `ServerHandler` with boxed futures, and blanket-implement it.
-///
-/// Written as one macro over the method list because the alternative is one
-/// hand-written pair per method, and one chance per method for the trait and
-/// its blanket impl to drift apart. Every method rmcp's trait has goes in one of the three lists;
-/// only `listen` stays hand-written, because its context type is neither a
-/// `RequestContext` nor a `NotificationContext`.
+/// Restate `ServerHandler` with boxed futures, and blanket-implement it; `listen`
+/// is hand-written, its context neither a `RequestContext` nor a `NotificationContext`.
 macro_rules! dyn_host {
     (
         requests: [ $( $rname:ident ( $($ra:ident : $rty:ty),* ) -> $rout:ty ),* $(,)? ],
@@ -130,31 +109,24 @@ macro_rules! dyn_host {
 
 dyn_host! {
     requests: [
-        // --- lifecycle & discovery ---
         ping() -> (),
         initialize(request: InitializeRequestParams) -> InitializeResult,
         discover() -> DiscoverResult,
-        // --- tools ---
         call_tool(request: CallToolRequestParams) -> CallToolResponse,
         list_tools(request: Option<PaginatedRequestParams>) -> ListToolsResult,
-        // --- prompts ---
         get_prompt(request: GetPromptRequestParams) -> GetPromptResponse,
         list_prompts(request: Option<PaginatedRequestParams>) -> ListPromptsResult,
-        // --- resources ---
         read_resource(request: ReadResourceRequestParams) -> ReadResourceResponse,
         list_resources(request: Option<PaginatedRequestParams>) -> ListResourcesResult,
         list_resource_templates(request: Option<PaginatedRequestParams>)
             -> ListResourceTemplatesResult,
         subscribe(request: SubscribeRequestParams) -> (),
         unsubscribe(request: UnsubscribeRequestParams) -> (),
-        // --- completion & logging ---
         complete(request: CompleteRequestParams) -> CompleteResult,
         set_level(request: SetLevelRequestParams) -> (),
-        // --- tasks (SEP-2663) ---
         get_task(request: GetTaskParams) -> GetTaskResult,
         update_task(request: UpdateTaskParams) -> (),
         cancel_task(request: CancelTaskParams) -> (),
-        // --- custom methods ---
         on_custom_request(request: CustomRequest) -> CustomResult,
     ],
     notifications: [
@@ -164,7 +136,6 @@ dyn_host! {
         on_roots_list_changed(),
         on_custom_notification(notification: CustomNotification),
     ],
-    // Synchronous reads of the host's own declaration — no dispatch, no future.
     accessors: [
         "The subset of `requested` this host accepts, `None` when it serves no \
          subscriptions."

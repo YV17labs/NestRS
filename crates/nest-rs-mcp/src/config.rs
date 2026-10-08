@@ -1,52 +1,20 @@
 //! [`McpConfig`] — streamable-HTTP server options for every `#[mcp]` mount.
 //!
-//! One of these fields is a **security control**, not a tuning knob.
-//!
-//! rmcp validates the inbound `Host` header against
-//! [`allowed_hosts`](McpConfig::allowed_hosts) to stop **DNS rebinding**: a
-//! page on an attacker's origin resolves its own hostname to `127.0.0.1` and
-//! POSTs to a developer's locally running MCP server, which would otherwise
-//! answer with the user's tools and data. The SDK therefore ships a
-//! loopback-only allowlist — which means a server reached under a *real*
-//! hostname answers `403` until the deployment names itself here.
-//!
-//! **That default is deliberate, and inverting it would invert the
-//! protection.** DNS rebinding only reaches a host the victim's browser can
-//! resolve to but the attacker cannot call directly — loopback and the local
-//! network. So the vulnerable deployment is the developer's local server, which
-//! is exactly the one that configures nothing; defaulting to "off" would
-//! disarm the control in the only case the attack works, and leave it armed
-//! only where it is least needed. A deployment that genuinely wants no
-//! validation says so with an empty list.
-//!
-//! **The browser `Origin` half is not here** — it is the HTTP transport's CORS
-//! policy, `<PREFIX>_HTTP__CORS_ORIGINS`. rmcp offers its own `allowed_origins`
-//! and the framework deliberately leaves it empty: poem rejects a disallowed
-//! `Origin` with `403` on *every* method (not just the preflight), the CORS
-//! layer wraps the whole route tree so a `#[mcp]` self-mount inherits it
-//! (`EdgePosture::Exempt` skips guards, never CORS), and the two checks share
-//! their open doors exactly (an empty list is off; a request with no `Origin`
-//! passes). Two knobs for one control is what the framework forbids, and the
-//! transport-wide one is the survivor because it also covers `/graphql`, `/ws`
-//! and every controller.
-//!
-//! Dual-path like every `nest-rs-*` config: settable via `<PREFIX>_MCP__*` env
-//! vars **and** via the pinned struct passed to
-//! [`McpModule::for_root`](crate::McpModule::for_root), composing per field.
+//! [`allowed_hosts`](McpConfig::allowed_hosts) is a security control: rmcp checks
+//! the `Host` header against it to stop DNS rebinding, which reaches exactly the
+//! local server that configures nothing — hence the loopback default. The
+//! `Origin` half is the HTTP transport's CORS policy
+//! (`<PREFIX>_HTTP__CORS_ORIGINS`), so rmcp's `allowed_origins` stays empty.
 
 use std::time::Duration;
 
 use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
-/// rmcp's own default POST body ceiling, restated so the framework's default is
-/// readable here rather than inherited invisibly.
+/// rmcp's own default POST body ceiling.
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
-/// The stream keep-alive's range — every server-sent stream's,
-/// [`SSE_KEEP_ALIVE_FLOOR`](nest_rs_http::SSE_KEEP_ALIVE_FLOOR) and
-/// [`SSE_KEEP_ALIVE_CEILING`](nest_rs_http::SSE_KEEP_ALIVE_CEILING) — and the
-/// variable that sets it.
+/// The stream keep-alive's range, every server-sent stream's.
 const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
     "SSE_KEEP_ALIVE_SECS",
     "McpConfig::sse_keep_alive",
@@ -54,8 +22,7 @@ const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
     nest_rs_http::SSE_KEEP_ALIVE_CEILING,
 );
 
-/// The advertised reconnection delay's range, the variable that sets it, and
-/// why.
+/// The advertised reconnection delay's range.
 const SSE_RETRY: DurationBounds = DurationBounds::secs(
     "SSE_RETRY_SECS",
     "McpConfig::sse_retry",
@@ -71,8 +38,7 @@ const SSE_RETRY: DurationBounds = DurationBounds::secs(
     },
 );
 
-/// MCP streamable-HTTP options resolved at boot (namespace `mcp`). See the
-/// module docs for why the host allowlist is a security control.
+/// MCP streamable-HTTP options resolved at boot (namespace `mcp`).
 #[config(namespace = "mcp")]
 #[derive(Clone, Debug)]
 pub struct McpConfig {
@@ -116,9 +82,7 @@ pub struct McpConfig {
 
 impl Default for McpConfig {
     fn default() -> Self {
-        // Mirrors rmcp's own defaults, loopback allowlist included — the
-        // framework does not widen the SDK's security posture behind the
-        // developer's back.
+        // rmcp's own defaults, loopback allowlist included.
         Self {
             allowed_hosts: vec!["localhost".into(), "127.0.0.1".into(), "::1".into()],
             legacy_session_mode: true,
@@ -141,24 +105,16 @@ impl McpConfig {
         self
     }
 
-    /// Translate into the SDK's own config. `session_store` and
-    /// `cancellation_token` are left at their defaults here — the mount fills
-    /// the store in from the container and the token from the transport's
-    /// [`DetachedWork`](nest_rs_http::DetachedWork): both are runtime state, not
-    /// configuration.
+    /// Translate into the SDK's config; the mount fills in `session_store` and
+    /// `cancellation_token`.
     pub(crate) fn to_server_config(&self) -> StreamableHttpServerConfig {
-        // `StreamableHttpServerConfig` is `#[non_exhaustive]`; the builder
-        // methods are the supported way in, and they keep this compiling when
-        // rmcp grows a field.
         StreamableHttpServerConfig::default()
             .with_sse_keep_alive(self.sse_keep_alive)
             .with_sse_retry(self.sse_retry)
             .with_legacy_session_mode(self.legacy_session_mode)
             .with_json_response(self.json_response)
             .with_allowed_hosts(self.allowed_hosts.clone())
-            // `allowed_origins` stays at rmcp's empty default on purpose: the
-            // `Origin` control is the transport's CORS policy. See the module
-            // docs.
+            // `allowed_origins` stays empty: `Origin` is the transport's CORS policy.
             .with_max_request_body_bytes(self.max_request_body_bytes)
             .with_stateless_protocol_metadata_required(self.stateless_protocol_metadata_required)
     }
@@ -193,17 +149,13 @@ mod tests {
 
     #[test]
     fn defaults_keep_the_sdk_loopback_allowlist() {
-        // Widening this default would hand every `#[mcp]` mount a DNS-rebinding
-        // exposure the SDK deliberately closes.
+        // Widening it opens every `#[mcp]` mount to DNS rebinding.
         assert_eq!(
             McpConfig::default().allowed_hosts,
             ["localhost", "127.0.0.1", "::1"],
         );
     }
 
-    /// The `Origin` control has exactly one home, and it is not this config.
-    /// A re-added `allowed_origins` would resurrect the second knob poem's
-    /// CORS layer already owns for every transport.
     #[test]
     fn no_origin_knob_lives_on_the_mcp_config() {
         let rendered = format!("{:?}", McpConfig::default());
@@ -214,8 +166,6 @@ mod tests {
         );
     }
 
-    // The dual-path rule is framework-wide: a pinned `McpConfig` still takes
-    // its overrides per field from `<PREFIX>_MCP__*`.
     #[test]
     fn env_overlays_the_pinned_base_per_field() {
         let pinned = McpConfig::default().with_allowed_hosts(["mcp.example.com"]);
@@ -262,8 +212,6 @@ mod tests {
         assert_eq!(cfg.sse_retry, Some(Duration::from_secs(3)));
     }
 
-    /// Both stream durations have a ceiling like every duration a deployment
-    /// sets: past an hour is refused naming the variable, from either side.
     #[test]
     fn an_sse_duration_past_an_hour_is_refused_from_either_side() {
         for key in ["SSE_KEEP_ALIVE_SECS", "SSE_RETRY_SECS"] {

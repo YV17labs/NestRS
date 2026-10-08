@@ -39,13 +39,8 @@ debug = "line-tables-only"
 
 /// The feature crate's manifest.
 ///
-/// `tracing` and `anyhow` ship from the first `nestrs new`, not from the first
-/// `g queue`: a service logs at `debug` and a `#[hooks]` method returns a
-/// fallible `Result` — the two reflexes the framework's own observability and
-/// lifecycle rules prescribe, and the two crates the docs write in feature code
-/// without ever telling the reader to add them. A workspace that configures
-/// `tracing-subscriber` in `main` and cannot emit an event from a service is
-/// wired to log and unable to.
+/// `tracing` and `anyhow` ship from the first `nestrs new`: a service logs at
+/// `debug` and a `#[hooks]` method returns a `Result`.
 pub(crate) const FEATURES_CARGO: &str = r#"[package]
 name = "features"
 version.workspace = true

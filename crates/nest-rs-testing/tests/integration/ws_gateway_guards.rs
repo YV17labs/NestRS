@@ -1,12 +1,5 @@
-//! WebSocket gateway-scope guard dedup against Global on the WS upgrade.
-//!
-//! A WS upgrade is an HTTP `GET`. The gateway self-mounts with the default
-//! `EdgePosture::Guarded`, so the transport runs the global guard chain at its
-//! edge via `SelfMountGuardWrap`. A gateway that redeclares the same guard via
-//! `#[use_guards(...)]` would otherwise wrap the upgrade twice — `#[gateway]`
-//! skips its inline wrap when the TypeId matches a `GuardSpecs` entry. The
-//! check still runs exactly once and a denial still short-circuits the upgrade
-//! before any `WebSocket::from_request` work.
+//! A gateway redeclaring a global guard runs it once on the WS upgrade, and a
+//! denial short-circuits the upgrade.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -19,8 +12,6 @@ use poem::Request;
 use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
-// --- shared observable state -------------------------------------------------
-
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 static GATE: Mutex<()> = Mutex::const_new(());
 
@@ -32,11 +23,7 @@ fn counter() -> usize {
     COUNTER.load(Ordering::SeqCst)
 }
 
-// --- a counting deny guard ---------------------------------------------------
-
-/// Increments [`COUNTER`] every time it runs, then denies with `403`. The
-/// counter lets the dedup test distinguish "ran once" from "ran twice but
-/// only the first response is observed".
+/// Increments [`COUNTER`] every time it runs, then denies with `403`.
 #[injectable]
 #[derive(Default)]
 struct CountingDenyGuard;
@@ -52,8 +39,6 @@ impl Guard for CountingDenyGuard {
 }
 
 impl HttpGuard for CountingDenyGuard {}
-
-// --- two gateways: one bare (relies on Global), one redeclaring the guard ---
 
 #[gateway(path = "/ws-bare")]
 struct BareGateway;
@@ -83,17 +68,11 @@ impl DupGateway {
 #[module(imports = [WsModule], providers = [CountingDenyGuard, BareGateway, DupGateway])]
 struct GatewayDedupModule;
 
-// --- the test ----------------------------------------------------------------
-
 #[tokio::test]
 async fn gateway_scope_guard_redeclared_against_global_runs_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Global declares `CountingDenyGuard`; the `DupGateway` redeclares it
-    // on the gateway struct. `#[gateway]` skips its inline wrap because
-    // the TypeId is in `GuardSpecs`, so only the self-mount edge wrap
-    // (`SelfMountGuardWrap`) runs the guard — counter bumps once.
     let app = TestApp::builder()
         .module::<GatewayDedupModule>()
         .use_guards_global([guard::<CountingDenyGuard>()])
@@ -101,10 +80,7 @@ async fn gateway_scope_guard_redeclared_against_global_runs_once() {
         .await
         .expect("boots");
 
-    // Plain GET (no WS upgrade headers) — the guard fires before
-    // `WebSocket::from_request` would reject the missing upgrade, so we
-    // observe the 403 and the counter increment without needing a real
-    // socket.
+    // No upgrade headers: the guard fires before `WebSocket::from_request`.
     let resp = app.http().get("/ws-dup").send().await;
     resp.assert_status(StatusCode::FORBIDDEN);
 
@@ -120,8 +96,6 @@ async fn bare_gateway_runs_global_guard_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Sanity check: a gateway with no `#[use_guards]` still has the
-    // global guard applied through the self-mount edge wrap, exactly once.
     let app = TestApp::builder()
         .module::<GatewayDedupModule>()
         .use_guards_global([guard::<CountingDenyGuard>()])

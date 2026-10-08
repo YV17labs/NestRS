@@ -1,8 +1,7 @@
 //! `nestrs g migration <name>` — a SeaORM migration file, registered in **both**
 //! `crates/migrations/src/lib.rs` (the `mod` line) and `migrator.rs` (the
 //! `MigratorTrait` vec). `migrator.rs` is regenerated from the module list so
-//! the two registrations can never drift — the one you forget by hand is the
-//! one that silently never runs.
+//! the two registrations can never drift.
 
 use std::path::{Path, PathBuf};
 
@@ -22,11 +21,9 @@ pub(crate) struct MigrationOptions {
 }
 
 /// Queue the `migrations` + `seed` crates `db.just` names in every recipe, with
-/// `mods` already registered in both `lib.rs` and `migrator.rs`. Called by
-/// `nestrs new` with none — so `nestrs run db up` applies zero migrations on a
-/// fresh tree instead of failing on a package that doesn't exist — and by
-/// `g migration`'s bootstrap path with its first migration, so a workspace
-/// scaffolded before these crates existed self-heals in one transaction.
+/// `mods` already registered in both `lib.rs` and `migrator.rs` — none from
+/// `nestrs new`, the first migration from `g migration` on a workspace that
+/// predates the crates.
 pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, mods: &[String]) {
     s.create(
         root.join("crates/migrations/Cargo.toml"),
@@ -58,8 +55,6 @@ pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
 
-    // A workspace predating the scaffolded crates gets them now, in the same
-    // transaction as its first migration.
     let lib_path = ws.migrations_lib();
     let bootstrapping = !lib_path.is_file();
 
@@ -72,8 +67,6 @@ pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
     let seq = next_seq(&existing, &date);
     let stem = format!("m{date}_{seq:06}_{}", names.snake);
 
-    // Full, sorted module list including the new one — the single source both
-    // registrations read from.
     let mut mods = existing;
     mods.push(stem.clone());
     mods.sort();
@@ -82,9 +75,8 @@ pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
     let subject = crate::naming::migration_subject(&opts.name);
     let mut s = Scaffold::new();
     if bootstrapping {
-        // `create` writes are staged in memory, so an `edit` on a file this
-        // same transaction creates would read it off disk and fail — render
-        // both registrations into the created files instead.
+        // `create` writes are staged in memory, so an `edit` on a file this same
+        // transaction creates would fail on disk: render into the created files.
         queue_db_crates(&mut s, &ws.root, &mods);
         s.edit(
             ws.root.join("Cargo.toml"),
@@ -96,9 +88,6 @@ pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
         Renderer::new(&subject).render(migration::MIGRATION),
     );
     if !bootstrapping {
-        // Both registrations: the `mod` line in lib.rs, and a migrator.rs
-        // regenerated (overwritten) from the full module list so its vec is
-        // always complete and ordered.
         s.edit(lib_path, ensure_decl(&format!("mod {stem};")));
         let migrator = render_migrator(&mods);
         s.edit(
@@ -153,8 +142,7 @@ fn render_lib(mods: &[String]) -> String {
 }
 
 /// Render `migrator.rs` from the sorted module list — the whole file, so the
-/// `use super::{…}` import and the `Vec<Box<dyn MigrationTrait>>` always match
-/// `lib.rs` exactly.
+/// `use super::{…}` import and the vec always match `lib.rs`.
 fn render_migrator(mods: &[String]) -> String {
     // An empty crate has nothing to import; `use super::{};` would not compile.
     let imports = if mods.is_empty() {

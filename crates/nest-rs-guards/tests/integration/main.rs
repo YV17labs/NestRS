@@ -1,8 +1,5 @@
-//! Integration tests mirroring `src/`. `nest-rs-guards` owns
-//! the auth chain, so its guard→response wiring is exercised here in-process
-//! (no DB/network): a guard's `check_http` decision must render the right
-//! transport response, and a chain must run each guard and short-circuit on a
-//! denial.
+//! Integration tests mirroring `src/`: a guard's `check_http` decision renders
+//! the right transport response, and a chain short-circuits on a denial.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

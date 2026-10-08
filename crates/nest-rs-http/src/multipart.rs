@@ -1,15 +1,8 @@
-//! A multipart part, read as it arrives.
+//! A multipart part, read as it arrives rather than buffered by poem's
+//! `Field::bytes()`.
 //!
-//! poem's `Field::bytes()` is the buffered form: the whole part lands in memory
-//! before the handler sees any of it, which is fine for a form value and wrong
-//! for a file. [`PartExt::into_byte_stream`] is the other half — the same part
-//! as a byte stream, so an upload can be piped straight into an object store
-//! and never exist whole anywhere.
-//!
-//! It changes nothing about the ceiling: the part is read through the request
-//! body, which the transport edge already caps at
-//! [`HttpConfig.max_body_bytes`](crate::HttpConfig). Streaming bounds *memory*,
-//! not the request.
+//! The request body stays capped at [`HttpConfig.max_body_bytes`](crate::HttpConfig):
+//! streaming bounds memory, not the request.
 
 use std::io::Result as IoResult;
 use std::pin::Pin;
@@ -84,8 +77,6 @@ mod tests {
 
     use super::*;
 
-    /// Reads the `file` part as a stream and reports what it saw, so the test
-    /// can assert both the bytes and that they arrived in pieces.
     #[handler]
     async fn upload(mut form: Multipart) -> Result<String> {
         let mut chunks = 0usize;
@@ -106,8 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_part_streams_its_bytes_without_being_buffered_whole() {
-        // Big enough that poem hands it over in several reads — the property
-        // that makes this worth having.
+        // Big enough that poem hands it over in several reads.
         let payload = vec![b'a'; 512 * 1024];
         let form = poem::test::TestForm::new().bytes("file", payload.clone());
         let resp = TestClient::new(upload)

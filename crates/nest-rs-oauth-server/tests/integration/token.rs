@@ -1,10 +1,4 @@
 //! RFC 6749 §4.4.2 and §5.1 on the wire.
-//!
-//! The point of holding these shapes in the framework is that every issuer
-//! spells them the same, so what is asserted here is the **spelling**: the
-//! member names the specification fixes, and the two `serde` behaviours a
-//! conforming endpoint depends on. The transport encoding — `Form` at the token
-//! endpoint — is poem's, not this type's, so it is asserted where it is applied.
 
 use nest_rs_oauth_server::{AccessTokenRequest, AccessTokenResponse};
 
@@ -32,8 +26,6 @@ fn a_request_omitting_scope_deserializes_because_3_3_makes_it_optional() {
     assert_eq!(request.scope, None);
 }
 
-/// §5.2 obliges the endpoint to answer an unknown grant with
-/// `unsupported_grant_type`, which it can only do if the value reaches it.
 #[test]
 fn an_unknown_grant_reaches_the_issuer_rather_than_failing_to_deserialize() {
     let request: AccessTokenRequest =

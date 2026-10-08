@@ -65,8 +65,6 @@ async fn override_dyn_swaps_in_a_mock_seen_by_the_controller() {
         .build()
         .await
         .expect("the module boots with the override");
-    // The controller is built from the final container at mount, so it resolves
-    // the overridden binding — the response proves the swap reached the handler.
     let resp = app.http().get("/").send().await;
     resp.assert_status_is_ok();
     resp.assert_text("Mocked").await;

@@ -2,12 +2,9 @@
 //! `app.useGlobalPipes(new ValidationPipe())`, minus the reflection Rust doesn't
 //! have.
 //!
-//! A transport macro can't tell at codegen time whether a handler's input type
-//! carries `validator::Validate` rules. This probe lets it emit **one uniform
-//! call** for every typed input: `ValidateProbe(&input).maybe_validate()?` runs
-//! `Validate::validate` when `T: Validate`, and is a no-op for any other type.
-//! The dispatch is compile-time (an inherent method shadows the trait fallback),
-//! so a non-`Validate` argument costs nothing.
+//! A transport macro emits one call for every typed input:
+//! `ValidateProbe(&input).maybe_validate()?` runs `Validate::validate` when
+//! `T: Validate`, and is a compile-time no-op for any other type.
 //!
 //! Bring the fallback trait into scope at the call site for the resolution to
 //! work: `use nest_rs_pipes::MaybeValidateFallback as _;`.
@@ -17,33 +14,17 @@ use validator::{Validate, ValidationErrors};
 use crate::PipeError;
 
 /// Turn a `validator` failure into a [`PipeError`] whose `details` carry the
-/// field-level errors **without** the echoed submitted value.
-///
-/// `validator` records the rejected input under `params.value` on every error,
-/// `must_match` the other field's input under `params.other`, and a bound
-/// (`min`, `max`, `equal`) is an expression that can read another field.
-/// Returning them leaks what was submitted — a too-short password, the password
-/// a confirmation failed to match — into the response body and anything that
-/// captures it (a log, a cache, a proxy). So a failure keeps its field name and
-/// its `code`/`message`, at every nesting depth, and no parameter at all; a rule
-/// that should tell the client its bound says so in its `message`.
-/// Fail-secure: an unserializable error map collapses to `Null` rather than
-/// surfacing raw input. Shared by
-/// every validation entry point ([`ValidateProbe`] here,
-/// [`ValidationPipe`](crate::ValidationPipe) in `pipes/`) so no transport can
-/// echo the credential.
+/// field-level errors without any echoed submitted value ([`validation_details`]).
 pub(crate) fn validation_error(errors: ValidationErrors) -> PipeError {
     PipeError::with_details("validation failed", validation_details(&errors))
 }
 
-/// The wire-safe JSON for a `validator` failure — the field errors with every
-/// echoed input stripped, as `validation_error` ships them.
+/// The wire-safe JSON for a `validator` failure.
 ///
-/// Public because the redaction is the *policy*, not an implementation detail
-/// of pipes: any layer that puts `ValidationErrors` on a wire (a service-level
-/// `ServiceError::Validation`, a transport's own renderer) has to inherit it,
-/// or the framework leaks the submitted value on the one path that skipped the
-/// pipe.
+/// A failure keeps its field name, `code` and `message` at every depth and no
+/// `params`, which echo submitted input (`params.value`, `params.other`, a bound
+/// reading another field). Any layer putting `ValidationErrors` on a wire must use
+/// it. An unserializable error map collapses to `Null`.
 pub fn validation_details(errors: &ValidationErrors) -> serde_json::Value {
     let mut details = serde_json::to_value(errors).unwrap_or(serde_json::Value::Null);
     redact_submitted_values(&mut details);
@@ -162,7 +143,6 @@ mod tests {
 
     #[test]
     fn a_non_validate_type_is_a_no_op() {
-        // `Plain` does not implement `Validate`; the fallback runs and passes.
         let plain = Plain {
             _name: "anything".into(),
         };

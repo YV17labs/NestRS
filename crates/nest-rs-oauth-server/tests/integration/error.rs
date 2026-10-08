@@ -1,14 +1,8 @@
 //! Covers `src/error.rs` — what a conforming OAuth client actually reads back
 //! from a mounted token endpoint.
 //!
-//! The unit tests beside the enum assert the rendering; this asserts it
-//! **through a booted app**, which is the only thing that proves the response
-//! survives the transport it travels on. That distinction is not academic here:
-//! an earlier version returned the code as a plain-text body, and the
-//! resource-server interceptor stamped a `Bearer` challenge onto the `401` — so
-//! a client authenticating with `Basic` was handed a pointer to RFC 9728
-//! discovery instead of the reason its credentials were refused. Neither fault
-//! is visible to a unit test of the error type.
+//! Booted, because the response must survive the transport: a resource-server
+//! interceptor must not stamp a `Bearer` challenge onto the `401`.
 
 use nest_rs_core::module;
 use nest_rs_guards::NoBearerChallenge;
@@ -44,9 +38,7 @@ impl TokenController {
 #[module(imports = [HttpModule::for_root(None)], providers = [TokenController])]
 struct TokenApp;
 
-/// RFC 6749 §5.2: "The parameters are included in the entity-body of the HTTP
-/// response using the `application/json` media type", and §5.1's `no-store` /
-/// `no-cache` bind the whole token endpoint.
+/// RFC 6749 §5.2's `application/json` body, with §5.1's `no-store` and `no-cache`.
 #[tokio::test]
 async fn a_refused_grant_reaches_the_client_as_the_rfc6749_json_error() {
     let app = TestApp::for_module::<TokenApp>()
@@ -63,10 +55,7 @@ async fn a_refused_grant_reaches_the_client_as_the_rfc6749_json_error() {
         .await;
 }
 
-/// §5.2 again, for the one condition that is a `401`: the code is
-/// `invalid_client`, and the refusal must not be dressed up as a
-/// oauth-resource challenge — which is what the `NoBearerChallenge` marker
-/// on the response is for.
+/// The one `401`: `invalid_client`, never dressed up as a resource challenge.
 #[tokio::test]
 async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
     let app = TestApp::for_module::<TokenApp>()
@@ -79,8 +68,7 @@ async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
         .assert_json(serde_json::json!({ "error": "invalid_client" }))
         .await;
 
-    // Through `poem::Error`, which is what `?` in the handler above builds —
-    // and the only spelling that reaches a client.
+    // Through `poem::Error`, which `?` in the handler builds.
     let rendered = poem::Error::from(TokenError::InvalidClient).into_response();
     assert!(
         rendered.extensions().get::<NoBearerChallenge>().is_some(),
@@ -88,8 +76,7 @@ async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
     );
 }
 
-/// Q12: a dependency that did not answer while the grant was resolved is no
-/// failure of the client's, nor of this server's code: `503` (RFC 9110
+/// A dependency that did not answer while the grant was resolved: `503` (RFC 9110
 /// §15.6.4), the opaque code in the body and nothing of the cause.
 #[tokio::test]
 async fn a_dependency_outage_is_a_503_naming_nothing_of_its_cause() {

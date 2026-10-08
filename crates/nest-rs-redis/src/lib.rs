@@ -19,9 +19,7 @@
 //! The queue contract lives in [`nest-rs-queue`](::nest_rs_queue) (the
 //! [`Job`] marker, the [`ProcessMethod`] inventory, the [`JobProducer`] seam and
 //! the capabilities a backend declares); this crate is Redis's binding of it,
-//! written on the `redis` client directly. Swapping storage means writing a
-//! different `nest-rs-<storage>` crate against the same abstractions; the
-//! macro and application code stay unchanged.
+//! written on the `redis` client directly.
 //!
 //! [`Job`]: ::nest_rs_queue::Job
 //! [`ProcessMethod`]: ::nest_rs_queue::ProcessMethod
@@ -30,11 +28,8 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — the shared connection's own events (reaching
-/// Redis at boot). Declared by the crate that owns the concern: the queue's
-/// and the throttler's events stay on their ports' targets
-/// (`nest_rs::queue`, `nest_rs::throttler`), because a target's one job is to
-/// say where an event came from, and connecting to Redis is neither port's.
+/// This crate's span target — the shared connection's own events; the queue's
+/// and the throttler's stay on their ports' targets.
 pub const TARGET: &str = "nest_rs::redis";
 
 mod backend;

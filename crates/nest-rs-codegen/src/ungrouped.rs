@@ -1,25 +1,12 @@
 //! A value without the invisible groups a `macro_rules!` substitution wraps it
-//! in — one concern, read at three token shapes.
-//!
-//! A `$x:expr`, `$t:ty` or `$m:meta` fragment reaches a proc macro wrapped in a
-//! `Delimiter::None` group, and `syn` unwraps it in some parse paths and not
-//! others. A decorator that matches on the value's shape has to look through the
-//! group, or the same literal compiles written by hand and is refused when a
-//! macro forwarded it. The three readers are named `ungrouped_<shape>` so the
-//! next one — a pattern, a statement — has one obvious name.
+//! in: `syn` unwraps a `Delimiter::None` group in some parse paths and not
+//! others, so a decorator matching on a value's shape looks through it here.
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::{Expr, Type};
 
-/// `expr` without the invisible groups around it.
-///
-/// Looping, not a single unwrap: nesting is legal, and a value forwarded through
-/// two macro layers arrives wrapped twice. `#[process]` parses a value with
-/// `input.parse::<Expr>()` and keeps the group, while the triggers read theirs
-/// through a `Punctuated<Meta, _>` that unwraps only when the fork is empty — so
-/// the same `false` compiled as the *last* argument of `#[every]` and was refused
-/// one position earlier in `#[cron]`. Reading every value through here is what
-/// makes one key one answer.
+/// `expr` without the invisible groups around it — looping, since a value
+/// forwarded through two macro layers arrives wrapped twice.
 pub fn ungrouped_expr(expr: &Expr) -> &Expr {
     let mut current = expr;
     while let Expr::Group(group) = current {

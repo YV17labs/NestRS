@@ -1,10 +1,7 @@
 //! The class-level gate `#[authorize(Action, Entity)]` desugars to on a message.
 //!
-//! Same three refusals every transport's gate answers with, and one WS-specific
-//! case that matters more here than anywhere else: a gateway whose data context
-//! was never registered has **no** ambient ability by the time a message arrives
-//! — the upgrade's task-locals unwound when it returned — so "no ability" must
-//! fail closed rather than read as unrestricted.
+//! Includes the WS-specific case: a gateway whose data context was never
+//! registered has no ambient ability when a message arrives, and fails closed.
 
 use nest_rs_authz::{AbilityBuilder, Action, Read, Update};
 use nest_rs_ws::{Gateway, WsClient, WsError, WsReply, gateway, messages};
@@ -63,9 +60,7 @@ async fn an_ability_that_grants_nothing_is_refused() {
     );
 }
 
-// The case a gateway hits when `AuthzWsModule` was never imported: nothing
-// installed an ability, and the message must not be served on the strength of
-// that absence.
+// A gateway that never imported `AuthzWsModule`: nothing installed an ability.
 #[tokio::test]
 async fn no_ambient_ability_fails_closed() {
     let reply = GateGateway
@@ -91,14 +86,12 @@ async fn a_public_message_needs_no_ability_at_all() {
     );
 }
 
-// A rule the credential's scopes withhold is a rule nobody wrote: the gate
-// refuses exactly as it does for an ungranted action, and the refusal names the
-// scope so a client can act on it.
+// A rule the credential's scopes withhold is refused like an ungranted one, and
+// the refusal names the scope.
 #[tokio::test]
 async fn a_scoped_rule_the_credential_does_not_carry_is_refused() {
-    // `Some([])` is an OAuth credential that delegated *nothing* — distinct from
-    // the default `None`, which means "not scope-aware" and applies scoped rules
-    // in full. Conflating the two is the fail-open reading.
+    // `Some([])` delegated nothing; the default `None` means "not scope-aware".
+    // Conflating the two is the fail-open reading.
     let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
     builder
         .can(Action::Read, widget::Entity)

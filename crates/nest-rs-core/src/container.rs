@@ -18,26 +18,19 @@ use crate::module::{Collecting, DynamicModule, Module, Registering};
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
 /// The identity a singleton provider registers under: a `TypeId` optionally
-/// disambiguated by a `name`. `name: None` is the default, bare registration —
-/// every non-keyed `provide*`/`get*` path keys with `None`, so existing code
-/// behaves exactly as before. `name: Some(_)` is a **keyed** provider
-/// ([`ContainerBuilder::provide_keyed`]), letting several instances of the same
-/// concrete type coexist in the flat container (two `OAuthClient`s, one per
-/// upstream provider).
-///
-/// Keying is singleton-only: request-scoped and transient factories, and the
-/// metadata index, stay bare `TypeId`.
+/// disambiguated by a `name`. `name: Some(_)` is a **keyed** provider
+/// ([`ContainerBuilder::provide_keyed`]), letting several instances of one
+/// concrete type coexist. Keying is singleton-only.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ProviderKey {
     /// The provided type's identity.
     pub type_id: TypeId,
-    /// The key when this is a keyed provider; `None` for the bare, default
-    /// identity — two entries of the same type differ only by this.
+    /// The key when this is a keyed provider; `None` for the bare identity.
     pub name: Option<&'static str>,
 }
 
 impl ProviderKey {
-    /// The bare (unkeyed) identity for a concrete type — the default path.
+    /// The bare (unkeyed) identity for a concrete type.
     pub(crate) fn typed<T: Any>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
@@ -53,9 +46,7 @@ impl ProviderKey {
         }
     }
 
-    /// The bare identity for a raw `TypeId` — used internally where the type is
-    /// only available as a `TypeId` (trait-object bindings keyed by
-    /// `TypeId::of::<Arc<dyn Trait>>()`, the register-phase `contains` check).
+    /// The bare identity for a raw `TypeId`.
     pub(crate) fn of(type_id: TypeId) -> Self {
         Self {
             type_id,
@@ -65,10 +56,7 @@ impl ProviderKey {
 }
 
 /// A keyed `#[inject(key = "…")]` dependency reported by
-/// [`Discoverable::injected_keyed`](crate::Discoverable::injected_keyed): the
-/// container [`ProviderKey`] used to match it against the global keyed set,
-/// plus the injected type's name so a boot failure can name both the type and
-/// the key.
+/// [`Discoverable::injected_keyed`](crate::Discoverable::injected_keyed).
 ///
 /// **Internal ABI** — constructed by `#[injectable]`'s codegen, lockstep with
 /// `nest-rs-core`; do not hand-construct.
@@ -81,30 +69,17 @@ pub struct KeyedDependency {
     pub type_name: &'static str,
 }
 
-/// Builds a fresh instance of a request-scoped provider, invoked once per
-/// request by a [`RequestScope`]. The factory receives the
-/// scope (not the bare root [`Container`]) so a request-scoped provider may
-/// depend on **another** request-scoped provider and share its per-request
-/// instance; singleton deps still resolve because the scope forwards them to
-/// the root.
+/// Builds a fresh instance of a request-scoped provider, once per request,
+/// from the [`RequestScope`] so its request-scoped deps share the request's
+/// instance.
 pub(crate) type ScopedFactory = Arc<dyn Fn(&RequestScope) -> AnyArc + Send + Sync>;
 
-/// Builds a fresh instance of a transient provider on every resolution.
-/// Emitted by `#[injectable(scope = transient)]`. Like [`ScopedFactory`] it
-/// receives the [`RequestScope`] (not the bare root [`Container`]) so a
-/// transient's `#[inject]` deps resolve through the request boundary: a
-/// request-scoped dep resolves to the request's shared instance, singletons
-/// forward to the root, and another transient rebuilds. Resolved outside a
-/// request (`Container::get`), the scope is a throwaway wrapping the root.
+/// Builds a fresh instance of a transient provider on every resolution, from
+/// the [`RequestScope`]; outside a request, a throwaway scope over the root.
 pub(crate) type TransientFactory = Arc<dyn Fn(&RequestScope) -> AnyArc + Send + Sync>;
 
 thread_local! {
-    /// Re-entrancy guard for transient resolution: a transient provider that
-    /// (transitively) injects itself would loop forever. The shared
-    /// [`CycleGuard`] catches the cycle on the second entry for the same
-    /// `TypeId` and renders the chain for a clear panic. Kept a transient-only
-    /// stack so a legitimate concurrent resolution of the same transient on
-    /// another thread is never mistaken for a cycle.
+    /// Re-entrancy guard for transient resolution ([`CycleGuard`]).
     static TRANSIENT_BUILDING: BuildStack = const { RefCell::new(Vec::new()) };
 }
 
@@ -118,18 +93,10 @@ pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send
 /// One entry of the async factory queue, drained by
 /// [`AppBuilder::build`](crate::AppBuilder::build).
 ///
-/// `after` names the factory outputs this one reads from its snapshot — a
-/// store built over a shared connection, a producer bound over it. The drain
-/// runs an entry only once every type it names is present (or is nothing in the
-/// queue will ever provide, in which case the entry's own error is the right
-/// one), with queue order as the tie-break. That is what keeps
-/// `imports = [..]` order a readability choice even when one `for_root` builds
-/// what another's factory consumes.
-///
-/// `provides` is every key the entry registers once it runs — the concrete `T`
-/// and each `Arc<dyn D>` bound off it, a superseded default's included —
-/// because a dependent names whichever it injects: `_after::<X, Arc<dyn Port>>`
-/// is the portable form a consumer is told to write.
+/// `after` names the factory outputs this one reads from its snapshot; the
+/// drain runs it once each is present or provided by nothing queued. `provides`
+/// is every key it registers — the concrete `T` and each `Arc<dyn D>` bound off
+/// it — since a dependent may wait on either.
 pub(crate) struct QueuedFactory {
     pub(crate) name: &'static str,
     pub(crate) provides: Vec<TypeId>,
@@ -144,9 +111,8 @@ pub(crate) struct QueuedFactory {
 }
 
 impl QueuedFactory {
-    /// The concrete `T` this entry is keyed by — always the first of
-    /// [`provides`](Self::provides), the rest being the extra names `install`
-    /// registers. One field rather than two carrying the same fact.
+    /// The concrete `T` this entry is keyed by — the first of
+    /// [`provides`](Self::provides).
     pub(crate) fn id(&self) -> TypeId {
         self.provides[0]
     }
@@ -235,13 +201,9 @@ pub(crate) struct MetaEntry {
 
 /// Identity of one built [`Container`], handed out in construction order.
 ///
-/// Clones of a container share their id (a clone *is* the same registry);
-/// every distinct construction — [`ContainerBuilder::build`],
-/// [`ContainerBuilder::snapshot`], [`Container::default`] — gets a fresh one.
-/// Ids are never recycled, so a cache may key on one without the address-reuse
-/// hazard a pointer identity carries. Used by mount-time caches that memoize a
-/// container-derived value (the GraphQL guard chains) and must not serve one
-/// app's value to another app in the same process.
+/// Clones share their id; every distinct construction gets a fresh one. Ids are
+/// never recycled, so a cache may key on one without a pointer's address-reuse
+/// hazard.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ContainerId(u64);
 
@@ -269,8 +231,6 @@ impl Default for Container {
     }
 }
 
-/// Hands out [`ContainerId`]s. Monotonic and never reset — wrapping would take
-/// ~585 years at one container per nanosecond.
 fn next_container_id() -> ContainerId {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -284,12 +244,8 @@ impl Container {
     }
 
     /// Whether any provider is request-scoped or transient — i.e. whether a
-    /// [`RequestScope`] over this container has anything to build or cache.
-    ///
-    /// `false` for the common app that registers only singletons, which lets a
-    /// transport skip minting a fresh scope per request: with no dynamic
-    /// factory, every resolution falls through to this container and the
-    /// per-request cache stays empty for the request's whole life.
+    /// [`RequestScope`] over this container has anything to build or cache; a
+    /// transport may skip minting one per request when it is `false`.
     pub fn has_dynamic_scopes(&self) -> bool {
         !self.scoped.is_empty() || !self.transient.is_empty()
     }
@@ -301,20 +257,16 @@ impl Container {
 
     /// Resolve a provider by type. Returns `None` if no provider was registered.
     ///
-    /// This is the `ModuleRef.get()` analog and bypasses the build-time access
-    /// contract (see [`crate::access`]) — prefer declarative `#[inject]`.
+    /// Bypasses the build-time access contract ([`crate::access`]) — prefer
+    /// declarative `#[inject]`. A transient provider is rebuilt on every call.
     ///
-    /// A transient provider (`#[injectable(scope = transient)]`) is rebuilt on
-    /// every call. A transient that (transitively) depends on itself panics
-    /// with a clear cycle diagnostic — break it with `Arc<dyn Trait>` or
-    /// pick a different scope.
+    /// # Panics
+    ///
+    /// When a transient provider (transitively) depends on itself.
     pub fn get<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
         let id = TypeId::of::<T>();
         if let Some(factory) = self.transient.get(&id) {
-            // No live request here (the escape-hatch path): wrap the root in a
-            // throwaway scope so the transient's factory can still resolve a
-            // request-scoped `#[inject]` dep (built fresh, request-of-one)
-            // instead of panicking on a missing provider.
+            // A throwaway scope, so a request-scoped dep still resolves.
             let scope = RequestScope::new(self.clone());
             let any = build_transient(id, std::any::type_name::<T>(), factory, &scope);
             return any.downcast::<T>().ok();
@@ -325,9 +277,8 @@ impl Container {
     }
 
     /// Resolve a **keyed** singleton registered via
-    /// [`ContainerBuilder::provide_keyed`]. `None` if no provider was registered
-    /// under `(T, name)`. Keyed providers are singletons only — there is no
-    /// keyed transient or request-scoped resolution.
+    /// [`ContainerBuilder::provide_keyed`]; `None` if nothing is registered
+    /// under `(T, name)`.
     pub fn get_keyed<T: Any + Send + Sync>(&self, name: &'static str) -> Option<Arc<T>> {
         self.providers
             .get(&ProviderKey::named::<T>(name))
@@ -344,9 +295,7 @@ impl Container {
             .map(|outer| (*outer).clone())
     }
 
-    /// Whether a singleton is registered under the type `id` itself — without
-    /// building or downcasting anything, for a diagnostic that knows the type
-    /// only by its id.
+    /// Whether a singleton is registered under the type `id` itself.
     pub(crate) fn holds(&self, id: TypeId) -> bool {
         self.providers.contains_key(&ProviderKey::of(id))
     }
@@ -364,17 +313,8 @@ impl Container {
     }
 }
 
-/// Resolve a transient provider with re-entrancy detection. A transient that
-/// (transitively) injects itself would recurse forever; we catch the second
-/// entry for the same `TypeId` and panic with a chain naming every type on
-/// the cycle.
-///
-/// The push/pop pairing is panic-safe via [`CycleGuard`]: a factory that
-/// panics still pops the stack as the guard unwinds.
-///
-/// The factory resolves its `#[inject]` deps through `scope`
-/// ([`RequestScope`]): a request-scoped dep resolves to the request's shared
-/// instance, singletons forward to the root, another transient rebuilds.
+/// Resolve a transient provider, panicking on a cycle with the chain it
+/// closes ([`CycleGuard`]).
 pub(crate) fn build_transient(
     id: TypeId,
     type_name: &'static str,
@@ -388,8 +328,6 @@ pub(crate) fn build_transient(
         )
     });
     factory(scope)
-    // `_guard` drops here — pops the stack even if `factory` panics and the
-    // value path above is skipped.
 }
 
 /// The trait object a dyn binding makes of `value`. One already bound — a
@@ -423,42 +361,33 @@ pub struct ContainerBuilder {
     registered_modules: HashSet<TypeId>,
     /// Idempotency for the collect phase.
     collected_modules: HashSet<TypeId>,
-    /// Every module collected, in the order its collect ran, for the boot to
-    /// name one no register phase reached.
+    /// Every module collected, in order, for the boot to name one no register
+    /// phase reached.
     collected_order: Vec<(TypeId, &'static str)>,
     /// Builder-only: drained by [`AppBuilder::build`](crate::AppBuilder::build),
     /// never copied into the [`Container`] or a [`snapshot`](Self::snapshot).
-    /// The `TypeId` lets the build skip a factory whose output a seed already
-    /// supplies (a test injecting a pre-built resource in place of a `for_root`).
-    /// The type name rides along so the synchronous boot can name what it
-    /// cannot resolve.
     factories: Vec<QueuedFactory>,
     /// Types queued by [`provide_declared_factory`](Self::provide_declared_factory)
-    /// — a call site chose a value rather than accepting the default — and the
-    /// trait objects a dyn factory binds, each with the import that declared
-    /// it. Kept so a declaration supersedes an already-queued default instead
-    /// of losing the first-queued-wins race to it, and so a second declaration
-    /// can name the first.
+    /// and the trait objects a dyn factory binds, each with the import that
+    /// declared it: a declaration supersedes a queued default, and a second
+    /// declaration names the first.
     declared_factories: HashMap<TypeId, Declaration>,
-    /// Two declarations for one type: neither may silently win, so the build
-    /// fails naming both (see [`ContestedDeclarationError`](crate::ContestedDeclarationError)).
+    /// Two declarations for one type
+    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)).
     contested_factories: Vec<crate::ContestedDeclarationError>,
     /// The first error a `register` refused the boot with — see
     /// [`refuse`](Self::refuse).
     refusal: Option<anyhow::Error>,
     /// The imports whose phase is running, innermost last — what a declaration
-    /// made now is named by. Pushed and popped by the `#[module]` expansion
-    /// around each import, and by the app builder around each root.
+    /// made now is named by.
     import_sites: Vec<ImportSite>,
     scoped: HashMap<TypeId, ScopedFactory>,
     transient: HashMap<TypeId, TransientFactory>,
-    /// Concrete/keyed registrations that replaced an earlier one — a wiring
-    /// mistake the boot rejects (see [`duplicate_providers`](Self::duplicate_providers)).
+    /// Unkeyed registrations that replaced an earlier one
+    /// ([`duplicate_providers`](Self::duplicate_providers)).
     duplicates: Vec<DuplicateProvider>,
-    /// Dynamic imports (`Foo::for_root(opts)`) already constructed by the
-    /// collect phase, keyed by import site so the register phase consumes the
-    /// same value instead of re-evaluating the expression. Builder-only —
-    /// never copied into a [`Container`] or a [`snapshot`](Self::snapshot).
+    /// Dynamic imports (`Foo::for_root(opts)`) the collect phase constructed,
+    /// keyed by import site so the register phase consumes the same value.
     dynamic_registrars: HashMap<DynamicImportSite, Registrar>,
 }
 
@@ -474,14 +403,12 @@ pub(crate) enum Phase {
     Register,
 }
 
-/// Identifies one `#[module(imports = [...])]` entry: the importing module's
-/// type plus its position in the list. Stable across the collect and register
-/// phases because both walk the same import list in order.
+/// One `#[module(imports = [...])]` entry: the importing module's type plus its
+/// position in the list.
 type DynamicImportSite = (TypeId, usize);
 
-/// A bare concrete-type provider registered more than once. Surfaced by the
-/// boot as a fatal wiring error rather than a silent last-write-wins. (Keyed
-/// providers keep the documented last-write-wins and are not collected here.)
+/// An unkeyed provider registered more than once; a keyed one warns and the
+/// last write wins.
 #[derive(Clone, Copy)]
 pub(crate) struct DuplicateProvider {
     /// Type name of the doubly-registered provider.
@@ -573,19 +500,14 @@ impl ContainerBuilder {
         }
     }
 
-    /// Concrete/keyed providers registered more than once — collected during the
-    /// register phase so the boot fails naming them (a duplicate silently
-    /// last-write-wins would otherwise be a wiring bug that only surfaces as
-    /// wrong behaviour). Empty in the common case.
+    /// Unkeyed providers registered more than once, for the boot to refuse.
     pub(crate) fn duplicate_providers(&self) -> &[DuplicateProvider] {
         &self.duplicates
     }
 
-    /// Warn when a singleton registration shadows an existing transient
-    /// factory of the same `TypeId`. `Container::get` checks `transient`
-    /// before `providers`, so the singleton would be unreachable — the most
-    /// likely cause is two modules registering the same type with different
-    /// scopes by mistake.
+    /// Warn when a singleton registration shadows an existing transient factory
+    /// of the same `TypeId`: `Container::get` checks `transient` first, so the
+    /// singleton would be unreachable.
     fn warn_if_cross_kind_singleton(&self, id: TypeId, type_name: &'static str) {
         if self.transient.contains_key(&id) {
             tracing::warn!(
@@ -598,9 +520,8 @@ impl ContainerBuilder {
         }
     }
 
-    /// Warn when a transient registration shadows an existing singleton of
-    /// the same `TypeId`. Resolution now silently returns the transient
-    /// build, leaving the singleton state unreachable.
+    /// Warn when a transient registration shadows an existing singleton of the
+    /// same `TypeId`, leaving the singleton unreachable.
     fn warn_if_cross_kind_transient(&self, id: TypeId, type_name: &'static str) {
         if self.providers.contains_key(&ProviderKey::of(id)) {
             tracing::warn!(
@@ -613,13 +534,12 @@ impl ContainerBuilder {
         }
     }
 
-    /// Register a trait-object provider. Stored as `Arc<Arc<T>>` so the outer
-    /// `Arc` is sized and retrievable via the trait's `TypeId`.
+    /// Register a trait-object provider, stored as `Arc<Arc<T>>` so the outer
+    /// `Arc` is sized.
     ///
-    /// A trait object has one implementation: a second binding of `T` is a
-    /// duplicate the boot refuses, as a concrete type's is
-    /// ([`DuplicateProviderError`](crate::DuplicateProviderError)); a test
-    /// swaps one with [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
+    /// A second binding of `T` is a duplicate the boot refuses
+    /// ([`DuplicateProviderError`](crate::DuplicateProviderError)); a test swaps
+    /// one with [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         let key = ProviderKey::of(TypeId::of::<Arc<T>>());
         self.record_if_replacing(&key, std::any::type_name::<Arc<T>>());
@@ -627,9 +547,7 @@ impl ContainerBuilder {
         self
     }
 
-    /// Replace a trait-object provider without the duplicate check — the
-    /// intentional swap path used by
-    /// [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
+    /// Replace a trait-object provider without the duplicate check.
     pub(crate) fn replace_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.providers
             .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
@@ -650,16 +568,8 @@ impl ContainerBuilder {
     }
 
     /// Metadata of type `M` attached **so far**, in attach order — the mid-build
-    /// read of what [`Discovery::meta`](crate::Discovery::meta)
-    /// exposes once the container is frozen.
-    ///
-    /// One caller shape needs it: a surface that **aggregates** several
-    /// providers onto one mount point. Each contributing provider's `register`
-    /// runs independently, yet exactly one of them may attach the mount — so it
-    /// asks whether a peer already claimed it. `nest-rs-mcp` is the first
-    /// (several `#[mcp]` hosts, one endpoint per path); the alternative was a
-    /// per-path marker provider, which pollutes the container to answer a
-    /// question the index already holds.
+    /// read of what [`Discovery::meta`](crate::Discovery::meta) exposes once the
+    /// container is frozen.
     pub fn attached_meta<M: Any + Send + Sync>(&self) -> impl Iterator<Item = &M> {
         self.metadata
             .get(&TypeId::of::<M>())
@@ -682,10 +592,8 @@ impl ContainerBuilder {
     }
 
     /// Refuse the boot from a `register`, which has no `Result` to return: the
-    /// boot fails with `error` once the register phase ends, as it fails with a
-    /// factory's own error in the factory phase. The first refusal is the one
-    /// reported; a module refusing returns without registering what it could
-    /// not build, rather than panicking on it.
+    /// boot fails with `error` once the register phase ends. The first refusal
+    /// is the one reported.
     pub fn refuse(mut self, error: impl Into<anyhow::Error>) -> Self {
         if self.refusal.is_none() {
             self.refusal = Some(error.into());
@@ -699,8 +607,7 @@ impl ContainerBuilder {
         self.refusal.take()
     }
 
-    /// Whether a provider for `id` has already been registered. Lets `#[module]`
-    /// register providers in any order by checking dependencies against this.
+    /// Whether a provider for `id` has already been registered.
     pub fn contains(&self, id: TypeId) -> bool {
         self.providers.contains_key(&ProviderKey::of(id))
     }
@@ -714,14 +621,10 @@ impl ContainerBuilder {
 
     /// Import the module `M`: in the collect phase its
     /// [`collect`](Module::collect), in the register phase its
-    /// [`register`](Module::register) — each once per app, however many
-    /// modules import it, and `collect` first. A module first imported in the
-    /// register phase is collected there, too late for a factory, and the boot
-    /// refuses what it queues by name
-    /// ([`LateFactoryError`](crate::LateFactoryError)).
-    ///
-    /// The one way into a module's phases ([`Collecting`], [`Registering`]): a hand-written
-    /// module imports the modules it wires with it, in both of its own.
+    /// [`register`](Module::register) — each once per app, `collect` first. A
+    /// module first imported in the register phase is collected too late for a
+    /// factory ([`LateFactoryError`](crate::LateFactoryError)), so a
+    /// hand-written module imports in both of its phases.
     #[must_use]
     pub fn import<M: Module>(mut self) -> Self {
         let id = TypeId::of::<M>();
@@ -745,10 +648,8 @@ impl ContainerBuilder {
     }
 
     /// Collect phase for one dynamic import: run its
-    /// [`DynamicModule::collect`], then park the value so
-    /// [`register_dynamic_import`](Self::register_dynamic_import) can consume
-    /// it at the same site. The import expression is therefore evaluated
-    /// **once** for both phases.
+    /// [`DynamicModule::collect`], then park the value for
+    /// [`register_dynamic_import`](Self::register_dynamic_import).
     ///
     /// **Internal ABI** — emitted by `#[module]`, lockstep with
     /// `nest-rs-core-macros`; do not call by hand.
@@ -766,9 +667,7 @@ impl ContainerBuilder {
     }
 
     /// Register phase for one dynamic import: consume the value the collect
-    /// phase parked at this site. A module's `register` runs after its
-    /// `collect`, which parks every dynamic import's value ([`import`](Self::import)),
-    /// so one is always there; a site called with none is refused naming it.
+    /// phase parked at this site; a site with none is refused naming it.
     ///
     /// **Internal ABI** — emitted by `#[module]`, lockstep with
     /// `nest-rs-core-macros`; do not call by hand.
@@ -784,9 +683,7 @@ impl ContainerBuilder {
     }
 
     /// Queue an async factory whose awaited output is stored as a provider
-    /// (injectable as `Arc<T>`). Drained by
-    /// [`AppBuilder::build`](crate::AppBuilder::build) before providers are
-    /// built.
+    /// (injectable as `Arc<T>`), drained before providers are built.
     pub fn provide_factory<T, F, Fut>(self, factory: F) -> Self
     where
         T: Any + Send + Sync,
@@ -801,23 +698,13 @@ impl ContainerBuilder {
     /// Queue an async factory whose awaited output is bound **twice**: as the
     /// concrete `T` and as the `Arc<D>` trait object `bind` derives from it.
     ///
-    /// The portable-injection pattern a driver owes its callers — inject
-    /// `Arc<Connection>` for the concrete backend, or `Arc<dyn Trait>` to stay
-    /// swappable — needs both names resolvable from the one factory. Without
-    /// this, a driver that only registers the concrete type compiles fine and
-    /// then fails at boot with "unmet dependency" the first time an app takes
-    /// the documented portable form.
-    ///
     /// `bind` receives a clone, so `T`'s `Clone` must share the underlying
     /// resource (a pooled or multiplexed handle), not duplicate it.
     ///
-    /// `T` is a default, as [`provide_factory`](Self::provide_factory)'s is;
-    /// the `Arc<D>` is a **declaration**, since a trait object has one
-    /// implementation: another type's binding of it — a dyn factory or a
-    /// [`provide_declared_factory`](Self::provide_declared_factory) — fails the
-    /// boot ([`ContestedDeclarationError`](crate::ContestedDeclarationError)),
-    /// and a port's default of it is superseded. A seeded `Arc<D>` keeps its
-    /// binding; a seeded `T`, or one an import declared, is what `bind` binds.
+    /// `T` is a default; the `Arc<D>` is a **declaration**: another type's
+    /// binding of it fails the boot
+    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)), and a
+    /// port's default of it is superseded. A seeded `Arc<D>` keeps its binding.
     pub fn provide_factory_dyn<T, D, F, Fut>(self, factory: F, bind: fn(T) -> Arc<D>) -> Self
     where
         T: Any + Clone + Send + Sync,
@@ -839,28 +726,11 @@ impl ContainerBuilder {
     /// wherever the two happen to fall in import order.
     ///
     /// The plain [`provide_factory`](Self::provide_factory) queue is
-    /// first-queued-wins, which is right for a default that several modules
-    /// declare — a diamond import must not build twice. (First-*queued*, not
-    /// first-*run*: an ordinary factory blocked by an `_after` still yields the
-    /// type to a later unblocked one — two different ordinary factories for one
-    /// type is already the ambiguity this method exists to replace.) It is wrong for a value
-    /// an import site *chose*: `imports = [AudioModule, StorageModule::for_root(cfg)]`
-    /// would drop `cfg` on the floor, silently, because `AudioModule` imports
-    /// `StorageModule` and queued the environment-only factory first. A
-    /// declaration takes the slot instead, so the app gets what it wrote and the
-    /// order of `imports` stays a readability choice.
-    ///
-    /// Two declarations for one type contest, and the build fails naming it —
-    /// see [`ContestedDeclarationError`](crate::ContestedDeclarationError).
-    /// `remedy` is the sentence that error appends: the caller knows what the
-    /// two sites were and what the reader should do instead, and the container
-    /// does not.
-    ///
-    /// Not config-specific. Any module registering an implementation a *sibling
-    /// module also registers* — the in-memory and Redis throttler stores both
-    /// binding `Arc<dyn ThrottlerStore>` — belongs here, so importing both is a
-    /// named boot failure rather than whichever one `imports` happened to list
-    /// first.
+    /// first-queued-wins, right for a default several modules declare but wrong
+    /// for a value an import site *chose* (`StorageModule::for_root(cfg)`), which
+    /// takes the slot instead. Two declarations for one type fail the build
+    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)), which
+    /// appends `remedy`.
     pub fn provide_declared_factory<T, F, Fut>(self, remedy: &'static str, factory: F) -> Self
     where
         T: Any + Send + Sync,
@@ -879,8 +749,7 @@ impl ContainerBuilder {
 
     /// [`provide_factory`](Self::provide_factory) for a factory that reads
     /// another factory's output — `After` — from its snapshot. The drain runs it
-    /// once `After` is present, wherever the two seams fall in `imports = [..]`;
-    /// a guard built over a store that a sibling factory binds is the shape.
+    /// once `After` is present, wherever the two fall in `imports = [..]`.
     pub fn provide_factory_after<T, After, F, Fut>(self, factory: F) -> Self
     where
         T: Any + Send + Sync,
@@ -900,8 +769,7 @@ impl ContainerBuilder {
 
     /// [`provide_declared_factory`](Self::provide_declared_factory) for a
     /// factory that reads another factory's output — `After` — from its
-    /// snapshot. See [`provide_factory_after`](Self::provide_factory_after); a
-    /// store bound over a shared connection is the shape.
+    /// snapshot. See [`provide_factory_after`](Self::provide_factory_after).
     pub fn provide_declared_factory_after<T, After, F, Fut>(
         self,
         remedy: &'static str,
@@ -925,8 +793,7 @@ impl ContainerBuilder {
     }
 
     /// [`provide_declared_factory_after`](Self::provide_declared_factory_after)
-    /// for a factory that reads two other factories' outputs, `A` and `B` — a
-    /// binding with a config of its own over a shared connection is the shape.
+    /// for a factory that reads two other factories' outputs, `A` and `B`.
     pub fn provide_declared_factory_after_both<T, A, B, F, Fut>(
         self,
         remedy: &'static str,
@@ -976,10 +843,8 @@ impl ContainerBuilder {
         )
     }
 
-    /// The factory-queue protocol every public form shares: box the future,
-    /// await it in the factory phase, and hand the awaited value to `install`,
-    /// which decides under which name(s) it registers. What differs between the
-    /// forms is [`QueueSpec`], and nothing else.
+    /// The factory-queue protocol every public form shares; the forms differ
+    /// only by [`QueueSpec`].
     fn queue<T, F, Fut, I>(mut self, spec: QueueSpec, factory: F, install: I) -> Self
     where
         T: Any + Send + Sync,
@@ -994,8 +859,6 @@ impl ContainerBuilder {
         } = spec;
         let id = TypeId::of::<T>();
         let name = std::any::type_name::<T>();
-        // What the entry declares: `T` when an import site chose it, and the
-        // trait object it binds.
         let mut declares = Vec::new();
         if let Some(remedy) = remedy {
             declares.push((id, name, Some(remedy)));
@@ -1031,9 +894,8 @@ impl ContainerBuilder {
                 }
             }
         }
-        // A default never displaces a declaration, whichever order they arrive
-        // in — this and the displacement below make the outcome
-        // order-independent. What it binds off `T` binds off the declared one.
+        // A default never displaces a declaration, whichever arrives first; what
+        // it binds off `T` binds off the declared one.
         if remedy.is_none() && self.declared_factories.contains_key(&id) {
             let Some(binding) = binds else {
                 return self;
@@ -1069,9 +931,8 @@ impl ContainerBuilder {
             queued.provides.push(binding.id);
             queued.derives.push(binding.derive);
         }
-        // A declaration takes the slot of the default it displaces: a factory
-        // queued after that default reads its output, and would otherwise run
-        // first. What the default bound off `T` it binds off the declared one.
+        // A declaration takes the displaced default's slot: a factory queued
+        // after that default reads its output, and would otherwise run first.
         let displaced = |q: &QueuedFactory| declares.iter().any(|&(key, ..)| q.id() == key);
         let slot = self.factories.iter().position(displaced);
         let mut kept = Vec::with_capacity(self.factories.len());
@@ -1097,9 +958,8 @@ impl ContainerBuilder {
         &self.contested_factories
     }
 
-    /// The import whose phase is running, as a declaration made now names its
-    /// site: the innermost one, since that is the import whose expression made
-    /// the call.
+    /// The innermost import whose phase is running, as a declaration names its
+    /// site.
     fn declaring_site(&self) -> String {
         match self.import_sites.last() {
             Some(site) => site.to_string(),
@@ -1142,14 +1002,8 @@ impl ContainerBuilder {
     }
 
     /// Register a request-scoped provider: `factory` builds a fresh `T` for
-    /// each request, cached by a [`RequestScope`].
-    ///
-    /// Emitted by `#[injectable(scope = request)]`. The factory resolves
-    /// dependencies through the [`RequestScope`], so a
-    /// request-scoped provider may depend on singletons **and** on other
-    /// request-scoped providers (which it shares with the rest of the request).
-    /// The reverse — a singleton depending on a request-scoped provider — stays
-    /// structurally impossible (singletons are built before any request exists).
+    /// each request, cached by a [`RequestScope`] — emitted by
+    /// `#[injectable(scope = request)]`.
     pub fn provide_scoped<T, F>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
@@ -1172,15 +1026,8 @@ impl ContainerBuilder {
     }
 
     /// Register a transient provider: `factory` builds a fresh `T` every time
-    /// `Container::get::<T>()` (or a [`RequestScope`])
-    /// resolves it. There is no caching — same scope, multiple resolutions,
-    /// different instances.
-    ///
-    /// Emitted by `#[injectable(scope = transient)]`. The factory receives the
-    /// [`RequestScope`], so a transient may depend on singletons **and** on
-    /// request-scoped providers (sharing the request's instance); a transient
-    /// depending (transitively) on itself panics at resolution with a cycle
-    /// diagnostic.
+    /// `Container::get::<T>()` (or a [`RequestScope`]) resolves it — emitted by
+    /// `#[injectable(scope = transient)]`.
     pub fn provide_transient<T, F>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
@@ -1207,18 +1054,14 @@ impl ContainerBuilder {
         std::mem::take(&mut self.factories)
     }
 
-    /// Types a module queued an async factory for. Non-empty after the
-    /// synchronous [`App::new`](crate::App::new) collect phase means those
-    /// values will never exist — nothing drains the queue on that path.
+    /// Types a module queued an async factory for.
     pub(crate) fn queued_factory_names(&self) -> Vec<&'static str> {
         self.factories.iter().map(|queued| queued.name).collect()
     }
 
-    /// The first type a factory still queued would provide and nothing does —
-    /// read as the register phase ends, when no boot drains the queue again.
-    /// A default whose outputs are all present is passed over, as the factory
-    /// phase passes it over; a declaration never is, since the value present is
-    /// not the one it chose.
+    /// The first type a factory still queued would provide and nothing does,
+    /// read as the register phase ends. A declaration always counts: the value
+    /// present is not the one it chose.
     pub(crate) fn late_factory_name(&self) -> Option<&'static str> {
         self.factories
             .iter()
@@ -1237,9 +1080,8 @@ impl ContainerBuilder {
             .map(|&(_, name)| name)
     }
 
-    /// Provider keys registered so far. Snapshotted by `AppBuilder::build`
-    /// after the factory phase to form the **global** set (seeds + factory
-    /// outputs) for the access-graph check.
+    /// Unkeyed provider keys registered so far — after the factory phase, the
+    /// access graph's **global** set.
     pub(crate) fn provider_ids(&self) -> HashSet<TypeId> {
         self.providers
             .keys()
@@ -1249,11 +1091,7 @@ impl ContainerBuilder {
     }
 
     /// Every unkeyed `TypeId` resolvable from this builder — singleton values
-    /// **plus** request-scoped and transient factories. Used by the access-graph
-    /// missing-dependency check to tolerate a dependency provided imperatively
-    /// (a hand-written `impl Module`) or by a lazy factory: those never appear in
-    /// the declarative `providers = [...]` graph, so the check must consult the
-    /// actual registered set before declaring a dependency unmet.
+    /// **plus** request-scoped and transient factories.
     pub(crate) fn registered_ids(&self) -> HashSet<TypeId> {
         self.providers
             .keys()
@@ -1265,15 +1103,7 @@ impl ContainerBuilder {
     }
 
     /// Every unkeyed `TypeId` registered as a **request-scoped or transient**
-    /// factory — the providers that exist only inside a `RequestScope`.
-    ///
-    /// Separate from [`registered_ids`](Self::registered_ids), which unions them
-    /// with the singletons, because the access graph has one question that turns
-    /// on the difference: a singleton may not inject one of these. That union is
-    /// what made the case invisible — the dependency was "registered", so the
-    /// missing-dependency check waved it through while the register phase, whose
-    /// readiness gate reads `providers` alone, could never build the singleton
-    /// and dropped it.
+    /// factory, which a singleton may not inject.
     pub(crate) fn scoped_or_transient_ids(&self) -> HashSet<TypeId> {
         self.scoped
             .keys()
@@ -1282,10 +1112,8 @@ impl ContainerBuilder {
             .collect()
     }
 
-    /// Keyed provider identities registered so far. Snapshotted alongside
-    /// [`provider_ids`](Self::provider_ids) after the factory phase to form the
-    /// **global keyed** set for the access-graph keyed check — a keyed
-    /// dependency is legal when a seed or factory output supplies it.
+    /// Keyed provider identities registered so far — after the factory phase,
+    /// the access graph's **global keyed** set.
     pub(crate) fn keyed_provider_keys(&self) -> HashSet<ProviderKey> {
         self.providers
             .keys()
@@ -1305,15 +1133,10 @@ impl ContainerBuilder {
         }
     }
 
-    /// Snapshot the providers registered so far. Used by `#[module]` to let a
-    /// provider being built resolve its dependencies while the builder is
-    /// still under construction.
+    /// Snapshot the providers registered so far, for a provider being built to
+    /// resolve its dependencies.
     ///
-    /// **Known ceiling:** this deep-clones four maps per provider
-    /// registration, making boot O(n²) in provider count. Fine at current
-    /// scales (hundreds of providers boot in milliseconds); if provider
-    /// counts grow into the thousands, switch these maps to persistent
-    /// (structurally shared) maps rather than optimizing call sites.
+    /// Deep-clones four maps per call, so boot is O(n²) in provider count.
     pub fn snapshot(&self) -> Container {
         Container {
             id: next_container_id(),
@@ -1357,8 +1180,7 @@ mod tests {
 
     #[test]
     fn provide_override_keeps_the_last_value() {
-        // The builder keeps the last value; the duplicate it records is what
-        // the boot refuses.
+        // The boot, not the builder, refuses the duplicate.
         let container = Container::builder()
             .provide(Counter(1))
             .provide(Counter(2))
@@ -1376,8 +1198,6 @@ mod tests {
 
     #[test]
     fn keyed_providers_of_the_same_type_coexist() {
-        // Two instances of one concrete type, disambiguated by key, live in the
-        // flat container at once — the whole point of `provide_keyed`.
         let container = Container::builder()
             .provide_keyed("github", Greeter("gh"))
             .provide_keyed("google", Greeter("goog"))
@@ -1602,15 +1422,12 @@ mod tests {
         let second: Arc<Counter> = container.get().expect("second build");
         assert_eq!(first.0, 0);
         assert_eq!(second.0, 1);
-        // Two builds means two distinct allocations.
         assert!(!Arc::ptr_eq(&first, &second));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     fn transient_factory_reads_singleton_deps() {
-        // A transient pulling a singleton: the singleton stays shared, the
-        // transient stays fresh.
         let container = Container::builder()
             .provide(Greeter("hello"))
             .provide_transient(|c| {
@@ -1628,10 +1445,6 @@ mod tests {
 
     #[test]
     fn transient_depending_on_request_scoped_resolves_off_the_bare_container() {
-        // B-CORE: resolving a transient whose `#[inject]` dep is request-scoped
-        // through the bare `Container::get` escape hatch (no live request) must
-        // NOT panic on a missing provider. A throwaway scope builds the
-        // request-scoped dep fresh, so the transient resolves.
         struct Dep(u32);
         struct Trans(u32);
         let container = Container::builder()
@@ -1657,8 +1470,6 @@ mod tests {
     fn transient_self_dependency_panics_with_cycle_diagnostic() {
         let container = Container::builder()
             .provide_transient(|c| {
-                // Resolving the same transient inside its factory loops; the
-                // re-entrancy guard catches the second entry and panics.
                 let _self: Arc<Counter> = c.get().expect("re-entrant resolution");
                 Counter(0)
             })
@@ -1666,16 +1477,10 @@ mod tests {
         let _ = container.get::<Counter>();
     }
 
-    // A two-step cycle (A → B → A) must produce a diagnostic that names BOTH
-    // types in order. A bug that printed only the type currently being built
-    // (here: A) would be indistinguishable from a self-cycle and useless for
-    // diagnosing which intermediate provider closes the loop.
     #[test]
     fn transient_transitive_cycle_diagnostic_lists_full_chain() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let container = Container::builder()
-                // A's factory resolves B; B's factory resolves A → second
-                // re-entry of A is caught.
                 .provide_transient(|c| {
                     let _b: Arc<Counter> = c.get().expect("B resolves");
                     Greeter("A")
@@ -1706,9 +1511,6 @@ mod tests {
             msg.contains("Counter"),
             "diagnostic must name B (Counter): {msg}",
         );
-        // Order matters — the chain reads from where the cycle starts to the
-        // offending re-entry. Resolution begins at A (Greeter), reaches B
-        // (Counter), then loops back to A.
         let greeter_at = msg.find("Greeter").unwrap();
         let counter_at = msg.find("Counter").unwrap();
         assert!(greeter_at < counter_at, "chain must read A then B: {msg}",);
@@ -1720,14 +1522,11 @@ mod tests {
             .provide_transient(|_| Counter(1))
             .provide_transient(|_| Counter(2))
             .build();
-        // Second registration wins (logged at `warn`).
         let resolved: Arc<Counter> = container.get().unwrap();
         assert_eq!(resolved.0, 2);
     }
 
-    /// Capture `tracing` events emitted on the calling thread while `f`
-    /// runs. Returns the rendered event lines so a test can assert
-    /// substrings without depending on the global subscriber.
+    /// The `tracing` lines emitted on the calling thread while `f` runs.
     fn capture_warns<F: FnOnce()>(f: F) -> String {
         use std::io::Write;
         use std::sync::{Arc, Mutex};
@@ -1766,10 +1565,6 @@ mod tests {
 
     #[test]
     fn singleton_then_transient_same_typeid_warns_cross_kind() {
-        // Y1: registering a singleton then a transient of the same TypeId
-        // leaves both registered; `Container::get` returns the transient
-        // and the singleton state is unreachable. The builder must warn
-        // at registration time so the conflict is visible.
         let logs = capture_warns(|| {
             let _ = Container::builder()
                 .provide(Counter(1))
@@ -1792,8 +1587,6 @@ mod tests {
 
     #[test]
     fn transient_then_singleton_same_typeid_warns_cross_kind() {
-        // Symmetric direction: a transient registered first, then a
-        // singleton — the singleton would be unreachable through `get`.
         let logs = capture_warns(|| {
             let _ = Container::builder()
                 .provide_transient(|_| Counter(1))
@@ -1816,22 +1609,11 @@ mod tests {
 
     #[test]
     fn transient_panic_clears_reentrancy_stack() {
-        // A factory that panics must still pop its entry from the
-        // thread-local stack — otherwise the next legitimate resolution on
-        // this thread would either report a spurious cycle (re-entering the
-        // same type) or silently leak into an unrelated transient build.
-        //
-        // The observable contract is: after a factory panic, the thread is
-        // usable. We don't peek at the thread-local depth — the assertions
-        // here (re-resolve the same panicking transient without "cycle",
-        // resolve a different transient cleanly) prove cleanup.
         let container = Container::builder()
             .provide_transient(|_| -> Counter { panic!("boom from factory") })
             .provide_transient(|_| Greeter("recovered"))
             .build();
 
-        // First resolution: the factory panics. Catch the unwind so the
-        // RAII drop guard pops the entry as the stack unwinds.
         let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _: Option<Arc<Counter>> = container.get();
         }));
@@ -1846,11 +1628,6 @@ mod tests {
             "first call surfaces the factory panic, not a spurious cycle: {msg}",
         );
 
-        // Re-resolve the SAME panicking transient. If the prior entry leaked
-        // on the stack, `TransientGuard::push` would see itself already
-        // present and panic with "transient provider cycle" — a spurious
-        // diagnostic that hides the real factory bug. The second call must
-        // still panic with the factory's own message instead.
         let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _: Option<Arc<Counter>> = container.get();
         }));
@@ -1869,8 +1646,6 @@ mod tests {
             "the second call must surface the same factory panic: {msg}",
         );
 
-        // A *different* transient on the same thread must resolve cleanly —
-        // proves the thread-local is not poisoned by the prior panics.
         let resolved: Arc<Greeter> = container
             .get()
             .expect("different transient resolves after a sibling factory panicked");

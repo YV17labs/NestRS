@@ -2,44 +2,32 @@
 //! transport bindings.
 //!
 //! An [`AbilityFactory`] builds an [`Ability`] for the app's actor, which
-//! answers three questions backed by one shared [`Predicate`] (so they can't
-//! drift apart): `can` (gate an action), `condition_for` (lower rules to a
-//! `sea_orm::Condition` for row-level filtering), and `mask` (strip
-//! disallowed instances + fields from a response).
+//! answers three questions backed by one shared [`Predicate`]: `can` (gate an
+//! action), `condition_for` (lower rules to a `sea_orm::Condition` for
+//! row-level filtering), and `mask` (strip disallowed instances + fields from a
+//! response).
 //!
-//! [`AbilityGuard`] is the one guard and it is transport-agnostic — it answers
-//! all four edges, so it lives here rather than under any of them.
+//! [`AbilityGuard`] is the one guard, answering all four edges.
 //!
 //! Bindings: `http`, `graphql`, `ws`, `mcp`. The data-coupled bindings
 //! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
-//! `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
+//! `nest-rs-seaorm`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod ability;
 mod action;
 mod builder;
-// The shared per-operation guard chain: only the two `Exempt`-edge transports
-// run it themselves (HTTP gates in the route shaper's pool instead, and a WS
-// gateway is `Guarded` — its upgrade already ran the real chain).
+// Only the `Exempt`-edge transports run the chain themselves: HTTP gates in the
+// route shaper's pool, and a WS gateway's upgrade already ran it.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 mod chain;
 mod context;
 mod error;
 mod factory;
-// The class-level decision every `#[authorize]`-emitting transport shares.
-//
-// **HTTP included**, and leaving it out is what made `--features http` alone
-// stop compiling: `Authorize`'s extractor reaches `gate::warn_denied` for the
-// denial log, so the module is a dependency of the HTTP half whether or not it
-// re-exports `gate` publicly. Four `nest-rs-cli` scaffold e2e tests were the
-// only thing that ever compiled that feature set, and they failed on it.
+// `http` included: `Authorize`'s extractor logs its denial through `gate::warn_denied`.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod gate;
-// The one guard, at the root because it answers every transport: it implements
-// `check_http`, `check_graphql`, `check_ws_message` and `check_mcp`, and each
-// arm is gated on its own feature. A transport folder would have claimed a
-// quarter of it — see the module's own note.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
 mod mask;
@@ -49,12 +37,6 @@ mod subject;
 mod wire_mask;
 
 /// This crate's span target.
-///
-/// Declared here, like every crate's: a target names **where** an event came
-/// from, so the crate that **owns** the concern names it and everything emitting
-/// on it reads the constant. Worth noting for this one either way — the kernel
-/// is an *optional* dependency here, so a path through it would have needed a
-/// feature gate on every denial.
 pub const TARGET: &str = "nest_rs::authz";
 
 pub use ability::{Ability, FieldSet};

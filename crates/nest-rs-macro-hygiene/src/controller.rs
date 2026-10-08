@@ -1,18 +1,6 @@
-//! `#[controller]` + `#[routes]` + the response shapers — the HTTP handler
-//! surface, witnessed through the umbrella alone.
-//!
-//! Two things are proved here that nothing else in the workspace proves:
-//!
-//! 1. **Path hygiene.** `#[routes]` emits its own `Endpoint` impl rather than
-//!    wrapping poem's `#[handler]`, so every path it names is routed through
-//!    `::nest_rs_http::poem::…`. A controller crate therefore declares no
-//!    `poem` line — this module compiles with `nest-rs` and nothing else.
-//! 2. **Identifier hygiene (HTTP-M1).** The wrapper's own locals sit on
-//!    `Span::mixed_site()`, so `Json(body)` — the destructure
-//!    `/http/extractors/` teaches — cannot mask the `RequestBody` the
-//!    extractor after it reads. The behavioural half of that regression lives
-//!    in `nest-rs-http/tests/integration/controller.rs`; the half that belongs
-//!    here is that it holds through the umbrella's own re-export chain.
+//! `#[controller]` + `#[routes]` + the response shapers, through the umbrella
+//! alone: no `poem` line, and the wrapper's `Span::mixed_site()` locals cannot
+//! be masked by a `Json(body)` destructure.
 
 use nest_rs::http::futures_util::stream;
 use nest_rs::http::poem::web::{Json, Multipart, Path};
@@ -39,17 +27,15 @@ pub struct HygieneController;
 
 #[routes]
 impl HygieneController {
-    /// A body parameter under the wrapper's own local name, followed by an
-    /// extractor that reads the request — the exact ordering the collision
-    /// used to break.
+    /// A body parameter under the wrapper's own local name, then an extractor
+    /// that reads the request.
     #[post("/echo")]
     #[public]
     async fn echo(&self, Json(body): Json<HygienePayload>, ip: ClientIp) -> String {
         format!("{} {}", body.name, ip.ip)
     }
 
-    /// The same, under a response shaper: the shaper re-forwards every
-    /// parameter through a second emission path.
+    /// The same, under a response shaper's second emission path.
     #[get("/probe/:req")]
     #[public]
     #[http_code(201)]
@@ -58,19 +44,15 @@ impl HygieneController {
         req
     }
 
-    /// The third response attribute, and the one whose expansion is not a
-    /// passthrough: `#[routes]` drains the marker and writes the whole handler
-    /// body, so the paths in *that* emission are the ones under test here —
-    /// its two siblings above prove nothing about it.
+    /// `#[redirect]` is not a passthrough: `#[routes]` writes the whole
+    /// handler body, a distinct emission.
     #[get("/moved")]
     #[public]
     #[redirect("/probe/moved", 308)]
     async fn moved(&self) {}
 
-    /// The OpenAPI facets that are *types* rather than strings: a `Header<T>`
-    /// payload and an `#[api(multipart = T)]` form both make the expansion emit
-    /// a `schema_of::<T>` and a `RequestBodyMeta`, so both are paths a
-    /// controller crate would otherwise have to declare a crate for.
+    /// `Header<T>` and `#[api(multipart = T)]` emit a `schema_of::<T>` and a
+    /// `RequestBodyMeta`.
     #[post("/upload")]
     #[public]
     #[api(
@@ -83,25 +65,20 @@ impl HygieneController {
         headers.into_inner().marker.unwrap_or_default()
     }
 
-    /// `#[sse]`, whose expansion resolves a `SseSettings` at mount and wraps
-    /// the handler's stream with the connection ceiling armed. The event type,
-    /// the returned `SseStream` and the combinators that build one all arrive
-    /// through the umbrella — a controller that streams declares neither
-    /// `futures-util` nor `poem`.
+    /// `#[sse]`: a streaming controller declares neither `futures-util` nor
+    /// `poem`.
     #[sse("/events")]
     #[public]
     async fn events(&self) -> SseStream {
         SseStream::new(stream::iter([SseEvent::message("tick")]))
     }
 
-    /// A synchronous handler is called without an `.await`.
     #[get("/sync")]
     #[public]
     fn sync(&self) -> String {
         "sync".into()
     }
 
-    /// The class gate, against the entity [`crate::entity`] declares.
     #[cfg(feature = "seaorm")]
     #[get("/count")]
     #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
@@ -109,8 +86,8 @@ impl HygieneController {
         "0".into()
     }
 
-    /// A route compiled out takes its endpoint, its mount, its document entry
-    /// and its guard with it — none of which exists in this build.
+    /// A route compiled out takes its endpoint, mount, document entry and
+    /// guard with it; the paths below do not exist.
     #[cfg(any())]
     #[get("/sync")]
     #[use_guards(crate::does_not_exist::Guard)]
@@ -122,10 +99,8 @@ impl HygieneController {
     }
 }
 
-/// The versioned mount, whose expansion is a different shape again: the routes
-/// mount inside a loop over `VERSIONS`, and `#[version]` emits a `const`
-/// assertion calling `versions_declare`. Both are framework paths a controller
-/// crate would otherwise have to name a crate for.
+/// The versioned mount: a loop over `VERSIONS` and `#[version]`'s `const`
+/// assertion are distinct emissions.
 #[controller(path = "/hygiene-versioned", version = ["1", "2"])]
 pub struct HygieneVersionedController;
 

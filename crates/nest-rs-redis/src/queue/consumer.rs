@@ -649,8 +649,6 @@ mod tests {
         Value::BulkString(text.as_bytes().to_vec())
     }
 
-    /// A read's reply, as Valkey answers it over RESP2: a nil on a timeout,
-    /// and the stream's entries otherwise.
     #[test]
     fn a_read_answers_its_entries_or_none() {
         assert!(entries(Value::Nil).expect("a timeout").is_empty());
@@ -670,7 +668,6 @@ mod tests {
         assert!(entries(Value::Int(1)).is_err());
     }
 
-    /// An entry's id says when Redis filed it.
     #[test]
     fn an_entry_id_says_when_it_was_filed() {
         assert_eq!(entry_millis("1700000000123-4"), Some(1_700_000_000_123));

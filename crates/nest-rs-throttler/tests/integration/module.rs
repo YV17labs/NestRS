@@ -6,19 +6,13 @@ use nest_rs_throttler::DEFAULT_THROTTLE;
 
 #[test]
 fn default_throttle_constant_is_60_per_minute() {
-    // App code reads `ThrottlerConfig.limit.unwrap_or(DEFAULT_THROTTLE.limit())` —
-    // a silent change here re-tunes every rate-limited route.
+    // A change here re-tunes every rate-limited route.
     assert_eq!(DEFAULT_THROTTLE.limit(), 60);
     assert_eq!(DEFAULT_THROTTLE.window(), Duration::from_secs(60));
 }
 
-/// The policy is a dependency, never a default: a guard built from the
-/// container by any path but `ThrottlerModule::for_root` — `providers =
-/// [ThrottlerGuard]` beside a vendor store, no `for_root` — must fail the boot
-/// naming the missing `Throttle`, not run 60/minute over a limit the operator
-/// configured as 1. It did the latter for one audit round, because `default`
-/// was a plain field the `#[injectable]` constructor filled with
-/// `Default::default()`.
+/// The policy is a dependency, never a default: a guard built by any path but
+/// `ThrottlerModule::for_root` fails the boot naming `Throttle`.
 mod guard_outside_for_root {
     use std::sync::Arc;
 
@@ -49,9 +43,6 @@ mod guard_outside_for_root {
     }
 }
 
-/// A store whose counters leave the process is handed pseudonyms, never the
-/// subject: `ThrottlerModule::for_root` boots one only with
-/// `pseudonym_key`, and no other path builds a guard over one.
 mod pseudonym_key {
     use std::sync::Arc;
 
@@ -120,10 +111,6 @@ mod pseudonym_key {
     #[module(providers = [ThrottlerGuard])]
     struct HandWiredModule;
 
-    /// The container's own constructor cannot build a guard over the store as
-    /// bound: a policy seeded by hand beside a store outside the process still
-    /// fails the boot, rather than a guard handing that store every client's
-    /// address.
     #[tokio::test]
     async fn a_guard_built_by_the_container_never_counts_in_a_bare_store() {
         let built = App::builder()

@@ -27,12 +27,8 @@ pub struct AccessGraphError {
 }
 
 /// A provider depends on something **no module provides** — not global
-/// infrastructure, not in its import closure, not registered anywhere. Raised at
-/// boot so a lazily-built scoped/transient provider fails cleanly here instead
-/// of panicking at its first `get(...).expect(...)` resolution. An *eager*
-/// provider's missing dependency lands here too: the register phase defers it
-/// to this check rather than panicking ahead of it, so every wiring failure is
-/// one `Result`.
+/// infrastructure, not in its import closure, not registered anywhere. Raised
+/// at boot, for lazily- and eagerly-built providers alike.
 #[derive(Debug, Error)]
 #[error(
     "unmet dependency: `{consumer}` (in module `{module}`) depends on `{dependency}`, but no \
@@ -53,30 +49,9 @@ pub struct MissingDependencyError {
 /// singleton map — a `#[injectable(scope = request)]` or `scope = transient`
 /// provider.
 ///
-/// Raised at boot because the container cannot honour it and, before this error,
-/// did not say so: the register phase gates readiness on the singleton map, so
-/// such a provider never became ready, was classified unprovided, and was
-/// **dropped** — with everything downstream of it — while the boot returned
-/// `Ok` and emitted nothing. The symptom surfaced far away, as a service
-/// missing at its first `Container::get`, or as an inert-host `warn` offering
-/// five causes none of which was this one.
-///
-/// **The remedy names the concept, never the edge crates**, and that is the
-/// same law [`target`](crate::target) and [`operation_log`](crate::operation_log)
-/// state for themselves: the kernel holds no name for a concern it does not know
-/// exists. It listed three `Scoped<T>` paths for one round — `nest_rs_http`,
-/// `nest_rs_graphql`, `nest_rs_mcp` — copied from a prose list that was itself
-/// three of four, so a developer who hit this on a WS gateway was handed three
-/// paths none of which was theirs while `nest_rs_ws::Scoped<T>` existed.
-/// Nothing compiles against a message, so the fourth would never have been
-/// added; every future edge would have inherited the same wrong remedy.
-///
-/// **The reason is worded per arm, because the two arms are not the same fact.**
-/// A request-scoped provider genuinely has no instance outside a request. A
-/// transient one does — `Container::get` opens a throwaway scope and builds it
-/// ([`Discoverable`](crate::Discoverable)'s own table says so). What is true of
-/// both, and is what this check reads, is that neither is ever in the singleton
-/// map the register phase gates readiness on.
+/// Neither is ever placed in the singleton map the register phase gates
+/// readiness on, so the singleton could never be built. The remedy names the
+/// concept (`Scoped<T>`), never an edge crate: the kernel knows none.
 #[derive(Debug, Error)]
 #[error(
     "scope violation: `{consumer}` (in module `{module}`) is a singleton and injects \
@@ -98,9 +73,8 @@ pub struct ScopeViolationError {
 /// The failure modes of the bare (non-keyed) access-graph pass: a cross-module
 /// reach that no import covers, or a dependency no module provides.
 ///
-/// `pub(crate)`, unlike every other error here, and [`into_anyhow`](Self::into_anyhow) is why: the
-/// wrapper is discarded before a boot failure leaves the crate, so no public
-/// signature can hand a caller one and nothing could downcast to it.
+/// `pub(crate)`: [`into_anyhow`](Self::into_anyhow) discards it before a boot
+/// failure leaves the crate.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub(crate) enum AccessError {
@@ -117,11 +91,8 @@ pub(crate) enum AccessError {
 
 impl AccessError {
     /// Flatten into an `anyhow::Error` carrying the **concrete** inner error,
-    /// discarding the enum wrapper, so a boot failure downcasts to
-    /// `AccessGraphError` / `MissingDependencyError` directly — the wrapper is an
-    /// internal detail of the pass, not part of the boot-error contract.
-    /// `anyhow::Error::new` (over the concrete type) is what preserves the
-    /// downcast; boxing to `dyn Error` first would lose it.
+    /// so a boot failure downcasts to it directly; boxing to `dyn Error` first
+    /// would lose the downcast.
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
             AccessError::CrossModule(e) => anyhow::Error::new(e),
@@ -132,9 +103,8 @@ impl AccessError {
 }
 
 /// A concrete type or a trait object was registered more than once — two
-/// modules, or a seed and a module, providing the same type. Raised at boot
-/// rather than silently last-write-wins, uniform with every other wiring
-/// error. The test override path is exempt: it is the *intended* replacement.
+/// modules, or a seed and a module, providing the same type. The test override
+/// path is exempt.
 #[derive(Debug, Error)]
 #[error(
     "duplicate provider: `{type_name}` is registered more than once. Two modules (or a seed and a \
@@ -149,20 +119,11 @@ pub struct DuplicateProviderError {
 /// Two import sites each *declared* a value for the same type, and one of them
 /// would have to lose. Raised by `AppBuilder::build` before any factory runs.
 ///
-/// The framework refuses to pick because both call sites are deliberate: the
-/// container resolves an ordinary collision by keeping the first factory
-/// queued, which would make the surviving value a function of `imports = [..]`
-/// order — silently dropped, on the wrong side of *no silent failure*. Only a
-/// **declaration** contests (`ContainerBuilder::provide_declared_factory`): a
-/// pinned config base, or a module binding an implementation a sibling module
-/// also binds — and the trait object a `provide_factory_dyn` binds, which one
-/// implementation holds. A module queuing the same default, or the same
-/// binding, twice never does, so a diamond import stays legal.
-///
-/// Both declarations are named — each as the import that made it and the
-/// module whose `imports = [..]` lists it — so the reader goes to the two lines
-/// to reconcile instead of searching the tree for them. `remedy` comes from the
-/// declaring seam, which knows what a declaration of its type means.
+/// Only a **declaration** contests (`ContainerBuilder::provide_declared_factory`,
+/// or the trait object a `provide_factory_dyn` binds); the same default or
+/// binding queued twice never does, so a diamond import stays legal. Both
+/// declarations are named by their import site; `remedy` comes from the
+/// declaring seam.
 #[derive(Debug, Error)]
 #[error(
     "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"
@@ -181,10 +142,7 @@ pub struct ContestedDeclarationError {
 /// A module queued an async factory, but the boot went through the synchronous
 /// [`App::new`](crate::App::new), which has no factory phase to drain it.
 ///
-/// The value would simply never exist: a `Module::for_root(cfg)` whose config
-/// resolves to nothing, a pool nobody opened. Injecting it fails the access
-/// graph, but reading it through `Container::get` would just return `None` —
-/// so the boot refuses instead of leaving the hole open.
+/// The value would never exist, and `Container::get` would return `None` for it.
 #[derive(Debug, Error)]
 #[error(
     "`{type_name}` is provided by an async factory, which the synchronous `App::new` never runs. \
@@ -198,9 +156,7 @@ pub struct UnresolvedFactoryError {
 
 /// Every factory left in the queue waits on a factory output still in it — one
 /// another's, or its own — so none can run first: a cycle in the `*_after`
-/// declarations. Raised by `AppBuilder::build` instead of running them in queue
-/// order, which would hand one of them a snapshot missing what it declared it
-/// reads.
+/// declarations.
 #[derive(Debug, Error)]
 #[error(
     "factory cycle: {type_names:?} — each waits on a factory output that a member \
@@ -213,15 +169,11 @@ pub struct FactoryCycleError {
 }
 
 /// A module queued an async factory during the register phase, once the
-/// collect phase every factory is queued in had ended: no boot drains it, so
-/// the value would never exist. Raised by both boot paths as the register
-/// phase ends; a default whose output is already present is discarded, as the
-/// factory phase discards it, while a declaration is refused all the same — the
-/// value present is not the one it chose.
+/// collect phase had ended, so no boot drains it. A default whose output is
+/// already present is discarded instead; a declaration is refused all the same.
 ///
 /// The usual cause is a module or [`DynamicModule`](crate::DynamicModule)
-/// importing another in its `register` alone: that module, and the modules it
-/// imports, then collect in the register phase, too late.
+/// importing another in its `register` alone.
 #[derive(Debug, Error)]
 #[error(
     "`{type_name}` is provided by an async factory queued during the register phase, which no \
@@ -248,9 +200,7 @@ pub struct UnregisteredModuleError {
 }
 
 /// A `#[module]`'s dynamic import reached the register phase with no value its
-/// collect phase built. An import runs a module's `collect` before its
-/// `register`, so only a call of the expansion's internal seam by hand gets
-/// here; refused rather than leaving the import out.
+/// collect phase built — only a hand call of the expansion's internal seam.
 #[derive(Debug, Error)]
 #[error(
     "{site} reached the register phase with no value its module's collect built — the import's \
@@ -278,13 +228,8 @@ pub struct ProviderCycleError {
 }
 
 /// A resource's [`Budget`](crate::Budget) at or past the [`Net`](crate::Net) of
-/// a port that waits on it. Raised by the boot's last pass, once every
-/// provider is built and each budget can be read off its own.
-///
-/// The port would stop waiting first: a call the resource was still answering
-/// would be cut, and its cause — which endpoint, which bound — replaced by the
-/// port's bare timeout. It would fail that way on every outage, so the boot
-/// refuses it rather than let the first incident discover it.
+/// a port that waits on it: the port would cut a call the resource was still
+/// answering, replacing its cause with a bare timeout.
 #[derive(Debug, Error)]
 #[error(
     "{resource}'s budget ({budget:?}) must be shorter than {port}'s net ({net:?}), which would \
@@ -304,12 +249,7 @@ pub struct BudgetPastNetError {
 }
 
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
-/// registered as global infrastructure (a seed or a factory output). Raised at
-/// boot by the keyed pass of the access-graph validation. Unlike a bare
-/// dependency — deferred to the register-phase fixpoint when genuinely missing —
-/// a keyed dependency is validated here so the failure is a clean boot error
-/// naming **both** the type and the key, not a `get_keyed(...).expect(...)`
-/// panic during construction.
+/// registered as global infrastructure (a seed or a factory output).
 #[derive(Debug, Error)]
 #[error(
     "keyed dependency unreachable: `{consumer}` (in module `{module}`) injects `{type_name}` \
@@ -332,29 +272,15 @@ pub struct KeyedDependencyError {
 /// failure, the line and column when the payload was text, the kind of value
 /// found and the type expected — never the value.
 ///
-/// serde's own sentences quote what the payload held: ``invalid type: string
-/// "sk_live_…", expected u64``, ``unknown variant `4242…`, expected `Visa` ``,
-/// ``unknown field `sk_live_…`, expected `amount` ``. A payload is somebody's data,
-/// and every edge that reports a failure to decode one puts that sentence where it
-/// is read by more people, and kept longer, than the payload ever was — a log
-/// line, a dead-letter record, a reply. So the framework reports it the way
-/// `Valid` and `Header<T>` already do.
+/// serde's own sentences quote the payload (``invalid type: string
+/// "sk_live_…", expected u64``), so the sentence is rebuilt from the shapes
+/// serde words; any other — a type's own `custom` message — is reported by its
+/// category alone. A key or variant the payload spelled is dropped like a
+/// value, and what is kept is bounded ([`MAX_LEN`](Self::MAX_LEN)).
 ///
-/// **Fail-secure by construction.** The sentence is rebuilt from the shapes serde
-/// words; any other — a type's own `custom` message, which may quote anything — is
-/// reported by its category alone. What a rebuilt sentence keeps is the type's
-/// own: its expected description, a field it requires, a count. A key or a
-/// variant the payload spelled is the payload's, and is dropped like a value. What
-/// is kept is bounded ([`MAX_LEN`](Self::MAX_LEN)), since a visitor's `expecting`
-/// may describe itself at any length.
-///
-/// Built from the error a decode returned — serde_json's, or serde's own
-/// [`value::Error`](serde::de::value::Error), which `serde_urlencoded` and every
-/// `IntoDeserializer` reader return: `DecodeError::from(&error)`. Carried where
-/// that error would have been: as the `source` of the edge's own error, or
-/// displayed in its sentence. A text already rendered *from* an error — a reply's
-/// detail, a wrapper's sentence — is said without the values it quotes by
-/// [`redact`](Self::redact).
+/// Built with `DecodeError::from(&error)` from serde_json's error or serde's
+/// [`value::Error`](serde::de::value::Error) (`serde_urlencoded`); a text
+/// already rendered from an error goes through [`redact`](Self::redact).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{sentence}")]
 pub struct DecodeError {
@@ -362,17 +288,13 @@ pub struct DecodeError {
 }
 
 impl DecodeError {
-    /// The longest a report runs before its position, in bytes. What a rebuilt
-    /// sentence keeps is the type's — an `expected` description, a field name —
-    /// and a hand-written visitor's `expecting` may describe itself at any length;
-    /// past this the sentence is cut at a character boundary and ends in `…`.
+    /// The longest a report runs before its position, in bytes; past it the
+    /// sentence is cut at a character boundary and ends in `…`.
     pub const MAX_LEN: usize = 512;
 
     /// The report of `error`, without the value it quoted.
     pub fn new(error: &serde_json::Error) -> Self {
         let rendered = error.to_string();
-        // serde_json appends the position to every message read from text, and
-        // to none read from a value.
         let position = (error.line() > 0)
             .then(|| format!(" at line {} column {}", error.line(), error.column()));
         let message = position
@@ -381,8 +303,7 @@ impl DecodeError {
             .unwrap_or(&rendered);
         let sentence = match error.classify() {
             Category::Data => data(message),
-            // serde_json's own wording: one fixed sentence per fault of the text
-            // or the reader, naming no byte of the input.
+            // One fixed sentence per fault, naming no byte of the input.
             Category::Syntax | Category::Eof | Category::Io => message.to_owned(),
         };
         let mut sentence = bounded(&sentence).into_owned();
@@ -406,21 +327,12 @@ impl DecodeError {
     /// detail, a frame, any sentence rendered from an error before the edge that
     /// reports it held it.
     ///
-    /// Two readings, both applied. Each decode failure in `error`'s chain is said
-    /// as its report wherever `text` spells it — the exact reading, and the only
-    /// one that reaches a type's `custom` message. Then any sentence still in one
-    /// of serde's quoting shapes (`invalid type:`, `invalid value:`, ``unknown
-    /// variant ` ``, ``unknown field ` ``) is rebuilt without its value: those are
-    /// `serde::de::Error`'s own defaults, worded alike by every format, and they
-    /// survive a wrapper that hides its cause from `source()` — thiserror's
-    /// `#[error(transparent)]`, anyhow's own box, a library that kept only the
-    /// text. From the first such sentence to the end of `text` is the failure's,
-    /// since nothing marks where it ends, and is bounded like a report.
-    ///
-    /// A `validator` failure is a refusal of input too, and its own wording lists
-    /// the rejected input among a rule's parameters: each
-    /// `Validation error: <code> [<params>]` in `text` is said as
-    /// `Validation error: <code>`, whatever wrapper spelled it.
+    /// Each decode failure in `error`'s chain is replaced by its report wherever
+    /// `text` spells it; then any sentence still in one of serde's quoting
+    /// shapes (`invalid type:`, `invalid value:`, ``unknown variant ` ``,
+    /// ``unknown field ` ``) is rebuilt without its value, from there to the
+    /// end of `text`. Each `validator` `Validation error: <code> [<params>]` is
+    /// said as `Validation error: <code>`.
     ///
     /// Borrowed when nothing in `text` was a decode or validation failure's.
     pub fn redact<'t>(
@@ -443,10 +355,8 @@ impl From<&serde_json::Error> for DecodeError {
     }
 }
 
-/// serde's own error for a value read through `IntoDeserializer` — the one
-/// `serde_urlencoded` returns for a query string or a form. Every message it
-/// carries is a data error, with no position: the reader has no text to point
-/// into.
+/// serde's own error for a value read through `IntoDeserializer`
+/// (`serde_urlencoded`): always a data error, with no position.
 impl From<&serde::de::value::Error> for DecodeError {
     fn from(error: &serde::de::value::Error) -> Self {
         Self {
@@ -462,8 +372,7 @@ impl From<serde::de::value::Error> for DecodeError {
 }
 
 /// The decode failures an error's chain holds, each as the text it displays and
-/// the report it is said as — gathered once, so every text rendered from the
-/// chain is redacted against the same pairs.
+/// the report it is said as.
 pub(crate) struct DecodeFailures(Vec<(String, String)>);
 
 impl DecodeFailures {
@@ -593,9 +502,8 @@ const QUOTING_KINDS: [(&str, &str); 6] = [
 fn quoting_opens_at(text: &str) -> Option<usize> {
     const FOUND: [&str; 2] = ["invalid type: ", "invalid value: "];
     const UNKNOWN: [&str; 2] = ["unknown variant `", "unknown field `"];
-    // Where the last tail opens, found once: an opening is closed when a tail
-    // follows it, which is when the last one does. Asking each opening whether
-    // its rest held one was quadratic in a text a client can fill with openings.
+    // Found once: per-opening search is quadratic in a text a client can fill
+    // with openings, and an opening is closed exactly when the last tail follows it.
     let expected = text.rfind(", expected ");
     let closed = expected.max(text.rfind(", there are no "));
     let found = FOUND.iter().filter_map(|open| {
@@ -642,13 +550,10 @@ const VALIDATION_OPENING: &str = "Validation error: ";
 
 /// `text` with each `validator` failure in it said without its parameters.
 ///
-/// The parameters hold the rejected input (`value`, `must_match`'s `other`, a
-/// bound read from another field), so they are dropped up to their closing
-/// bracket, read past every quoted string so a value cannot close them early —
-/// or to the end of `text`, marked `…`, when they never close. The code is the
-/// rule's own and is kept. A rule given its own `message` displays that message
-/// alone, which is its author's. Each stretch of `text` is read a bounded number
-/// of times, however many openings a client packs into it.
+/// The parameters hold the rejected input, so they are dropped up to their
+/// closing bracket — read past quoted strings, so a value cannot close them
+/// early — or to the end of `text`, marked `…`. The rule's code is kept. Each
+/// stretch of `text` is read a bounded number of times.
 fn validation_sentences(text: &str) -> Cow<'_, str> {
     if !text.contains(VALIDATION_OPENING) {
         return Cow::Borrowed(text);
@@ -800,8 +705,6 @@ mod decode_error_tests {
         DecodeError::new(&error).to_string()
     }
 
-    /// The audit's two probes: a secret where a number was expected, a card
-    /// number where a variant was. serde quotes both; the report quotes neither.
     #[test]
     fn a_refused_value_is_said_by_its_kind_and_never_quoted() {
         let secret = from_value(json!({ "amount": "sk_live_51HsecretTOKEN", "card": "Visa" }));
@@ -816,7 +719,6 @@ mod decode_error_tests {
         }
     }
 
-    /// Read from text, the report keeps the position, which is *where*.
     #[test]
     fn a_payload_read_from_text_keeps_its_line_and_column() {
         assert_eq!(
@@ -838,8 +740,6 @@ mod decode_error_tests {
         assert_eq!(report, "invalid type: a string, expected u64");
     }
 
-    /// Every kind serde_json can find where a number was expected, and the
-    /// sentences that name only the type's own fields or a count, kept whole.
     #[test]
     fn kinds_and_the_type_s_own_sentences_are_kept() {
         assert_eq!(
@@ -917,9 +817,6 @@ mod decode_error_tests {
         );
     }
 
-    /// What a report keeps is the type's, and a hand-written visitor describes
-    /// itself at whatever length it likes: the report stops at the bound, at a
-    /// character boundary, and still carries its position.
     #[test]
     fn what_a_report_keeps_is_bounded() {
         #[derive(Debug)]
@@ -946,9 +843,6 @@ mod decode_error_tests {
         assert_eq!(position, " at line 1 column 4");
     }
 
-    /// serde's own value error — `serde_urlencoded`'s, for a query string or a
-    /// form — carries the same sentences, with no position, and is reported the
-    /// same way.
     #[test]
     fn serde_s_value_error_is_reported_like_serde_json_s() {
         use serde::de::IntoDeserializer;
@@ -973,10 +867,6 @@ mod decode_error_tests {
         );
     }
 
-    /// A text rendered from an error before the edge held it — a reply, a
-    /// wrapper's sentence — is said without the values it quotes, by both
-    /// readings: the chain's failures exactly, and serde's quoting shapes
-    /// wherever they appear.
     #[test]
     fn a_rendered_text_is_redacted_by_the_chain_and_by_serde_s_wording() {
         let secret =
@@ -1073,8 +963,6 @@ mod decode_error_tests {
         assert!(!redacted.contains("sss"), "{redacted}");
     }
 
-    /// A type's own `custom` message may quote anything, so it is reported by
-    /// its category alone.
     #[test]
     fn a_message_of_no_known_shape_is_reported_without_its_text() {
         let error = <serde_json::Error as serde::de::Error>::custom("token ya29.secret refused");
@@ -1121,7 +1009,6 @@ mod decode_error_tests {
         assert!(!redacted.contains("sk_live"), "{redacted}");
     }
 
-    /// Openings that never open parameters are left as they are.
     #[test]
     fn openings_without_parameters_are_left_as_they_are() {
         let crowded = "Validation error: x ".repeat(10_000);

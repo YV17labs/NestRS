@@ -1,10 +1,5 @@
-//! The queue name rule, read at compile time — the copy `#[queue]` checks its
-//! literals against.
-//!
-//! The rule's authority is `nest_rs_queue::QueueName`, which a macro crate cannot
-//! depend on. This copy is pinned against it by a test in `nest-rs-queue`, and
-//! the two refusals state one fact: the charset and length, and why the
-//! characters left out are left out.
+//! The queue name rule, read at compile time; a copy of
+//! `nest_rs_queue::QueueName`, pinned against it by a test in `nest-rs-queue`.
 
 /// The longest a queue name may be.
 const MAX_LEN: usize = 128;
@@ -20,8 +15,7 @@ pub fn is_valid_queue_name(value: &str) -> bool {
 }
 
 /// The refusal of a `#[queue]` literal outside the rule — the runtime's
-/// sentence with the site in front, so the compile error and the runtime error
-/// read as one.
+/// sentence with the site in front.
 pub fn invalid_queue_name(attr: &str, key: &str, value: &str) -> String {
     format!(
         "{}: {value:?} is not a valid queue name: it takes 1 to {MAX_LEN} ASCII letters, \

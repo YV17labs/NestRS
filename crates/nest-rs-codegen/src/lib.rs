@@ -1,15 +1,10 @@
 //! Shared token-building helpers for nestrs decorator macros.
 //!
 //! Proc-macro crates can only export macros, so the logic every decorator
-//! shares lives here (a plain library crate) and each `nest-rs-*-macros` crate
-//! depends on it. New decorators should reuse the helpers below — and add
-//! new ones here rather than in a `*-macros` crate, so third-party decorators
-//! can use them too.
+//! shares lives here; add new helpers here rather than in a `*-macros` crate.
 //!
-//! This crate never depends on `nest-rs-core` or any other surface crate:
-//! emitted absolute-path tokens (`::nest_rs_core::*`) resolve at the call site.
-//! Which root actually resolves there depends on what the call site declared —
-//! see [`reroot`], which every decorator applies to what it returns.
+//! This crate never depends on a surface crate: emitted absolute paths
+//! (`::nest_rs_core::*`) resolve at the call site, through [`reroot`].
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -36,12 +31,8 @@ mod route_path;
 mod specs;
 mod ty;
 mod ungrouped;
-/// Public because its runtime counterpart needs a *name* from it: `nest-rs-http`
-/// cannot depend on this crate (it pulls `syn`), so it carries its own copy of the
-/// grammar and pins it against this one in a dev-dependency test that reads the
-/// module's items by path. A rule whose runtime copy needs only a function to
-/// call — `queue_name` — stays private and re-exports that function flat
-/// (*written twice and pinned once*).
+/// Public because `nest-rs-http` cannot depend on this crate (it pulls `syn`):
+/// its runtime copy of the grammar is pinned against this one by path in a test.
 pub mod versioning;
 
 pub use args::{

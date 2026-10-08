@@ -1,17 +1,10 @@
 //! Automatic reply masking through the real macro: `#[authorize(Action, Entity)]`
 //! beside a `#[subscribe_message]` makes `#[messages]` emit `masked_reply_for`
 //! around the reply — the gateway body writes no masking call.
-//!
-//! That last clause is the whole point of this file. Before it, a WS handler
-//! returning entity rows had to hand-write `serde_json::to_value` +
-//! `masked_reply` + two `map_err`s, which meant the posture was an `Action::Read`
-//! argument buried in a function call rather than a greppable `#[authorize]` —
-//! and a handler that simply forgot the call shipped unmasked rows and compiled.
 
 use nest_rs_authz::Read;
 use nest_rs_core::input;
-// `WsError` is the handler-error type here purely because it is `Display` and
-// already in scope — the suite is about the mask, not about error mapping.
+// `WsError` is the handler error only because it is `Display` and in scope.
 use nest_rs_ws::{Gateway, WsClient, WsError, gateway, messages};
 
 use super::{ability_for, body, dispatch_with, widget};
@@ -146,10 +139,8 @@ async fn a_scalar_answer_passes_through_the_mask() {
     );
 }
 
-// The case that separates WS from MCP. A stripped key the *return type* declares
-// required is not a refusal here: the envelope promises no schema, so the frame
-// simply omits it — HTTP's behaviour, not GraphQL's or MCP's. The masked JSON is
-// what ships, so nothing ever has to fit back into `StrictWidgetDto`.
+// A stripped key the return type requires is not a refusal on WS: the frame
+// omits it, as an HTTP body does.
 #[tokio::test]
 async fn a_stripped_required_field_is_omitted_from_the_frame_not_refused() {
     let body = reply("viewer", "strict_widget").await;
@@ -168,8 +159,7 @@ async fn a_stripped_required_field_is_omitted_from_the_frame_not_refused() {
     );
 }
 
-// What *is* fail-closed: nothing installed an ability, so nothing decided what
-// this caller may read. Shipping the value would answer that with "everything".
+// What is fail-closed: no ambient ability installed.
 #[tokio::test]
 async fn no_ambient_ability_refuses_rather_than_shipping_the_rows() {
     let reply = MaskGateway

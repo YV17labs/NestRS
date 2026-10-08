@@ -13,8 +13,6 @@ use super::command::{
 };
 use super::probe;
 
-/// One processor per case, each with the one method its case's queue needs,
-/// declaring what the case proves.
 macro_rules! processors {
     ($($processor:ident: $method:ident on $queue:ident $(, $key:ident = $value:literal)*;)+) => {
         $(

@@ -84,17 +84,8 @@ async fn resolver_reads_a_per_request_value_bridged_from_the_poem_request() {
     assert_eq!(tag, "hello");
 }
 
-/// A schema with no operation guard and no global pool is an **unguarded**
-/// schema, and the boot says so once.
-///
-/// It is a warn rather than a refusal because an app with no authn posture at
-/// all is a legitimate shape — a public read API, a demo. What makes the line
-/// load-bearing is the shape next door: an app that *meant* to import its authz
-/// bridge and did not gets a schema that answers every operation, with no
-/// status code, no error frame and no failing test to notice it. This is the
-/// GraphQL twin of the MCP deny-all announcement, and the two differ on purpose
-/// — MCP fails closed, GraphQL falls open, so only one of them can afford to be
-/// quiet, and it is not this one.
+/// A schema with no operation guard and no global pool is **unguarded**, and the
+/// boot says so once — a warn, since a public read API is a legitimate shape.
 mod an_unguarded_schema_announces_itself {
     use nest_rs_core::module;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -122,7 +113,6 @@ mod an_unguarded_schema_announces_itself {
             .await
             .expect("an unguarded schema boots — that is the point");
 
-        // It really is open: the operation answers with no credential at all.
         let resp = app
             .http()
             .post("/graphql")
@@ -144,13 +134,8 @@ mod an_unguarded_schema_announces_itself {
     }
 }
 
-/// A `#[resolver]` no module lists is **silently filtered** from the schema.
-///
-/// Module-gating is what makes per-app subsets work, so this is correct
-/// behaviour — and indistinguishable from a resolver whose queries were never
-/// written. The app boots, the schema is smaller than the author thinks, and
-/// the first sign is a client's `Unknown field` days later. The warn carries
-/// the remedy because the fix is one line in a `#[module(providers = [...])]`.
+/// A `#[resolver]` no module lists is filtered from the schema, and the boot
+/// warns with the remedy.
 mod a_resolver_no_module_lists {
     use nest_rs_core::module;
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
@@ -180,11 +165,9 @@ mod a_resolver_no_module_lists {
         }
     }
 
-    // `OrphanResolver` is deliberately absent from `providers`.
     #[module(imports = [GraphqlModule::for_root(None)], providers = [ListedResolver])]
     struct PartialModule;
 
-    // The same hole, under an app that asked for it to be fatal.
     #[module(
         imports = [GraphqlModule::for_root(GraphqlConfig {
             strict_resolver_membership: true,
@@ -201,7 +184,6 @@ mod a_resolver_no_module_lists {
             .await
             .expect("an app with an unlisted resolver still boots");
 
-        // The schema really is missing it — that is what the warn is about.
         let resp = app
             .http()
             .post("/graphql")
@@ -214,8 +196,7 @@ mod a_resolver_no_module_lists {
             "the query is rejected by name: {body}",
         );
 
-        // `inventory` is link-time, so every resolver in this test binary is a
-        // candidate; what matters is that ours is named.
+        // Link-time: every resolver in this test binary is a candidate.
         let reported = logs.find(
             nest_rs_graphql::TARGET,
             "unreachable resolver skipped from the GraphQL schema",
@@ -238,8 +219,6 @@ mod a_resolver_no_module_lists {
         );
     }
 
-    /// `strict_resolver_membership` promotes that warn to a boot failure, for an
-    /// app where a forgotten `providers` entry must not reach a deployment.
     #[tokio::test]
     async fn is_a_boot_failure_when_the_app_asked_for_one() {
         let err = TestApp::for_module::<StrictModule>()
@@ -258,17 +237,8 @@ mod a_resolver_no_module_lists {
     }
 }
 
-// --- an operation guard that never runs the operation -------------------------
-//
-// `GraphqlOperationGuard::around` is handed the operation as a future and owes
-// it exactly one thing: drive it. An app bridge that returns early — an
-// `if denied { return }` written without awaiting the inner future — leaves the
-// endpoint with nothing to answer with.
-//
-// The failure that matters is the *quiet* one: without this line the endpoint
-// serves an empty `200`, which a GraphQL client reads as a response carrying
-// neither `data` nor `errors`. Every operation on that deployment silently
-// answers nothing, and the app's own logs say a request came in and succeeded.
+// An app bridge whose `around` never drives the operation must not yield an
+// empty `200`.
 
 mod an_operation_guard_that_never_runs_the_operation {
     use nest_rs_core::{injectable, module};
@@ -288,7 +258,6 @@ mod an_operation_guard_that_never_runs_the_operation {
         }
 
         fn around<'a>(&'a self, _req: &'a Request, _inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-            // `inner` is dropped rather than awaited.
             Box::pin(async {})
         }
     }
@@ -324,10 +293,6 @@ mod an_operation_guard_that_never_runs_the_operation {
             .body_json(&serde_json::json!({ "query": "{ echo }" }))
             .send()
             .await;
-        // The status is the whole failure this branch exists to prevent: the
-        // comment above calls it "an empty 200", and a body assertion alone
-        // cannot tell an empty 200 from an empty 500. Asserted first, because
-        // it is the half a reader would otherwise have to take on trust.
         resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
         let body = resp
             .0
@@ -354,11 +319,7 @@ mod an_operation_guard_that_never_runs_the_operation {
     }
 }
 
-/// A body that is JSON but not a GraphQL request — `variables` as a string — was
-/// answered `400` with nothing in it. GraphQL-over-HTTP answers a request it
-/// cannot accept with an `errors` entry saying why, and the why here is a decode
-/// failure: said where and of what kind, never with the value the caller sent.
-/// No `data` member, since nothing was executed.
+/// A body that is JSON but not a GraphQL request — `variables` as a string.
 #[tokio::test]
 async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_and_no_value() {
     let app = TestApp::builder()

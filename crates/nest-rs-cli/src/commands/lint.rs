@@ -12,9 +12,7 @@ pub(crate) struct LintOptions {
 /// Read every `src/` file under the given root and report each one whose stem
 /// reaches nothing it declares.
 ///
-/// The command's job is the report and the exit code: a lint nobody's CI can
-/// fail is a lint nobody runs. A caller that wants the findings as data calls
-/// [`crate::lint::scan`].
+/// A caller that wants the findings as data calls [`crate::lint::scan`].
 pub(crate) fn run(opts: LintOptions) -> CliResult<()> {
     let scan = scan(&resolve_start(opts.path));
 

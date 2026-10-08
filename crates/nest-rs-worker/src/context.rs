@@ -1,16 +1,8 @@
-//! Worker-execution ambient-data seam — the cron/queue counterpart to HTTP's
-//! `DbContext` interceptor and WebSocket's `SocketContext`. A worker transport
-//! (`Scheduler`, `QueueWorker`) resolves an optional [`JobContext`] from the
-//! container and wraps each job, letting e.g. `nest-rs-seaorm`'s
-//! `WorkerDbContext` install an executor so a job's `Repo` calls join a
-//! connection without injecting one. With nothing bound a job runs bare.
+//! Worker-execution ambient-data seam. A worker transport (`Scheduler`,
+//! `QueueWorker`) resolves an optional [`JobContext`] from the container and
+//! wraps each job in it; with nothing bound a job runs bare.
 
 /// This crate's span target.
-///
-/// Declared here, like every crate's: a target names **where** an event came
-/// from, so the crate that **owns** the concern names it and everything emitting
-/// on it reads the constant. Re-exported at the root as `nest_rs_worker::TARGET`,
-/// which is the path callers use.
 pub const TARGET: &str = "nest_rs::worker";
 
 use std::future::Future;
@@ -19,34 +11,18 @@ use std::sync::Arc;
 
 use crate::error::Unhonoured;
 
-/// How one job attempt's data-layer work is settled.
-///
-/// A worker job has no safe/mutating method to classify the way an HTTP verb or
-/// a WebSocket message does — which is why this is *declared*, at the
-/// `#[process]` / `#[every]` / `#[cron]` / `#[after]` that already declares
-/// everything else about the job, rather than inferred from something the
-/// framework cannot see.
+/// How one job attempt's data-layer work is settled, declared on the job's
+/// decorator (`transactional = …`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum JobTransaction {
     /// **The default.** One transaction per attempt, opened on the job's first
     /// data-layer touch, committed when the job returns `Ok` and rolled back
-    /// otherwise.
-    ///
-    /// A job that fails halfway would otherwise leave its writes behind for the
-    /// **retry** to find and repeat — a silent partial write, which is a
-    /// correctness defect with no knob. Holding a pooled connection for the
-    /// attempt is the cost, and it is a tuning problem with one: see
-    /// [`Pool`](Self::Pool). The transaction is *lazy*, so a job that never
-    /// touches the database never opens one and pays nothing.
+    /// otherwise. A job that never touches the database never opens one.
     #[default]
     PerAttempt,
     /// The connection pool, with no transaction — each statement commits on its
-    /// own, which is what every job did before this existed.
-    ///
-    /// For the job whose shape defeats the default: read, then minutes of work
-    /// that is not the database's, then write. `PerAttempt` would pin a pooled
-    /// connection across the middle. Such a job owns its own consistency, and an
-    /// idempotency key is what makes its retry safe — the transaction never was.
+    /// own. For a job that would pin a pooled connection across minutes of other
+    /// work; it owns its own consistency.
     Pool,
 }
 
@@ -56,9 +32,8 @@ pub enum JobTransaction {
 pub enum JobSettlement {
     /// The job's outcome stands: committed, rolled back, or nothing to settle.
     Settled,
-    /// The job reported success and the context could **not** honour it.
-    /// Reporting success here would lose the writes silently, so the attempt is
-    /// turned into the failure the [`Unhonoured`] describes.
+    /// The job reported success and the context could **not** honour it: the
+    /// attempt becomes the failure the [`Unhonoured`] describes.
     Unhonoured(Unhonoured),
 }
 
@@ -68,23 +43,15 @@ pub trait JobContext: Send + Sync + 'static {
     /// settle whatever that context opened.
     ///
     /// `inner` yields **whether the job succeeded**, which is all a context
-    /// needs to choose commit over rollback and is what keeps this trait free of
-    /// the transport's own result/error type; the job's actual output is carried
+    /// needs to choose commit over rollback; the job's actual output is carried
     /// across the seam by [`run_in_job_context`].
     ///
     /// # Contract
     ///
     /// An impl **must** poll `inner` to completion before returning — normally
-    /// by `.await`ing it inside whatever ambient it installs (a `task_local!`
-    /// scope, a span, …). `inner` *is* the job: returning without driving it to
-    /// completion means the job never ran, and there is then no result to hand
-    /// back. [`run_in_job_context`] cannot synthesize one for an arbitrary
-    /// output type, so it treats a broken impl as a failure of **that single
-    /// job** — it logs an error on `nest_rs::worker` and unwinds. The unwind is
-    /// isolated by the transport's per-job boundary — the queue port's
-    /// `catch_unwind` around the job future, which dead-letters the attempt; the
-    /// scheduler's per-job task — so one bad impl fails its own job while the
-    /// worker keeps consuming. A correct impl always awaits `inner`.
+    /// by `.await`ing it inside whatever ambient it installs. One that does not
+    /// fails that job: [`run_in_job_context`] logs an error on `nest_rs::worker`
+    /// and unwinds into the transport's per-job boundary.
     fn scope<'a>(
         &'a self,
         transaction: JobTransaction,
@@ -92,9 +59,8 @@ pub trait JobContext: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>>;
 }
 
-/// What a boot refusing two job contexts tells the reader — one is bound by
-/// import, and a binding declares `Arc<dyn JobContext>` carrying this sentence
-/// (`ContainerBuilder::provide_declared_factory`).
+/// What a boot refusing two job contexts tells the reader; a binding declares
+/// `Arc<dyn JobContext>` carrying it (`ContainerBuilder::provide_declared_factory`).
 pub const BACKEND_REMEDY: &str = "Import exactly one job context binding: \
      `nest_rs::seaorm::SeaOrmDatabaseModule` runs each job over SeaORM's executor; with none, \
      a job runs bare.";
@@ -104,15 +70,8 @@ pub const BACKEND_REMEDY: &str = "Import exactly one job context binding: \
 /// nothing bound that could open one.
 ///
 /// `succeeded` reads the transport's own outcome type to decide commit vs
-/// rollback; `unhonoured` builds that transport's failure for the one case where
-/// a *successful* job cannot be honoured. Same two functions, for the same
-/// reason, as `nest_rs_seaorm`'s `with_data_context` on the request-carrying
-/// edges — the settling rule is one rule, and a job is not an exception to it.
-///
-/// `unhonoured` is handed the [`Unhonoured`] so the transport can render the
-/// classification in its own vocabulary — the queue as `JobError::retryable`,
-/// the schedule as the sentence it logs, because a schedule has no retry budget
-/// to spend and fires again at its next occurrence either way.
+/// rollback; `unhonoured` builds that transport's failure, in its own
+/// vocabulary, for the one case where a *successful* job cannot be honoured.
 pub async fn run_in_job_context<T: Send>(
     ctx: Option<&Arc<dyn JobContext>>,
     transaction: JobTransaction,
@@ -143,24 +102,13 @@ pub async fn run_in_job_context<T: Send>(
                     // never withholds a failure the job already declared.
                     JobSettlement::Unhonoured(why) => unhonoured(why),
                 },
-                // Broken `JobContext::scope` impl: it returned without ever
-                // driving `inner` to completion, so the job never ran and there
-                // is no `T` to return (a job's output cannot be synthesized for
-                // an arbitrary type). Fail *this* job, not the worker: record
-                // the contract violation, then unwind — the transport's per-job
-                // boundary (the queue port's `catch_unwind` around the job
-                // future, → dead letter; the scheduler's per-job task) catches
-                // it, so the consumer loop keeps running instead of the whole
-                // worker going down.
+                // A broken `JobContext::scope` never ran the job, and no `T` can be
+                // synthesized: unwind into the transport's per-job boundary.
                 #[expect(
                     clippy::panic,
                     reason = "a JobContext that returns without running the job breaks its contract; the job's own catch_unwind turns this into a dead letter"
                 )]
                 None => {
-                    // `nest_rs::worker`, not `nest_rs::queue`: this seam is
-                    // shared by the queue worker AND the scheduler — a broken
-                    // context in a *scheduled* job must not be misattributed
-                    // to the queue concern.
                     tracing::error!(
                         target: TARGET,
                         job_context = ::std::any::type_name::<dyn JobContext>(),

@@ -9,20 +9,8 @@ use crate::layout::millis;
 
 /// Every key this binding writes: `nestrs:schedule:claims:<token>`, one per
 /// occurrence a `replicas = "one"` job has claimed, `<token>` being the port's
-/// verbatim (`features:NotificationsTasks:purge_expired:1789002000000`).
-///
-/// `nestrs:<concern>:<structure>[:<member>]`, like every key the framework
-/// writes. The concern is the tail of [`nest_rs_schedule::TARGET`] — the crate
-/// that owns the concern, never `redis`, because an operator looking at Redis is
-/// looking for the scheduler's keys. The structure is read off the port rather
-/// than chosen: [`OccurrenceLock`] calls the act `claim` and asks `claimed`. So
-/// `nestrs:schedule:claims:features:*` names one crate's claims, and
-/// `nestrs:schedule:claims:features:NotificationsTasks:purge_expired:*` one job's.
-///
-/// The prefix is fixed, not the deployment's: `NESTRS_ENV_PREFIX` renames the
-/// developer's variables, while a key is the framework's own machinery, and two
-/// deployments sharing one Redis are separated by the logical database in the
-/// connection URL.
+/// verbatim (`features:NotificationsTasks:purge_expired:1789002000000`). The
+/// concern is the tail of [`nest_rs_schedule::TARGET`], never `redis`.
 pub(crate) const CLAIMS: &str = "nestrs:schedule:claims";
 
 /// The key the occurrence `token` is claimed under. The token is the port's and
@@ -39,13 +27,8 @@ fn claim_key(token: &str) -> String {
 /// `EXISTS <claim>` — two commands on `nestrs:schedule:claims:*`, which with the
 /// connection's own `PING` (and `SELECT`, when the URL names a database) is the
 /// whole of what a Redis ACL has to allow the schedule. Atomic, so two replicas
-/// reaching one occurrence at the same instant cannot both win; expiring, so the
-/// key lasts as long as the port's hold and no longer. Each runs over the
-/// multiplexed connection and answers or fails within the connect budget, like
-/// every command a caller waits on — and a failure skips the occurrence, which is
-/// the port's fail-closed rule rather than this binding's choice: an occurrence
-/// is fired **at most once**, and one whose claim Redis could not answer is not
-/// fired at all.
+/// cannot both win; expiring with the port's hold. A failure skips the
+/// occurrence: it is fired **at most once**.
 #[derive(Clone)]
 pub struct RedisOccurrenceLock {
     conn: RedisConnection,

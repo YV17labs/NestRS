@@ -1,11 +1,8 @@
 //! Per-operation request-scope bridge for MCP tool methods — the MCP mirror of
 //! [`nest_rs_http::Scoped<T>`].
 //!
-//! rmcp owns the tool-call dispatch (the handler struct is built once per
-//! session, and a tool method receives no poem request), so there is no
-//! parameter to forward a scope through. Instead `endpoint.rs`'s `GuardedEndpoint` installs
-//! the per-operation `RequestScope` as a task-local around
-//! `self.inner.call(req)`, and a tool method reads it back with
+//! A tool method receives no poem request, so the endpoint installs the
+//! per-operation `RequestScope` as a task-local and a tool reads it back with
 //! [`Scoped::<T>::from_context`].
 //!
 //! ```
@@ -52,10 +49,6 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! The scope is the one the HTTP transport edge installed outermost over the
-//! whole HTTP route tree (the MCP endpoint is nested under it), so an MCP
-//! operation shares the same per-request resolution model as HTTP and GraphQL.
 
 use std::any::type_name;
 use std::ops::Deref;
@@ -66,10 +59,6 @@ use nest_rs_core::RequestScope;
 use crate::McpError;
 
 /// The ambient per-operation scope, if one is installed.
-///
-/// The scope carries the app container it was built with, which is why this
-/// transport does not carry a second copy of it — see
-/// [`current_container`](crate::current_container).
 pub(crate) fn current_scope() -> Option<Arc<RequestScope>> {
     nest_rs_core::current_request_scope()
 }
@@ -128,12 +117,8 @@ mod tests {
 
     use super::*;
 
-    /// A request-scoped provider whose id is stamped once when the scope builds
-    /// it — distinct per operation, stable within one.
     struct Probe(u64);
 
-    /// Container whose `Probe` factory pulls a monotonic id, so each scope that
-    /// builds a `Probe` gets a fresh value.
     fn scoped_container() -> Container {
         let counter = Arc::new(AtomicU64::new(0));
         Container::builder()
@@ -147,7 +132,6 @@ mod tests {
         nest_rs_core::with_request_scope(Some(scope), Correlation::minted(None), async {
             let a = Scoped::<Probe>::from_context().expect("scope installed");
             let b = Scoped::<Probe>::from_context().expect("scope installed");
-            // One `Probe` per operation: two reads resolve the same cached Arc.
             assert!(Arc::ptr_eq(&a.0, &b.0));
             assert_eq!(a.0.0, b.0.0);
         })
@@ -187,8 +171,6 @@ mod tests {
 
     #[tokio::test]
     async fn from_context_errors_without_an_installed_scope() {
-        // No `with_request_scope` wrapper — the task-local is absent, so the
-        // bridge fails loudly rather than resolving from nowhere.
         let err = Scoped::<Probe>::from_context()
             .map(|_| ())
             .expect_err("no scope installed");

@@ -1,53 +1,18 @@
 //! Compile-time witness of macro path hygiene.
 //!
-//! This crate depends **only** on `nest-rs-*` surface crates — no third-party
-//! dependency at all. Every decorator exercised here is therefore proven to
-//! emit only `::std`/`::core` paths or paths routed through its surface
-//! crate's re-exports: a bare third-party path (`::anyhow`, `::tracing`, …)
-//! emitted by any of them fails **this crate's** compile, because nothing
-//! third-party sits in its extern prelude. Macro hygiene is proven by compiling
-//! a consumer, not by reading emissions, and the decorators' refusals the same
-//! way: this crate's suite pins each one through the umbrella, as a developer
-//! meets it.
+//! This crate depends **only** on `nest-rs-*` surface crates, so a bare
+//! third-party path (`::anyhow`, `::tracing`, …) emitted by any decorator used
+//! here fails this crate's compile; its suite pins each decorator's refusals
+//! through the umbrella, as a developer meets them.
 //!
-//! **Each witness compiles under its capability's feature alone** — the
-//! crate's features mirror the umbrella's, one per capability that owns a
-//! decorator — so the union proves no decorator needs a second manifest line,
-//! and each feature on its own proves its capability pulls everything its
-//! decorators emit. The kernel's decorators (`#[module]`, `#[injectable]`,
-//! `#[hooks]`, `#[nest_rs::main]`) are witnessed under no feature at all.
+//! Each witness compiles under its capability's feature alone, mirroring the
+//! umbrella's features; the kernel's decorators compile under none. Extend this
+//! crate whenever a decorator is added. Emitted derives without a `crate = `
+//! override are not exercised: they target the call-site prelude by construction.
 //!
-//! Extend this crate whenever a decorator is added. Emitted derives are the
-//! one class deliberately not exercised: a derive without a `crate = ` override
-//! targets the call-site prelude by construction.
-//!
-//! `#[resolver]` **is** witnessed ([`resolver`]), and it is the case this file
-//! most needed: it wraps async-graphql's own `#[Object]`, a third-party macro
-//! that roots its expansion at whatever the *call site's* manifest declares.
-//! 2.0.0 shipped with that fallback live, so the lead snippet of `/graphql/`
-//! did not compile behind the documented install line; the `crate = ` override
-//! that fixes it is invisible to review and visible here.
-//!
-//! `#[controller]`/`#[routes]` **are** witnessed ([`controller`]).
-//! `#[routes]` emits its own `Endpoint` impl instead of wrapping poem's
-//! `#[handler]`, so nothing in the expansion resolves against the call-site
-//! prelude and a controller crate needs no `poem` line — the exclusion this
-//! paragraph used to record no longer describes the macro.
-//!
-//! `#[expose]` and `#[crud]` **are** witnessed ([`entity`], [`crud`]), and so
-//! is `#[authorize(Action, Entity)]` at all four edges, against that entity.
-//! An entity can live here because sea-orm's derives emit *relative*
-//! `sea_orm::` paths, which `use nest_rs::seaorm::sea_orm;` in the entity's
-//! module satisfies — no `sea-orm` line. `#[crud]` is the case that proved the
-//! witness must reach them: it emitted `::uuid::Uuid` for three routes, so a
-//! controller whose source never wrote `uuid` failed with `E0433` blamed on the
-//! attribute, and nothing compiled it behind one manifest line.
-//!
-//! **The limit:** a witness proves the arms it compiles and no others. An arm of
-//! a decorator applied nowhere here — a key no witness writes, a feature
-//! combination the matrix does not build — is proved only where something else
-//! compiles it, such as `nest-rs-cli`'s scaffold e2e; and that proves nothing
-//! when the generated project happens to declare the crate the arm names.
+//! **The limit:** a witness proves the arms it compiles and no others — a key
+//! no witness writes, or a feature combination the matrix does not build, is
+//! unproved here.
 
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

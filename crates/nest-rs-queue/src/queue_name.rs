@@ -11,16 +11,9 @@ use crate::QueueError;
 /// checked when the value is made — at compile time for a `#[queue]` literal, at
 /// boot for a `#[process]` method's queue, at the push for a raw name.
 ///
-/// The charset is what a name can carry through every surface it reaches
-/// unescaped: no `:` — a **datastore key's level separator**, here and in every
-/// store that spells one, which is why `nestrs:<concern>:<structure>` can hold a
-/// queue name as a member at all — and no whitespace or control character (a
-/// log field, a metric label). A backend with a narrower rule refuses what it
-/// cannot file, naming its own fact.
-///
-/// `.` is permitted, and that is the line between a port's floor and a
-/// backend's: it separates nothing here, and a broker that reads it as a subject
-/// hierarchy is free to refuse a name carrying one.
+/// No `:`, a datastore key's level separator, and no whitespace or control
+/// character (a log field, a metric label). A backend with a narrower rule
+/// refuses what it cannot file, naming its own fact.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct QueueName(Cow<'static, str>);
 
@@ -48,8 +41,7 @@ impl QueueName {
 
     /// Whether `value` follows the rule a queue name follows.
     ///
-    /// Public so the decorator's compile-time copy of the rule can be pinned
-    /// against this one: the macro crate cannot depend on this crate.
+    /// Public so the decorator's compile-time copy of the rule is pinned to it.
     #[doc(hidden)]
     pub fn is_valid(value: &str) -> bool {
         !value.is_empty()

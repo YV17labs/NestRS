@@ -1,22 +1,5 @@
-//! Dispatch order — the guarantee the events page states:
-//!
-//! > "**Order is deterministic** — registration order is preservation order;
-//! > listeners are registered in the order their providers appear in
-//! > `providers = [...]`, then in the order their methods appear in the
-//! > `#[listeners]` impl block."
-//!
-//! Both halves used to fail. `inventory` hands entries back in **link order**,
-//! which is stable across restarts of the same binary and reshuffles whenever
-//! the code changes — the worst possible shape for a guarantee, because a
-//! developer orders two listeners deliberately, verifies it locally, and gets a
-//! silent rearrangement the next time somebody adds an unrelated third to the
-//! same block. Three methods declared `first, second, third` dispatched
-//! `2, 3, 1`; a second provider's listener landed *between* two of the first
-//! provider's, so they were not even grouped by provider.
-//!
-//! The bus faithfully preserves whatever the registry hands it, so the ordering
-//! is restored upstream: each `#[on_event]` submits its position in its block,
-//! and `EventsModule` sorts on (provider rank in the module walk, that index).
+//! Dispatch order: providers in `providers = [...]` order, then methods in
+//! `#[listeners]` block order — never `inventory`'s link order.
 
 use std::sync::Arc;
 
@@ -27,7 +10,6 @@ use parking_lot::Mutex;
 #[derive(Clone)]
 struct Ping;
 
-/// Shared sink so the order is observed as one sequence across both providers.
 #[injectable]
 #[derive(Default)]
 struct Trace {
@@ -50,8 +32,7 @@ struct FirstProvider {
     trace: Arc<Trace>,
 }
 
-// Declared first, second, third — and deliberately *not* in alphabetical or
-// link order, so a sort that happens to agree by accident would not pass.
+// Deliberately not in alphabetical order.
 #[listeners]
 impl FirstProvider {
     #[on_event]
@@ -84,8 +65,6 @@ impl SecondProvider {
     }
 }
 
-// The declaration the guarantee refers to: `FirstProvider` before
-// `SecondProvider`.
 #[module(
     imports = [EventsModule],
     providers = [Trace, FirstProvider, SecondProvider],
@@ -109,9 +88,6 @@ async fn listeners_dispatch_in_declaration_order() {
     );
 }
 
-/// "Deterministic" was already true of link order — stable across restarts of
-/// one binary — and that is exactly what made the guarantee a trap. Re-running
-/// proves stability, which only means something alongside the test above.
 #[tokio::test]
 async fn the_order_is_stable_across_boots() {
     let first = dispatch_order().await;

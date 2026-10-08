@@ -98,8 +98,6 @@ async fn unhonoured_outcome(why: Unhonoured) -> Result<&'static str, Unhonoured>
 
 #[tokio::test]
 async fn a_job_the_context_cannot_settle_is_reported_as_failed() {
-    // The whole point: the job body succeeded, and reporting that would claim
-    // writes that were never committed. The transport's failure stands in.
     let outcome = unhonoured_outcome(Unhonoured::retryable("not committed")).await;
     assert_eq!(
         outcome,
@@ -110,9 +108,6 @@ async fn a_job_the_context_cannot_settle_is_reported_as_failed() {
 
 #[tokio::test]
 async fn the_transport_is_told_whether_repeating_the_attempt_could_help() {
-    // A transport with a retry budget spends it replaying the job body, side
-    // effects and all. The context is what knows whether that could ever end
-    // differently, so it says — rather than the transport assuming one answer.
     let transient = unhonoured_outcome(Unhonoured::retryable("a conflict at commit"))
         .await
         .expect_err("the context could not honour it");
@@ -148,7 +143,6 @@ impl JobContext for BrokenContext {
         _transaction: JobTransaction,
         _inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
     ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
-        // Drops `inner` on the floor instead of awaiting it.
         Box::pin(async { JobSettlement::Settled })
     }
 }
@@ -156,9 +150,6 @@ impl JobContext for BrokenContext {
 #[tokio::test]
 #[should_panic(expected = "JobContext::scope contract violation")]
 async fn broken_context_that_skips_the_job_fails_that_job() {
-    // The broken impl fails *this* job — surfaced as a panic the transport's
-    // per-job boundary (the port's `catch_unwind` / a per-job task) isolates, so the worker
-    // keeps consuming rather than the failure taking down the consumer loop.
     let ctx: Arc<dyn JobContext> = Arc::new(BrokenContext);
     let _ = run_in_job_context(
         Some(&ctx),
@@ -170,15 +161,8 @@ async fn broken_context_that_skips_the_job_fails_that_job() {
     .await;
 }
 
-/// A `JobContext` impl that never drives `inner` — the one contract violation
-/// `run_in_job_context` cannot recover from.
-///
-/// The job's output type is arbitrary, so nothing can be synthesized: the seam
-/// fails *this* job and unwinds, and the transport's per-job boundary catches
-/// it. Which means the panic message reaches a dead-letter record at best, and
-/// on the scheduler side nowhere at all — the error event is what names the
-/// offending impl, and `nest_rs::worker` rather than `nest_rs::queue` because
-/// the same seam serves the scheduler.
+/// A `JobContext` impl that never drives `inner`: the error event, on
+/// `nest_rs::worker`, is what names the offending impl.
 mod a_context_that_never_runs_the_job {
     use std::pin::Pin;
     use std::sync::Arc;
@@ -194,7 +178,6 @@ mod a_context_that_never_runs_the_job {
             _transaction: JobTransaction,
             _inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
         ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
-            // Returns without ever polling `inner`: the job never runs.
             Box::pin(async { JobSettlement::Settled })
         }
     }

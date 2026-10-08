@@ -1,9 +1,3 @@
-//! [`CrudService`] — the entity's data API and the single audited gateway to the
-//! ORM. Controllers and resolvers delegate here; they never touch [`Repo`] or
-//! the ORM directly, so there is exactly one choke point per entity to secure
-//! and audit. Default methods express CRUD through [`Repo`], keeping ambient
-//! scoping and the request transaction transparent.
-
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -35,9 +29,8 @@ pub trait UpdateModel<E: EntityTrait> {
     fn apply_to(self, model: E::ActiveModel) -> E::ActiveModel;
 }
 
-/// Outcome of an authorized by-id load. Distinguishing `Denied` from `Missing`
-/// lets a surface map to 200/403/404 (REST) or data/forbidden/null (GraphQL)
-/// without leaking existence by silently returning `Missing` for a denied row.
+/// Outcome of an authorized by-id load: 200/403/404 on REST, data/forbidden/null
+/// on GraphQL.
 pub enum Access<M> {
     /// The row exists and the ability grants the action — carries the row.
     Found(M),
@@ -48,31 +41,15 @@ pub enum Access<M> {
     Missing,
 }
 
-/// Proof that the wrapped row was produced by an **authorized** load — the
-/// ambient ability granted action `A` on it through [`CrudService::access`], the
-/// single gateway every `Bind` / `bind_required`
-/// funnels through.
-///
-/// The action is carried in the type, not just the binding site: an
-/// `Authorized<Update, E>` is a *different type* from an `Authorized<Read, E>`,
-/// so a service method that takes `Authorized<Update, E>` is statically
-/// guaranteed its subject was authorized for **exactly that action** — a `Read`
-/// proof fed to a method expecting an `Update` proof is a type error, not a
-/// runtime surprise. Combined with the crate-private constructor (only the
-/// binding seams that pass through [`CrudService::access`] may mint one), the
-/// type *is* the policy: a hand-written mutation can neither act on a row the
-/// caller was never allowed to load, nor act under an action it was never
-/// granted. The model is read through [`Deref`](std::ops::Deref);
-/// [`into_inner`](Authorized::into_inner) takes ownership for the active-model
-/// write (which [`Repo`] re-scopes by the ambient ability — defense
-/// in depth, not the only line).
+/// Proof that the ambient ability granted action `A` on the wrapped row through
+/// [`CrudService::access`]; only the crate mints one. Read the model through
+/// [`Deref`](std::ops::Deref), or own it with
+/// [`into_inner`](Authorized::into_inner).
 pub struct Authorized<A: ActionMarker, E: EntityTrait>(E::Model, PhantomData<fn() -> A>);
 
 impl<A: ActionMarker, E: EntityTrait> Authorized<A, E> {
-    /// Mint the proof. **Crate-private on purpose**: only the binding seams that
-    /// pass through [`CrudService::access`] may construct it, which is what makes
-    /// the type a guarantee rather than a label. The only such seam is the
-    /// `graphql` bridge, hence the gate: without it, nothing may mint a proof.
+    /// Crate-private: only a seam passing through [`CrudService::access`] mints
+    /// the proof, and the `graphql` bridge is the only one.
     #[cfg(feature = "graphql")]
     pub(crate) fn new(model: E::Model) -> Self {
         Self(model, PhantomData)
@@ -91,12 +68,8 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
     }
 }
 
-/// The entity's **read** API and the single audited gateway to the ORM. Every
-/// resource implements it; the write half is segregated into the opt-in
-/// [`Creatable`], [`Updatable`], and [`Deletable`] traits so a resource carries
-/// — and exposes — only the operations it genuinely has. A read-only resource
-/// (e.g. a relation or a projection) implements just this trait and never has
-/// to declare an unused `Create`/`Update` placeholder.
+/// The entity's **read** API and the single audited gateway to the ORM. The
+/// write half is the opt-in [`Creatable`], [`Updatable`] and [`Deletable`].
 ///
 /// # Exposed by `#[crud]`
 ///
@@ -265,11 +238,6 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # Ok(())
 /// # }
 /// ```
-///
-/// The `on_unimplemented` note pairs with `ActionMarker`'s: a swapped
-/// `Bind<Service, Action>` (the 1.1.x order) trips both bounds at once, and
-/// the pair is what names the swap rather than leaving two unrelated errors
-/// pointing at the `#[crud]` attribute above.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a resource service",
     label = "expected a service implementing `CrudService`",
@@ -285,16 +253,13 @@ where
     /// The SeaORM entity this service is the audited API for.
     type Entity: EntityTrait;
 
-    /// The entity's table name; included as the `entity` field on every log
-    /// (the flat module path can't distinguish entities — they all log from
-    /// `nest_rs_seaorm::service`).
+    /// The entity's table name, the `entity` field on every log.
     fn entity_name() -> &'static str {
         Self::Entity::default().table_name()
     }
 
     /// Soft-delete opt-in. Override on the service to return the entity's
-    /// `deleted_at` column. `None` (default) ⇒ hard delete and unfiltered reads
-    /// — exactly today's behaviour.
+    /// `deleted_at` column. `None` (default) ⇒ hard delete and unfiltered reads.
     fn soft_delete_column() -> Option<<Self::Entity as EntityTrait>::Column> {
         None
     }
@@ -309,11 +274,9 @@ where
         }
     }
 
-    /// Every row the caller may [`Read`](Action::Read), ability-scoped by
-    /// `Repo` — up to [`LIST_CAP`](crate::LIST_CAP) rows. The cap is a
-    /// backstop so no endpoint built on `list` can ever return an unbounded
-    /// result set; a capped result logs a `warn`. Collections that may
-    /// legitimately exceed it paginate with [`page`](CrudService::page).
+    /// Every row the caller may [`Read`](Action::Read), up to
+    /// [`LIST_CAP`](crate::LIST_CAP) rows; a capped result logs a `warn`.
+    /// Collections that may exceed it paginate with [`page`](CrudService::page).
     async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
         use sea_orm::QuerySelect;
         tracing::debug!(target: crate::TARGET, entity = Self::entity_name(), "listing rows");
@@ -349,20 +312,9 @@ where
         Repo::<Self::Entity>::page(first, after, Self::live_read_filter()).await
     }
 
-    /// Load a row by id and authorize the caller for `action` on it. The load is
-    /// **unscoped** so a denied-but-existing row is [`Access::Denied`] rather than
-    /// hidden as [`Access::Missing`] — the route-model-binding gateway the
-    /// `Bind`/`bind` adapters delegate to.
-    ///
-    /// Authorization is decided in **SQL**, by loading the id under
-    /// `condition_for(action)` (the very `WHERE` the list path uses). This is
-    /// one source of truth for every predicate kind: a relational rule —
-    /// which an in-memory check cannot evaluate without loading the parent —
-    /// is enforced here exactly as it is on a list read.
-    ///
-    /// The authorized path costs **one** primary-key lookup; the second,
-    /// unscoped one runs only to separate `Denied` from `Missing` after the
-    /// scoped load came back empty.
+    /// Load a row by id and authorize the caller for `action` on it, in SQL
+    /// under `condition_for(action)`, so a relational rule holds too. A
+    /// denied-but-existing row is [`Access::Denied`], not [`Access::Missing`].
     async fn access(
         &self,
         action: Action,
@@ -374,11 +326,6 @@ where
         let conn = Repo::<Self::Entity>::conn()?;
         let live = Self::live_read_filter();
         let entity = Self::entity_name();
-        // Ability-scoped first: an authorized load — the case every `Bind` and
-        // bound mutation takes — then costs **one** round-trip. The unscoped
-        // lookup below runs only when this one comes back empty, purely to tell
-        // "exists but forbidden" from "absent"; the previous order paid for that
-        // distinction on every successful access.
         if let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
             .filter(scope_for::<Self::Entity>(action))
             .filter(live.clone())
@@ -402,36 +349,17 @@ where
     }
 }
 
-/// Opt-in write capability: the resource accepts **inserts**. Carries the
-/// create-input type and the audited `create` path. A resource implements it
-/// only when it genuinely creates rows — so there is no placeholder `Create`
-/// type, and `#[crud(ops = [..create..])]` cannot generate a `create` op for a
-/// resource that does not offer one.
+/// Opt-in write capability: the resource accepts **inserts**.
 #[async_trait]
 pub trait Creatable: CrudService {
     /// The create-input DTO this resource accepts, lowered to an `ActiveModel`
     /// via [`CreateModel`].
     type Create: CreateModel<Self::Entity> + Send;
 
-    /// Insert a row from a create-input DTO, atomically with its scope check.
-    ///
-    /// Defense in depth beyond the route's `Authorize<Create, _>` gate: the
-    /// freshly inserted row is re-checked **in SQL** against
-    /// `condition_for(Create)` — the same source of truth the read filter uses
-    /// — and a row outside the caller's scope surfaces as
-    /// [`DbErr::RecordNotInserted`] and never persists. Deciding in SQL
-    /// (rather than an in-memory `can`) covers every predicate kind, including
-    /// a **relational** Create grant whose scope lives on a parent row the
-    /// in-memory check cannot reach — so a caller cannot create a child under
-    /// an out-of-scope parent.
-    ///
-    /// Atomicity does not depend on the ambient executor's shape: on the
-    /// request transaction (HTTP `DbContext`) insert + re-check ride it and
-    /// the interceptor rolls back; on a **pool** executor (a WS message
-    /// handler, a bare `with_executor`) a local transaction wraps the pair,
-    /// committing only when the re-check passes. On a worker/system (`Job`)
-    /// executor with no ambient ability `scope_for` is unscoped, so the
-    /// insert stands, mirroring the read default there.
+    /// Insert a row from a create-input DTO, atomically with its scope check:
+    /// the fresh row is re-checked in SQL against `condition_for(Create)`, and
+    /// one outside the caller's scope is [`DbErr::RecordNotInserted`] and never
+    /// persists.
     async fn create(
         &self,
         input: Self::Create,
@@ -440,25 +368,16 @@ pub trait Creatable: CrudService {
     }
 
     /// Insert a **prepared** `ActiveModel` through the same audited path as
-    /// [`create`](Creatable::create) — atomic insert + SQL scope re-check —
-    /// for service methods that stamp server-side columns (the token's org
-    /// id, a status default) before insert. This is the sanctioned seam for
-    /// those writes; a raw `ActiveModel::insert(&Repo::conn()?)` bypasses the
-    /// ability pre-filter.
+    /// [`create`](Creatable::create), for a service stamping server-side
+    /// columns first; a raw `ActiveModel::insert(&Repo::conn()?)` bypasses the
+    /// ability check.
     async fn create_from_active(
         &self,
         active: <Self::Entity as EntityTrait>::ActiveModel,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
-        // Insert + scope re-check run inside a **nested** transaction — a
-        // SAVEPOINT on an active request transaction (`Txn`/`Lazy`), or a
-        // top-level transaction on the pool. This makes the pair atomic
-        // regardless of the ambient shape AND regardless of whether the handler
-        // propagates the denial: a failed re-check rolls this local transaction
-        // back, so a swallowed `RecordNotInserted` (`let _ = svc.create(..)`)
-        // can never leave an out-of-scope row to be committed with the rest of
-        // the request (DATA-S1). Committing the SAVEPOINT keeps the inserted row
-        // in the outer request transaction, which still commits on 2xx.
+        // A local transaction (a SAVEPOINT inside the request's): a swallowed
+        // `RecordNotInserted` must not leave the row to commit with the request.
         let local = match Repo::<Self::Entity>::conn()? {
             Executor::Pool(pool) => pool.begin().await?,
             Executor::Txn(txn) => txn.begin().await?,
@@ -484,16 +403,8 @@ pub trait Creatable: CrudService {
     }
 }
 
-/// The audited create body shared by both `create_from_active` arms: insert,
-/// then re-check the fresh row against `condition_for(Create)` **in SQL** on
-/// the same connection. Generic over the connection so the ambient executor
-/// and a local `DatabaseTransaction` use one implementation.
-///
-/// Deliberate asymmetry with `Repo`: reads and by-id writes pre-filter by
-/// ability, but an insert has no existing row to filter, so there is no
-/// `Repo::create` — the raw `insert` below is the one authorized-write entry
-/// and the post-insert scope re-check (inside the caller's SAVEPOINT) is its
-/// gate. `Repo::insert_unscoped` is the separate, principal-less escape.
+/// Insert, then re-check the fresh row against `condition_for(Create)` in SQL
+/// on the same connection.
 async fn insert_in_scope<E, C>(
     active: E::ActiveModel,
     entity: &'static str,
@@ -525,10 +436,7 @@ where
     Ok(model)
 }
 
-/// Opt-in write capability: the resource accepts **updates**. Carries the
-/// update-input type and the audited `update` path. Implemented only when the
-/// resource genuinely mutates rows — so a `update<E>` op is never generated for
-/// a resource that has no honest update to apply.
+/// Opt-in write capability: the resource accepts **updates**.
 #[async_trait]
 pub trait Updatable: CrudService {
     /// The update-input DTO this resource accepts, applied to a loaded row via
@@ -537,9 +445,7 @@ pub trait Updatable: CrudService {
 
     /// Apply an update-input DTO to a loaded row, in the request transaction.
     /// Ability-scoped by [`Repo::update`]: a row outside the caller's scope is
-    /// never touched and surfaces as [`DbErr::RecordNotUpdated`], so a caller
-    /// cannot mutate by id past its scope even if it reached this method with a
-    /// row loaded some other way.
+    /// never touched and surfaces as [`DbErr::RecordNotUpdated`].
     async fn update(
         &self,
         model: <Self::Entity as EntityTrait>::Model,
@@ -569,15 +475,12 @@ pub trait Updatable: CrudService {
 }
 
 /// Opt-in write capability: the resource accepts **deletes** (hard or, when
-/// [`soft_delete_column`](CrudService::soft_delete_column) is set, soft). A
-/// resource that is append-only simply does not implement it — and
-/// `#[crud(ops = [..delete..])]` cannot expose a delete it does not have.
+/// [`soft_delete_column`](CrudService::soft_delete_column) is set, soft).
 #[async_trait]
 pub trait Deletable: CrudService {
     /// Delete a loaded row, in the request transaction. Ability-scoped by
-    /// [`Repo::delete`]: a row outside the caller's scope yields a zero-row
-    /// result mapped to [`DbErr::RecordNotFound`], so a caller cannot delete by
-    /// id past its scope.
+    /// [`Repo::delete`]: a row outside the caller's scope is
+    /// [`DbErr::RecordNotFound`].
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
         let entity = Self::entity_name();
         let id = model_pk::<Self::Entity>(&model);
@@ -623,30 +526,21 @@ pub trait Deletable: CrudService {
     }
 }
 
-/// First primary-key column value of a model, formatted for log correlation on
-/// denial/mutation events, or `None` for a primary-key-less entity (SeaORM
-/// permits them — views, raw tables). Logging-only, so a missing key logs as
-/// `None` rather than panicking on this mutation hot path.
+/// First primary-key column value of a model, for logs; `None` for a
+/// primary-key-less entity (views, raw tables).
 fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
     use sea_orm::{Iterable, ModelTrait, PrimaryKeyToColumn};
     let pk_col = E::PrimaryKey::iter().next()?.into_column();
     Some(model.get(pk_col))
 }
 
-/// The same first primary key, narrowed to a `Uuid` — what a caller needs to
-/// address the row it just created (`#[crud]`'s `201` names it in `Location`).
-///
-/// `None` for a primary-key-less entity, and for one keyed on anything else:
-/// `#[crud]`'s by-id routes take a `Uuid` path segment, but `ops = [create]`
-/// alone imposes no such bound, so this stays a question rather than a trait
-/// bound that would reject those resources outright.
+/// The model's first primary key as a `Uuid`, for `#[crud]`'s `201`
+/// `Location`; `None` when the entity has none, or one of another type.
 pub fn model_uuid<E: EntityTrait>(model: &E::Model) -> Option<Uuid> {
     <Uuid as sea_orm::sea_query::ValueType>::try_from(model_pk::<E>(model)?).ok()
 }
 
-/// Equality condition over **all** of a model's primary-key columns, used to
-/// re-select a freshly inserted row for the scoped create re-check. Spans
-/// composite keys, so it is correct for junction entities too.
+/// Equality over **all** of a model's primary-key columns, composite included.
 fn pk_condition<E: EntityTrait>(model: &E::Model) -> Condition {
     use sea_orm::{ColumnTrait, Iterable, ModelTrait, PrimaryKeyToColumn};
     let mut cond = Condition::all();

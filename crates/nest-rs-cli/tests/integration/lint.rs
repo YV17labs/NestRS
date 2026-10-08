@@ -1,9 +1,7 @@
 //! `nestrs lint` — the naming rule, as the command a project's CI runs.
 //!
-//! The rule itself is unit-tested next to its own code; what these prove is the
-//! contract a CI depends on and a library test cannot see — that a clean tree
-//! exits zero, and that a slot-named file exits non-zero rather than merely
-//! printing.
+//! The rule is unit-tested beside its code; these prove the exit codes a CI
+//! depends on.
 
 use std::fs;
 use std::process::Command;

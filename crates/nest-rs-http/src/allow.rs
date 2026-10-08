@@ -1,53 +1,18 @@
-//! `Allow` — the method set a route table serves, carried from the declaration
-//! that states it to the `405` that has to name it.
+//! `Allow` — the method set a route table serves, carried to the `405` that
+//! must name it ([RFC 9110 §15.5.6](https://www.rfc-editor.org/rfc/rfc9110#status.405)).
 //!
-//! [RFC 9110 §15.5.6](https://www.rfc-editor.org/rfc/rfc9110#status.405) is a
-//! **MUST**: "The origin server MUST generate an Allow header field in a 405
-//! response containing a list of the target resource's currently supported
-//! methods." Without it a client is told its method is wrong and nothing about
-//! which one is right — the one piece of information the status exists to
-//! deliver.
-//!
-//! The set is known where the routes are declared: `#[routes]` groups its verbs
-//! by path to collapse them into one method table. It was computed there and
-//! discarded at the mount, so poem's `MethodNotAllowedError` rendered a bare
-//! status with nothing to put in the header. [`MethodTable`] is what carries it
-//! through — the same call that registers a verb records it, so the served set
-//! and the advertised set cannot drift.
-//!
-//! Two methods are advertised exactly as far as the router serves them:
-//!
-//! - **`HEAD`**, whenever `GET` is registered. poem's `RouteMethod` answers an
-//!   unregistered `HEAD` by re-dispatching to the `GET` endpoint and dropping
-//!   the body, which is what RFC 9110 §9.3.2 describes, so the method genuinely
-//!   is supported at that resource.
-//! - **`OPTIONS`, never.** Nothing under this transport registers one: an
-//!   `OPTIONS` that reached a method table would itself answer `405`, and an
-//!   advertised method that refuses the request is the lie this header exists to
-//!   prevent. (A CORS preflight is answered by the CORS middleware, outside
-//!   routing, and only for a request carrying `Origin` +
-//!   `Access-Control-Request-Method`.) Serving `OPTIONS` with an `Allow` of its
-//!   own — RFC 9110 §9.3.7, a SHOULD — would put an unguarded method-listing
-//!   endpoint at every route, so it is an owner question rather than a member
-//!   this module refuses.
-//!
-//! **The other mount shape is reported, not reached into.** A self-mounted
-//! endpoint that routes by method builds its own table: `nest-rs-graphql` mounts
-//! `poem::post(…).get(…)`, so a `PUT /graphql` still answers a bare `405`.
-//! [`MethodTable`] is public for exactly that — it is a drop-in for poem's
-//! `RouteMethod`, and the crate that owns a mount is the one that can name its
-//! verbs.
+//! `HEAD` is advertised whenever `GET` is registered, since poem answers it
+//! through the `GET` endpoint; `OPTIONS` never, since nothing here serves it. A
+//! self-mount routing by method builds its own table: `PUT /graphql` still
+//! answers a bare `405`.
 
 use poem::error::MethodNotAllowedError;
 use poem::http::{HeaderValue, Method, header};
 use poem::{Endpoint, IntoEndpoint, Request, Response, Result, RouteMethod};
 
 /// A [`RouteMethod`] that remembers which verbs were registered on it, so the
-/// `405` it answers can carry `Allow` (RFC 9110 §15.5.6).
-///
-/// Built by `#[routes]` at mount time, one per path. Recording happens in the
-/// same call that registers the endpoint — there is no second list to keep in
-/// step.
+/// `405` it answers can carry `Allow` (RFC 9110 §15.5.6). Built by `#[routes]`
+/// at mount time, one per path.
 pub struct MethodTable {
     inner: RouteMethod,
     allowed: Vec<Method>,
@@ -68,10 +33,8 @@ impl MethodTable {
         }
     }
 
-    /// Whether no verb has been registered. A path whose every route was
-    /// narrowed out by `#[version]` claims no address at all: an empty table
-    /// mounted at a path answers `405`, which is a worse lie than the `404` the
-    /// router gives when nothing claims it.
+    /// Whether no verb has been registered — such a table must not be mounted,
+    /// or its path answers `405` where it should `404`.
     pub fn is_empty(&self) -> bool {
         self.allowed.is_empty()
     }
@@ -149,11 +112,7 @@ impl MethodTable {
     /// The endpoint to mount: the method table, plus the `Allow` header on the
     /// `405` it answers.
     pub fn into_endpoint(self) -> AllowedMethods {
-        // Every `Method::as_str()` is an RFC 9110 token and `", "` is a legal
-        // separator between two of them, so this conversion cannot fail — the
-        // `Option` is the type system's, not a policy. On the branch that
-        // cannot be taken the `405` is simply the one poem already rendered,
-        // which is what this module found rather than something it introduced.
+        // Cannot fail: every `Method::as_str()` is an RFC 9110 token.
         let allow = HeaderValue::try_from(self.allow_value()).ok();
         AllowedMethods {
             inner: self.inner,
@@ -173,15 +132,11 @@ impl Endpoint for AllowedMethods {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Response> {
-        // Every controller route reaches the router through this table, so this
-        // is where a controller request notes the route it matched — read only
-        // if it is dropped before it answers (`matched`).
+        // Every controller route passes here, so this is where it notes its route.
         crate::matched::note(&req);
         let result = self.inner.call(req).await;
-        // Narrowed to poem's own routing error rather than to "any `405`": a
-        // handler that deliberately answers `405` is stating something about
-        // its own resource, and turning its `Err` into an `Ok` here would also
-        // take it out of the rollback path a mapped error travels.
+        // poem's routing error only: a handler's own `405` `Err` must keep its
+        // rollback path.
         match result {
             Err(err) if err.is::<MethodNotAllowedError>() => {
                 let mut resp = err.into_response();
@@ -240,9 +195,6 @@ mod tests {
         resp.assert_header(header::ALLOW, "GET, HEAD, POST");
     }
 
-    // The advertised `HEAD` is poem's `GET` fallback, so it has to answer —
-    // advertising a method the router refuses is what this module exists to
-    // stop.
     #[tokio::test]
     async fn the_advertised_head_is_served_by_the_get_endpoint() {
         let ep = MethodTable::new().get(ok).into_endpoint();

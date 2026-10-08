@@ -100,10 +100,8 @@ impl MaskTool {
         ]))
     }
 
-    /// A prose summary. rmcp accepts a `String` as tool output, and the mask
-    /// runs over it as a scalar — nothing entity-shaped to strip, so the value
-    /// passes through untouched. Kept as a witness that arming the posture on a
-    /// non-entity shape is harmless rather than a compile error.
+    /// A prose summary: a scalar, so the mask passes it through untouched — a
+    /// witness that arming the posture on a non-entity shape is harmless.
     #[tool]
     #[authorize(Read, widget::Entity)]
     async fn widget_summary(&self) -> Result<String, McpError> {
@@ -211,17 +209,8 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
         "…and it refuses loudly, never as a silent passthrough: {body}",
     );
 
-    // The caller — a language model here — is handed an opaque refusal, which
-    // is the same answer a gate denial gives it. So the log is the only thing
-    // that separates "you may not read this" from "this operation's return type
-    // and this grant cannot both be satisfied", and the second is a bug in the
-    // schema that a developer has to fix.
-    //
-    // It is filed as the *denial* it is, under the one event and the one
-    // `reason` value GraphQL files for the same decision. Named for the
-    // mechanism instead — "response masking failed", with the remedy sentence
-    // as its `reason` — it was a refusal an incident query by `reason` never
-    // returned.
+    // The model gets an opaque refusal; the log, filed as a denial under
+    // GraphQL's event and `reason`, is what tells a grant refusal from a schema bug.
     let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("transport").as_deref(), Some("mcp"));

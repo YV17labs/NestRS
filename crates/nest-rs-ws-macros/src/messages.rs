@@ -1,13 +1,7 @@
 //! `#[messages]` — bind a `#[gateway]` impl block's `#[subscribe_message]`
 //! methods to WebSocket events; emit the `Gateway` dispatcher and the
-//! `Discoverable` impl that self-mounts on the HTTP transport.
-//!
-//! Each `#[subscribe_message]` handler runs through the Layer System: the
-//! global guard chain (from `App::builder().use_guards_global(...)`) is
-//! merged with per-message `#[use_guards]`, deduped by `TypeId`, then
-//! driven via `EventLayerTable` at dispatch in declaration order. The
-//! chain is composed **once at gateway mount** and frozen for the rest of
-//! the process — no per-message container lookup.
+//! `Discoverable` impl that self-mounts on the HTTP transport. Each event's
+//! guard chain is composed once at mount.
 
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
@@ -23,10 +17,7 @@ use nest_rs_codegen::{
     shared_receiver, take_flag_attr, take_path_list,
 };
 
-/// WS's half of the shared posture grammar. Mandatory per message for the same
-/// fail-secure reason it is on a `#[query]` and a `#[tool]`: a handler nobody
-/// decided a posture for must not compile, rather than reply with rows no ability
-/// ever filtered.
+/// WS's half of the shared posture grammar, mandatory per message.
 const POSTURE: PostureRules = PostureRules {
     operation: "#[subscribe_message]",
     public_means: "no gate and no mask — the guards bound on the gateway and beside \
@@ -39,9 +30,7 @@ const POSTURE: PostureRules = PostureRules {
 };
 
 /// `#[subscribe_message("chat")]`'s one argument, the event name, read as a
-/// string literal — or the shared value sentence at what was written, never
-/// syn's `expected string literal`, which names neither the attribute nor what
-/// it takes.
+/// string literal.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -67,10 +56,9 @@ fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
     }
 }
 
-/// Split a `#[subscribe_message]` payload argument into (type to deserialize
-/// from the wire, pipe info). `Some((Some(pipe), inner))` for `Piped<P, T>`,
-/// `Some((None, inner))` for `Valid<T>`, `None` for a plain payload deserialized
-/// as-is.
+/// Split a `#[subscribe_message]` payload argument into the wire type and its
+/// pipe: `Some((Some(pipe), inner))` for `Piped<P, T>`, `Some((None, inner))`
+/// for `Valid<T>`, `None` for a plain payload.
 fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
     match pipe_wrapper(ty) {
         Some(PipeWrapper::Piped { pipe, value }) => (value.clone(), Some((Some(pipe), value))),
@@ -102,10 +90,6 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
 const HELPERS: [&str; 3] = ["subscribe_message", "on_connect", "on_disconnect"];
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
-    // The impl half collects; it declares nothing. `#[gateway]` one line up
-    // declares the `path` and the `version`, which makes this the likeliest
-    // place to reach for either — so an argument list is refused rather than
-    // silently dropped.
     if let Err(err) = pair::WS.reject_args(
         &TokenStream2::from(args),
         "a gateway's `path`, `version` and `namespace` are declared by",
@@ -121,8 +105,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     }
     let self_ty = item.self_ty.clone();
 
-    // Gateway struct name — logged as a structured field beside each mounted
-    // event at boot, mirroring how `#[routes]` logs its controller.
     let host = match impl_self_ident(&self_ty, "#[messages]") {
         Ok(name) => name,
         Err(err) => return err.to_compile_error().into(),
@@ -132,19 +114,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut arms: Vec<TokenStream2> = Vec::new();
     let mut mounted_logs: Vec<TokenStream2> = Vec::new();
     let mut chain_inserts: Vec<TokenStream2> = Vec::new();
-    // Folded into `Discoverable::injected` for the access-graph check, same
-    // as HTTP per-route layer keys.
     let mut all_message_layers: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
-    // Every hook override, each under its method's conditions. All of them are
-    // emitted: keeping the last one seen dropped a hook compiled in whenever a
-    // compiled-out one followed it, and two compiled in are two definitions of
-    // one trait method, which rustc refuses.
+    // Every hook override is emitted under its method's `#[cfg]`; two compiled in
+    // are two definitions of one trait method, which rustc refuses.
     let mut hooks: Vec<TokenStream2> = Vec::new();
-    // What each event and hook is already served by. A second declaration is
-    // refused at its own attribute — by the macro when neither carries a
-    // condition, by rustc through the marker when both are compiled in — instead
-    // of compiling to a match arm that never runs while the guard table keeps
-    // the *second* method's chain for the first method's arm.
+    // A second declaration is refused by the macro without `#[cfg]`, and by
+    // rustc through the marker when both are compiled in.
     let mut declared = DispatchKeys::new(
         "#[messages]",
         "a gateway dispatches each event, and each connection hook, to one method, so the \
@@ -156,9 +131,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        // One role per method — a message, or one of the two connection hooks —
-        // through the family's helper, which places the caret on the repeated
-        // attribute rather than serving the first and leaving the rest.
         let index = match nest_rs_codegen::one_role_per_method(
             "role",
             &method.attrs,
@@ -191,9 +163,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 Err(err) => return err.to_compile_error().into(),
             },
         };
-        // The hook's own trait method is the marker: two compiled in are two
-        // definitions of `on_connect`, spanned at the attributes that declared
-        // them. An event has no item of its own to collide, so it gets one.
+        // A hook's own trait method is its marker; an event has no item, so it gets one.
         let collision = match hook {
             Some(_) => Collision::Item,
             None => Collision::Marker,
@@ -248,10 +218,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        // The message's access posture, taken off the method so neither attribute
-        // reaches the compiler as unknown. `#[public]` is a *declaration* here,
-        // not a fast-path: unlike an HTTP route there is no anonymous shortcut to
-        // take, so what it buys is the statement that the posture was decided.
         let posture = match POSTURE.take(method) {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
@@ -305,10 +271,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let deser = match payload_ty {
             Some(ty) => {
-                // A `Piped<P, T>` / `Valid<T>` payload is a per-argument pipe:
-                // deserialize the wire value `T`, run the pipe, then hand the
-                // handler the carrier. A rejection replies with `WsReply::error`
-                // — the transport analog of the HTTP / GraphQL pipe forms.
                 let (deser_ty, pipe) = ws_pipe_binding(ty);
                 let wrap = match &pipe {
                     None => quote! { let __payload = __deser; },
@@ -323,11 +285,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             let __payload = match #apply {
                                 ::core::result::Result::Ok(__p) => __p,
                                 ::core::result::Result::Err(__e) => {
-                                    // Through `pipe_error`, so the frame carries
-                                    // the rejection's per-field detail as
-                                    // `data.errors` — the same member HTTP
-                                    // renders. Formatting only `message()` here
-                                    // is what used to drop it.
                                     return ::nest_rs_ws::WsReply::pipe_error(
                                         #event, "payload", __e,
                                     );
@@ -339,10 +296,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 quote! {
                     let __deser: #deser_ty = match ::nest_rs_ws::serde_json::from_value(__data) {
                         ::core::result::Result::Ok(__p) => __p,
-                        // Through `payload_error`, which carries the `warn` on
-                        // `nest_rs::ws` a denied dispatch owes an operator —
-                        // a client sending garbage used to be the one refusal
-                        // that logged nothing at any level.
                         ::core::result::Result::Err(__e) => {
                             return ::nest_rs_ws::WsReply::payload_error(#event, &__e);
                         }
@@ -352,11 +305,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
             None => quote! {},
         };
-        // Step 1 — the class gate, before the payload is deserialized or piped, so
-        // a caller the gate refuses never pays for validation and a validation
-        // message never doubles as an existence oracle. (The guard chain ran
-        // earlier still, in the dispatcher: a gateway is `Guarded`, so its
-        // upgrade already carried the real HTTP chain.)
+        // The class gate runs before the payload is deserialized, so a validation
+        // message never doubles as an existence oracle.
         let gate = match &posture {
             Posture::Authorize { action, entity, .. } => quote! {
                 if let ::core::result::Result::Err(__denied) =
@@ -378,14 +328,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             #invoke
         };
 
-        // Step 2 — reply masking, armed by the same posture. The masked *JSON* is
-        // what ships, not a value round-tripped back through the handler's type:
-        // a WS envelope promises no schema, so a stripped key is simply absent
-        // from the frame, exactly as HTTP omits it from a body. See
-        // `nest_rs_authz::ws::mask` for why WS is HTTP's case here and not MCP's.
-        // `__ret` is the value left once the handler's `Result` and any `Result`
-        // inside it are split, bound by the arms below — so this is a value
-        // rather than a function of one, and a mask never sees an `Err`.
+        // The masked JSON ships, not a value round-tripped through the handler's
+        // type (see `nest_rs_authz::ws::mask`). `__ret` is bound by the arms below.
         let reply = match &posture {
             Posture::Authorize {
                 action,
@@ -406,12 +350,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             _ => quote! { ::nest_rs_ws::WsReply::reply(&__ret) },
         };
 
-        // A masked message says `Result` outright. Two reasons, and the first is
-        // the one a developer would not guess: the reply-shape decision is
-        // *syntactic*, so a `Result` behind an alias reads as an ordinary value
-        // here and would be masked as the `Result` itself — a frame shaped like a
-        // success carrying `{"Ok": …}`. The second is ordinary: a fail-closed mask
-        // needs an error channel.
         if posture.masks() && matches!(return_kind, ReturnKind::Value | ReturnKind::Unit) {
             return syn::Error::new_spanned(
                 &method.sig.output,
@@ -426,12 +364,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .into();
         }
 
-        // Every `Err` a handler can return is turned into a frame by type, through
-        // `ErrorReport`'s three tiers — the imports bring the two trait tiers into
-        // scope, and the inherent one needs none. The report is built in library
-        // code (`ReplyOutcome::Failed`, `Result::map_err`), never by a call here:
-        // handed an error with no value (`Infallible` is `!` from Rust 1.100),
-        // that call would be unreachable code.
+        // The report is built in library code, never by a call here: on an
+        // `Infallible` error that call would be unreachable code.
         let report = quote! {
             {
                 #[allow(unused_imports)]
@@ -439,10 +373,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 __report.into_frame(#event)
             }
         };
-        // A handler's value is split once more before it replies: a `Result` inside
-        // the `Result` is a failure too, however either is spelled. Through
-        // `ReplyValue` rather than by reading the type, because an alias hides
-        // the `Result` from the macro and not from method resolution.
+        // Split by type through `ReplyValue`: an alias hides a `Result` from the
+        // macro, not from method resolution.
         let split_then_reply = quote! {
             {
                 #[allow(unused_imports)]
@@ -459,19 +391,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 { #call };
                 ::nest_rs_ws::WsReply::None
             },
-            // Routed through `ReplyValue` rather than `WsReply::reply` so the
-            // decision is made on the **type**: a `Result` spelled through an
-            // alias (`ServiceResult<T>`) reads as an ordinary value here, and
-            // used to serialize its `Err` variant — the whole error struct —
-            // into a frame shaped like a success. Method resolution picks the
-            // inherent `Result` impl whatever the alias is called; its `Ok` is
-            // then split again, as the literal arm's is.
-            //
-            // The syntactic `Result` arm below is therefore not redundant: on a
-            // literal `Result` it goes straight to `ErrorReport`. `ReplyValue`'s
-            // `Result` impl carries no bound on `E`, so no error type can fall
-            // to the blanket impl and be serialized whole; an `E` that is
-            // neither an error nor `Display` fails to compile at `ErrorReport`.
+            // Through `ReplyValue`, so an aliased `Result` never serializes its `Err`
+            // into a success frame.
             ReturnKind::Value => quote! {
                 let __ret = { #call };
                 {
@@ -500,10 +421,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         arms.push(quote! { #(#cfgs)* #event => { #arm_body } });
     }
 
-    // Per-message guards run `Guard::check_ws_message`, whose default is `Ok(())`.
-    // One bound each, at the `#[use_guards]` line. Guards on the `#[gateway]`
-    // struct are deliberately absent from this list: they run on the upgrade,
-    // which is an HTTP `GET`.
+    // `Guard::check_ws_message` defaults to `Ok(())`, so each per-message guard
+    // must attest `WsGuard`. Gateway-scope guards run on the HTTP upgrade instead.
     let conditional = || {
         all_message_layers
             .iter()
@@ -550,21 +469,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                // Self-mount on HTTP: a WS upgrade is an HTTP `GET`, so a
-                // gateway is just another `HttpEndpointMeta` at boot.
-                //
-                // The *effective* path — `PATH` with `#[gateway(version = …)]`
-                // folded in — is what the meta carries, and that matters beyond
-                // routing: the transport's duplicate-mount check compares
-                // `HttpEndpointMeta::path`, so two gateways declaring one path
-                // under two versions are two mounts that both boot, while two on
-                // the same path *and* version still fail boot naming both.
-                //
-                // The sockets are carried by the transport, which poem stops
-                // doing at the upgrade: one `DetachedWork` per gateway, handed to
-                // its endpoint and declared on its meta, so the transport tells
-                // each socket at the shutdown signal and stops what is left at
-                // the close of its window.
+                // poem stops tracking a socket at the upgrade: the `DetachedWork` lets
+                // the transport tell each socket at shutdown and bound its window.
                 let __sockets = ::nest_rs_ws::nest_rs_http::DetachedWork::new();
                 let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
@@ -572,8 +478,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         <#self_ty>::__nestrs_mount_path(),
                         "ws",
                         move |__container, __route| {
-                            // One string for the log and the mount, so what boot
-                            // prints is the address a client connects to.
                             let __path = <#self_ty>::__nestrs_mount_path();
                             #(#mounted_logs)*
                             let __gw = ::std::sync::Arc::new(
@@ -581,8 +485,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             );
                             let __server = <#self_ty>::__nestrs_registry(__container);
                             let mut __chains = ::nest_rs_ws::EventLayerTable::new();
-                            // Resolve every globally-registered guard once — every
-                            // event arm reuses the same vec to compose its chain.
                             let __global_guards: ::std::vec::Vec<(
                                 ::core::any::TypeId,
                                 &'static str,
@@ -619,25 +521,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS)
                     .runs_detached(__sockets),
                 )
-                // Boot-time validation of the **upgrade** chain — the same
-                // check `#[routes]` runs for a controller, on the same kind of
-                // chain: a `#[gateway(...)]` guard runs on the HTTP `GET` that
-                // becomes the socket, so it executes `check_http` and attests
-                // `HttpGuard`. A misordered pair fails the boot here instead of
-                // denying every connection with nothing to say why.
-                //
-                // **The per-message chains are deliberately not validated**, and
-                // that is a finding rather than an omission. `validate_guard_chain`
-                // reads `produced_principal`/`expected_principal`, which describe
-                // `check_http`; at the per-message site the entry is
-                // `check_ws_message`, where `AuthnGuard` keeps the no-op default
-                // by design. Applied there the check was wrong in both
-                // directions — silently green on a chain that attaches no
-                // principal, and a false boot failure on the sanctioned
-                // split-scope shape — and it refused `#[force_guards]` under the
-                // canonical pool. Answering at that site needs a per-message
-                // notion of "producer", which is a design question, not a
-                // patch. See `guards-baseline.txt`.
+                // Only the upgrade chain is validated: the principal check describes
+                // `check_http`, and per-message chains have no notion of a producer yet.
                 .attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpBootCheck>(
                     ::nest_rs_ws::nest_rs_http::HttpBootCheck::new(|__container| {
                         ::nest_rs_guards::dispatch::boot_validate_guards(
@@ -692,17 +577,10 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
 }
 
 /// Emit the `Gateway` override for `on_connect` / `on_disconnect` delegating
-/// to the user method. The hook may declare an optional `&WsClient` parameter,
-/// and answers `()`.
-///
-/// The override is named at `at`, the attribute that declared it, so two hooks
-/// compiled in are refused by rustc there.
+/// to the user method, spanned at `at` so rustc refuses two there.
 fn hook_override(hook: &str, method: &ImplItemFn, at: Span) -> syn::Result<TokenStream2> {
     let hook_ident = syn::Ident::new(hook, at);
     let method_name = method.sig.ident.clone();
-    // The override awaits what the method is and discards what it answers, so a
-    // returned future would be dropped without ever being polled, and a returned
-    // error with nothing to report it.
     if !returns_unit(&method.sig.output) {
         return Err(syn::Error::new_spanned(
             &method.sig.output,
@@ -750,9 +628,8 @@ fn hook_override(hook: &str, method: &ImplItemFn, at: Span) -> syn::Result<Token
     })
 }
 
-/// The three inputs one event's chain is composed from, bound as `__global`,
-/// `__method`, `__force` and `__label`, reading `__global_guards` and
-/// `__container` from the enclosing scope.
+/// One event's chain inputs, bound as `__global`, `__method`, `__force` and
+/// `__label`, reading `__global_guards` and `__container` from the enclosing scope.
 fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
     let method_spec_entries = method_guards.iter().map(|p| {
         quote! {
@@ -791,11 +668,8 @@ fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) ->
     }
 }
 
-/// Build the chain-insert for one `#[subscribe_message]` event.
-///
-/// The chain is `global + method_guards`, deduped by `TypeId` (broadest
-/// wins). `#[force_guards]` lets a per-message guard replay even when the
-/// same `TypeId` is global.
+/// Build the chain-insert for one `#[subscribe_message]` event: global plus
+/// method guards, deduped by `TypeId` unless `#[force_guards]` replays one.
 fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
     let specs = chain_specs(event, method_guards, force_guards);
     quote! {

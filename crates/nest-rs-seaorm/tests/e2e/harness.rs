@@ -1,7 +1,5 @@
-//! Shared Postgres connection for the suite, over TLS alone: the URL is
-//! `<PREFIX>_SEAORM__URL`, which the dev container and CI set, and every
-//! connection is opened with the pool's own options, so it verifies the
-//! server's certificate as the app does.
+//! The suite's Postgres, over TLS alone at `<PREFIX>_SEAORM__URL`, opened with
+//! the pool's own options so it verifies the certificate as the app does.
 
 use std::sync::Arc;
 
@@ -14,7 +12,6 @@ pub(crate) fn url() -> String {
         .expect("the dev container and CI name the suite's Postgres")
 }
 
-/// The pool's own options for `url`.
 pub(crate) fn options(url: String) -> sea_orm::ConnectOptions {
     nest_rs_seaorm::SeaOrmConfig {
         url,
@@ -35,17 +32,9 @@ pub(crate) async fn connect_arc() -> Arc<DatabaseConnection> {
 
 /// Run the one-time DDL (+ seed) for a probe table shared by several tests.
 ///
-/// nextest gives **each test its own process**, so a `OnceCell` guard only
-/// serializes within one of them — and `CREATE TABLE IF NOT EXISTS` races the
-/// Postgres catalog between processes, which fails the whole batch on a fresh
-/// database. Serialize on a transaction-level advisory lock instead: it is held
-/// by whichever process gets there first and released at `COMMIT`, so the
-/// others wait and then find the table already there.
-///
-/// The lock key is derived from `table`, so two probe tables cannot collide and
-/// no caller has to invent a magic number. `sql` must be `;`-terminated
-/// statements that are safe to re-run (`IF NOT EXISTS`, `ON CONFLICT DO
-/// NOTHING`).
+/// nextest gives each test its own process, and `CREATE TABLE IF NOT EXISTS`
+/// races the Postgres catalog between them: the DDL runs under an advisory lock
+/// keyed on `table`. `sql` must be `;`-terminated and safe to re-run.
 pub(crate) async fn setup_shared_table(conn: &DatabaseConnection, table: &str, sql: &str) {
     let lock_key = advisory_lock_key(table);
     conn.execute_unprepared(&format!(
@@ -55,17 +44,9 @@ pub(crate) async fn setup_shared_table(conn: &DatabaseConnection, table: &str, s
     .unwrap_or_else(|err| panic!("set up the shared probe table `{table}`: {err}"));
 }
 
-/// The two tables a commit-time failure is provoked with: a child row whose
-/// foreign key is `DEFERRABLE INITIALLY DEFERRED`, so inserting it against a
-/// parent that never arrives succeeds and the `COMMIT` is what refuses.
-///
-/// Three suites need it — the HTTP boundary, the worker's per-attempt
-/// transaction and the WS/MCP data context — for the same reason each time, and
-/// they differ only in the prefix that keeps their tables apart. Shared because
-/// the shape *is* the assertion: a probe that stopped deferring would make all
-/// three green while testing nothing, and the drift would be invisible in each
-/// file on its own. Returns the child table's name, which is what the caller
-/// inserts into.
+/// The two tables a commit-time failure is provoked with: a child whose foreign
+/// key is `DEFERRABLE INITIALLY DEFERRED`, so the `COMMIT` is what refuses an
+/// orphan. Returns the child table's name.
 pub(crate) async fn deferred_probe_tables(conn: &DatabaseConnection, prefix: &str) -> String {
     let parents = format!("{prefix}_parents");
     let children = format!("{prefix}_children");
@@ -85,9 +66,8 @@ pub(crate) async fn deferred_probe_tables(conn: &DatabaseConnection, prefix: &st
     children
 }
 
-/// FNV-1a over the table name — a stable `i64` that does not depend on the
-/// std hasher's per-process seed (advisory locks must agree *across* nextest
-/// processes, so `DefaultHasher` would be wrong here).
+/// FNV-1a over the table name: the lock must agree across nextest processes,
+/// which `DefaultHasher`'s per-process seed breaks.
 fn advisory_lock_key(table: &str) -> i64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in table.as_bytes() {
@@ -97,13 +77,8 @@ fn advisory_lock_key(table: &str) -> i64 {
     hash as i64
 }
 
-/// A pool of exactly one connection, with a short acquire timeout — the shape a
-/// saturated pool or a restarted database actually presents.
-///
-/// The caller holds that one connection (`TransactionTrait::begin`) for the
-/// length of the probe; everything else then fails to acquire. Two suites build
-/// this, and their timeouts had already drifted apart, which is what a shared
-/// fixture is for.
+/// A pool of exactly one connection with a short acquire timeout; the caller
+/// holds it (`TransactionTrait::begin`) so every other acquire fails.
 pub(crate) async fn starved_pool() -> DatabaseConnection {
     let mut options = options(url());
     options
@@ -116,10 +91,8 @@ pub(crate) async fn starved_pool() -> DatabaseConnection {
     let pool = sea_orm::Database::connect(options)
         .await
         .expect("a one-connection pool is built");
-    // sqlx counts opening a connection against the acquire timeout, which a
-    // loaded machine can spend on the handshake alone; a lazy pool with neither
-    // an idle timeout nor a lifetime opens its minimum in the background instead,
-    // under sqlx's own deadline.
+    // sqlx counts opening a connection against the acquire timeout; a lazy pool
+    // opens its minimum in the background, under sqlx's own deadline.
     nest_rs_testing::wait_until(std::time::Duration::from_secs(10), || {
         pool.get_postgres_connection_pool().num_idle() == 1
     })
@@ -177,7 +150,6 @@ pub(crate) async fn after_commit_table(conn: &DatabaseConnection, table: &str) {
     }
 }
 
-/// `table`'s rows on `conn`.
 pub(crate) async fn committed_rows(conn: &DatabaseConnection, table: &str) -> i64 {
     conn.query_one_raw(sea_orm::Statement::from_string(
         sea_orm::DatabaseBackend::Postgres,
@@ -193,12 +165,8 @@ pub(crate) async fn committed_rows(conn: &DatabaseConnection, table: &str) -> i6
 /// Run from inside a boundary's body: write one row on the ambient executor,
 /// then hand the boundary work for after its commit that records what it sees.
 ///
-/// Shared by every settle site — the HTTP boundary, the worker's attempt, the
-/// WS/MCP data context — because the probe *is* the assertion. The work counts
-/// on `observer`, a connection outside the boundary, so a sighting of `1`
-/// proves the row had committed when it ran: work run at once would have counted
-/// `0` there, while counting on the boundary's own executor would have seen its
-/// uncommitted row and passed either way.
+/// The work counts on `observer`, outside the boundary: the boundary's own
+/// executor would see its uncommitted row and pass either way.
 pub(crate) async fn write_and_hold(
     table: &'static str,
     observer: Arc<DatabaseConnection>,

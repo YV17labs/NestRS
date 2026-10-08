@@ -2,14 +2,9 @@
 //! ships, and the SeaORM migration skeleton `g migration` writes into them.
 //!
 //! [`MIGRATION`] is a create-table starting point with the house columns
-//! (`created_at`/`updated_at`/`deleted_at`); edit it for an alter instead. The
-//! generator also registers it in `lib.rs` and regenerates `migrator.rs`, so
-//! the migration actually runs — the registration you forget is the one that
-//! silently never applies.
-//!
-//! The two crates are scaffolded by `nestrs new`, because `db.just` — shipped
-//! in the same breath — names them in every recipe: `nestrs run db up` on a
-//! fresh workspace has to apply zero migrations, not fail on a missing package.
+//! (`created_at`/`updated_at`/`deleted_at`); the generator also registers it in
+//! `lib.rs` and regenerates `migrator.rs`. `nestrs new` scaffolds both crates
+//! because `db.just` names them in every recipe.
 
 pub(crate) const CRATE_CARGO: &str = r#"[package]
 name = "migrations"
@@ -26,14 +21,11 @@ sea-orm-migration.workspace = true
 tracing-subscriber.workspace = true
 "#;
 
-// `lib.rs` and `migrator.rs` are not consts: both are *derived* from the
-// migration module list (`render_lib` / `render_migrator` in the generator), so
-// a fresh crate and one with eight migrations come out of the same code path.
+// `lib.rs` and `migrator.rs` are derived from the migration module list
+// (`render_lib` / `render_migrator` in the generator).
 
-/// The binary behind every `nestrs run db <verb>`. `connect_from_env` is the
-/// single connector for tools outside the DI container: it resolves
-/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, so a tool
-/// and its app can never disagree about which database they mean.
+/// The binary behind every `nestrs run db <verb>`. `connect_from_env` resolves
+/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use.
 pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
 use sea_orm_migration::MigratorTrait;
@@ -83,8 +75,7 @@ nest-rs.workspace = true
 sea-orm.workspace = true
 "#;
 
-/// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
-/// already here, so adding one is a body edit rather than a new crate.
+/// `nestrs run db seed`. Empty, but connected.
 pub(crate) const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
 //!
 //! `nestrs run db reset` runs `fresh` and then this, and you will run it again

@@ -1,29 +1,6 @@
-//! MCP data-layer binding (feature `mcp`).
-//!
-//! rmcp dispatches every tool call on its own spawned task, so the ORM executor
-//! and authz ability the HTTP request installed are gone by the time a tool
-//! body runs. This implements `nest-rs-mcp`'s [`McpToolContext`] seam to
-//! re-install both around each operation — the same
-//! [`with_data_context`] every other
-//! after-the-request transport uses, so the transaction semantics cannot drift
-//! between them.
-//!
-//! The endpoint's operation guard (`McpAbilityBridge`) runs the same
-//! authn/authz chain controllers use and attaches the caller's ability to the
-//! request; this bridge captures it there — post-guard, still on the HTTP task.
-//! It does **not** re-run the guard chain.
-//!
-//! **The ability install here is not redundant with the guard's `around`, do
-//! not "de-duplicate" it.** Both read the same `Arc<Ability>` off the same
-//! request, so they cannot disagree — but a guard installs one only if it
-//! implements `McpOperationGuard::capture`, which is optional and defaults to
-//! `None`. A custom guard that attaches an ability in `before` and leaves
-//! `capture` alone would leave a tool body silently unscoped if this stopped
-//! installing it. `with_data_context` is the data layer's own fail-safe, and it
-//! is the *only* installer on the WS path, which has no `around` seam at all.
-//!
-//! A tool running with no `Ability` gets `Repo`'s fail-closed behaviour:
-//! `scope_for` denies every row.
+//! Installing the ability here is not redundant with the guard's `around`: a
+//! guard leaving the optional `McpOperationGuard::capture` unimplemented would
+//! otherwise leave a tool body unscoped.
 
 use std::sync::Arc;
 

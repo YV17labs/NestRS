@@ -63,10 +63,8 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 )]
                 let field_name = field.ident.clone().expect("named field has an ident");
                 let Some(inject_attr) = crate::take_single_attr(&mut field.attrs, "inject")? else {
-                    // CORE-I5: an `Arc<…>` (or `Option<Arc<…>>`) field with no
-                    // `#[inject]` is almost always a *forgotten* injection.
-                    // Silently `Default::default()`-ing it — an empty config, a
-                    // no-op guard/strategy — is a security footgun, so reject it.
+                    // A forgotten `#[inject]` would default to an empty config or
+                    // a no-op guard — a security footgun.
                     let is_arc = arc_inner(&field.ty).is_some();
                     let is_opt_arc = nth_generic_type(&field.ty, "Option", 0)
                         .is_some_and(|inner| arc_inner(inner).is_some());
@@ -88,10 +86,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
 
                 let field_ty = &field.ty;
 
-                // A keyed `#[inject(key = "…")]` field resolves a keyed
-                // singleton via `get_keyed`. Singleton-only, concrete `Arc<T>`
-                // only — a key on an `Option<…>` or `Arc<dyn Trait>` field is a
-                // compile error (no keyed optional/dyn resolution exists).
+                // No keyed optional/dyn resolution exists: concrete `Arc<T>` only.
                 if let Some(key) = parse_inject_key(&inject_attr)? {
                     if nth_generic_type(field_ty, "Option", 0).is_some() {
                         return Err(syn::Error::new_spanned(
@@ -246,15 +241,9 @@ pub fn from_container_method(ctor: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// The scope-aware constructor emitted by `#[injectable(scope = request)]`.
-/// Identical body to [`from_container_method`], but the parameter is a
-/// `&RequestScope` — so a `#[inject]` dep that is itself request-scoped
-/// resolves through the per-request cache (and is shared with the rest of the
-/// request), while singleton / keyed / `dyn` deps forward to the root. The
-/// binding is named `container` so the shared `ctor` tokens
-/// (`container.get()`, `container.get_dyn()`, `container.get_keyed()`) compile
-/// unchanged against `RequestScope`'s matching
-/// resolution methods.
+/// The scope-aware constructor emitted by `#[injectable(scope = request)]`:
+/// [`from_container_method`] over a `&RequestScope`, still bound as
+/// `container` so the shared `ctor` tokens compile unchanged.
 pub fn from_scope_method(ctor: &TokenStream2) -> TokenStream2 {
     quote! {
         /// Construct this request-scoped provider from the per-request scope,
@@ -278,18 +267,12 @@ pub fn forwarded_arg_idents(sig: &Signature) -> syn::Result<Vec<Ident>> {
 /// `#[resolver]`'s `#[field_resolver]` path drops the parent before forwarding.
 ///
 /// A **destructuring pattern** resolves to the identifier it binds:
-/// `Path(name): Path<String>` forwards as `name`, `Valid(Json(input))` as
-/// `input`. That is poem's own idiom and the first shape a reader writes, so the
-/// decorators accept it rather than making the developer un-destructure for the
-/// macro's benefit. The developer's method keeps the pattern (it is valid Rust
-/// there, and the macro re-emits the method unchanged); only the generated
-/// wrapper's parameter list is rewritten, by
-/// [`normalize_forwarded_args`] — a wrapper that destructured too would hand the
-/// inner value (`String`) to a method expecting the extractor (`Path<String>`).
+/// `Path(name): Path<String>` forwards as `name`. Only the wrapper's parameter
+/// list is rewritten ([`normalize_forwarded_args`]), so the method still
+/// receives the extractor.
 ///
-/// A pattern binding **no** name or **several** is still an error: there is no
-/// single name to forward under, and on GraphQL the wrapper's parameter name is
-/// the SDL argument name, so a synthesized one would leak into the schema.
+/// A pattern binding no name or several is an error: on GraphQL the wrapper's
+/// parameter name is the SDL argument name, so a synthesized one would leak.
 pub fn forwarded_idents<'a>(
     inputs: impl IntoIterator<Item = &'a FnArg>,
 ) -> syn::Result<Vec<Ident>> {
@@ -307,19 +290,10 @@ pub fn forwarded_idents<'a>(
 /// `Span::mixed_site()` — the span that resolves local variables at the macro's
 /// *definition* site instead of the call site.
 ///
-/// Reach for this for every `let` a wrapper introduces alongside identifiers the
-/// developer chose. A wrapper that binds `req`/`body` on `Span::call_site()` and
-/// then extracts a handler parameter the developer spelled `body` produces two
-/// bindings of the *same* name: the second masks the first, and every later
-/// statement silently reads the wrong one. The compiler blames the attribute,
-/// never the parameter — see the `#[routes]` regression in
-/// `nest-rs-http/tests/integration/route_decorators.rs`.
-///
-/// A prefix convention (`__nestrs_body`) only narrows the window; hygiene closes
-/// it, and lets the emitted code keep readable names under `cargo expand`.
-///
-/// Struct fields and method names are matched by spelling, not hygiene — keep
-/// those on `Span::call_site()`.
+/// Use it for every `let` a wrapper introduces: a call-site `body` beside a
+/// developer's parameter named `body` silently masks one with the other.
+/// Struct fields and method names are matched by spelling — keep those on
+/// `Span::call_site()`.
 pub fn mixed_site_ident(name: &str) -> Ident {
     Ident::new(name, proc_macro2::Span::mixed_site())
 }
@@ -329,8 +303,7 @@ pub fn mixed_site_ident(name: &str) -> Ident {
 /// Returns those identifiers in order, index-aligned with the value arguments.
 ///
 /// Types are untouched: `Path(name): Path<String>` becomes `name:
-/// Path<String>`, which is what lets the wrapper pass the whole extractor on to
-/// a method that destructures it itself. See [`forwarded_idents`] for the why.
+/// Path<String>` (see [`forwarded_idents`]).
 pub fn normalize_forwarded_args<'a>(
     inputs: impl IntoIterator<Item = &'a mut FnArg>,
 ) -> syn::Result<Vec<Ident>> {
@@ -357,7 +330,6 @@ pub fn normalize_forwarded_args<'a>(
 /// The single identifier a parameter pattern binds — the name a generated
 /// wrapper declares it under and forwards it by.
 fn binder_of(pat: &Pat) -> syn::Result<Ident> {
-    // The common case, and the only one that needs no rewrite.
     if let Pat::Ident(pat_ident) = pat
         && pat_ident.subpat.is_none()
     {
@@ -412,14 +384,9 @@ fn collect_binders(pat: &Pat, out: &mut Vec<Ident>) {
 /// from the container outside its `#[inject]` fields — guards, filters,
 /// interceptors, resolver `#[field_resolver]` `&Service` deps.
 ///
-/// Both halves come out of **one** walk, deduplicated by token text once, so
-/// they are index-aligned by construction. That alignment is load-bearing: the
-/// access graph pairs `injected()[i]` with `injected_names()[i]` to name a
-/// dependency no module provides. Two independent walks over the same list
-/// would have to dedupe on the byte-identical rule forever, and a divergence
-/// would not fail — it would silently make the boot error name the *wrong*
-/// type, which is worse than the `<unnamed dependency>` placeholder it
-/// replaces.
+/// One walk, so the halves are index-aligned: the access graph pairs
+/// `injected()[i]` with `injected_names()[i]`, and a misalignment would name
+/// the wrong type silently.
 pub struct LayerDeps {
     /// `TypeId::of::<P>()` per layer, for `Discoverable::injected`.
     pub keys: Vec<TokenStream2>,
@@ -430,11 +397,8 @@ pub struct LayerDeps {
 /// Walk `items` once, yielding [`LayerDeps`]. Feeding its `keys` into
 /// `Discoverable::injected` is what puts a layer under the access contract.
 ///
-/// An item declared on a method compiled out by `#[cfg]` carries the method's
-/// conditions ([`Conditional`]), and its key and label are emitted under them —
-/// a guard named only on a compiled-out route is neither required of the app
-/// nor named in the expansion, where it may not exist. A layer also declared
-/// unconditionally is emitted once, unconditionally.
+/// An item on a `#[cfg]`-gated method is emitted under its [`Conditional`]
+/// conditions, unless it is also declared unconditionally.
 pub fn layer_deps<'a, T: ToTokens + 'a>(
     items: impl IntoIterator<Item = impl Into<Conditional<'a, T>>>,
 ) -> LayerDeps {
@@ -462,10 +426,8 @@ pub fn layer_deps<'a, T: ToTokens + 'a>(
     LayerDeps { keys, labels }
 }
 
-/// Short diagnostic name for a layer, through the crate's one labeller. Routed
-/// via `Type` rather than `Path` so a `&Service` or `Arc<dyn Trait>` field
-/// dependency — which `#[resolver]` passes here — reads as `dyn Trait` instead
-/// of raw token text.
+/// Short diagnostic name for a layer, read as a `Type` so `Arc<dyn Trait>`
+/// reads as `dyn Trait`.
 fn layer_label(item: &impl ToTokens) -> String {
     match syn::parse2::<syn::Type>(item.to_token_stream()) {
         Ok(ty) => type_label(&ty),
@@ -491,8 +453,6 @@ pub fn injected_keys_with_layers(dep_keys: &[TokenStream2], layers: &LayerDeps) 
 
 /// The name half of [`injected_keys_with_layers`], index-aligned with it —
 /// body for the inherent `__nestrs_injected_names()` a struct decorator emits.
-/// Both take the same [`LayerDeps`], so the alignment is not a convention the
-/// call site has to honour.
 pub fn injected_names_with_layers(dep_names: &[TokenStream2], layers: &LayerDeps) -> TokenStream2 {
     let mut names = dep_names.to_vec();
     names.extend(layers.labels.iter().cloned());
@@ -503,12 +463,7 @@ pub fn injected_names_with_layers(dep_names: &[TokenStream2], layers: &LayerDeps
 /// take the struct's `__nestrs_injected()` / `__nestrs_injected_names()` and
 /// extend each with the per-route / per-message layers.
 ///
-/// One function emitting both, over one [`LayerDeps`] — so an impl-block
-/// decorator cannot append a key without its label, and adding a seventh layer
-/// family to a call site's selector cannot misalign the two. The explicitly
-/// typed `Vec`s keep `extend` unambiguous when no per-method layers are present,
-/// and — unlike a fixed-size array — hold whatever count a layer's `#[cfg]`
-/// leaves.
+/// One function over one [`LayerDeps`], so a key never goes without its label.
 pub fn injected_methods_with_layers(
     self_ty: &impl quote::ToTokens,
     layers: &LayerDeps,

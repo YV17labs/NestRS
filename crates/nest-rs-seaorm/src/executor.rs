@@ -1,18 +1,5 @@
-//! Ambient, request-scoped database executor.
-//!
-//! [`Executor`] is the request's current SeaORM connection — pool or
-//! transaction — implementing both SeaORM's `ConnectionTrait` (so it can
-//! drive any query) and [`nest_rs_database::Executor`] (so it lives in the
-//! ORM-agnostic task-local the request boundary installs and [`Repo`]
-//! reads back). The enum exists because `ConnectionTrait` has generic
-//! methods (not object-safe); forwarding via a variant restores a single
-//! `&Executor` that drives any SeaORM query.
-//!
-//! The task-local plumbing itself lives in `nest-rs-database`; this module
-//! re-exports it with SeaORM-typed convenience signatures so existing
-//! callers see no change.
-//!
-//! [`Repo`]: crate::Repo
+//! An enum rather than a trait object: `ConnectionTrait` has generic methods,
+//! so it is not object-safe.
 
 use std::any::Any;
 use std::future::Future;
@@ -36,35 +23,17 @@ pub use nest_rs_database::current_executor_scope;
 /// The connection a request's queries run against: the shared pool, the
 /// per-request [`DatabaseTransaction`], or a transaction opened lazily on
 /// first use. Cheap to clone.
-///
-/// `DatabaseConnection` is internally `Arc`-shaped (a `Clone` handle on the
-/// connection manager), so the `Pool` variant holds it directly — wrapping
-/// it in an outer `Arc` would carry a redundant refcount on every request
-/// (the executor is already re-wrapped as `Arc<dyn nest_rs_database::Executor>`
-/// when installed in the task-local). `DatabaseTransaction` is **not**
-/// internally `Arc`-shaped, so the `Txn` variant keeps its `Arc`.
 #[derive(Clone)]
 pub enum Executor {
     /// The shared connection pool — safe (read) methods and system/job work run
     /// here, outside any transaction.
     Pool(DatabaseConnection),
-    /// A transaction the **caller** opened and installed itself.
+    /// A transaction the **caller** opened and installed itself, through
+    /// `with_executor`; the framework never builds one.
     ///
-    /// Nothing in the framework constructs this: every boundary it owns —
-    /// HTTP, WS, MCP, the worker — installs [`Lazy`](Self::Lazy), so the
-    /// `BEGIN` waits for a data-layer touch and a denied request costs no
-    /// round-trip. What keeps the variant is the opposite direction: an app
-    /// that opens its own `DatabaseTransaction` (a programmatic boundary, a
-    /// migration step, a test that wants everything rolled back) installs it
-    /// through `with_executor` and gets the whole `Repo` surface running inside
-    /// it. Being *given* a transaction is also why `create_from_active`
-    /// SAVEPOINTs on it rather than opening one.
-    ///
-    /// Its commit is the caller's, and no boundary of the framework sees it, so
-    /// work handed to [`after_commit`](nest_rs_database::after_commit) inside it
-    /// runs at once rather than waiting for a commit nothing would report. A
-    /// caller that owns the commit owns the order of what follows it: it emits
-    /// after its own `commit`.
+    /// Its commit is the caller's, so work handed to
+    /// [`after_commit`](nest_rs_database::after_commit) inside it runs at once:
+    /// the caller emits after its own `commit`.
     Txn(Arc<DatabaseTransaction>),
     /// A transaction opened on **first data-layer touch**. Installed by the
     /// HTTP `DbContext` for mutating methods, so a request a guard denies (or
@@ -78,10 +47,7 @@ pub enum Executor {
 /// transaction opens per request.
 pub struct LazyTransaction {
     pool: DatabaseConnection,
-    /// The edge this boundary serves — declared once, at construction, and read
-    /// back by [`finalize`](Self::finalize) and by the [`Drop`] warning. It used
-    /// to be an argument to `finalize`, which meant the one path that never
-    /// reaches `finalize` had no way to name itself.
+    /// The edge this boundary serves, named by every event it emits.
     transport: &'static str,
     cell: tokio::sync::OnceCell<Arc<DatabaseTransaction>>,
     /// Set the instant [`finalize`](Self::finalize) begins, so [`Drop`] can tell
@@ -90,30 +56,16 @@ pub struct LazyTransaction {
     /// Set the moment a statement on **this** transaction returns an error, to
     /// [`POISON_TRANSIENT`] or [`POISON_DETERMINISTIC`] according to that error.
     ///
-    /// Postgres aborts the whole transaction on the first failed statement and
-    /// refuses everything after it (`25P02`), and a `COMMIT` on an aborted
-    /// transaction *succeeds* while rolling back. So a boundary that swallows a
-    /// `DbErr` and reports success would be told the commit worked and write
-    /// nothing — the silent-write-loss this flag exists to refuse. Nested
-    /// transactions ([`begin_nested`](Self::begin_nested)) run their statements
-    /// on their own handle and never reach here, which is why a `SAVEPOINT`ed
-    /// insert that fails still leaves the outer transaction committable.
-    /// *Opening* one does reach here: a `SAVEPOINT` that cannot be issued means
-    /// the outer transaction is already unusable, which is the opposite case.
-    ///
-    /// An `AtomicU8` rather than a flag beside a stored `DbErr`: the only thing
-    /// any settle site asks of that error is whether repeating the attempt could
-    /// end differently, and that answer is one bit every query path can record
-    /// without allocating or locking.
+    /// Postgres aborts the transaction on the first failed statement, and a
+    /// `COMMIT` on an aborted transaction *succeeds* while rolling back: without
+    /// this, a boundary swallowing a `DbErr` would report writes that never
+    /// landed. A nested transaction's statements run on their own handle and
+    /// never reach here; opening one does.
     poisoned: AtomicU8,
     /// The work [`after_commit`](nest_rs_database::after_commit) handed this
     /// boundary: run by [`finalize`](Self::finalize) once the transaction has
-    /// committed, dropped unrun when it has not.
-    ///
-    /// `None` from the moment settling begins, and that is what makes a late
-    /// registration visible. Only an escaped handle can still reach this
-    /// boundary then, and work it registers is refused in the open — a list
-    /// nobody would read again is where it would otherwise have gone.
+    /// committed, dropped unrun when it has not. `None` once settling begins, so
+    /// an escaped handle's late registration is refused.
     after_commit: Mutex<Option<Vec<Deferred>>>,
 }
 
@@ -143,11 +95,8 @@ impl LazyTransaction {
         }
     }
 
-    /// Keep `work` for after the commit, with what it was registered under
-    /// installed around it again: the boundary's scope and the caller's
-    /// ability, on the **pool**. The transaction it waited for is over by the
-    /// time it runs, so it runs outside it, with the authority its emitter had
-    /// — a request's work stays scoped to the caller, a job's stays unscoped.
+    /// Keep `work` for after the commit, to run on the **pool** under the
+    /// boundary's scope and the caller's ability.
     ///
     /// Captures the pool, never this `LazyTransaction`: a held `Arc` to the
     /// boundary would make every boundary that held work read as escaped.
@@ -201,15 +150,8 @@ impl LazyTransaction {
     }
 
     /// Run one statement on the request's transaction, poisoning the boundary
-    /// on **either** failure.
-    ///
-    /// Opening is a failure like any other, and it used to be the one that got
-    /// away: `poison(txn_ref().await?.execute(..).await)` applies `?` first, so
-    /// a `BEGIN` that could not be issued — a pool acquire timeout, a restarted
-    /// database — returned `Err` with the flag still clean. A job or handler
-    /// that swallowed it then reported success over a boundary that had opened
-    /// nothing, which is the silent write loss the flag exists to refuse, on the
-    /// one path the flag never saw.
+    /// on **either** failure: a `?` on `txn_ref` would let a failed `BEGIN`
+    /// escape the flag.
     async fn run<'a, T, F, Fut>(&'a self, statement: F) -> Result<T, DbErr>
     where
         F: FnOnce(&'a DatabaseTransaction) -> Fut,
@@ -221,8 +163,7 @@ impl LazyTransaction {
         })
     }
 
-    /// The request's transaction, opening it on the first call. Returns a
-    /// borrow so the per-query path costs no `Arc` clone.
+    /// The request's transaction, opening it on the first call.
     async fn txn_ref(&self) -> Result<&DatabaseTransaction, DbErr> {
         Ok(self
             .cell
@@ -234,9 +175,6 @@ impl LazyTransaction {
     /// The transaction, if a data-layer touch opened one — consumed by
     /// [`finalize`](LazyTransaction::finalize). `None` means no `BEGIN` was
     /// ever issued.
-    ///
-    /// Takes the cell rather than destructuring `self`: this type carries a
-    /// [`Drop`] now, so it cannot be moved out of piecewise.
     pub fn into_opened(mut self) -> Option<Arc<DatabaseTransaction>> {
         self.cell.take()
     }
@@ -247,21 +185,12 @@ impl LazyTransaction {
     }
 
     /// Record that a statement on this transaction failed, and what the database
-    /// said about it. Every `Executor::Lazy` query path funnels its `Err`
-    /// through here, so the classification covers the whole data layer rather
-    /// than the call sites that remembered.
-    ///
-    /// **The first failure wins.** It is the one that aborted the transaction;
-    /// everything after it fails with `25P02`, which says nothing about why.
+    /// said about it. **The first failure wins**: everything after it fails
+    /// with `25P02`, which says nothing about why.
     fn poison<T>(&self, result: Result<T, DbErr>) -> Result<T, DbErr> {
         if let Err(err) = &result {
-            // `is_transient_failure`, not `is_retryable_conflict`: this records a
-            // **statement**, and inside an open transaction nothing is durable
-            // until `COMMIT` — so a pool acquire timeout or a connection the
-            // server closed leaves nothing behind and a replay cannot write
-            // twice. The commit site keeps the narrow predicate, because there
-            // the same error means the `COMMIT` may have landed. See
-            // [`is_transient_failure`](crate::retry::is_transient_failure).
+            // A statement, not a `COMMIT`: nothing is durable yet, so the broad
+            // predicate is safe here.
             let verdict = if crate::retry::is_transient_failure(err) {
                 POISON_TRANSIENT
             } else {
@@ -282,19 +211,8 @@ impl LazyTransaction {
     }
 
     /// Force the request transaction open (if a data-layer touch has not
-    /// already) and start a **SAVEPOINT** on it. The nested transaction lets an
-    /// atomic insert + scope re-check roll back independently of the outer
-    /// request transaction, so a handler that swallows the denial cannot leave
-    /// an out-of-scope row to be committed with the rest of the request
-    /// (DATA-S1).
-    ///
-    /// Through [`run`](Self::run) like every other statement, and for the same
-    /// reason: `txn_ref().await?.begin()` applies `?` first, so neither a
-    /// `BEGIN` that could not be issued nor a refused `SAVEPOINT` would poison
-    /// the boundary. The second one is the dangerous half — Postgres aborts the
-    /// outer transaction, and `COMMIT` on an aborted transaction *succeeds*
-    /// while rolling back, so a caller that swallows this `DbErr` would be told
-    /// its writes landed.
+    /// already) and start a **SAVEPOINT** on it, through [`run`](Self::run) so
+    /// a refused `SAVEPOINT` poisons the boundary.
     pub(crate) async fn begin_nested(&self) -> Result<DatabaseTransaction, DbErr> {
         self.run(|txn| txn.begin()).await
     }
@@ -304,32 +222,20 @@ impl LazyTransaction {
     /// one — then run the work held for after the commit, or drop it. It runs
     /// on [`Committed`](FinalizeOutcome::Committed), and on
     /// [`NoTransaction`](FinalizeOutcome::NoTransaction) when the boundary
-    /// succeeded, since then nothing could roll back; every other outcome wrote
-    /// nothing, and announcing it would report what never happened.
+    /// succeeded; every other outcome drops it.
     ///
-    /// This is the **single home** of the escape invariant — a lingering
-    /// executor clone in a spawned task cannot be committed, so it is logged
-    /// at `error` and reported as [`FinalizeOutcome::Escaped`]; the caller
-    /// must fail an otherwise-successful response loudly rather than lose the
-    /// writes silently. A rollback failure is logged here and reported as
-    /// rolled back (the transaction is gone either way); a commit failure is
-    /// **not** logged here — it is returned so the transport can classify it
-    /// (serialization conflicts vs. generic failure).
+    /// An executor clone lingering in a spawned task cannot be committed:
+    /// [`FinalizeOutcome::Escaped`], which the caller must fail loudly on
+    /// success. A commit failure is returned unlogged, for the transport to
+    /// classify.
     pub async fn finalize(self: Arc<Self>, success: bool) -> FinalizeOutcome {
         let transport = self.transport;
-        // `Drop` covers the boundary abandoned *before* settling; this covers the
-        // window settling itself opens, and both were needed. `into_opened`
-        // takes the cell and drops the `LazyTransaction` before the `COMMIT` is
-        // awaited, so from that point the `Drop` guard no longer exists — and a
-        // future dropped mid-`COMMIT` is the case where the locks are most
-        // certainly still held. Armed only when something was opened: with no
-        // transaction there is nothing to hold.
+        // Settling consumes `self` before `COMMIT` is awaited, so its `Drop`
+        // cannot report a future dropped mid-`COMMIT`: this guard does.
         let mut abandoned = AbandonedDuringSettle {
             transport,
             armed: self.is_opened(),
         };
-        // Before anything can return early: `Drop` reports an *abandoned*
-        // boundary, and every path from here on is a settled one.
         self.settled.store(true, Ordering::Relaxed);
         let after_commit = self.take_after_commit();
         let outcome = Self::settle(self, success).await;
@@ -343,8 +249,6 @@ impl LazyTransaction {
         outcome
     }
 
-    /// [`finalize`](Self::finalize)'s body, split out so the guard above wraps
-    /// every path through it — including the awaits.
     async fn settle(self: Arc<Self>, success: bool) -> FinalizeOutcome {
         let transport = self.transport;
         let escaped_outcome = if success {
@@ -367,17 +271,10 @@ impl LazyTransaction {
                 return FinalizeOutcome::Escaped;
             }
         };
-        // The one combination that loses writes in silence: a statement failed,
-        // and the boundary reported success anyway. Asked once — both sites
-        // below settle on it, and `Some(retryable)` is the whole answer either
-        // has to carry.
         let flag = lazy.poisoned.load(Ordering::Relaxed);
         let poisoned = (success && flag != POISON_CLEAN).then_some(flag == POISON_TRANSIENT);
         let Some(txn) = lazy.into_opened() else {
-            // Nothing opened — but something may still have *failed* to open.
-            // Reporting `NoTransaction` for a boundary that swallowed a failed
-            // `BEGIN` would say "nothing to settle" about work that was meant to
-            // land and did not.
+            // A swallowed failed `BEGIN` is not "nothing to settle".
             if let Some(retryable) = poisoned {
                 tracing::error!(
                     target: crate::TARGET,
@@ -405,10 +302,8 @@ impl LazyTransaction {
                 return FinalizeOutcome::Escaped;
             }
         };
-        // A statement already failed, so the transaction is aborted and its
-        // `COMMIT` would succeed having written nothing. Reporting success here
-        // is the one outcome that loses writes in silence, so it is refused
-        // before the round-trip rather than discovered by its absence.
+        // The transaction is aborted: its `COMMIT` would succeed having written
+        // nothing.
         if let Some(retryable) = poisoned {
             if let Err(err) = txn.rollback().await {
                 tracing::error!(
@@ -422,9 +317,6 @@ impl LazyTransaction {
                 target: crate::TARGET,
                 transport,
                 outcome = "rollback_and_fail",
-                // The same bit `CommitFailed` reports: without it a `40001` a
-                // handler swallowed is indistinguishable in the logs from a
-                // constraint violation it swallowed.
                 retryable,
                 "a statement failed inside this transaction but the boundary reported success; \
                  nothing it wrote could be committed"
@@ -451,22 +343,10 @@ impl LazyTransaction {
 }
 
 impl Drop for LazyTransaction {
-    /// The boundary was **abandoned**: the future holding this executor was
-    /// dropped before anything settled it.
-    ///
-    /// That is not hypothetical and not a bug to fix here — it is the
-    /// framework's own shutdown path. A queue worker's drain window closing
-    /// cuts the job's attempt wherever it was, and if that
-    /// was mid-statement the transaction stays open until the abandoned
-    /// statement drains **server-side**: sea-orm's rollback cannot go out until
-    /// the connection is free again, so every row lock the attempt took is held
-    /// for the rest of that statement, and the connection stays out of the pool.
-    /// The framework cannot cancel a statement — that is not in sea-orm's
-    /// contract — so what it owes is the event, at the level an operator tuning
-    /// a shutdown timeout will actually see.
-    ///
-    /// Silent when nothing was opened (there is nothing to hold) and when
-    /// `finalize` ran (it has already said what happened, in more detail).
+    /// The boundary was **abandoned** before settling (a worker's drain window
+    /// closing on it). sea-orm cannot roll back while the connection is busy,
+    /// so the row locks stay held until the statement drains server-side: the
+    /// event is what the framework owes.
     fn drop(&mut self) {
         let held = self
             .after_commit
@@ -482,13 +362,9 @@ impl Drop for LazyTransaction {
     }
 }
 
-/// Run the boundary's after-commit work when it `committed`, or drop it.
-///
-/// Each piece runs once the transaction has landed, so a panic in one can no
-/// longer change what the boundary did: it is contained and reported here, and
-/// the rest still run. Letting it unwind would turn a committed attempt into a
-/// failed one — a request answered `500`, a queue job retried — over work that
-/// already stood.
+/// Run the boundary's after-commit work when it `committed`, or drop it. A
+/// panic is contained: unwinding would turn a committed attempt into a failed
+/// one a queue replays.
 async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, committed: bool) {
     if !committed {
         report_discarded(transport, held.len());
@@ -506,9 +382,7 @@ async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, commi
     }
 }
 
-/// The one wording for work dropped unrun: the boundary committed nothing, so
-/// what waited for its commit never happens. `debug`, because it is the
-/// expected consequence of a rollback the edge already reports.
+/// `debug`: the expected consequence of a rollback the edge already reports.
 fn report_discarded(transport: &'static str, discarded: usize) {
     if discarded > 0 {
         tracing::debug!(
@@ -522,11 +396,6 @@ fn report_discarded(transport: &'static str, discarded: usize) {
 
 /// Reports a boundary whose *settling* was abandoned — the future awaiting
 /// `COMMIT` or `ROLLBACK` was dropped before it returned.
-///
-/// The same event `LazyTransaction`'s own `Drop` emits, and it has to be a
-/// second guard rather than a longer-lived first one: settling consumes the
-/// `LazyTransaction`, so by the time the round-trip is in flight there is no
-/// `Drop` left to fire. One sentence for both, so an operator greps once.
 struct AbandonedDuringSettle {
     transport: &'static str,
     armed: bool,
@@ -540,7 +409,6 @@ impl Drop for AbandonedDuringSettle {
     }
 }
 
-/// The one wording, for the two guards that can raise it.
 fn report_abandoned(transport: &'static str) {
     tracing::warn!(
         target: crate::TARGET,
@@ -564,41 +432,22 @@ pub enum FinalizeOutcome {
     /// committed (the leaked handle's eventual `Drop` rolls back). On a
     /// success path the caller must fail the response loudly.
     ///
-    /// **It carries no "was anything opened yet" flag, and that is a decision.**
-    /// `finalize` computes it and logs it as a field, because an operator
-    /// reading the event wants it — but the escaped handle is *still live*, so
-    /// "nothing opened at the moment of the check" is not a promise that nothing
-    /// will be: a spawned task holding the executor can open a transaction and
-    /// write seconds later, and those writes are rolled back when it drops.
-    /// Reporting `Settled` on the strength of that flag would turn the one
-    /// failure this whole mechanism exists to refuse — a success that lost its
-    /// writes — into a `warn` nobody reads. So the escape fails closed either
-    /// way, and the flag stays out of the type where a reader would take it for
-    /// a guarantee.
+    /// No "nothing opened" flag: the escaped handle is still live, and can open
+    /// a transaction and write later.
     Escaped,
     /// The commit itself failed — the caller classifies and logs it.
     CommitFailed(CommitError),
     /// A statement failed inside the transaction, yet the boundary reported
-    /// success. Nothing was committed — Postgres aborts the transaction on the
-    /// first failed statement, and its `COMMIT` then succeeds while rolling
-    /// back, so believing the boundary would report writes that never landed.
-    /// Handled exactly like [`CommitFailed`](Self::CommitFailed): the caller
-    /// fails an otherwise-successful outcome loudly. Already logged at `error`.
+    /// success: nothing was committed. The caller fails the outcome loudly, like
+    /// [`CommitFailed`](Self::CommitFailed). Already logged at `error`.
     Poisoned {
-        /// Whether the statement that failed did so on something a fresh attempt
-        /// could clear, so a caller with a retry budget can tell "this will fail
-        /// identically forever" from "this may well win next time". Read from
-        /// the failure the database reported, never guessed.
+        /// Whether the failed statement failed on something a fresh attempt
+        /// could clear, read from the database's error.
         ///
-        /// **It answers for this boundary's transaction, and nothing else.**
-        /// `true` says the attempt's *transaction* wrote nothing, which is what
-        /// makes replaying it safe. Work the attempt committed elsewhere — an
-        /// HTTP call, an S3 write, or a statement deliberately stepped out of
-        /// the transaction through
-        /// [`non_transactional`](nest_rs_database::Executor::non_transactional)
-        /// — is outside that promise and is replayed with the rest of the body.
-        /// The step-out is documented as the read-only escape for exactly this
-        /// reason.
+        /// It answers for this transaction only: work done outside it (an HTTP
+        /// call, an S3 write,
+        /// [`non_transactional`](nest_rs_database::Executor::non_transactional))
+        /// is replayed with the body.
         retryable: bool,
     },
 }
@@ -662,19 +511,14 @@ impl ConnectionTrait for Executor {
     }
 }
 
-/// Slots the SeaORM `Executor` into the ORM-agnostic ambient task-local.
-/// The downcast back to `Executor` is what [`Repo::conn`](crate::Repo::conn)
-/// uses to recover a typed handle for SeaORM queries.
 impl nest_rs_database::Executor for Executor {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     /// Only a lazy transaction **nothing has opened yet** yields a pool handle:
-    /// `Pool` is already outside a transaction, `Txn` is a deliberate
-    /// programmatic boundary, and once a `BEGIN` has been issued the request
-    /// keeps its transaction (stepping out of live transaction state would buy
-    /// nothing and split the request's view of the data).
+    /// once `BEGIN` went out, stepping out would split the request's view of
+    /// the data.
     fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
         match self {
             Executor::Lazy(lazy) if !lazy.is_opened() => {
@@ -684,10 +528,8 @@ impl nest_rs_database::Executor for Executor {
         }
     }
 
-    /// A lazy transaction holds the work for its boundary to settle. A pool has
-    /// nothing to wait for, and a [`Txn`](Executor::Txn) is committed by
-    /// whoever opened it, out of every boundary's sight — both hand the work
-    /// back to run at once.
+    /// A lazy transaction holds the work for its boundary to settle; a pool and
+    /// a caller's [`Txn`](Executor::Txn) hand it back to run at once.
     fn after_commit(&self, work: Deferred) -> Option<Deferred> {
         match self {
             Executor::Lazy(lazy) => {
@@ -700,9 +542,8 @@ impl nest_rs_database::Executor for Executor {
 }
 
 /// The SeaORM `Executor` installed in the ambient task-local for this
-/// request or job, or `None` outside any scope. A downcast miss is a
-/// framework bug (some other ORM installed its handle in the same
-/// task-local) — it logs an error and surfaces as `None`.
+/// request or job, or `None` outside any scope. A downcast miss (another ORM's
+/// handle) logs an error and surfaces as `None`.
 pub fn current_executor() -> Option<Executor> {
     let dynamic = nest_rs_database::current_executor()?;
     match dynamic.as_any().downcast_ref::<Executor>() {
@@ -718,11 +559,8 @@ pub fn current_executor() -> Option<Executor> {
     }
 }
 
-/// Install `executor` without tagging a scope. Prefer the request/job
-/// variants at framework boundaries so authorization can distinguish the
-/// two paths. An untagged scope is fail-closed under `Repo` (deny-all with no
-/// ambient ability, exactly like a request); only [`with_job_executor`] is
-/// unscoped.
+/// Install `executor` without tagging a scope: with no ambient ability `Repo`
+/// denies every row, as on a request; only [`with_job_executor`] is unscoped.
 pub async fn with_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
     nest_rs_database::with_executor(Arc::new(executor), fut).await
 }
@@ -747,7 +585,6 @@ mod tests {
         Executor::Pool(DatabaseConnection::default())
     }
 
-    /// Downcast a `dyn nest_rs_database::Executor` back to the SeaORM enum.
     fn as_seaorm(executor: &Arc<dyn nest_rs_database::Executor>) -> &Executor {
         executor
             .as_any()
@@ -757,8 +594,6 @@ mod tests {
 
     #[test]
     fn an_unopened_lazy_transaction_hands_out_its_pool() {
-        // DATA-S5: the GraphQL endpoint steps a proven read-only operation out
-        // of the transaction the POST boundary installed.
         let lazy = Executor::Lazy(Arc::new(LazyTransaction::new(
             DatabaseConnection::default(),
             "test",
@@ -783,8 +618,6 @@ mod tests {
     async fn with_executor_installs_the_value_but_no_scope() {
         with_executor(pool(), async {
             assert!(matches!(current_executor(), Some(Executor::Pool(_))));
-            // `with_executor` is the unspecified-scope variant — guards that
-            // gate on scope must see `None` here, not a stale value.
             assert!(current_executor_scope().is_none());
         })
         .await;
@@ -819,9 +652,6 @@ mod tests {
         assert!(current_executor_scope().is_none());
     }
 
-    // `with_executor` (the unspecified-scope variant) does not unwind the
-    // scope task-local because it never set it — verifies the two task-locals
-    // are genuinely independent, not coupled by a wrapping accident.
     #[tokio::test]
     async fn with_executor_leaves_scope_task_local_untouched() {
         assert!(current_executor_scope().is_none());
@@ -834,9 +664,6 @@ mod tests {
         assert!(current_executor_scope().is_none());
     }
 
-    // Calling `current_executor` twice inside the same scope returns
-    // independently-clonable handles — `Executor` is `Clone`, the task-local
-    // hands out a clone each time, so a second access does not "consume" it.
     #[tokio::test]
     async fn current_executor_returns_a_fresh_clone_per_call() {
         with_request_executor(pool(), async {
@@ -848,9 +675,6 @@ mod tests {
         .await;
     }
 
-    // Nested scopes shadow the outer one — typical when a job runs inside a
-    // request (e.g. enqueueing in-process). The outer scope is restored on
-    // exit; a bug that drops the inner reset would leak the inner executor.
     #[tokio::test]
     async fn nested_scope_shadows_then_restores_the_outer_scope() {
         with_request_executor(pool(), async {
@@ -872,10 +696,6 @@ mod tests {
         .await;
     }
 
-    // `Executor` is `Clone`; the variant must round-trip without changing
-    // shape. `DatabaseConnection` is already internally `Arc`-shaped, so the
-    // clone is a cheap reference bump, no deep copy. Pinning this here so a
-    // refactor to a non-`Clone` field surfaces immediately.
     #[test]
     fn executor_clone_preserves_the_pool_variant() {
         let p = pool();
@@ -884,23 +704,14 @@ mod tests {
         assert!(matches!(cloned, Executor::Pool(_)));
     }
 
-    // `is_mock_connection` is the one `ConnectionTrait` forwarder safe to
-    // call on a disconnected `DatabaseConnection`: without the `mock`
-    // feature it falls back to the trait default (`false`), so it neither
-    // panics nor reaches a sqlx pool. Exercises the `Pool` arm of the
-    // forwarding match without needing a live DB.
     #[tokio::test]
     async fn is_mock_connection_forwards_to_inner_on_pool() {
         let executor = pool();
-        // A real Postgres pool would still report `false`; the assertion
-        // pins the trait-default behaviour, not the value itself.
         assert!(!executor.is_mock_connection());
     }
 
     #[tokio::test]
     async fn no_ambient_state_outside_any_scope_remains_observable() {
-        // Outside any scope, both task-locals stay `None` — the guard the
-        // `repo::scope_for` deny-all branch keys on.
         assert!(current_executor().is_none());
         assert!(current_executor_scope().is_none());
     }
@@ -913,8 +724,6 @@ mod ambient_tests {
 
     use nest_rs_database::{Executor as DynExecutor, with_request_executor};
 
-    /// Some *other* ORM's handle installed in the shared task-local — the one
-    /// shape `current_executor`'s downcast can miss.
     struct ForeignHandle;
 
     impl DynExecutor for ForeignHandle {
@@ -923,13 +732,6 @@ mod ambient_tests {
         }
     }
 
-    /// A downcast miss answers `None`, which is exactly what "no ambient
-    /// executor at all" answers — so every caller takes the same fallback and
-    /// the request either opens its own connection or denies, quietly.
-    ///
-    /// That makes this a framework bug that degrades instead of failing, and
-    /// the event is the only thing that distinguishes it from an ordinary
-    /// unscoped call. `reason` is what a reader greps for.
     #[tokio::test]
     async fn a_foreign_ambient_executor_is_reported_rather_than_read_as_absent() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -971,8 +773,6 @@ mod after_commit_tests {
         (flag, async move { set.store(true, Ordering::SeqCst) })
     }
 
-    /// What the held work saw when it ran: the executor variant, the scope and
-    /// the ability around it.
     #[derive(Default)]
     struct Seen {
         on_pool: bool,
@@ -980,9 +780,6 @@ mod after_commit_tests {
         ability: Option<Arc<nest_rs_authz::Ability>>,
     }
 
-    /// A boundary that succeeded without opening a transaction has nothing that
-    /// could roll back, so what it held runs — on the pool, under the scope and
-    /// the ability it was registered under, the authority its emitter had.
     #[tokio::test]
     async fn held_work_runs_once_the_boundary_succeeds_with_the_emitters_scope_and_ability() {
         let lazy = boundary();
@@ -1030,8 +827,6 @@ mod after_commit_tests {
         );
     }
 
-    /// A failed boundary wrote nothing, so what waited for its commit never
-    /// happens — and the drop is said, once, naming how much was dropped.
     #[tokio::test]
     async fn held_work_is_dropped_unrun_when_the_boundary_fails() {
         let logs = LogCapture::install();
@@ -1058,9 +853,6 @@ mod after_commit_tests {
         assert_eq!(line.field("transport").as_deref(), Some("test"));
     }
 
-    /// Only an escaped handle can reach a boundary that has settled. Its work is
-    /// refused in the open, never pushed onto a list nobody reads again — and
-    /// what it held before the escape was detected is dropped with the writes.
     #[tokio::test]
     async fn work_reaching_a_boundary_that_already_settled_is_refused_and_said() {
         let logs = LogCapture::install();
@@ -1089,9 +881,6 @@ mod after_commit_tests {
         assert_eq!(refused.field("outcome").as_deref(), Some("discarded"));
     }
 
-    /// Held work runs after the commit, so a panic in one piece cannot change
-    /// what the boundary did: it is contained and reported, the rest still run,
-    /// and the boundary's outcome stands.
     #[tokio::test]
     async fn a_panicking_piece_of_held_work_is_contained_and_the_rest_run() {
         let logs = LogCapture::install();
@@ -1121,8 +910,6 @@ mod after_commit_tests {
         );
     }
 
-    /// A boundary dropped before it settled — the shutdown window closing on it
-    /// — never commits, so its held work goes with it, and that is said.
     #[tokio::test]
     async fn held_work_is_dropped_with_an_abandoned_boundary() {
         let logs = LogCapture::install();
@@ -1143,7 +930,6 @@ mod after_commit_tests {
         assert_eq!(line.field("discarded").as_deref(), Some("1"));
     }
 
-    /// A pool has nothing to wait for, so it hands the work back to run at once.
     #[test]
     fn a_pool_hands_the_work_back_to_run_at_once() {
         let pool = Executor::Pool(DatabaseConnection::default());

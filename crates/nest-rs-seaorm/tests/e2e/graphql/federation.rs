@@ -1,13 +1,5 @@
 //! An `#[entity]` resolved by reference is scoped and masked like any other
-//! operation, against live Postgres.
-//!
-//! `_entities` is the one field a client never writes: the router hands it
-//! `{__typename, <key fields>}` for objects nobody named, and nothing in the
-//! document mentions the resolver behind it. So what has to be true is that the
-//! posture on it is real — that the row it hands back went through `Repo` under
-//! the caller's ability, and that a row the ability does not reach is not
-//! reachable *by key* either. Asserted here rather than in-process because the
-//! filter that matters is the `WHERE` the ability adds.
+//! operation: a row the ability does not reach is not reachable by key either.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
@@ -44,8 +36,7 @@ mod post {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// Stands in for what `#[expose]` emits: `secret` carries no exposure, so the
-/// mask strains it out of every value regardless of the grant.
+/// Stands in for what `#[expose]` emits: `secret` carries no exposure.
 impl WireModelDefaults for post::Entity {
     fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
         map.entry(String::from("secret"))
@@ -57,14 +48,10 @@ impl WireModelDefaults for post::Entity {
     }
 }
 
-/// The federated type. Its `@key` is the entity resolver's `id` argument.
+/// The federated type; its `@key` is the entity resolver's `id` argument.
 ///
-/// `crate = ` because this derive is the test's own, not one a decorator
-/// emitted: async-graphql resolves its paths from the call site, and this crate
-/// reaches it through `nest-rs-graphql`.
-/// `published` is `Option` because the field grant below masks it: GraphQL
-/// cannot ship a masked-out non-nullable field, so a maskable column is
-/// nullable on the wire or the whole operation fails closed.
+/// `crate = `: async-graphql resolves its paths from the call site. `published`
+/// is `Option`: GraphQL cannot ship a masked-out non-nullable field.
 #[derive(SimpleObject, Serialize, Deserialize)]
 #[graphql(crate = "::nest_rs_graphql::async_graphql")]
 struct Post {
@@ -89,14 +76,8 @@ impl CrudService for PostsService {
     type Entity = post::Entity;
 }
 
-/// Grants exactly the published rows — so "the ability filtered this" and "the
-/// row does not exist" are two different states the assertions can tell apart.
-///
-/// The grant is also narrowed to two **columns**, and that half is what gives
-/// the mask something to strain: `secret` is stripped by the static expose set
-/// whether or not masking runs, so a test asserting only its absence passes
-/// against an entity resolver that never masks at all. `published` is exposed
-/// *and* withheld by the grant, so it can only be absent if the mask ran.
+/// Grants the published rows and two columns: `published` is exposed yet
+/// withheld, so only the mask can strip it (the expose set alone strips `secret`).
 #[injectable]
 #[derive(Default)]
 struct PublishedOnly;
@@ -113,10 +94,8 @@ impl AbilityFactory for PublishedOnly {
 
 type PostsAbilityGuard = AbilityGuard<PublishedOnly>;
 
-/// Authenticates every caller as the same principal. What is under test is the
-/// **ability**, not who the caller is — and on GraphQL a visitor ability
-/// deliberately cannot satisfy an `#[authorize]`, so a principal is what lets
-/// this file assert on the rule rather than on the absence of one.
+/// Authenticates every caller: on GraphQL a visitor ability cannot satisfy an
+/// `#[authorize]`.
 #[injectable]
 #[derive(Default)]
 struct AlwaysAuthenticated;
@@ -152,10 +131,7 @@ impl PostsResolver {
         };
         match PostsService.access(Action::Read, key).await {
             Ok(Access::Found(model)) => Ok(Some(Post::from(model))),
-            // A row the ability does not reach is `Denied`; one that is not
-            // there is `Missing`. Neither is resolvable by key, and the router
-            // is told the same thing for both — an entity resolver that
-            // distinguished them would be an existence oracle keyed by id.
+            // Answered alike: telling them apart is an existence oracle by id.
             Ok(Access::Denied | Access::Missing) => Ok(None),
             Err(err) => Err(nest_rs_graphql::async_graphql::Error::new(
                 ServiceError::from(err).to_string(),

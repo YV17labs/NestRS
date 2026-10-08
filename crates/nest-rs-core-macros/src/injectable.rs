@@ -34,34 +34,23 @@ pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // Request-scoped and transient providers both resolve their `#[inject]` deps
-    // through a `RequestScope` (so a request-scoped dep is shared with the rest
-    // of the request), so both need the scope-aware constructor. A singleton
-    // never sees a scope, so emitting it there would reference `RequestScope`
-    // for no reason.
     let from_scope = match scope {
         InjectableScope::Request | InjectableScope::Transient => from_scope_method(&ctor),
         InjectableScope::Singleton => TokenStream2::new(),
     };
     let injected = injected_method(&dep_keys);
-    // Emitted for every scope (aligned with `injected`), so the access graph can
-    // name a missing dependency of a lazily-built scoped/transient provider.
+    // Every scope, so the access graph names a lazily-built provider's missing dependency.
     let injected_names = injected_names_method(&dep_names);
     let injected_keyed = injected_keyed_method(&keyed_dep_keys);
     let injected_optional = injected_optional_method(&opt_keys);
 
-    // What the container will hold under this type, stated for **every** scope:
-    // a missing impl is fillable by hand, and omitting it is how a
-    // `scope = transient` host once slipped through the bound that refuses it.
+    // Every scope: a missing impl could be written by hand and lie about residency.
     let singleton_marker = nest_rs_codegen::provider_residency(
         &name,
         &item.generics,
         matches!(scope, InjectableScope::Singleton),
     );
 
-    // Request-scoped and transient: lazy build, no register-phase ordering deps,
-    // each registers a factory not a value. `injected` is still reported for
-    // the access graph regardless of build timing.
     let (dependencies, dependency_names, optional_dependencies, register_fn) = match scope {
         InjectableScope::Singleton => (
             dependencies_method(&dep_keys),
@@ -139,24 +128,11 @@ enum InjectableScope {
     Transient,
 }
 
-/// `#[injectable]`'s one key.
 const INJECTABLE: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("injectable", &["scope"]);
 
-/// The values `scope` takes.
 const SCOPES: [&str; 3] = ["singleton", "request", "transient"];
 
-/// Parse `#[injectable(scope = singleton|request|transient)]`. Empty defaults
-/// to [`InjectableScope::Singleton`].
-///
-/// **Three cases used to reach syn rather than a sentence**, on the most-written
-/// decorator in either workspace — the struct half of all five `on_provider`
-/// pairs. `#[injectable(scope)]` died on `` expected `=` ``, which
-/// [`nest_rs_codegen::needs_a_value`] exists to replace ("a bare `expected `=``
-/// names the grammar and not the key"); and a duplicate or trailing argument
-/// died on `Parser::parse2`'s full-consumption requirement with "unexpected
-/// token", naming neither. Only the unknown-*value* case had a refusal, and it
-/// is the one that had a snapshot.
 fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
     if args.is_empty() {
         return Ok(InjectableScope::Singleton);

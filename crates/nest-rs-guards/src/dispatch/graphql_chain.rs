@@ -5,9 +5,7 @@
 //! `#[field_resolver]` to the root field it resolves under, and a root field
 //! folds it.
 //!
-//! The cell, the sources and the composition live in [`chain`](super::chain);
-//! this file is what GraphQL adds to them — `check_graphql` and the error frame
-//! a [`Denial`](crate::Denial) renders as.
+//! The cell, the sources and the composition live in [`chain`](super::chain).
 
 use nest_rs_core::Container;
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
@@ -17,32 +15,19 @@ use crate::dispatch::chain::{GlobalBucket, SiteChainCell, SiteChainSources};
 use crate::dispatch::denial_convert::denial_to_graphql_error;
 
 /// Which GraphQL site is running the chain — the one thing the two differ by.
-///
-/// A parameter rather than a second public runner: `#[operations]` emits a
-/// literal instead of choosing an identifier, `nest-rs-guards` publishes one
-/// seam, and the third site that ever needs its own treatment adds a variant
-/// here rather than a third `pub fn`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GraphqlSite {
     /// A `#[query]` / `#[mutation]` / `#[subscription]`: the app-wide pool
     /// runs here, since `/graphql`'s edge is `EdgePosture::Exempt` and its
     /// operation guard is the app's authz bridge rather than the pool.
     Operation,
-    /// A `#[field_resolver]`: its own resolver's `#[use_guards]` and its own
-    /// method's run, the pool does not. Every value a field resolver extends was
-    /// produced by a root field **of the same request**, which already ran the
-    /// pool against a context that cannot differ; folding it again runs every
-    /// pooled guard once per *parent* — a throttler counting one hit per row of
-    /// a list, an authenticator verifying one token per row. The resolver-scope
-    /// guards do run: the parent may come from another resolver's root, which
-    /// never ran this one's.
+    /// A `#[field_resolver]`: its resolver's and method's guards run, the pool
+    /// does not — the root field of the same request already ran it, and
+    /// folding it again would run it once per parent.
     Field,
-    /// An `#[entity]`, reached only through `_entities` — in front of which
-    /// `nest_rs_graphql`'s federation gate runs the pool once per field,
-    /// whatever the representation count. Folding it again here would run every
-    /// pooled guard once per representation, against a context that cannot
-    /// differ between them: the *exactly once* invariant broken in the one place
-    /// a router controls the multiplier.
+    /// An `#[entity]`, reached only through `_entities`, whose federation gate
+    /// runs the pool once per field; folding it here would run it once per
+    /// representation.
     Entity,
 }
 
@@ -50,16 +35,8 @@ impl GraphqlSite {
     /// Whether this site composes the pool, read off the container so the memo
     /// cell's key still covers the whole composition.
     ///
-    /// **Subtract only what the gate is actually there to run.** The gate is
-    /// installed if and only if the app seeded a `FederationGate`, and only
-    /// `use_guards_global` seeds one — while `GuardSpecs`, the pool itself, is a
-    /// plain public provider an app can seed on its own. Skipping
-    /// unconditionally turned *that* composition from gated into open.
-    ///
-    /// The gate is also installed only under `GraphqlConfig::federation`, and
-    /// that costs nothing here: an `#[entity]` cannot exist without the flag —
-    /// the boot refuses the pair — so an entity body only ever runs in a schema
-    /// where the extension was installed.
+    /// Skips only when a `FederationGate` is seeded: `GuardSpecs` can be seeded
+    /// without one, and skipping then would leave the entity ungated.
     fn bucket(self) -> fn(&Container) -> GlobalBucket {
         match self {
             Self::Operation => |_| GlobalBucket::Fold,
@@ -75,17 +52,9 @@ impl GraphqlSite {
 /// GraphQL shaper helper. Called by `#[operations]` at the start of every
 /// resolver method. Dedups per-resolver guards against the global chain.
 ///
-/// `cell` memoizes the composed chain for `container`; `sources` is consulted
-/// only when it has to be composed (see the module docs). It is a `&dyn Fn`
-/// rather than an `impl Fn` on purpose: the closure is a distinct ZST per
-/// resolver, so a generic parameter would monomorphize this whole body — the
-/// future, the `tracing` callsite and all — once per operation in the app,
-/// where the erased form codegens once per crate.
-///
-/// GraphQL pipes ([`nest_rs_pipes::GlobalPipe::transform_graphql_variables`])
-/// are not invoked here — variables live at the operation level, not per
-/// resolver, so they run at the GraphQL transport's request entry
-/// (`nest_rs_graphql::context` folds them over an operation's variables).
+/// `sources` is consulted only when the chain is composed. A `&dyn Fn` rather
+/// than an `impl Fn`, so this body codegens once rather than per resolver.
+/// GraphQL pipes run at the transport's request entry, not here.
 pub async fn run_layered_graphql_chain(
     ctx: &GraphqlContext<'_>,
     container: &Container,

@@ -1,11 +1,3 @@
-//! [`Bind<A, S>`] — route-model binding for HTTP routes: turn a path id into
-//! the loaded, authorized entity. Outcomes: bad UUID → 400, absent → 404,
-//! denied → 403 (existence intentionally not hidden), else the loaded model.
-//!
-//! Loads through the entity's service ([`CrudService::access`]), never the ORM
-//! directly, so a by-id binding emits the same `nest_rs::orm` access span as
-//! every other data access.
-
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -22,6 +14,9 @@ use crate::{Access, CrudService, ServiceError};
 /// The loaded, authorized entity bound from a path id, through service `S`.
 /// Declare as a handler parameter (`user: Bind<Read, UsersService>`); read the
 /// model via [`Deref`] or own it with [`into_inner`](Bind::into_inner).
+///
+/// A non-v7 id answers 400, an absent row 404, a denied one 403 (existence is
+/// not hidden).
 pub struct Bind<A, S: CrudService>(<S::Entity as EntityTrait>::Model, PhantomData<fn() -> A>);
 
 impl<A, S: CrudService> Bind<A, S> {
@@ -74,10 +69,6 @@ where
             )
         })?;
 
-        // A failed load ships the crate's one opaque DbErr envelope
-        // (`ServiceError::Db` — problem+json 500, constant detail), so
-        // SQL/driver text never reaches the client; the cause is logged once by
-        // that envelope's `ResponseError::as_response`.
         let access = with_ability(ability.clone(), service.access(A::ACTION, id))
             .await
             .map_err(|err| Error::from(ServiceError::Db(err)))?;

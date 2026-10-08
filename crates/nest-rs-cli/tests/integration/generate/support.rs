@@ -26,8 +26,7 @@ fn generate_dry_run_writes_nothing() {
     assert!(!lib.contains("pub mod posts;"));
 }
 
-/// B10: `--dry-run` printed "Created feature `orders`" directly above "no files
-/// written" — the two lines contradicted each other.
+/// `--dry-run` never says the work happened.
 #[test]
 fn generate_dry_run_does_not_claim_the_work_happened() {
     let dir = tempfile::tempdir().unwrap();

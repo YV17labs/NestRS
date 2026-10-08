@@ -1,14 +1,4 @@
 //! The social-login provider contract.
-//!
-//! `SocialProvider` is **flow-owning**: `authorize` and `exchange` carry
-//! default implementations that drive the shared PKCE/CSRF Authorization-Code
-//! flow through the provider's [`OAuthClient`]. A provider writes nothing for
-//! the common case — GitHub and Google override only [`profile`](SocialProvider::profile), the one
-//! method whose per-provider code justifies the crate. A provider whose
-//! protocol genuinely deviates (e.g. Apple's per-request ES256-signed client
-//! secret, or reading identity from an id_token instead of a userinfo
-//! endpoint) overrides `exchange` too — **without changing this trait**, so
-//! the third-party ecosystem never breaks on a new provider shape.
 
 use std::fmt;
 use std::future::Future;
@@ -19,16 +9,8 @@ use nest_rs_oauth_client::{AuthorizationRedirect, OAuthClient, TokenSet};
 
 /// The normalized profile a provider reports for the authenticated caller.
 ///
-/// `#[non_exhaustive]` + [`new`](SocialProfile::new): third-party crates build
-/// it through the constructor and field setters, so adding a field later
-/// (avatar, locale) is not a breaking change. Identity resolution keys on
-/// [`subject`](SocialProfile::subject) — never the email (see the demo's
-/// `UsersService::resolve_social_identity`).
-///
-/// [`Debug`] is hand-written to **redact** the PII fields (`email`, `name`):
-/// it prints their presence (`Some`/`None`) but never their value, so a
-/// `tracing` call that captures a profile cannot leak a user's email into logs
-/// — the same fail-closed posture the config secrets and response masking take.
+/// Identity resolution keys on [`subject`](SocialProfile::subject), never the
+/// email. [`Debug`] redacts `email` and `name`, printing only their presence.
 #[non_exhaustive]
 #[derive(Clone)]
 pub struct SocialProfile {
@@ -75,8 +57,6 @@ impl SocialProfile {
 
 impl fmt::Debug for SocialProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Presence, never value: `Some(<redacted>)` / `None` keeps the shape
-        // useful for debugging while the PII stays out of the log line.
         let redact = |v: &Option<String>| v.as_ref().map(|_| "<redacted>");
         f.debug_struct("SocialProfile")
             .field("provider", &self.provider)
@@ -88,8 +68,7 @@ impl fmt::Debug for SocialProfile {
     }
 }
 
-/// Boxed futures keep the trait object-safe without an `async-trait`
-/// dependency — mirrors `nest-rs-health`'s `IndicatorFuture`.
+/// The boxed future returned by [`SocialProvider::exchange`].
 pub type TokenFuture<'a> = Pin<Box<dyn Future<Output = Result<TokenSet, AuthError>> + Send + 'a>>;
 /// The boxed future returned by [`SocialProvider::profile`].
 pub type ProfileFuture<'a> =
@@ -108,10 +87,8 @@ pub trait SocialProvider: Send + Sync + 'static {
     /// drive the shared PKCE/CSRF flow through it.
     fn client(&self) -> &OAuthClient;
 
-    /// Begin the redirect leg. Default: the shared flow. Overriding this is
-    /// almost never needed.
-    /// The transaction is bound to [`key`](Self::key), so a flow started here
-    /// cannot be completed on another provider's callback.
+    /// Begin the redirect leg (default: the shared flow); the transaction is bound
+    /// to [`key`](Self::key), so it cannot complete on another provider's callback.
     fn authorize(&self, jwt: &JwtService) -> Result<AuthorizationRedirect, AuthError> {
         self.client().authorize(jwt, self.key())
     }

@@ -13,17 +13,10 @@ use crate::registry::{FilterSpec, FilterSpecs};
 ///
 /// The example on [`filter`](fn@crate::filter) registers through it.
 ///
-/// This seeds [`FilterSpecs`] into the container and attaches the
-/// transport-edge wrap that executes the **global** sub-chain around the
-/// whole routing tree (band
-/// [`FILTERS`](nest_rs_http::endpoint_wrap_priority::FILTERS)): a global
-/// filter maps every error escaping routing — handler errors no narrower
-/// filter claimed, 404s, self-mount errors. It sits *outside* the ambient
-/// DB context, so the failed transaction has already rolled back by the
-/// time it maps; a global filter can never turn a rollback into a commit.
-/// The per-route composer dedups controller / method redeclarations against
-/// this global scope by `TypeId` (broadest wins), so any filter still
-/// executes exactly once.
+/// The chain wraps the whole routing tree at the transport edge (band
+/// [`FILTERS`](nest_rs_http::endpoint_wrap_priority::FILTERS)), mapping every error
+/// escaping routing; it sits outside the ambient DB context, so a failed
+/// transaction has already rolled back when it maps.
 pub trait AppBuilderFiltersExt: Sized {
     /// Register `specs` as the global filter chain — the transport-edge pool
     /// that maps every error escaping routing, deduped by type against
@@ -54,9 +47,6 @@ impl AppBuilderFiltersExt for AppBuilder {
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::FILTERS,
                 |container, endpoint| {
-                    // `compose_chain` orders outermost-first — the chain
-                    // runner's own order (first declared = outermost on the
-                    // error path), over one endpoint.
                     let chain = global_chain(container);
                     if chain.is_empty() {
                         return endpoint;
@@ -67,8 +57,7 @@ impl AppBuilderFiltersExt for AppBuilder {
     }
 }
 
-/// Resolve `FilterSpecs` into the deduplicated, priority-ordered global
-/// chain — same `compose_chain` as every other Layer System site.
+/// Resolve `FilterSpecs` into the deduplicated, priority-ordered global chain.
 fn global_chain(container: &Container) -> Vec<ResolvedLayer<dyn Filter>> {
     let global = resolve_global_layers::<FilterSpecs>(container);
     compose_chain::<dyn Filter>(global, Vec::new(), Vec::new(), &[], "transport")

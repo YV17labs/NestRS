@@ -203,9 +203,7 @@ impl MaskResolver {
         Ok("hello".into())
     }
 
-    /// The stream both subscribers read. The resolver writes no masking call
-    /// and no per-subscriber filter — the posture attribute is the whole
-    /// mechanism, exactly as on the queries above.
+    /// The stream both subscribers read; the resolver writes no masking call.
     #[subscription]
     #[authorize(Read, widget::Entity)]
     async fn widget_feed(&self) -> Result<impl Stream<Item = WidgetDto>, GqlError> {
@@ -289,11 +287,8 @@ async fn every_row_of_a_vec_is_masked() {
     }
 }
 
-// ── A field grant against a non-null schema field ───────────────────────────
-//
-// `#[expose]` types a non-nullable column as a non-null GraphQL field, which
-// the mask cannot null. The selection set decides instead: asking for the
-// stripped field is refused, asking for the granted ones is served.
+// `#[expose]` types a non-nullable column as a non-null GraphQL field, which the
+// mask cannot null: the selection set decides.
 
 #[tokio::test]
 async fn selecting_a_field_the_grant_strips_is_refused() {
@@ -308,9 +303,7 @@ async fn selecting_a_field_the_grant_strips_is_refused() {
         json["errors"][0]["extensions"]["code"], "FORBIDDEN",
         "a field outside the grant is a denial, not a masking failure: {json}",
     );
-    // D3: a **list**, not a comma-joined string — the natural reading of
-    // "names in the `fields` extension", and the only shape that survives more
-    // than one refused field without every client re-splitting it.
+    // A list, not a comma-joined string.
     assert_eq!(
         json["errors"][0]["extensions"]["fields"],
         serde_json::json!(["name"]),
@@ -389,16 +382,10 @@ async fn zero_grant_caller_is_gated_before_masking() {
     );
 }
 
-// ── Posture per item: the gate runs once, the mask runs on every push ───────
-//
-// A query answers once, so its posture is spent once. A subscription's is not:
-// the guard decided at subscribe, and items keep arriving afterwards. These two
-// tests are the guarantee that the decision keeps applying — one stream, two
-// subscribers, two different item sequences.
+// A subscription's posture keeps applying per item: one stream, two
+// subscribers, two item sequences.
 
-/// The ability a `role` carries, the same three the `x-role` guard builds — one
-/// table, so the socket path and the POST path cannot come to mean different
-/// things by the same word.
+/// The ability a `role` carries — the same three the `x-role` guard builds.
 fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
     let mut builder = AbilityBuilder::new();
     match role {
@@ -418,10 +405,8 @@ fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
 
 /// One subscribe as `role`.
 ///
-/// The ability rides on the request rather than an `x-role` header because a
-/// socket has no per-operation request: this is the same value the bridge
-/// installs, in the same slot `nest_rs_authz::graphql::ability` reads it from
-/// (the context data), reached directly so one test can be two callers at once.
+/// The ability rides in the context data, where the bridge installs it, so one
+/// test can be two callers at once.
 fn subscribe(app: &TestApp, role: &str) -> GqlRequest {
     let _ = app;
     GqlRequest::new("subscription { widgetFeed { id name } }").data(ability_for(role))
@@ -442,9 +427,8 @@ fn ids(items: &[serde_json::Value]) -> Vec<i64> {
 /// auditor may not read never reaches them — it is **absent**, not delivered
 /// with its fields nulled.
 ///
-/// Three items are emitted (`1`, `2`, `1`) and each subscriber takes the number
-/// it is entitled to. That is what makes the assertion sharp: the auditor's two
-/// items are the two `1`s, so `2` was skipped rather than merely arriving last.
+/// Items `1`, `2`, `1` are emitted, so the auditor's two are both `1`s: `2` was
+/// skipped, not late.
 #[tokio::test]
 async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     let app = boot().await;
@@ -468,10 +452,8 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
         .take(2)
         .collect::<Vec<_>>();
     let emit = async {
-        // A stream registers its receiver on first poll, so nothing may be
-        // published until both have been polled — otherwise the send lands in a
-        // channel nobody is listening on and the test hangs for the wrong
-        // reason.
+        // A stream registers its receiver on first poll: publish only once both
+        // are polled, or the send lands nowhere and the test hangs.
         nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
             feed.tx.receiver_count() >= 2
         })
@@ -539,13 +521,8 @@ async fn public_posture_skips_gate_and_mask() {
     assert_eq!(json["data"]["motd"], "hello");
 }
 
-// ── SEC-F1: `masked_reply` — the manual opt-in helper WS gateways must call ──
-
 #[tokio::test]
 async fn masked_reply_fails_closed_without_an_ambient_ability() {
-    // With no ambient ability installed (the transport's authz bridge missing
-    // or a handler that forgot to run inside it) the helper must error, never
-    // pass the unmasked wire value through.
     let wire = serde_json::json!({ "id": 1, "name": "ada" });
     let result = masked_reply::<widget::Entity>(Action::Read, wire);
     assert!(
@@ -556,9 +533,7 @@ async fn masked_reply_fails_closed_without_an_ambient_ability() {
 
 #[tokio::test]
 async fn masked_reply_strips_unpermitted_fields_and_unexposed_columns() {
-    // A viewer may read only the `id` field: `name` is masked to null and the
-    // server-only `secret` column is strained out — the same semantics the HTTP
-    // shaper and GraphQL wrapper apply automatically.
+    // A viewer reads only `id`: `name` masks to null, `secret` is strained out.
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, widget::Entity)
         .fields([widget::Column::Id]);
@@ -608,11 +583,8 @@ async fn masked_reply_masks_every_row_of_an_array() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `#[entity]` carries the same posture — and it is the role where that matters
-// most, because the client never names the operation. Everything above reaches
-// the resolver through a field the document spells; everything below reaches it
-// through a **reference** a federation router sends.
+// `#[entity]` carries the same posture, reached through a reference a
+// federation router sends rather than a field the document spells.
 
 #[resolver]
 struct EntityMaskResolver;

@@ -1,29 +1,12 @@
 //! [`DispatchKeys`] — what one host dispatches to one method, refused when two
 //! methods claim it.
 //!
-//! A WS event, a connection hook, an HTTP verb and path, an MCP tool or prompt
-//! name: each is a key a host answers with exactly one method. A second method
-//! claiming the key never runs — or worse, runs under the first method's layers
-//! — so two declarations of one key are a compile error.
-//!
-//! **Who can see the fact decides where it is refused.** An attribute macro reads
-//! a method before its `#[cfg]` is evaluated, so the expansion cannot tell two
-//! conditions that both hold from two that exclude each other: `#[cfg(all())]`
-//! and no condition at all differ as written and agree as evaluated. The macro
-//! refuses what it can see — two declarations with no condition on either — and
-//! hands the rest to rustc, which evaluates conditions: every declaration emits a
-//! unit associated constant under its method's conditions, named for the key, so
-//! two that are both compiled are `E0201`/`E0592` on the attribute that declared
-//! them, and two that exclude each other are one constant.
-//!
-//! **A key may be served in a scope** — an HTTP route under a subset of its
-//! controller's versions. Two claims collide when their scopes meet: two scoped
-//! claims share a member, or one claim is unscoped and so serves every member.
-//! A scoped claim's marker is one per member, so two that share a member are the
-//! same `E0592`; an unscoped claim beside a scoped one meets it whatever the
-//! scope holds, and the macro cannot see the conditions, so that pair is a
-//! `const` evaluated under both claims' conditions, failing with the refusal's
-//! own sentence when both are compiled.
+//! The macro cannot evaluate `#[cfg]`, so it refuses two unconditional claims
+//! itself and leaves the rest to rustc: each claim emits a unit associated
+//! constant named for the key under its method's conditions, so two compiled
+//! claims are `E0201`/`E0592`. A scoped claim (an HTTP route under some
+//! versions) emits one marker per member; an unscoped claim beside a scoped one
+//! is a `const` evaluated under both claims' conditions.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
@@ -32,12 +15,10 @@ use syn::Ident;
 /// What rustc finds when two claims of one key are both compiled.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Collision {
-    /// Nothing of the claim's own collides, so [`DispatchKeys::markers`] emits a
-    /// constant that does.
+    /// [`DispatchKeys::markers`] emits a constant that collides.
     Marker,
-    /// The claim emits an item named for the key — a WS connection hook is the
-    /// trait method `on_connect` — which is already a duplicate definition, so a
-    /// marker would only say it twice.
+    /// The claim emits an item named for the key (the trait method
+    /// `on_connect`), already a duplicate definition.
     Item,
 }
 
@@ -45,8 +26,7 @@ pub enum Collision {
 pub struct DispatchKeys {
     /// The impl half as written, e.g. `"#[messages]"`.
     decorator: &'static str,
-    /// What the host does with each key and why a second claim is wrong, the
-    /// clause after the colon of the refusal.
+    /// The clause after the colon of the refusal.
     why: &'static str,
     declared: Vec<Declared>,
 }
@@ -91,10 +71,7 @@ impl DispatchKeys {
     ///
     /// `kind` is the key's family word (`event`, `route`, `tool`), and `key` the
     /// key as a reader wrote it — `#[subscribe_message("ping")]`, `GET /users`.
-    /// `identity` is what makes two keys the same: two declarations sharing a
-    /// `kind` and an `identity` claim one key. Refused here when neither carries a
-    /// condition; otherwise left to rustc, at `attr` — through a marker, or through
-    /// the claim's own item, as `collision` says.
+    /// Two declarations sharing a `kind` and an `identity` claim one key.
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is one chain a decorator collected; a struct would only rename them"
@@ -143,8 +120,7 @@ impl DispatchKeys {
                 self.refusal(key, &first.method, &method),
             ));
         }
-        // The attribute's own name carries the span: a single token, so rustc
-        // points at the declaration a reader wrote rather than at the decorator.
+        // A single token, so rustc points at the declaration, not the decorator.
         let span = attr
             .path()
             .segments
@@ -213,10 +189,7 @@ impl DispatchKeys {
                 }
             }
         });
-        // An unscoped claim beside a scoped one of the same key: no pair of
-        // marker names can meet, so the pair is refused by a `const` compiled
-        // only where both claims are. Two unconditional claims never reach here —
-        // `declare_in` refused the second.
+        // Unscoped beside scoped: no pair of marker names can meet.
         let mut crossings = Vec::new();
         for (index, later) in self.declared.iter().enumerate() {
             for earlier in &self.declared[..index] {
@@ -245,11 +218,8 @@ impl DispatchKeys {
 /// The marker constant's name: a clause that reads as the rule in rustc's
 /// `duplicate definitions with name` sentence.
 ///
-/// The identity is written by the developer and may hold any character, so it
-/// is folded to `[a-z0-9_]`. A fold that lost nothing is used as it is — it
-/// never holds `__`, which an identity that is already a plain word does not
-/// either — and a fold that lost something is followed by `__` and a stable hash
-/// of the original, so two identities folding alike still name two constants.
+/// The identity is folded to `[a-z0-9_]`; a lossy fold is followed by `__` and
+/// a stable hash of the original, so two identities folding alike stay distinct.
 fn marker_name(decorator: &str, kind: &str, identity: &str) -> String {
     let decorator: String = decorator
         .chars()
@@ -271,9 +241,7 @@ fn marker_name(decorator: &str, kind: &str, identity: &str) -> String {
     format!("__nestrs_{decorator}_dispatches_{kind}_{identity}_to_one_method")
 }
 
-/// FNV-1a, 64-bit — spelled here rather than borrowed from `std`, whose
-/// hashers promise no stability across releases, so the name rustc prints for
-/// one identity is the same on every toolchain.
+/// FNV-1a, 64-bit: `std`'s hashers promise no stability across releases.
 fn fnv1a(text: &str) -> u64 {
     text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)

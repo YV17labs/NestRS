@@ -1,33 +1,24 @@
 //! The unit of work this edge opens per dispatched field, and the line it files.
-//!
-//! Until `graphql.operation` existed, every query and every mutation in a
-//! deployment was one line — the `POST /graphql` the HTTP edge filed for the
-//! whole document — so which field ran, which one failed and how long any of
-//! them took were all unanswerable from the console. These assertions are that
-//! statement, executed.
 
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql::{self, Context, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_testing::{LogCapture, TestApp};
 
-/// A parent object with a resolved field, so the `#[field_resolver]` role is in
-/// the population rather than asserted about in the abstract.
+/// A parent object, so the `#[field_resolver]` role is in the population.
 #[derive(async_graphql::SimpleObject)]
 #[graphql(complex)]
 struct Note {
     body: String,
 }
 
-/// A payload whose name ends in `Result` — an ordinary object, which the
-/// wrapper once took for a `Result` and refused to compile.
+/// A payload whose name ends in `Result` — an ordinary object.
 #[derive(async_graphql::SimpleObject)]
 struct SearchResult {
     hits: i32,
 }
 
-/// A developer's own error: `Display`, so async-graphql can carry it, and no
-/// `From<async_graphql::Error>` — which the wrapper's chain once demanded.
+/// A developer's own error: `Display`, and no `From<async_graphql::Error>`.
 #[derive(Debug)]
 struct LookupError;
 
@@ -54,18 +45,13 @@ impl NoteResolver {
         })
     }
 
-    /// The failing half: an operation the framework cannot see the reason for
-    /// still has to file `outcome = error`, or the line reports only the paths
-    /// that were never in doubt.
     #[query]
     #[public]
     async fn refused(&self) -> async_graphql::Result<String> {
         Err(async_graphql::Error::new("no"))
     }
 
-    /// A `Result` under another name — `use async_graphql::Result as
-    /// GqlResult`, the idiom that keeps `std`'s in scope — fails as the spelled
-    /// one does.
+    /// A `Result` under another name (`async_graphql::Result as GqlResult`).
     #[query]
     #[public]
     async fn refused_by_alias(&self) -> GqlResult<String> {
@@ -99,7 +85,6 @@ impl NoteResolver {
         Ok(true)
     }
 
-    /// Outlasts any client patient enough to wait for it in a test.
     #[query]
     #[public]
     async fn slow(&self) -> async_graphql::Result<bool> {
@@ -158,9 +143,7 @@ async fn every_dispatched_field_files_one_line_naming_itself() {
     post(&app, "{ note { body shout } }").await;
 
     let served = lines(&logs);
-    // Two units: the root query, and the field resolver dispatched under it.
-    // `body` is async-graphql's own accessor on `Note` and this crate never sees
-    // it dispatched, which is the honest boundary rather than a gap.
+    // `body` is async-graphql's own accessor, never dispatched by this crate.
     let named: Vec<(Option<String>, Option<String>)> = served
         .iter()
         .map(|line| (line.field("role"), line.field("operation")))
@@ -220,7 +203,6 @@ async fn a_failing_operation_says_so() {
         "a GraphQL error is answered with a 200, so the HTTP line alone reports \
          a request that failed as one that succeeded: {served:?}",
     );
-    // The span exports what the line files: the operation failed.
     let span = logs
         .spans()
         .into_iter()
@@ -238,10 +220,6 @@ async fn a_failing_operation_says_so() {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
-/// A GraphQL request dropped while an operation runs — its client reset the
-/// connection, or the shutdown window closed on it — exports its HTTP span
-/// under the route the GraphQL endpoint is mounted at, as an answered one does:
-/// the endpoint notes the route it was reached on as it starts.
 #[tokio::test]
 async fn a_dropped_graphql_request_exports_its_http_span_under_its_route() {
     let logs = LogCapture::install();
@@ -270,11 +248,6 @@ async fn a_dropped_graphql_request_exports_its_http_span_under_its_route() {
     );
 }
 
-/// Fallibility is read from what a method returns, never from what its type
-/// is called: a payload named `SearchResult` is a value and answers, a `Result`
-/// renamed on import fails like a spelled one — on the line and to the client —
-/// and a developer's own error type owes the wrapper nothing beyond what
-/// async-graphql asks of it.
 #[tokio::test]
 async fn a_return_is_fallible_by_its_type_never_by_its_name() {
     let logs = LogCapture::install();
@@ -354,9 +327,6 @@ async fn the_unit_is_a_child_of_the_request_that_carried_the_document() {
         "each names the HTTP request that carried it — the causal edge a flat id \
          could not express: {spans:?}",
     );
-    // Two fields dispatched, two units, two span ids: a document is not one
-    // unit of work, which is the whole reason the HTTP request's line could not
-    // answer for it.
     let ids: std::collections::HashSet<_> = spans
         .iter()
         .filter_map(|span| span.field("span_id"))
@@ -375,11 +345,6 @@ async fn the_unit_is_a_child_of_the_request_that_carried_the_document() {
     );
 }
 
-/// A field whose request is dropped before it answers — its client gone, or its
-/// connection cut by the shutdown window — is a unit stopped before it settled,
-/// and still files its line: `cancelled`, beside the request's own `cancelled`.
-/// The request line was filed and this one was not, so the unit that was
-/// actually running was the one missing from the log.
 #[tokio::test]
 async fn a_field_whose_request_is_dropped_files_its_line_cancelled() {
     let logs = LogCapture::install();
@@ -405,9 +370,7 @@ async fn a_field_whose_request_is_dropped_files_its_line_cancelled() {
     assert_field_span_failed(&logs, "slow", nest_rs_core::operation_log::CANCELLED);
 }
 
-/// async-graphql does not catch a resolver that unwinds — the panic travels up
-/// through the request, which the HTTP edge files `panic` — so the field filed
-/// nothing: the unit that unwound was the one the log could not name.
+/// async-graphql does not catch a resolver that unwinds.
 #[tokio::test]
 async fn a_field_that_panics_files_its_line_panic() {
     use nest_rs_graphql::async_graphql::futures_util::FutureExt;
@@ -438,7 +401,6 @@ async fn a_field_that_panics_files_its_line_panic() {
     assert_field_span_failed(&logs, "explode", nest_rs_core::operation_log::PANIC);
 }
 
-/// The field's span fails with the word its line files.
 fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
     let span = logs
         .spans()
@@ -457,10 +419,7 @@ fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
-/// Fields of one selection resolve together, so a field that unwinds tears its
-/// siblings down with it. Only the field that unwound files `panic`: the one
-/// torn down beside it was stopped before it settled, and files `cancelled` —
-/// one panic is one `panic` line, whatever else it took with it.
+/// A field that unwinds tears its siblings down with it; only it files `panic`.
 #[tokio::test]
 async fn a_field_torn_down_by_a_sibling_that_panics_files_cancelled() {
     use nest_rs_graphql::async_graphql::futures_util::FutureExt;

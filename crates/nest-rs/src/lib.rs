@@ -1,11 +1,7 @@
 //! `nestrs` — umbrella crate that re-exports the framework's surface so an
 //! application can write a single `use nest_rs::prelude::*;` instead of a
-//! handful of per-crate imports.
-//!
-//! The per-crate split (`nest-rs-core`, `nest-rs-http`, …) stays the public,
-//! versioned source of truth. This crate adds no API of its own — it only
-//! collects what already exists behind Cargo features, with one feature per
-//! surface so an app pays only for what it uses.
+//! handful of per-crate imports. Each surface sits behind its own Cargo
+//! feature, so an app pays only for what it uses.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -56,11 +52,6 @@ pub use nest_rs_authn as authn;
 pub use nest_rs_authz as authz;
 
 /// RFC 6749 §1.1's roles, one module per role, spelled in the RFC's own words.
-///
-/// The level exists because a family whose members are named by one standard is
-/// read as one thing; the word below it is looked up in §1.1 rather than chosen,
-/// so a role added later has exactly one place to land. See *Families* in
-/// `architecture.md`.
 #[cfg(any(
     feature = "oauth-client",
     feature = "oauth-server",
@@ -95,9 +86,8 @@ pub use nest_rs_server_timing as server_timing;
 #[cfg(feature = "testing")]
 pub use nest_rs_testing as testing;
 
-// Layer-System extension-point crates — re-exported so writing a custom
-// `Guard`/`Pipe`/`Interceptor`/`Filter`/`ExceptionFilter` (or a `#[resource]`/
-// worker provider) needs no direct per-crate dep (FACADE-I11).
+// Layer-System extension-point crates, so a custom `Guard`/`Pipe`/`Interceptor`/
+// `Filter`/`ExceptionFilter` needs no per-crate dependency.
 #[cfg(feature = "guards")]
 pub use nest_rs_guards as guards;
 
@@ -139,11 +129,7 @@ pub mod prelude {
         App, AppBuilder, Container, ContainerBuilder, Module, hooks, injectable, module,
     };
 
-    // `#[input]` is `nest-rs-core`'s and every edge re-exports it, which is the
-    // statement that it belongs to none of them. It sat inside the `http` block
-    // for a while, so `--no-default-features --features queue` left a job
-    // payload with no `#[input]` and the remedy a developer reaches for pulls
-    // the whole HTTP stack into a headless worker.
+    // Outside every edge's feature: a headless worker needs `#[input]` too.
     pub use nest_rs_core::input;
 
     #[cfg(feature = "http")]
@@ -152,10 +138,7 @@ pub mod prelude {
         http_code, interceptor, redirect, response_header, routes,
     };
 
-    // `Json`/`Path`/`Query` are `poem` extractors re-exported through
-    // `nest_rs_http::poem`. This is a deliberate part of the declared
-    // poem-coupling contract (see the root `Cargo.toml` pinned-major policy:
-    // poem's major version is tied to the nestrs major), not an accidental leak.
+    // poem's extractors on purpose: poem's major is tied to nestrs's (root `Cargo.toml`).
     #[cfg(feature = "http")]
     pub use nest_rs_http::poem::web::{Json, Path, Query};
 
@@ -186,10 +169,6 @@ pub mod prelude {
     #[cfg(feature = "ws")]
     pub use nest_rs_ws::{gateway, messages};
 
-    // `#[crud]` is deliberately **not** re-exported here: `nest_rs_http::crud`
-    // and `nest_rs_graphql::crud` are different decorators sharing a name, so a
-    // glob prelude carrying both would collide the moment an app enables
-    // `http` + `graphql`. Name the transport at the use site —
-    // `use nest_rs::graphql::crud;` — which is also what the file it decorates
-    // is about.
+    // No `#[crud]`: the HTTP and GraphQL decorators share the name, so a glob
+    // would collide; import it from its edge (`nest_rs::graphql::crud`).
 }

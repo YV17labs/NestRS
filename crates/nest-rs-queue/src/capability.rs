@@ -1,10 +1,5 @@
 //! [`Capability`] and [`Capabilities`] — what a queue backend supports beyond
 //! the contract every backend owes.
-//!
-//! The module is private and its types are re-exported flat, so **what a driver
-//! author has to read lives on [`Capability`]** rather than here: a `//!` on a
-//! private module renders nowhere, and the paragraph below it is the one telling
-//! a driver which of three obligations is actually theirs.
 
 use std::fmt;
 
@@ -16,22 +11,12 @@ use std::fmt;
 /// backend lacks at the earliest site that sees both facts — the worker's boot
 /// for a `#[process]` key, the push for a push option, the call for a cancel.
 ///
-/// **Not a capability, because no backend may refuse them:** the retry budget
-/// and its backoff (`#[process(retries = N)]`), one transaction per attempt
-/// (`transactional`), and per-method concurrency (`concurrency = N`).
+/// **Not a capability, and none the backend's to keep:** the retry budget and
+/// its backoff (`#[process(retries = N)]`) and per-method concurrency
+/// (`concurrency = N`) are the port's; one transaction per attempt
+/// (`transactional`) is the `JobContext`'s the container holds.
 ///
-/// **None of the three is the backend's to keep.** The budget is the port's —
-/// the attempt counts it and says how long to wait before the next — the
-/// permits behind `concurrency` are the port's worker's, and `transactional` is
-/// honoured by whichever `JobContext` the container holds (`nest-rs-seaorm`'s,
-/// today).
-///
-/// Non-exhaustive: the port may name a capability later, and a backend that
-/// matches on this enum must not stop compiling the day it does — nor claim the
-/// new one, which it cannot have been written to honour.
-///
-/// "Capability" here means what a driver supports. The umbrella's Cargo features
-/// are called capabilities too, and are a different thing.
+/// Not the umbrella's Cargo features, which are called capabilities too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Capability {
@@ -51,9 +36,8 @@ pub enum Capability {
 }
 
 impl Capability {
-    /// Every capability, in declaration order — what `Capabilities` derives its
-    /// own `ALL` and its iterator from. `pub(crate)`: a driver declares the
-    /// capabilities it honours one by one, and never enumerates the port's.
+    /// Every capability, in declaration order; never public, since a driver
+    /// declares the capabilities it honours one by one.
     pub(crate) const ALL: [Self; 5] = [
         Self::DelayedPush,
         Self::UniquePush,
@@ -67,8 +51,7 @@ impl Capability {
     }
 
     /// What a developer writes that needs this capability — the half of a
-    /// refusal that says where to look. `pub(crate)`: it is read by
-    /// `unsupported`, which words the whole refusal.
+    /// refusal that says where to look.
     pub(crate) const fn declared_by(self) -> &'static str {
         match self {
             Self::DelayedPush => "`PushOptions::with_delay`",
@@ -101,9 +84,6 @@ impl Capabilities {
     /// No optional capability.
     pub const NONE: Self = Self(0);
     /// Every optional capability — the set the bit layout is checked against.
-    /// Never public, and outside the tests never needed: a backend declares what
-    /// it honours one capability at a time, so a capability the port adds later
-    /// is never claimed by a backend written before it existed.
     #[cfg(test)]
     pub(crate) const ALL: Self = Self((1 << Capability::ALL.len()) - 1);
 
@@ -206,9 +186,8 @@ mod tests {
     }
 
     /// What a developer writes that needs `capability`, at the site that meets
-    /// it, against [`NOTHING`]. Exhaustive here whatever `#[non_exhaustive]`
-    /// says, so a capability added to the port does not compile until it names
-    /// the declaration that needs it — and that declaration is refused.
+    /// it, against [`NOTHING`]. Exhaustive, so a capability added to the port
+    /// does not compile until it names the declaration that needs it.
     async fn refusal(capability: Capability) -> String {
         let push = |options| Producer.push_json(QUEUE, Value::Null, options);
         match capability {
@@ -234,8 +213,6 @@ mod tests {
         }
     }
 
-    /// Every capability is refused where it is declared, on a backend that does
-    /// not declare it, in the one sentence that names it.
     #[tokio::test]
     async fn every_capability_is_refused_where_it_is_declared_on_a_backend_without_it() {
         for capability in Capability::ALL {

@@ -1,16 +1,5 @@
-//! `#[listeners]` — orchestrator on a provider's `impl` block. Walks the
-//! methods; for each one tagged with `#[on_event]`, emits a free `wire` fn
-//! that resolves the provider from the assembled container and subscribes a
-//! closure to the `EventBus`, then submits a `ListenerMethod` inventory
-//! entry the `EventsModule` drains at bootstrap.
-//!
-//! Mirrors `#[processor]`/`#[process]` and `#[scheduled]`/`#[every]`: the
-//! host struct keeps its own `#[injectable]` (which owns `Discoverable`), and
-//! several decorated methods pool the provider's `#[inject]` dependencies.
-//!
-//! `#[on_event]` is a pure marker consumed here — it is not registered as a
-//! proc-macro attribute, so writing it outside a `#[listeners]` impl block
-//! fails the same way `#[get]` outside `#[routes]` does.
+//! `#[listeners]`: per `#[on_event]` method, a free `wire` fn and a
+//! `ListenerMethod` inventory entry.
 
 use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
@@ -33,10 +22,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    // `version` before the blanket refusal: the developer arriving from
-    // `#[controller(version = "1")]` asked a real question, and "takes no
-    // arguments" answers a different one. The sentence is `nest-rs-codegen`'s,
-    // so this edge's answer is worded where every edge's is.
+    // `version` before the blanket refusal, which would answer another question.
     if let Err(err) = Edge::Events.reject_version(&args) {
         return err.to_compile_error().into();
     }
@@ -58,12 +44,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let provider_snake = snake_case(&provider_name);
 
     let mut emissions: Vec<TokenStream2> = Vec::new();
-    // Position of each `#[on_event]` method **in this block**, submitted with
-    // the entry. `inventory` hands entries back in link order, which is stable
-    // per binary and reshuffles whenever the code changes — so two listeners
-    // ordered deliberately and verified locally were silently rearranged the
-    // next time somebody added a third. The index is what lets `EventsModule`
-    // restore the order the developer actually wrote.
+    // `inventory` yields link order; this index restores the written one.
     let mut declaration_index: usize = 0;
 
     for impl_item in item.items.iter_mut() {

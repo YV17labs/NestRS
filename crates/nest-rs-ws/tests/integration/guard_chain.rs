@@ -1,25 +1,6 @@
-//! Boot-time phase validation of a gateway's **upgrade** chain.
-//!
-//! `#[routes]` has refused a misordered controller chain since the phase
-//! declarations existed: an authorization guard listed before the
-//! authentication guard whose principal it reads is a wiring mistake nothing
-//! recovers from, so it fails the boot with a named error rather than answering
-//! every request the same way forever.
-//!
-//! A gateway's upgrade is that same chain. `#[gateway(...)]`'s `#[use_guards]`
-//! run on the HTTP `GET` that becomes the socket — `check_http`, the entry
-//! `produced_principal` and `expected_principal` describe — so the check
-//! transfers exactly, and it can run at boot because the mount is where a
-//! gateway resolves its guards.
-//!
-//! What made the absence quiet is that it fails *closed*: the ability guard
-//! finds no principal, installs nothing, and `Repo` denies every row. The socket
-//! connects, messages are accepted, and every one of them comes back empty —
-//! with nothing anywhere naming the order as the cause.
-//!
-//! **The per-message chains are not validated, and `guards-baseline.txt` records
-//! why**: those run `check_ws_message`, where the principal contract this check
-//! reads does not hold.
+//! Boot-time phase validation of a gateway's **upgrade** chain. The per-message
+//! chains are not validated: they run `check_ws_message`, where the principal
+//! contract this check reads does not hold.
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, GuardPhase, HttpGuard, PrincipalClaim, WsGuard};
@@ -76,11 +57,8 @@ impl Guard for Authorize {
 impl HttpGuard for Authorize {}
 impl WsGuard for Authorize {}
 
-/// The path deliberately carries no word the assertions below look for. Spelled
-/// `/ws/backwards` rather than `/ws/misordered-upgrade` because an earlier
-/// version asserted `err.contains("upgrade")` against a path containing
-/// "upgrade" — the assertion passed with the label removed entirely, which is a
-/// green cell with nothing behind it.
+/// The path carries no word the assertions below look for, so they cannot pass
+/// on the path alone.
 #[gateway(path = "/ws/backwards")]
 #[use_guards(Authorize, Authenticate)]
 struct BackwardsGateway;
@@ -109,8 +87,6 @@ async fn a_misordered_upgrade_chain_fails_the_boot_naming_both_guards_and_the_ga
         "the failure names both guards — the order is a property of the pair, \
          and one name sends the reader to a guard that is fine: {err}",
     );
-    // The label, and the path *inside* it. An app with several gateways gets one
-    // of these per misordered mount, and "a gateway" is not an address.
     assert!(
         err.contains("gateway upgrade") && err.contains("/ws/backwards"),
         "…and says which mount: {err}",
@@ -123,10 +99,7 @@ struct OrderedGateway;
 
 #[messages]
 impl OrderedGateway {
-    /// Message-scope guards in the *reverse* order, deliberately. The
-    /// per-message chain is not phase-validated, so this must still boot — and
-    /// if a future change starts validating it, this test is what says so
-    /// rather than a product failing to start.
+    /// Reverse order on purpose: the per-message chain is not phase-validated.
     #[subscribe_message("ping")]
     #[use_guards(Authorize, Authenticate)]
     #[public]
@@ -140,7 +113,6 @@ struct OrderedModule;
 
 #[tokio::test]
 async fn a_correct_upgrade_chain_boots_whatever_the_messages_declare() {
-    // The check is worth nothing if it refuses the ordering every app writes.
     TestApp::for_module::<OrderedModule>()
         .await
         .unwrap_or_else(|err| {
@@ -148,9 +120,6 @@ async fn a_correct_upgrade_chain_boots_whatever_the_messages_declare() {
         });
 }
 
-/// A gateway with no guards of its own, under a correctly ordered global pool —
-/// the shape most apps have, and the one a check reading the wrong list would
-/// refuse.
 #[gateway(path = "/ws/bare")]
 struct BareGateway;
 

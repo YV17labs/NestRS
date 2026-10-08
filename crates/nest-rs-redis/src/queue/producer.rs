@@ -2,9 +2,8 @@
 //! [`RedisConnection`]: the [`JobProducer`] binding a feature injects as
 //! `Arc<dyn JobProducer>` to push without naming the backend.
 //!
-//! The port checks the queue and the options, mints each job's id and seals
-//! every job before this type sees it; what is stored is that sealed envelope,
-//! as the port handed it, keyed by the port's id ([`crate::layout`]).
+//! What is stored is the sealed envelope as the port handed it, keyed by the
+//! port's id ([`crate::layout`]).
 //!
 //! **A push is one script**: it refuses a unique key another job holds before
 //! anything is filed, then files every job — on the stream, or held back until
@@ -184,8 +183,6 @@ mod tests {
         QueueName::new(name.into()).expect("a valid name")
     }
 
-    /// A queue's keys are spelled once, and a name past the bound — the raw
-    /// push takes any — is spelled per call rather than kept.
     #[test]
     fn a_queues_keys_are_spelled_once_and_no_more_queues_are_kept_than_the_bound() {
         let kept = KeptKeys::default();

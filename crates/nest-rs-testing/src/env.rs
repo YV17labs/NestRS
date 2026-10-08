@@ -1,22 +1,15 @@
-//! Load the project's `.env` cascade for e2e — the harness reads backend URLs
-//! via `std::env::var` before any `App` (hence `ConfigModule`) exists, and
-//! tests run from a crate dir, not the project root that holds `.env`.
+//! Load the project's `.env` cascade for e2e: the harness reads backend URLs
+//! before any `ConfigModule` exists, from a crate dir rather than the root.
 
 use std::sync::Once;
 
 use nest_rs_config::{Environment, load_cascade};
 
-/// Load the nearest project `.env` once per process. Set-if-absent (real env /
-/// CI wins); bounded to the git repo so the framework's own `.env`-less tests
-/// stay hermetic.
+/// Load the nearest project `.env` once per process, set-if-absent and bounded
+/// to the git repo, defaulting `<PREFIX>_ENV=test` first.
 ///
-/// This `Once` is the guardian of the whole invariant: **the environment is
-/// decided before any cascade read**, whichever harness entry point runs
-/// first (`EphemeralDatabase::create`, `TestApp::builder`, `HeadlessApp`, …).
-/// Defaulting `<PREFIX>_ENV=test` anywhere later would be a no-op on an already
-/// consumed `Once` — the bug that made `.env.local` load (hermeticity broken)
-/// and `.env.test.local` never load when a harness touched the database
-/// first.
+/// Every harness entry point calls it first: `<PREFIX>_ENV` defaulted after
+/// this `Once` ran would select the wrong cascade.
 #[expect(
     clippy::disallowed_methods,
     reason = "the harness defaults the variable the cascade selects on, set-if-absent"
@@ -24,12 +17,8 @@ use nest_rs_config::{Environment, load_cascade};
 pub fn load_project_env() {
     static LOADED: Once = Once::new();
     LOADED.call_once(|| {
-        // Before the `.env` lookup — even with no file found, env-aware
-        // defaults (GraphQL playground, SDL emit) must see `test`. An explicit
-        // value wins (e.g. CI asserting prod behaviour). The name comes from
-        // `Environment` rather than a literal: under a custom prefix a hardcoded
-        // `<PREFIX>_ENV` here would set a variable the app never reads, and every
-        // test would silently run as `development`.
+        // Before the `.env` lookup: env-aware defaults must see `test` even
+        // with no file found.
         let env_var = Environment::var_name();
         if std::env::var_os(&env_var).is_none() {
             // SAFETY: not discharged by a single-threaded-bootstrap claim,

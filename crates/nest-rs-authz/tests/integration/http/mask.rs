@@ -48,10 +48,7 @@ impl WireModelDefaults for widget::Entity {
     }
 }
 
-// `JsonSchema` too: an `Authorize`-shaped route publishes its response schema
-// (OAPI-O5), so the bound `Json<T>` has always carried on an unshaped route now
-// applies uniformly — adding `#[authorize]` no longer silently drops a route's
-// documented shape.
+// `JsonSchema` too: an `Authorize`-shaped route publishes its response schema.
 #[derive(Serialize, schemars::JsonSchema)]
 struct WidgetDto {
     id: i32,
@@ -122,9 +119,7 @@ impl WidgetController {
         })
     }
 
-    // The decorator form: `#[authorize]` must arm exactly what the hand-written
-    // `Authorize<..>` parameter above arms — same gate, same response shaper —
-    // with nothing in the signature to delete by accident.
+    // The decorator form arms exactly what the hand-written `Authorize<..>` parameter arms.
     #[get("/decorated")]
     #[authorize(Read, widget::Entity)]
     async fn decorated(&self) -> Json<widget::Model> {
@@ -282,8 +277,8 @@ async fn an_unrestricted_grant_cannot_leak_skipped_columns() {
 
 #[tokio::test]
 async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
-    // Regression: a handler returning `Json(Model)` instead of the wire DTO must
-    // not leak the unexposed `secret`, even under an unrestricted (admin) grant.
+    // A handler returning `Json(Model)` instead of the wire DTO must not leak the
+    // unexposed `secret`, even under an unrestricted (admin) grant.
     let app = boot().await;
     let resp = app
         .http()
@@ -309,10 +304,8 @@ async fn a_raw_model_handler_cannot_leak_unexposed_columns() {
 
 #[tokio::test]
 async fn the_authorize_decorator_arms_the_same_gate_and_mask() {
-    // API-1: `#[authorize(Read, Entity)]` with an empty signature must behave
-    // exactly like the hand-written `Authorize<..>` parameter — masked on a
-    // grant, 403 without one — so posture never depends on how an import was
-    // spelled.
+    // `#[authorize(Read, Entity)]` with an empty signature behaves exactly like
+    // the hand-written `Authorize<..>` parameter.
     let app = boot().await;
 
     let resp = app
@@ -342,9 +335,8 @@ async fn the_authorize_decorator_arms_the_same_gate_and_mask() {
 
 #[tokio::test]
 async fn a_dropped_row_does_not_leak_unexposed_columns() {
-    // Regression: when `mask_many` drops a row (id=2 denied) under an
-    // unrestricted grant on id=1, the survivor must still be stripped — the
-    // dropped-row branch previously skipped the wire-key strainer.
+    // When `mask_many` drops a row (id=2 denied) under an unrestricted grant on
+    // id=1, the survivor is still strained.
     let app = boot().await;
     let resp = app
         .http()
@@ -417,14 +409,8 @@ async fn a_non_json_response_passes_through() {
     resp.assert_text("hello").await;
 }
 
-/// OAPI-O5: an ability shaper masks *fields*, so a route behind one publishes
-/// its full shape and flags it — it does not publish nothing.
-///
-/// Suppressing the schema was the honest reading of "the field set depends on
-/// the caller", and it typed every `#[crud]` response as `any` in a generated
-/// client, on exactly the surface `#[expose]` exists to serve. Asserted on the
-/// route metadata rather than on a rendered document so the contract is pinned
-/// where it is produced — `#[routes]` — and with no database in reach.
+/// An ability shaper masks *fields*, so a route behind one publishes its full
+/// shape and flags it — it does not publish nothing.
 #[tokio::test]
 async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked() {
     let app = boot().await;
@@ -436,11 +422,9 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
         .collect();
     assert!(!routes.is_empty(), "the controller is discovered at all");
 
-    // The media-type probes return a bare `poem::Response` precisely so they can
-    // set (or omit) a `Content-Type` no typed body would let them set. An opaque
-    // return type has no schema to publish, so they answer the `masked` half of
-    // this contract and are exempt from the `response` half — by name, so a route
-    // cannot drift out of the assertion by accident.
+    // The media-type probes return a bare `poem::Response` to set (or omit) a
+    // `Content-Type`; with no schema to publish they are exempt from the
+    // `response` half, by name.
     const OPAQUE_BY_CONSTRUCTION: &[&str] = &["vendor", "upper", "charset", "untyped", "csv"];
 
     for route in routes {
@@ -460,14 +444,8 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
     }
 }
 
-/// The mask is armed by the compiler and cannot be renamed out of — but what
-/// arming installs then decided *whether to run* by comparing the response's
-/// `Content-Type` against the literal prefix `application/json`. Three bodies
-/// that are JSON by the standard failed that test and shipped every unexposed
-/// column, at `200`, with the route armed and nothing logged.
-///
-/// Each case below is one of them, and each is a media type the standard says is
-/// JSON — not a near-miss.
+/// Each case is a media type the standard says is JSON — not a near-miss — so
+/// the armed mask must run on it.
 #[tokio::test]
 async fn a_json_media_type_is_masked_however_it_is_spelled() {
     let app = boot().await;
@@ -486,10 +464,8 @@ async fn a_json_media_type_is_masked_however_it_is_spelled() {
     }
 }
 
-/// A response that declares nothing cannot be classified, so the shaper must not
-/// guess. Passing it through is the only guess that leaks, which makes failing
-/// closed the answer here — the same one a body that will not reconcile with the
-/// entity already gets.
+/// A response that declares nothing cannot be classified, so the shaper fails
+/// closed rather than guess.
 #[tokio::test]
 async fn a_body_with_no_declared_media_type_fails_closed() {
     // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
@@ -509,12 +485,7 @@ async fn a_body_with_no_declared_media_type_fails_closed() {
         "and it ships none of the entity on the way out: {body}",
     );
 
-    // The 500 is the same 500 a panicking handler gives, so the event is what
-    // separates "this route is broken" from "this route was refused a body it
-    // could not classify". Every fail-closed masking exit files this one line —
-    // which is what makes a branch that forgets it the visible omission — and
-    // nothing read it until a refusal that was never a masking failure stopped
-    // standing in for it.
+    // The 500 matches a panicking handler's; the event is what tells them apart.
     let event = logs.expect_one("nest_rs::authz", "response masking failed");
     assert_eq!(event.level, "warn");
     assert!(

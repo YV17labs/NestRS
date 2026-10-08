@@ -1,18 +1,5 @@
-//! The boot audit that closes the half-wired tombstone. Its own binary: the
-//! half-wired entity below sits in the link-time registry, which every app
-//! booted in the same binary audits.
-//!
-//! `#[expose(..., soft_delete)]` makes the column addressable and implements
-//! `SoftDeletable`; only `CrudService::soft_delete_column` makes `DELETE`
-//! tombstone. Dropping the second half leaves an entity that answers `204` and
-//! *destroys the row* — the same response a successful tombstone returns, with
-//! no warning at boot and none at the delete.
-//!
-//! The unit tests beside `audit` cover the message. What only a real expansion
-//! can prove is that `#[expose]` submits the pair at all, and that the audit
-//! reads it back: both entities below are compiled by the decorator, and the
-//! verdict is read out of the link-time registry exactly as `SeaOrmDatabaseModule`
-//! reads it at boot.
+//! The boot audit refusing a `soft_delete` entity no service tombstones. Its own
+//! binary: the half-wired entity sits in the link-time registry every app audits.
 
 use nest_rs_resource::expose;
 use nest_rs_seaorm::audit_soft_delete_bindings;
@@ -23,9 +10,7 @@ use nest_rs_seaorm::{CrudService, Deletable};
 mod bound {
     use super::*;
 
-    // `timestamps` is not decoration: it emits the `ActiveModelBehavior` impl
-    // `CrudService`'s own where-clause requires, so the service cannot be
-    // written without it.
+    // `timestamps` emits the `ActiveModelBehavior` impl `CrudService` requires.
     #[expose(name = "BoundRow", service = RowsService, soft_delete, timestamps)]
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
@@ -57,9 +42,8 @@ mod bound {
     impl Deletable for RowsService {}
 }
 
-/// The trap: the entity keeps its flag, the service lost its override. This is
-/// what a refactor — or a service written by hand against `/database/crud/` —
-/// produces, and it is irreversible the first time someone calls `DELETE`.
+/// The entity keeps its flag, the service lost its override: `DELETE` destroys
+/// the row.
 mod unbound {
     use super::*;
 
@@ -107,9 +91,6 @@ fn a_tombstone_column_no_service_writes_refuses_boot() {
 
 #[test]
 fn a_correctly_wired_entity_is_not_reported() {
-    // Same registry, same walk: the audit must accuse only the half-wired pair.
-    // Without this, "refuse when anything is registered" would pass the test
-    // above and break every app that uses soft delete correctly.
     let text = audit_soft_delete_bindings()
         .expect_err("the unbound entity is still linked into this binary")
         .to_string();

@@ -1,68 +1,15 @@
 //! [`McpIdentity`] — who an MCP endpoint says it is.
 //!
-//! # Two declarations, two owners, no overlap
-//!
-//! An MCP endpoint is **one server** to every client that speaks to it: the
-//! protocol carries exactly one `serverInfo` and one `instructions` per
-//! endpoint, on `initialize` and on `server/discover` alike. That is not a
-//! nestrs opinion — it is what the spec's `DiscoverResult` holds, what the
-//! TypeScript SDK constructs (`new McpServer({ name, version })`, tools
-//! registered onto it), and what FastMCP means when a parent server keeps its
-//! own name and mounts children into it.
-//!
-//! So one endpoint answers with one identity, and the two halves of it are owned
-//! by whoever can actually know them:
-//!
-//! * **The app says who it is, and how its server is used** — `name`, `version`,
-//!   the branding a client shows beside them, and the `instructions` a client
-//!   may fold into the model's system prompt. All of it travels once, through
-//!   [`McpOptions::server`](crate::McpOptions::server). The version has to come
-//!   from there: `env!("CARGO_PKG_VERSION")` written in a shared feature library
-//!   is the library's version, not the deployment's. So do the instructions:
-//!   they describe **the server**, not a feature, and on a shared endpoint no
-//!   single host can see the whole.
-//! * **A host says which endpoint stands apart** — a `name`/`title` on `#[mcp]`,
-//!   when one endpoint should not be reported as the app's default. That is a
-//!   fact about the mount, so it is declared where the mount is. It is also the
-//!   whole of what a host may declare: `#[mcp(version = …)]` and
-//!   `#[mcp(instructions = …)]` are compile errors, because both describe the
-//!   server rather than the mount.
-//!
-//! Neither can shadow the other by accident: a host's fields override the app's
-//! per field, and two hosts sharing one path may not both declare — that fails
-//! boot naming them, because the answer would otherwise depend on
-//! `imports = [..]` order.
-//!
-//! **Per-tool prose is a different field entirely.** `instructions` is the
-//! server's — how to use it at all — and `#[tool(description = "…")]` is each
-//! tool's, which is what the model reads when it picks one. Writing tool
-//! specifics into `instructions` duplicates a description that is already
-//! carried where the model expects it.
-//!
-//! # What a declaration replaces, and what it never touches
-//!
-//! Identity is **declared**; capabilities are **observed**. A declaration
-//! replaces `serverInfo`, and `instructions` when it writes any. Everything else
-//! stays a fact about the hosts and is still merged from them — capabilities are
-//! the union of what they serve, protocol versions the intersection of what they
-//! implement. A declaration can never claim a capability no host provides.
-//!
-//! Undeclared instructions are **joined** from the hosts rather than dropped, so
-//! a shared endpoint reads as the sum of its features until someone frames it.
-//!
-//! [`McpOptions`](crate::McpOptions)'s example declares one and reads it back
-//! from the handshake.
+//! An endpoint reports one `serverInfo` and one `instructions`. The app declares
+//! them through [`McpOptions::server`](crate::McpOptions::server); a host may
+//! refine only `name` and `title` for its endpoint, and two hosts declaring on one
+//! path fail the boot. Capabilities are never declared, only observed from the hosts.
 
 use rmcp::model::{Icon, Implementation};
 
-/// What an app, or one `#[mcp]` host, says about the server behind an endpoint.
-///
-/// Built two ways, and the constructor says which owner it came from:
-/// [`new`](Self::new) for the app's own `serverInfo` (both halves mandatory —
-/// the protocol carries both, and a version defaulted from the *framework's*
-/// build environment would name nest-rs where the deployment meant its own app),
-/// and the `#[mcp]` attribute for a host's per-endpoint refinement, which fills
-/// only the fields it writes.
+/// What an app, or one `#[mcp]` host, says about the server behind an endpoint:
+/// [`new`](Self::new) for the app's own `serverInfo`, the `#[mcp]` attribute for a
+/// host's refinement of the fields it writes.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpIdentity {
     name: Option<String>,
@@ -110,35 +57,18 @@ impl McpIdentity {
         self
     }
 
-    /// How to use this server — the one part of the declaration a model acts
-    /// on, which a client may fold into its system prompt.
-    ///
-    /// Declared here and nowhere else, because it describes **the server**: on
-    /// an endpoint several features share, no single host can see the whole, and
-    /// a paragraph assembled from the halves is one nobody wrote. Keep it
-    /// general — what a caller must know to use the surface at all. What each
-    /// tool *does* belongs to its own `#[tool(description = "…")]`, which is
-    /// where the model reads it when choosing between them.
+    /// How to use this server, which a client may fold into its system prompt;
+    /// what each tool does belongs to its own `#[tool(description = "…")]`.
     ///
     /// Declared, it replaces whatever the hosts wrote through
-    /// `ServerHandler::get_info`; left out, theirs are joined rather than
-    /// dropped.
+    /// `ServerHandler::get_info`; left out, theirs are joined.
     pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
         self.instructions = Some(instructions.into());
         self
     }
 
-    /// What the `#[mcp]` attribute declares — both fields optional, because a
-    /// host refines the app's identity rather than restating it.
-    ///
-    /// The pair is the whole of what a host can honestly say: *which endpoint
-    /// stands apart*. `version` is not among them and `#[mcp(version = …)]` is a
-    /// compile error, because a feature library knows neither the binary's
-    /// version nor, on a shared endpoint, the whole surface — so the version
-    /// arrives from the app, through [`new`](Self::new), or from nowhere.
-    ///
-    /// **Internal ABI** — named by the `#[mcp]` expansion, lockstep with this
-    /// crate; never called by hand.
+    /// What the `#[mcp]` attribute declares; the version arrives from the app
+    /// alone, through [`new`](Self::new).
     #[doc(hidden)]
     pub fn declared(name: Option<&str>, title: Option<&str>) -> Self {
         Self {
@@ -148,16 +78,15 @@ impl McpIdentity {
         }
     }
 
-    /// Whether this declaration states anything at all — an `#[mcp]` host that
-    /// wrote no identity argument declares nothing and must not count as a
-    /// claimant on its path.
+    /// Whether this declaration states anything at all; an argumentless `#[mcp]`
+    /// host is no claimant on its path.
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 
 /// One endpoint's identity, after a host's declaration has been laid over the
-/// app's. What the mount reports and what the boot checks judge.
+/// app's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResolvedIdentity {
     info: Option<Implementation>,
@@ -184,14 +113,8 @@ impl ResolvedIdentity {
     }
 }
 
-/// Lay `host`'s declaration over the app's `server`, field by field.
-///
-/// The one way this can fail is a name with no version behind it: a host that
-/// renames its endpoint in an app that never named itself. Reporting it is the
-/// point — the alternative is an endpoint introducing itself at the *SDK's*
-/// version, which reads as a working server and is not one. A host cannot close
-/// that gap itself: `version` is the app's word, so the remedy the message
-/// names is the app's one declaration.
+/// Lay `host`'s declaration over the app's `server`, field by field; a name with
+/// no version behind it is refused, never reported at the SDK's version.
 pub(crate) fn resolve(
     host: Option<&McpIdentity>,
     app: Option<&McpIdentity>,
@@ -271,8 +194,6 @@ mod tests {
         );
     }
 
-    /// The point of the overlay: a host renames its own endpoint without having
-    /// to restate — or be able to know — the app's version.
     #[test]
     fn a_host_overrides_per_field_and_inherits_the_rest() {
         let host = McpIdentity::declared(Some("assistant-posts"), None);
@@ -294,9 +215,6 @@ mod tests {
         );
     }
 
-    /// Both halves of what a host may declare, laid over the app at once: the
-    /// two remaining fields override independently, and the version — which
-    /// `#[mcp]` has no argument for — still arrives from the app.
     #[test]
     fn a_host_declaring_both_of_its_fields_still_inherits_the_version() {
         let host = McpIdentity::declared(Some("assistant-posts"), Some("Posts"));
@@ -322,8 +240,6 @@ mod tests {
         assert!(resolved.implementation().is_none());
     }
 
-    /// An app may say how its server is used without renaming anything — the
-    /// common case, since one app usually exposes one endpoint.
     #[test]
     fn instructions_alone_declare_without_naming() {
         let app = McpIdentity::default().instructions("Ask before writing.");
@@ -362,11 +278,8 @@ mod tests {
         assert!(!McpIdentity::new("a", "1").is_empty());
     }
 
-    /// Every field's name, read off a pattern that binds each one, so a field
-    /// added to [`McpIdentity`] does not compile here until it is listed. Inside
-    /// a macro rustc words that as "pattern requires `..` due to inaccessible
-    /// fields": the field is missing, not inaccessible — list it, and never
-    /// write the `..` that would switch the check off.
+    /// A field added to [`McpIdentity`] fails to compile here until listed; rustc
+    /// words it "inaccessible fields" inside a macro — list it, never write `..`.
     macro_rules! every_field {
         ($($field:ident),+ $(,)?) => {{
             let McpIdentity { $($field: _),+ } = McpIdentity::default();
@@ -374,10 +287,7 @@ mod tests {
         }};
     }
 
-    /// A host reaches for `#[mcp(<field> = …)]` for every field an app can set,
-    /// so each one owes an answer there — taken, or refused naming the seam that
-    /// takes it — and never the bare unknown-key sentence, which sends the
-    /// developer looking for a spelling that does not exist.
+    /// Each field owes `#[mcp(<field> = …)]` an answer, never the bare unknown-key sentence.
     #[test]
     fn every_identity_field_has_an_answer_at_the_host() {
         let fields = every_field!(

@@ -49,10 +49,8 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let graphql_crate = graphql_crate_attr(model);
 
     quote! {
-        // Derives routed through the surface crate, each with its `crate = `
-        // override: a derive expands against the *call site's* prelude, so
-        // without the override the generated model would oblige the entity
-        // crate to declare `serde` and `schemars` for code it never wrote.
+        // A derive expands against the call site's prelude: without `crate = `
+        // the entity crate would have to declare `serde` and `schemars`.
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,

@@ -61,9 +61,6 @@ impl<T> IntoInner for Header<T> {
 }
 
 fn reject(err: PipeError) -> Error {
-    // One error format at the edge: a `400` RFC-9457 `application/problem+json`
-    // (`ProblemDetails`), with the pipe message as `detail` and any field-level
-    // validation errors riding as an `errors` extension member.
     let mut problem = ProblemDetails::bad_request().with_detail(err.message().to_owned());
     if let Some(details) = err.into_details() {
         problem = problem.with_extension("errors", details);
@@ -71,10 +68,8 @@ fn reject(err: PipeError) -> Error {
     Error::from(problem)
 }
 
-/// Extract `E` and unwrap it to its inner value. The inner future is erased to
-/// `dyn Future + Send` before awaiting: a generic `async fn` delegating to
-/// another's future trips rustc#100013 ("lifetime bound not satisfied"). Boxing
-/// it once here keeps the workaround in a single place.
+/// Extract `E` and unwrap it to its inner value. The future is boxed: a generic
+/// `async fn` delegating to another's trips rustc#100013.
 async fn extract_inner<'a, E>(req: &'a Request, body: &mut RequestBody) -> Result<E::Inner>
 where
     E: FromRequest<'a> + IntoInner,
@@ -86,11 +81,7 @@ where
 }
 
 /// Re-seat the request body bounded to the configured limit before the inner
-/// extractor reads it, so the framework's idiomatic JSON binding
-/// (`Valid<Json<T>>`, `Piped<P, Json<T>>`, and the `#[crud]` codegen that
-/// emits them) can never buffer an unbounded payload — poem's `Json` reads
-/// the body without consulting the ambient cap on its own. Returns `413` when
-/// the payload exceeds the cap. A taken/absent body is a no-op.
+/// extractor reads it: poem's `Json` ignores the ambient cap. `413` past it.
 async fn cap_body(req: &Request, body: &mut RequestBody) -> Result<()> {
     if body.is_none() {
         return Ok(());
@@ -149,10 +140,8 @@ where
 /// invalid input with a field-level JSON `400`. `Valid<Json<T>>` is the
 /// ergonomic form of `Piped<ValidationPipe<T>, Json<T>>`.
 ///
-/// The field is public so a handler can **destructure** it in the parameter
-/// list — `Valid(input): Valid<Json<CreateUser>>`, binding the `CreateUser`
-/// itself (the carrier holds the extractor's *inner* value, never the
-/// extractor). See `nest_rs_pipes::Valid` for why that is safe to expose.
+/// The field is public so a handler can destructure it:
+/// `Valid(input): Valid<Json<CreateUser>>`.
 pub struct Valid<E: IntoInner>(pub E::Inner);
 
 impl<E: IntoInner> Valid<E> {
@@ -220,13 +209,8 @@ mod tests {
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(json["detail"], "validation failed");
-        // Field errors ride as the `errors` RFC-9457 extension member.
         assert_eq!(json["errors"]["email"][0], "not an email");
     }
-
-    // `IntoInner` is the owned-unwrap shim. The three impls are
-    // line-for-line identical; pin one for each so a future rename of `.0`
-    // or a generic mismatch surfaces immediately.
 
     #[test]
     fn into_inner_for_json_unwraps_the_payload() {
@@ -252,9 +236,6 @@ mod tests {
 
     #[test]
     fn into_inner_for_header_unwraps_the_payload() {
-        // What makes `Valid<Header<T>>` and `Piped<P, Header<T>>` spellable —
-        // a header DTO validates through the same carrier every other
-        // extractor does.
         #[derive(Debug, PartialEq)]
         struct H {
             request_id: String,
@@ -269,10 +250,6 @@ mod tests {
             },
         );
     }
-
-    // Piped<P, E> exposes `into_inner` and `Deref<Target = P::Out>`. Build a
-    // `Piped` directly (the field is private so tests live here, the only
-    // module that can see it) and exercise both.
 
     struct ToUpper;
 
@@ -315,9 +292,6 @@ mod tests {
         assert_eq!(v.len(), 2);
         assert_eq!(&*v, "ok");
     }
-
-    // `from_request` paths. Build a real `Request` with a JSON body and run
-    // the extractor by hand — same shape poem invokes at the route boundary.
 
     use poem::Body;
     use serde::{Deserialize, Serialize};
@@ -382,9 +356,6 @@ mod tests {
 
     #[tokio::test]
     async fn valid_rejects_a_body_past_the_configured_limit_with_413() {
-        // A tight per-request cap (4 bytes) installed in extensions; the JSON
-        // body is larger, so the bounded read in `extract_inner` must reject
-        // with 413 before poem's `Json` ever buffers it.
         let payload = Greeting {
             msg: "well over four bytes".into(),
         };
@@ -434,8 +405,6 @@ mod tests {
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(json["status"], 400);
-        // The field-level errors surface under the offending field name in the
-        // `errors` extension member.
         assert!(
             json.get("errors").and_then(|d| d.get("msg")).is_some(),
             "errors should name the failing field: {json}",
@@ -450,9 +419,6 @@ mod tests {
 
     #[tokio::test]
     async fn valid_rejection_does_not_echo_the_submitted_value_in_the_400_body() {
-        // A credential-like field that fails a length rule must never come back
-        // in the 400 body — a logged, cached, or proxied response would
-        // otherwise leak exactly what was typed.
         let payload = Login {
             password: "hunter2".into(), // 7 chars — fails `min = 8`
         };
@@ -469,7 +435,6 @@ mod tests {
             !text.contains("hunter2"),
             "the submitted value must not be echoed in the 400 body: {text}",
         );
-        // The failing field is still named so the client knows what to fix.
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert!(
             json.get("errors").and_then(|d| d.get("password")).is_some(),

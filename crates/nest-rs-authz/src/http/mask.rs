@@ -9,8 +9,7 @@
 //!    statically-known exposed columns ([`WireModelDefaults::wire_keys`]) so
 //!    neither an unrestricted field grant nor a handler returning a raw `Model`
 //!    can leak an unexposed column (e.g. `password_hash`, which carries no
-//!    `#[expose]`). Keying on the static set rather than the response body keeps
-//!    this sound even when `mask_many` drops rows.
+//!    `#[expose]`).
 //!
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
@@ -93,21 +92,9 @@ enum BodyKind {
 
 /// The response's media type read as a **type**, not as a spelling.
 ///
-/// The arming is type-directed and cannot be renamed out of, but what it arms
-/// used to decide whether to run by comparing the `Content-Type` against the
-/// literal prefix `application/json`. Three responses that are JSON by the
-/// standard failed that test and shipped every unexposed column:
-///
-/// - `Application/JSON` — RFC 9110 §8.3.1 makes type and subtype
-///   case-insensitive, so this is the *same* media type;
-/// - `application/vnd.api+json`, `application/problem+json` — RFC 6839 makes
-///   `+json` a structured syntax suffix, so these are JSON too;
-/// - a media type carrying parameters, which are not part of the type.
-///
-/// Undeclared is deliberately its own answer rather than folded into `Other`:
-/// passing a body through because it *named* a non-JSON type is a decision the
-/// handler made, while passing one through because it named nothing is the
-/// shaper guessing — and guessing in the direction that leaks.
+/// JSON per RFC 9110 §8.3.1 (type and subtype case-insensitive) and RFC 6839
+/// (a `+json` suffix), parameters ignored. Undeclared is its own answer: passing
+/// such a body through would be the shaper guessing, toward the leak.
 fn body_kind(resp: &Response) -> BodyKind {
     let Some(raw) = resp.content_type() else {
         return BodyKind::Undeclared;
@@ -130,13 +117,8 @@ fn body_kind(resp: &Response) -> BodyKind {
 
 /// A success with a body and no declared media type.
 ///
-/// Nothing licenses a pass-through: an armed route is one whose posture says the
-/// response carries this entity, and shipping a body the shaper cannot classify
-/// is the silent direction of the only error that matters here. An *empty* body
-/// is not that — there is nothing in it to leak — and emptiness is read off the
-/// body's size hint rather than by collecting it, so a streamed download on a
-/// route that forgot its `Content-Type` is refused without being buffered whole
-/// first.
+/// Refused unless empty: an armed route's body carries the entity. Emptiness is
+/// read off the size hint, so a streamed body is refused without being buffered.
 fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
     let body = resp.take_body();
     if body.is_empty() {
@@ -193,8 +175,6 @@ where
         }
     };
 
-    // Round-trip handler DTOs through `S::Model` for policy, then drop any
-    // fields the wire shape never carried (e.g. `password_hash`).
     let wire: Value = match serde_json::from_slice(bytes.as_ref()) {
         Ok(wire) => wire,
         Err(err) => {
@@ -208,12 +188,8 @@ where
         }
     };
 
-    // One masking semantics for every transport: the value-level round-trip
-    // (wire → `S::Model` → mask → exposed-key strainer) lives in
-    // `crate::wire_mask`, shared with the GraphQL resolver wrapper.
     match mask_wire_json::<S>(ability, action, &wire) {
         Ok(MaskedWire::Passthrough) => {
-            // Scalar / null — nothing to strip.
             resp.set_body(bytes);
             resp
         }
@@ -245,14 +221,8 @@ where
 const MASKING_FAILED_BODY: &str =
     "response masking failed: body did not match the authorized subject type";
 
-/// One shape for every fail-closed masking exit: the queryable `warn` (so a
-/// branch that forgets it is the visible omission) plus the 500 that ships
-/// instead of unmasked data.
-///
-/// One delegation rather than five inline emissions, which is the shape the
-/// other three edges already have (`ws::mask::mask_failure` and its GraphQL and
-/// MCP siblings). Inline, four of the five sites passed no `transport`, so
-/// filtering masking failures by `transport = "http"` returned one of them.
+/// One shape for every fail-closed masking exit: the queryable `warn` plus the
+/// 500 that ships instead of unmasked data.
 fn mask_failure<S>(
     action: Action,
     reason: &'static str,

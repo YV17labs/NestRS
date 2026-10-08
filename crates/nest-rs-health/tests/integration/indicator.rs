@@ -1,21 +1,7 @@
-//! The decorator's expansion, **executed** — a real `#[indicators]` host, booted,
-//! answering through the probe body a caller reads back.
+//! The `#[indicators]` expansion, executed through the probe body.
 //!
-//! Neither umbrella witness reaches this. `nest-rs-macro-hygiene` proves the
-//! expansion *compiles* under one dependency and never runs it; the composition
-//! witness in `controller.rs` boots the documented import with no indicator in
-//! the module, so the three routes it asserts answer an empty registry. Between
-//! them sat the whole developer-facing surface of this capability — the `run`
-//! thunk that resolves the host and invokes the method, the `name` / `kind` /
-//! `origin` the expansion fills, and the two return shapes it adapts — asserted
-//! by nothing in either workspace.
-//!
-//! The host lives here rather than in `src/`'s `#[cfg(test)]` module for the
-//! reason recorded on `run_indicators`: `inventory` is process-wide, so a
-//! submitted fixture joins every other probe in the process. It is safe *here*
-//! because module gating is what these entries are filtered by — `Sensors` is
-//! reachable only from this file's `AppModule`, so the sibling suites' probes
-//! never see it.
+//! `inventory` is process-wide; `Sensors` is reachable only from this file's
+//! `AppModule`, so the sibling suites' probes never run it.
 
 use nest_rs_core::{injectable, module};
 use nest_rs_health::{HealthModule, indicators};
@@ -27,14 +13,11 @@ struct Sensors;
 
 #[indicators]
 impl Sensors {
-    /// `Ok` is up.
     #[readiness]
     async fn upstream_reachable(&self) -> Result<(), std::io::Error> {
         Ok(())
     }
 
-    /// `Err` is down — and the error's own text is what must **not** reach the
-    /// body, since a readiness probe answers whatever can open the port.
     #[readiness]
     async fn credentials_valid(&self) -> Result<(), std::io::Error> {
         Err(std::io::Error::other(
@@ -42,13 +25,9 @@ impl Sensors {
         ))
     }
 
-    /// A method returning nothing is the expansion's other return shape
-    /// (`ReturnType::Default`): reaching the end of the body is the `Ok`.
     #[liveness]
     async fn process_responsive(&self) {}
 
-    /// The same shapes spelled out: `-> ()` written is the infallible return, and
-    /// `self: &Self` is `&self`.
     #[expect(
         clippy::needless_arbitrary_self_type,
         reason = "the spelled-out receiver is the shape under test"
@@ -56,16 +35,12 @@ impl Sensors {
     #[liveness]
     async fn heartbeat(self: &Self) -> () {}
 
-    /// A raw identifier reports under its name — the key a caller reads.
     #[liveness]
     async fn r#loop(&self) {}
 
-    /// `self: &Arc<Self>` borrows what the container holds.
     #[liveness]
     async fn through_its_arc(self: &std::sync::Arc<Self>) {}
 
-    /// Compiled out, it takes its entry with it — the expansion would otherwise
-    /// name a method that does not exist.
     #[cfg(any())]
     #[readiness]
     async fn compiled_out(&self) {}
@@ -88,8 +63,6 @@ async fn probe(path: &str) -> (u16, String) {
     (status, body)
 }
 
-/// The decorated methods reach the report under the names the expansion wrote,
-/// and one failing check takes the probe down.
 #[tokio::test]
 async fn a_decorated_host_reports_through_the_probe_body() {
     let (status, body) = probe("/health/ready").await;
@@ -104,9 +77,6 @@ async fn a_decorated_host_reports_through_the_probe_body() {
     );
 }
 
-/// The `#[liveness]` method is on the liveness probe and **not** on readiness —
-/// the per-method `kind` the expansion fills is what routes it, and routing it
-/// wrongly would put a process check behind a dependency check.
 #[tokio::test]
 async fn each_method_answers_only_its_own_probe() {
     let (live_status, live_body) = probe("/health/live").await;
@@ -124,9 +94,6 @@ async fn each_method_answers_only_its_own_probe() {
     );
 }
 
-/// The indicator's own error never reaches the body — this is the half the
-/// unit tests assert on a hand-built entry, now asserted through the decorator
-/// that real callers use, on a body served over the wire.
 #[tokio::test]
 async fn the_hosts_own_error_never_reaches_the_body() {
     let (_, body) = probe("/health/ready").await;
@@ -140,8 +107,6 @@ async fn the_hosts_own_error_never_reaches_the_body() {
     }
 }
 
-/// A written `-> ()` and a typed receiver answer as their plain spellings do, and
-/// a raw identifier is keyed by its name rather than by `r#` and its name.
 #[tokio::test]
 async fn a_spelled_out_unit_return_and_receiver_report_up() {
     let (status, body) = probe("/health/live").await;

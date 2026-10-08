@@ -1,10 +1,5 @@
 //! Every error a GraphQL response carries says a decode failure without its
 //! value — on the POST path and over the socket alike.
-//!
-//! A resolver's `?` on a serde or anyhow error, and async-graphql's own `Json<T>`
-//! scalar coercing an argument, both reached the client as serde's sentence,
-//! which quotes what it refused. async-graphql's coercion of its built-in
-//! scalars never quoted, and still does not.
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -112,8 +107,7 @@ async fn an_error_a_response_carries_says_a_decode_failure_without_its_value() {
     }
 }
 
-/// The socket executes through `execute_stream`, not `execute` — the same
-/// operations, sent as graphql-ws `subscribe` messages.
+/// The socket executes through `execute_stream`, not `execute`.
 #[tokio::test]
 async fn an_error_an_operation_answers_over_the_socket_says_it_without_the_value() {
     let app = boot().await;

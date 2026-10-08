@@ -12,11 +12,9 @@ use nest_rs_core::layer_chain::{LayerSite, LayerSpec, ResolvedLayer, resolve_glo
 
 use crate::Guard;
 
-/// A scoped layer spec (controller / resolver / gateway / handler) — the same
-/// shape a global registration carries, only tagged with a narrower
-/// [`LayerSite`] when it is resolved, so dedup against the global chain finds
-/// the same `TypeId` key. It **is** [`LayerSpec`]: one type, one constructor,
-/// no second structure to keep in step.
+/// A scoped layer spec (controller / resolver / gateway / handler): a
+/// [`LayerSpec`] tagged with a narrower [`LayerSite`] when it is resolved, so
+/// dedup against the global chain finds the same `TypeId` key.
 pub type ScopedLayerSpec<L> = LayerSpec<L>;
 
 /// A guard spec for a specific scope.

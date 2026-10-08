@@ -25,17 +25,10 @@ use crate::registry::PipeSpecs;
 /// HTTP per-route shaper: the deduped guard + pipe chains, wrapped around the
 /// route's inner endpoint.
 ///
-/// Built by [`wrap_route_shaper`] at mount time with the controller / method
-/// scope specs. Resolves the global + per-route chain **eagerly against the
-/// mount-time container** (the container is final at `configure`; resolving
-/// lazily would only delay surfacing a broken chain to the first request),
-/// dedups by `TypeId`, runs every layer in declaration order. No `#[public]`
-/// skip — guards decide what `#[public]` means for them via the
-/// [`Public`](nest_rs_http::Public) marker attached as request data.
-///
-/// Generic over the inner endpoint on purpose: the chains themselves stay
-/// erased (`dyn Guard` / `dyn GlobalPipe` — composition is a mount-time,
-/// runtime fact), but the wrap adds no per-request future boxing of its own.
+/// Built by [`wrap_route_shaper`] at mount, resolving the global + per-route
+/// chain eagerly so a broken chain surfaces at boot; dedups by `TypeId` and
+/// runs every layer in declaration order. No `#[public]` skip: guards read the
+/// [`Public`](nest_rs_http::Public) marker themselves.
 pub struct RouteShaper<E> {
     guards: Vec<ResolvedLayer<dyn Guard>>,
     pipes: Vec<ResolvedLayer<dyn GlobalPipe>>,
@@ -50,20 +43,16 @@ where
 
     async fn call(&self, mut req: Request) -> Result<Response> {
         for entry in &self.guards {
-            // `as_ref()` dispatches straight on the erased guard: calling
-            // through the `Guard for Arc<T>` blanket would nest a second
-            // boxed future around every check, per guard, per request.
+            // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
+            // blanket would nest a second boxed future per check.
             if let Err(denial) = entry.layer.as_ref().check_http(&mut req).await {
                 return Ok(deny_http(entry.name, denial));
             }
         }
 
         if !self.pipes.is_empty() {
-            // Boxed on purpose: `apply_body_pipes` reads and rewrites the whole
-            // JSON body, so one allocation is noise on that path — while
-            // inlining its (large) state machine here would bloat the future of
-            // every route that threads through [`ShapedRoute`], bare included,
-            // and every such future is boxed per request by poem's route table.
+            // Boxed on purpose: inlining `apply_body_pipes`' large state machine
+            // would bloat every route's future, which poem boxes per request.
             Box::pin(apply_body_pipes(&mut req, &self.pipes)).await?;
         }
 
@@ -74,11 +63,8 @@ where
 /// One HTTP route as `#[routes]` mounts it: shaped when the composed guard
 /// **or** pipe chain is non-empty, bare (untouched) when both are empty.
 ///
-/// The bare arm is not an access decision: with both chains empty the shaper's
-/// loop bodies would be provable no-ops paid on every request. Fail-secure
-/// posture is unchanged: the transport's unguarded-route scan warns at boot
-/// independently, and the moment any guard or pipe reaches the route (global
-/// pool, controller, method), the route mounts shaped.
+/// The bare arm is not an access decision: the boot's unguarded-route scan
+/// warns independently.
 pub enum ShapedRoute<E> {
     /// Both chains empty — the endpoint passes through untouched.
     Bare(E),
@@ -102,8 +88,7 @@ where
 
 /// Compose the route's guard / pipe chains and wrap `endpoint` in a
 /// [`RouteShaper`] — or return it untouched when both chains are empty.
-/// Emitted by `#[routes]` for every handler, mirroring the sibling
-/// `wrap_route_*` helpers.
+/// Emitted by `#[routes]` for every handler.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is one chain a decorator collected; a struct would only rename them"
@@ -163,12 +148,8 @@ fn resolve_guards(
         route_label,
     );
     log_effective_chain(route_label, "guards", &chain);
-    // The shaper is the single execution site for the guard pool on a
-    // routed handler: global + controller + method, deduped by `TypeId`
-    // (broadest scope wins), run here *after* routing so a guard reads
-    // `#[public]`. Self-mounting endpoints (no shaper) get the global
-    // chain at the transport edge (`SelfMountGuardWrap`) or in-band
-    // (GraphQL operation guard) instead.
+    // The single execution site for the guard pool on a routed handler, after
+    // routing so a guard reads `#[public]`.
     chain
 }
 
@@ -234,10 +215,8 @@ async fn apply_body_pipes(
             ));
         }
         Err(err) => {
-            // The body is already consumed and cannot be restored — continuing
-            // would run the handler against an empty body with every global
-            // pipe skipped. Fail the request instead, exactly as the sibling
-            // body readers do (`nest_rs_http` `RawBody` / `Piped`).
+            // The body is consumed and cannot be restored: fail rather than run
+            // the handler with every global pipe skipped.
             tracing::warn!(target: nest_rs_core::target::LAYERS, error = %nest_rs_core::error_message(&err), "global pipe: failed to read body");
             return Err(err.into());
         }
@@ -255,9 +234,8 @@ async fn apply_body_pipes(
     };
     for entry in pipes {
         if let Err(err) = entry.layer.transform_body(&mut value) {
-            // One error format at the edge: a `400` RFC-9457
-            // `application/problem+json` (`ProblemDetails`) — the pipe message
-            // as `detail`, field-level errors as an `errors` extension member.
+            // A `400` RFC 9457 problem: the pipe message as `detail`, field-level
+            // errors as an `errors` extension member.
             let mut problem =
                 nest_rs_http::ProblemDetails::bad_request().with_detail(err.message().to_owned());
             if let Some(details) = err.into_details() {
@@ -321,12 +299,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_body_the_global_pipes_could_not_read_fails_the_request_and_says_why() {
-        // The reason this cannot degrade quietly: reading the body *consumes*
-        // it, and a partial read cannot be put back. Carrying on would run the
-        // handler against an empty body with every global pipe skipped — a
-        // request that looks served, with the app's edge validation silently
-        // absent from it. So the request fails, and this line is what says the
-        // failure was the body rather than the handler.
+        // A partial read cannot be put back, so the request fails; this line
+        // says the failure was the body rather than the handler.
         let logs = LogCapture::install();
         let mut req = request_with_a_failing_body();
 
@@ -349,10 +323,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_oversized_body_is_the_status_the_limit_names_and_not_this_line() {
-        // Its neighbour, and the reason the branch is split: `PayloadTooLarge`
-        // is the body limit doing its job, so it answers `413` and says nothing
-        // — folding the two would file every oversized upload under a read
-        // failure.
+        // `PayloadTooLarge` is the body limit doing its job: `413`, and no
+        // read-failure line.
         let logs = LogCapture::install();
         let mut req = Request::builder()
             .method(nest_rs_http::poem::http::Method::POST)

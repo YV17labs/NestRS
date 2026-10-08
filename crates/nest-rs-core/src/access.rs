@@ -1,26 +1,11 @@
 //! Build-time validation of the module import graph (the access contract).
 //!
-//! The container is flat: any registered provider can be resolved by `TypeId`.
-//! This pass enforces that `#[module(imports = [...])]` is honored — a
-//! provider's `#[inject]` dependency (and its attribute-bound layers from
-//! `#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`) must be
-//! provided by the provider's own module, by a module in its transitive
-//! import closure, or by global infrastructure (seeds + factory outputs). A
-//! cross-module reach that no import covers fails the boot with an
-//! [`AccessGraphError`].
-//!
-//! A self-composing item joins the contract the same way — through module
-//! membership. Something listed in some reachable module's `providers = [...]`
-//! is governed like any other provider; something in no reachable module is
-//! outside the app, which [`ReachableProviders`] is what tells a transport.
-//! Whether that absence is worth a word, and in what sentence, belongs to the
-//! transport: this module answers *what is reachable* and nothing about any
-//! particular edge's registry.
-//!
-//! Runtime [`Container::get`](crate::Container::get) /
-//! [`get_dyn`](crate::Container::get_dyn) is an unchecked escape hatch by
-//! design — the contract binds the declarative `#[inject]` surface, not
-//! imperative resolution.
+//! A provider's `#[inject]` dependency (and its `#[use_guards]` /
+//! `#[use_filters]` / `#[use_interceptors]` layers) must be provided by its own
+//! module, a module in its transitive import closure, or global infrastructure
+//! (seeds + factory outputs); otherwise the boot fails with an
+//! [`AccessGraphError`]. Runtime [`Container::get`](crate::Container::get) is
+//! an unchecked escape hatch.
 
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
@@ -34,15 +19,11 @@ use crate::error::{
 /// One provider declared in a module's `providers = [...]`, recorded by the
 /// `#[module]` macro for the access-graph check.
 ///
-/// **Internal ABI.** Constructed by struct-literal in framework-macro output;
-/// the `nest-rs-*-macros` crates ship in lockstep with `nest-rs-core`, so a
-/// new field is added to the emitter and this struct in the same release and
-/// never breaks downstream (which never hand-constructs it). Do not construct
-/// it by hand.
+/// **Internal ABI** — macro-constructed, lockstep with `nest-rs-core`; do not
+/// hand-construct.
 #[doc(hidden)]
 pub struct ProviderDescriptor {
-    /// The provider type's name, used to name the offending consumer in a boot
-    /// access error.
+    /// The provider type's name, for boot errors.
     pub name: &'static str,
     /// The container key this provider registers under:
     /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
@@ -52,80 +33,60 @@ pub struct ProviderDescriptor {
     /// a decorated host bound as `dyn Trait` from one no module lists.
     pub provider: fn() -> TypeId,
     /// Extra container keys this provider registers on its module's behalf,
-    /// each with the label a boot error names it by. See
-    /// [`Discoverable::also_provides`](crate::Discoverable::also_provides) —
-    /// almost always empty.
+    /// each with its label ([`Discoverable::also_provides`](crate::Discoverable::also_provides)).
     pub also_provides: fn() -> Vec<(TypeId, &'static str)>,
     /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
     /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
     pub injects: fn() -> Vec<TypeId>,
-    /// Human-readable label for each [`injects`](Self::injects) entry, in the
-    /// same order, so a dependency no module provides is named in the boot
-    /// error. May be shorter than `injects` (a provider that emits no names
-    /// falls back to a placeholder); never longer.
+    /// Label for each [`injects`](Self::injects) entry, in the same order; may
+    /// be shorter than `injects`, never longer.
     pub inject_names: fn() -> Vec<&'static str>,
     /// `TypeId` of each `#[inject] Option<Arc<…>>` field: no boot check holds
     /// it, but a [`Net`](crate::Net) around the provider follows it.
     pub injects_optional: fn() -> Vec<TypeId>,
     /// Each **keyed** `#[inject(key = "…")]` field, validated against the
-    /// global keyed set. Empty for providers with no keyed dependency.
+    /// global keyed set.
     pub injects_keyed: fn() -> Vec<KeyedDependency>,
 }
 
 /// Per-module descriptor submitted to the link-time registry by `#[module]`.
 ///
-/// **Internal ABI** (see [`ProviderDescriptor`]) — macro-constructed, lockstep
-/// with `nest-rs-core`; do not hand-construct.
+/// **Internal ABI** — macro-constructed, lockstep with `nest-rs-core`; do not
+/// hand-construct.
 #[doc(hidden)]
 pub struct ModuleDescriptor {
-    /// `TypeId` of the `#[module]` struct — the graph node's identity, matched
-    /// against other modules' [`imports`](Self::imports).
+    /// `TypeId` of the `#[module]` struct, matched against other modules'
+    /// [`imports`](Self::imports).
     pub module: fn() -> TypeId,
-    /// The module type's name, used to name the module in a boot access error.
+    /// The module type's name, for boot errors.
     pub name: &'static str,
     /// Every import in declaration order: a module by its type, a dynamic
     /// import (`for_root(...)`) by the module its value declares
     /// ([`DynamicModule::module`](crate::DynamicModule::module)).
     pub imports: &'static [fn() -> TypeId],
-    /// Every provider this module declares in its `providers = [...]`, each with
-    /// the dependency information the access-graph walk needs.
+    /// Every provider this module declares in its `providers = [...]`.
     pub providers: &'static [ProviderDescriptor],
 }
 
 inventory::collect!(ModuleDescriptor);
 
-/// Provider keys reachable from the app's module tree, seeded into the
-/// container so transports can module-gate their inventory: a `#[resolver]`
-/// linked into the binary but living in no reachable module is silently
-/// skipped from the GraphQL schema instead of failing the boot.
-///
-/// Includes every provider declared in a reachable module's
-/// `providers = [...]` plus the global infrastructure keys.
+/// Provider keys reachable from the app's module tree — every provider of a
+/// reachable module plus the global infrastructure keys — seeded into the
+/// container so transports can module-gate their inventory.
 pub struct ReachableProviders(pub std::collections::HashSet<TypeId>);
 
 impl ReachableProviders {
-    /// Whether `provider` is reachable — the one spelling of the gate every
-    /// inventory-draining edge reads before it mounts an entry.
-    ///
-    /// It takes the **optional** set because that is what `Container::get`
-    /// returns, and the absent case is the whole decision: no set means the
-    /// access graph never ran (a hand-built container in a test), so everything
-    /// is in scope rather than nothing. Written once because four edges wrote
-    /// it — and because the GraphQL loader registry decided the absent case the
-    /// other way, a divergence one predicate is what makes visible.
+    /// Whether `provider` is reachable — the gate every inventory-draining edge
+    /// reads before it mounts an entry. No set means the access graph never ran
+    /// (a hand-built container in a test), so everything is in scope.
     pub fn reaches(set: Option<&Self>, provider: TypeId) -> bool {
         set.is_none_or(|r| r.0.contains(&provider))
     }
 }
 
 /// What a discovery site reads to say why a host it found is inert: the crates
-/// the app's roots are written in, and the modules those roots reach.
-///
-/// Seeded beside [`ReachableProviders`]. A host the app does not reach is a
-/// mistake only when it is the app's own: in a workspace of several binaries,
-/// one library crate holds the hosts every binary imports some of, so each
-/// binary links the others' — and reporting those at `warn` taught operators to
-/// ignore the target. See [`inert_host`](crate::inert_host).
+/// the app's roots are written in, and the modules those roots reach
+/// ([`inert_host`](crate::inert_host)).
 pub struct Composition {
     root_crates: Vec<&'static str>,
     modules: HashSet<TypeId>,
@@ -133,7 +94,6 @@ pub struct Composition {
 
 impl Composition {
     /// The composition of an app built from `roots`, each with its type's name.
-    /// Pure over its inputs.
     pub(crate) fn from_descriptors(
         descriptors: &[&ModuleDescriptor],
         roots: &[(TypeId, &'static str)],
@@ -168,25 +128,13 @@ fn crate_of(path: &str) -> &str {
     path.split("::").next().unwrap_or(path)
 }
 
-/// The reachable providers again, this time **in declaration order** — modules
-/// depth-first from the root along `imports = [...]`, each module's
-/// `providers = [...]` left to right.
-///
-/// Seeded beside [`ReachableProviders`] for the one discovery seam that
-/// promises an order the developer wrote: the event bus dispatches listeners in
-/// "the order their providers appear in `providers = [...]`, then the order
-/// their methods appear in the `#[listeners]` block". Link order cannot deliver
-/// that — it is stable per binary but reshuffles when the code changes, which
-/// is the worst of both worlds: two listeners ordered deliberately and verified
-/// locally get silently rearranged the next time somebody adds a third.
+/// The reachable providers **in declaration order** — modules depth-first from
+/// the root along `imports = [...]`, each module's `providers = [...]` left to
+/// right — for the event bus's listener order, which link order cannot give.
 pub struct ProviderOrder(HashMap<TypeId, usize>);
 
 impl ProviderOrder {
-    /// Index each provider by its position in `order`. Stored as a map rather
-    /// than the `Vec` it comes from because the only consumer asks for a
-    /// **rank** inside a sort key — a linear scan there is one pass per
-    /// comparison, and the walk that produced the order already visited every
-    /// provider once.
+    /// Index each provider by its position in `order`.
     pub fn new(order: impl IntoIterator<Item = TypeId>) -> Self {
         Self(
             order
@@ -197,8 +145,7 @@ impl ProviderOrder {
         )
     }
 
-    /// Rank of `provider` in declaration order; unreachable providers sort last
-    /// (they are skipped before dispatch anyway).
+    /// Rank of `provider` in declaration order; unreachable providers sort last.
     pub fn rank(&self, provider: TypeId) -> usize {
         self.0.get(&provider).copied().unwrap_or(usize::MAX)
     }
@@ -227,10 +174,6 @@ pub(crate) fn validate_access_graph(
             provided_by
                 .entry((p.provides)())
                 .or_insert((p.name, d.name));
-            // A key the provider installs for its module — named by the key's own
-            // label, not the provider's, so the error reads
-            // "`WsServer<NotifyNs>` is provided by `WsModule`" rather than naming
-            // the plumbing that installed it.
             for (key, label) in (p.also_provides)() {
                 provided_by.entry(key).or_insert((label, d.name));
             }
@@ -242,9 +185,6 @@ pub(crate) fn validate_access_graph(
             continue;
         };
 
-        // Per-module BFS over the import closure (itself included). `global`
-        // is checked separately, not cloned in. The module graph is shallow,
-        // so single-pass closure memoization would not earn its complexity.
         let mut closure_keys = HashSet::new();
         for import_id in reachable(&[module_id], &by_id) {
             if let Some(imported) = by_id.get(&import_id) {
@@ -258,18 +198,9 @@ pub(crate) fn validate_access_graph(
         for p in desc.providers {
             let deps = (p.injects)();
             let names = (p.inject_names)();
-            // A singleton may not inject a provider that only exists inside a
-            // request — **one level deep**: request-scoped may inject
-            // singletons, never the reverse — and nothing enforced it, so the
-            // case failed **silently**: the register phase gates readiness on
-            // the singleton map alone, so a singleton whose dependency is a
-            // scoped or transient factory never becomes ready, is classified
-            // unprovided, and is dropped along with everything downstream of it.
-            // The boot returned `Ok`, emitted nothing, and the provider was
-            // simply absent at first `get`.
-            //
-            // Checked before the presence checks below, because the dependency
-            // *is* declared and reachable — presence was never the problem.
+            // Without this, the register phase (which gates readiness on the
+            // singleton map) silently drops a singleton holding a scoped or
+            // transient dependency, and everything downstream of it.
             let consumer_is_scoped = scoped_or_transient.contains(&(p.provides)());
             if !consumer_is_scoped {
                 for (i, dep) in deps.iter().enumerate() {
@@ -287,11 +218,6 @@ pub(crate) fn validate_access_graph(
                 if global.contains(dep) || closure_keys.contains(dep) {
                     continue;
                 }
-                // Provided by some other module but not imported ⇒ a cross-module
-                // reach; provided by no module at all ⇒ an unmet dependency that
-                // would otherwise panic at first resolution (lazy) or at the
-                // register phase (eager). The dependency name is index-aligned
-                // with `injects`; a provider that emits no names falls back.
                 if let Some((dependency, owner)) = provided_by.get(dep) {
                     return Err(AccessGraphError {
                         module: desc.name,
@@ -301,11 +227,8 @@ pub(crate) fn validate_access_graph(
                     }
                     .into());
                 }
-                // Not a declarative provider anywhere. It may still be resolvable
-                // — a hand-written `impl Module` (e.g. `EventsModule`) or a lazy
-                // factory registers imperatively, invisible to this graph. Only
-                // when it is absent from the actual registered set is it a
-                // genuinely unmet dependency that would panic at resolution.
+                // A hand-written `impl Module` registers imperatively, invisible
+                // to this graph.
                 if registered.contains(dep) {
                     continue;
                 }
@@ -322,13 +245,8 @@ pub(crate) fn validate_access_graph(
 }
 
 /// Validate the **keyed** access graph: every reachable provider's
-/// `#[inject(key = "…")]` dependency must be supplied by the global keyed set
-/// (seeds + factory outputs). Keyed providers are configured imperatively, so
-/// there is no per-module keyed declaration to reach through — a keyed
-/// dependency is legal only when globally provided, and an unmet one is a clean
-/// boot error naming type and key rather than a construction-time panic.
-///
-/// Pure over its inputs. Runs after [`validate_access_graph`] at boot.
+/// `#[inject(key = "…")]` dependency must be in the global keyed set (seeds +
+/// factory outputs), since keyed providers have no per-module declaration.
 pub(crate) fn validate_keyed_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
@@ -350,8 +268,6 @@ pub(crate) fn validate_keyed_access_graph(
                     module: desc.name,
                     consumer: p.name,
                     type_name: dep.type_name,
-                    // A keyed dependency always carries a name; fall back
-                    // defensively rather than unwrap on a framework path.
                     key: dep.key.name.unwrap_or("<unnamed>"),
                 });
             }
@@ -363,19 +279,11 @@ pub(crate) fn validate_keyed_access_graph(
 /// BFS over `imports` from `roots`, returning every module `TypeId` reached
 /// (roots included). A `TypeId` without a descriptor terminates its branch.
 fn reachable(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> HashSet<TypeId> {
-    // The ordered walk, collected — order is irrelevant to a set, and one
-    // traversal is one thing to keep correct.
     reachable_in_order(roots, by_id).into_iter().collect()
 }
 
 /// The same walk, **in source order**: roots first, then each module's
 /// `imports = [...]` left to right, depth-first, first occurrence winning.
-///
-/// A `HashSet` cannot answer "which provider was declared first", and link
-/// order cannot either — `inventory` hands entries back in whatever order the
-/// linker emitted them, which is stable per binary and changes when the code
-/// does. Any discovery seam that promises a *declaration* order (the event bus
-/// does) needs an ordering derived from the module graph instead.
 fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> Vec<TypeId> {
     let mut seen = HashSet::new();
     let mut order = Vec::new();
@@ -386,7 +294,6 @@ fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescripto
         }
         order.push(id);
         if let Some(desc) = by_id.get(&id) {
-            // Reversed onto the stack so the first import is visited first.
             stack.extend(desc.imports.iter().rev().map(|import| import()));
         }
     }
@@ -394,8 +301,7 @@ fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescripto
 }
 
 /// Provider keys the roots reach — `order`, from [`provider_order`] — plus
-/// `global`. Used at boot to seed [`ReachableProviders`] so transports can
-/// module-gate their discovery.
+/// `global`, seeded as [`ReachableProviders`].
 pub(crate) fn reachable_provider_ids(
     order: &[TypeId],
     global: &HashSet<TypeId>,
@@ -407,8 +313,7 @@ pub(crate) fn reachable_provider_ids(
 
 /// Every reachable provider in **declaration order**: modules depth-first from
 /// the roots along their `imports = [...]`, and within each module its
-/// `providers = [...]` left to right. First occurrence wins, so a diamond
-/// import ranks a provider where it is first reached. Pure over its inputs.
+/// `providers = [...]` left to right; first occurrence wins.
 pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -431,9 +336,8 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
 /// Every key `root`'s code reaches through `#[inject]`, optional or not, at
 /// any depth, `root` included: each provider `descriptors` declare under a key
 /// in the set adds what it injects. A key no module declares — a seed, a
-/// factory output — ends its branch, since nothing records what it holds.
-/// Pure over its inputs; the caller passes the modules its app reaches, so a
-/// binding another composition imports is never followed.
+/// factory output — ends its branch. The caller passes the modules its app
+/// reaches, so another composition's binding is never followed.
 pub(crate) fn injection_closure(
     descriptors: &[&ModuleDescriptor],
     root: TypeId,
@@ -476,8 +380,7 @@ pub(crate) fn reachable_descriptors<'a>(
 mod tests {
     use super::*;
 
-    // Marker types for stable `TypeId`s; descriptors are hand-built so the
-    // global `inventory` registry is untouched.
+    // Descriptors are hand-built so the global `inventory` registry is untouched.
     struct AppMod;
     struct UsersMod;
     struct BillingMod;
@@ -504,7 +407,6 @@ mod tests {
         Vec::new()
     }
 
-    /// The default for every provider that registers only itself.
     fn provides_only_itself() -> Vec<(TypeId, &'static str)> {
         Vec::new()
     }
@@ -679,10 +581,6 @@ mod tests {
 
     #[test]
     fn a_dependency_no_module_provides_is_a_named_boot_error() {
-        // `BillingService` depends on `UsersService`, but no module provides it
-        // (the users module is absent) and it is not global. This is the case
-        // that used to slip past the graph and panic at first `get()` for a lazy
-        // provider — now a clean boot error naming both provider and dependency.
         let billing = ModuleDescriptor {
             module: || TypeId::of::<BillingMod>(),
             name: "BillingModule",
@@ -833,8 +731,7 @@ mod tests {
         assert!(keys.contains(&TypeId::of::<Db>()));
     }
 
-    // A stand-in for the keyed `OAuthClient` case: one concrete type injected
-    // twice, disambiguated by key.
+    // One concrete type injected twice, disambiguated by key.
     struct OAuthClient;
 
     fn github_dep() -> Vec<KeyedDependency> {

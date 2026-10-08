@@ -2,18 +2,10 @@
 //! (`g http|graphql|ws|queue|schedule|mcp|events <feature>`).
 //!
 //! Each skeleton delegates to the port service's `count()` (the method
-//! `g feature` emits) so a freshly-generated port + any adapter compiles
-//! immediately. The handler is the seam the developer then fills in.
-//!
-//! **A `g resource` port has no `count()`** — its service is a `CrudService`
-//! (`list`/`page`/`access`/`create`/`update`/`delete`), so a skeleton calling
-//! `count()` on one does not compile. Each transport therefore renders one
-//! template with the differing handler supplied as `{{op}}` / `{{op_body}}` /
-//! `{{op_value}}` (see [`crud_vars`](super::crud::crud_vars)), rather than a second
-//! near-identical blob: the scaffolding, imports and path conventions have one
-//! home each. GraphQL is the exception that earns a second template
-//! ([`GRAPHQL_RESOLVER_CRUD`]) — over a resource it is not a stub but the full
-//! `#[crud]` block behind the app's guards.
+//! `g feature` emits). A `g resource` port's `CrudService` has none, so each
+//! transport takes the differing handler as `{{op}}` / `{{op_body}}` /
+//! `{{op_value}}` ([`crud_vars`](super::crud::crud_vars)); GraphQL alone gets a
+//! second template ([`GRAPHQL_RESOLVER_CRUD`]), the full `#[crud]` block.
 
 /// `mod.rs` for an adapter folder: `mod <handler>; mod module;` + re-exports.
 /// `{{handler_mod}}`/`{{handler}}`/`{{tmodule}}` are layered per transport.
@@ -25,11 +17,8 @@ pub use module::{{tmodule}};
 
 /// Adapter `module.rs` — imports the port, provides the handler.
 ///
-/// **Every adapter imports the port**, including the queue's: the moment the
-/// generated stub grows the shape the docs prescribe — a thin processor handing
-/// the job to the port service — the access graph fails the boot unless the port
-/// module is already there. Scaffolding the import costs nothing (registration
-/// is idempotent) and removes a boot error from the developer's first edit.
+/// **Every adapter imports the port**, the queue's included: a processor
+/// handing the job to the port service would otherwise fail the access graph.
 pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::{{handler_mod}}::{{handler}};
@@ -103,17 +92,11 @@ impl {{resolver}} {
 "#;
 
 /// The GraphQL adapter for a **resource** port: the `#[crud]` resolver behind
-/// the app's guards, the twin of `resource::HTTP_CONTROLLER` — same service,
-/// same ability, same rows, one transport over.
+/// the app's guards, the twin of `resource::HTTP_CONTROLLER`.
 ///
-/// **One guard on the struct, not two**, and the difference from the HTTP
-/// controller is the transport's, not a shortcut: `/graphql` authenticates in
-/// band, per operation, through the bridge `AuthzGraphqlModule` registers, and
-/// `AuthnGuard` implements no `check_graphql` — so `#[resolver]` refuses it at
-/// compile time rather than let it pass every operation. The demo's resolvers
-/// bind `AuthzGuard` alone for the same reason. The two-guard form this
-/// template carried failed that check from 6.0 on, unseen, because no e2e
-/// compiled `g graphql` over a resource.
+/// **One guard on the struct**: `/graphql` authenticates in band through
+/// `AuthzGraphqlModule`'s bridge, and `AuthnGuard` implements no
+/// `check_graphql`, so `#[resolver]` refuses it at compile time.
 pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};
@@ -146,10 +129,8 @@ pub struct {{resolver}} {
 impl {{resolver}} {}
 "#;
 
-/// The WS adapter's `module.rs`. `WsModule` is **not optional** — it owns the
-/// connection registry every `WsClient` reads, for the default namespace and for
-/// every `#[gateway(namespace = …)]` marker alike — so the generator writes it
-/// rather than leaving the app to discover it at boot.
+/// The WS adapter's `module.rs`. `WsModule` is **not optional**: it owns the
+/// connection registry every `WsClient` reads.
 pub(crate) const WS_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::ws::WsModule;
 
@@ -224,17 +205,9 @@ impl {{processor}} {
 }
 "#;
 
-/// The queue payload **and its `#[queue]` marker** — both at the feature *port*,
-/// not in the `queue/` adapter: they are the producer↔worker contract, and the
-/// producer is usually the port's own service, one directory up. Keeping the
-/// marker beside the payload is what makes the typed `push(Q, job, options)`
-/// reachable; declaring it inside the private `queue::processor` module would
-/// leave the untyped `push_json(name, value, options)` escape hatch as the only
-/// way to push.
-///
-/// The default payload is a Command (the common case); rename it verb-led to
-/// the real action, or switch to an `…Event` (past tense) when a fact is
-/// published to several consumers.
+/// The queue payload **and its `#[queue]` marker**, at the feature *port*: they
+/// are the producer↔worker contract, and the marker outside the private
+/// `queue::processor` keeps the typed `push(Q, job, options)` reachable.
 pub(crate) const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
 use serde::{Deserialize, Serialize};
 
@@ -309,8 +282,7 @@ impl {{listener}} {
 "#;
 
 /// The published fact the `events/` listener receives — at the feature *port*,
-/// because the service that emits it and every listener import it. Past tense,
-/// named for what happened.
+/// where the emitting service and every listener import it.
 pub(crate) const EVENTS_EVENT: &str = r#"/// A `{{kebab}}` fact, emitted on the event bus. Rename it to what happened
 /// (e.g. `PostPublishedEvent`).
 #[derive(Debug, Clone)]

@@ -1,8 +1,5 @@
 //! OAuth2 Authorization Code client (PKCE). Provider endpoints come from [`OAuthClientConfig`];
 //! profile mapping stays in the app's [`Strategy`](nest_rs_authn::Strategy).
-//!
-//! CSRF `state` and the PKCE verifier ride in a short-lived JWT cookie so the
-//! round-trip needs no server-side session storage.
 
 use std::fmt;
 use std::time::Duration;
@@ -33,39 +30,19 @@ pub struct AuthorizationRedirect {
 }
 
 /// Outcome of the Authorization-Code exchange.
-///
-/// `#[non_exhaustive]`: downstream provider crates (`nest-rs-social` and
-/// third-party providers) match on these fields, so adding one later — a new
-/// standard token field — must not break them. Construct via the field
-/// initializers inside this crate only; consumers read.
-///
-/// The base flow populates `access_token` (and `refresh_token` when the
-/// provider returns one). `id_token` stays `None` for the standard resource
-/// path: an OIDC provider that reads identity from the id_token overrides
-/// `SocialProvider::exchange` (e.g. Apple, which has no userinfo endpoint) and
-/// fills it there — the base client does not parse OIDC extra fields.
 #[non_exhaustive]
 pub struct TokenSet {
     /// The bearer access token used to call the provider's APIs (e.g. userinfo).
     pub access_token: String,
-    /// The OIDC id_token, when the provider reads identity from it. `None` on
-    /// the standard resource path — an OIDC provider fills it by overriding
+    /// The OIDC id_token; `None` unless an OIDC provider fills it by overriding
     /// `SocialProvider::exchange`.
     pub id_token: Option<String>,
     /// The refresh token, when the provider issued one; `None` otherwise.
     pub refresh_token: Option<String>,
 }
 
-/// Token-kind discriminant. Any other `typ` fails to deserialize, so a token
-/// minted for a different purpose by the same [`JwtService`] (an access token,
-/// say) can never be replayed as a transaction.
-/// The transaction cookie's handshake purpose (RFC 8725 §3.11, explicit typing).
-///
-/// `JwtService` turns this into a media type in the namespace it reserves for
-/// non-access tokens, so a resource server verifying `at+jwt` refuses the
-/// cookie and `verify_handshake` refuses an access token replayed as a
-/// transaction. The in-payload [`TransactionKind`] discriminator states the
-/// same fact where a reader sees it; the header is what a *verifier* acts on.
+/// The transaction cookie's handshake purpose (RFC 8725 §3.11): a resource server
+/// verifying `at+jwt` refuses the cookie, and an access token is refused as one.
 const TRANSACTION_PURPOSE: &str = "oauth-tx";
 
 #[derive(Serialize, Deserialize)]
@@ -75,13 +52,8 @@ enum TransactionKind {
 }
 
 /// Carried as a [`JwtService`]-signed cookie so the client cannot forge it.
-///
-/// `provider` binds the transaction to the flow that minted it. Apps store the
-/// cookie under a single name for every provider (the reference app does), so
-/// without that binding a transaction obtained from provider A would verify on
-/// provider B's callback — a code/login-confusion class that only PKCE would
-/// still stand in the way of, and PKCE is not mandatory for confidential
-/// clients at several real providers.
+/// `provider` binds it to the flow that minted it: apps keep one cookie name for
+/// every provider, and PKCE alone would not stop a cross-provider replay.
 #[derive(Serialize, Deserialize)]
 struct Transaction {
     typ: TransactionKind,
@@ -91,15 +63,12 @@ struct Transaction {
     exp: u64,
 }
 
-/// Low-cardinality `reason` codes for the three ways a callback is refused —
-/// what an incident query groups on. Constants rather than call-site literals so
-/// the set is greppable and a typo cannot silently create a fourth.
+/// Low-cardinality `reason` codes for the three ways a callback is refused.
 const REASON_INVALID_TRANSACTION: &str = "invalid_transaction";
 const REASON_PROVIDER_MISMATCH: &str = "provider_mismatch";
 const REASON_CSRF_STATE_MISMATCH: &str = "csrf_state_mismatch";
 
-/// The one message every callback refusal is filed under, so an operator greps
-/// once and reads `reason` to tell the three apart.
+/// The one message every callback refusal is filed under; `reason` tells them apart.
 const CALLBACK_REJECTED: &str = "OAuth callback rejected";
 
 /// RFC 6749 §3.2's name for where the code is traded for a token.
@@ -110,14 +79,8 @@ const USERINFO_ENDPOINT: &str = "userinfo endpoint";
 /// verified emails, say — which no standard names.
 const PROVIDER_ENDPOINT: &str = "endpoint";
 
-/// A provider endpoint as the sentence of a failed call names it: which endpoint,
-/// and where.
-///
-/// The address is the URL's origin and path and nothing else. A query and a
-/// userinfo part are where a deployment would put an API key, and this sentence
-/// reaches every line that reports the failure. The call's own secrets — the
-/// client secret and the code of an exchange, the access token of a read — travel
-/// in its body and headers, so an address cannot quote them either.
+/// A provider endpoint as a failed call's sentence names it: origin and path only,
+/// since a query or userinfo part may carry an API key and the sentence is logged.
 struct Endpoint<'a> {
     role: &'static str,
     url: &'a str,
@@ -134,15 +97,8 @@ impl fmt::Display for Endpoint<'_> {
     }
 }
 
-/// What a call to `endpoint` that got no answer is reported as: an
-/// [`AuthError::Unavailable`] — the provider could not be reached or did not
-/// answer in time, which the caller did nothing to cause and can only wait out
-/// (RFC 9110 §15.6.4) — whose sentence names the endpoint and, when one of this
-/// client's bounds ended the call, which bound. It was a `Failed`, answered
-/// `401`, which told the person signing in that their sign-in was wrong.
-///
-/// The rest of the cause is reqwest's own chain with the URL taken out, since
-/// reqwest quotes the URL whole, query included.
+/// A call to `endpoint` that got no answer, as [`AuthError::Unavailable`] (RFC 9110
+/// §15.6.4); reqwest's chain goes in without the URL, which it quotes whole.
 fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
     let detail = if error.is_timeout() && error.is_connect() {
         format!(
@@ -166,13 +122,8 @@ fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
     }
 }
 
-/// What a provider's answer with `status` says about the provider, if it says
-/// the provider cannot answer now: a status of the 5xx class, or `429`
-/// (RFC 6585 §4), is the provider's state rather than the caller's mistake, so
-/// it is an [`AuthError::Unavailable`] carrying the provider's own `Retry-After`
-/// when it gave one in delay-seconds. An HTTP-date `Retry-After` is not read:
-/// converting it means trusting the provider's clock against this one, and the
-/// caller is still told to come back, without a figure.
+/// A 5xx or `429` (RFC 6585 §4) answer as [`AuthError::Unavailable`], carrying a
+/// delay-seconds `Retry-After`; an HTTP-date one would trust the provider's clock.
 fn provider_unavailable(
     endpoint: &Endpoint<'_>,
     status: u16,
@@ -187,10 +138,6 @@ fn provider_unavailable(
     })
 }
 
-/// A code exchange that failed: [`provider_unavailable`] when the provider
-/// answered that it cannot answer now, [`call_failed`] when it was never heard
-/// from, and otherwise the provider's own answer — RFC 6749 §5.2's error, or
-/// why its body did not parse — after the endpoint that gave it.
 fn exchange_failed(
     endpoint: &Endpoint<'_>,
     answered: Option<Answered>,
@@ -256,69 +203,37 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
     }
 }
 
-/// The HTTP backend every call to a provider goes through, as
-/// [`OAuthClient::new`] builds it: no redirect followed, one user-agent, and
-/// both bounds.
 fn backend() -> reqwest::ClientBuilder {
     reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
-        // A client-wide UA so every outbound request carries it uniformly —
-        // some provider APIs (GitHub) reject requests without one, and the
-        // token exchange uses this same client.
+        // Some provider APIs (GitHub) reject a request without a user-agent.
         .user_agent("nestrs")
         .connect_timeout(OAuthClient::CONNECT_TIMEOUT)
         .timeout(OAuthClient::CALL_TIMEOUT)
 }
 
 /// A transient Authorization-Code (PKCE) client built per flow from an
-/// [`OAuthClientConfig`]. Its HTTP backend refuses redirects (anti-SSRF), carries
-/// a fixed user-agent, and bounds every call it makes; see [`new`](Self::new).
+/// [`OAuthClientConfig`]; its backend refuses redirects (anti-SSRF) and bounds every call.
 pub struct OAuthClient {
     config: OAuthClientConfig,
     http: reqwest::Client,
 }
 
 impl OAuthClient {
-    /// How long reaching a provider may take — resolving its name, the TCP
-    /// handshake and the TLS one — before a call gives up, naming the endpoint.
-    ///
-    /// A provider's endpoints are public APIs a healthy network reaches in tens
-    /// of milliseconds, and in about a second when a lost SYN has to be sent
-    /// again. Three seconds covers that retransmission and the handshakes after
-    /// it; a connection that needs longer is a network that is not delivering,
-    /// and saying so then keeps the rest of [`CALL_TIMEOUT`](Self::CALL_TIMEOUT)
-    /// from being spent on it.
+    /// How long reaching a provider (DNS, TCP and TLS handshakes) may take before a
+    /// call gives up, naming the endpoint.
     pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-    /// How long one call to a provider may take in all — connecting, sending,
-    /// and reading the whole answer — before it fails with a sentence naming the
+    /// How long one call to a provider may take in all before it fails, naming the
     /// endpoint and this bound.
     ///
-    /// The calls are the code exchange at the token endpoint and the reads that
-    /// follow it: the userinfo endpoint, and any second read a provider makes
-    /// through [`fetch`](Self::fetch), as GitHub's verified emails are. An
-    /// identity provider answers each of them in well under a second; five
-    /// seconds is several times a slow answer, and past it the person waiting on
-    /// the callback is better served by a failure they can retry than by a page
-    /// that hangs.
-    ///
-    /// **Below the nets above it, for a whole login.** A callback makes these
-    /// calls one after another — three for GitHub, the most any provider
-    /// `nest-rs-social` ships makes — so a login spends at most three times this
-    /// bound on its provider, 15 s. That stays under the
-    /// [`AuthnGuard`](nest_rs_authn::AuthnGuard)'s
-    /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (20 s) and
-    /// the HTTP edge's request timeout (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`,
-    /// 30 s by default), which must stay the larger: a provider that stops
-    /// answering is then reported here, naming its endpoint, before either net
-    /// replaces that with a sentence naming nothing but a strategy or a route.
+    /// A login makes up to three calls (GitHub), 15 s, which must stay under
+    /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (20 s) and the
+    /// HTTP edge's request timeout, or a silent provider is reported by neither name.
     pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
-    /// The HTTP backend refuses redirects — following them during a token
-    /// exchange is an SSRF risk (per the `oauth2` crate's own guidance) — and
-    /// bounds every call at [`CONNECT_TIMEOUT`](Self::CONNECT_TIMEOUT) and
-    /// [`CALL_TIMEOUT`](Self::CALL_TIMEOUT), so a provider that never answers
-    /// fails the call instead of holding it.
+    /// Builds a client from a validated `config`; its backend follows no redirect
+    /// (an SSRF risk in a token exchange, per `oauth2`) and bounds every call.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
         config
             .validate()
@@ -329,10 +244,7 @@ impl OAuthClient {
         Ok(Self { config, http })
     }
 
-    /// Build the underlying `oauth2` client from a config. Free function (vs.
-    /// `&self`) so unit tests can exercise the URL-parse error paths
-    /// directly — `Self::new` short-circuits on `validate()` (length ≥ 1)
-    /// before the URLs are syntactically checked here.
+    /// Builds the `oauth2` client; URL syntax is checked here, not by `validate()`.
     pub(crate) fn basic_client(
         config: &OAuthClientConfig,
     ) -> Result<
@@ -362,19 +274,11 @@ impl OAuthClient {
             ))
     }
 
-    /// Lifetime of the signed transaction token and the cookie carrying it.
-    /// Short by design: an OAuth handshake completes in seconds, so the
-    /// CSRF/PKCE binding must not inherit the full access-token TTL. The
-    /// cookie's `Max-Age` and this token `exp` are driven from the same value
-    /// so they cannot drift.
+    /// Lifetime of the signed transaction token and of its cookie's `Max-Age`.
     pub const TRANSACTION_TTL_SECS: u64 = 600;
 
-    /// Begin the flow: produce the provider redirect URL and the signed
-    /// transaction token to set as a cookie. The transaction lives for
-    /// [`Self::TRANSACTION_TTL_SECS`], not the full `JwtService` TTL.
-    ///
-    /// `provider` is the key this transaction is bound to; [`exchange`](Self::exchange)
-    /// refuses one minted for a different provider.
+    /// Begin the flow: the provider redirect URL and the signed transaction token to
+    /// set as a cookie, bound to `provider`.
     pub fn authorize(
         &self,
         jwt: &JwtService,
@@ -403,10 +307,8 @@ impl OAuthClient {
         })
     }
 
-    /// Complete the flow: check the signed `transaction` belongs to `provider`,
-    /// validate the provider's `state` against it, then trade `code` for a
-    /// [`TokenSet`]. Both checks run before the exchange — never the other way
-    /// around.
+    /// Complete the flow: check `transaction` belongs to `provider` and matches
+    /// `state`, both before trading `code` for a [`TokenSet`].
     pub async fn exchange(
         &self,
         jwt: &JwtService,
@@ -415,15 +317,8 @@ impl OAuthClient {
         state: &str,
         code: &str,
     ) -> Result<TokenSet, AuthError> {
-        // A transaction cookie that does not verify is a forged or replayed
-        // handshake, and it is this crate's third way to refuse a callback — so
-        // it files the same `warn` its two siblings below do. Nothing else
-        // would: `JwtService` keeps its typed decode reason at `debug` because
-        // on the *strategy* path `AuthnGuard` emits the single `warn`, and this
-        // path has no guard above it — the error `?`s out through
-        // `AuthError::render`, which logs only `Failed`/`Unavailable`. So a
-        // forged cookie left no `warn` anywhere. The `debug` stays where it is;
-        // one event per refusal, said at the site that knows what was refused.
+        // The only `warn` for a forged cookie: no guard sits above this path, and
+        // `JwtService` logs its decode reason at `debug`.
         let tx: Transaction = jwt
             .verify_handshake(TRANSACTION_PURPOSE, transaction)
             .inspect_err(|error| {
@@ -446,8 +341,7 @@ impl OAuthClient {
             );
             return Err(AuthError::Failed("OAuth provider mismatch".into()));
         }
-        // Constant-time compare (mirrors the client-credentials check); a length
-        // mismatch reads as "not equal" via `subtle`'s slice `ct_eq`.
+        // Constant-time; `subtle` reads a length mismatch as not equal.
         if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
             tracing::warn!(
                 target: crate::TARGET,
@@ -461,9 +355,8 @@ impl OAuthClient {
             role: TOKEN_ENDPOINT,
             url: &self.config.token_url,
         };
-        // The answer's status is read on the way through, because `oauth2`
-        // drops it: a provider's `503` page parses as no §5.2 error, and would
-        // be reported as the caller's failure rather than the provider's.
+        // `oauth2` drops the answer's status, without which a provider's `503`
+        // would read as the caller's failure.
         let observed = Observed {
             http: &self.http,
             answered: std::sync::Mutex::new(None),
@@ -488,12 +381,8 @@ impl OAuthClient {
         })
     }
 
-    /// Authenticated `GET` against an arbitrary provider endpoint, deserialized
-    /// into `T`. The generalization of [`userinfo`](Self::userinfo): a provider
-    /// whose profile needs a second call (GitHub's verified-emails endpoint)
-    /// reuses this so it inherits the redirect-refusing, anti-SSRF HTTP client
-    /// built in [`new`](Self::new), and its bounds, instead of standing up its
-    /// own reqwest.
+    /// Authenticated `GET` against any provider endpoint (GitHub's verified emails,
+    /// say), deserialized into `T`, through this client's redirect-refusing backend.
     pub async fn fetch<T: DeserializeOwned>(
         &self,
         url: &str,
@@ -506,9 +395,7 @@ impl OAuthClient {
         self.read(&endpoint, access_token).await
     }
 
-    /// Fetch the caller's profile from the configured `userinfo_url`,
-    /// deserialized into the app's provider-specific shape; mapping it to the
-    /// app's principal is the Passport strategy's job.
+    /// Fetch the caller's profile from the configured `userinfo_url`, deserialized into `T`.
     pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
         let endpoint = Endpoint {
             role: USERINFO_ENDPOINT,
@@ -517,11 +404,7 @@ impl OAuthClient {
         self.read(&endpoint, access_token).await
     }
 
-    /// The authenticated `GET` both reads make. Anything but a `2xx` is a
-    /// failure — a `3xx` included, since the client follows no redirect — and
-    /// every failure names the endpoint rather than quoting its URL: the
-    /// provider's own unavailability ([`provider_unavailable`]) as such, any
-    /// other status as the token's refusal.
+    /// Anything but a `2xx` fails, a `3xx` included: no redirect is followed.
     async fn read<T: DeserializeOwned>(
         &self,
         endpoint: &Endpoint<'_>,
@@ -584,15 +467,12 @@ mod tests {
 
     #[test]
     fn new_rejects_invalid_config_at_validate_stage() {
-        // `OAuthClientConfig::default()` has empty URL fields → `validate()`
-        // (length ≥ 1) trips before any URL is parsed, so `new` surfaces a
-        // `Failed`. `OAuthClient` is not `Debug`, so we test via `is_err`.
+        // `OAuthClient` is not `Debug`, hence `is_err`.
         assert!(OAuthClient::new(OAuthClientConfig::default()).is_err());
     }
 
     #[test]
     fn new_accepts_a_valid_config() {
-        // Happy `new` path — the URL-parse tests below stand on this baseline.
         assert!(OAuthClient::new(valid_config()).is_ok());
         OAuthClient::basic_client(&valid_config()).expect("basic_client builds");
     }
@@ -626,8 +506,6 @@ mod tests {
 
     #[test]
     fn basic_client_rejects_malformed_redirect_url() {
-        // A redirect URL must be absolute — a bare path trips `RedirectUrl::new`
-        // after auth_url and token_url have parsed successfully.
         let mut config = valid_config();
         config.redirect_url = "/relative/path".into();
         assert!(matches!(
@@ -638,9 +516,6 @@ mod tests {
 
     #[test]
     fn authorize_surfaces_basic_client_error() {
-        // `validate()` accepts non-empty strings; the URL-syntax check runs
-        // inside `basic_client` when `authorize` rebuilds the client. This
-        // exercises the `?` propagation path in `authorize`.
         let mut config = valid_config();
         config.auth_url = "not a url".into();
         let client = OAuthClient::new(config).expect("new accepts non-empty fields");
@@ -652,11 +527,6 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_surfaces_url_parse_error_after_csrf_passes() {
-        // Forge a transaction whose csrf matches the state we will pass in,
-        // so the early `state mismatch` branch is skipped and `exchange`
-        // reaches `basic_client(&self.config)?` — which fails on the
-        // malformed `token_url` before any network call. Covers the
-        // `?` propagation past the CSRF check.
         let jwt = jwt();
         let mut config = valid_config();
         config.token_url = "::::".into();
@@ -685,10 +555,6 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_rejects_a_transaction_minted_for_another_provider() {
-        // Apps carry the transaction in one cookie for every provider, so this
-        // binding — not PKCE — is what keeps provider A's handshake from being
-        // completed on provider B's callback. Checked before the CSRF compare,
-        // so a matching state does not help the attacker.
         let jwt = jwt();
         let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
         let transaction = jwt
@@ -715,9 +581,6 @@ mod tests {
 
     #[tokio::test]
     async fn exchange_rejects_a_state_that_does_not_match() {
-        // A `state` differing from the signed transaction's csrf — here also of
-        // a different length — is rejected by the constant-time compare before
-        // any code exchange, so no network call is reached.
         let jwt = jwt();
         let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
         let transaction = jwt
@@ -733,8 +596,7 @@ mod tests {
             )
             .expect("sign");
 
-        // `TokenSet` is intentionally not `Debug` (it carries tokens), so match
-        // rather than `expect_err`.
+        // `TokenSet` is not `Debug` (it carries tokens).
         let Err(err) = client
             .exchange(&jwt, "acme", &transaction, "forged", "the-code")
             .await
@@ -745,8 +607,7 @@ mod tests {
         assert!(err.to_string().contains("state mismatch"));
     }
 
-    /// A name lookup that never answers — the first thing a call waits on, and
-    /// inside the connect bound, like the handshakes after it.
+    /// A name lookup that never answers.
     struct NeverResolves;
 
     impl reqwest::dns::Resolve for NeverResolves {
@@ -755,13 +616,8 @@ mod tests {
         }
     }
 
-    /// A provider that cannot be reached is told apart from one that does not
-    /// answer: the call fails at `CONNECT_TIMEOUT`, sooner than the whole call's
-    /// bound, and says which bound it was. Driven on the backend `new` builds,
-    /// with only its resolver swapped for one that never answers — a connection
-    /// no local listener can be made to leave hanging, since the kernel
-    /// completes a handshake to any listening socket and resets one it cannot
-    /// queue.
+    /// A provider nobody can reach fails at `CONNECT_TIMEOUT`, naming that bound. A
+    /// resolver stalls it: no local listener can leave a handshake hanging.
     #[tokio::test(start_paused = true)]
     async fn a_provider_that_cannot_be_reached_fails_at_the_connect_timeout() {
         let client = OAuthClient {

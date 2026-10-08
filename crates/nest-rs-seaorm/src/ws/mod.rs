@@ -1,6 +1,5 @@
-//! WebSocket bridge (feature `ws`) — captures the connection's ambient
-//! [`Executor`](crate::Executor) + ability once and re-installs them per
-//! message dispatch.
+//! WebSocket bridge (feature `ws`): re-installs the connection's ambient
+//! [`Executor`](crate::Executor) and ability per message dispatch.
 
 mod context;
 

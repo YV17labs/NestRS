@@ -1,10 +1,5 @@
-//! `Parameters<T>` refuses arguments that do not decode without the value the
-//! client sent — on a tool, where the refusal reaches the model as a tool error
-//! it can correct, and on a prompt.
-//!
-//! rmcp's own extractor answered `failed to deserialize parameters: invalid
-//! type: string "…", expected u64`, which quotes the argument into the model's
-//! transcript.
+//! `Parameters<T>` refuses arguments that do not decode without quoting the
+//! value into the model's transcript, as rmcp's own extractor does.
 
 use nest_rs_core::module;
 use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
@@ -58,10 +53,8 @@ async fn boot() -> TestApp {
         .expect("a host taking typed arguments boots")
 }
 
-/// A tool's arguments that do not decode are refused as a tool result flagged
-/// `isError` — the form the MCP specification gives an input error, so the model
-/// can correct its call — naming where and what kind, never the value. A key
-/// the client spelled is the client's too.
+/// `isError` is the form the MCP specification gives an input error. An unknown
+/// key is the client's value too.
 #[tokio::test]
 async fn a_tool_s_arguments_that_do_not_decode_are_refused_without_their_value() {
     let app = boot().await;
@@ -90,8 +83,6 @@ async fn a_tool_s_arguments_that_do_not_decode_are_refused_without_their_value()
     assert_eq!(result(&body)["result"]["content"][0]["text"], json!("7"));
 }
 
-/// A prompt's arguments that do not decode are refused as `invalid_params`, the
-/// same sentence and no value.
 #[tokio::test]
 async fn a_prompt_s_arguments_that_do_not_decode_are_refused_without_their_value() {
     let app = boot().await;

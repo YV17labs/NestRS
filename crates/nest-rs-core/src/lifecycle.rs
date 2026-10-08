@@ -1,14 +1,5 @@
-//! Application lifecycle hooks for the module/application init and shutdown
-//! phases.
-//!
-//! A provider opts in by tagging methods on an impl block with `#[hooks]`. Each
-//! hook is submitted to a link-time `inventory` registry that
-//! [`crate::App::run`] drains per phase. Submitting to `inventory` lets a
-//! provider keep its single `impl Discoverable` from `#[injectable]`.
-//!
-//! Ordering within a phase is `(provider, method)` name to be stable across
-//! builds. Cross-provider init dependencies are not expressed here — a hook
-//! that needs another service injects it.
+//! Lifecycle hooks: `#[hooks]` submits methods to a link-time `inventory`
+//! registry that [`crate::App::run`] drains per phase, in `(provider, method)` order.
 
 use std::any::TypeId;
 use std::future::Future;
@@ -25,10 +16,8 @@ use crate::way_down::WayDown;
 /// How long the shutdown hooks may run, all of them together, before what still
 /// waits is abandoned.
 ///
-/// **One budget for the whole teardown, never one per hook**, because the budget
-/// it is spent from is per process. Kubernetes gives a pod 30 seconds between
-/// `SIGTERM` and `SIGKILL` by default, and the way down spends them in steps,
-/// each bounded by default so they sum under the grace:
+/// **One budget for the whole teardown, never one per hook.** The way down
+/// spends a Kubernetes pod's default 30 s grace in steps, each bounded:
 ///
 /// | Step | Bound | Default |
 /// |---|---|---|
@@ -37,51 +26,23 @@ use crate::way_down::WayDown;
 /// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |
 /// | the runtime is torn down | what remains of this budget, under `#[nest_rs::main]` | nothing past it |
 ///
-/// 28.5 seconds, one and a half short of the kill: a process past its grace dies
-/// without a line, skipping every later hook and the flush. A bound per hook
-/// could not hold that sum — `k` hooks that hang cost `k` times the bound — which
-/// is why the budget is a deadline the three phases share. The runtime's own
-/// teardown adds nothing to it: it is held to what the hooks and the flush left
-/// of this deadline, so work they abandoned no longer holds the exit.
+/// 28.5 s, under the kill: a process past its grace dies without a line.
 ///
-/// **Once it is spent, every later hook still starts.** Each is polled once
-/// against the elapsed deadline: a hook that finishes without waiting — a
-/// counter logged, a buffer handed to a channel — finishes, and one that waits
-/// is abandoned at once, with the same `warn` naming it. A hook is never skipped
-/// in silence.
+/// **Once it is spent, every later hook still starts**, polled once: one that
+/// finishes without waiting finishes, one that waits is abandoned at `warn`. A
+/// hook that blocks its thread is past any timer's reach.
 ///
-/// A constant rather than a setting: a cleanup that needs longer is draining
-/// work, and draining belongs in a transport's own window, which a deployment
-/// does configure. The bound covers a hook that waits — an `async fn` pending on
-/// I/O, a lock, a channel; one that blocks its thread is past any timer's reach,
-/// and the process exit no longer waits for it either.
-///
-/// The scheduler reads it as its own window: a tick still running when shutdown
-/// is asked for is developer code on the way down, as a hook is, and gets the
-/// same time before it is stopped.
+/// The scheduler reads it as the window of a tick still running at shutdown.
 pub const SHUTDOWN_HOOKS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long an edge that stops its running work on the way down waits for that
-/// work to unwind, once stopped.
+/// work to unwind, once stopped ([`SHUTDOWN_HOOKS_TIMEOUT`] tabulates the way down).
 ///
-/// Stopping drops each unit where it waits, so what is left is only for the
-/// runtime to poll the tasks it woke and run what their drops do — the
-/// `cancelled` line among them — which takes microseconds, unless a unit blocks
-/// its thread, which no timer can reach. Waiting at all is what makes "nothing
-/// stopped is still running when the shutdown hooks start" a fact rather than
-/// a race; waiting longer would let a unit that blocks hold the stop.
-///
-/// One constant for every edge that stops work itself — the HTTP transport, for
-/// what a self-mount runs off its connections, and the scheduler, for a tick
-/// still running at its bound — so the way down is one arithmetic: half a
-/// second after the edge's own window, inside the slack the default shutdown
-/// leaves under a Kubernetes pod's grace ([`SHUTDOWN_HOOKS_TIMEOUT`] tabulates
-/// it).
+/// Without it, a stopped unit may still be unwinding when the shutdown hooks start.
 pub const SHUTDOWN_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Lifecycle phase at which a hook runs. Init phases run after the container
-/// is built and transports configured, before serving; shutdown phases run
-/// after the transports stop.
+/// Lifecycle phase at which a hook runs. Init phases run before serving;
+/// shutdown phases after the transports stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LifecyclePhase {
@@ -107,26 +68,16 @@ type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '
 pub struct LifecycleHook {
     /// The phase this hook runs in.
     pub phase: LifecyclePhase,
-    /// The host provider's name — the primary key of the `(provider, method)`
-    /// run order and the label in the boot trace.
+    /// The host provider's name, the primary key of the run order.
     pub provider: &'static str,
-    /// The hook method's name — the tiebreaker in the `(provider, method)` order.
+    /// The hook method's name, the run order's tiebreaker.
     pub method: &'static str,
-    /// `module_path!()` at the `#[hooks]` site — the crate and module the
-    /// provider lives in. Reported alongside the provider so "which of my
-    /// modules owns this?" is answered by the log line, and used to decide
-    /// whether an unreachable hook is the developer's problem
-    /// ([`is_framework_owned`]).
+    /// `module_path!()` at the `#[hooks]` site, read by [`is_framework_owned`].
     pub origin: &'static str,
-    /// The host provider's type — what [`inert_host`](crate::inert_host) reads
-    /// to say why a hook whose host is absent is inert.
+    /// The host provider's type, read by [`inert_host`](crate::inert_host).
     pub provider_type_id: fn() -> TypeId,
-    /// Whether this hook's provider is resolvable in the assembled container.
-    /// `#[hooks]` emits a `Container::get::<Provider>().is_some()` probe, so a
-    /// hook whose provider was never listed in any reachable module is surfaced
-    /// with a boot `warn` and skipped — leftover code stays visible instead of
-    /// vanishing silently (the module-gated discovery rule). Module-level infra
-    /// hooks that self-gate inside `run` pass `|_| true` to opt out.
+    /// Whether this hook's provider is resolvable in the assembled container;
+    /// a hook that self-gates inside `run` passes `|_| true`.
     pub present: fn(&Container) -> bool,
     /// Resolve the provider and invoke the hook method against the container.
     pub run: for<'a> fn(&'a Container) -> HookFuture<'a>,
@@ -142,19 +93,8 @@ fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
     hooks
 }
 
-/// Report an inert hook: linked, but the booted container holds no instance
-/// under its host's own type, so it never fires.
-///
-/// **`warn` for the app's own code** — leftover code must stay visible instead
-/// of vanishing silently (the module-gated discovery rule), and the developer
-/// can act: the line names the cause and its remedy ([`InertHost`]).
-///
-/// **`debug` for what is not the app's** — the framework's capabilities it
-/// never opted into, and another binary's hosts in a shared library crate. A
-/// `warn` naming either teaches exactly one thing: that these warnings are
-/// noise. Security warnings share this target.
-///
-/// [`InertHost`]: crate::InertHost
+/// Report a hook linked but whose host the booted container does not hold:
+/// `warn` for the app's own code, `debug` for what is not the app's.
 fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: LifecyclePhase) {
     crate::report_inert_host!(
         target: crate::target::LIFECYCLE,
@@ -168,7 +108,7 @@ fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: Lifecyc
     );
 }
 
-/// Init-phase runner: sequential, aborts on the first error.
+/// Init-phase runner: aborts on the first error or panic.
 pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> anyhow::Result<()> {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
@@ -191,9 +131,6 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
                 )));
             }
             Err(payload) => {
-                // The message rides the line, under the field every contained
-                // panic is logged with; the error names the hook, as a failed
-                // one's does, and aborts the boot the same way.
                 crate::contained_panic!(
                     target: crate::target::LIFECYCLE,
                     payload.as_ref(),
@@ -214,25 +151,14 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
     Ok(())
 }
 
-/// `hook`, with a panic inside it caught and handed back as its payload.
-///
-/// A hook is developer code, and an unwind out of one used to leave `App::run`
-/// with it: at init, the boot aborted with no line naming the hook; at shutdown,
-/// every later hook — in its phase and in the phases after — never ran. Both
-/// runners contain it, and each reports it the way it reports an error.
 async fn contained(
     hook: HookFuture<'_>,
 ) -> Result<anyhow::Result<()>, Box<dyn std::any::Any + Send>> {
     AssertUnwindSafe(hook).catch_unwind().await
 }
 
-/// Shutdown-phase runner: best-effort, logs failures and continues so one
-/// provider's cleanup error — or panic — does not skip another's, and bounded by
-/// `deadline`, which the three shutdown phases share
-/// ([`SHUTDOWN_HOOKS_TIMEOUT`]), so neither does one provider's cleanup that
-/// never returns. An abandoned hook's future is dropped where it waits, as any
-/// cancelled task is: what it held is released, and what it had not yet done
-/// stays undone, which is why the line naming it is a `warn`.
+/// Shutdown-phase runner: logs a failure or panic and continues, bounded by
+/// `deadline`, which the three shutdown phases share ([`SHUTDOWN_HOOKS_TIMEOUT`]).
 pub(crate) async fn run_phase_lenient(
     container: &Container,
     phase: LifecyclePhase,
@@ -246,9 +172,8 @@ pub(crate) async fn run_phase_lenient(
         }
         way_down.hook(phase, hook.provider, hook.method);
         let started = Instant::now();
-        // Polled once even past the deadline — `timeout_at` polls the hook
-        // before its timer — so a hook that finishes without waiting still runs
-        // once the budget is spent. See `SHUTDOWN_HOOKS_TIMEOUT`.
+        // `timeout_at` polls the hook before its timer, so past the deadline
+        // it still runs once.
         match tokio::time::timeout_at(deadline, contained((hook.run)(container))).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => tracing::error!(
@@ -350,10 +275,6 @@ mod tests {
             .unwrap();
     }
 
-    // A hook whose `present` probe returns false models a `#[hooks]` provider
-    // listed in no reachable module: it must be warned-and-skipped, never run.
-    // `run_unreachable` panics if invoked, so a regression that drops the
-    // `present` gate fails this test loudly.
     struct Unreachable;
 
     fn run_unreachable(_container: &Container) -> HookFuture<'_> {
@@ -375,12 +296,9 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_hook_is_skipped_by_both_runners() {
         let container = Container::builder().build();
-        // Init runner: present=false ⇒ warn + skip, so the phase still succeeds
-        // and `run_unreachable` never fires.
         run_phase(&container, LifecyclePhase::BeforeApplicationShutdown)
             .await
             .expect("a skipped hook must not fail the phase");
-        // Shutdown runner: same skip, best-effort (also must not panic).
         run_phase_lenient(
             &container,
             LifecyclePhase::BeforeApplicationShutdown,

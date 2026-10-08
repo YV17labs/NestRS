@@ -1,11 +1,4 @@
 //! Covers `src/document.rs` — what the served document says about a version.
-//!
-//! The composer's unit tests build parameters from a config; these boot an app
-//! whose controllers declare versions and read `/api-json` back, because the
-//! question the document has to answer is not "what shape is this parameter"
-//! but **"is this an address a client can call"**. So the strategy that resolves
-//! the version per request is installed on the transport too, and the document's
-//! own claims are issued as requests against it.
 
 use nest_rs_core::module;
 use nest_rs_http::poem::http::HeaderName;
@@ -18,9 +11,6 @@ use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use serde_json::Value;
 
-/// Two versions of one resource plus an unversioned one — the shape the whole
-/// entry is about: `/posts` is served by two versions a header tells apart, and
-/// `/health` by neither.
 #[controller(path = "/posts", version = "1")]
 struct PostsV1Controller;
 
@@ -42,18 +32,12 @@ impl PostsV2Controller {
         "v2".into()
     }
 
-    /// A route only the second version serves, so "an operation from another
-    /// version never appears in a document that does not claim it" has
-    /// something to be false about.
     #[get("/drafts")]
     async fn drafts(&self) -> String {
         "[]".into()
     }
 }
 
-/// The other shape a version multiplies: **one** controller, two mounts. Its
-/// single `list` answers at two addresses, so a document that calls both
-/// operations `list` is one no client can be generated from.
 #[controller(path = "/reports", version = ["1", "2"])]
 struct ReportsController;
 
@@ -65,10 +49,6 @@ impl ReportsController {
     }
 }
 
-/// A handler spelled as a raw identifier. Legal Rust, mounts like any other —
-/// and the ident *as written* is what `#[routes]` records, so this is the
-/// controller that proves the id the document publishes for it is one a client
-/// generator can carry.
 #[controller(path = "/probe")]
 struct ProbeController;
 
@@ -91,8 +71,7 @@ impl HealthController {
     }
 }
 
-/// Pinned rather than read from the environment, for the reason `module.rs`
-/// gives: the unpinned default is profile-dependent.
+// Pinned: the unpinned `enabled` default depends on the environment profile.
 fn openapi() -> OpenApiSetup {
     OpenApiModule::for_root(OpenApiConfig {
         enabled: true,
@@ -136,10 +115,7 @@ struct MultiVersionApp;
 #[module(imports = [openapi()], providers = [ProbeController])]
 struct RawIdentApp;
 
-/// The transport `TestApp` builds by default resolves nothing per request —
-/// it is `HttpTransport::default()`. Hand it the selector `HttpConfig`
-/// describes so the addresses the document publishes can be *called*, which is
-/// the only assertion that proves the document right.
+// `TestApp`'s default transport resolves no version per request.
 fn versioned_transport(default_version: Option<&str>) -> HttpTransport {
     HttpTransport::new().api_versioning(VersionSelector::new(
         ApiVersioning::Header,
@@ -155,12 +131,10 @@ async fn document(app: &TestApp, path: &str) -> Value {
     serde_json::from_slice(&body).expect("the document is JSON")
 }
 
-/// The `operationId` a document publishes at one address.
 fn operation_id<'a>(document: &'a Value, path: &str, method: &str) -> Option<&'a str> {
     document["paths"][path][method]["operationId"].as_str()
 }
 
-/// The version parameter of one operation, or `None` when it carries none.
 fn version_parameter<'a>(operation: &'a Value, header: &str) -> Option<&'a Value> {
     operation["parameters"]
         .as_array()?
@@ -247,9 +221,6 @@ async fn each_version_gets_a_document_that_describes_only_it() {
 
 #[tokio::test]
 async fn the_documented_address_is_the_one_that_answers() {
-    // The whole point of the entry: read the document, call what it says, and
-    // get the version it claimed — while the address it stopped publishing is
-    // the `404` the transport already made it.
     let app = TestApp::builder()
         .module::<HeaderVersionedApp>()
         .http(versioned_transport(None))
@@ -300,7 +271,6 @@ async fn a_default_version_makes_the_parameter_optional_and_picks_the_document()
         doc["paths"]["/posts/drafts"].is_null(),
         "and `/api-json` describes that default version, not every version: {doc}",
     );
-    // Which is exactly what the transport does with a request stating nothing.
     let resp = app.http().get("/posts").send().await;
     resp.assert_status_is_ok();
     resp.assert_text("v1").await;
@@ -308,9 +278,6 @@ async fn a_default_version_makes_the_parameter_optional_and_picks_the_document()
 
 #[tokio::test]
 async fn one_handler_under_two_versions_is_two_operations_a_client_can_tell_apart() {
-    // OpenAPI 3.1 §4.8.10.1: an `operationId` is unique across the document. The
-    // controller answers for one document's worth of handlers, and the version
-    // for what a `version = ["1", "2"]` controller mounts twice.
     let app = TestApp::for_module::<MultiVersionApp>()
         .await
         .expect("boots");
@@ -330,7 +297,6 @@ async fn one_handler_under_two_versions_is_two_operations_a_client_can_tell_apar
         "an unversioned operation is named by its controller alone: {doc}",
     );
 
-    // Both addresses answer, so both ids name an operation a client can call.
     for path in ["/v1/reports", "/v2/reports"] {
         app.http().get(path).send().await.assert_status_is_ok();
     }
@@ -338,11 +304,6 @@ async fn one_handler_under_two_versions_is_two_operations_a_client_can_tell_apar
 
 #[tokio::test]
 async fn the_two_controller_layout_names_its_two_versions_apart_as_well() {
-    // The same collision through the other layout the versioning docs prescribe:
-    // `PostsV1Controller::list` and `PostsV2Controller::list`. Here the two
-    // operations live in *different* documents, which is precisely why the ids
-    // used to agree — nothing in one document could see the other. The version is
-    // in both halves of the id because the developer put it in the type name too.
     let app = TestApp::builder()
         .module::<HeaderVersionedApp>()
         .http(versioned_transport(None))
@@ -364,11 +325,6 @@ async fn the_two_controller_layout_names_its_two_versions_apart_as_well() {
 
 #[tokio::test]
 async fn a_raw_ident_handler_publishes_an_id_a_client_can_be_generated_from() {
-    // The composer's unit tests map the string; this is the half only a booted
-    // app can answer — the handler compiles, the route mounts, and the id the
-    // served document carries for it holds nothing a generated client would
-    // have to mangle. It published `probe_r#type` until the id was mapped as a
-    // whole rather than in its version half alone.
     let app = TestApp::for_module::<RawIdentApp>().await.expect("boots");
     let doc = document(&app, "/api-json").await;
 
@@ -387,8 +343,6 @@ async fn a_raw_ident_handler_publishes_an_id_a_client_can_be_generated_from() {
 
 #[tokio::test]
 async fn the_uri_strategy_document_does_not_move() {
-    // The regression this feature owes: under `uri` the mounted path *is* the
-    // client-facing one, so nothing gains a parameter and nothing gains a route.
     let app = TestApp::for_module::<UriVersionedApp>()
         .await
         .expect("boots");

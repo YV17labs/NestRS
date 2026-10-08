@@ -9,11 +9,8 @@
 //! lookup, the lockout policy — belongs to the consuming application (in this
 //! repo, `demo/crates/features`).
 //!
-//! **What lives elsewhere, and why.** RFC 6749 §1.1 names four roles and this
-//! crate is none of them: it answers a question that precedes all four. The
-//! roles have their own crates, so an app links the one it actually plays —
-//! a worker that verifies a JWT off a queue message no longer compiles an HTTP
-//! controller, a credential registry, or an outbound HTTP client:
+//! **What lives elsewhere.** The RFC 6749 §1.1 roles have their own crates, so
+//! an app links the one it plays:
 //!
 //! | Concern | Crate |
 //! |---|---|
@@ -21,23 +18,12 @@
 //! | issuing tokens — §5.2 error codes, §2.3.1 client authentication | `nest-rs-oauth-server` |
 //! | RFC 9728 discovery — what this deployment is, and where to get a token | `nest-rs-oauth-resource` |
 //! | social login behind a discovered provider contract | `nest-rs-social` |
-//!
-//! **Naming convention.** A `*Service` is a singleton DI provider holding
-//! stateful infrastructure (key material, in-memory caches) — [`JwtService`] is
-//! built once at boot and injected wherever a token is signed or verified.
-//!
-//! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — principal resolution: strategies, credential
 /// verification, and the guard's authentication outcome.
-///
-/// Declared by the crate that **owns** the concern, because a target's one job
-/// is to say **where** an event came from. A central table in the kernel would
-/// have meant `nest-rs-core` holding a name for a concern it does not know
-/// exists.
 pub const TARGET: &str = "nest_rs::authn";
 
 mod config;

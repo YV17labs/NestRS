@@ -1,9 +1,7 @@
 //! Resolver-side accessor for request-scoped providers — the GraphQL mirror of
-//! [`nest_rs_http::Scoped<T>`]. A framework-level `GraphqlContextSeed`
-//! (`context.rs`) forwards the per-request `RequestScope` into the async-graphql
-//! context; [`Scoped<T>`] reads it back to resolve an
-//! `#[injectable(scope = request)]` provider (or, falling through, a singleton —
-//! prefer plain `#[inject]` for those).
+//! [`nest_rs_http::Scoped<T>`]. [`Scoped<T>`] resolves an
+//! `#[injectable(scope = request)]` provider (a singleton falls through; prefer
+//! plain `#[inject]` for those).
 //!
 //! ```
 //! # use nest_rs_core::{injectable, module};
@@ -47,10 +45,8 @@
 //! # }
 //! ```
 //!
-//! **Caveat.** This works inside resolver bodies, which run on the request's
-//! task. A `#[dataloader]` batch closure runs off-task (a spawned future), so a
-//! request-scoped provider is **not** reachable there — batches re-establish
-//! ambient state through their own [`crate::GraphqlBatchContext`] seam.
+//! **Caveat.** A `#[dataloader]` batch runs off-task, so a request-scoped
+//! provider is **not** reachable there; batches use [`crate::GraphqlBatchContext`].
 
 use std::any::type_name;
 use std::ops::Deref;
@@ -60,9 +56,7 @@ use async_graphql::{Context, Error};
 use nest_rs_core::RequestScope;
 
 /// Resolves a provider of type `T` from the current operation's
-/// [`RequestScope`]. `from_context` errors if the scope is absent (the schema
-/// is not being served over the HTTP transport) or if no provider is registered
-/// for `T`.
+/// [`RequestScope`].
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
@@ -80,8 +74,12 @@ impl<T> Deref for Scoped<T> {
 }
 
 impl<T: Send + Sync + 'static> Scoped<T> {
-    /// Resolve `T` from the operation's request scope, forwarded into the
-    /// async-graphql context by the framework `GraphqlContextSeed`.
+    /// Resolve `T` from the operation's request scope.
+    ///
+    /// # Errors
+    ///
+    /// When the scope is absent (the schema is not served over the HTTP
+    /// transport) or no provider is registered for `T`.
     pub fn from_context(ctx: &Context<'_>) -> async_graphql::Result<Self> {
         #[expect(
             clippy::map_err_ignore,

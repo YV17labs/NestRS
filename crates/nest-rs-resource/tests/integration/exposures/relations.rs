@@ -1,16 +1,5 @@
-//! `src/exposures/relations.rs` — the loader bridges, and the case that used to
-//! be refused: **two foreign keys from one child to one parent**.
-//!
-//! `RelatedTo<Parent>` is keyed on the parent's entity type, so a child
-//! declaring two `belongs_to` at the same parent produced two impls of one
-//! trait — coherence error `E0119` with a span inside the expansion. The macro
-//! refused it at parse time and pointed at a hand-written `#[field_resolver]`.
-//!
-//! It is now the `Via` type parameter's job: `#[expose]` emits one marker per
-//! `belongs_to` beside the child entity, and the parent's `HasMany` names the
-//! column — `#[expose(via = "reporter_id")]`. The `SoleForeignKey` default is
-//! emitted only while the child points at that parent once, so an ambiguous
-//! relation that names nothing is a compile error rather than a silent pick.
+//! `src/exposures/relations.rs` — the loader bridges, including **two foreign
+//! keys from one child to one parent**.
 
 use nest_rs_resource::expose;
 use nest_rs_seaorm::CrudService;
@@ -37,10 +26,6 @@ pub(super) mod tickets {
         pub reporter_id: Uuid,
         #[expose]
         pub assignee_id: Uuid,
-        // Both point at the same parent. Each gets its own `by_<col>` loader,
-        // its own `ByReporterId` / `ByAssigneeId` marker, and its own
-        // `RelatedTo<people::Entity, …>` impl — and *neither* gets the
-        // `SoleForeignKey` one.
         #[sea_orm(
             belongs_to,
             from = "reporter_id",
@@ -84,8 +69,6 @@ pub(super) mod people {
         pub id: Uuid,
         #[expose]
         pub name: String,
-        // Two relations, one child entity, told apart by the column each
-        // follows. Without `via` neither would compile — which is the point.
         #[sea_orm(has_many, relation_enum = "Reported", via_rel = "Reporter")]
         #[expose(via = "reporter_id")]
         pub reported: HasMany<super::tickets::Entity>,
@@ -103,10 +86,8 @@ pub(super) mod people {
     }
 }
 
-/// The two `via` relations resolve to *different* loaders. Asserted on the
-/// projected associated types rather than on a running query: a regression that
-/// pointed both fields at one key would still compile and still return rows —
-/// the wrong ones.
+/// Asserted on the projected types: a regression pointing both fields at one
+/// key would still compile and return rows — the wrong ones.
 #[test]
 fn two_foreign_keys_to_one_parent_resolve_through_separate_loaders() {
     use nest_rs_resource::RelatedTo;
@@ -127,15 +108,11 @@ fn two_foreign_keys_to_one_parent_resolve_through_separate_loaders() {
     );
 }
 
-/// A child pointing at a parent **once** keeps the default, so every relation
-/// written before `via` existed still resolves with nothing to declare.
 #[test]
 fn a_sole_foreign_key_still_resolves_without_naming_a_column() {
     use nest_rs_resource::{RelatedTo, SoleForeignKey};
     use std::any::TypeId;
 
-    // `Note` points at `Person` once; `RelatedTo<Person>` is `RelatedTo<Person,
-    // SoleForeignKey>` by the trait's default type parameter.
     type Default = <notes::Entity as RelatedTo<people::Entity>>::Loader;
     type Explicit = <notes::Entity as RelatedTo<people::Entity, SoleForeignKey>>::Loader;
     assert_eq!(TypeId::of::<Default>(), TypeId::of::<Explicit>());

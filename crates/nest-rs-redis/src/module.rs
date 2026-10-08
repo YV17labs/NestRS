@@ -1,14 +1,7 @@
 //! [`RedisModule`] — the substrate seam. `RedisModule::for_root(None)` opens
 //! the one [`RedisConnection`] this crate's bindings share; each binding
-//! (`RedisQueueModule`, `RedisThrottlerModule`,
-//! `RedisScheduleModule`) is then a
-//! bare import beside it, or its own `for_root` when it owns a config of its
-//! own, and reads the connection from the container.
-//!
-//! This is the crate-root `module.rs` a driver is allowed exactly once: a
-//! module *of Redis* — the crate's own subject — and not one binding wearing the
-//! crate's name. Every binding folder reaches it, which is the level a shared
-//! thing belongs at.
+//! (`RedisQueueModule`, `RedisThrottlerModule`, `RedisScheduleModule`) is then a
+//! bare import beside it, or its own `for_root` when it owns a config.
 
 use std::any::TypeId;
 
@@ -57,8 +50,6 @@ impl DynamicModule for RedisSetup {
             let config = container
                 .get::<RedisConfig>()
                 .expect("RedisConfig is resolved by ConfigModule::provide_feature");
-            // `?` lifts the typed `RedisError` into the factory's `anyhow`
-            // boundary (the composition-root error channel).
             Ok(RedisConnection::connect(&config).await?)
         })
     }

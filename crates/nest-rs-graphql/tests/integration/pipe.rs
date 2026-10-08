@@ -1,8 +1,6 @@
-//! Per-argument pipes on GraphQL operations. A `Piped<P, T>` / `Valid<T>`
-//! parameter exposes the wire value type `T`, runs the pipe before the body,
-//! and surfaces a rejection as a GraphQL error — the resolver body only ever
-//! unwraps the already-transformed value. The GraphQL analog of the HTTP
-//! `Piped<P, E>` / `Valid<E>` extractors.
+//! Per-argument pipes on GraphQL operations: a `Piped<P, T>` / `Valid<T>`
+//! parameter exposes the wire type `T`, runs the pipe before the body, and
+//! surfaces a rejection as a GraphQL error.
 
 use async_graphql::InputObject;
 use nest_rs_core::module;
@@ -12,7 +10,7 @@ use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_testing::TestApp;
 use validator::Validate;
 
-/// A pipe that always rejects — exercises the error path.
+/// A pipe that always rejects.
 struct Reject;
 
 impl Pipe for Reject {
@@ -88,8 +86,6 @@ async fn boot() -> TestApp {
 
 #[tokio::test]
 async fn a_piped_arg_runs_the_pipe_before_the_body() {
-    // The wire arg is `String` (the query would fail schema validation if it were
-    // the `Piped` wrapper), and the body receives the trimmed value.
     let app = boot().await;
     let resp = app
         .http()
@@ -187,9 +183,6 @@ async fn a_valid_arg_rejects_an_invalid_input() {
     assert_eq!(first.object().get("message").string(), "validation failed");
 }
 
-/// A list item the pipe refuses is said without its value, in the reply and on
-/// every line. `ParseArray`'s refusal quoted the item, and the operation answers
-/// a pipe's refusal as the error's message.
 #[tokio::test]
 async fn a_refused_list_item_is_never_quoted_in_the_error() {
     let logs = nest_rs_testing::LogCapture::install();

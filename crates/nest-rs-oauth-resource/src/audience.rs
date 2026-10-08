@@ -12,19 +12,10 @@ use nest_rs_core::{hooks, injectable};
 use crate::metadata::ProtectedResourceMetadata;
 
 /// Runs the confused-deputy check once wiring is complete.
-///
-/// It is a lifecycle hook rather than part of the metadata factory because
-/// [`AuthnConfig`] is itself a factory output: reading it *during* the factory
-/// phase depends on which module was collected first, which is exactly the kind
-/// of ordering a boot check must not rest on. `#[on_module_init]` runs after
-/// every provider is built, so the answer is the same whatever the import order
-/// — and an `Err` there aborts boot.
+/// A hook, not part of the metadata factory: [`AuthnConfig`] is a factory output,
+/// and reading it there would depend on the order modules are collected in.
 #[injectable]
 pub(crate) struct AudienceBinding {
-    /// Required, not `Option`: `OAuthResourceHost` is private and
-    /// `OAuthResourceSetup` always queues the factory, so the absent case
-    /// was a branch nothing could reach — and one that would have passed the
-    /// confused-deputy check silently if anything ever did.
     #[inject]
     metadata: Arc<ProtectedResourceMetadata>,
     #[inject]
@@ -40,13 +31,8 @@ impl AudienceBinding {
 }
 
 /// The confused-deputy check, run once at boot.
-///
-/// A resource server that does not pin `aud` accepts any validly-signed token
-/// from its issuer — including one a user granted to a different service, which
-/// that service can then replay here. RFC 8707 makes the resource identifier
-/// *be* the audience, so the two must agree; a mismatch is a `warn` rather than
-/// a refusal because some authorization servers mint an opaque audience string
-/// by policy, and the deployment is entitled to that.
+/// A mismatch with the resource (RFC 8707) only warns: some authorization servers
+/// mint an opaque audience by policy.
 fn require_audience_binding(
     authn: Option<&AuthnConfig>,
     metadata: &ProtectedResourceMetadata,
@@ -108,13 +94,8 @@ mod tests {
         .expect("audience matches the resource");
     }
 
-    /// A mismatch is a `warn`, not a refusal — some authorization servers mint
-    /// an opaque audience by policy and the deployment is entitled to that.
-    ///
-    /// Which is exactly why the line matters: the app boots and serves, and the
-    /// failure surfaces one client at a time, as a `401` on a token that
-    /// followed RFC 8707 correctly. Nothing else in the system knows the two
-    /// values disagree — this is the only place both are in scope.
+    /// A mismatch is a `warn`, not a refusal: some authorization servers mint an
+    /// opaque audience by policy.
     #[test]
     fn a_mismatched_audience_boots_and_says_which_two_values_disagree() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -140,8 +121,6 @@ mod tests {
         );
     }
 
-    /// And a matching pair is silent: warning on the correct configuration is
-    /// how a reader learns to ignore the line above.
     #[test]
     fn a_matching_audience_says_nothing() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -195,8 +174,6 @@ mod tests {
 
     #[test]
     fn a_differing_audience_is_allowed_but_warned() {
-        // Not every authorization server mints the resource URI as `aud`; the
-        // deployment keeps the choice, the log keeps the record.
         require_audience_binding(Some(&authn_with_audience(Some("api"))), &metadata())
             .expect("a differing audience is a warn, not a refusal");
     }

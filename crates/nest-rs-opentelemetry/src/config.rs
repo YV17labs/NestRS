@@ -5,12 +5,11 @@ use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_core::parse_bool;
 
-/// The OTel SDK's own metric export period, restated so it is a named,
-/// documented default rather than a number buried in a dependency.
+/// The OTel SDK's own metric export period.
 pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
 
-/// The namespace this crate's variables are read under. Not a `#[config]`'s —
-/// the config is read before the container exists — but named once all the same.
+/// The namespace this crate's variables are read under — not a `#[config]`'s:
+/// the config is read before the container exists.
 pub(crate) const NAMESPACE: &str = "opentelemetry";
 
 /// The metric export period's range, the variable that sets it, and why.
@@ -32,40 +31,31 @@ pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds::secs(
 
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
-/// Env vars: the console layer reads the framework-wide logging family
-/// (`<PREFIX>_LOG`, `<PREFIX>_LOG_FORMAT`, `<PREFIX>_LOG_SOURCE_LOCATION` — the
-/// same [`logging::var`](nest_rs_core::logging::var) names nest-rs-core's
-/// fallback logger honours); everything OTel-specific lives under this crate's
-/// namespace (`<PREFIX>_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,
+/// The console layer reads the framework-wide logging family (`<PREFIX>_LOG`,
+/// `<PREFIX>_LOG_FORMAT`, `<PREFIX>_LOG_SOURCE_LOCATION`, see
+/// [`logging::var`](nest_rs_core::logging::var)); everything OTel-specific lives
+/// under `<PREFIX>_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,
 /// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,
-/// METRIC_INTERVAL_SECS}`). `<PREFIX>` is the deployment's, not a fixture —
-/// see [`EnvPrefix`].
-/// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the
-/// subscriber stays console-only.
+/// METRIC_INTERVAL_SECS}` (see [`EnvPrefix`]). The OTel exporter is wired only
+/// when `otlp_endpoint` is set.
 #[derive(Clone, Debug)]
 pub struct OpenTelemetryConfig {
-    /// `service.name` on every span, metric and log — the primary axis a
-    /// backend groups telemetry by. Required (the one non-optional field);
-    /// defaults to the value passed to [`new`](Self::new).
+    /// `service.name` on every span, metric and log; defaults to the value passed
+    /// to [`new`](Self::new).
     pub service_name: String,
-    /// `service.version` resource attribute (e.g. the crate version or git
-    /// SHA). `None` omits the attribute entirely rather than emitting a blank.
+    /// `service.version` resource attribute; `None` omits it.
     pub service_version: Option<String>,
-    /// `deployment.environment.name` resource attribute (`prod`, `staging`, …)
-    /// so a backend can partition otherwise-identical services. `None` omits it.
+    /// `deployment.environment.name` resource attribute; `None` omits it.
     pub deployment_environment: Option<String>,
-    /// Defaults to a fresh UUID v7 per process so restarts get distinct
-    /// identities in the backend.
+    /// `service.instance.id`; defaults to a fresh UUID v7 per process.
     pub service_instance_id: Option<String>,
     /// `EnvFilter` syntax; applied to console layer and OTel log appender.
     pub log_filter: String,
-    /// Console output shape: human-readable [`Text`](LogFormat::Text) in dev,
-    /// machine-parseable [`Json`](LogFormat::Json) in prod. Defaults by build
-    /// profile (see [`new`](Self::new)); the OTLP appender is unaffected.
+    /// Console output shape; defaults by build profile (see [`new`](Self::new)).
+    /// The OTLP appender is unaffected.
     pub log_format: LogFormat,
-    /// Append the emitting `file:line` to every console event. Useful in dev
-    /// to locate a log's origin; off by default (adds width to every line and
-    /// leaks source paths in prod).
+    /// Append the emitting `file:line` to every console event; off by default,
+    /// since it leaks source paths.
     pub log_source_location: bool,
     /// Base endpoint (e.g. `http://localhost:4318`); exporter appends
     /// `/v1/traces`, `/v1/metrics`, `/v1/logs`.
@@ -73,27 +63,14 @@ pub struct OpenTelemetryConfig {
     /// `[0.0, 1.0]`; wrapped in `ParentBased` so children inherit the
     /// parent's sampling decision.
     pub trace_sample_ratio: f64,
-    /// How often the `PeriodicReader` flushes metrics to the collector.
-    ///
-    /// Defaults to the OTel SDK's own 60 s. That default is the single most
-    /// misleading thing about a first OTel setup: traces and logs arrive
-    /// immediately, metrics take a *minute*, so the natural conclusion after
-    /// wiring a meter, hitting a route and checking the collector is that the
-    /// metrics half is broken. It was reachable neither from the env table nor
-    /// from this struct, so there was no way to shorten it for a local run
-    /// either — hence this field, and `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS`
-    /// beside it.
+    /// How often the `PeriodicReader` flushes metrics to the collector; defaults to
+    /// the OTel SDK's own 60 s.
     pub metric_interval: Duration,
 }
 
-/// Report a set-but-unparseable **logging-family** variable on stderr.
-///
-/// `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` are the kernel's
-/// family, read before any subscriber exists by whichever console is mounted,
-/// and the kernel's own reader keeps its default with a warning — so this one
-/// answers the same way rather than failing a boot the fallback logger would
-/// let through. This crate's own namespaced variables are refused through
-/// `from_env`'s `Result` instead.
+/// Report a set-but-unparseable **logging-family** variable on stderr, keeping
+/// the default as the kernel's own reader does; this crate's own variables are
+/// refused through `from_env`'s `Result` instead.
 #[expect(
     clippy::print_stderr,
     reason = "the logging family is read before any subscriber exists"
@@ -105,18 +82,13 @@ fn warn_unparseable(name: &str, raw: &str) {
     );
 }
 
-/// The console this crate installs is the kernel's console, so the *grammar* of
-/// `<PREFIX>_LOG_FORMAT` is the kernel's too — one enum, one parser, one
-/// build-profile default, whichever subscriber ends up mounted. Re-exported
-/// rather than aliased so `nest_rs_opentelemetry::LogFormat` keeps naming the
-/// type a caller already writes.
+/// The kernel's console format, whose grammar this crate's console shares.
 pub use nest_rs_core::logging::LogFormat;
 
 impl OpenTelemetryConfig {
     /// Config with framework defaults and the given `service.name`. `log_format`
     /// is chosen by build profile (Text in debug, Json in release); everything
-    /// else is off/absent. The builder `with_*` methods and [`from_env`](Self::from_env)
-    /// layer on top.
+    /// else is off/absent.
     pub fn new(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
@@ -124,10 +96,6 @@ impl OpenTelemetryConfig {
             deployment_environment: None,
             service_instance_id: None,
             log_filter: "info".into(),
-            // Production output is OTLP/JSON; the human-readable pretty-print is
-            // a dev affordance only. Default by build profile so a release deploy
-            // that mounts `OpenTelemetryModule` emits JSON without needing
-            // `<PREFIX>_LOG_FORMAT` set (which still overrides).
             log_format: LogFormat::by_profile(),
             log_source_location: false,
             otlp_endpoint: None,
@@ -138,23 +106,13 @@ impl OpenTelemetryConfig {
 
     /// `service_name` is the default; `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` overrides.
     ///
-    /// `Err`, naming the variable, when one cannot be read — both of its
-    /// spellings set, or a `<KEY>_FILE` naming an unreadable file — or when
-    /// `SAMPLE_RATIO` or `METRIC_INTERVAL_SECS` holds a value that does not
-    /// parse, a ratio that is not a number, or an interval outside a second to an
-    /// hour. Only the two
-    /// `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION` settings keep
-    /// their default with a warning instead: they are the framework-wide logging
-    /// family, which the kernel's fallback logger reads the same way before any
-    /// error path exists.
+    /// `Err`, naming the variable, when one cannot be read or does not parse, or
+    /// when `METRIC_INTERVAL_SECS` falls outside a second to an hour. Only
+    /// `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION` keep their default with
+    /// a warning, as the kernel's fallback logger reads them.
     pub fn from_env(service_name: impl Into<String>) -> Result<Self, ConfigError> {
         let mut cfg = Self::new(service_name);
-        // The ordinary namespaced reader — constructing one has no side effect
-        // and needs no container, which matters here: `from_env` runs before
-        // the container exists, being what builds the subscriber it logs
-        // through. The two knobs below that warn-and-default rather than fail
-        // keep their own parse, and take the name from `var_name` for the
-        // report.
+        // Constructing the reader needs no container, which `from_env` runs before.
         let env = ConfigService::for_namespace(NAMESPACE);
 
         if let Some(v) = env.get("SERVICE_NAME")? {
@@ -164,19 +122,9 @@ impl OpenTelemetryConfig {
         cfg.deployment_environment = env.get("SERVICE_ENVIRONMENT")?;
         cfg.service_instance_id = env.get("SERVICE_INSTANCE_ID")?;
 
-        // The console layer answers to the framework-wide logging family
-        // (`<PREFIX>_LOG*`, owned by nest-rs-core's fallback logger) — an app's
-        // log config survives adopting or dropping this crate unchanged.
         if let Some(v) = env_var(&EnvPrefix::var(var::FILTER)).or_else(|| env_var("RUST_LOG")) {
             cfg.log_filter = v;
         }
-        // Both of these report through the same helper as their two numeric
-        // siblings below. They used to drop a set-but-unparseable value in
-        // silence — so `<PREFIX>_LOG_FORMAT=console` gave a production deploy
-        // text output where it asked for JSON, with nothing anywhere saying
-        // why. The family is "an unparseable `<PREFIX>_*` value at init" and it
-        // is answered at every member, not at the two that happened to be
-        // numbers.
         if let Some(raw) = env_var(&EnvPrefix::var(var::FORMAT)) {
             match LogFormat::parse(&raw) {
                 Some(fmt) => cfg.log_format = fmt,
@@ -191,13 +139,9 @@ impl OpenTelemetryConfig {
         }
 
         cfg.otlp_endpoint = env.get("OTLP_ENDPOINT")?;
-        // Set-but-unparseable is boot-fatal, naming the spelling that was set and
-        // never a value read from a file — the framework-wide contract, which a
-        // `from_env` returning `Result` can now keep.
         if let Some(setting) = env.setting("SAMPLE_RATIO")? {
             let ratio = setting.parse::<f64>()?;
-            // `NaN` parses as an `f64` and survives `clamp`, so a sampler would
-            // be handed a ratio that is no ratio at all.
+            // `NaN` parses as an `f64` and survives `clamp`.
             if ratio.is_nan() {
                 return Err(setting.refuse("must be a number between 0 and 1"));
             }
@@ -208,12 +152,9 @@ impl OpenTelemetryConfig {
         Ok(cfg)
     }
 
-    /// Pin the metric export interval, overriding the SDK's 60 s default.
-    /// Dropping it to a few seconds is what makes a local collector setup
-    /// verifiable in the time it takes to read the output. Held at
-    /// [`OpenTelemetry::init_with`](crate::OpenTelemetry::init_with) to the
-    /// range `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS` is: a second to an
-    /// hour.
+    /// Pin the metric export interval, overriding the SDK's 60 s default. Held at
+    /// [`OpenTelemetry::init_with`](crate::OpenTelemetry::init_with) to the range
+    /// `<PREFIX>_OPENTELEMETRY__METRIC_INTERVAL_SECS` is: a second to an hour.
     pub fn with_metric_interval(mut self, interval: Duration) -> Self {
         self.metric_interval = interval;
         self
@@ -256,8 +197,7 @@ impl OpenTelemetryConfig {
         self
     }
 
-    /// Set the trace sample ratio; the value is clamped into `[0.0, 1.0]` so a
-    /// bad caller can't disable sampling logic outright.
+    /// Set the trace sample ratio, clamped into `[0.0, 1.0]`.
     pub fn with_trace_sample_ratio(mut self, ratio: f64) -> Self {
         self.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         self
@@ -301,7 +241,6 @@ mod tests {
 
     #[test]
     fn new_takes_the_service_name_as_owned_string() {
-        // Accepts `&str` and `String` — verify both compile and yield the same value.
         let from_str = OpenTelemetryConfig::new("svc-a");
         let from_string = OpenTelemetryConfig::new(String::from("svc-a"));
         assert_eq!(from_str.service_name, from_string.service_name);
@@ -359,16 +298,10 @@ mod tests {
 
     #[test]
     fn log_format_default_is_text() {
-        // Pin the default at the trait level — flipping to Json would change
-        // every default app's log output overnight.
         assert_eq!(LogFormat::default(), LogFormat::Text);
     }
 
-    // `OpenTelemetryConfig::from_env` reads the `<PREFIX>_OPENTELEMETRY__*` keys
-    // straight off the process env via `env_var`, so the tests isolate the env
-    // with `figment::Jail` (the same approach `nest-rs-config` uses for its env
-    // reads) — hermetic and serialized, no `unsafe { set_var }`. Vars a test
-    // leaves unset are simply never `set_env`'d, exercising the default path.
+    // `from_env` reads the process env, isolated per test by `figment::Jail`.
     #[test]
     fn from_env_falls_back_to_defaults_for_every_optional_field() {
         figment::Jail::expect_with(|_| {
@@ -443,11 +376,6 @@ mod tests {
         });
     }
 
-    /// The interval is dual-path like every other `nest-rs-*` config field: a
-    /// documented default, an env var, and a builder. It used to be none of the
-    /// three — the SDK's 60 s was reachable from nowhere, so the standard
-    /// "wire a meter, hit the route, check the collector" loop showed traces
-    /// and logs but no metrics for a full minute, and read as broken.
     #[test]
     fn the_metric_interval_is_a_documented_default_an_env_var_and_a_builder() {
         assert_eq!(
@@ -475,9 +403,6 @@ mod tests {
         });
     }
 
-    /// An empty interval keeps the default, and a zero one is refused naming the
-    /// variable — it was read as "keep the default", a sentinel the unset
-    /// variable already spells, and a pinned zero was dropped without a word.
     /// A `PeriodicReader` on a zero period is a tight export loop.
     #[test]
     fn an_empty_interval_keeps_the_default_and_a_zero_one_is_refused() {
@@ -555,8 +480,6 @@ mod tests {
         });
     }
 
-    /// This crate's own variables keep the framework contract: set but
-    /// unparseable fails the boot, naming the variable.
     #[test]
     fn from_env_refuses_an_unparseable_ratio_or_interval_naming_it() {
         for key in ["SAMPLE_RATIO", "METRIC_INTERVAL_SECS"] {
@@ -571,8 +494,6 @@ mod tests {
         }
     }
 
-    /// `NaN` parses as an `f64` and survives the clamp, so it reached the
-    /// sampler as a ratio that is no ratio; it is refused naming the variable.
     #[test]
     fn from_env_refuses_a_ratio_that_is_not_a_number() {
         figment::Jail::expect_with(|jail| {

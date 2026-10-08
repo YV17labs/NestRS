@@ -6,9 +6,8 @@ use quote::quote;
 use syn::spanned::Spanned as _;
 use syn::{Block, ItemFn, ReturnType};
 
-/// Each refusal is emitted beside the item it refused — expanded when the item
-/// itself is sound — so a mistake is reported once, rather than followed by the
-/// `main` function not found that removing the item would add.
+/// Each refusal is emitted beside the item it refused, or rustc adds a second
+/// error: `main` function not found.
 pub(crate) fn main(args: TokenStream, input: TokenStream) -> TokenStream {
     let refused = nest_rs_codegen::entry_takes_no_arguments(&args.into())
         .map(|refused| refused.to_compile_error());
@@ -25,9 +24,8 @@ pub(crate) fn main(args: TokenStream, input: TokenStream) -> TokenStream {
             nest_rs_codegen::entry_needs_an_async_fn(item.sig.fn_token.span).to_compile_error();
         return quote! { #error #input }.into();
     }
-    // The body's output, named so its `?`s convert into it as they would in the
-    // `async fn` it was written in: an `async` block infers its output from its
-    // tail alone, and `Ok(())` names no error type.
+    // Named so the body's `?`s convert into it: an `async` block infers its
+    // output from its tail alone, and `Ok(())` names no error type.
     let output = match &item.sig.output {
         ReturnType::Default => quote! { () },
         ReturnType::Type(_, ty) => quote! { #ty },

@@ -1,9 +1,7 @@
 //! Variables set under the framework's prefix that no config claims.
 //!
-//! A deployment that misspells a variable, or keeps a name a release renamed,
-//! gets the default and no signal: nothing ever asks for the value, so nothing
-//! can say it was ignored. This is where that silence ends. Two shapes are
-//! reported, at `warn`, once per variable, by name and never by value:
+//! Two shapes are reported, at `warn`, once per variable, by name and never by
+//! value:
 //!
 //! - **An unread key** — [`UNREAD_CONFIG_VARIABLE`]. The variable sits under a
 //!   namespace a config of this binary read, and names a key that nothing read.
@@ -11,97 +9,39 @@
 //!   near enough to be the intended one.
 //! - **A misspelled namespace** — [`MISSPELLED_CONFIG_NAMESPACE`]. The variable
 //!   spells a namespace this binary read otherwise than the loader reads it —
-//!   with other separators — `OAUTH_RESOURCE` for `oauth__resource`, the
-//!   family-level rename 7.0 made, or the level separator run into a word one,
-//!   `SEAORM_URL` for `SEAORM__URL`, the spelling every `DATABASE_URL` teaches;
-//!   in another case, prefix included, since the loader folds none; or one
-//!   misspelled segment of six letters or more away, a family member's included
-//!   — `PORBE_KEYS` for `probe_keys`, `PROBE__MEMBR` for `probe__member`
-//!   ([`is_near_miss`]) — **and the key after it is one that namespace reads**,
-//!   or one edit from one. The linked spelling comes back as `suggestion`.
+//!   other separators (`OAUTH_RESOURCE` for `oauth__resource`, `SEAORM_URL` for
+//!   `SEAORM__URL`), another case, prefix included, or one misspelled segment
+//!   of six letters or more (`PORBE_KEYS` for `probe_keys`, [`is_near_miss`]) —
+//!   **and the key after it is one that namespace reads**, or one edit from
+//!   one. The linked spelling comes back as `suggestion`.
 //!
-//! **Everything else is silent, and that is the design rather than a gap.** One
-//! `.env` routinely serves several binaries — the demo's `api` and `worker` link
-//! different configs — so a namespace this binary does not know, and that is no
-//! near miss of one it does, is another binary's, never a mistake. The near-miss
-//! reach is kept narrow for that reason, on both halves of the variable. On the
-//! namespace: one segment, a quarter of it, and only in a segment long enough
-//! to hold a typo that is not also a word — `auth`, `authz` and `es` are words
-//! beside `authn` and `ws`, and a product module named one of them is another
-//! binary's. On the key: a misspelled namespace still carries the key the
-//! deployment meant, which the near namespace reads, while another binary's
-//! variable carries its own — `OPENAI__API_KEY` names no key `openapi` reads.
-//! The conformance suite holds every namespace of both workspaces outside the
-//! namespace half of every other, so no binary of the tree reports a sibling's
-//! variables. The same reading makes a key holding `__` under a known namespace
-//! a sub-namespace some other binary links (`redis__queue` under `redis`),
-//! reported only when it is a near miss of a key read here.
+//! Everything else is silent: one `.env` serves several binaries, so a namespace
+//! this binary does not know, and no near miss of one it does, is another
+//! binary's. A key holding `__` under a known namespace is a sub-namespace
+//! another binary links (`redis__queue` under `redis`), reported only as a near
+//! miss of a key read here.
 //!
-//! A name with no `__` after the prefix holds no namespace, so it is compared
-//! with the names this process reads, whole, and reported only when it equals
-//! one of them once separators and case are set aside. No binary's namespaced
-//! variable has that shape — each carries `__` — so the names that do are the
-//! framework's own, and those are known from the constants that declare them:
-//! the prefix's bootstrap variable (`EnvPrefix::VAR`), the environment selector
-//! ([`Environment::var_name`](crate::Environment::var_name)) and the kernel's
-//! log settings (`nest_rs_core::logging::var`). No read makes them known — the
-//! kernel reads its own before this crate is reached, and the selector is read
-//! to choose the cascade the funnel then consults — and without them
-//! `<PREFIX>_LOG_FORMAT` would read as a misspelling in any binary whose own
-//! `log` namespace reads a `FORMAT` key. A tool's own variable, such as the
-//! CLI's bootstrap opt-out, equals no namespaced name and needs no entry.
+//! A name with no `__` after the prefix holds no namespace: it is reported only
+//! when it equals, separators and case aside, a name this process reads — the
+//! framework-wide ones (`EnvPrefix::VAR`,
+//! [`Environment::var_name`](crate::Environment::var_name), the kernel's log
+//! settings) included, known by declaration since no read makes them known.
 //!
-//! # Where it runs, and why there
+//! # Where it runs
 //!
-//! **A config's keys are knowable only where its `from_env` runs.** They reach
-//! the reader from a literal, a `const`, a sub-struct's own `from_env`, or a
-//! branch: `HttpCors` reads five of its six keys only when `CORS_ORIGINS` is
-//! set. So the key half runs inside [`read`](crate::read) — the one funnel
-//! every path into `from_env` takes — for the namespace just read, once per
-//! namespace per process, and only once a `from_env` in it has returned: an
-//! early `?` leaves the record partial, and a key it never reached is not a key
-//! nobody reads. By then the prefix is resolved and the `.env` cascade parsed,
-//! since the read consulted both, and an `App` boot has installed its
-//! subscriber.
+//! A config's keys are knowable only where its `from_env` runs, so the key half
+//! runs inside [`read`](crate::read), once per namespace, and only once a
+//! `from_env` in it has returned: an early `?` leaves the record partial. The
+//! namespace half runs at every read once the namespace has been read. A read
+//! ended by an error reports before the error ends the boot.
 //!
-//! One process-wide pass over every linked config was the alternative, and it
-//! is refused: it would have to run each `from_env` a second time against a
-//! recording source — developer code that may warn or open secret files — and
-//! any key behind a branch it did not take would be reported on a deployment
-//! that sets it correctly. A diagnostic that fires on the correct configuration
-//! teaches operators to filter the target out.
-//!
-//! **The namespace half runs once the namespace has been read**, for the same
-//! reason: the keys it reads are what tell a misspelling from another binary's
-//! variable, and they are known only once its `from_env` has run. It runs at
-//! every read after that — a read ended early knows part of its keys and a
-//! later one may know the rest — and still reports each variable once. A read
-//! ended by an error reports before the error ends the boot, so a renamed
-//! *required* variable is named ahead of the failure its absence causes.
-//!
-//! **A report waits for someone to hear it.** A read with nothing listening at
-//! `warn` on [`TARGET`](crate::TARGET) — a config loaded in `main` ahead of the
-//! subscriber an `App` installs — records what it read and reports nothing, and
-//! the first read that has a listener files what the earlier ones found. Marked
-//! as reported before anyone could hear it, a variable would be reported zero
-//! times, which is the silence this module exists to end; and a deployment that
-//! filters the target out pays nothing for the scan.
-//!
-//! A linked config that is never read has no known keys and its variables reach
-//! nothing in this binary, so it files no key report; the binary that reads it
-//! does. Only a reader backed by the environment
+//! A read with nothing listening at `warn` on [`TARGET`](crate::TARGET) records
+//! what it read and reports nothing; the first read with a listener files what
+//! the earlier ones found. Only a reader backed by the environment
 //! ([`ConfigService::for_namespace`](crate::ConfigService::for_namespace))
-//! triggers either half — a reader on a custom source says nothing about the
-//! variables a deployment exported.
-//!
-//! **Known** means asked for by a framework reader in this process: the
-//! [`ConfigService`](crate::ConfigService) funnel, which records both spellings
-//! of every key (`<KEY>` and `<KEY>_FILE`), and the free
-//! [`env_var`](crate::env_var) — plus the framework-wide names above, known by
-//! declaration. A namespace read without a `Config` behind it —
-//! `nest-rs-opentelemetry`'s, which runs before the container exists — is known
-//! as far as it was read, and gets no report of its own: nothing marks the
-//! moment its reads are complete, and no `#[config]` files it as linked.
+//! triggers either half. A namespace read without a `Config` behind it
+//! (`nest-rs-opentelemetry`'s) is known as far as it was read, and gets no
+//! report of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -214,15 +154,9 @@ impl Ledger {
     /// What `names` holds that no config claims, in a binary linking `linked`,
     /// given the reads recorded so far.
     ///
-    /// Each namespace's keys are checked once — the keys of every namespace
-    /// whose read finished since the last check, so a read nobody heard is
-    /// checked by the next one somebody does. Its misspellings are looked for at
-    /// every check once it has been read, against the keys known by then: a
-    /// misspelling is reported only under a key the namespace reads, and a read
-    /// that ends early knows part of them, so a later read may add the rest. A
-    /// variable two of those checks can both see — a namespace read before a
-    /// longer one the binary links only by a hand-written `Namespaced` — is
-    /// still reported once.
+    /// Each namespace's keys are checked once, after a read that finished; its
+    /// misspellings at every check, against the keys known by then. A variable
+    /// two checks both see is still reported once.
     fn check(&mut self, names: &BTreeSet<String>, linked: &[&str]) -> Vec<Unclaimed> {
         self.known.extend(framework_wide());
         let owners: BTreeSet<&str> = linked
@@ -274,9 +208,7 @@ static LEDGER: Mutex<Ledger> = Mutex::new(Ledger::new());
 
 /// Record that a framework reader asked for `name`.
 ///
-/// A poisoned ledger skips the record rather than panicking the read: a missed
-/// diagnostic is a diagnostic, while a config read that aborts over the
-/// bookkeeping of a warning would make the warning an outage of its own.
+/// A poisoned ledger skips the record rather than failing the read.
 pub(crate) fn witness(name: &str) {
     let Ok(mut ledger) = LEDGER.lock() else {
         return;
@@ -392,19 +324,11 @@ fn unread_keys(
 /// ([`is_near_miss`]) — **and whose key is one that namespace reads**, or one
 /// edit from one.
 ///
-/// The key is what makes the report safe on a deployment several binaries
-/// share. A namespace this binary does not link is another binary's, and a
-/// short framework namespace is one edit from plenty of words a product module
-/// may be named — `openai` beside `openapi`, `auth` beside `authn` — so a near
-/// miss on the namespace alone told an operator to move another binary's
-/// variable under a namespace that does not even read its key. Typed under a
-/// misspelled namespace, the key is still the one the deployment meant, so it
-/// is still a key this namespace reads; another binary's variable almost never
-/// is. A namespace not read yet knows no key, and is looked for once it is.
+/// The key half keeps another binary's variable silent: `openai` is one edit
+/// from `openapi`, but `OPENAI__API_KEY` names no key `openapi` reads.
 ///
-/// The loader is exact — `var_name` upper-cases the namespace, and neither the
-/// process environment nor the cascade folds case — so a namespace is spelled
-/// correctly only as that exact text, under the exact prefix. The longest split
+/// The loader is exact, so a namespace is spelled correctly only as that exact
+/// text, under the exact prefix. The longest split
 /// at a `__` that names an owned namespace exactly makes the variable that
 /// namespace's, and whatever follows is its key: the key half judges it —
 /// unless a longer split is a near miss of a member of that namespace's own
@@ -497,20 +421,16 @@ fn strip_root<'n>(name: &'n str, root: &str) -> Option<(bool, &'n str)> {
 const TYPO_REACH_MIN_LEN: usize = 6;
 
 /// Whether `written` is a near miss of the namespace `namespace` — the
-/// namespace half of the rule the misspelled-namespace report applies, exposed
-/// so a suite can hold a tree's own namespaces apart by it: two linked
-/// namespaces that are near misses of each other would each report the other's
-/// variables. The report adds the key half: see `misspelled_namespaces`.
+/// namespace half of the misspelled-namespace report, for a suite to hold a
+/// tree's own namespaces apart by.
 ///
 /// Equal once separators and case are set aside is nearest of all. Otherwise
 /// the two must have as many `__` segments, all equal but one — separators and
 /// case set aside — and that one, at least `TYPO_REACH_MIN_LEN` letters as
 /// linked, within a quarter of its longer spelling, at least one edit:
 /// `PORBE_KEYS` for `probe_keys`, `PROBE__MEMBR` for `probe__member`.
-/// **Tighter than a key's reach, deliberately**: a namespace a binary does not
-/// link is another binary's, and siblings of one family share every segment but
-/// the last — `social__github` and a `social__gitlab` must not read as one
-/// misspelled for the other, where a third of a segment would.
+/// Tighter than a key's reach: `social__github` and `social__gitlab` must not
+/// read as one misspelled for the other.
 pub fn is_near_miss(written: &str, namespace: &str) -> bool {
     near_miss(written, namespace).is_some()
 }
@@ -540,10 +460,8 @@ fn near_miss(written: &str, namespace: &str) -> Option<usize> {
 /// case are set aside, a name read under a namespace this binary owns —
 /// `SEAORM_URL` for `SEAORM__URL`.
 ///
-/// Such a name holds no namespace, so the two checks above cannot see it; and it
-/// is never another binary's namespaced variable, since every one of those
-/// carries `__`. The suggestion is therefore a name this binary actually reads,
-/// never a guess at one: a name that equals nothing read is left alone.
+/// Such a name is never another binary's namespaced variable, so the
+/// suggestion is a name this binary reads; one equal to nothing read is left alone.
 fn run_together(
     names: &BTreeSet<String>,
     known: &BTreeSet<String>,
@@ -869,9 +787,8 @@ mod tests {
         assert!(is_near_miss("SEAROM", "seaorm"), "six letters hold a typo");
     }
 
-    /// config-2r2: under six letters a namespace has no room for a typo that is
-    /// not also another word, so a short segment is a near miss only through its
-    /// separators and its case.
+    /// A segment under six letters is a near miss only through its separators
+    /// and its case.
     #[test]
     fn a_short_segment_is_a_near_miss_only_by_its_separators_and_case() {
         for (written, linked) in [
@@ -891,10 +808,8 @@ mod tests {
         assert!(is_near_miss("Redis", "redis"), "case set aside");
     }
 
-    /// config-2r2, the key half: a near miss of a namespace this binary read is
-    /// reported only under a key that namespace reads, or one edit from one —
-    /// so another binary's `OPENAI__API_KEY` beside a linked `openapi` stays
-    /// silent while a typo carrying `openapi`'s own key does not.
+    /// A near miss of a namespace is reported only under a key that namespace
+    /// reads, or one edit from one.
     #[test]
     fn a_near_namespace_is_reported_only_under_a_key_it_reads() {
         let known = set(&[

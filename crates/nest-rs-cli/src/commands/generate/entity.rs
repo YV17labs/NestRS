@@ -2,27 +2,12 @@
 //! existing feature, without the `CrudService` and guarded controller that
 //! `g resource` brings with it.
 //!
-//! **The positional is the feature**, exactly as it is for `g http` and every
-//! other generator that bolts something onto an existing port; the optional
-//! `/<name>` tail is the entity's own name for when the feature's singular is
-//! not it (`g entity posts` ⇒ `Post`, `g entity posts/comment` ⇒ `Comment`).
-//!
-//! **Placement follows what the feature already holds**, because the naming law
-//! gives a role one file per folder: no entity yet ⇒ the lone `entity.rs`; an
-//! `entities/` folder already there ⇒ one more bare-named file in it.
-//!
-//! The third case — a lone `entity.rs` that would now become the first of
-//! several — is **refused** ([`CliError::EntitiesFolderRequired`]), and that is a
-//! decision, not a gap. Doing the move would mean rewriting files the developer
-//! has already edited: every `super::` path inside the moved entity gains a
-//! level, and every `super::entity::` path elsewhere in the feature has to
-//! follow. SeaORM's canonical relation form spells those paths **inside string
-//! literals** (`#[sea_orm(belongs_to = "super::org::Entity")]`), so a textual
-//! rewrite either misses them or, if it does reach into strings, corrupts prose
-//! that merely mentions one — silently, in code the compiler will blame on the
-//! framework. The scaffolder has no move or delete action for the same reason
-//! `create` refuses to clobber: a generator writes files, it does not refactor
-//! them. So the refusal names the four mechanical steps and gets out of the way.
+//! The positional is the feature; the optional `/<name>` tail names the entity
+//! when the feature's singular is not it (`g entity posts/comment` ⇒ `Comment`).
+//! No entity yet ⇒ the lone `entity.rs`; an `entities/` folder ⇒ one more file in
+//! it. A lone `entity.rs` becoming the first of several is **refused**
+//! ([`CliError::EntitiesFolderRequired`]): moving it means rewriting `super::`
+//! paths SeaORM spells inside string literals, so the refusal names the steps.
 
 use std::path::{Path, PathBuf};
 
@@ -61,15 +46,12 @@ impl Target {
     fn parse(raw: &str) -> CliResult<Self> {
         let mut segments = raw.split('/');
         let feature = segments.next().unwrap_or_default();
-        // No tail ⇒ the entity is the feature's singular, which is what
-        // `g resource` already derives.
         let entity = segments.next().unwrap_or(feature);
         if segments.next().is_some() {
             return Err(CliError::InvalidEntityTarget(raw.to_owned()));
         }
-        // Each segment is validated on its own: the shared validator rejects a
-        // path separator outright, which is exactly what makes it safe here —
-        // `..` or a nested path in either half never reaches the filesystem.
+        // The shared validator rejects a path separator, so `..` or a nested path in
+        // either half never reaches the filesystem.
         for segment in [feature, entity] {
             crate::naming::validate_feature_name(segment).map_err(CliError::InvalidFeatureName)?;
         }
@@ -104,10 +86,8 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     let r = Renderer::new(&target.entity).with("stem", stem.clone());
     let mut s = Scaffold::new();
 
-    // The port's `mod.rs` is read up front, not matched inside the transform:
-    // `ensure_lines` compares a line verbatim, so a feature already declaring
-    // `pub mod entities;` would gain a duplicate `mod entities;` rather than a
-    // no-op — a second definition of the same module, which does not compile.
+    // Read up front: `ensure_lines` compares verbatim, so an existing
+    // `pub mod entities;` would gain a duplicate `mod entities;`.
     let mod_rs = root.join("mod.rs");
     let mod_src = std::fs::read_to_string(&mod_rs).unwrap_or_default();
     let mut port_lines = Vec::new();
@@ -130,9 +110,8 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
             if !declares_mod(&mod_src, "entities") {
                 port_lines.push("mod entities;".to_owned());
             }
-            // The module, not a glob: two entities re-exported flat would
-            // collide on `Entity`, `Model` and `Column`. The exemplar
-            // (`demo/…/posts/mod.rs`) exports the secondary the same way.
+            // The module, not a glob: two entities re-exported flat would collide on
+            // `Entity`, `Model` and `Column`.
             port_lines.push(format!("pub use entities::{stem};"));
             root.join(format!("entities/{stem}.rs"))
         }
@@ -140,9 +119,6 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     s.create(file, r.render(entity::ENTITY));
     s.edit(mod_rs, ensure_lines(port_lines));
 
-    // What the entity's own source names: `sea-orm` and `serde` in its imports,
-    // `nest-rs` for `expose` and the `SoftDeletable` its `soft_delete` expands
-    // to. One `edit` per manifest.
     let deps = entity_deps();
     s.edit(
         ws.root.join("Cargo.toml"),
@@ -171,10 +147,8 @@ fn placement(root: &Path, feature: &Names) -> CliResult<Placement> {
     if lone.is_file() {
         return Err(CliError::EntitiesFolderRequired {
             feature: feature.snake.clone(),
-            // The name the *existing* entity's file takes once moved. Read from
-            // its own `table_name`, because the feature's singular is only the
-            // right answer when nobody renamed it — and a remedy naming the
-            // wrong file is worse than no remedy.
+            // The existing entity's new file name, read from its own `table_name`: the
+            // feature's singular is wrong once someone renamed it.
             stem: existing_stem(&lone).unwrap_or_else(|| feature.table()),
         });
     }
@@ -185,8 +159,7 @@ fn placement(root: &Path, feature: &Names) -> CliResult<Placement> {
 }
 
 /// The bare file name a lone `entity.rs` would take inside `entities/`, read
-/// from the `#[sea_orm(table_name = "…")]` it already declares — snake singular
-/// by construction, since that is what the table is.
+/// from the `#[sea_orm(table_name = "…")]` it already declares.
 fn existing_stem(entity_rs: &Path) -> Option<String> {
     let source = std::fs::read_to_string(entity_rs).ok()?;
     let (_, rest) = source.split_once("table_name = \"")?;
@@ -223,9 +196,6 @@ fn print_next_steps(target: &Target, placement: Placement, stem: &str) {
         "  1. Fill in `{file}` columns, then:  nestrs g migration create_{}",
         target.entity.snake
     );
-    // The omission is deliberate and invisible in the file, so it is stated
-    // here: `#[expose(service = …)]` names the one `CrudService` whose
-    // `type Entity` is this entity, and `g entity` writes no service at all.
     println!("  2. Link it to its service — `#[expose]` names none, because a `CrudService`");
     match placement {
         Placement::Lone => {
@@ -270,8 +240,6 @@ mod tests {
         let target = Target::parse("posts/user-identities").expect("valid");
         assert_eq!(target.feature.snake, "posts");
         assert_eq!(target.entity.entity(), "UserIdentity");
-        // The stem is the file name inside `entities/` — snake singular, the
-        // shape `demo/…/users/entities/user_identity.rs` carries.
         assert_eq!(target.stem(), "user_identity");
     }
 
@@ -281,8 +249,6 @@ mod tests {
             Target::parse("a/b/c"),
             Err(CliError::InvalidEntityTarget(_))
         ));
-        // Both halves go through the shared validator, so a traversal in either
-        // one is refused before any path is joined.
         assert!(matches!(
             Target::parse("../escape"),
             Err(CliError::InvalidFeatureName(_))

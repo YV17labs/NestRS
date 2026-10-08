@@ -10,10 +10,7 @@ fn registers_health_service() {
     assert!(svc.is_some());
 }
 
-/// The `for_root` seam, booted — the composition witness *Shipping a new
-/// capability* asks every seam for. It proves what `registers_health_service`
-/// cannot: that the pinned ceilings survive the boot and reach the container a
-/// probe reads them from.
+/// The `for_root` seam, booted.
 mod for_root {
     use nest_rs_core::module;
     use nest_rs_health::{HealthConfig, HealthModule};
@@ -44,8 +41,6 @@ mod for_root {
         assert_eq!(config.indicator_timeout(), Duration::from_millis(120));
         assert_eq!(config.probe_deadline(), Duration::from_millis(250));
 
-        // Pinning configures; it never replaces the wiring the bare import
-        // brings, so the probes answer exactly as they do without it.
         app.http()
             .get("/health/ready")
             .send()

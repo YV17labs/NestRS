@@ -2,14 +2,11 @@
 //!
 //! Interceptors — the wrap-handler slot of the Layer System.
 //!
-//! An [`Interceptor`] sees the inputs before the handler runs and the
-//! outputs after. `intercept` (HTTP) is the only entry the framework wires
-//! today: a **global** interceptor wraps the whole routing tree at the
-//! transport edge (so it also observes 404s, guard denials, and
-//! self-mounted surfaces — a GraphQL `POST` or WS upgrade is an HTTP
-//! request); a **controller / method** interceptor wraps its handler,
-//! inside the guard chain. There is no per-resolver / per-message seam —
-//! a former reserved one was removed until it is actually wired.
+//! An [`Interceptor`] sees the inputs before the handler runs and the outputs
+//! after. A **global** interceptor wraps the whole routing tree at the transport
+//! edge, so it also observes 404s, guard denials and self-mounted surfaces (a
+//! GraphQL `POST` or WS upgrade is an HTTP request); a **controller / method**
+//! interceptor wraps its handler, inside the guard chain.
 //!
 //! `Interceptor` is a [`Layer`](nest_rs_core::Layer) sub-trait, so global + per-scope
 //! declarations dedup by [`TypeId`](std::any::TypeId) at mount time
@@ -63,10 +60,5 @@ pub use builder::AppBuilderInterceptorsExt;
 pub use ext::InterceptorExt;
 pub use interceptor::{Interceptor, InterceptorChain, InterceptorEndpoint, Next};
 pub use registry::{InterceptorSpec, InterceptorSpecs, interceptor};
-// Re-exported so a crate writing an `Interceptor` impl needs no direct
-// `async-trait` dependency of its own. `nest-rs-http`, `nest-rs-queue` and
-// `nest-rs-ws` already do this; the layer crates did not, so the one import a
-// reader needed most was the one no page could name — and the miss cascades
-// (without the attribute, every trait method reports a lifetime mismatch, so
-// the real cause is buried under four unrelated errors).
+// Re-exported so an `Interceptor` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;

@@ -15,19 +15,9 @@ pub(crate) mod shared;
 pub(crate) mod workspace;
 
 /// Every template module, as `(file name, source)` — **read from the
-/// directory**, never listed. A list is edited by a different hand than the one
-/// that adds a template, and the list this replaced had already lost `crud.rs`:
-/// the module that renders every adapter's handler body sat outside both guards
-/// below while the doc above them claimed the population was scanned.
-///
-/// `include_str!` cannot glob, so the scan is a `read_dir` at test time. It is
-/// `#[cfg(test)]`-only, so nothing ships a runtime directory read.
-///
-/// **One scan, three guards.** `generate::cargo`'s Rust-floor sweep reads the
-/// same corpus, and the two spelled it apart: this one excluded `mod.rs` and
-/// checked a floor, that one did neither — so a change to what counts as a
-/// template file had to be made twice, or one guard silently stopped seeing
-/// part of the corpus. Which is the failure this scan exists to prevent.
+/// directory**, never listed, so no template escapes the guards below.
+/// `include_str!` cannot glob, so the scan is a test-only `read_dir`; the
+/// `generate::cargo` sweep reads the same corpus.
 #[cfg(test)]
 pub(crate) fn sources() -> Vec<(String, String)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
@@ -35,8 +25,6 @@ pub(crate) fn sources() -> Vec<(String, String)> {
         .expect("the templates directory")
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
-        // The folder index is not a template: it declares the modules the
-        // others are.
         .filter(|path| path.file_name().and_then(|n| n.to_str()) != Some("mod.rs"))
         .collect();
     files.sort();
@@ -52,8 +40,7 @@ pub(crate) fn sources() -> Vec<(String, String)> {
             )
         })
         .collect();
-    // Finding nothing reads exactly like finding nothing wrong, so the scan
-    // says it is still matching.
+    // Finding nothing reads exactly like finding nothing wrong.
     assert!(
         found.len() >= 10,
         "the templates scan found {} modules — it stopped matching, and a \
@@ -68,17 +55,15 @@ mod tests {
     use super::sources;
 
     /// A template that spells `NESTRS_` writes a variable an `--env-prefix`
-    /// project never reads — a `.env` key silently inert, or a generated tool
-    /// looking at the wrong name. The placeholder is the only legal form, so
-    /// the guard is mechanical rather than a review habit.
+    /// project never reads; the placeholder is the only legal form.
     #[test]
     fn templates_use_the_env_prefix_placeholder_not_a_literal() {
         let scanned = sources();
         let literals: Vec<&str> = scanned
             .iter()
             .flat_map(|(_, src)| src.lines())
-            // Rust doc/line comments in the CLI's own source describe the
-            // scheme; only the emitted template strings are the contract.
+            // Comments in the CLI's own source describe the scheme; only the emitted
+            // template strings are the contract.
             .filter(|line| !line.trim_start().starts_with("//"))
             .filter(|line| line.contains("NESTRS_"))
             .map(str::trim)
@@ -90,11 +75,7 @@ mod tests {
     }
 
     /// `container.md`, *Every wait the framework owns is bounded*: a scaffolded
-    /// binary's `main` is `#[nest_rs::main]`, which tears the runtime down within
-    /// the shutdown budget, never `#[tokio::main]`, whose runtime drop waits on
-    /// whatever an abandoned unit left blocking. The repository's own sources
-    /// are held to it by the conformance suite's `entries` join; templates are
-    /// strings, so they are held here.
+    /// binary's `main` is `#[nest_rs::main]`, never `#[tokio::main]`.
     #[test]
     fn every_scaffolded_entry_point_runs_on_nest_rs_main() {
         /// The app's `main`, the migration runner's and the seed's.
@@ -132,14 +113,10 @@ mod tests {
         );
     }
 
-    /// `CLAUDE.md`: *metadata is mandatory — a bare log is a defect*. A scaffold
-    /// emits what the rules mandate, so a template that logs without a field
-    /// ships that defect into every generated project. The whole framework holds
-    /// this at zero; the generated code has to as well.
+    /// `CLAUDE.md`: a log line carries at least one field.
     ///
     /// Matches the macro-call shape (`tracing::<level>!(target: …`), so prose
-    /// mentioning `tracing::` never trips it. The target ends at its comma
-    /// whichever way it is spelled, and the next field must come before the
+    /// mentioning `tracing::` never trips it; the next field must come before the
     /// message's opening quote.
     #[test]
     fn no_scaffolded_log_is_emitted_without_a_structured_field() {
@@ -163,11 +140,8 @@ mod tests {
         );
     }
 
-    /// `CLAUDE.md`: a target is a constant its owner declares, never a literal
-    /// at the call site — and a scaffold emits what the rules mandate. A feature
-    /// declares `TARGET` at its root and its files log on `crate::<feature>::TARGET`,
-    /// the shape the demo follows. Nothing else reads a template's logs, so
-    /// this is the check.
+    /// `CLAUDE.md`: a target is a constant its owner declares, never a literal at
+    /// the call site — a feature's files log on `crate::<feature>::TARGET`.
     #[test]
     fn no_scaffolded_log_spells_its_target_as_a_literal() {
         let scanned = sources();

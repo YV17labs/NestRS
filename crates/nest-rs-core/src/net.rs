@@ -13,13 +13,10 @@ use crate::error::BudgetPastNetError;
 /// What a port waits on a call before it gives up and answers in its own
 /// terms: a guard denies, a push fails, a claim skips its occurrence.
 ///
-/// A net is the framework's bound on a backend that stopped bounding itself,
-/// never the backend's budget: a resource still fails within its own
-/// [`Budget`], with its cause, and a net at or under it would cut that answer
-/// short and say a bare timeout instead. So the boot refuses every budget at
-/// or past a net that reaches it ([`BudgetPastNetError`]). Declared as
-/// metadata (`builder.provide_meta(Net::over::<R>(…))`) by whoever arms it,
-/// in one of two reaches.
+/// A net bounds a backend that stopped bounding itself; a resource's own
+/// [`Budget`] must fail first, with its cause, so the boot refuses a budget at
+/// or past a net that reaches it ([`BudgetPastNetError`]). Declared as metadata
+/// (`builder.provide_meta(Net::over::<R>(…))`).
 #[derive(Debug)]
 pub struct Net {
     port: &'static str,
@@ -80,8 +77,6 @@ pub(crate) fn check_budgets(
         return Ok(());
     }
     let mut budgets: Vec<(&Budget, bool)> = Vec::new();
-    // One budget declared by several bindings is held once, ambient if any
-    // declaration is; two budgets of one resource are two waits, each held.
     for budget in builder.attached_meta::<Budget>() {
         match budgets.iter_mut().find(|(seen, _)| {
             seen.provider() == budget.provider() && seen.resource() == budget.resource()

@@ -1,10 +1,5 @@
-//! GraphQL decorator macros, re-exported by `nest-rs-graphql`. Generated code
-//! uses absolute paths, so this crate does not depend on the surface crate.
-//!
-//! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on the
-//! struct = construction (DI); `#[operations]` on its impl =
-//! `#[query]`/`#[mutation]`/`#[subscription]`/`#[field_resolver]`
-//! orchestration.
+//! GraphQL decorator macros, re-exported by `nest-rs-graphql`: `#[resolver]` on
+//! the struct (construction), `#[operations]` on its impl (the operations).
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -14,8 +9,8 @@ mod crud;
 mod dataloader;
 mod resolver;
 
-/// The operations themselves go under [`macro@operations`] on the impl block —
-/// one decorator per item shape, the same split as `#[controller]`/`#[routes]`.
+/// Declares a GraphQL resolver struct; its operations go under
+/// [`macro@operations`] on the impl block.
 ///
 /// `#[use_guards(...)]` here runs before every operation on the impl;
 /// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
@@ -37,16 +32,13 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// submitted to the link-time registry; `#[field_resolver]` methods become
 /// `#[ComplexObject]` impls on the parent type.
 ///
-/// The GraphQL counterpart of `#[routes]` and `#[messages]` — named for what it
-/// collects, because the spec calls a query or a mutation an *operation*.
 /// `#[use_guards(...)]` belongs on the struct beside `#[resolver]`, not here.
 ///
 /// **Every `#[query]`/`#[mutation]`/`#[subscription]` declares its access
 /// posture** — forgetting one is a compile error, never a silently ungated
 /// operation:
 ///
-/// - `#[authorize(Action, Entity)]` — the GraphQL analog of the HTTP
-///   `Authorize<A, E>` extractor: the macro emits the class-level gate
+/// - `#[authorize(Action, Entity)]` — the macro emits the class-level gate
 ///   (`nest_rs_authz::graphql::authorize`) before the call and automatic
 ///   response masking (`masked_value_for`) after it. The mask sees through the
 ///   wire DTO itself, `Option<…>` and `Vec<…>`; scalars pass through; an
@@ -54,7 +46,6 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
 ///   shape (e.g. a cursor connection) yourself via
 ///   `nest_rs_authz::masked_output_ambient`.
-///   Requires a `Result` return so denials can surface.
 /// - `#[public]` — deliberately ungated: no `#[authorize]` gate, no response
 ///   mask. Struct- and method-level `#[use_guards]` still run.
 ///
@@ -70,13 +61,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// literally-spelled `Result<…>`; an aliased `Result` is a compile error that
 /// names itself.
 ///
-/// **One `#[ComplexObject]` per wire type.** async-graphql allows at most one
-/// `#[ComplexObject]` impl per output type. A `#[field_resolver]` here and an
-/// auto-resolved `#[expose]`d relation on the *same* entity both emit one, so
-/// they collide — the compiler reports a coherence error (`E0119`) deep in the
-/// expansion, not a friendly message. Pick a single source per type: either let
-/// the relation auto-resolve, or drop `#[expose]` on that relation and write the
-/// field yourself.
+/// **One `#[ComplexObject]` per wire type** (an async-graphql limit): a
+/// `#[field_resolver]` and an auto-resolved `#[expose]`d relation on the same
+/// entity collide as `E0119` deep in the expansion. Pick one source per type.
 ///
 /// # Expands to
 ///
@@ -95,8 +82,9 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(resolver::operations(args, input).into()).into()
 }
 
-/// It stands in for `#[operations]`, never beside it. Operation names derive
-/// from the output type (`User` → `users`/`user`/`create_user`/…).
+/// Generates the CRUD operations of a resolver; it stands in for
+/// `#[operations]`, never beside it. Operation names derive from the output type
+/// (`User` → `users`/`user`/`create_user`/…).
 ///
 /// `#[crud(service = svc, entity = …::Entity, output = Dto, create = CreateDto,
 /// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`, where
@@ -106,7 +94,7 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `ops` selects which operations to generate (omit for all five). A `create`/
 /// `update` op needs its input type and the service's `Creatable`/`Updatable`
 /// impl; `delete` needs `Deletable`. Requesting an op without its type is a
-/// compile error — a resource exposes only the operations it actually has.
+/// compile error.
 ///
 /// The generated list query is **keyset-paginated by default**
 /// (`first: Int, after: ID` — `after` is the previous page's last `id`,
@@ -116,11 +104,8 @@ pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Expands to
 ///
 /// The missing operation methods — each delegating to the entity's
-/// `CrudService` and declaring its posture with `#[authorize(Action, Entity)]`
-/// exactly as a hand-written operation would (gate + response mask come from
-/// `#[operations]`' posture expansion, one mechanism for both) — prepended to
-/// the impl block, then the whole block re-emitted under `#[operations]`; the
-/// hand-written methods are kept as they are.
+/// `CrudService` and declaring `#[authorize(Action, Entity)]` — prepended to the
+/// impl block, then the whole block re-emitted under `#[operations]`.
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
@@ -130,17 +115,13 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `Result<HashMap<K, V>, E>`) generates a hidden `Loader` named
 /// `<Owner><Name>` and submits a `GraphqlLoaderRegistration` to the link-time
 /// registry — no `#[module(providers = [...])]` entry. The loader is
-/// **request-scoped**: rebuilt per request from the fully assembled container
-/// (so import order is irrelevant) and seeded into the GraphQL context, read
-/// by a `#[field_resolver]` as `&DataLoader<…>`.
+/// **request-scoped**, seeded into the GraphQL context and read by a
+/// `#[field_resolver]` as `&DataLoader<…>`.
 ///
 /// # Generated loader names
 ///
 /// The loader type is named **`{Owner}{PascalMethod}`** — the owning struct's
-/// name followed by the method name in PascalCase. A hand-typed wrong name is
-/// already a compile error (the type doesn't exist); this table makes the
-/// correct name discoverable so you don't guess. Each generated struct also
-/// carries a doc comment stating what it is and which method it came from.
+/// name followed by the method name in PascalCase.
 ///
 /// | Owner struct | `#[dataloader]` method | Generated loader |
 /// |---|---|---|

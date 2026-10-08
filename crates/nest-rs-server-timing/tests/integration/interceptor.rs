@@ -1,12 +1,5 @@
-//! The composition witness: the documented import, booted, and the header a
-//! caller reads back.
-//!
-//! The crate shipped with no test target at all — three files of header
-//! assembly, and the one claim its README makes ("importing
-//! `ServerTimingModule` adds a `Server-Timing` header to every response")
-//! proved nowhere. The interceptor is *infra*, auto-mounted by the import and
-//! off the layer pool, so a regression in the mount is invisible to every unit
-//! test in `src/`; only a boot can see it.
+//! The documented import, booted, and the header a caller reads back: the
+//! interceptor is mounted by the import, so only a boot can see it.
 
 use std::time::Duration;
 
@@ -20,8 +13,7 @@ struct ProbeController;
 
 #[routes]
 impl ProbeController {
-    /// Records one sub-step the documented way: pull [`Timings`] out of the
-    /// request extensions and name a duration.
+    /// Records one sub-step the documented way, through [`Timings`].
     #[get("/")]
     #[public]
     async fn index(&self, req: &nest_rs_http::poem::Request) -> String {

@@ -1,26 +1,12 @@
 //! [`Checkpoint`] — progress a job keeps across its retries and redeliveries —
 //! and [`CheckpointStore`], what a backend implements to keep it.
 //!
-//! **The latest save, whatever the backend's own snapshot.** A backend reads a
-//! job's state when the delivery starts; this crate remembers every save made
-//! through the delivery, so an attempt run again inside one delivery reads what
-//! the attempt before it saved, on every backend alike.
+//! A backend reads a job's state when the delivery starts; this crate remembers
+//! every save made through the delivery, so an attempt run again inside one
+//! delivery reads what the attempt before it saved.
 //!
-//! **Never inside the attempt's transaction.** A checkpoint is written to the
-//! queue backend at once, while a transactional attempt rolls its database work
-//! back when it fails — its retry would resume past work that was undone. So the
-//! decorator refuses a `Checkpoint<_>` parameter unless the method declares
-//! `transactional = false`.
-//!
-//! **Gone with the job.** The backend lets a job's checkpoint go in the step
-//! that ends the job — completed, dead-lettered or cancelled
-//! ([`Disposition`](crate::Disposition)); a retry, on this delivery or a later
-//! one, keeps it.
-//!
-//! **Never waited on past [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT).** A
-//! store silent past the net fails the call with
-//! [`QueueError::Unanswered`], naming the job's queue: a read fails the
-//! attempt, retryably, and so does a save the method returns with `?`.
+//! The backend lets a job's checkpoint go in the step that ends the job
+//! ([`Disposition`](crate::Disposition)); a retry keeps it.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -36,9 +22,7 @@ use crate::{JobError, QueueError, QueueName};
 /// [`JobId`](crate::JobId), so every delivery of the job reads the same one.
 ///
 /// The port waits [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for each call's
-/// answer, then drops the call where it stands: bound each round trip well
-/// inside it, as the Redis adapter's connection does, so a store that cannot
-/// answer says why before the net gives up on it.
+/// answer, then drops the call: bound each round trip well inside it.
 #[async_trait]
 pub trait CheckpointStore: Send + Sync + 'static {
     /// The state saved for the job before this delivery started, if any.
@@ -134,9 +118,8 @@ impl CheckpointCell {
 /// It lasts through the job's retries and through a redelivery after the
 /// replica holding the job died, and is cleared when the job completes,
 /// dead-letters or is cancelled. The method must declare
-/// `transactional = false` — a checkpoint is saved to the queue backend at once,
-/// while a transactional attempt rolls its database work back when it fails, so
-/// the retry would resume past work that was undone.
+/// `transactional = false`: a checkpoint is saved at once, so a rolled-back
+/// attempt's retry would resume past work that was undone.
 pub struct Checkpoint<S> {
     cell: Arc<CheckpointCell>,
     state: Option<S>,
@@ -235,9 +218,6 @@ mod tests {
         QueueName::new("imports").expect("a valid name")
     }
 
-    /// A backend's store answers with its snapshot from the start of the
-    /// delivery; an attempt run again inside that delivery must still read the
-    /// save the attempt before it made.
     #[tokio::test]
     async fn a_second_attempt_in_one_delivery_reads_the_first_attempts_save() {
         let store = Arc::new(MemoryStore::default());

@@ -1,19 +1,3 @@
-//! Opt-in soft-delete markers and read filters.
-//!
-//! Entities declare [`SoftDeletable`] via `#[expose(..., soft_delete)]`; services
-//! opt in through [`CrudService::soft_delete_column`](crate::CrudService::soft_delete_column).
-//! Hand-written queries that bypass `CrudService` should AND
-//! [`live_condition`] onto [`Repo::scoped`](crate::Repo::scoped).
-//!
-//! **The two halves are checked at boot.** An entity carrying the flag whose
-//! service never overrides the column is not a half-configured feature — it is
-//! an irreversible one: `DELETE` erases the row for good, reads never filter
-//! `deleted_at`, and the wire response is byte-for-byte the one a successful
-//! tombstone returns. `#[expose]` submits the pair to
-//! [`SoftDeleteRegistration`] at link time and [`SoftDeleteAudit`] refuses boot
-//! on a mismatch, which is the only moment both facts are knowable without a
-//! row having already been destroyed.
-
 use sea_orm::sea_query::Condition;
 use sea_orm::{ColumnTrait, EntityTrait};
 
@@ -32,24 +16,16 @@ pub fn live_condition<E: SoftDeletable>() -> Condition {
     live_condition_for_column(E::deleted_at_column())
 }
 
-/// The `<col> IS NULL` live-row predicate, built from a tombstone column — the
-/// single source of "what a live row looks like" shared by [`live_condition`]
-/// and `CrudService::live_read_filter`.
 pub(crate) fn live_condition_for_column<C: ColumnTrait>(col: C) -> Condition {
     Condition::all().add(col.is_null())
 }
 
 /// One `#[expose(..., soft_delete)]` entity and the service it named, submitted
-/// at link time so `SoftDeleteAudit` can compare the entity's half against the
-/// service's.
+/// at link time for the boot audit; emitted by the decorator, never by hand.
 ///
-/// Every field is a fn pointer rather than a value: `table_name()`,
-/// `type_name::<S>()` and `soft_delete_column()` are all calls, and the entry
-/// has to be constructible in a `static`. Emitted by the decorator, never
-/// written by hand.
+/// Fn pointers, since each value is a call and the entry must be a `static`.
 pub struct SoftDeleteRegistration {
-    /// The entity's table name — what the audit reports, and what
-    /// `CrudService::entity_name` logs.
+    /// The entity's table name.
     pub entity: fn() -> &'static str,
     /// The service `#[expose(service = …)]` named, for the message.
     pub service: fn() -> &'static str,
@@ -61,11 +37,6 @@ pub struct SoftDeleteRegistration {
 inventory::collect!(SoftDeleteRegistration);
 
 /// The boot refusal for a half-wired tombstone.
-///
-/// A lifecycle hook rather than a `SeaOrmDatabaseModule` factory for the same reason
-/// `AudienceBinding` is one: it depends on nothing built in the collect phase,
-/// so running it after every provider exists makes the answer independent of
-/// import order — and an `Err` from `#[on_module_init]` aborts boot.
 #[nest_rs_core::injectable]
 #[derive(Default)]
 pub(crate) struct SoftDeleteAudit;
@@ -78,12 +49,10 @@ impl SoftDeleteAudit {
     }
 }
 
-/// Run the soft-delete audit over every `#[expose(..., soft_delete)]` entity
-/// linked into this binary.
-///
-/// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) runs it at boot; it is public so an
-/// app that composes the ORM some other way — and any test that wants the answer
-/// without booting — can ask for the same verdict.
+/// Refuse an `#[expose(..., soft_delete)]` entity linked into this binary whose
+/// service does not override `CrudService::soft_delete_column`: its `DELETE`
+/// would erase the row for good. [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule)
+/// runs it at boot.
 pub fn audit_soft_delete_bindings() -> anyhow::Result<()> {
     let pairs: Vec<_> = inventory::iter::<SoftDeleteRegistration>
         .into_iter()
@@ -93,9 +62,6 @@ pub fn audit_soft_delete_bindings() -> anyhow::Result<()> {
 }
 
 /// `Err` naming every entity whose `soft_delete` flag no service backs.
-///
-/// Split from the hook so it is testable without a link-time registry: the hook
-/// only resolves the fn pointers.
 fn audit(pairs: &[(&str, &str, bool)]) -> anyhow::Result<()> {
     let unbound: Vec<String> = pairs
         .iter()
@@ -135,9 +101,6 @@ mod tests {
 
     #[test]
     fn a_service_without_the_override_fails_boot_naming_both_halves() {
-        // The regression this exists for: `nestrs g resource` scaffolds both
-        // halves, so the trap only closes on someone editing the service — and
-        // the symptom is a `204` with the row gone.
         let err = audit(&[("post", "features::posts::PostService", false)])
             .expect_err("a tombstone column no service writes must not reach a DELETE");
         let text = err.to_string();
@@ -158,8 +121,6 @@ mod tests {
 
     #[test]
     fn every_unbound_entity_is_reported_at_once() {
-        // One boot, one list: fixing them one refusal at a time is how a
-        // migration of several resources turns into several rebuilds.
         let err = audit(&[
             ("post", "PostService", false),
             ("comment", "CommentService", true),

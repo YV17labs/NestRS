@@ -1,28 +1,13 @@
 //! Driving a GraphQL **subscription** over graphql-transport-ws.
 //!
-//! A query is a `POST`, so [`TestApp`](crate::TestApp)'s client already speaks
-//! it. A subscription is not: it rides a WebSocket, and the thing a suite has to
-//! reproduce is the protocol on top of that socket — `connection_init` →
-//! `connection_ack` → `subscribe` → `next`… → `complete`. Hand-rolling it per
-//! suite means each copy re-encodes the message names and the ordering, and they
-//! drift, so it lives here once.
+//! The driver speaks `graphql-transport-ws` alone (async-graphql's
+//! `WebSocketProtocols::GraphQLWS`, which reads backwards), not the legacy
+//! `subscriptions-transport-ws`.
 //!
-//! **`graphql-transport-ws`, not `graphql-ws`.** Those are two subprotocols and
-//! the second name is the *legacy* one (`subscriptions-transport-ws`);
-//! async-graphql spells them `WebSocketProtocols::GraphQLWS` and
-//! `SubscriptionsTransportWS` respectively, which reads backwards. The mount
-//! negotiates both (`ALL_WEBSOCKET_PROTOCOLS`); this driver pins the modern one,
-//! so the legacy branch — whose wire shape genuinely differs (`start`/`data`/
-//! `stop`, errors framed as text rather than a close) — has no driver here.
-//!
-//! No socket is bound. The protocol engine
-//! ([`async_graphql::http::WebSocket`]) is the same one the mount runs above
-//! poem's upgrade — it takes an executor and a stream of client messages, which
-//! is exactly what a test can supply. What is *not* exercised here is the
-//! upgrade itself (the guard that authenticates it, the lifetime ceiling that
-//! bounds it), nor `GraphQLProtocol::from_request`'s negotiation, nor
-//! `GraphqlConfig::max_connection`; that half needs a real socket and belongs in
-//! an app's e2e suite.
+//! No socket is bound: the mount's own protocol engine
+//! ([`async_graphql::http::WebSocket`]) runs over a channel. The upgrade itself
+//! — its guard, its lifetime ceiling, the protocol negotiation,
+//! `GraphqlConfig::max_connection` — needs a real socket and an app's e2e suite.
 //!
 //! ```
 //! # use nest_rs_core::module;
@@ -83,8 +68,6 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 /// How long [`GraphqlSocket::next_message`] waits before reporting silence.
-/// Long enough that a loaded CI box does not flake, short enough that a test
-/// asserting *absence* stays quick.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Builds a [`GraphqlSocket`] against an app's composed schema.
@@ -101,18 +84,16 @@ impl GraphqlSocketBuilder {
         }
     }
 
-    /// Attach a value to the connection's context — what the operation guard
-    /// installs on a real upgrade (the caller's `Ability`, a principal). A
-    /// subscription reads it exactly as it would there.
+    /// Attach a value to the connection's context, as the operation guard does
+    /// on a real upgrade (the caller's `Ability`, a principal).
     #[must_use]
     pub fn data<T: Send + Sync + 'static>(mut self, value: T) -> Self {
         self.data.insert(value);
         self
     }
 
-    /// Open the connection. The schema is composed from the app's container and
-    /// its resolved [`GraphqlConfig`], so depth/complexity limits and
-    /// introspection match what the mount serves.
+    /// Open the connection, over the schema composed from the app's container
+    /// and its resolved [`GraphqlConfig`].
     pub fn open(self) -> GraphqlSocket {
         let config = self
             .container
@@ -145,11 +126,8 @@ fn tokio_stream_from(
 
 /// What one read off a graphql-transport-ws connection found.
 ///
-/// [`Silent`](Self::Silent) and [`Ended`](Self::Ended) are separate for the
-/// reason [`WsRead`](crate::ws::WsRead) separates its two: an idle connection
-/// and a dead one are different states, and only one of them proves the server
-/// chose to say nothing. Folded together, a suite asserting that nothing
-/// arrived passes because nothing *could* arrive.
+/// Only [`Silent`](Self::Silent), never [`Ended`](Self::Ended), proves the
+/// server chose to say nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphqlEvent {
     /// A protocol message.
@@ -158,9 +136,8 @@ pub enum GraphqlEvent {
     Closed(u16, String),
     /// Nothing arrived within the budget, and the connection is still open.
     Silent,
-    /// The message stream ended with no close frame — the engine dropped the
-    /// connection, which over a real socket is RFC 6455 §7.4.1's **1006
-    /// Abnormal Closure**.
+    /// The message stream ended with no close frame — over a real socket,
+    /// RFC 6455 §7.4.1's **1006 Abnormal Closure**.
     Ended,
 }
 
@@ -184,14 +161,8 @@ pub struct GraphqlSocket {
 }
 
 impl GraphqlSocket {
-    /// Send `connection_init` and await `connection_ack`. Every
-    /// graphql-transport-ws exchange starts here; a server that answers anything
-    /// else is refusing the connection, so this panics rather than letting the
-    /// next assertion fail somewhere less obvious.
-    ///
-    /// Use [`try_connect`](Self::try_connect) to assert that an upgrade is
-    /// *refused* — the upgrade runs the operation guard, so a refusal is a
-    /// security decision worth pinning.
+    /// Send `connection_init` and await `connection_ack`, panicking on any
+    /// other answer; [`try_connect`](Self::try_connect) asserts a refusal.
     pub async fn connect(&mut self) {
         if let Err(refusal) = self.try_connect().await {
             panic!("the server refused the connection: {refusal:?}");
@@ -201,12 +172,10 @@ impl GraphqlSocket {
     /// [`connect`](Self::connect), reporting a refused connection instead of
     /// panicking.
     ///
-    /// graphql-transport-ws refuses with a close code, and the code *is* the
-    /// assertion: **4400** invalid message, **4401** unauthorized (an operation
-    /// before the ack), **4403** forbidden, **4408** init timeout, **4409**
-    /// duplicate subscriber id, **4429** too many init requests. Until this
-    /// existed those were all mapped to `None` and no suite could tell them
-    /// apart — or from silence.
+    /// graphql-transport-ws refuses with a close code: **4400** invalid message,
+    /// **4401** unauthorized (an operation before the ack), **4403** forbidden,
+    /// **4408** init timeout, **4409** duplicate subscriber id, **4429** too
+    /// many init requests.
     pub async fn try_connect(&mut self) -> Result<(), GraphqlRefusal> {
         self.send(json!({ "type": "connection_init" }));
         match self.next_event().await {
@@ -238,9 +207,7 @@ impl GraphqlSocket {
         self.next_message_within(DEFAULT_TIMEOUT).await
     }
 
-    /// [`next_message`](Self::next_message) with an explicit budget — use a
-    /// short one when asserting that **nothing** arrives, so the test does not
-    /// pay the full timeout to prove silence.
+    /// [`next_message`](Self::next_message) with an explicit budget.
     pub async fn next_message_within(&mut self, within: Duration) -> Option<Value> {
         match self.next_event_within(within).await {
             GraphqlEvent::Message(message) => Some(message),
@@ -263,19 +230,13 @@ impl GraphqlSocket {
             Some(WsMessage::Text(text)) => GraphqlEvent::Message(
                 serde_json::from_str(&text).expect("a graphql-transport-ws message is JSON"),
             ),
-            // The server closed: no further message will come, so a caller
-            // waiting on one is told to stop rather than left to the timeout.
             Some(WsMessage::Close(code, reason)) => GraphqlEvent::Closed(code, reason),
-            // The stream ended with no close frame: the engine dropped the
-            // connection. Not silence — nothing further *can* arrive.
             None => GraphqlEvent::Ended,
         }
     }
 
-    /// The next `next` payload for operation `id` — the shape a subscriber
-    /// actually reads. `error` and `complete` for that id end the wait and are
-    /// returned as-is, so a test never blocks on a stream the server has already
-    /// finished.
+    /// The next `next` payload for operation `id`; an `error` or `complete` for
+    /// that id ends the wait and is returned as-is.
     pub async fn next_item(&mut self, id: &str) -> Option<Value> {
         self.next_item_within(id, DEFAULT_TIMEOUT).await
     }

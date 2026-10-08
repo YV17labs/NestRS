@@ -1,8 +1,5 @@
 //! Covers `src/net.rs` — the boot refuses every budget at or past a net that
-//! reaches it, and only those: a net over a resource reaches that resource's
-//! budget alone, a net around a provider's code what the code injects at any
-//! depth, optionally or not, through the bindings the app imports, and every
-//! ambient resource — and it refuses as soon as the budget's resource exists.
+//! reaches it, and only those.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -317,8 +314,6 @@ impl Module for OpeningModule {
     }
 }
 
-/// The refusal comes as soon as the pool exists, before a factory reading it
-/// does its own work and fails on something else first.
 #[tokio::test]
 async fn a_budget_is_refused_once_its_resource_is_built_before_the_factories_after_it() {
     let refused = refusal(App::builder().module::<OpeningModule>().build().await);
@@ -368,9 +363,6 @@ async fn a_budget_declared_twice_is_held_by_its_ambient_declaration() {
     assert_eq!(refused.port, "the test guard");
 }
 
-/// One resource can wait in two ways — a pool's acquire and its statements —
-/// each its own budget: the second is held under the net, never merged into
-/// the first and dropped.
 #[tokio::test]
 async fn two_budgets_of_one_resource_are_each_held() {
     let refused = refusal(

@@ -1,11 +1,5 @@
 //! [`ProcessMethod`] — the link-time entry `#[processor]` submits for each
 //! `#[process]` method, and the one way a backend reaches the method.
-//!
-//! The port's [`QueueWorker`](crate::QueueWorker) reads what a method declares
-//! — its queue, its options, what it needs from the backend — and is the only
-//! code that runs the method. The handler it calls is not part of the public
-//! surface for that reason: code calling it directly would skip the envelope,
-//! the span, the panic catch and the classification, and nothing would say so.
 
 use std::any::TypeId;
 use std::borrow::Cow;
@@ -24,7 +18,7 @@ use crate::{Capabilities, Capability, JobError, ProcessOptions};
 /// and the port's attempt.
 ///
 /// The payload is borrowed from the stored record while another attempt may
-/// follow, and handed over on the last, so no attempt copies the record.
+/// follow, and handed over on the last.
 #[doc(hidden)]
 pub type JobHandler = fn(
     payload: Cow<'_, serde_json::Value>,
@@ -93,9 +87,6 @@ impl ProcessMethod {
     /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick a
     /// report level, and emitted as a field so a skip line names a type the
     /// developer can find.
-    ///
-    /// `pub(crate)`: it answers the port's own skip report. A backend is handed
-    /// the methods it serves, never asked where they came from.
     pub(crate) const fn origin(&self) -> &'static str {
         self.origin
     }
@@ -117,10 +108,6 @@ impl ProcessMethod {
 
     /// The optional capabilities this method's declarations need from a
     /// backend.
-    ///
-    /// `#[doc(hidden)]`: the port refuses every declaration the backend does not
-    /// honour before a backend sees the method, so a driver never asks. Public
-    /// because `discover` and the port's own suite read it.
     #[doc(hidden)]
     pub fn required_capabilities(&self) -> Capabilities {
         let mut required = Capabilities::NONE;
@@ -165,7 +152,6 @@ mod tests {
         file: String,
     }
 
-    /// A job decodes the same from a payload it reads and one it takes.
     #[test]
     fn a_job_decodes_from_a_borrowed_payload_as_from_an_owned_one() {
         let payload = serde_json::json!({ "file": "song.wav" });

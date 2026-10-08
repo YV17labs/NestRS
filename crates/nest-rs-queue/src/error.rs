@@ -1,11 +1,6 @@
 //! Typed errors for the queue port: [`QueueError`], what a caller of the port
 //! gets back — a push, a cancel, a checkpoint save — and [`JobError`], what a
 //! job attempt reports to its backend.
-//!
-//! Framework crates surface `thiserror` enums, not `anyhow`. A backend failure
-//! is kept behind a boxed `source`, so this contract names no backend — a Redis
-//! backend wraps its storage error, an SQS backend its SDK error, without this
-//! crate depending on either.
 
 use thiserror::Error;
 
@@ -26,11 +21,9 @@ pub enum QueueError {
     /// The backend did not answer a call within [`BACKEND_TIMEOUT`], and the
     /// port stopped waiting.
     ///
-    /// Not answering is not refusing: the backend may still carry the call out
-    /// once it answers again — a push then files its jobs, which run; a cancel
-    /// then cancels. So a caller that pushes again after this error enqueues
-    /// the job twice, unless the push carries a unique key — the same as after
-    /// any failure to answer.
+    /// Not answering is not refusing: the backend may still carry the call out,
+    /// so a caller that pushes again enqueues the job twice, unless the push
+    /// carries a unique key.
     #[error(
         "the queue backend did not answer `{call}` on queue `{queue}` within {timeout:?}, and the \
          port stopped waiting — the backend may still carry the call out once it answers",
@@ -100,12 +93,9 @@ pub enum QueueError {
     /// A push of many failed after the backend accepted some of its calls.
     ///
     /// `receipts` names the jobs of every call the backend accepted, in input
-    /// order — they are queued and will run, and a receipt is what cancels one
-    /// or tells it from a job to push again. `source` is the failure of the call
-    /// that stopped the push, whose own jobs no receipt covers: a backend's call
-    /// is not atomic, so some of them may be queued too — at-least-once, as after
-    /// any failure to answer. A push failing at its first call returns that
-    /// failure itself.
+    /// order: they are queued and will run. `source` is the failure of the call
+    /// that stopped the push, some of whose jobs may be queued too. A push
+    /// failing at its first call returns that failure itself.
     #[error(
         "the queue backend accepted {} job(s) of the push before a call failed; their receipts \
          are on the error, and the jobs of the failed call may be queued too",
@@ -118,14 +108,8 @@ pub enum QueueError {
         #[source]
         source: Box<QueueError>,
     },
-    /// Options no push could honour: together, or at all on this backend.
-    ///
-    /// Both readings are here on purpose. The port refuses the combinations
-    /// nothing could honour — a unique key on `push_many` — and a backend
-    /// refuses a single value its own storage cannot represent, naming that
-    /// fact (`the delay ends past what the clock can represent`). A caller
-    /// matching on this variant is told the options were refused and given the
-    /// reason; which of the two it was is the `reason`, never the variant.
+    /// Options no push could honour: together (a unique key on `push_many`), or
+    /// at all on this backend's storage — the `reason` says which.
     #[error("invalid push options: {reason}")]
     InvalidOptions {
         /// Why they were refused.
@@ -135,8 +119,7 @@ pub enum QueueError {
 
 impl QueueError {
     /// How much of a refused job id an error shows: a UUID's hyphenated form
-    /// and then some, so a near-miss is recognisable and a pasted blob is not
-    /// carried into every log line that renders the error.
+    /// and then some, never a pasted blob.
     pub const SHOWN_ID_LEN: usize = 64;
 
     /// Wrap a backend's own failure as [`QueueError::Backend`], without this
@@ -163,23 +146,15 @@ pub struct JobError {
     /// The underlying error, for the log and the backend's dead-letter record.
     pub source: Box<dyn std::error::Error + Send + Sync>,
     /// Structured detail the failure carried, when it had any — the per-field
-    /// errors of a `Valid<T>` job-argument rejection.
-    ///
-    /// A dead-lettered job is read from a log, days later, by someone who cannot
-    /// re-run it: `error=validation failed` alone does not say which field of
-    /// which payload was wrong, and the information existed at the moment of
-    /// failure. It rides the dead-letter event beside the error, under the same
-    /// `errors` name HTTP and WebSockets use.
+    /// errors of a `Valid<T>` job-argument rejection, logged as `errors`.
     pub details: Option<serde_json::Value>,
 }
 
 impl JobError {
     /// A **retryable** failure: a transient fault worth another attempt.
     ///
-    /// Boxed by [`nest_rs_core::boxed_error`], so an `anyhow::Error` — what a
-    /// `#[process]` method returns — keeps every link of its chain readable, and
-    /// a decode failure inside it reaches the line and the dead-letter record as
-    /// its report rather than as serde's sentence quoting the value.
+    /// Boxed by [`nest_rs_core::boxed_error`], so an `anyhow::Error` keeps every
+    /// link of its chain, and a decode failure inside it never quotes the value.
     pub fn retry(source: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> Self {
         Self {
             retryable: true,
@@ -201,14 +176,7 @@ impl JobError {
 
     /// The failure of a job that ran fine and whose data context could not
     /// honour it — a transaction that could not be committed, or one whose
-    /// handle outlived the attempt.
-    ///
-    /// **The context's classification is this crate's**: a retry replays the
-    /// job body, so a commit failure that will repeat identically — a deferred
-    /// constraint violation, a commit whose outcome is unknown — costs the
-    /// whole budget in replayed side effects and dead-letters anyway. A
-    /// serialization conflict is the case worth another attempt, and the only
-    /// thing that says which is the database.
+    /// handle outlived the attempt — retryable only when the context says so.
     pub fn unhonoured(unhonoured: nest_rs_worker::Unhonoured) -> Self {
         Self {
             retryable: unhonoured.retryable,
@@ -220,10 +188,7 @@ impl JobError {
     /// The failure of a payload that does not decode as the job type of the
     /// queue it came from — deterministic, since the same bytes never decode on
     /// a retry. Said by where and what kind ([`DecodeError`](nest_rs_core::DecodeError)),
-    /// never by the value: the sentence lands in the dead-letter log line and
-    /// record, and the payload is somebody's data.
-    ///
-    /// `#[doc(hidden)]`: the handler `#[processor]` emits is its one caller.
+    /// never by the value.
     #[doc(hidden)]
     pub fn undecodable(queue: &str, error: &serde_json::Error) -> Self {
         Self::abort(format!(

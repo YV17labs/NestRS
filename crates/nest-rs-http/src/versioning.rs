@@ -1,9 +1,7 @@
 //! How a request says which API version it wants.
 //!
-//! `#[controller(version = "1")]` stays the one place a version is *declared*;
-//! this module decides how a caller *selects* one. All three strategies resolve
-//! to the same mounted path — [`version_path`] — so the
-//! served, logged and documented routes cannot drift apart:
+//! `#[controller(version = "1")]` declares a version; a strategy selects it, and
+//! all three resolve to the same mounted path, [`version_path`]:
 //!
 //! | Strategy | The caller writes | Resolved |
 //! |---|---|---|
@@ -11,10 +9,7 @@
 //! | [`Header`](ApiVersioning::Header) | `GET /users` + `X-API-Version: 2` | per request |
 //! | [`MediaType`](ApiVersioning::MediaType) | `GET /users` + `Accept: application/json; version=2` | per request |
 //!
-//! The last two are a **rewrite in front of routing**: the version is read off
-//! the request, validated, and folded into the path the controller already
-//! mounts at. One routing table, one source of truth, and a strategy change
-//! costs an app no code.
+//! The last two rewrite the request's path in front of routing.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -28,16 +23,13 @@ use poem::{Endpoint, Error, IntoResponse, Request, Response, Result};
 use crate::version_path;
 
 /// The media-type parameter the [`MediaType`](ApiVersioning::MediaType)
-/// strategy reads (`Accept: application/json; version=2`). A constant, not a
-/// knob: it is the convention every API that uses this strategy already writes,
-/// and a second spelling would only let two deployments disagree.
+/// strategy reads (`Accept: application/json; version=2`).
 pub const MEDIA_TYPE_PARAM: &str = "version";
 
 /// The default header the [`Header`](ApiVersioning::Header) strategy reads.
 pub const DEFAULT_VERSION_HEADER: &str = "x-api-version";
 
-/// The longest version token accepted from a request. Versions are `1`, `2`,
-/// `2024-08-11` — anything longer is a caller probing, not an API version.
+/// The longest version token accepted from a request.
 const MAX_VERSION_LEN: usize = 32;
 
 /// How a caller selects an API version.
@@ -81,10 +73,8 @@ impl FromStr for ApiVersioning {
 
 /// Reads the requested version off a request and folds it into the path.
 ///
-/// It also knows **which paths are versioned**, and that is not a refinement:
-/// a rewrite that fired on every path would send `/graphql`, `/mcp` and
-/// `/health` to `/v1/graphql` the moment a deployment set a default version,
-/// and a self-mounted endpoint has no version to be rewritten to.
+/// It rewrites only paths a versioned route serves, so a default version never
+/// sends `/graphql` or `/health` to `/v1/graphql`.
 #[derive(Clone, Debug)]
 pub struct VersionSelector {
     strategy: ApiVersioning,
@@ -93,29 +83,14 @@ pub struct VersionSelector {
     /// Every **route** a versioned controller mounts, as mounted
     /// (`/v1/posts`, `/v1/posts/:id`).
     versioned_routes: Arc<[String]>,
-    /// The paths self-mounted endpoints own — `/graphql`, `/mcp`, `/api-json`,
-    /// a WebSocket gateway. **Absolutely neutral**: served as sent whatever a
-    /// caller states, because a self-mount owns its path outright (the boot
-    /// check makes it exclusive) and has no version to be rewritten to. Without
-    /// this, a versioned `#[controller(path = "/")]` with a catch-all route
-    /// swallowed every one of them.
+    /// The paths self-mounted endpoints own (`/graphql`, `/mcp`, a gateway),
+    /// served as sent whatever version a caller states.
     self_mounts: Arc<[String]>,
-    /// The routes unversioned controllers mount.
-    ///
-    /// Neutral against a **default** version — a deployment-wide default must
-    /// never rewrite a controller out from under a caller who asked for nothing
-    /// — but not against a **stated** one. That precedence is the point: an
-    /// explicit request is the strongest signal a caller can send, so it beats
-    /// an unversioned neighbour at the same address; a default is the weakest,
-    /// so it yields. Collapsing the two made `#[controller(version = …)]`
-    /// unreachable under a non-URI strategy whenever an unversioned route
-    /// shared its address.
+    /// The routes unversioned controllers mount: neutral against a default
+    /// version, not against a stated one.
     unversioned_routes: Arc<[String]>,
-    /// The versions the app declares, for the one question the two lists above
-    /// cannot answer on their own: a caller named a version that does not serve
-    /// this address — does *another* one? Yes ⇒ `404`, because answering with a
-    /// different version's body is the silent failure the whole design exists to
-    /// prevent. No ⇒ the address is simply not versioned, and the router decides.
+    /// The versions the app declares, to answer `404` when a stated version
+    /// does not serve an address another version does.
     versions: Arc<[String]>,
 }
 
@@ -123,11 +98,8 @@ impl VersionSelector {
     /// Build a selector. `header` names the header the
     /// [`Header`](ApiVersioning::Header) strategy reads; `default_version` is
     /// what a request that states none is served, and `None` leaves such a
-    /// request on the unversioned routes.
-    ///
-    /// The versioned prefixes are learned at
-    /// [`configure`](crate::HttpTransport) time, from the controllers the app
-    /// actually mounts.
+    /// request on the unversioned routes. The routes are learned when
+    /// [`HttpTransport`](crate::HttpTransport) mounts the app's controllers.
     pub fn new(
         strategy: ApiVersioning,
         header: HeaderName,
@@ -161,10 +133,8 @@ impl VersionSelector {
         self
     }
 
-    /// `true` when no controller declares a version, so this selector can never
-    /// change an outcome. The transport reads it and skips the wrap entirely —
-    /// an endpoint that only ever passes the request through still costs a
-    /// routing layer per request.
+    /// `true` when no controller declares a version; the transport then skips
+    /// the wrap.
     pub(crate) fn is_inert(&self) -> bool {
         self.versioned_routes.is_empty()
     }
@@ -176,7 +146,7 @@ impl VersionSelector {
     }
 
     /// The version a request that states none is served, if the deployment
-    /// names one. Read at boot to check it against what the app declares.
+    /// names one.
     pub(crate) fn default_version(&self) -> Option<&str> {
         self.default_version.as_deref()
     }
@@ -187,10 +157,8 @@ impl VersionSelector {
             ApiVersioning::Uri => Requested::Absent,
             ApiVersioning::Header => match req.headers().get(&self.header) {
                 None => Requested::Absent,
-                // A header value may legally carry any byte in `0x80..=0xFF`
-                // (httparse's `HEADER_VALUE_MAP`), so hyper delivers one and
-                // `to_str` refuses it. The caller *stated* something; that it is
-                // not text is a malformed statement, never a silent absence.
+                // httparse admits `0x80..=0xFF` in a value and `to_str` refuses
+                // it: a stated value, so malformed, never absent.
                 Some(raw) => match raw.to_str() {
                     Ok(value) => Requested::Stated(value),
                     Err(_) => Requested::Malformed,
@@ -200,14 +168,12 @@ impl VersionSelector {
         }
     }
 
-    /// Whether a versioned route answers at `path` as mounted (`/v1/posts`).
     fn is_versioned(&self, path: &str) -> bool {
         self.versioned_routes
             .iter()
             .any(|route| route_matches(path, route))
     }
 
-    /// Whether a self-mounted endpoint owns `path`.
     fn is_self_mount(&self, path: &str) -> bool {
         self.self_mounts
             .iter()
@@ -220,10 +186,8 @@ impl VersionSelector {
             .any(|route| route_matches(path, route))
     }
 
-    /// Whether **some** declared version serves `path`. Only consulted when a
-    /// caller named one that does not, to tell "you asked for the wrong
-    /// version" (`404`) from "this address has no versions" (let the router
-    /// answer). Allocates, and only on that error path.
+    /// Whether some declared version serves `path`. Allocates; called only on
+    /// the refusal path.
     fn has_any_version(&self, path: &str) -> bool {
         self.versions
             .iter()
@@ -232,11 +196,6 @@ impl VersionSelector {
 }
 
 /// Every version the app's mounted controllers declare, sorted and deduplicated.
-///
-/// One implementation, because two consumers ask the same question for opposite
-/// reasons: the transport refuses a `DEFAULT_VERSION` that names none of these,
-/// and the OpenAPI module publishes a document per entry. Two walks of the same
-/// metadata would eventually disagree about what "declared" means.
 pub fn declared_versions(container: &Container) -> Vec<String> {
     let mut versions: Vec<String> = Discovery::new(container)
         .meta::<crate::HttpControllerMeta>()
@@ -251,22 +210,13 @@ pub fn declared_versions(container: &Container) -> Vec<String> {
 
 /// Does `path` address the mounted route `pattern`?
 ///
-/// Segment-wise, and aware of the forms poem's router parses: `:name` takes one
-/// segment, `<regex>` takes one segment, `*rest` takes everything left including
-/// nothing, and a segment may mix a literal with a parameter (`/@:handle`,
-/// `/report-:id`) — which is how a handle or a slug is written.
+/// Segment-wise, over the forms poem's router parses: `:name` and `<regex>` take
+/// one segment, `*rest` everything left including nothing, and a segment may mix
+/// a literal with a parameter (`/@:handle`, `/report-:id`).
 ///
-/// **It answers loosely on purpose, and that is only safe because poem always
-/// decides last.** Every outcome this feeds ends with the router: a match sends
-/// the request to a rewritten path the router must still recognise, and a
-/// non-match sends it on as written. So a false *match* costs a `404` the
-/// request was heading for anyway, while a false *non-match* once served one
-/// controller's body to a caller who asked for another's — the mixed-segment
-/// form was compared as a literal, never matched, and the address was quietly
-/// declared unversioned. Loose in the direction the router can correct; never in
-/// the direction it cannot see.
-///
-/// Allocation-free — it runs on every request.
+/// Loose on purpose, since poem decides last: a false match costs a `404`, a
+/// false non-match serves another controller's body. Runs on every request, so
+/// it does not allocate.
 fn route_matches(path: &str, pattern: &str) -> bool {
     let mut segments = path.split('/');
     let mut expected = pattern.split('/');
@@ -274,16 +224,14 @@ fn route_matches(path: &str, pattern: &str) -> bool {
         let (segment, pattern) = (segments.next(), expected.next());
         match (segment, pattern) {
             (None, None) => return true,
-            // A catch-all takes the rest of the path, and `/cat/` is an address
-            // it answers at — so it matches an empty tail too.
+            // A catch-all also answers an empty tail (`/cat/`).
             (_, Some(pat)) if pat.starts_with('*') => return true,
             (Some(segment), Some(pat)) => {
                 if !segment_matches(segment, pat) {
                     return false;
                 }
             }
-            // The pattern ran out: a trailing `/` on the request names the same
-            // address, anything else is a longer path.
+            // A trailing `/` names the same address.
             (Some(segment), None) => {
                 if !segment.is_empty() {
                     return false;
@@ -305,13 +253,10 @@ fn segment_matches(segment: &str, pattern: &str) -> bool {
     }
 }
 
-/// What a request said about the version it wants — and *that* it said
-/// something, which is the distinction the answer turns on.
+/// What a request said about the version it wants.
 ///
-/// [`Requested::Absent`] and [`Requested::Malformed`] were one value once, and
-/// collapsing them is a fail-open: a caller whose header cannot be decoded was
-/// read as having asked for nothing, and served the default version, or the
-/// unversioned neighbour at the same address, at `200`.
+/// [`Requested::Absent`] and [`Requested::Malformed`] stay apart: collapsing them
+/// serves an undecodable header the default version at `200`.
 enum Requested<'a> {
     /// Nothing was stated, so a deployment default may apply.
     Absent,
@@ -321,14 +266,7 @@ enum Requested<'a> {
     Malformed,
 }
 
-/// The `version=` parameter of any media range in `Accept`. The first one wins:
-/// a client listing two versions is asking two questions, and answering the
-/// first is the only reading that does not invent a preference order the
-/// header never stated.
-///
-/// An `Accept` that is not decodable as text is [`Requested::Malformed`] for the
-/// same reason the header strategy's is: the caller stated something, and the
-/// framework could not read it.
+/// The `version=` parameter of the first media range in `Accept` carrying one.
 fn accept_version(req: &Request) -> Requested<'_> {
     let Some(accept) = req.headers().get(header::ACCEPT) else {
         return Requested::Absent;
@@ -346,27 +284,20 @@ fn accept_version(req: &Request) -> Requested<'_> {
                     .then(|| value.trim().trim_matches('"'))
             })
         })
-        // No `version=` parameter anywhere is a caller who asked for nothing —
-        // an ordinary `Accept: application/json` — not a malformed statement.
+        // An ordinary `Accept` with no `version=` asked for nothing.
         .map_or(Requested::Absent, Requested::Stated)
 }
 
-/// The one refusal both strategies raise, so a caller cannot tell which half of
-/// the check refused them.
+/// One refusal for both checks, so a caller cannot tell which one refused it.
 fn malformed_version() -> Error {
     Error::from_string("malformed API version", StatusCode::BAD_REQUEST)
 }
 
-/// A version token is spliced into a URL path, so it is validated before it
-/// gets anywhere near one: bare alphanumerics, `.` and `-`, bounded length.
-/// Everything else — a `/`, a `..`, an encoded byte — is a caller trying to
-/// reach a path the API never mounted.
+/// A version token is spliced into a URL path: bare alphanumerics, `.` and `-`,
+/// bounded length.
 ///
-/// The rule is worded in `nest_rs_codegen::versioning`, which is where
-/// `#[controller(version = …)]` reads it; this is a **copy**, because that crate
-/// pulls `syn` and no app's dependency graph may. The copy is not left to drift:
-/// `the_wire_grammar_matches_the_declared_grammar` in this module's tests holds
-/// a dev-dependency on `nest-rs-codegen` and compares the two over a table.
+/// A copy of `nest_rs_codegen::versioning`'s rule (that crate pulls `syn`), held
+/// equal by `the_wire_grammar_matches_the_declared_grammar`.
 fn is_valid_version(raw: &str) -> bool {
     !raw.is_empty()
         && raw.len() <= MAX_VERSION_LEN
@@ -376,38 +307,28 @@ fn is_valid_version(raw: &str) -> bool {
 }
 
 /// Rewrites a request's path from the version it asks for, then routes it.
-/// Sits *inside* the global prefix, so the path it sees is the one controllers
-/// mount at. Plumbing: `HttpTransport::api_versioning` is the seam.
+/// Sits inside the global prefix, so it sees the path controllers mount at.
 pub(crate) struct VersionedEndpoint<E> {
     inner: E,
     selector: VersionSelector,
 }
 
 impl<E> VersionedEndpoint<E> {
-    /// Wrap `inner` with `selector`.
     pub(crate) fn new(inner: E, selector: VersionSelector) -> Self {
         Self { inner, selector }
     }
 
     /// The path this request should be routed at, or `None` to route it as
-    /// sent. `Err` is the refusal — a `404` or a `400` — decided here so the
-    /// caller does nothing but apply the answer.
+    /// sent; `Err` is the `404` or `400` refusal.
     fn resolve(&self, req: &Request) -> Result<Option<String>> {
         let path = req.uri().path();
-        // A self-mounted endpoint owns its path outright and has no version to
-        // be rewritten to. Absolutely neutral, and therefore genuinely first:
-        // this test sat *below* the URI-form refusal, which meant a gateway
-        // self-mounted at `/v1/ws` — `#[gateway(version = "1")]` goes through
-        // the same `version_path` a controller does — was refused at its own
-        // mount by the check meant for callers spelling a version by hand.
+        // Before the URI-form refusal: `#[gateway(version = "1")]` self-mounts
+        // at `/v1/ws`.
         if self.selector.is_self_mount(path) {
             return Ok(None);
         }
 
-        // The mounted versioned routes *are* the URI form, so asking whether
-        // the request already addresses one answers it exactly — for `/v1` and
-        // for `#[controller(version = "2024-08-11")]` alike. A digits-only
-        // heuristic missed the second and left it reachable two ways.
+        // The mounted versioned routes are the URI form, whatever a version's spelling.
         if self.selector.is_versioned(path) {
             tracing::debug!(
                 target: crate::target::HTTP,
@@ -429,10 +350,6 @@ impl<E> VersionedEndpoint<E> {
                 );
                 return Err(malformed_version());
             }
-            // Stated, and not decodable as text at all. Treating this as
-            // "nothing was stated" served the default version — or an
-            // unversioned neighbour's body — at `200`, so one non-ASCII byte
-            // decided which controller answered.
             Requested::Malformed => {
                 tracing::warn!(
                     target: crate::target::HTTP,
@@ -445,11 +362,7 @@ impl<E> VersionedEndpoint<E> {
             Requested::Absent => (self.selector.default_version(), false),
         };
 
-        // A default never rewrites an address an unversioned controller already
-        // answers: the caller asked for nothing, so nothing moves under them.
-        // A *stated* version does — an explicit request is the strongest signal
-        // there is, and yielding to an unversioned neighbour would leave
-        // `#[controller(version = …)]` unreachable at that address.
+        // A default never moves an unversioned address; a stated version does.
         if !stated && self.selector.is_unversioned(path) {
             return Ok(None);
         }
@@ -462,10 +375,7 @@ impl<E> VersionedEndpoint<E> {
             return Ok(Some(candidate));
         }
         if stated && self.selector.has_any_version(path) {
-            // The caller named a version this address does not serve, while
-            // another one does. Falling through would answer with that other
-            // version's body — the silent fallback this strategy exists to
-            // avoid.
+            // Falling through would answer with another version's body.
             tracing::debug!(
                 target: crate::target::HTTP,
                 path = path,
@@ -473,8 +383,6 @@ impl<E> VersionedEndpoint<E> {
             );
             return Err(Error::from_status(StatusCode::NOT_FOUND));
         }
-        // Nothing versioned answers here at all: served as written, and the
-        // router has the last word either way.
         Ok(None)
     }
 }
@@ -487,11 +395,7 @@ where
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Response> {
-        // Resolved behind an immutable borrow so the common outcomes — neutral
-        // address, no version stated — allocate **nothing**. The path used to be
-        // cloned on entry, before it was known whether anything would use it,
-        // and this endpoint sits in front of every request under a non-URI
-        // strategy. The one `String` left is the rewritten path itself.
+        // In front of every request: only a rewrite may allocate.
         if let Some(path) = self.resolve(&req)? {
             rewrite_path(&mut req, &path)?;
         }
@@ -516,9 +420,7 @@ fn rewrite_path(req: &mut Request, path: &str) -> Result<()> {
         .unwrap_or_default();
     parts.path_and_query = Some(PathAndQuery::try_from(format!("{path}{query}")).map_err(
         |_| {
-            // Unreachable in practice: `path` is `version_path` over a path the
-            // router already parsed, and the version passed validation. Refuse
-            // rather than route an unrewritten request to the wrong version.
+            // Unreachable: a router-parsed path plus a validated version.
             Error::from_status(StatusCode::BAD_REQUEST)
         },
     )?);
@@ -574,23 +476,16 @@ mod tests {
 
     #[test]
     fn the_matcher_reads_every_segment_form_the_router_parses() {
-        // Each line here was a defect an audit reproduced, or the shape that
-        // defect hid behind.
         assert!(route_matches("/posts/abc", "/posts/:id"));
-        // A literal and a parameter in one segment — a handle, a slug. Compared
-        // as a literal this never matched, and the address was then declared
-        // unversioned while a versioned route served it.
+        // A literal and a parameter in one segment.
         assert!(route_matches("/mix/@bob", "/mix/@:handle"));
         assert!(!route_matches("/mix/bob", "/mix/@:handle"));
         assert!(route_matches("/r/report-7", "/r/report-:id"));
-        // A regex segment is *one* segment, not a tail — reading it as a
-        // catch-all took an unversioned neighbour offline.
+        // A regex segment is one segment, not a tail.
         assert!(route_matches("/probe/7", r"/probe/<\d+>"));
         assert!(!route_matches("/probe/archive/7", r"/probe/<\d+>"));
-        // A catch-all takes the rest, and `/cat/` is one of its addresses.
         assert!(route_matches("/cat/a/b", "/cat/*rest"));
         assert!(route_matches("/cat/", "/cat/*rest"));
-        // A trailing slash names the same address; anything longer does not.
         assert!(route_matches("/users/", "/users"));
         assert!(!route_matches("/users/1", "/users"));
         assert!(!route_matches("/postsy", "/posts"));
@@ -598,10 +493,6 @@ mod tests {
 
     #[test]
     fn a_selector_with_nothing_versioned_reports_itself_inert() {
-        // The transport reads this to skip the wrap. An endpoint that can only
-        // ever pass the request through still costs a routing layer on every
-        // request — measured at +57% — so "can this change any outcome?" has to
-        // be answerable without running it.
         let bare = VersionSelector::new(
             ApiVersioning::Header,
             HeaderName::from_static(DEFAULT_VERSION_HEADER),
@@ -626,8 +517,6 @@ mod tests {
 
     #[test]
     fn route_matching_follows_the_router_not_the_prefix() {
-        // The two ends prefix matching got wrong, and the parameter syntax the
-        // router actually mounts with.
         assert!(route_matches("/ping", "/ping"));
         assert!(route_matches("/posts/abc", "/posts/:id"));
         assert!(route_matches("/files/a/b/c", "/files/*rest"));
@@ -694,15 +583,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_default_never_moves_an_address_that_already_answers_without_one() {
-        // The fixture mounts `/users` three ways: v1, v2, and unversioned. A
-        // caller who states nothing gets the route the app mounted for exactly
-        // that request — the unversioned one — even under a default version.
-        //
-        // A default is the weakest signal in the system: the caller asked for
-        // nothing, so nothing moves under them. Letting it win here is what let
-        // a versioned catch-all controller swallow `/health/live` and every
-        // other unversioned route beside it. A developer who wants `/users` to
-        // mean v1 does not also mount an unversioned `/users`.
         for default in [Some("1"), None] {
             let client = TestClient::new(app(ApiVersioning::Header, default));
             let resp = client.get("/users").send().await;
@@ -710,7 +590,6 @@ mod tests {
             resp.assert_text("none").await;
         }
 
-        // A *stated* version is the strongest, and still wins at that address.
         let client = TestClient::new(app(ApiVersioning::Header, Some("1")));
         let resp = client
             .get("/users")
@@ -748,8 +627,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_version_that_could_reach_another_path_is_refused() {
-        // The token is spliced into a path, so this is path traversal, not a
-        // typo: refuse it rather than let the router decide what it means.
         let client = TestClient::new(app(ApiVersioning::Header, None));
         for probe in [
             "../admin",
@@ -780,8 +657,6 @@ mod tests {
 
     #[tokio::test]
     async fn the_uri_form_is_refused_whatever_the_version_is_spelled_like() {
-        // A version is an opaque string, so a `v` + digits test would leave
-        // `#[controller(version = "2024-08-11")]` reachable at both addresses.
         let route = Route::new().at("/v2024-08-11/users", get(v2));
         let ep = VersionedEndpoint::new(
             route,
@@ -815,8 +690,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_path_that_merely_starts_with_v_is_left_alone() {
-        // `/vendors` is not a version segment, and nothing versioned is mounted
-        // under it, so the selector must not touch it.
         let ep = VersionedEndpoint::new(
             Route::new().at("/vendors", get(unversioned)),
             VersionSelector::new(
@@ -836,10 +709,8 @@ mod tests {
         resp.assert_text("none").await;
     }
 
-    /// The transport keeps its route tree typed as a `Route` so the no-layer
-    /// fast path stays monomorphized; folding the rewrite back in through a
-    /// root `nest_no_strip` is what preserves that. Pin the behaviour poem
-    /// gives us there.
+    /// Pins the poem behaviour the transport relies on to keep its route tree a
+    /// monomorphized `Route`.
     #[tokio::test]
     async fn a_root_nest_no_strip_routes_the_full_path() {
         let wrapped = VersionedEndpoint::new(
@@ -860,18 +731,8 @@ mod tests {
         resp.assert_text("two").await;
     }
 
-    /// The wire grammar and the declared grammar are one rule, and this is what
-    /// keeps the copy honest.
-    ///
-    /// `nest_rs_codegen` words it; `#[controller(version = …)]` reads it there.
-    /// This crate cannot — `nest-rs-codegen` pulls `syn`, and the umbrella rule
-    /// forbids that reaching an app's dependency graph — so it carries the
-    /// predicate itself and pins it here, through a dev-dependency.
-    ///
-    /// The bound is the half that was missing: `MAX_VERSION_LEN` lived only on
-    /// this side, so a 40-character declared version compiled, mounted, logged
-    /// and documented, and was then refused with `400` the moment a caller
-    /// named it.
+    /// Holds `is_valid_version` equal to `nest_rs_codegen`'s, which this crate
+    /// cannot depend on outside its tests.
     #[test]
     fn the_wire_grammar_matches_the_declared_grammar() {
         assert_eq!(
@@ -879,10 +740,7 @@ mod tests {
             nest_rs_codegen::versioning::MAX_VERSION_LEN
         );
 
-        // Exhaustive over the byte space rather than over a table of examples:
-        // a table passes for every character it does not list, which is exactly
-        // the drift this test exists to catch. One-character strings settle the
-        // character set; the sweep around the bound settles the length.
+        // Over the whole ASCII range: a table passes for every byte it omits.
         for byte in 0u8..=0x7f {
             let case = (byte as char).to_string();
             assert_eq!(
@@ -905,8 +763,6 @@ mod tests {
                 "the two halves disagree about a {len}-character version",
             );
         }
-        // And the shapes a caller actually sends, including the ones a version
-        // token must never be able to become.
         for case in [
             "1",
             "2",

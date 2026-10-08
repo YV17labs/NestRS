@@ -1,8 +1,6 @@
-//! Global pipes on GraphQL operation **variables**. A registered `GlobalPipe`'s
-//! `transform_graphql_variables` runs over an operation's variables before
-//! execution — the operation-level analog of HTTP's `transform_body`, wired at
-//! the `/graphql` endpoint via the `GraphqlVariablePipe` bridge that
-//! `use_pipes_global` seeds. A rejection becomes a GraphQL error.
+//! Global pipes on GraphQL operation **variables**: a `GlobalPipe`'s
+//! `transform_graphql_variables` runs before execution, and a rejection becomes
+//! a GraphQL error.
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -83,7 +81,6 @@ async fn a_global_pipe_transforms_operation_variables_before_execution() {
         .await;
     resp.assert_status_is_ok();
     let json = resp.json().await;
-    // The resolver saw the pipe-transformed variable, not the raw one.
     let echo = json
         .value()
         .object()
@@ -119,8 +116,6 @@ async fn a_rejecting_variable_pipe_surfaces_a_graphql_error() {
     );
 }
 
-/// A pipe that leaves the variables in a shape GraphQL cannot take is reported
-/// by where and what kind — never by the value, which is the caller's.
 #[tokio::test]
 async fn variables_a_pipe_left_unusable_are_reported_without_their_value() {
     let app = boot().await;

@@ -1,22 +1,13 @@
 //! The per-site guard chain: what an in-band transport composes once and then
 //! runs on every operation.
 //!
-//! HTTP bakes its chain into a [`RouteShaper`](super::RouteShaper) at mount and
-//! WS into an `EventLayerTable` at gateway mount. GraphQL and MCP have no such
-//! seam — the schema is built by `nest-rs-graphql` and the MCP host by rmcp,
-//! neither of which can see [`Guard`] — so each *site* memoizes its own chain in
-//! a [`SiteChainCell`] the decorator emits as a `static` beside the call.
-//! Composition (container lookups, dedup, sort) therefore happens once per site,
-//! not once per operation; the steady-state cost is one atomic load and one
-//! `Arc` clone.
+//! GraphQL and MCP have no mount seam — neither the schema nor the MCP host can
+//! see [`Guard`] — so each site memoizes its chain in a [`SiteChainCell`] the
+//! decorator emits as a `static`: composed once per site, one atomic load per
+//! operation.
 //!
-//! The cell is keyed by [`ContainerId`] rather than blindly memoizing: a test
-//! process serves several apps, and one app's guard chain must never gate
-//! another's operations. Ids are never recycled, so a stale hit is impossible.
-//!
-//! Both transports share the cell and the sources; only *which* `check_*` runs
-//! and how a [`Denial`](crate::Denial) renders differ, and those live in
-//! `graphql_chain.rs` and `mcp_chain.rs` beside their transports.
+//! The cell is keyed by [`ContainerId`]: a test process serves several apps, and
+//! one app's guard chain must never gate another's operations.
 
 use std::any::TypeId;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -29,8 +20,7 @@ use crate::dispatch::route_shaper::log_effective_chain;
 use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resolve_specs};
 
 /// The scope-tagged guard declarations of one operation site, as the decorator
-/// knows them. Read **once per site** — on the cache miss that composes the
-/// chain — so building the `Vec`s costs nothing per operation.
+/// knows them. Read once per site, on the cache miss that composes the chain.
 ///
 /// Macro-emitted, not public API.
 #[doc(hidden)]
@@ -87,10 +77,8 @@ impl SiteChainCell {
     /// This site's chain for `container`, composing it on first sight. See
     /// [`compose`].
     ///
-    /// `global` is a **function of the container**, not a value, so the memo's
-    /// key covers everything the composition reads. A site whose bucket varied
-    /// by anything else would otherwise get whichever chain was composed first,
-    /// silently — and in the fail-open direction.
+    /// `global` is a function of the container, so the memo's key covers
+    /// everything the composition reads.
     pub(crate) fn chain(
         &self,
         container: &Container,
@@ -129,31 +117,14 @@ impl SiteChainCell {
 
 /// Resolve, dedup and order this site's chain.
 ///
-/// **The app-wide pool is part of it, on both transports.** This site runs the
-/// pool's [`check_graphql`](Guard::check_graphql) / `check_mcp` against the
-/// operation. What an `Exempt` *edge* runs is `check_http` against the request —
-/// and only when no bridge is registered, since a registered one replaces the
-/// fallback that folds the pool there. Different methods asking different
-/// questions, so one is never a reason to skip the other; skipping this one is a
-/// fail-open, because a guard written for an operation would then never be
-/// consulted at the only site that could consult it.
+/// The app-wide pool is folded in on both transports: this site runs its
+/// [`check_graphql`](Guard::check_graphql) / `check_mcp`, which an `Exempt`
+/// edge's `check_http` never stands in for.
 ///
-/// **One site subtracts it, and only because another site already ran it.**
-/// `#[entity]` operations are reached exclusively through `_entities`, in front
-/// of which `nest_rs_graphql`'s federation gate runs the pool once per field —
-/// so folding it here again would re-run every pooled guard once per
-/// representation. That is [`GlobalBucket::Skip`]; every other site is
-/// [`Fold`](GlobalBucket::Fold), and nothing else may subtract a bucket without
-/// naming where it ran instead.
-///
-/// **Subtracting is done by composing and then dropping, never by composing
-/// without.** The pool is what `compose_chain`'s `TypeId` dedup collapses a
-/// narrower declaration *against* — broadest scope wins — so leaving it out
-/// makes a guard declared both globally and on the resolver survive as the
-/// resolver's own copy, and it then runs once per representation *on top of* the
-/// gate's one run. That is the shape `demo`'s resolvers have. Composing first
-/// and dropping the entries whose surviving `source` is the global bucket keeps
-/// the dedup and removes exactly what already ran.
+/// Only `#[entity]` operations skip it ([`GlobalBucket::Skip`]): the federation
+/// gate in front of `_entities` already ran it. Skipping composes and then drops
+/// the global entries, never composes without them — the pool is what
+/// `compose_chain`'s dedup collapses a narrower declaration against.
 fn compose(
     container: &Container,
     route_label: &str,

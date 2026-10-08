@@ -105,20 +105,10 @@ use crate::{Ability, ActionMarker, Subject};
 /// # }
 /// ```
 ///
-/// `#[routes]` desugars that to this extractor, fully qualified, as the
-/// handler's first parameter — the same thing `#[crud]` emits for its
-/// generated ops. Writing the parameter by hand still works (it *is* the
-/// mechanism) but it is not a posture declaration, and that is the whole
-/// reason to go through the decorator: an `#[authorize]` is greppable as one
-/// of the three sites an authz decision may live at, a parameter is not.
-///
-/// Arming is **not** a spelling question. `#[routes]` hands each parameter
-/// type to `nest_rs_http::ShaperProbe` and the compiler decides whether it is
-/// a `RouteResponseShaper`, so `use ... as Az` arms exactly like the canonical
-/// name. What no signature scan can see is an extractor reached *indirectly* —
-/// nested in another extractor, or run by a hand-rolled `FromRequest`; that is
-/// what the `nest_rs_http::MaskProbe` this extractor marks still backstops,
-/// failing such a route closed rather than shipping an unmasked body.
+/// `#[routes]` desugars that to this extractor as the handler's first
+/// parameter; written by hand it works, but is not a posture declaration. An
+/// extractor reached indirectly (nested, or run by a hand-rolled `FromRequest`)
+/// is backstopped by `nest_rs_http::MaskProbe`, which fails the route closed.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>
@@ -148,26 +138,16 @@ where
         if ability.can_class(A::ACTION, TypeId::of::<S>()) {
             return Ok(Authorize(PhantomData));
         }
-        // Asked only once the gate has already refused: a withheld rule beside
-        // a granted one is not a denial, so `missing_scopes` is the *reason*
-        // for this refusal, never a check of its own.
         let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
         if missing.is_empty() {
-            // Through the shared emitter, not beside it: three sites wrote this
-            // one event and only two carried `transport`, so an operator
-            // filtering denials by transport saw every edge except this one.
             crate::gate::warn_denied(Refusal {
                 reason: Some(crate::gate::reason::NO_CLASS_GRANT),
                 ..Refusal::of::<A, S>(transport::HTTP)
             });
             return Err(denial_to_http_error(Denial::forbidden("forbidden")));
         }
-        // A token that verified but is too narrow. The scopes ride to the edge,
-        // where the discovery interceptor turns them into the RFC 6750
-        // `insufficient_scope` challenge — so the client learns what to ask the
-        // authorization server for instead of retrying the same token.
-        // The scopes ride on the `Denial`, and the denial line stays the shared
-        // one: an event named once is an event queried once.
+        // A token that verified but is too narrow: the discovery interceptor turns
+        // the scopes into the RFC 6750 `insufficient_scope` challenge.
         crate::gate::warn_denied(Refusal {
             reason: Some(crate::gate::reason::INSUFFICIENT_SCOPE),
             ..Refusal::of::<A, S>(transport::HTTP)

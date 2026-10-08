@@ -12,11 +12,9 @@ use crate::scope::RequiredScopes;
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::async_graphql::{Error as GraphqlError, ErrorExtensions};
 
-/// Structural denial handling for the HTTP chain sites (route shaper,
-/// self-mount fold): the one `warn` that keeps the "every denial visible at
-/// warn+" invariant independent of individual guard authors, then the wire
-/// conversion. Individual guards may add richer context; this line is the
-/// floor.
+/// Denial handling for the HTTP chain sites (route shaper, self-mount fold): the
+/// one `warn` that keeps every denial visible whatever the guard logged, then
+/// the wire conversion.
 pub(crate) fn deny_http(guard: &'static str, denial: Denial) -> Response {
     tracing::warn!(
         target: nest_rs_core::target::LAYERS,
@@ -27,19 +25,13 @@ pub(crate) fn deny_http(guard: &'static str, denial: Denial) -> Response {
     denial_to_http_response(denial)
 }
 
-/// Convert a transport-agnostic [`Denial`] to a poem [`Response`] on the single
-/// RFC-9457 `application/problem+json` envelope — a guard denial is an
-/// `Ok(4xx)` response that never travels the `Err`/`ResponseError` path, so it
-/// is normalized here rather than at the transport-edge error boundary. The
-/// authored 4xx reason rides as `detail`; a 5xx `Internal` keeps only the
-/// generic title so no internal text leaks.
+/// Convert a transport-agnostic [`Denial`] to a poem [`Response`] on the RFC 9457
+/// `application/problem+json` envelope. A 4xx reason rides as `detail`; a 5xx
+/// keeps only the generic title, so no internal text leaks.
 pub fn denial_to_http_response(denial: Denial) -> Response {
     let mut response = problem_response(&denial);
-    // The scopes ride as a response extension rather than a header written
-    // here: the challenge also has to name the metadata document, which
-    // only the oauth-resource crate knows. Attaching the evidence lets
-    // that one interceptor render the whole `WWW-Authenticate` at the edge,
-    // for every transport, instead of this function learning about RFC 9728.
+    // The scopes ride as an extension: the challenge also names the RFC 9728
+    // metadata document, which only the oauth-resource interceptor knows.
     if let Some(required) = required_scopes(&denial) {
         response.extensions_mut().insert(required);
     }
@@ -62,19 +54,9 @@ fn problem_response(denial: &Denial) -> Response {
         problem = problem.with_detail(denial.message().to_owned());
     }
     let mut response = problem.into_response();
-    // RFC 6750 §3: the `Bearer` scheme "MUST be followed by one or more
-    // auth-param values", and §3.1 that a rejected credential names its code.
-    // Written here rather than deferred like the scopes: the code needs nothing
-    // this function does not have, while the `resource_metadata` pointer needs
-    // the RFC 9728 document only the oauth-resource crate holds. That module's
-    // interceptor merges its pointer into whatever stands here.
-    //
-    // Not gated on the status: §3.1 puts `insufficient_scope` at `403` ("the
-    // resource server SHOULD respond with the HTTP 403 (Forbidden) status
-    // code"), so a `401` test would exclude the one code that lives there and
-    // `bearer_error`'s scope arm could never fire. `bearer_error` is already
-    // `None` for every denial the specification says carries no challenge,
-    // which is the condition that actually decides this.
+    // RFC 6750 §3/§3.1: a rejected credential names its code. Not gated on the
+    // status: `insufficient_scope` lives at `403`, and `bearer_error` is already
+    // `None` wherever no challenge is due.
     if let Some(code) = denial.bearer_error() {
         nest_rs_http::challenge::stamp_bearer_error(&mut response, code);
     }
@@ -100,17 +82,10 @@ fn required_scopes(denial: &Denial) -> Option<RequiredScopes> {
 /// [`denial_to_http_response`], for the sites that must reject rather than
 /// return (an extractor, the MCP endpoint).
 ///
-/// **Not `Error::from_response(denial_to_http_response(d))`.** poem's
-/// `Error::into_response` ends with `*resp.extensions_mut() = self.extensions`,
-/// overwriting whatever the carried response held with the error's own set — so
-/// that spelling silently drops the very evidence the edge needs, and does it
-/// at the moment a client is being refused. `set_data` is poem's channel for
-/// exactly this, and routing every denial-to-`Err` conversion through here is
-/// what keeps the trap from being re-stepped-in per call site.
+/// Not `Error::from_response(denial_to_http_response(d))`: poem's
+/// `Error::into_response` overwrites the response's extensions with the error's
+/// own, dropping the scope evidence; `set_data` is the channel that survives.
 pub fn denial_to_http_error(denial: Denial) -> Error {
-    // Built from `problem_response`, not `denial_to_http_response`: the
-    // extension that one attaches is precisely what `into_response` would
-    // overwrite, so putting it there would be a copy made only to be dropped.
     let mut error = Error::from_response(problem_response(&denial));
     if let Some(required) = required_scopes(&denial) {
         error.set_data(required);
@@ -120,12 +95,8 @@ pub fn denial_to_http_error(denial: Denial) -> Error {
 
 /// Convert a [`Denial`] to an async-graphql error frame.
 ///
-/// A scope denial is where GraphQL stops being the transport that learns less
-/// than the others. It has no `401` to enrich — an unauthenticated operation
-/// answers `200` with an `UNAUTHENTICATED` frame — but a *scope* refusal is an
-/// ordinary error frame here, so the required scopes ride as a
-/// `requiredScopes` extension: structurally, as a list, for the same reason
-/// `forbidden_fields` does it that way.
+/// The required scopes of a scope denial ride as a `requiredScopes` list
+/// extension, since an error frame has no `401` to enrich.
 #[cfg(feature = "graphql")]
 pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
     let code = match &denial {
@@ -158,15 +129,10 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
 
 /// Convert a [`Denial`] to the JSON-RPC error one MCP operation answers with.
 ///
-/// MCP has no status line, so the refusal has to *say* what it is: the code
-/// picks the closest JSON-RPC family (`invalid_request` for an unauthenticated
-/// or refused caller — the request cannot be served as made) and the `data`
-/// carries the machine-readable `reason`, plus `requiredScopes` when the denial
-/// names them, so a client can act on a scope refusal exactly as it does on the
-/// other three transports.
-///
-/// An internal denial is opaque here for the reason every MCP error is (see
-/// `nest_rs_mcp::Opaque`): the reader is a language model.
+/// MCP has no status line: the code picks the closest JSON-RPC family and the
+/// `data` carries the machine-readable `reason`, plus `requiredScopes` when the
+/// denial names them. An internal denial is opaque (`nest_rs_mcp::Opaque`): the
+/// reader is a language model.
 #[cfg(feature = "mcp")]
 pub fn denial_to_mcp_error(denial: Denial) -> nest_rs_mcp::McpError {
     use nest_rs_mcp::McpError;
@@ -192,10 +158,6 @@ pub fn denial_to_mcp_error(denial: Denial) -> nest_rs_mcp::McpError {
 /// The machine-readable half of a refusal, for the two transports with no status
 /// line to carry it: the `reason` a client branches on, plus `requiredScopes`
 /// when the denial names them.
-///
-/// Shared because the two are byte-identical, and because the vocabulary is the
-/// thing that must not drift — a reason added for one transport and missed on the
-/// other is a client that can branch on `/mcp` and not on a socket.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Value> {
     let reason = match denial {
@@ -213,20 +175,7 @@ fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Val
     if !scopes.is_empty() {
         data.insert("requiredScopes".to_owned(), serde_json::json!(scopes));
     }
-    // The wait, on every edge that has somewhere to put it.
-    //
-    // It was computed by the throttler, carried on the `Denial`, and read by
-    // exactly one of four renderers: HTTP turned it into `Retry-After`
-    // (RFC 6585 §4) and GraphQL, MCP and WS dropped it — so a throttled caller
-    // on those three had no backoff signal and hot-retried into the limit,
-    // which is the load the limiter exists to shed. Those three have no status
-    // line and no standard header, but they do have this map: it is where
-    // `reason` and `requiredScopes` already ride, so a client parses one shape
-    // for every structured refusal detail rather than three.
-    //
-    // Seconds, matching `Retry-After`'s delay-seconds form, so the four edges
-    // report one number in one unit — a rate limit's wait and an unavailable
-    // dependency's alike.
+    // The wait, in delay-seconds like `Retry-After`, for edges with no status line.
     if let Some(retry_after_secs) = denial.retry_after_secs() {
         data.insert(
             "retryAfterSeconds".to_owned(),
@@ -238,14 +187,9 @@ fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Val
 
 /// Convert a [`Denial`] to the error frame one WS message answers with.
 ///
-/// A WS frame has no status line either, so the refusal says what it is the same
-/// way MCP's does: the message, plus `reason` and — when the denial names them —
-/// `requiredScopes` under the frame's `data.errors` member, which is where every
-/// other structured rejection detail on this transport already rides (a
-/// `Valid<T>` rejection puts its per-field errors there).
-///
-/// An internal denial is opaque, as on every transport: the operator gets the
-/// real reason from the `warn` the refusing layer emitted.
+/// No status line either: the message, plus `reason` and `requiredScopes` under
+/// the frame's `data.errors`, where a `Valid<T>` rejection's details ride. An
+/// internal denial is opaque.
 #[cfg(feature = "ws")]
 pub fn denial_to_ws_error(denial: Denial) -> nest_rs_ws::WsError {
     use nest_rs_ws::WsError;
@@ -317,8 +261,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_err_path_carries_the_scopes_through_poems_extension_overwrite() {
-        // The regression this guards: `Error::from_response` alone loses them,
-        // because `into_response` replaces the response's extensions wholesale.
+        // `Error::from_response` alone loses them: `into_response` replaces the
+        // response's extensions wholesale.
         let error = denial_to_http_error(Denial::insufficient_scope(
             ["posts:write"],
             "this token may not write posts",
@@ -361,12 +305,6 @@ mod tests {
     }
 
     /// All four edges report the wait, in one unit.
-    ///
-    /// HTTP turns it into `Retry-After` (RFC 6585 §4); the other three have no
-    /// status line and no standard header, so it rides the structured map where
-    /// `reason` and `requiredScopes` already do. It was computed and dropped on
-    /// three of four, which left a throttled caller hot-retrying into the limit
-    /// the limiter exists to shed.
     #[cfg(any(feature = "mcp", feature = "ws"))]
     #[test]
     fn every_edge_reports_the_wait_a_rate_limit_denial_carries() {
@@ -387,10 +325,8 @@ mod tests {
         );
     }
 
-    /// Q12: a dependency that did not answer is a `503` on every edge, its
-    /// reason `unavailable`, and its wait reported in the same unit as a rate
-    /// limit's when the failing party gave one — and never invented when it did
-    /// not.
+    /// A dependency that did not answer: reason `unavailable`, its wait
+    /// reported when given and never invented.
     #[cfg(any(feature = "mcp", feature = "ws"))]
     #[test]
     fn every_edge_reports_an_unavailable_dependency_and_its_known_wait() {

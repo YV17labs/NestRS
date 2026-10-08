@@ -1,47 +1,20 @@
 //! Layer chain composition — the dedup-by-`TypeId` logic shared by every
-//! execution site of the Layer System (the per-route shaper, the transport
-//! pool folds, the GraphQL / WS in-band chains).
+//! execution site of the Layer System.
 //!
-//! Two kinds of sources feed a chain:
-//!
-//! - **Global** specs from `App::builder().use_*_global(...)`.
-//! - **Per-route** layers a shaper macro emitted from `#[use_guards]` /
-//!   `#[use_pipes]` / etc. on the controller and method.
-//!
-//! [`ResolvedLayer`] tags each entry with its [`LayerSite`]; the chain
-//! builder picks the broadest site for any duplicated [`TypeId`] and runs
-//! entries in **declaration order** within the kind, with [`Layer::priority`]
-//! as the optional intra-kind tiebreaker. Cross-kind ordering is fixed by
-//! the framework (one kind per chain) — there is no "category" reordering.
-//!
-//! The composed chain is a *pool membership* result: every execution site
-//! composes the same three buckets, then executes only the sub-chain that
-//! belongs to it (e.g. global interceptors execute at the transport edge,
-//! controller/method ones at the route). `priority` orders entries *within*
-//! a site; the site itself is chosen by the scope, never by priority.
+//! [`ResolvedLayer`] tags each entry with its [`LayerSite`]; the chain keeps
+//! the broadest site for any duplicated [`TypeId`] and runs entries in
+//! declaration order, with [`Layer::priority`] as the tiebreaker within a site.
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 use crate::container::Container;
 use crate::layer::Layer;
-// Re-exported so downstream call sites (and macro-emitted code) can name the
-// site tag through this module without also importing `layer`.
 pub use crate::layer::LayerSite;
 
 /// A global-layer registration: the `TypeId` a chain dedups on, the type's
-/// name for boot logs and fail-secure diagnostics, and a `resolve` fn that
-/// recovers the concrete `Arc<L>` from the live container at configure time.
-///
-/// This is the single shared shape behind the five Layer-System families'
-/// `*Spec` types: `GuardSpec` / `PipeSpec` (`nest-rs-guards`), `FilterSpec`
-/// (`nest-rs-filters`), `InterceptorSpec` (`nest-rs-interceptors`) and
-/// `ExceptionFilterSpec` (`nest-rs-exception-filters`) are all
-/// `LayerSpec<dyn Trait>` aliases. Each crate keeps its own typed constructor
-/// (`guard::<G>()`, `filter::<F>()`, …) that builds one via [`LayerSpec::new`];
-/// the erased-trait target is the only thing that varies. `type_id` and `name`
-/// are public (the shapers read them when composing the chain); `resolve` is
-/// private, reached through [`LayerSpec::resolve`].
+/// name for diagnostics, and a `resolve` fn that recovers the `Arc<L>` from the
+/// live container.
 pub struct LayerSpec<L: ?Sized> {
     /// `TypeId` of the layer type — the dedup key across scopes.
     pub type_id: TypeId,
@@ -51,9 +24,7 @@ pub struct LayerSpec<L: ?Sized> {
 }
 
 impl<L: ?Sized> LayerSpec<L> {
-    /// Build a spec from its `type_id`, `name` and `resolve` fn — called by
-    /// each family's typed constructor, which supplies the container lookup that
-    /// erases the concrete layer type to `Arc<L>`.
+    /// Build a spec from its `type_id`, `name` and `resolve` fn.
     pub fn new(
         type_id: TypeId,
         name: &'static str,
@@ -73,10 +44,8 @@ impl<L: ?Sized> LayerSpec<L> {
     }
 }
 
-/// The container-registered global registry of one Layer-System family —
-/// `GuardSpecs`, `PipeSpecs`, `FilterSpecs`, `InterceptorSpecs`,
-/// `ExceptionFilterSpecs`. Implementing it is what lets a family reach
-/// [`resolve_global_layers`] instead of open-coding the resolve loop.
+/// The container-registered global registry of one Layer-System family
+/// (`GuardSpecs`, `FilterSpecs`, …), read by [`resolve_global_layers`].
 pub trait GlobalSpecs: Any + Send + Sync {
     /// The erased layer trait this family's specs resolve to.
     type Layer: ?Sized;
@@ -87,12 +56,9 @@ pub trait GlobalSpecs: Any + Send + Sync {
 
 /// Resolve a family's global registry into [`LayerSite::Global`] entries.
 ///
-/// **The** implementation: every execution site that folds a global pool — the
-/// route shaper, the transport-edge folds, the in-band GraphQL chain, the
-/// boot-time validation — goes through here, so their dedup inputs cannot
-/// drift. A spec whose provider is not registered is skipped (the fail-secure
-/// boot check in [`check_specs_resolvable`] is what turns that into a boot
-/// failure); an unregistered family yields an empty chain.
+/// A spec whose provider is not registered is skipped —
+/// [`check_specs_resolvable`] fails the boot on it; an unregistered family
+/// yields an empty chain.
 #[doc(hidden)]
 pub fn resolve_global_layers<S: GlobalSpecs>(
     container: &Container,
@@ -114,12 +80,9 @@ pub fn resolve_global_layers<S: GlobalSpecs>(
         .collect()
 }
 
-/// Fail-secure boot check shared by every global Layer-System family: name the
-/// specs whose provider is not resolvable from `container`, and build the
-/// boot-failure message listing them. `kind` is the family noun (`"guard"`,
-/// `"filter"`, …) and `consequence` the family-specific tail explaining what a
-/// silent drop would cost. `Ok(())` when every spec resolves. The five builders
-/// each wrap the returned `Result` in their transport's `HttpBootCheck`.
+/// Fail-secure boot check: name the specs whose provider is not resolvable
+/// from `container`. `kind` is the family noun (`"guard"`, `"filter"`, …) and
+/// `consequence` the tail saying what a silent drop would cost.
 #[doc(hidden)]
 pub fn check_specs_resolvable<L: ?Sized>(
     specs: &[LayerSpec<L>],
@@ -143,11 +106,7 @@ pub fn check_specs_resolvable<L: ?Sized>(
     }
 }
 
-/// A layer that survived dedup, paired with its origin site and the name
-/// the shaper logged at mount.
-///
-/// Cross-crate wiring, not public API — hidden so it does not freeze at 1.0
-/// ([`LayerSpec`] is the one deliberate vocabulary type in this module).
+/// A layer that survived dedup, paired with its origin site and its name.
 #[doc(hidden)]
 pub struct ResolvedLayer<L: ?Sized> {
     /// The layer type's identity — the key dedup collapsed duplicates on.
@@ -173,26 +132,12 @@ impl<L: ?Sized> Clone for ResolvedLayer<L> {
 
 /// Compose a deduplicated chain from global + per-route entries.
 ///
-/// Behaviour:
+/// 1. Dedup by `TypeId` — the broadest site wins.
+/// 2. A `TypeId` listed in `force` survives even when declared more broadly.
+/// 3. Stable sort by [`Layer::priority`]; declaration order breaks ties.
 ///
-/// 1. Dedup by `TypeId` — the broadest site wins; a narrower-scope duplicate
-///    is deduped and reported once per process at `debug` (see
-///    [`report_redundant_site`]), not `warn` (fail-secure: the layer still
-///    runs exactly once).
-/// 2. The broadest-site rule is bypassed for any `TypeId` listed in
-///    `force` — those entries always survive even if the same `TypeId`
-///    is global.
-/// 3. Stable sort by [`Layer::priority`] only — declaration order survives
-///    when priorities tie (the common case). No "category" ordering: the
-///    framework runs one kind per chain.
-///
-/// `chain` names the dispatch site this chain belongs to, and it is deliberately
-/// not called `route`: four of the callers have none. HTTP passes a route, WS a
-/// message name, the two transport-edge pools the word `transport`, and the
-/// guard registry a bare label — so a field called `route` carried a message
-/// name on the one structured field an operator greps when a layer did not run
-/// where they expected. Same correction as [`LayerSite::Host`], on the other
-/// half of the same event.
+/// `chain` names the dispatch site (a route, a WS message, `transport`), not
+/// only a route.
 #[doc(hidden)]
 pub fn compose_chain<L>(
     global: Vec<ResolvedLayer<L>>,
@@ -222,10 +167,7 @@ where
                 }
                 tracing::info!(
                     target: crate::target::LAYERS,
-                    // Shortened exactly as the dedup line below shortens it: one
-                    // field name, one rendering, or a grep for
-                    // `layer="AuthnGuard"` finds one of the two lines about that
-                    // layer and misses the other.
+                    // Shortened as in `report_redundant_site`, so one grep finds both lines.
                     layer = crate::type_name::shorten(entry.name),
                     site = entry.source.label(),
                     chain,
@@ -237,31 +179,13 @@ where
         }
     }
 
-    // Stable sort by priority only. Declaration order survives as the
-    // tiebreaker when priorities are equal (the common case).
     entries.sort_by_key(|e| e.layer.priority());
 
     entries
 }
 
-/// Report a redundant multi-site declaration **once per process**.
-///
-/// *Site*, not *scope*, everywhere it is observable — the field, the message and
-/// this name. [`LayerSite`] spends a paragraph explaining that `scope` is the
-/// wrong word here (it belongs to request-scoped DI resolution) and every
-/// artifact of the type then used it, on the one structured field an operator
-/// greps when a guard did not run where they expected.
-///
-/// `compose_chain` runs per route, so a layer declared at both a broad scope
-/// (e.g. `global`) and a narrower one (e.g. the host struct) would otherwise warn
-/// on every route of that controller — a process-global structural fact spam-
-/// emitted as if it were a per-request event. Dedup by `(layer, scope-pair)`
-/// so it surfaces a single line at boot. Level is `debug`: it is informative
-/// (the host/method declaration was skipped because a broader site
-/// already covers it) yet fail-secure (broadest wins, the layer still runs
-/// exactly once), so it stays out of `warn` — a config lint, not an actionable
-/// security event, kept off `warn` to avoid alert fatigue. `#[force_*]` opts a
-/// duplicate back into re-running (logged at `info`).
+/// Report a redundant multi-site declaration once per process, at `debug`:
+/// `compose_chain` runs per route, and the layer still runs exactly once.
 fn report_redundant_site(
     type_id: TypeId,
     existing: LayerSite,
@@ -292,11 +216,8 @@ fn report_redundant_site(
     }
 }
 
-/// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration —
-/// **silently**. Used to pre-clean the global bucket before it is handed to
-/// [`compose_chain`] at a per-route site: the duplicate was already warned
-/// about once at the site that executes the global sub-chain; re-warning on
-/// every route would be noise.
+/// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration,
+/// silently — the site executing the global sub-chain already reported them.
 #[doc(hidden)]
 pub fn dedup_bucket<L: ?Sized>(bucket: Vec<ResolvedLayer<L>>) -> Vec<ResolvedLayer<L>> {
     let mut seen: Vec<TypeId> = Vec::new();

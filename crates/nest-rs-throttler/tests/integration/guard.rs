@@ -1,26 +1,9 @@
-//! [`ThrottlerGuard`] bound **globally** against a route's `#[meta(Throttle)]`
-//! (`src/guard.rs`) — the scope half of the contract, as opposed to the
-//! per-route wiring `wiring.rs` covers.
+//! [`ThrottlerGuard`] bound **globally** reads a route's `#[meta(Throttle)]`
+//! (`src/guard.rs`), and bounds its store by `HIT_TIMEOUT` on every edge.
 //!
-//! The class this closes: three doc comments and two documentation pages said a
-//! global guard "runs before routing has resolved a handler, so no route
-//! metadata is attached at that point" — from which a pooled `ThrottlerGuard`
-//! would silently fall back to the module default and a route's own
-//! `#[meta(Throttle)]` would mean nothing. Only a status code settles it, and
-//! nothing asserted one: the pool executes at the `RouteShaper`, which
-//! `#[routes]` wraps *inside* the `#[meta]` / `#[public]` route-data wrap, so
-//! every guard on the chain reads the same metadata whichever scope declared
-//! it.
-//!
-//! The module default is pinned generously (60/minute) on purpose: it is the
-//! only other limit in the app, so a `429` on the third request cannot come
-//! from anywhere but the route's own declaration — and the unmetered control
-//! route proves the pinned default really is that generous rather than the
-//! deployment's.
-//!
-//! The guard's other half is its bound on the store, `HIT_TIMEOUT`: every edge
-//! the guard serves is driven below over a store that never answers, on paused
-//! time, so the twenty seconds it waits cost the suite nothing.
+//! The module default is pinned generously (60/minute), so a `429` on the third
+//! request can only come from the route's own declaration. The stalled stores
+//! run on paused time, so the twenty seconds cost nothing.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,8 +21,7 @@ use poem::http::StatusCode;
 #[controller(path = "/rated")]
 struct RatedController;
 
-// No `#[use_guards]` at either scope — the pool is the only thing that can
-// reach these routes, which is the whole point of the fixture.
+// No `#[use_guards]` at either scope: the pool alone reaches these routes.
 #[routes]
 impl RatedController {
     /// Two per minute, declared on the route and nowhere else.
@@ -99,16 +81,12 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
         .await
         .assert_status_is_ok();
 
-    // The third request exceeds the route's `#[meta(Throttle::per_minute(2))]`
-    // and nothing else — the pinned module default is 60/minute. A `200` here
-    // would mean the pool ran with no route metadata attached.
+    // A `200` here would mean the pool ran with no route metadata attached.
     let denied = app.http().get("/rated/strict").send().await;
     denied.assert_status(StatusCode::TOO_MANY_REQUESTS);
     denied.assert_header_exist("retry-after");
 
-    // The `429` tells the client it was throttled; the event tells the operator
-    // which route's bucket filled — never the composite store key, which holds
-    // the client's address, personal data a log line does not carry.
+    // The route, never the composite store key, which holds the client's address.
     let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
     assert_eq!(event.level, "warn");
     assert!(
@@ -135,10 +113,8 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
 async fn a_route_with_no_metadata_falls_back_to_the_module_default() {
     let app = app().await;
 
-    // Same pooled guard, same three requests, no `#[meta]` on the route: the
-    // pinned 60/minute applies, so nothing is refused. This is what makes the
-    // sibling test's `429` attributable to the metadata rather than to a low
-    // default the deployment (or a stray `NESTRS_THROTTLER__LIMIT`) supplied.
+    // What makes the sibling test's `429` attributable to the metadata rather
+    // than to a low default the deployment supplied.
     for _ in 0..3 {
         app.http()
             .get("/rated/lenient")
@@ -147,14 +123,6 @@ async fn a_route_with_no_metadata_falls_back_to_the_module_default() {
             .assert_status_is_ok();
     }
 }
-
-// --- a store that never answers ---------------------------------------------
-//
-// A store that cannot answer denies, and a store that never answers could not
-// even do that: it held the unit of work for as long, and on the three edges no
-// request timeout covers — a GraphQL subscription, an MCP operation, a socket's
-// messages — for good. The guard waits `HIT_TIMEOUT` and no longer, then refuses
-// the caller as a store that cannot answer does, on every edge it serves.
 
 /// A store that never answers — a backend holding every command, a network
 /// dropping them without a reset.
@@ -168,9 +136,8 @@ impl ThrottlerStore for StalledStore {
     }
 }
 
-/// A store that answers, and slowly: just inside the guard's bound, as a store
-/// running out its own budget does. It stands for the Redis store at the end of
-/// a reconnect, whose connection budget sits well inside the bound.
+/// A store that answers just inside the guard's bound, as a store running out
+/// its own budget does.
 #[derive(Default)]
 struct SlowStore;
 
@@ -183,8 +150,7 @@ impl ThrottlerStore for SlowStore {
 }
 
 /// Binds `S` the way a store's own module does: a declared factory carrying the
-/// port's remedy, so it supersedes the in-process default wherever it sits in
-/// `imports` — the documented wiring of a custom store.
+/// port's remedy.
 struct StoreModule<S>(std::marker::PhantomData<S>);
 
 impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
@@ -203,9 +169,8 @@ impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
 type StalledStoreModule = StoreModule<StalledStore>;
 type SlowStoreModule = StoreModule<SlowStore>;
 
-/// The refusal alone reads like any other: a `429`, a `Retry-After`. What says
-/// the store never answered — and which store it was — is this line, naming the
-/// edge, the store and how long it was waited on.
+/// The line says what the refusal cannot: that the store never answered, and
+/// which store it was.
 fn assert_the_store_was_waited_out(logs: &LogCapture, transport: &str) {
     let cause = logs.expect_one(
         nest_rs_throttler::TARGET,
@@ -239,8 +204,7 @@ fn edge() -> HttpConfig {
 }
 
 /// Await `unit` on the paused clock for twice the bound and no longer, so a
-/// guard that stopped bounding its store fails here, naming the bound, rather
-/// than holding the suite for good the way it held the unit of work.
+/// guard that stopped bounding its store fails here rather than hang.
 async fn within_twice_the_bound<T>(unit: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(HIT_TIMEOUT * 2, unit)
         .await
@@ -287,11 +251,6 @@ struct StalledHttpModule;
 )]
 struct SlowHttpModule;
 
-/// Fail closed at the bound: the request a stalled store held for good is
-/// refused once `HIT_TIMEOUT` passes — as a store that cannot answer refuses it,
-/// a `429` for the whole window — and before the HTTP edge's own request
-/// timeout, so the caller reads the guard's refusal and the operator the guard's
-/// line naming the store, rather than a `503` naming nothing.
 #[tokio::test(start_paused = true)]
 async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
     let logs = LogCapture::install();
@@ -304,8 +263,7 @@ async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
     let waited = sent.elapsed();
 
     // A `503` here is the edge's request timeout answering first: the guard's
-    // bound would then be past it, and a hung store would read one way on HTTP
-    // and another on every edge no request timeout covers.
+    // bound would be past it.
     refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
     refused.assert_header("retry-after", WINDOW_SECS.to_string());
     assert!(
@@ -322,10 +280,6 @@ async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
     assert_the_store_was_waited_out(&logs, "http");
 }
 
-/// The other side of the bound: a store that answers inside it is waited for,
-/// however slowly, and its answer is the one the caller gets. The bound is a
-/// net under a store that never answers, never a budget cutting short one that
-/// does — the Redis store's own budget answers well inside it.
 #[tokio::test(start_paused = true)]
 async fn a_store_answering_inside_the_bound_is_waited_for() {
     let logs = LogCapture::install();
@@ -342,10 +296,6 @@ async fn a_store_answering_inside_the_bound_is_waited_for() {
     );
 }
 
-/// The two budgets either side of the bound, read from the constants that set
-/// them rather than retyped: the HTTP edge's request timeout must stay above
-/// it, or a stalled store reads as a `503` on HTTP and as the guard's refusal
-/// everywhere else.
 #[test]
 fn the_bound_answers_before_the_http_edge_times_a_request_out() {
     let timeout = HttpConfig::default()
@@ -354,20 +304,9 @@ fn the_bound_answers_before_the_http_edge_times_a_request_out() {
     assert!(HIT_TIMEOUT < timeout, "{HIT_TIMEOUT:?} vs {timeout:?}");
 }
 
-// --- the three edges an HTTP-only guard left unmetered -----------------------
-//
-// `/graphql` and `/mcp` are `EdgePosture::Exempt` and a WS message runs after
-// the upgrade's chain has returned, so none of the three is reachable from an
-// HTTP-scope binding at any scope. A `ThrottlerGuard` that implemented only
-// `check_http` therefore rate-limited nothing there — including the
-// anonymous-reachable `/graphql` mount — while compiling, reading as a
-// protection, and (before the capability markers) not even refusing the
-// binding.
-//
-// Each module below binds the guard where a developer would, which is also the
-// only witness its capability marker has: `#[operations]`, `#[tools]` and
-// `#[messages]` emit a bound against `GraphqlGuard` / `McpGuard` / `WsGuard`, so
-// an unattested guard is a compile error at the `#[use_guards]` line.
+// Each module below binds the guard where a developer would: the only witness
+// its capability marker has, since `#[operations]`, `#[tools]` and `#[messages]`
+// bound it against `GraphqlGuard` / `McpGuard` / `WsGuard`.
 
 /// One request per minute, so the *second* call is the assertion and the first
 /// proves the site was reachable at all.
@@ -456,8 +395,6 @@ mod graphql {
             "the field resolves inside the budget: {first}",
         );
 
-        // The gate is the whole point: `/graphql` is `Exempt`, so before this
-        // entry existed the operation ran however many times a client asked.
         let second = tick(&app).await;
         assert!(
             second.contains("Too Many Requests"),
@@ -490,10 +427,7 @@ mod graphql {
             event.fields,
         );
 
-        // Said once per process, with the remedy, and **only for an anonymous
-        // caller** — which this fixture is. An authenticated one keys on its
-        // actor and shares nothing; keying every caller together was a limiter
-        // one client could turn into a denial of service for the rest.
+        // Only for an anonymous caller, which this fixture is.
         let degraded = logs.expect_one(
             nest_rs_throttler::TARGET,
             "rate-limit keying degraded to a shared bucket",
@@ -505,10 +439,8 @@ mod graphql {
         );
     }
 
-    /// A field is refused at the bound when its store never answers, and its
-    /// resolver never runs. Here a query's, which the HTTP edge would otherwise
-    /// have answered with a `503` at its own timeout; a subscription's fields,
-    /// carried by a socket, have no such timeout at all.
+    /// A query's, which the HTTP edge would otherwise have answered with a `503`;
+    /// a subscription's fields have no such timeout at all.
     #[tokio::test(start_paused = true)]
     async fn a_store_that_never_answers_refuses_the_field_at_the_bound() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -560,19 +492,16 @@ mod mcp {
         }
     }
 
-    // `AllowAllMcpGuard` is the endpoint's deliberate opt-out: without an
-    // operation guard `/mcp` is deny-all, and a `401` would hide whether the
-    // per-operation chain ran at all.
+    // Without an operation guard `/mcp` is deny-all, and a `401` would hide
+    // whether the per-operation chain ran at all.
     #[module(
         imports = [ThrottlerModule::for_root(one_per_minute())],
         providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
     )]
     struct RatedMcpModule;
 
-    // The stream's keep-alive is off: `sse-stream` re-arms it from the real
-    // clock, which a paused one leaves behind at every jump, so it fired over and
-    // over — five real seconds for these twenty paused ones — and pings are not
-    // what this test is about.
+    // `sse-stream` re-arms its keep-alive from the real clock, which a paused one
+    // leaves behind at every jump.
     #[module(
         imports = [
             nest_rs_http::HttpModule::for_root(edge()),
@@ -635,10 +564,8 @@ mod mcp {
         );
     }
 
-    /// A tool call is refused at the bound when its store never answers. The
-    /// call answers over a stream, which runs after the handler the HTTP edge's
-    /// request timeout covers has returned, so the guard's bound is the only one
-    /// the operation has — the edge is mounted here, and does not end it.
+    /// The call answers over a stream, after the handler the HTTP request timeout
+    /// covers has returned: the guard's bound is the only one the operation has.
     #[tokio::test(start_paused = true)]
     async fn a_store_that_never_answers_refuses_the_tool_call_at_the_bound() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -668,9 +595,7 @@ mod ws {
         StalledStoreModule, assert_the_store_was_waited_out, one_per_minute, within_twice_the_bound,
     };
 
-    /// The binding a developer writes, and the compile witness for `WsGuard`:
-    /// `#[messages]` bounds every per-message guard on it, so this file would
-    /// not build if `ThrottlerGuard` stopped attesting the edge.
+    /// The compile witness for `WsGuard`.
     #[gateway(path = "/ws/rated")]
     struct RatedGateway;
 
@@ -700,12 +625,8 @@ mod ws {
     )]
     struct StalledWsModule;
 
-    /// The message chain is frozen at mount, behind a real socket the harness
-    /// has no driver for — `TestApp` drives HTTP, GraphQL and MCP, and a WS
-    /// gateway only through its upgrade. So the boot proves the wiring (the
-    /// access graph resolves the guard, the mount succeeds) and the entry is
-    /// then exercised on the guard the container actually built, rather than on
-    /// one this test hand-assembled over a store nothing configured.
+    /// The boot proves the wiring, and the entry is then exercised on the guard
+    /// the container built.
     #[tokio::test]
     async fn a_second_message_on_one_connection_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -725,15 +646,11 @@ mod ws {
             .await
             .expect("the first message on this connection is inside the budget");
 
-        // A WS message is dispatched after the upgrade returned, so nothing an
-        // HTTP-scope binding does can meter this.
         guard
             .check_ws_message(&client, "tick", &data)
             .await
             .expect_err("the second message inside the window is refused");
 
-        // The event is half the bucket: a flood of `tick` must not spend the
-        // budget of every other message the gateway serves.
         guard
             .check_ws_message(&client, "other", &data)
             .await
@@ -759,9 +676,7 @@ mod ws {
         assert!(event.field("retry_after").is_some());
     }
 
-    /// A message is refused at the bound when its store never answers. No
-    /// request timeout reaches a socket's messages at all, so before the bound a
-    /// stalled store held this connection's traffic for good.
+    /// No request timeout reaches a socket's messages at all.
     #[tokio::test(start_paused = true)]
     async fn a_store_that_never_answers_refuses_the_message_at_the_bound() {
         let logs = nest_rs_testing::LogCapture::install();

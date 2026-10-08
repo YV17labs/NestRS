@@ -6,20 +6,14 @@ use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-/// The most a `<KEY>_FILE` is read for: a secret, a certificate chain or a key is
-/// a few kilobytes, so a mebibyte is room for any real value and a bound on a path
-/// that names `/dev/zero` or a log file by mistake.
+/// The most a `<KEY>_FILE` is read for — a bound on a path naming `/dev/zero` or
+/// a log file by mistake.
 pub(crate) const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
 
 /// The bytes read for one key through
 /// [`ConfigService::material`](crate::ConfigService::material), and the file they
-/// came from when the deployment named a path instead of inlining them — which is
-/// what a consumer that reloads watches, since a renewal rewrites the file under
-/// the running process while inline bytes are the deployment's final word.
-///
-/// It asserts nothing about the bytes: a consumer parses them in the format it
-/// expects (PEM, a token, a URL). `Debug` shows the path and the length, never
-/// the bytes, because the same reader carries private keys.
+/// came from when the deployment named a path — what a reloading consumer
+/// watches. `Debug` shows the path and the length, never the bytes.
 #[derive(Clone)]
 pub struct Material {
     /// The material, as read.
@@ -40,15 +34,11 @@ impl fmt::Debug for Material {
 
 /// Read `path` if it is a regular file (symlinks followed — a Kubernetes secret
 /// mount is one) of at most a mebibyte: the one reader for a value a deployment
-/// names by path, so every consumer that loads or re-reads such a file refuses
-/// the same things.
+/// names by path.
 ///
-/// Opening a FIFO blocks until something writes to it, which at boot is
-/// forever. On unix the file is therefore opened **non-blocking** and its kind
-/// checked on the opened handle — the one check a path swapped between a
-/// look and an open cannot slip past; a regular file ignores the flag. Other
-/// platforms check the path's kind before opening and the handle's after, which
-/// narrows that window without closing it.
+/// Opening a FIFO blocks forever, so on unix the file is opened **non-blocking**
+/// and its kind checked on the handle, closing the look-then-open race; other
+/// platforms only narrow it, checking the path before opening and the handle after.
 pub fn read_material(path: &Path) -> io::Result<Vec<u8>> {
     #[cfg(unix)]
     let file = {

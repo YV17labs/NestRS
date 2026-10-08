@@ -1,19 +1,10 @@
 //! The cascade's refusals around `<PREFIX>_ENV` — the variable that chooses
 //! which `.env` files to read, and therefore can never usefully live in one.
-//!
-//! The stakes are higher than redundancy: `Environment::init` publishes the
-//! cascade into the process env (set-if-absent), so a committed
-//! `NESTRS_ENV=development` would become process-visible and flip
-//! `Environment::declared()` from `None` to `Some(Development)` — arming every
-//! development-only affordance on any deployment that left the variable unset.
-//! Found by booting a scaffolded app with exactly that file, not by reading.
 
 use nest_rs_config::Environment;
 
-/// Unset on the process, declared in the file: the laundering case. The
-/// cascade defaulted to `development` *by absence*, so the file "matches" the
-/// resolved environment — which is precisely why matching the resolution is
-/// not the tolerance. Abort.
+/// Unset on the process, declared in the file: the file matches the resolution
+/// by absence only, and still aborts.
 #[test]
 #[should_panic(expected = "is `development` in the `.env` cascade")]
 #[expect(
@@ -31,9 +22,8 @@ fn the_environment_written_into_the_cascade_aborts() {
     });
 }
 
-/// Set on the process to one thing, declared in the file as another: the file
-/// is contradicting the deployment, and set-if-absent publishing would keep
-/// the contradiction invisible. Abort, naming both values.
+/// Set on the process to one thing, declared in the file as another: abort,
+/// naming both values.
 #[test]
 #[should_panic(expected = "carries `production`")]
 #[expect(
@@ -52,10 +42,7 @@ fn the_environment_contradicted_by_the_cascade_aborts() {
     });
 }
 
-/// Restating a value the process actually carries is redundant, not wrong —
-/// the same tolerance the prefix refusal grants, and the only one this check
-/// can grant safely: with the variable genuinely set, set-if-absent publishing
-/// has nothing to launder.
+/// Restating a value the process actually carries is redundant, not wrong.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -74,11 +61,6 @@ fn the_environment_restated_by_the_cascade_is_tolerated() {
 }
 
 /// A value the cascade drops leaves nothing behind but the event.
-///
-/// Every refusal in `merge_file` is `warn` + return: the key is simply absent
-/// afterwards, indistinguishable from one nobody wrote. So the operator reading
-/// "why is my secret unset" has these lines and no other trace, which is why a
-/// bare one would be a defect rather than a style nit.
 mod refusals_are_reported {
     use std::io::Write;
 
@@ -106,8 +88,6 @@ mod refusals_are_reported {
 
             let event = logs.expect_one("nest_rs::config", "skipped malformed .env lines");
             assert_eq!(event.level, "warn");
-            // One aggregate event per file, carrying the count — a per-line
-            // event would bury a real cascade under its own noise.
             assert_eq!(event.field("skipped").as_deref(), Some("2"));
             assert!(
                 event.field("path").is_some_and(|p| p.contains(".env")),
@@ -126,9 +106,6 @@ mod refusals_are_reported {
     fn a_file_that_is_present_but_unreadable_is_reported_rather_than_skipped_silently() {
         figment::Jail::expect_with(|jail| {
             let logs = LogCapture::install();
-            // Present and non-UTF-8: `read_to_string` fails with `InvalidData`,
-            // which is the branch that separates "no such file" (the normal
-            // case, silent) from "a file we could not read".
             let path = std::path::Path::new(".env");
             let mut file = std::fs::File::create(path).expect("create the .env");
             file.write_all(&[b'A', b'=', 0xff, 0xfe, b'\n'])
@@ -150,13 +127,8 @@ mod refusals_are_reported {
     }
 }
 
-/// A non-UTF-8 value in the real environment.
-///
-/// It is the one case where the variable is genuinely *present* and still
-/// answers `None`: the cascade is suppressed as well, so a `.env` carrying a
-/// usable value for the same key is deliberately not consulted. Nothing about
-/// that is visible to the caller — the field simply falls back to its default —
-/// which is what makes the event the only place the mistake exists.
+/// A non-UTF-8 value in the real environment answers `None` and suppresses the
+/// cascade, so the event is the only trace of it.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -170,15 +142,11 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
 
     figment::Jail::expect_with(|jail| {
         let logs = LogCapture::install();
-        // `Jail` restores the process env on drop, which is what makes writing
-        // a deliberately broken value safe here.
         jail.set_env(
             "FIXTURE_BROKEN_VALUE",
             OsStr::from_bytes(&[0xff, 0xfe]).to_string_lossy(),
         );
-        // `set_env` round-trips through `String`, so write the raw bytes
-        // directly — the lossy form above is valid UTF-8 and would not reach
-        // the branch under test.
+        // `set_env` round-trips through `String`, so the raw bytes go directly.
         // SAFETY: single-threaded test, and `Jail` restores the environment.
         #[expect(
             unsafe_code,

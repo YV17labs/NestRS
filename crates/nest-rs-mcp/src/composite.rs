@@ -1,16 +1,7 @@
 //! [`CompositeHandler`] — the one `ServerHandler` several `#[mcp]` hosts share.
 //!
-//! # The rule
-//!
-//! *One host on a path is served verbatim*, so adding the merge changed nothing
-//! for the shape every existing app has. That is a property of the policies
-//! below, not a second code path bolted on: each one **degenerates** to the lone
-//! host's own answer at N=1. [`single`](CompositeHandler::single) appears only
-//! where the merged path would otherwise pay for aggregation it cannot use —
-//! chiefly a deep `RequestContext` clone per host — plus `discover`, the one
-//! place it is genuinely a policy and says so.
-//!
-//! # The policy, per kind of operation
+//! Every policy degenerates to the lone host's own answer, so one host on a path
+//! is served verbatim.
 //!
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
@@ -19,30 +10,9 @@
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
 //! | **Declaration** | `initialize`, `discover`, `get_info`, `supported_protocol_versions` | The resolved [`ResolvedIdentity`] states the identity; capabilities are unioned, protocol versions intersected, instructions declared-or-joined. |
 //!
-//! Identity is the one part several hosts cannot each answer for, because an
-//! endpoint reports one `serverInfo` however many features share it — so the
-//! app names itself once (`McpOptions::server`) and at most one host on the
-//! path refines that (`#[mcp(name = …, title = …)]`). Undeclared, it
-//! falls back to the hosts' own with a boot `warn`. See [`crate::McpIdentity`].
-//!
-//! `tools/call` is routed through an index the mount builds once, name → host,
-//! from what each host's `#[tool_router]` declares — deliberately *not* by
-//! asking each host's `get_tool`, which rmcp answers by rebuilding that host's
-//! entire router. A name the index does not carry falls through to the
-//! offer-each-host path, which is what serves a host whose router the mount
-//! could not read. Two hosts claiming one name never gets this far: it is a boot
-//! error (`registry::check_duplicate_tools`), because within an endpoint MCP
-//! addresses a tool by bare name and the loser would simply be unreachable.
-//!
-//! # What the merge does not do
-//!
-//! Cursor-based pagination across hosts. Each host's own cursor is meaningless
-//! to its peers, so a host that returns one on an aggregated path is reported
-//! at `warn` rather than silently truncating the merged list. rmcp's routers
-//! never paginate, so this is a guard rail, not a live limitation.
+//! Pagination cursors are not merged across hosts: a host returning one on a
+//! shared path is reported at `warn`.
 
-// `subscribe` / `unsubscribe` are SEP-2575-deprecated in rmcp but still routed
-// for legacy protocol versions.
 #![expect(
     deprecated,
     reason = "rmcp still routes the deprecated methods for legacy protocol versions"
@@ -71,30 +41,24 @@ use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
 use crate::registry::{McpHostMeta, ToolIndex};
 
-/// One host as the mount resolved it: the name a diagnostic prints, and the
-/// live instance for this session.
+/// One host as the mount resolved it.
 struct MountedHost {
     name: &'static str,
     host: Arc<dyn McpHost>,
 }
 
-/// The merged handler for one MCP endpoint. Built per session, like the single
-/// host it replaced — see [`endpoint`](fn@crate::endpoint).
+/// The merged handler for one MCP endpoint, built per session.
 pub struct CompositeHandler {
-    /// The path's hosts, in registration order. Never empty in practice: the
-    /// mount exists because a host claimed the path.
+    /// The path's hosts, in registration order.
     hosts: Vec<MountedHost>,
     /// Tool name → position in [`hosts`](Self::hosts), built once at mount.
     tools: Arc<ToolIndex>,
     /// What this endpoint was declared to be, app and host merged.
     identity: Arc<ResolvedIdentity>,
-    /// Fixed at mount and only ever read by a diagnostic, so it is shared
-    /// rather than copied — `build` runs once per MCP session.
     path: Arc<str>,
 }
 
 impl CompositeHandler {
-    /// Build one instance of every host contributing to a path.
     pub(crate) fn build(
         container: &Container,
         path: Arc<str>,
@@ -116,21 +80,8 @@ impl CompositeHandler {
         }
     }
 
-    /// Whether the *endpoint* answers a declaration question, rather than the
-    /// host that happens to serve it.
-    ///
-    /// True once something declared what this endpoint is — the app, or a host
-    /// speaking for the path — or once several hosts share it, where no single
-    /// one of them can speak for it. False for the lone undeclared host, which *is*
-    /// the endpoint: its own `initialize` / `discover` override is the answer,
-    /// and rebuilding one from `get_info` would silently discard it.
-    /// What this endpoint declares of its own, laid over a host's answer.
-    ///
-    /// Both `initialize` and `negotiate_initialize` return the primary host's
-    /// result with the endpoint's declaration on top, and the two have to agree
-    /// — so the overlay is answered here rather than written twice. The
-    /// protocol version is deliberately left alone: it is the one field the
-    /// host *negotiated*, and `get_info`'s is a declaration, not a verdict.
+    /// The endpoint's own declaration laid over a host's `initialize` result; the
+    /// protocol version stays the host's, which it negotiated.
     fn overlay_own_declaration(&self, mut result: InitializeResult) -> InitializeResult {
         if self.declares_itself() {
             let merged = ServerHandler::get_info(self);
@@ -141,27 +92,19 @@ impl CompositeHandler {
         result
     }
 
+    /// Whether the endpoint, not its lone host, answers a declaration question:
+    /// a lone undeclared host's own `initialize` / `discover` override is the answer.
     fn declares_itself(&self) -> bool {
         self.identity.is_declared() || self.hosts.len() > 1
     }
 
-    /// The endpoint's first host — whose own declaration stands in for the
-    /// endpoint's (its identity, its handshake).
-    ///
-    /// The `Option` is structural, not a real case, and it is answered **here**
-    /// rather than re-invented by every method that needs a host to speak for
-    /// the path.
+    /// The endpoint's first host, whose declaration stands in for the endpoint's.
     fn primary(&self) -> Option<&MountedHost> {
         self.hosts.first()
     }
 
-    /// The lone host on this path, when there is exactly one.
-    ///
-    /// Used only where the merged path would otherwise pay for aggregation it
-    /// cannot use — chiefly a deep `RequestContext` clone per host, on the shape
-    /// every single-host app has. It is a fast path, not a second policy: every
-    /// site below that takes it produces exactly what the merged path would,
-    /// with `discover` the one documented exception.
+    /// The lone host on this path: a fast path sparing a `RequestContext` clone per
+    /// host, answering what the merge would, `discover` excepted.
     fn single(&self) -> Option<&MountedHost> {
         match self.hosts.as_slice() {
             [only] => Some(only),
@@ -169,14 +112,8 @@ impl CompositeHandler {
         }
     }
 
-    /// The host that declares `name`, through the index built at mount.
-    ///
-    /// Deliberately not a `get_tool` scan: rmcp's `#[tool_handler]` rebuilds the
-    /// host's whole `ToolRouter` — every tool, every schema — on each `get_tool`
-    /// call, so scanning would re-assemble every router on every `tools/call`.
-    /// A name the index does not carry falls through to
-    /// [`route`](Self::route), which is what serves a host whose router the
-    /// index could not read.
+    /// The host that declares `name`, through the index built at mount: rmcp's
+    /// `#[tool_handler]` rebuilds the whole `ToolRouter` on each `get_tool`.
     fn owner_of_tool(&self, name: &str) -> Option<&MountedHost> {
         self.tools
             .get(name)
@@ -184,9 +121,7 @@ impl CompositeHandler {
     }
 
     /// Offer an addressed operation to each host in turn, returning the first
-    /// answer that is not *not-found*. The last not-found is what surfaces when
-    /// nobody owns it, so the caller sees a real MCP error rather than a
-    /// framework one.
+    /// answer that is not *not-found*, else the last not-found.
     async fn route<'a, T, F>(&'a self, call: F) -> Result<T, McpError>
     where
         F: Fn(&'a dyn McpHost) -> BoxFuture<'a, Result<T, McpError>>,
@@ -202,9 +137,6 @@ impl CompositeHandler {
         Err(unhandled.unwrap_or_else(no_hosts))
     }
 
-    /// A host returned a pagination cursor on a path it shares. Its peers'
-    /// entries are already in the merged page, so the cursor cannot be followed
-    /// — say so rather than hand back a list that looks complete.
     fn warn_cursor(&self, host: &MountedHost, method: &str) {
         tracing::warn!(
             target: crate::TARGET,
@@ -217,19 +149,13 @@ impl CompositeHandler {
     }
 }
 
-/// The error a client gets when a mount somehow has no hosts. Unreachable
-/// through `#[mcp]` (a path exists because a host claimed it), but the merge is
-/// written over a slice and a slice can be empty.
+/// Unreachable through `#[mcp]`, where a path exists because a host claimed it.
 fn no_hosts() -> McpError {
     McpError::internal_error("no MCP host serves this endpoint".to_owned(), None)
 }
 
-/// Whether an error means *this host does not serve that name*, as opposed to
-/// *serving it failed*. Only the first kind lets the merge try the next host.
-///
-/// Three shapes, all from rmcp: the trait default's `method_not_found`, a
-/// resource host's `resource_not_found`, and `ToolRouter`'s own miss — which is
-/// an `INVALID_PARAMS` carrying this exact message.
+/// Whether an error means *this host does not serve that name*, which lets the
+/// merge try the next host; rmcp's `ToolRouter` misses with this exact `INVALID_PARAMS`.
 fn is_not_found(err: &McpError) -> bool {
     err.code == ErrorCode::METHOD_NOT_FOUND
         || err.code == ErrorCode::RESOURCE_NOT_FOUND
@@ -245,7 +171,6 @@ fn or_flag(a: Option<bool>, b: Option<bool>) -> Option<bool> {
     }
 }
 
-/// Fold one optional collection into another, creating it if absent.
 fn union<T>(into: &mut Option<T>, from: Option<T>)
 where
     T: Default + IntoIterator + Extend<<T as IntoIterator>::Item>,
@@ -255,8 +180,6 @@ where
     }
 }
 
-/// Union of two capability declarations: a capability any host serves is a
-/// capability the endpoint serves.
 fn merge_capabilities(into: &mut ServerCapabilities, from: ServerCapabilities) {
     union(&mut into.experimental, from.experimental);
     union(&mut into.extensions, from.extensions);
@@ -277,11 +200,8 @@ fn merge_capabilities(into: &mut ServerCapabilities, from: ServerCapabilities) {
     }
 }
 
-/// The protocol versions **every** list carries, in the first list's order.
-///
-/// One endpoint negotiates one version, so a merged mount may only advertise
-/// what all its hosts implement. Shared with `registry`'s boot check, so the
-/// verdict at boot and the answer on the wire are the same computation.
+/// The protocol versions **every** list carries, in the first list's order; the
+/// boot check and the wire answer share it.
 pub(crate) fn common_protocol_versions(
     lists: &[Cow<'static, [ProtocolVersion]>],
 ) -> Vec<ProtocolVersion> {
@@ -308,9 +228,7 @@ macro_rules! merged_listing {
             };
             let mut merged = first.host.$name(request.clone(), context.clone()).await?;
             if rest.is_empty() {
-                // A lone host's cursor is its own and still followable — the
-                // merge is what makes one meaningless, so only aggregation
-                // drops it.
+                // A lone host's cursor is still followable.
                 return Ok(merged);
             }
             if merged.next_cursor.is_some() {
@@ -362,8 +280,6 @@ macro_rules! broadcast_notification {
 
 #[deny(clippy::missing_trait_methods)]
 impl ServerHandler for CompositeHandler {
-    // --- lifecycle & discovery ---------------------------------------------
-
     async fn ping(&self, context: RequestContext<RoleServer>) -> Result<(), McpError> {
         if let Some(only) = self.single() {
             return only.host.ping(context).await;
@@ -374,10 +290,8 @@ impl ServerHandler for CompositeHandler {
         Ok(())
     }
 
-    /// The first host runs rmcp's own `initialize` — protocol negotiation and
-    /// `set_peer_info` live in a `pub(crate)` helper no handler can call, so the
-    /// merge borrows them rather than reimplementing them — and the parts that
-    /// are the *endpoint's* are then replaced by the endpoint's own answer.
+    /// The first host runs rmcp's own `initialize`, whose negotiation and
+    /// `set_peer_info` are crate-private to rmcp; the endpoint's declaration goes on top.
     async fn initialize(
         &self,
         request: InitializeRequestParams,
@@ -390,15 +304,8 @@ impl ServerHandler for CompositeHandler {
         Ok(self.overlay_own_declaration(result))
     }
 
-    /// **Not reached today**, and written anyway: rmcp calls this only from its
-    /// default `initialize`, which this type overrides. Inheriting rmcp's
-    /// default instead would answer from the *merged* declaration
-    /// unconditionally, ignoring the primary host even where the endpoint
-    /// declares nothing of its own — the wrong answer, waiting for the first
-    /// rmcp that routes through here.
-    ///
-    /// It cannot simply call `initialize`: that one also sets the peer info,
-    /// and a pure negotiation must have no such side effect.
+    /// rmcp calls this only from the default `initialize`, overridden here; its own
+    /// default would ignore the primary host. Not `initialize`, which sets the peer info.
     fn negotiate_initialize(
         &self,
         request: &InitializeRequestParams,
@@ -414,10 +321,8 @@ impl ServerHandler for CompositeHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<DiscoverResult, McpError> {
         if !self.declares_itself() {
-            // A lone undeclared host may override `discover`, and the branch
-            // below cannot ask whether it did — it can only rebuild the default
-            // from the merged declaration. Once the endpoint declares itself,
-            // that declaration is the answer, override or not.
+            // Whether a lone host overrides `discover` cannot be asked; the
+            // rebuild below would discard its override.
             if let Some(only) = self.single() {
                 return only.host.discover(context).await;
             }
@@ -427,8 +332,6 @@ impl ServerHandler for CompositeHandler {
             ServerHandler::get_info(self),
         ))
     }
-
-    // --- tools ---------------------------------------------------------------
 
     async fn call_tool(
         &self,
@@ -441,20 +344,15 @@ impl ServerHandler for CompositeHandler {
         if let Some(owner) = self.owner_of_tool(&request.name) {
             return owner.host.call_tool(request, context).await;
         }
-        // The index does not carry the name — a host whose router the mount
-        // could not read still gets its turn.
+        // A host whose router the mount could not read still gets its turn.
         self.route(|host| host.call_tool(request.clone(), context.clone()))
             .await
     }
 
     merged_listing!(list_tools, ListToolsResult, tools, "tools/list");
 
-    // --- prompts --------------------------------------------------------------
-
     addressed!(get_prompt(GetPromptRequestParams) -> GetPromptResponse);
     merged_listing!(list_prompts, ListPromptsResult, prompts, "prompts/list");
-
-    // --- resources ------------------------------------------------------------
 
     addressed!(read_resource(ReadResourceRequestParams) -> ReadResourceResponse);
     merged_listing!(
@@ -472,15 +370,8 @@ impl ServerHandler for CompositeHandler {
     addressed!(subscribe(SubscribeRequestParams) -> ());
     addressed!(unsubscribe(UnsubscribeRequestParams) -> ());
 
-    // --- completion & logging --------------------------------------------------
-
-    /// A host with nothing to complete answers `Ok` with an empty list rather
-    /// than *not-found*, so `route` cannot tell it
-    /// apart from a real answer: the first **non-empty** completion wins, and an
-    /// empty one is kept only as the fallback.
-    ///
-    /// A host that refuses outright is remembered too, so one host alone on a
-    /// path still surfaces its own refusal instead of an invented empty result.
+    /// A host with nothing to complete answers an empty `Ok`, not *not-found*: the
+    /// first non-empty completion wins, an empty one or a refusal is the fallback.
     async fn complete(
         &self,
         request: CompleteRequestParams,
@@ -502,10 +393,8 @@ impl ServerHandler for CompositeHandler {
         fallback.unwrap_or_else(|| Err(no_hosts()))
     }
 
-    /// A logging level is a property of the *connection*, not of one host, so
-    /// every host is told. Accepted by any ⇒ accepted; a real failure is
-    /// reported even when a peer accepted, because a half-applied level is a
-    /// worse answer than a refusal.
+    /// Every host is told; accepted by any is accepted, but a real failure is
+    /// reported even when a peer accepted.
     async fn set_level(
         &self,
         request: SetLevelRequestParams,
@@ -517,8 +406,6 @@ impl ServerHandler for CompositeHandler {
         for host in &self.hosts {
             match host.host.set_level(request.clone(), context.clone()).await {
                 Ok(()) => accepted = true,
-                // Kept, not discarded: with nobody accepting, the client should
-                // read a host's own refusal rather than one this merge invented.
                 Err(err) if is_not_found(&err) => {
                     refusal.get_or_insert(err);
                 }
@@ -534,17 +421,11 @@ impl ServerHandler for CompositeHandler {
         }
     }
 
-    // --- tasks (SEP-2663) --------------------------------------------------------
-
     addressed!(get_task(GetTaskParams) -> GetTaskResult);
     addressed!(update_task(UpdateTaskParams) -> ());
     addressed!(cancel_task(CancelTaskParams) -> ());
 
-    // --- custom methods ------------------------------------------------------------
-
     addressed!(on_custom_request(CustomRequest) -> CustomResult);
-
-    // --- notifications --------------------------------------------------------------
 
     broadcast_notification!(on_cancelled(notification: CancelledNotificationParam));
     broadcast_notification!(on_progress(notification: ProgressNotificationParam));
@@ -552,11 +433,8 @@ impl ServerHandler for CompositeHandler {
     broadcast_notification!(on_roots_list_changed());
     broadcast_notification!(on_custom_notification(notification: CustomNotification));
 
-    /// The subscription belongs to whichever host accepted the client's filter
-    /// — the same host [`accepted_subscription_filter`](Self::accepted_subscription_filter)
-    /// answered for. With none, it falls to the primary host, whose own `listen`
-    /// (rmcp's default: hold until cancelled) is the right answer and keeps a
-    /// lone host's override from being bypassed.
+    /// Served by the host that accepted the client's filter, else the primary
+    /// host, whose own `listen` answers (rmcp's default: hold until cancelled).
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let requested = context.requested().clone();
         let owner = self
@@ -570,8 +448,6 @@ impl ServerHandler for CompositeHandler {
         }
     }
 
-    // --- synchronous accessors ---------------------------------------------------------
-
     fn accepted_subscription_filter(
         &self,
         requested: &SubscriptionFilter,
@@ -581,8 +457,7 @@ impl ServerHandler for CompositeHandler {
             .find_map(|host| host.host.accepted_subscription_filter(requested))
     }
 
-    /// Routed through the index first, so the common case rebuilds **one**
-    /// host's `ToolRouter` rather than every host's.
+    /// Routed through the index first, so it rebuilds one host's `ToolRouter`.
     fn get_tool(&self, name: &str) -> Option<Tool> {
         match self.owner_of_tool(name) {
             Some(owner) => owner.host.get_tool(name),
@@ -590,11 +465,8 @@ impl ServerHandler for CompositeHandler {
         }
     }
 
-    /// One endpoint negotiates one version, so it may only advertise what
-    /// **every** host on the path implements — `common_protocol_versions`,
-    /// the same computation the boot check verdicts on. An empty intersection is
-    /// refused at boot, so falling back to the primary host's list is a guard
-    /// rail rather than a live case.
+    /// What **every** host on the path implements; an empty intersection is
+    /// refused at boot, so the primary's fallback is unreachable.
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         let Some(primary) = self.primary() else {
             return Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS);
@@ -614,19 +486,8 @@ impl ServerHandler for CompositeHandler {
         }
     }
 
-    /// What the endpoint says it is.
-    ///
-    /// **Identity is declared, capabilities are observed.** A declaration
-    /// replaces exactly what it states — `serverInfo` when the app or a host
-    /// named the server, `instructions` when one of them wrote any. It can never
-    /// add a capability: those stay the union of what the hosts actually serve,
-    /// so the endpoint cannot advertise a surface nobody implements.
-    ///
-    /// Undeclared, the endpoint borrows its first host's identity and joins the
-    /// hosts' instructions rather than dropping all but one. That is a fallback,
-    /// and a path taking it is reported at boot (`registry::check_identity`) —
-    /// at N=1 with a host that overrode `get_info` it is not a fallback at all:
-    /// one host alone *is* the server, which is the shape every MCP SDK builds.
+    /// A declaration replaces only `serverInfo` and `instructions`; capabilities
+    /// stay the union of what the hosts serve. Undeclared, the first host's identity stands.
     fn get_info(&self) -> ServerConfig {
         let mut infos = self.hosts.iter().map(|host| host.host.get_info());
         let Some(mut merged) = infos.next() else {
@@ -657,16 +518,8 @@ mod protocol_intersection {
         Cow::Owned(versions.to_vec())
     }
 
-    /// One endpoint negotiates one version, so what it may advertise is what
-    /// **every** host on the path implements.
-    ///
-    /// This is the computation both halves of the contract run — the boot check
-    /// verdicts on it (empty ⇒ refuse, differing ⇒ `warn`) and
-    /// `supported_protocol_versions` answers with it, which is what rmcp checks
-    /// every inline-negotiated request against. Getting it wrong in the
-    /// *widening* direction is the silent one: the endpoint would advertise a
-    /// version some host cannot serve, the boot check would see a non-empty
-    /// intersection and say nothing, and a client would find out at a request.
+    /// Widening is the silent failure: the boot check would pass, and a client
+    /// would find out at a request.
     #[test]
     fn is_what_every_host_declares_and_never_more() {
         let older = ProtocolVersion::V_2024_11_05;

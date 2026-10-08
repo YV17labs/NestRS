@@ -123,11 +123,8 @@ async fn a_denial_short_circuits_before_the_handler_runs() {
 
 #[tokio::test]
 async fn a_denial_at_this_site_is_visible_at_warn() {
-    // Regression: this endpoint is the WS upgrade's gate. It used to render the
-    // 401 through the bare converter, so a connection-level denial logged
-    // *nothing* at any level while its per-message twin logged at warn — the
-    // "every denial visible at warn+" invariant, breached exactly where the
-    // authentication boundary is.
+    // This endpoint is the WS upgrade's gate: its denial must log at warn, as its
+    // per-message twin's does.
     let logs = LogCapture::install();
     let resp = call_guarded(DecisionGuard::deny(
         Denial::unauthorized("no ticket"),

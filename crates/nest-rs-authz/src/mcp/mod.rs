@@ -93,15 +93,8 @@
 //! # }
 //! ```
 //!
-//! # Why these read the *ambient* ability
-//!
-//! GraphQL's gate takes a `&Context` because async-graphql threads one through
-//! every resolver. An MCP operation is handed no such value — rmcp dispatches it
-//! on its own task — so the caller's ability travels the way every other
-//! ambient-state consumer on this transport reads it: the endpoint's operation
-//! guard installs it in its `around`, and these read it back with
-//! [`current_ability`](crate::current_ability). Same decision, same guard, one
-//! less parameter.
+//! These read the *ambient* ability: rmcp dispatches an operation on its own
+//! task with no context value, so the operation guard installs it in its `around`.
 //!
 //! Data-coupled bindings live in `nest_rs_seaorm::mcp` (`McpDataContext`).
 

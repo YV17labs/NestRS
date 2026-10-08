@@ -1,10 +1,7 @@
-//! [`ThrottlerModule`] — the port's own seam. `ThrottlerModule::for_root(cfg)`
-//! resolves the policy ([`ThrottlerConfig`], `<PREFIX>_THROTTLER__*`), registers
-//! the [`ThrottlerGuard`] that applies it, and binds the in-process
-//! [`InMemoryThrottler`] as the default `dyn ThrottlerStore` — an *ordinary*
-//! factory, so a vendor binding imported beside it (`nest_rs::redis::RedisThrottlerModule`)
-//! supersedes the store wherever it sits in `imports`, and the app removes no
-//! line to move its counters off-process.
+//! [`ThrottlerModule`] — the port's own seam: the policy
+//! ([`ThrottlerConfig`], `<PREFIX>_THROTTLER__*`), the [`ThrottlerGuard`] that
+//! applies it, and the in-process [`InMemoryThrottler`] as the default
+//! `dyn ThrottlerStore`, which a vendor binding imported beside it supersedes.
 
 use std::any::TypeId;
 
@@ -47,19 +44,13 @@ impl DynamicModule for ThrottlerSetup {
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        // The default store, as an *ordinary* factory: a vendor binding's
-        // declared factory for the same `Arc<dyn ThrottlerStore>` supersedes it
-        // wherever the two fall in `imports`, and two vendor bindings contest
-        // (`BACKEND_REMEDY`). A factory output, so the guard's
-        // `#[inject] Arc<dyn ThrottlerStore>` resolves as global infrastructure.
+        // An *ordinary* factory, so a vendor binding's declared one supersedes it
+        // wherever the two fall in `imports`.
         let builder = builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|_| async {
             Ok(Arc::new(InMemoryThrottler::new()) as Arc<dyn ThrottlerStore>)
         });
-        // The resolved policy, as a provider of its own: the guard injects it,
-        // so a guard built by any other path (`providers = [ThrottlerGuard]`
-        // with no `for_root`) fails the boot naming `Throttle` rather than
-        // running 60/minute in silence. Queued in the same `collect` as the
-        // config it reads, hence after it.
+        // A provider of its own, so a guard built by any other path fails the boot
+        // naming `Throttle` rather than running 60/minute in silence.
         let builder = builder.provide_factory::<Throttle, _, _>(|container| async move {
             #[expect(
                 clippy::expect_used,
@@ -70,11 +61,7 @@ impl DynamicModule for ThrottlerSetup {
                 .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
             Ok(resolve(&config))
         });
-        // The guard reads the store, and the store is itself a factory output —
-        // one that may wait on a connection of its own (a vendor binding).
-        // Declared after it, so the drain runs this last however the seams were
-        // queued; without it the guard ran first whenever the store's factory
-        // was deferred, and failed naming a binding that was about to exist.
+        // After the store, whose vendor factory may wait on a connection of its own.
         builder.provide_factory_after::<ThrottlerGuard, Arc<dyn ThrottlerStore>, _, _>(
             |container| async move {
                 #[expect(

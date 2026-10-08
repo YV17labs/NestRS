@@ -10,10 +10,8 @@ use nest_rs_core::layer_chain::ResolvedLayer;
 use poem::http::{HeaderMap, Method, Uri};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
-/// Read-only view of the request handed to a [`Filter`]. The original
-/// `poem::Request` has been consumed by the inner endpoint by the time the
-/// filter runs (and is not `Clone`), so the routing-relevant bits are
-/// captured up front.
+/// Read-only view of the request handed to a [`Filter`], captured up front: the
+/// inner endpoint consumes the `poem::Request`, which is not `Clone`.
 #[derive(Debug, Clone)]
 pub struct RequestSnapshot {
     /// The request method.
@@ -36,24 +34,20 @@ impl RequestSnapshot {
     }
 }
 
-/// Maps errors returned by the inner handler to a response. Runs only on the
-/// error path; successful results pass through unchanged. A global filter
-/// covers a GraphQL `POST` or WS upgrade through its HTTP entry — there is no
-/// per-resolver / per-message seam (former reserved ones were removed until
-/// they are actually wired).
+/// Maps errors returned by the inner handler to a response; runs only on the
+/// error path. A global filter covers a GraphQL `POST` or WS upgrade through its
+/// HTTP entry.
 ///
 /// `Filter` extends [`Layer`] so global + per-scope declarations dedup by
 /// [`TypeId`](std::any::TypeId).
 #[async_trait]
 pub trait Filter: Layer {
-    /// HTTP entry — required, no default: a filter that targets HTTP
-    /// without implementing this would silently let errors through.
+    /// HTTP entry, required so a filter cannot silently let errors through.
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
 }
 
-// Manual forward, not `#[async_trait]`: the macro would wrap the inner
-// (already boxed) future in a second box, taxing every call made through an
-// `Arc<dyn Filter>` without `.as_ref()`.
+// Manual forward, not `#[async_trait]`: the macro would box the already-boxed
+// future a second time on every call through an `Arc<dyn Filter>`.
 impl<T: Filter + ?Sized> Filter for Arc<T> {
     fn filter<'s, 'r, 'fut>(
         &'s self,
@@ -97,9 +91,8 @@ where
             Ok(out) => Ok(out.into_response()),
             Err(err) => {
                 let mut resp = self.filter.filter(&snapshot, err).await;
-                // The handler failed; this response only shapes the client
-                // answer. Tag it so the ambient transaction rolls back even
-                // when the mapped status reads as success.
+                // Tag it so the ambient transaction rolls back even when the
+                // mapped status reads as success.
                 resp.extensions_mut().insert(nest_rs_http::MappedError);
                 Ok(resp)
             }
@@ -107,17 +100,9 @@ where
     }
 }
 
-/// A poem endpoint wrapped by a whole filter chain in one endpoint, replacing
-/// one nested [`FilterEndpoint`] per entry at the composition sites
-/// (per-route and transport edge).
-///
-/// Equivalent to the nesting it replaces: the request snapshot is captured
-/// once (between two directly-nested filters nothing rewrites the request, so
-/// every level of the old nesting captured the same state), and an error is
-/// offered to the entries innermost-first — [`Filter::filter`] is infallible,
-/// so whichever entry maps it first turns the walk into a pass-through,
-/// exactly as the nested endpoints behaved. On the success path the chain
-/// costs the one snapshot and nothing per entry.
+/// A poem endpoint wrapped by a whole filter chain. The snapshot is captured
+/// once and an error is offered innermost-first; the first entry to map it ends
+/// the walk, as [`Filter::filter`] is infallible.
 pub struct FilterChain<E> {
     chain: Vec<ResolvedLayer<dyn Filter>>,
     inner: E,
@@ -139,22 +124,19 @@ where
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        // An empty chain (a composed stack whose filter stage is unused)
-        // must not pay the snapshot capture.
+        // An empty chain must not pay the snapshot capture.
         if self.chain.is_empty() {
             return self.inner.call(req).await.map(IntoResponse::into_response);
         }
         let snapshot = RequestSnapshot::from_req(&req);
         let mut result = self.inner.call(req).await.map(IntoResponse::into_response);
-        // Innermost-first — the entry closest to the handler sees the error
-        // before the outer ones, as the nested endpoints did.
+        // Innermost-first: the entry closest to the handler sees the error first.
         for entry in self.chain.iter().rev() {
             result = match result {
                 Ok(resp) => Ok(resp),
                 Err(err) => {
-                    // `as_ref()`: dispatch on the erased filter — the
-                    // `Filter for Arc<T>` blanket would nest a second boxed
-                    // future around the call.
+                    // `as_ref()`: the `Filter for Arc<T>` blanket would nest a
+                    // second boxed future around the call.
                     let mut resp = entry.layer.as_ref().filter(&snapshot, err).await;
                     // Same tag as `FilterEndpoint`: the handler failed, the
                     // mapped status must not bless its writes.
@@ -268,9 +250,6 @@ mod tests {
         let failing = make(|_req: Request| async {
             Err::<Response, _>(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
         });
-        // Outermost-first order: "outer" is listed first, "inner" last — the
-        // nested endpoints gave the error to the innermost filter, and so
-        // must the chain.
         let ep = FilterChain::new(
             failing,
             vec![

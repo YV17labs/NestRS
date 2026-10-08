@@ -1,28 +1,12 @@
 //! Where an expansion's framework paths are rooted.
 //!
-//! A decorator's expansion lands in the *developer's* crate, so every absolute
-//! path it emits resolves against **their** extern prelude — which holds only
-//! what their manifest declares. Two populations declare different things, and
-//! neither can be talked out of it:
+//! An expansion resolves against the *developer's* extern prelude: an app
+//! declares only the umbrella (`::nest_rs::<concern>`), while the framework's
+//! own crates cannot (`nest-rs` depends on them) and need `::nest_rs_<concern>`.
+//! Macros emit the sibling form; [`reroot`] rewrites the finished stream.
 //!
-//! * **An app** declares the umbrella (`nest-rs`, plus the capability's
-//!   feature) and nothing else. Its expansions must be rooted at
-//!   `::nest_rs::<concern>`.
-//! * **The framework's own crates** — 14 of them use nestrs decorators in their
-//!   own `src/` — cannot declare the umbrella: `nest-rs` depends on them, so
-//!   that edge is a real cycle Cargo refuses. Their expansions must be rooted
-//!   at `::nest_rs_<concern>`.
-//!
-//! [`reroot`] resolves which of the two the call site is, once, and rewrites
-//! the finished token stream. Macros keep emitting the sibling form they always
-//! did; the rewrite is the single place the distinction lives, rather than a
-//! `crate = ` argument threaded through eleven decorators and ~50 use sites.
-//!
-//! The walk sees a decorator's **whole** return value, the developer's own item
-//! included (`#[input]`/`#[config]` re-emit it, and the response attributes are
-//! pass-throughs). A hand-written `::nest_rs_http::X` in such an item is
-//! therefore re-rooted too — deliberate: it resolves either way, and the
-//! alternative is teaching the walk which tokens came from where.
+//! The walk sees the developer's own item too, so a hand-written
+//! `::nest_rs_http::X` there is re-rooted as well; it resolves either way.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -43,9 +27,8 @@ enum Umbrella {
 /// between macro invocations, and the cold `crate_name` spawns a subprocess.
 static UMBRELLA: OnceLock<Option<Umbrella>> = OnceLock::new();
 
-/// Whether each `nest-rs-<concern>` sibling is declared, memoized for the same
-/// reason: the answer depends on the manifest, not on the token stream, and
-/// `crate_name` stats the filesystem on every call.
+/// Whether each `nest-rs-<concern>` sibling is declared, memoized: `crate_name`
+/// stats the filesystem on every call.
 static SIBLINGS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 fn umbrella() -> Option<&'static Umbrella> {
@@ -60,9 +43,8 @@ fn umbrella() -> Option<&'static Umbrella> {
         .as_ref()
 }
 
-/// `true` when the manifest was readable and holds no such sibling. A build
-/// system `proc-macro-crate` cannot introspect answers `false`, so it degrades
-/// to the old behaviour instead of failing a build that would have worked.
+/// `true` when the manifest was readable and holds no such sibling; a build
+/// system `proc-macro-crate` cannot introspect answers `false`.
 fn sibling_missing(concern: &str) -> bool {
     let cache = SIBLINGS.get_or_init(Default::default);
     if let Ok(map) = cache.lock()
@@ -98,9 +80,7 @@ pub fn reroot(tokens: TokenStream) -> TokenStream {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
 
     let Some(u) = umbrella() else {
-        // One traversal for both jobs: collecting the roots is the same walk as
-        // rewriting them, and keeping it that way is why a root that only ever
-        // appears inside a `crate = "…"` literal still reports.
+        // One walk for both jobs, so a root only inside a `crate = "…"` reports.
         let mut found = Vec::new();
         walk(&trees, None, "", false, &mut found);
         let mut out = TokenStream::from_iter(trees);
@@ -125,8 +105,7 @@ pub fn reroot(tokens: TokenStream) -> TokenStream {
 /// seen into `found` either way.
 ///
 /// Returns `None` when nothing under `trees` changed, so an untouched subtree
-/// is reused rather than rebuilt — most of a decorator's output is the
-/// developer's own item, which has no framework paths in it at all.
+/// is reused rather than rebuilt.
 ///
 /// `in_crate_attr` marks the inside of a `#[serde(…)]` / `#[schemars(…)]`
 /// group, the only place a path is carried as a string literal. Outside one,
@@ -142,25 +121,16 @@ fn walk(
     let mut i = 0;
 
     while i < trees.len() {
-        // A leading `::` is two puncts, the first joint. Only a *rooted* path
-        // is rewritten: a bare `nest_rs_core` — a local binding, or an
-        // unrooted `use nest_rs_core::…` — is not ours to touch.
-        //
-        // What precedes the `::` is deliberately **not** inspected. Three
-        // rounds of trying said otherwise: `impl`/`dyn`/`as` are `Ident`s that
-        // open a path, and `->`, `=>` and a plain comparison `>` all end in
-        // `>` like the qualified path `<T as Trait>::assoc` does. The only
-        // shape a prefix check would protect is an associated item literally
-        // named `nest_rs_<x>`, which no emission has. Mid-path segments are
-        // handled below instead, where the answer is certain.
+        // Only a *rooted* path is rewritten: a bare `nest_rs_core` may be a
+        // local binding. What precedes the `::` is deliberately not inspected:
+        // `impl`/`dyn`/`as` open a path, and `->`, `=>` and `>` all end in `>`
+        // like `<T as Trait>::assoc` does.
         if let Some(ident) = segment_at(trees, i)
             && let Some(concern) = concern_of(&ident.to_string())
         {
             found.push(concern.clone());
             if let Some(prefix) = prefix {
-                // The rewritten root keeps the span of the root it replaces: a
-                // token at the call site would move every error on this path to
-                // the decorator's attribute.
+                // Keeps the replaced root's span, or errors move to the attribute.
                 let span = trees[i].span();
                 let buf = out.get_or_insert_with(|| trees[..i].to_vec());
                 buf.extend(prefix.iter().cloned().map(|mut tree| {
@@ -170,11 +140,8 @@ fn walk(
                 buf.extend(trees[i..i + 2].iter().cloned());
                 buf.push(TokenTree::Ident(Ident::new(&concern, ident.span())));
                 i += 3;
-                // The rest of *this* path is copied verbatim. A path has one
-                // root, and `nest-rs-ws` re-exports `nest_rs_http`, so
-                // `::nest_rs_ws::nest_rs_http::HttpEndpointMeta` must come out
-                // as `::nest_rs::ws::nest_rs_http::…` — not with the umbrella
-                // spliced into every segment.
+                // One root per path: `::nest_rs_ws::nest_rs_http::X` becomes
+                // `::nest_rs::ws::nest_rs_http::X`.
                 while segment_at(trees, i).is_some() {
                     buf.extend(trees[i..i + 3].iter().cloned());
                     i += 3;
@@ -239,14 +206,8 @@ fn walk(
 
 /// Whether this group carries a `crate = ` override spelled as a string.
 ///
-/// Matched by **shape, at any position**, rather than by a list of derive
-/// names: `crate =` is what `#[serde(…)]`, `#[schemars(…)]` and async-graphql's
-/// `#[Object(crate = "…")]` / `#[graphql(crate = "…")]` all spell, so a
-/// newly-wrapped third-party macro is covered the day it lands instead of
-/// silently falling back to the call site's prelude. The walk re-asks on every
-/// group descent, so an override nested one group under its derive name arms
-/// the literal branch when that group is reached. Validator's override is a
-/// bare path and falls out of the ordinary segment branch either way.
+/// Matched by shape at any position, not by derive name, so a newly-wrapped
+/// third-party macro spelling `crate = "…"` is covered too.
 fn carries_a_crate_path(inner: &[TokenTree]) -> bool {
     inner.windows(2).any(|pair| {
         matches!(
@@ -258,8 +219,7 @@ fn carries_a_crate_path(inner: &[TokenTree]) -> bool {
 
 /// The single `compile_error!` naming every concern the call site cannot reach.
 ///
-/// Empty when nothing is missing, which is the framework's own crates: they
-/// reach each concern by its sibling name already.
+/// Empty when nothing is missing.
 fn missing_dependency_error(mut concerns: Vec<String>) -> TokenStream {
     concerns.sort();
     concerns.dedup();
@@ -275,8 +235,6 @@ fn missing_dependency_error(mut concerns: Vec<String>) -> TokenStream {
         .filter(|c| *c != "core")
         .map(|c| format!("\"{}\"", c.replace('_', "-")))
         .collect();
-    // The framework's own version, so the line is copy-pasteable rather than a
-    // placeholder the developer has to look up.
     let version = env!("CARGO_PKG_VERSION");
     let req = version
         .rsplit_once('.')
@@ -298,9 +256,7 @@ fn missing_dependency_error(mut concerns: Vec<String>) -> TokenStream {
 
 /// A string literal holding a `::nest_rs_<concern>::…` path, re-rooted.
 ///
-/// `None` for every other literal — a message that merely mentions a crate name
-/// is not a path, so the match is anchored at the start and requires the
-/// leading `::` an emitted path always carries.
+/// `None` for every other literal: the match is anchored at a leading `::`.
 fn rewrite_path_literal(
     lit: &Literal,
     prefix_text: &str,
@@ -342,12 +298,8 @@ fn segment_at(trees: &[TokenTree], i: usize) -> Option<&Ident> {
 
 /// The concern a sibling crate name denotes, or `None` if it names none.
 ///
-/// The name after the prefix is exactly what `nest-rs` re-exports the crate as
-/// (`nest_rs_exception_filters` ⇒ `nest_rs::exception_filters`), so no mapping
-/// table can drift out of sync with the facade. `::nest_rs_` alone is not a
-/// concern, and the umbrella has no module for the macro crates — neither ever
-/// appears in an expansion, but a typo here would silently produce an
-/// unresolvable path rather than a loud one.
+/// The name after the prefix is what `nest-rs` re-exports the crate as
+/// (`nest_rs_exception_filters` ⇒ `nest_rs::exception_filters`).
 fn concern_of(name: &str) -> Option<String> {
     let concern = name.strip_prefix("nest_rs_")?;
     (!concern.is_empty() && !concern.ends_with("_macros")).then(|| concern.to_owned())
@@ -377,7 +329,6 @@ mod tests {
 
     #[test]
     fn roots_a_path_held_in_a_string_literal() {
-        // serde and schemars take their `crate = ` override as a string.
         assert_eq!(
             rewritten(quote!(#[serde(crate = "::nest_rs_http::serde")])),
             quote!(#[serde(crate = "::nest_rs::http::serde")]).to_string()
@@ -386,9 +337,6 @@ mod tests {
 
     #[test]
     fn a_literal_only_root_still_reports_as_missing() {
-        // The diagnostic walk and the rewrite walk are the same walk — an
-        // expansion whose only framework root lives in a `crate = "…"` string
-        // used to report nothing at all.
         assert_eq!(
             roots_seen(quote!(#[serde(crate = "::nest_rs_http::serde")])),
             vec!["http".to_owned()]
@@ -403,8 +351,6 @@ mod tests {
 
     #[test]
     fn leaves_a_doc_comment_alone() {
-        // Doc comments are `#[doc = "…"]`, not a `crate = ` attribute, so the
-        // literal branch never even stringifies them.
         let untouched = quote!(#[doc = "see ::nest_rs_core::Container"]);
         assert_eq!(rewritten(untouched.clone()), untouched.to_string());
     }
@@ -419,9 +365,6 @@ mod tests {
 
     #[test]
     fn roots_a_path_that_follows_a_keyword() {
-        // `impl`, `dyn` and `as` are `Ident` tokens, so "the previous token is
-        // an ident" cannot mean "mid-path" — this is the shape every
-        // `Discoverable` expansion opens with.
         assert_eq!(
             rewritten(quote!(impl ::nest_rs_core::Discoverable for T {})),
             quote!(impl ::nest_rs::core::Discoverable for T {}).to_string()
@@ -430,10 +373,6 @@ mod tests {
 
     #[test]
     fn rewrites_only_the_root_of_a_re_exported_path() {
-        // `nest-rs-ws` re-exports `nest_rs_http`, and `#[messages]` reaches
-        // `HttpEndpointMeta` through it. Splicing the umbrella into the second
-        // segment produced `::nest_rs::ws::nest_rs::http::…` — caught by
-        // `nest-rs-macro-hygiene` rather than by a user.
         assert_eq!(
             rewritten(quote!(::nest_rs_ws::nest_rs_http::HttpEndpointMeta)),
             quote!(::nest_rs::ws::nest_rs_http::HttpEndpointMeta).to_string()
@@ -442,9 +381,6 @@ mod tests {
 
     #[test]
     fn roots_a_return_type() {
-        // `->` ends in `>`, which also closes a qualified path. Treating the
-        // two alike left every `Discoverable::register` return type pointing
-        // at a crate the app never declared.
         assert_eq!(
             rewritten(quote! {
                 fn register(b: ::nest_rs_core::ContainerBuilder) -> ::nest_rs_core::ContainerBuilder
@@ -458,8 +394,6 @@ mod tests {
 
     #[test]
     fn roots_a_match_arm_body() {
-        // `=>` ends in `>` too — the fallback arm of the `#[messages]` dispatch
-        // table is the one path this missed after the `->` fix.
         assert_eq!(
             rewritten(quote!(match m {
                 __other => ::nest_rs_ws::WsReply::unknown(__other),
@@ -473,10 +407,6 @@ mod tests {
 
     #[test]
     fn roots_a_path_after_any_operator() {
-        // Everything that ends in `>` was tried as "this continues a path" and
-        // each attempt broke a real emission: `->` a return type, `=>` a match
-        // arm, and a bare `>` the `if __v > ::nest_rs_queue::MAX` bound in
-        // `#[processor]`. What precedes the `::` is no longer inspected.
         assert_eq!(
             rewritten(quote!(if __v > ::nest_rs_queue::MAX {})),
             quote!(if __v > ::nest_rs::queue::MAX {}).to_string()
@@ -512,16 +442,12 @@ mod tests {
 
     #[test]
     fn ignores_an_unrooted_ident_that_merely_looks_like_a_crate() {
-        // A local binding or a `use` alias — rewriting it would capture the
-        // developer's own name.
         let untouched = quote!(let nest_rs_core = 1;);
         assert_eq!(rewritten(untouched.clone()), untouched.to_string());
     }
 
     #[test]
     fn an_expansion_with_no_framework_path_is_returned_unchanged() {
-        // `None` from the walk means "reuse the input" — most of a decorator's
-        // output is the developer's own item, which has no roots in it.
         let trees: Vec<TokenTree> = quote!(
             pub struct Bare {
                 pub name: String,

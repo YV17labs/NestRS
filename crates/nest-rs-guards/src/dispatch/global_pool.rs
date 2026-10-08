@@ -1,23 +1,10 @@
 //! The global guard pool's **HTTP** check, run in-band by a *fallback* endpoint
 //! guard.
 //!
-//! `/graphql` and `/mcp` are both `EdgePosture::Exempt`, so no guard runs in
-//! front of them. **With no operation guard registered**, each seeds its
-//! fallback from here: resolve the pool at mount, run every guard's
-//! `check_http` in order, stop at the first denial — identical on both, so it
-//! lives here once and each transport keeps only its own [`Denial`] mapping.
-//!
-//! **A registered bridge replaces the fallback, and then this never runs.** It
-//! owns the request half itself (the canonical bridge runs its own authn and
-//! authz guards), so a pooled guard's `check_http` is not executed for that
-//! transport at all — which is the shape a `use_guards_global([ThrottlerGuard])`
-//! beside an `AuthzMcpBridge` has, and why the docs qualify the fallback rather
-//! than describing it as the pool's edge.
-//!
-//! Either way this is only the **request** half. A pooled guard's *operation*
-//! check (`check_graphql` / `check_mcp`) runs in the per-operation chain, which
-//! folds the same pool at the site where an operation exists to be checked, and
-//! runs whether or not a bridge is registered.
+//! `/graphql` and `/mcp` are `EdgePosture::Exempt`: with no operation guard
+//! registered, each seeds its fallback from here. A registered bridge replaces
+//! the fallback, and then this never runs. Either way it is only the request
+//! half; a pooled guard's operation check runs in the per-operation chain.
 
 use nest_rs_core::Container;
 use nest_rs_core::layer_chain::ResolvedLayer;
@@ -43,11 +30,9 @@ impl GlobalPoolChain {
         Self { chain }
     }
 
-    /// `true` when the pool resolved to nothing. `/mcp`'s default is closed, so
-    /// its guard checks this rather than letting an empty chain read as "every
-    /// guard passed" — the builder only seeds the fallback for a non-empty
-    /// pool, but `resolve` drops specs it cannot resolve, so emptiness here is
-    /// not the same question the builder answered.
+    /// `true` when the pool resolved to nothing. `/mcp`'s default is closed and
+    /// `resolve` drops specs it cannot resolve, so its guard checks this rather
+    /// than reading an empty chain as "every guard passed".
     #[cfg(feature = "mcp")]
     pub(crate) fn is_empty(&self) -> bool {
         self.chain.is_empty()
@@ -56,9 +41,6 @@ impl GlobalPoolChain {
     /// Run the pool, returning the first [`Denial`] **as the guard raised it**
     /// so the caller's mapping keeps its status (a pooled throttler's `429`
     /// stays a `429`).
-    ///
-    /// Nothing is logged here: each guard logs its own denial at the source
-    /// layer, and HTTP's `RouteShaper` doesn't re-log a pooled denial either.
     pub(crate) async fn check(&self, req: &mut Request) -> Result<(), Denial> {
         for entry in &self.chain {
             // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
@@ -69,9 +51,7 @@ impl GlobalPoolChain {
     }
 
     /// Run the pool's **operation** half against a GraphQL operation, returning
-    /// the denying guard's name beside its [`Denial`] — the caller logs it, as
-    /// the per-site chain does, and this is the only site with no `ResolvedLayer`
-    /// in the caller's hand to read the name off.
+    /// the denying guard's name beside its [`Denial`] for the caller to log.
     #[cfg(feature = "graphql")]
     pub(crate) async fn check_operation(
         &self,

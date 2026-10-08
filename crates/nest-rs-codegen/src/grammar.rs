@@ -1,24 +1,12 @@
 //! [`Grammar`] — the one reader of a decorator's `key = value` arguments.
 //!
-//! Every decorator whose arguments are a list of keys owes the same three
-//! refusals: a key it does not take ([`unknown_argument`]), a key written twice
-//! ([`duplicate_argument`]), and a key written bare that needs a value
-//! ([`needs_a_value`]). They used to be issued at each decorator's own loop —
-//! seventeen loops over three argument shapes — so a refusal was something a
-//! loop could leave out, and the repeat that kept the last of two
-//! `via = "…"` keys was exactly that. Here they are issued by the loop itself,
-//! once, before the decorator sees a key: the closure a decorator hands to
-//! [`Grammar::parse`] receives only keys of its own grammar, each the first time
-//! it is written.
+//! It issues a key it does not take ([`unknown_argument`]), a key written twice
+//! ([`duplicate_argument`]) and a bare key that needs a value
+//! ([`needs_a_value`]) before the closure handed to [`Grammar::parse`] sees a
+//! key; the closure reads the value through [`Arg`].
 //!
-//! What the closure reads after the key is its own business — a value through
-//! [`Arg::value`], [`Arg::expr`] or [`Arg::str_lit`], a parenthesised list off
-//! [`Arg::input`], or nothing for a flag — because the values differ (a type, a
-//! list, an expression) and the refusals do not.
-//!
-//! `syn::meta::parser` and `syn::Attribute::parse_nested_meta` are the
-//! alternative this replaces, and the root `clippy.toml` refuses both outside
-//! the one site that reads an attribute whose grammar is another library's.
+//! The root `clippy.toml` refuses `syn::meta::parser` and
+//! `syn::Attribute::parse_nested_meta` in its favour.
 
 use proc_macro2::{TokenStream, TokenTree};
 use syn::ext::IdentExt;
@@ -29,10 +17,6 @@ use crate::args::{duplicate_argument, needs_a_value, require_str_lit, unknown_ar
 
 /// One decorator's argument grammar: its name and the keys it takes, in the
 /// order its refusals list them.
-///
-/// Declared as a `const` beside the decorator's parser, so the decorator's name
-/// and its key list are written once — they were written twice at every loop,
-/// once to refuse and once to read.
 #[derive(Clone, Copy, Debug)]
 pub struct Grammar {
     attr: &'static str,

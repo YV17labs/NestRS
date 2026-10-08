@@ -1,8 +1,5 @@
-//! Integration tests for `nest-rs-authn`. Layout strictly mirrors `src/`.
-//!
-//! - This file is the only `tests/*.rs` binary; paths under `tests/` are modules.
-//! - Shared fixtures live below at the suite root (`crate::…`), so every module
-//!   in the tree mirrors a `src/` counterpart.
+//! Integration tests for `nest-rs-authn`, mirroring `src/`; shared fixtures sit
+//! at the suite root.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

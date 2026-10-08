@@ -4,7 +4,6 @@
 #[non_exhaustive]
 pub enum OpenTelemetryError {
     /// Subscriber setup failed — e.g. a global subscriber was already installed.
-    /// Carries the underlying message.
     #[error("OpenTelemetry init failed: {0}")]
     Init(String),
     /// `OpenTelemetryModule` was imported in an app whose `main` never called
@@ -21,14 +20,11 @@ pub enum OpenTelemetryError {
     /// spellings set, or a `<KEY>_FILE` naming a file that cannot be read.
     #[error(transparent)]
     Config(#[from] nest_rs_config::ConfigError),
-    /// A set-but-unparseable log filter (`<PREFIX>_LOG`, or a
-    /// `with_log_filter` builder value) aborts boot naming the bad directive
-    /// rather than silently degrading to `info` — framework config contract:
-    /// set-but-unparseable is an error, never a fallback.
+    /// A set-but-unparseable log filter (`<PREFIX>_LOG`, or a `with_log_filter`
+    /// builder value) aborts boot naming the bad directive.
     #[error("invalid log filter {value:?}: {source}")]
     InvalidLogFilter {
-        /// The offending directive string, echoed back so the operator can see
-        /// exactly what failed to parse.
+        /// The offending directive string.
         value: String,
         /// The underlying `EnvFilter` parse error.
         source: tracing_subscriber::filter::ParseError,

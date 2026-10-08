@@ -20,11 +20,6 @@ use crate::propagate::PropagatingHandler;
 /// The operation guard an MCP mount runs, in preference order: the app's
 /// registered `dyn McpOperationGuard` (the authz bridge), else the global guard
 /// pool through the seeded [`FallbackMcpGuard`], else deny-all.
-///
-/// This is the order [`McpMount::from_container`] resolves with, and the MCP
-/// twin of what `ContextEndpoint::new` does for `/graphql`. Keeping deny-all as
-/// the tail means the fallback only ever widens what `use_guards_global` opted
-/// into — an app with no guards at all still gets a closed tool surface.
 pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGuard> {
     let (guard, mode) = match container.get_dyn::<dyn McpOperationGuard>() {
         Some(guard) => (guard, "operation_guard"),
@@ -41,19 +36,13 @@ pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGua
 /// Everything one `#[mcp]` mount needs beyond the handler itself: who gates an
 /// operation, what ambient state is re-installed around it, and how the
 /// streamable-HTTP server is configured.
-///
-/// Assembled once per mount. [`from_container`](Self::from_container) is what
-/// the `#[mcp]` macro emits — the resolution order lives here, in the crate,
-/// rather than inside a macro expansion, so it is readable and testable.
 pub struct McpMount {
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
     config: McpConfig,
     session_store: Option<Arc<dyn SessionStore>>,
-    /// Told at the shutdown signal and stopped at the close of the window by
-    /// the HTTP transport. A mount the transport did not declare — a hand-built
-    /// [`endpoint`] — holds one nothing tells or stops, so its subscriptions and
-    /// operations end with their clients' cancellations and no sooner.
+    /// Told and stopped by the HTTP transport; a hand-built [`endpoint`]'s is never
+    /// told, so its operations end only with their clients' cancellations.
     detached: DetachedWork,
 }
 
@@ -86,21 +75,15 @@ impl McpMount {
             .unwrap_or_default();
 
         if config.allowed_hosts.is_empty() {
-            // Not a style nit: an empty allowlist turns off rmcp's DNS-rebinding
-            // defence, and this is the event an incident query looks for.
+            // An empty allowlist turns off rmcp's DNS-rebinding defence.
             tracing::warn!(
                 target: crate::TARGET,
                 reason = "host_validation_disabled",
                 "mcp host allowlist is empty — inbound Host headers are not validated",
             );
         } else {
-            // rmcp warns when it *rejects* a Host, but its message cannot name
-            // the remedy: it knows the allowlist, not that this framework feeds
-            // it from `<PREFIX>_MCP__ALLOWED_HOSTS`. Recording the effective list
-            // at mount is what turns that rejection from "why is my deployment
-            // answering 403?" into one grep. Deliberately not a `warn`: the
-            // loopback default is correct for the local server it protects, and
-            // an alarm on every dev run is an alarm nobody reads.
+            // rmcp's warning on a rejected Host cannot name the variable; `debug`
+            // because the loopback default is right for a dev run.
             tracing::debug!(
                 target: crate::TARGET,
                 allowed_hosts = ?config.allowed_hosts,
@@ -157,16 +140,8 @@ where
     let handler_context = context.clone();
     let handler_guard = guard.clone();
 
-    // rmcp's own token too, so the streams and tasks it keeps per server end
-    // with the transport. It does not reach an operation of a stateful session
-    // (rmcp 3.4 serves each session under a token of its own), which is why the
-    // handler stops those itself, through the same `detached`.
-    //
-    // The stop, not the signal: rmcp ends *every* stream it serves on this
-    // token, a POST's answer included, so handing it the signal would cut an
-    // operation still answering inside its window. What has no end of its own
-    // is ended at the signal by name instead — the standalone stream below,
-    // and `subscriptions/listen` in `PropagatingHandler`.
+    // The stop, not the signal: rmcp ends every stream on this token, a POST's
+    // answer included. A stateful session's operations miss it; the handler stops those.
     let mut server_config = config
         .to_server_config()
         .with_cancellation_token(detached.cancellation_token());
@@ -210,49 +185,31 @@ where
     async fn call(&self, mut req: Request) -> Result<Self::Output> {
         self.guard.before(&mut req).await?;
 
-        // Capture ambient state here — post-guard, while the request scope and
-        // the ambient executor/ability are still reachable — and stash it in
-        // the request extensions. rmcp forwards those extensions (as
-        // `http::request::Parts`) into every operation's `RequestContext`, so
-        // `PropagatingHandler` can re-install them *inside* the spawned
-        // dispatch, where a task-local from this task would not reach.
+        // Post-guard, while the ambient executor and ability are reachable; rmcp
+        // forwards the extensions into every operation's `RequestContext`.
         let scope = current_request_scope();
-        // One read, one decision. Resolved twice, the two calls disagree on the
-        // path that has to mint — the extensions would carry one id and the
-        // inline install another, for the same operation.
+        // Read once: two reads would mint two ids for one operation.
         let correlation =
             nest_rs_core::current_correlation().unwrap_or_else(|| Correlation::minted(None));
         let captured = self.context.as_ref().map(|context| context.capture(&req));
-        // The guard captures for its own `around` the same way — post-`before`,
-        // so it sees the ability its chain just attached.
+        // Post-`before`, so the guard sees the ability its chain attached.
         let guard_captured = self.guard.capture(&req);
         req.extensions_mut().insert(McpAmbient {
             scope: scope.clone(),
             captured,
             guard_captured,
-            // The interceptor band is the outermost wrap on the request, so the
-            // span current here is the request's own — the one an access log
-            // and an OTel export are keyed on. Disabled when nothing installed
-            // one, which is the free case rather than a special one.
+            // The request's own span: the interceptor band is the outermost wrap.
             span: tracing::Span::current(),
             correlation: correlation.clone(),
         });
 
-        // A `GET` is the session's standalone stream, or its resumption: what
-        // the server pushes, with no end of its own. Read before the request is
-        // handed over, which consumes it.
+        // A `GET` is the session's standalone stream, with no end of its own.
         let standalone = req.method() == poem::http::Method::GET;
 
-        // Also install it here, so an operation rmcp happens to resolve inline
-        // (rather than on a spawned task) is covered by the same seam. Already
-        // ambient from the HTTP edge — re-installing the same id keeps an inline
-        // (non-spawned) rmcp resolution on the same footing as a spawned one.
+        // Also installed here, for an operation rmcp resolves inline.
         let mut response =
             nest_rs_core::with_request_scope(scope, correlation, self.inner.call(req)).await?;
-        // So the transport ends it at the shutdown signal: an idle client held
-        // every stopping replica for its whole window, and was cut at the end
-        // of it anyway. A POST's stream ends with the answer it carries, and is
-        // left to the window like any request still answering.
+        // Ended at the shutdown signal; a POST's stream ends with its answer.
         if standalone && response.status().is_success() {
             response
                 .extensions_mut()

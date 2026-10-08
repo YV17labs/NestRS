@@ -13,8 +13,6 @@ use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
-// --- shared observable state -------------------------------------------------
-
 static DOMAIN_CATCH_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static GATE: Mutex<()> = Mutex::const_new(());
 
@@ -26,8 +24,6 @@ fn catches() -> usize {
     DOMAIN_CATCH_COUNTER.load(Ordering::SeqCst)
 }
 
-// --- typed errors ------------------------------------------------------------
-
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
 pub(crate) struct DomainError(pub String);
@@ -36,22 +32,13 @@ pub(crate) struct DomainError(pub String);
 #[error("infrastructure failure: {0}")]
 pub(crate) struct InfraError(pub String);
 
-/// R12 L-2. Every handler above raises its error by hand
-/// (`poem::Error::new(DomainError(…), status)`), which is the one shape that
-/// needs no `ResponseError` — so the suite proved dispatch while never touching
-/// the requirement a reader meets first. `/fundamentals/exception-filters/`
-/// shipped 2.0.0 defining `DomainError` with neither this impl nor a handler,
-/// and the natural `Result<_, DomainError>` return failed to compile with an
-/// `E0277` on `IntoResult` that names neither. The status here is the
-/// **default**; the filter replaces it, and
-/// [`raising_the_error_the_ordinary_way_reaches_the_filter`] pins both halves.
+/// Without it, a `Result<_, DomainError>` return fails with an `E0277` on
+/// `IntoResult`. The status is the **default** a filter replaces.
 impl poem::error::ResponseError for DomainError {
     fn status(&self) -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
 }
-
-// --- the filter under test ---------------------------------------------------
 
 #[injectable]
 #[derive(Default)]
@@ -70,8 +57,6 @@ impl ExceptionFilter for DomainErrorFilter {
             .body(format!("caught: {err}"))
     }
 }
-
-// --- controllers, one per scope variant --------------------------------------
 
 #[controller(path = "/global")]
 struct GlobalScope;
@@ -156,10 +141,8 @@ impl DupCtrlMethod {
     }
 }
 
-/// The page's own shape: `Result<T, DomainError>` straight out of the handler,
-/// no hand-built `poem::Error`. This is what the reader writes, so it is what
-/// the suite has to compile — the `?`/`Err` path only exists because
-/// `DomainError` implements `ResponseError`.
+/// `Result<T, DomainError>` straight out of the handler, no hand-built
+/// `poem::Error`.
 #[controller(path = "/ordinary")]
 struct OrdinaryRaise;
 
@@ -171,9 +154,6 @@ impl OrdinaryRaise {
         Err(DomainError("boom".into()))
     }
 
-    /// The same error with no filter bound — it renders from its own
-    /// `ResponseError` status. The filter replaces that default; it does not
-    /// create it, and the page now says so.
     #[get("/unfiltered")]
     async fn unfiltered(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("boom".into()))
@@ -190,8 +170,6 @@ impl OrdinaryRaise {
     OrdinaryRaise,
 ])]
 struct ExceptionFiltersModule;
-
-// --- tests -------------------------------------------------------------------
 
 #[tokio::test]
 async fn exception_filter_at_global_scope_catches_typed_error() {
@@ -252,8 +230,6 @@ async fn raising_the_error_the_ordinary_way_reaches_the_filter() {
     filtered.assert_text("caught: domain failure: boom").await;
     assert_eq!(catches(), 1);
 
-    // Unbind the filter and the same handler answers from the exception's own
-    // `ResponseError` status — the two halves the page has to keep distinct.
     let unfiltered = app.http().get("/ordinary/unfiltered").send().await;
     unfiltered.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(catches(), 1, "the unfiltered route reaches no filter");
@@ -302,9 +278,6 @@ async fn same_filter_at_all_three_scopes_catches_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Global + controller + method — every scope of the exception-filter
-    // pool executes at the route site (typed catches sit closest to the
-    // handler); the dedup still collapses the three declarations to one.
     let app = TestApp::builder()
         .module::<ExceptionFiltersModule>()
         .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])

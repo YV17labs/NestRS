@@ -1,44 +1,5 @@
-//! [`DbContext`] — request boundary that installs the ambient executor.
-//!
-//! Auto-installed by [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule), it wraps the
-//! routing tree (band `DATA_CONTEXT`, the innermost transport wrap), so it
-//! covers controller routes and self-mounted surfaces alike. The guard pool
-//! runs *inside* it (in the per-route shaper, post-routing). The executor a
-//! mutating method gets is **lazy**: `BEGIN` is deferred to the first
-//! data-layer touch, so a request a guard denies — or one that never queries
-//! — costs no transaction at all (no pool connection, no Postgres transaction
-//! slot; an unauthenticated POST flood cannot amplify into `BEGIN`/`ROLLBACK`
-//! round-trips). Guards and handlers resolve the same ambient
-//! [`Executor`] via [`Repo`](crate::Repo). Safe methods
-//! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
-//! transaction committed on 2xx/3xx and rolled back otherwise — a failed
-//! mutation never half-persists, and a response tagged
-//! [`MappedError`](nest_rs_http::MappedError) (an error a filter mapped)
-//! rolls back even when its status reads as success.
-//!
-//! The safe/mutating split is the HTTP **method**, which is all this layer
-//! knows. A transport that can prove more about the operation steps back out
-//! of the transaction itself through
-//! [`Executor::non_transactional`](nest_rs_database::Executor::non_transactional):
-//! every GraphQL operation is a POST, so the `/graphql` endpoint routes a batch
-//! whose every operation parses as a `query` onto the pool for its duration
-//! (DATA-S5). The lazy transaction installed here is then never opened and
-//! finalizes as a no-op.
-//!
-//! ### Serialization conflict observability
-//!
-//! This interceptor does **not** retry — it cannot: a poem `Request` is
-//! consumed by `next.run` and is not replayable at this layer. When
-//! [`SeaOrmConfig::observe_serialization_conflicts`] is on, a commit that fails
-//! with a SQLSTATE the [`retry`](crate::retry) module recognizes is merely
-//! *tagged* — logged at `warn` as a serialization conflict for observability —
-//! then the request still fails closed (`500`). To actually retry a conflicting
-//! transaction, wrap the work in the [`retry_on_conflict`] primitive at the
-//! service's programmatic transaction boundary (where the body *is* replayable);
-//! the knob here only controls whether the conflict is surfaced distinctly in
-//! the logs.
-//!
-//! [`retry_on_conflict`]: crate::retry::retry_on_conflict
+//! Safe or mutating is read off the HTTP method alone; `/graphql` steps a
+//! query-only batch back onto the pool through `Executor::non_transactional`.
 
 use std::sync::Arc;
 
@@ -68,8 +29,7 @@ pub struct DbContext {
 }
 
 impl DbContext {
-    /// Construct the interceptor from a pool and config — the honest constructor
-    /// tests use in place of container resolution.
+    /// Construct the interceptor from a pool and config.
     pub fn new(db: Arc<DatabaseConnection>, config: Arc<SeaOrmConfig>) -> Self {
         Self { db, config }
     }
@@ -84,9 +44,6 @@ impl Interceptor for DbContext {
             return with_request_executor(Executor::Pool((*self.db).clone()), next.run(req)).await;
         }
 
-        // Lazy: `BEGIN` runs on the first data-layer touch, inside the
-        // executor itself. A guard denial (or a handler that never queries)
-        // leaves the cell empty and this request costs no transaction.
         let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), "http"));
 
         let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
@@ -96,9 +53,7 @@ impl Interceptor for DbContext {
             FinalizeOutcome::NoTransaction
             | FinalizeOutcome::Committed
             | FinalizeOutcome::RolledBack => result,
-            // The escape invariant (logged by `finalize`): a handle outliving
-            // the handler cannot be committed, so an otherwise-successful
-            // response is silent data loss — fail it loud.
+            // A success here would report writes that were never committed.
             FinalizeOutcome::Escaped => {
                 if success {
                     Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
@@ -110,10 +65,7 @@ impl Interceptor for DbContext {
                 err,
                 self.config.observe_serialization_conflicts,
             )),
-            // A statement failed and the handler answered 2xx anyway, so the
-            // transaction is aborted and nothing it wrote can land. Same
-            // reading as the escape above: a success that lost its writes is
-            // worse than a 500.
+            // The handler answered 2xx over a failed statement: its writes are lost.
             FinalizeOutcome::Poisoned { .. } => {
                 Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
             }
@@ -121,12 +73,8 @@ impl Interceptor for DbContext {
     }
 }
 
-/// Classify a commit-time failure. When `observe_conflicts` is on, a typed
-/// SQLSTATE matched by [`CommitError::is_retryable_conflict`] is tagged at
-/// `warn` for observability — the interceptor does **not** retry (the handler
-/// body is not replayable here; use `retry::retry_on_conflict` at a
-/// programmatic transaction boundary); anything else logs at `error`. Either
-/// way the response fails closed.
+/// Never retried: `next.run` consumed the request, so the handler is not
+/// replayable here.
 fn commit_failure(err: CommitError, observe_conflicts: bool) -> Error {
     if observe_conflicts && err.is_retryable_conflict() {
         tracing::warn!(
@@ -149,11 +97,8 @@ fn is_safe(method: &Method) -> bool {
     )
 }
 
-/// 2xx and 3xx commit; any other status or an `Err` rolls back. A response
-/// tagged [`MappedError`](nest_rs_http::MappedError) also rolls back whatever
-/// its status: it was produced by a route-site `Filter` / `ExceptionFilter`
-/// mapping a handler **error** — the mapping shapes the client answer, it
-/// does not bless the failed handler's writes.
+/// 2xx and 3xx commit, unless tagged [`MappedError`](nest_rs_http::MappedError):
+/// a filter mapping a handler error does not bless its writes.
 fn should_commit(result: &Result<Response>) -> bool {
     matches!(
         result,
@@ -218,9 +163,6 @@ mod tests {
 
     #[test]
     fn a_mapped_error_rolls_back_even_with_a_success_status() {
-        // A route-site Filter / ExceptionFilter that maps a handler error to
-        // a 2xx tags the response `MappedError` — the handler failed, so its
-        // writes must not persist behind the mapped status.
         let mut resp = StatusCode::OK.into_response();
         resp.extensions_mut().insert(nest_rs_http::MappedError);
         assert!(!should_commit(&Ok(resp)));

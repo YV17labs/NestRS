@@ -9,10 +9,8 @@
 //!   one — and the `WorkerDbContext` bridge for jobs.
 //! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
 //!
-//! Services then query through [`Repo`] instead of holding a connection: every
-//! call runs on the ambient executor (transactions need no hand-threading) and
-//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability)
-//! (row-level security cannot be forgotten).
+//! Services query through [`Repo`]: every call runs on the ambient executor and
+//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability).
 //!
 //! ```
 //! # use nest_rs_core::module;
@@ -41,13 +39,7 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — Repository access — every query, and every row-level filter applied.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
+/// This crate's span target: every query, and every row-level filter applied.
 pub const TARGET: &str = "nest_rs::orm";
 
 mod config;
@@ -105,17 +97,10 @@ pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};
 #[cfg(feature = "http")]
 pub use http::{Bind, DbContext};
 
-/// Re-exported so a consumer names one `sea_orm` — the framework's — instead of
-/// carrying its own dependency and hand-mirroring the exact pin. SeaORM types
-/// saturate the ORM public surface (`Repo` bounds, `Executor`, `DbErr`, the
-/// entity / `ActiveModel` derives), so its version is part of this crate's API
-/// contract: the workspace exact-pins it (`=2.0`) and apps should resolve it
-/// through this re-export to stay in lockstep (the same rationale
-/// `nest-rs-http` re-exports `poem` and `nest-rs-graphql` re-exports
-/// `async_graphql`).
+/// Re-exported so an app resolves the framework's exact `sea_orm` pin, part of
+/// this crate's API.
 pub use sea_orm;
 
-/// Re-exported so the `inventory::submit!` `#[expose(..., soft_delete)]` emits
-/// resolves through this crate — the entity crate declares neither `inventory`
-/// nor its version.
+/// Re-exported for the `inventory::submit!` that `#[expose(..., soft_delete)]`
+/// emits: the entity crate does not declare `inventory`.
 pub use inventory;

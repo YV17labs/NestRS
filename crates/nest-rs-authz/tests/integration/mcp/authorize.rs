@@ -2,10 +2,9 @@
 //! beside a `#[tool]` makes `#[mcp]` emit `nest_rs_authz::mcp::authorize`
 //! before the body — the host writes no gate call.
 //!
-//! What is pinned here is the *posture*, and it is the same one GraphQL
-//! declares: a caller with the grant proceeds, one without is refused, the
-//! anonymous caller is refused for want of a principal whatever the visitor
-//! branch granted, and a refusal a wider token would have fixed says so.
+//! Pinned: a caller with the grant proceeds, one without is refused, the
+//! anonymous caller is refused whatever the visitor branch granted, and a
+//! refusal a wider token would have fixed says so.
 
 use std::sync::Arc;
 
@@ -41,19 +40,15 @@ impl Guard for AbilityInjector {
             "admin" => {
                 builder.can(Action::Read, widget::Entity);
             }
-            // A scope-aware credential that was delegated nothing: the rule is
-            // withheld rather than absent, so the refusal can name what to ask
-            // for. An ability with no `with_granted_scopes` at all means "not
-            // scope-aware", and scoped rules would apply in full.
+            // A scope-aware credential delegated nothing: the rule is withheld,
+            // so the refusal can name the scope to ask for.
             "scoped" => {
                 builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
                 builder
                     .can(Action::Read, widget::Entity)
                     .requires_scope("widgets:read");
             }
-            // The anonymous branch, holding a real grant: the gate must still
-            // refuse it, or a grant written to serve a `#[public]` operation
-            // would quietly satisfy every `#[authorize]` one on the same entity.
+            // The anonymous branch holds a real grant; the gate must still refuse it.
             "visitor" => {
                 builder.can(Action::Read, widget::Entity);
                 req.extensions_mut().insert(Arc::new(

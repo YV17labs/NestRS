@@ -1,7 +1,5 @@
-//! CORS settings for the HTTP transport, settable both via `<PREFIX>_HTTP__CORS_*`
-//! env vars and pinned in code as `HttpConfig.cors`. The [`HttpModule`](crate::HttpModule)
-//! translates a [`HttpCors`] into poem's [`Cors`]
-//! middleware at boot.
+//! CORS settings for the HTTP transport, read from `<PREFIX>_HTTP__CORS_*` or
+//! pinned as `HttpConfig.cors`, and turned into poem's [`Cors`] at boot.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -32,23 +30,13 @@ pub struct HttpCors {
 /// The wildcard, as the four lists spell it.
 const WILDCARD: &str = "*";
 
-/// The four lists a `*` may appear in, paired with the response header each one
-/// renders into. One table, so the refusal below is worded once and a fifth list
-/// joins it by growing this array rather than by copying a check.
+/// A list a `*` may appear in, paired with the response header it renders into.
 type WildcardList<'a> = (&'a str, &'a str, &'a [String]);
 
 impl HttpCors {
     /// Every list where `*` is a literal once the request's credentials mode is
-    /// `include` — WHATWG Fetch, *CORS protocol*.
-    ///
-    /// The rule is one rule and it binds four headers, not one:
-    /// `Access-Control-Allow-Origin`, `-Headers`, `-Methods` and
-    /// `-Expose-Headers` all lose their wildcard meaning for a credentialed
-    /// request, and `*` is read as the literal origin / header name / method
-    /// named `*`. `*` is a valid `tchar`, so nothing refuses it: the header is
-    /// emitted, every browser drops the response, and there is nothing
-    /// server-side to point at. Only the origin list was checked here, and the
-    /// other three were accepted in silence.
+    /// `include` — WHATWG Fetch, *CORS protocol*. `*` is a valid `tchar`, so
+    /// nothing else refuses it: the header is emitted and every browser drops it.
     fn wildcard_lists(&self) -> [WildcardList<'_>; 4] {
         [
             ("origins", "Access-Control-Allow-Origin", &self.origins),
@@ -62,9 +50,6 @@ impl HttpCors {
         ]
     }
 
-    /// One check, one sentence, four lists. A per-key refusal multiplies with
-    /// the table and what multiplies is what gets skipped — which is how three
-    /// of these four came to be unchecked.
     fn reject_wildcards_with_credentials(&self) -> Result<()> {
         if !self.credentials {
             return Ok(());
@@ -85,11 +70,8 @@ impl HttpCors {
 
     /// Overlay the `<PREFIX>_HTTP__CORS_*` keys onto `base` (the policy pinned in
     /// code, if any). Returns `Ok(None)` when neither the environment nor `base`
-    /// supplies an origin — no origins means no CORS layer.
-    ///
-    /// Every sub-key overlays independently, so a deployment can widen the
-    /// origins of a policy pinned in code without restating its methods and
-    /// headers.
+    /// supplies an origin — no origins means no CORS layer. Each sub-key
+    /// overlays independently.
     pub fn from_env(
         env: &ConfigService,
         base: Option<Self>,
@@ -240,13 +222,8 @@ mod tests {
         assert!(err.contains("expose-list"), "must name the list: {err}");
     }
 
-    // WHATWG Fetch's credentials rule binds four lists, not one. Each is
-    // asserted on its own: a shared check that silently stopped covering one of
-    // them would still pass a test that only ever looked at `origins`.
     #[test]
     fn credentials_refuse_a_wildcard_in_every_list_the_rule_binds() {
-        /// One case: the field a `*` is planted in, the header it renders
-        /// into, and the plant itself.
         type Case = (&'static str, &'static str, fn(&mut HttpCors));
         let cases: [Case; 4] = [
             ("origins", "Access-Control-Allow-Origin", |c| {
@@ -275,8 +252,6 @@ mod tests {
         }
     }
 
-    // The refusal is about the *pair*: a wildcard without credentials is the
-    // ordinary public-API policy and must keep building.
     #[test]
     fn a_wildcard_without_credentials_still_builds() {
         HttpCors {

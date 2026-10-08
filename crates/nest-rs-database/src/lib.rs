@@ -13,11 +13,7 @@
 //! The first-class implementation is `nest-rs-seaorm` (SeaORM): it ships
 //! `Repo` (row-level filter), `CrudService`, `Bind`, the HTTP mask
 //! shaper, and `SeaOrmDatabaseModule` (the request interceptor that opens the
-//! transaction). Those pieces are SeaORM-specific by design — the
-//! leverage comes from binding tightly to the ORM's query/model types.
-//! A future third-party `nest-rs-<other-orm>` crate (sqlx, diesel,
-//! prisma-client-rust, mongo, …) can plug a different engine into the
-//! same ambient seam without touching `nest-rs-core` or any feature code.
+//! transaction).
 //!
 //! ## Extension contract
 //!
@@ -34,15 +30,10 @@
 //! 4. Override [`Executor::after_commit`] on every handle a boundary settles a
 //!    transaction for: hold the work, run it after the commit — or after a
 //!    boundary that succeeded without opening one — and drop it otherwise. The
-//!    default runs it at once, which is right for a pool and wrong for a
-//!    transaction — an event emitted inside one would be dispatched before the
-//!    transaction it reports had landed.
+//!    default runs it at once, which is wrong for a transaction.
 //!
-//! The SeaORM-specific pieces (`Repo`, `condition_for`, the mask shaper,
-//! `Bind<S, A>`, `CrudService`) are unreachable from your implementation —
-//! that is intentional. They couple to SeaORM's `EntityTrait`/`Model`; a
-//! generic abstraction over them would lose 80% of their value. A new ORM
-//! integration ships its own row-level-filter equivalent.
+//! A new ORM integration ships its own row-level-filter equivalent: the
+//! SeaORM pieces (`Repo`, `condition_for`, `Bind<A, S>`) are unreachable from it.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

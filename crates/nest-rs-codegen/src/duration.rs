@@ -1,28 +1,13 @@
 //! The duration grammar — `"500ms"`, `"30s"`, `"5m"`, `"1h"` — worded once for
 //! every decorator position that takes a span of time.
-//!
-//! `#[every]` and `#[after]` read their period through it, and so does every
-//! queue key that takes a window. Learning the grammar once is learning it
-//! everywhere, and a malformed value reads the same wherever it is typed —
-//! which is the whole reason it lives here rather than in the first decorator
-//! that needed it.
-//!
-//! **One parser, one sentence, whatever was written.** A value that is not a
-//! string literal at all — `#[every(30)]`, `window = SECONDS` — is the same
-//! mistake as `"30"`, and it used to get syn's bare "expected string literal"
-//! at one site and a hand-worded clause at another, neither naming the
-//! decorator. The sentence names the decorator and the position, as every
-//! refusal in [`crate::args`] does.
 
 use syn::{Expr, ExprLit, Lit};
 
 use crate::args::takes_value;
 use crate::ungrouped::ungrouped_expr;
 
-/// The refusal of anything outside the grammar, naming where it was written:
-/// `key` is the position's name (`throttle(window)`), `None` for the one
-/// positional argument of a trigger. The shared value sentence,
-/// [`crate::args::takes_value`], with the grammar as what the position takes.
+/// The refusal of anything outside the grammar: `key` is the position's name
+/// (`throttle(window)`), `None` for a trigger's positional argument.
 fn outside_the_grammar(attr: &str, key: Option<&str>) -> String {
     takes_value(
         attr,
@@ -34,12 +19,8 @@ fn outside_the_grammar(attr: &str, key: Option<&str>) -> String {
 
 /// Read a duration written at `#[attr]`'s `key` as whole milliseconds.
 ///
-/// Refused, spanned at the value and with one sentence: anything but a string
-/// literal, a literal without one of the four suffixes, a number that is not a
-/// whole non-negative integer, zero, and a value too large for `u64`
-/// milliseconds. `ms` is matched before `s`, so `"500ms"` is never read as
-/// `"500m"` followed by a stray `s`. A value a `macro_rules!` forwarded is read
-/// through its invisible group.
+/// Refused with one sentence: anything but a string literal with one of the
+/// four suffixes on a whole number above zero that fits `u64` milliseconds.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"

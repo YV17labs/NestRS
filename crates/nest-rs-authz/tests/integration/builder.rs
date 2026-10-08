@@ -40,8 +40,6 @@ use crate::{child, parent};
 
 #[test]
 fn denial_overrides_a_matching_grant() {
-    // Defence in depth: even with `Read` granted on the org, an explicit denial
-    // on row 13 must keep it out of both the in-memory check and the query.
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, widget::Entity)
         .when(|p| p.eq(widget::Column::OrgId, 7));
@@ -64,8 +62,6 @@ fn denial_overrides_a_matching_grant() {
 
 #[test]
 fn multiple_grants_or_into_the_query_filter() {
-    // Two `can(Read, _)` rules on the same entity must produce a SQL filter
-    // that admits rows matching either grant.
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, widget::Entity)
         .when(|p| p.eq(widget::Column::OrgId, 7));
@@ -74,7 +70,6 @@ fn multiple_grants_or_into_the_query_filter() {
     let ability = b.build().expect("valid test ability");
 
     assert!(ability.can::<widget::Entity>(Action::Read, &model(1, 7)));
-    // Row 99 in a different org is still permitted by the second grant.
     assert!(ability.can::<widget::Entity>(Action::Read, &model(99, 999)));
 }
 
@@ -114,8 +109,6 @@ fn manage_grants_pass_the_class_gate_for_every_action() {
 
 #[test]
 fn a_rule_spec_commits_when_its_statement_ends_without_a_terminal_call() {
-    // `can(Read, _)` with no `.when(...)`/`.fields(...)` is a fully open grant;
-    // it must still commit on drop.
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, widget::Entity);
     let ability = b.build().expect("valid test ability");
@@ -125,11 +118,7 @@ fn a_rule_spec_commits_when_its_statement_ends_without_a_terminal_call() {
 
 #[test]
 fn a_malformed_cannot_fails_ability_construction() {
-    // `related::<child::Entity, _>(child::Relation::Parent, ...)` declares the
-    // related entity as `child` while the relation `Parent` points at `parent`
-    // — the mismatch yields the `Deny` sentinel. On a *denial* that would
-    // combine as `grant AND NOT(1 = 0)`, i.e. fail-open; construction must
-    // instead fail, naming the rule.
+    // Declares `child` as the related entity while `Parent` points at `parent`.
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, child::Entity);
     b.cannot(Action::Read, child::Entity).when(|p| {
@@ -156,15 +145,10 @@ fn a_malformed_cannot_fails_ability_construction() {
 
 #[test]
 fn a_malformed_grant_also_fails_construction() {
-    // Same malformation on a grant: fail-closed (deny-all) rather than fail-open,
-    // but still a developer error worth surfacing loudly.
     let logs = nest_rs_testing::LogCapture::install();
     let mut b = AbilityBuilder::new();
-    // The declared related entity is `widget`, deliberately different from the
-    // rule's subject (`child`) *and* from what the relation points at
-    // (`parent`). With `child` in both places the event's `related` field was
-    // indistinguishable from the subject, and a mutation naming the subject
-    // instead passed.
+    // `widget` differs from both the subject (`child`) and the relation's target
+    // (`parent`), so the `related` field cannot pass by naming either.
     b.can(Action::Read, child::Entity).when(|p| {
         p.related::<widget::Entity, _>(child::Relation::Parent, |w| w.eq(widget::Column::Id, 1))
     });
@@ -174,10 +158,6 @@ fn a_malformed_grant_also_fails_construction() {
     };
     assert_eq!(err.kind, "grant");
 
-    // The `Deny` sentinel is produced *where the rule is written*, before the
-    // builder ever sees it — so this line is what says which malformation it
-    // was. `build()` reports only that some rule is malformed, and an ability
-    // with several relation predicates leaves the developer guessing.
     let event = logs.expect_one(
         "nest_rs::authz",
         "invalid ability relation predicate — denying all rows",
@@ -200,9 +180,6 @@ fn a_malformed_grant_also_fails_construction() {
 
 #[test]
 fn a_well_formed_relation_predicate_says_nothing() {
-    // The other direction. A relational grant is the ordinary case — every
-    // multi-tenant app writes one — so a check that fired on all of them would
-    // be noise in exactly the log an incident queries.
     let logs = nest_rs_testing::LogCapture::install();
     let mut b = AbilityBuilder::new();
     b.can(Action::Read, child::Entity).when(|p| {
@@ -218,8 +195,6 @@ fn a_well_formed_relation_predicate_says_nothing() {
 
 #[test]
 fn no_grant_for_a_subject_produces_a_one_equals_zero_filter() {
-    // Empty ability ⇒ defaulting to TRUE would silently leak rows; the engine
-    // must yield `1 = 0` so the pre-filter matches nothing.
     let ability = AbilityBuilder::new().build().expect("valid test ability");
     let sql = widget::Entity::find()
         .filter(ability.condition_for::<widget::Entity>(Action::Read))

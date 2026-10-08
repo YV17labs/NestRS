@@ -1,8 +1,4 @@
-//! Activation seam for HTTP. Import [`HttpModule::for_root(...)`](HttpModule::for_root) in an
-//! `AppModule.imports` and the framework attaches the
-//! [`HttpTransport`] at boot. Every option lives on
-//! [`HttpConfig`] (host + port + optional TLS), populated either by the
-//! `<PREFIX>_HTTP__*` env scheme or by the pinned struct.
+//! Activation seam for HTTP: [`HttpModule::for_root`] attaches the [`HttpTransport`] at boot.
 
 use std::any::TypeId;
 
@@ -27,8 +23,7 @@ impl HttpModule {
     }
 }
 
-/// The configured import produced by [`HttpModule::for_root`]. Registers the
-/// [`HttpConfig`] (pinned or env-loaded) and contributes the HTTP transport.
+/// The configured import produced by [`HttpModule::for_root`].
 pub struct HttpSetup {
     pinned: Option<HttpConfig>,
 }

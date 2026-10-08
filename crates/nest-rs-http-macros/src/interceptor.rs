@@ -1,10 +1,5 @@
-//! `#[interceptor]` — mark a struct as a **global** HTTP interceptor (for
-//! infrastructure that must wrap everything: a DB-transaction context,
-//! tracing). The macro attaches an
-//! `nest_rs_http::HttpEndpointWrap` but does *not*
-//! register the type as a provider — it is mounted automatically. To bind
-//! per-controller/handler, write a plain `#[injectable] + impl Interceptor`
-//! and list it in `#[use_interceptors(...)]`.
+//! `#[interceptor]` — mark a struct as a **global** HTTP interceptor, mounted
+//! as an `nest_rs_http::HttpEndpointWrap` rather than provided.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -16,7 +11,6 @@ use nest_rs_codegen::{
     from_container_method, injected_method, injected_optional_method, optional_dependencies_method,
 };
 
-/// `#[interceptor]`'s one key.
 const INTERCEPTOR: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("interceptor", &["priority"]);
 
@@ -24,10 +18,6 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     if args.is_empty() {
         return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
     }
-    // **The whole list, read key by key in order**, each key read for what it
-    // *is* before it is counted: refusing any second argument as a repeated
-    // `priority` told `#[interceptor(prority = 1, order = 2)]` it had repeated a
-    // key it never wrote, and never named the misspelling.
     let mut priority: Option<syn::Expr> = None;
     INTERCEPTOR.parse2(TokenStream2::from(args), |arg| {
         priority = Some(arg.expr()?);
@@ -41,13 +31,8 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
 }
 
 /// A `priority = …` value: an integer literal in `i32`'s range, negative ones
-/// included (`priority = -10` sits inside every band the framework declares).
-/// syn hands a lone `-10` over as a negative literal and one followed by another
-/// argument as a negation, so both shapes are read.
-///
-/// One sentence for whatever else was written: the old one, "priority must be
-/// an integer", named neither the decorator nor the key, and a literal too large
-/// for an `i32` got syn's own "number too large to fit in target type".
+/// included. syn hands a lone `-10` over as a negative literal and one followed
+/// by another argument as a negation, so both shapes are read.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"

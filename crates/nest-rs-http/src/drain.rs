@@ -2,22 +2,8 @@
 //! shutdown is asked for, the instant the window closes, and what is still open
 //! at the second.
 //!
-//! The edge reads the first two. A response whose body has no end of its own
-//! ([`OpenEndedBody`](crate::OpenEndedBody)) is ended at the signal, and a body
-//! dropped unfinished once the window has closed was cut by it — both say so on
-//! their `http.request` line, which is why the edge holds the drain rather than
-//! the transport alone.
-//!
-//! poem closes every connection it still serves once the window handed to
-//! `run_with_graceful_shutdown` elapses, and keeps its count of them private,
-//! so it cannot say how many that was. The transport therefore keeps its own
-//! tally, one level down: every socket the listener accepts counts as open
-//! until it is dropped. Counting sockets rather than requests is also what lets
-//! it see the connections poem does not: an upgraded one (a WebSocket) leaves
-//! poem's count at the upgrade, and the window does not close it. A gateway's
-//! socket is carried by its mount's [`DetachedWork`](crate::DetachedWork), which
-//! closes it; one a hand-built endpoint upgraded is the developer's own, and
-//! this count is what says it outlived the transport.
+//! poem keeps its connection count private and drops an upgraded socket from
+//! it, so the transport counts every accepted socket itself.
 
 use std::io::IoSlice;
 use std::pin::Pin;
@@ -56,10 +42,8 @@ impl Drain {
 
     /// Shutdown was asked for: the window starts now.
     ///
-    /// Called from the signal future poem awaits, so it runs before poem
-    /// starts its own clock — every socket poem closes at the bound is
-    /// therefore dropped at or after the instant recorded here, and one that
-    /// closed on its own before it is not counted as closed by it.
+    /// Called from the signal future poem awaits, before poem starts its own
+    /// clock, so every socket poem closes at the bound drops after this instant.
     pub(crate) fn begin(&self, window: Duration) {
         #[expect(
             clippy::let_underscore_must_use,
@@ -156,9 +140,8 @@ impl<A: Acceptor> Acceptor for DrainAcceptor<A> {
     }
 }
 
-/// One accepted socket, counted open until it is dropped. Every call is
-/// forwarded untouched — vectored writes included, which hyper uses when the
-/// socket offers them.
+/// One accepted socket, counted open until it is dropped. Vectored writes are
+/// forwarded too: hyper uses them when the socket offers them.
 pub(crate) struct DrainSocket<Io> {
     inner: Io,
     drain: Arc<Drain>,

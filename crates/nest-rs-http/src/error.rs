@@ -19,21 +19,14 @@ pub(crate) enum HeaderError {
         name: String,
         expected: Cow<'static, str>,
     },
-    /// serde recognised the shape and refused the content — an enum field whose
-    /// text names no variant, a `Deserialize` impl calling `invalid_value`. It
-    /// carries what was *expected*, never what was read; the header's name is
-    /// put back by [`against`](Self::against), which is the one place that
-    /// knows it.
+    /// serde recognised the shape and refused the content. It carries what was
+    /// *expected*, never what was read; [`against`](Self::against) names the header.
     Unexpected(Cow<'static, str>),
-    /// A type's own refusal — a `deserialize_with` function, a custom
-    /// `Deserialize` impl calling `custom`. Its message may quote anything, the
-    /// value included, so it is carried as the fact alone — the reading
-    /// `nest_rs_core::DecodeError` gives the same message — and named against
-    /// its header like [`Unexpected`](Self::Unexpected).
+    /// A type's own refusal (`deserialize_with`, a `Deserialize` impl calling
+    /// `custom`); its message may quote the value, so only the fact is carried.
     Refused,
-    /// A field naming something that cannot be a header name. The developer's
-    /// mistake, not the caller's — but it surfaces on a request, so it is
-    /// reported the same way and says whose it is.
+    /// A field naming something that cannot be a header name — the developer's
+    /// mistake, surfaced on a request.
     NotAHeaderName(String),
 }
 
@@ -49,13 +42,8 @@ impl HeaderError {
         }
     }
 
-    /// Attribute a content refusal to the header it was read from.
-    ///
-    /// serde builds `unknown_variant` and friends from **static**
-    /// constructors — there is no deserializer in scope to ask which header is
-    /// being read — so the name is attached here, by the arm that has one.
-    /// Every other variant already names a header, which makes this idempotent
-    /// and safe to apply at each arm that hands a value to a visitor.
+    /// Attribute a content refusal to the header it was read from: serde's
+    /// constructors are static and cannot know it. Idempotent on named variants.
     pub(crate) fn against(self, name: &str) -> Self {
         match self {
             Self::Unexpected(expected) => Self::malformed(name, expected),
@@ -90,29 +78,22 @@ impl serde::de::Error for HeaderError {
         Self::Refused
     }
 
-    /// serde's derive routes an absent field here, which is what turns
-    /// "missing field `X-Request-Id`" into a sentence about headers.
     fn missing_field(field: &'static str) -> Self {
         Self::Missing(field.to_owned())
     }
 
-    /// The one serde constructor a plain header field actually reaches: an
-    /// enum-typed field whose text names no variant. The default
-    /// (`unknown variant \`{variant}\`, expected …`) opens with the value read
-    /// off the wire, which on a header is exactly what must not be echoed.
+    /// serde's default message opens with the value read off the wire, which
+    /// must not be echoed.
     fn unknown_variant(_variant: &str, expected: &'static [&'static str]) -> Self {
         Self::Unexpected(one_of(expected).into())
     }
 
-    /// Same default shape (`unknown field \`{field}\``); a header *name* is not
-    /// a secret, but one rule over every value-interpolating constructor is
-    /// what stops the next one being missed.
+    /// One rule over every value-interpolating constructor.
     fn unknown_field(_field: &str, expected: &'static [&'static str]) -> Self {
         Self::Unexpected(one_of(expected).into())
     }
 
-    /// `invalid value: string "…", expected …` — one custom `Deserialize` impl
-    /// away, and it quotes the value in full.
+    /// serde's default quotes the value in full.
     fn invalid_value(
         _unexpected: serde::de::Unexpected<'_>,
         expected: &dyn serde::de::Expected,
@@ -120,7 +101,7 @@ impl serde::de::Error for HeaderError {
         Self::Unexpected(expected.to_string().into())
     }
 
-    /// `invalid type: string "…", expected …`, same reasoning.
+    /// serde's default quotes the value in full.
     fn invalid_type(
         _unexpected: serde::de::Unexpected<'_>,
         expected: &dyn serde::de::Expected,

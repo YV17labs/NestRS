@@ -6,10 +6,8 @@ use poem::http::{StatusCode, header};
 
 #[test]
 fn maps_to_unauthorized_with_bearer_challenge() {
-    // RFC 6750 §3.1: a rejected credential names which of the three codes
-    // applies, and §3 requires the scheme carry at least one auth-param. An
-    // expired token and an absent one used to produce byte-identical `401`s,
-    // so a client could not tell "refresh and retry" from "start discovery".
+    // RFC 6750 §3.1: a rejected credential names its code, so a client can tell
+    // "refresh and retry" from "start discovery".
     let response = AuthError::Expired.into_response();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(

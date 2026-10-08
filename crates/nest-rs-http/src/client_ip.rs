@@ -1,64 +1,20 @@
 //! Who the request came from — [`ClientOrigin`], the one resolution every
 //! consumer shares, and [`ClientIp`], the extractor over it.
 //!
-//! # Why a trusted-proxy list is not optional
-//!
-//! `Forwarded`, `X-Forwarded-For` and `X-Real-IP` are client-authored strings.
-//! Honoring them unconditionally lets any caller claim any address; ignoring
-//! them entirely means an app behind a load balancer only ever sees the
-//! balancer. Neither is usable, so the resolution is gated on the **direct
-//! peer**:
+//! The forwarding headers are client-authored, so they are read only when the
+//! direct peer is in `<PREFIX>_HTTP__TRUSTED_PROXIES` (empty by default):
 //!
 //! 1. no peer address at all (unix socket, or a proxy that hides it) ⇒
 //!    [`ClientOrigin::Unknown`];
-//! 2. the peer is not in `<PREFIX>_HTTP__TRUSTED_PROXIES` ⇒ that peer *is* the
-//!    client ([`ClientOrigin::Peer`]) and the headers are ignored;
-//! 3. the peer is a trusted proxy ⇒ the forwarding headers are read, and the
-//!    client is the **rightmost** hop that is not itself a trusted proxy
-//!    ([`ClientOrigin::Forwarded`]).
+//! 2. an untrusted peer *is* the client ([`ClientOrigin::Peer`]), headers ignored;
+//! 3. a trusted peer ⇒ `Forwarded` (RFC 7239), `X-Forwarded-For`, then
+//!    `X-Real-IP` are read, and the client is the **rightmost** hop that is not
+//!    itself a trusted proxy ([`ClientOrigin::Forwarded`]): a proxy appends, a
+//!    caller can only prepend.
 //!
-//! # Three headers, one rule, the standard first
-//!
-//! [RFC 7239](https://www.rfc-editor.org/rfc/rfc7239) §4 standardised this
-//! exchange as `Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43`, and it is
-//! what a conformant proxy emits — nginx's `$proxy_add_forwarded`, HAProxy's
-//! `option forwardfor` successor, and every intermediary that follows the RFC
-//! rather than the convention it replaced. Reading only the de-facto pair meant
-//! that behind such a proxy **every caller resolved to the balancer**: one
-//! rate-limit bucket for the entire internet, the balancer's address in every
-//! `ClientIp`, and — because the peer is still trusted — `traceparent`
-//! continued for a client the transport could not identify.
-//!
-//! So all three are read, in the order of their authority: `Forwarded`, then
-//! `X-Forwarded-For`, then `X-Real-IP`. The trust gate above is the same for
-//! all three; a header is evidence only once the peer that sent it is
-//! infrastructure.
-//!
-//! **Rightmost, never leftmost.** A proxy *appends* the address it received the
-//! request from to the right of the chain — RFC 7239 §4 says so for its own
-//! header too — so the genuine client is the last hop infrastructure wrote. A
-//! caller can only *prepend*, and a prepended entry
-//! lands to the left of the genuine one — which is why it can neither mint a
-//! fresh identity nor impersonate a victim's (B-HTTP-1). Keying on the leftmost
-//! hop is the spoofable rule.
-//!
-//! With no trusted proxy configured — the default — step 2 always wins and the
-//! headers are never read. That is the safe default, not a limitation: an app
-//! that is genuinely behind a balancer names it, and only then does the
-//! framework believe what the balancer says.
-//!
-//! # Two consumers, one answer
-//!
-//! [`ClientIp`] (observational: geolocation hints, sampling keys) and the
-//! throttler's rate-limit bucket must not disagree about who the caller is — a
-//! request rate-limited as one address and served as another is unauditable.
-//! Both go through [`ClientOrigin::of`], so the deployment declares its proxies
-//! once, in `HttpConfig`. Neither writes the address on a line or a span: it is
-//! personal data.
-//!
-//! Treat the result as observational, never as an authentication or
-//! authorization input: the peer is trustworthy, the hop behind it is only as
-//! trustworthy as the proxy that wrote it.
+//! [`ClientIp`] and the throttler's bucket both resolve through
+//! [`ClientOrigin::of`]. Treat the result as observational, never as an authn
+//! or authz input; the address is personal data, so no line or span carries it.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -68,19 +24,13 @@ use poem::{FromRequest, Request, RequestBody, Result};
 
 use crate::HttpConfig;
 
-/// The de-facto forwarding headers, spelled once. Neither is in the `http`
-/// crate's constant table, because neither is a standard — which is the whole
-/// reason RFC 7239 exists and why `header::FORWARDED` is read in preference to
-/// both.
+/// The de-facto forwarding headers, which the `http` crate does not name.
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 const X_REAL_IP: &str = "x-real-ip";
 
-/// Who a request is attributed to, and on what evidence. The variants are what
-/// let each consumer react differently to the same resolution: the throttler
-/// warns on [`Unknown`](Self::Unknown) and
-/// [`TrustedProxy`](Self::TrustedProxy) (both collapse every caller into one
-/// bucket), while [`ClientIp`] only needs the address and whether a header
-/// supplied it.
+/// Who a request is attributed to, and on what evidence.
+/// [`Unknown`](Self::Unknown) and [`TrustedProxy`](Self::TrustedProxy) collapse
+/// every caller into one throttler bucket.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum ClientOrigin {
     /// The direct transport peer, which is not a configured trusted proxy.
@@ -100,13 +50,7 @@ impl ClientOrigin {
     /// Resolve from a live request, reading the trusted-proxy list off the
     /// [`HttpConfig`] the app booted with.
     ///
-    /// The list is a **boot-time constant**, so it is read from the container
-    /// rather than pushed through per-request state: an extension insert costs
-    /// one box each and the first one allocates the whole per-request anymap,
-    /// which is the trade
-    /// [`RequestScope`](nest_rs_core::RequestScope)'s own doc rejects. Off the
-    /// request task (a hand-built `Request` in a unit test) nothing is trusted,
-    /// which is the same answer an unconfigured deployment gives.
+    /// Off the request task (a hand-built `Request`) nothing is trusted.
     pub fn of(req: &Request) -> Self {
         let scope = current_request_scope();
         let config = scope.as_ref().and_then(|s| s.root().get::<HttpConfig>());
@@ -116,19 +60,10 @@ impl ClientOrigin {
         )
     }
 
-    /// [`of`](Self::of) against an explicit list — what the transport edge
-    /// needs, because it runs *before* the request scope that `of` reads the
-    /// list off exists.
-    ///
-    /// Both entry points funnel here so the forwarding header names and the
-    /// argument order are written once: a resolution spelled twice is two
-    /// answers to "who called" the day one of them learns about `Forwarded:`.
+    /// [`of`](Self::of) against an explicit list, for the transport edge, which
+    /// runs before the request scope `of` reads exists.
     pub(crate) fn of_with(req: &Request, trusted_proxies: &[IpAddr]) -> Self {
-        // With nothing declared trusted — the default deployment — no
-        // forwarding header can be believed, so none is looked up. `resolve`
-        // reaches the same answer from the peer alone; skipping the reads only
-        // spares it three header probes and three UTF-8 validations per
-        // request, and leaves the decision itself in one place.
+        // Nothing trusted: no header can be believed, so none is read.
         fn believed(req: &Request, trusted: bool, name: impl header::AsHeaderName) -> Option<&str> {
             trusted
                 .then(|| req.headers().get(name)?.to_str().ok())
@@ -145,22 +80,14 @@ impl ClientOrigin {
     }
 
     /// Whether the direct peer is declared infrastructure — the one fact that
-    /// decides whether *any* header this caller sent may be believed.
-    ///
-    /// Read by the correlation id's gate on `X-Request-Id`, so the deployment
-    /// cannot end up believing a header for the client's address while
-    /// disbelieving it for the id, or the reverse. `Peer` is a peer that is not
-    /// a trusted proxy; `Unknown` is no peer at all.
+    /// decides whether *any* header this caller sent may be believed, the
+    /// `X-Request-Id` gate included.
     pub(crate) fn peer_is_trusted(self) -> bool {
         matches!(self, Self::Forwarded(_) | Self::TrustedProxy(_))
     }
 
-    /// The resolution itself, over plain values — the whole security argument
-    /// of this module lives here, and so do its tests.
-    ///
-    /// `forwarded` is the RFC 7239 field value, `forwarded_for` and `real_ip`
-    /// the de-facto pair. Each chain is reduced in one forward pass, so nothing
-    /// here allocates on a request behind a proxy.
+    /// The resolution itself, over plain values. `forwarded` is the RFC 7239
+    /// field value, `forwarded_for` and `real_ip` the de-facto pair.
     pub fn resolve(
         forwarded: Option<&str>,
         forwarded_for: Option<&str>,
@@ -171,8 +98,7 @@ impl ClientOrigin {
         let Some(peer) = peer else {
             return Self::Unknown;
         };
-        // Anyone but a trusted proxy could have forged the headers, so the peer
-        // is the client and nothing else is read.
+        // Anyone but a trusted proxy could have forged the headers.
         if !trusted_proxies.contains(&peer) {
             return Self::Peer(peer);
         }
@@ -188,25 +114,9 @@ impl ClientOrigin {
                 .filter_map(parse_forwarded_entry),
             trusted_proxies,
         );
-        // The hop infrastructure appended most recently that is not itself
-        // ours. **When both headers answer and disagree, neither is believed** —
-        // and that is the half a "prefer RFC 7239" rule gets wrong.
-        //
-        // RFC 7239 §8.1: the header is trustworthy only insofar as the trusted
-        // intermediary is the one that wrote it. A real deployment emits *one*
-        // of the two, so both answering is already anomalous: the common way to
-        // reach it is a proxy that appends `X-Forwarded-For` and passes unknown
-        // client headers straight through (nginx's default), where a caller
-        // sending `Forwarded: for=198.51.100.9` would outrank the genuine hop
-        // the proxy itself appended. The trusted-proxy gate cannot catch that —
-        // it decides whether to read the headers at all, not which of two a
-        // trusted peer authored.
-        //
-        // So a disagreement degrades to `TrustedProxy`: the caller is behind
-        // our infrastructure and is not identifiable, which is what a rate-limit
-        // bucket and a `traceparent` decision both need to be
-        // told rather than guessed at. Reported, because a deployment emitting
-        // both is a misconfiguration whichever header is the honest one.
+        // Two chains that disagree are both refused (RFC 7239 §8.1): behind a
+        // proxy that appends `X-Forwarded-For` and passes `Forwarded` through
+        // (nginx's default), a caller's own `Forwarded` would outrank the real hop.
         match (standard.client, de_facto.client) {
             (Some(standard_client), Some(de_facto_client))
                 if standard_client != de_facto_client =>
@@ -222,9 +132,7 @@ impl ClientOrigin {
             (Some(client), _) | (None, Some(client)) => return Self::Forwarded(client),
             (None, None) => {}
         }
-        // nginx's single-hop form. Read after the chains because it carries no
-        // ordering of its own, and skipped when it names a proxy we already
-        // know is infrastructure.
+        // nginx's single-hop form, after the chains: it carries no ordering.
         if let Some(ip) = real_ip
             .and_then(parse_forwarded_entry)
             .filter(|ip| !trusted_proxies.contains(ip))
@@ -247,8 +155,8 @@ pub struct ClientIp {
     /// The resolved address. `0.0.0.0` only when the request has no peer
     /// address at all.
     pub ip: IpAddr,
-    /// `true` when a trusted proxy's `X-Forwarded-For` / `X-Real-IP` supplied
-    /// the address, `false` when it is the direct peer (or the default).
+    /// `true` when a trusted proxy's forwarding header supplied the address,
+    /// `false` when it is the direct peer (or the default).
     pub forwarded: bool,
 }
 
@@ -280,10 +188,7 @@ impl From<ClientOrigin> for ClientIp {
 
 /// What one forwarding chain says: the rightmost hop that is not ours (the
 /// client), and the outermost recorded hop (the degenerate answer, kept for
-/// when every hop is infrastructure).
-///
-/// Both fall out of a single forward pass, which is why nothing here has to
-/// collect the chain to walk it backwards.
+/// when every hop is infrastructure), both from a single forward pass.
 #[derive(Debug, Default, Clone, Copy)]
 struct Chain {
     client: Option<IpAddr>,
@@ -303,12 +208,8 @@ impl Chain {
     }
 }
 
-/// The `for=` nodes of an RFC 7239 `Forwarded` field value, left to right.
-///
-/// Element boundaries do not have to be reconstructed to read them: an element
-/// carries at most one `for`, and the pairs of a header arrive in the same
-/// left-to-right order as the elements that hold them — so walking the pairs
-/// walks the chain.
+/// The `for=` nodes of an RFC 7239 `Forwarded` field value, left to right. An
+/// element carries at most one `for`, so walking the pairs walks the chain.
 fn forwarded_hops(raw: &str) -> impl Iterator<Item = IpAddr> + '_ {
     ForwardedPairs { rest: raw }
         .filter(|(name, _)| name.eq_ignore_ascii_case("for"))
@@ -318,13 +219,8 @@ fn forwarded_hops(raw: &str) -> impl Iterator<Item = IpAddr> + '_ {
 /// One `token "=" ( token / quoted-string )` pair of a `Forwarded` value, with
 /// the value's surrounding quotes removed (RFC 7239 §4).
 ///
-/// The separators are `,` (between elements) and `;` (between pairs), and both
-/// are legal *inside* a quoted string — `for="[2001:db8::1]:4711"` is the shape
-/// every IPv6 hop takes — so the scan tracks quoting rather than splitting on
-/// the characters. A quoted-pair (`\"`) is left escaped, and cannot matter: the
-/// `node` production is IPv4 / bracketed IPv6 / `unknown` / an obfuscated
-/// identifier, none of which admits a backslash, so such a value fails to parse
-/// either way.
+/// `,` and `;` are legal inside a quoted string, so the scan tracks quoting. A
+/// quoted-pair is left escaped: no `node` form admits a backslash.
 struct ForwardedPairs<'a> {
     rest: &'a str,
 }
@@ -377,11 +273,8 @@ fn unquote(value: &str) -> &str {
 /// One RFC 7239 `node` identifier as an address, or `None` when it names no
 /// address.
 ///
-/// Two node forms are deliberately *not* addresses and are skipped exactly like
-/// an unparseable hop: `unknown` (§6.2 — the intermediary states that it has
-/// one and will not say which) and an obfuscated identifier (§6.3, `_hidden`,
-/// which is opaque by construction). Reading either as a client would key a
-/// rate-limit bucket on a string a proxy chose to withhold.
+/// `unknown` (§6.2) and an obfuscated identifier (§6.3) are skipped: either
+/// would key one rate-limit bucket for every caller a proxy withheld.
 fn parse_forwarded_node(node: &str) -> Option<IpAddr> {
     let node = node.trim();
     if node.eq_ignore_ascii_case("unknown") || node.starts_with('_') {
@@ -429,12 +322,6 @@ mod tests {
         ClientOrigin::resolve(None, xff, None, peer, trusted)
     }
 
-    /// A caller behind a proxy that appends `X-Forwarded-For` and passes
-    /// unknown headers through can send a `Forwarded` of its own. Preferring
-    /// RFC 7239 unconditionally let that spoof outrank the hop the proxy itself
-    /// wrote — so a disagreement is refused rather than resolved, and it is the
-    /// **rate-limit bucket and the `traceparent` decision**
-    /// that would otherwise have taken the caller's word.
     #[test]
     fn two_forwarding_headers_that_disagree_are_both_refused() {
         let proxy: IpAddr = "10.0.0.1".parse().unwrap();
@@ -453,15 +340,11 @@ mod tests {
             ClientOrigin::TrustedProxy(proxy),
             "a disagreement names no client, so neither header decides",
         );
-        // A deployment emitting both is a misconfiguration whichever header is
-        // the honest one, so it is reported rather than silently degraded.
         let reported = logs.expect_one(
             crate::target::HTTP,
             "forwarding headers disagree about the client — neither is believed",
         );
         assert_eq!(reported.level, "warn");
-        // The proxy that sent them is infrastructure and named; what they claim
-        // of the client is an address, and stays off the line.
         assert_eq!(reported.field("peer").as_deref(), Some("10.0.0.1"));
         for claimed in ["198.51.100.9", "203.0.113.7"] {
             assert!(
@@ -475,8 +358,6 @@ mod tests {
         }
         drop(logs);
 
-        // Agreement is not a disagreement: one deployment, two spellings of the
-        // same hop, still resolves.
         let agreeing = ClientOrigin::resolve(
             Some("for=203.0.113.7"),
             Some("203.0.113.7"),
@@ -489,7 +370,6 @@ mod tests {
             ClientOrigin::Forwarded("203.0.113.7".parse().unwrap())
         );
 
-        // And each header alone is unaffected.
         for (fwd, xff) in [(Some("for=203.0.113.7"), None), (None, Some("203.0.113.7"))] {
             assert_eq!(
                 ClientOrigin::resolve(fwd, xff, None, Some(proxy), &trusted),
@@ -498,7 +378,6 @@ mod tests {
         }
     }
 
-    /// The RFC 7239 half, with neither de-facto header in play.
     fn resolve_forwarded(
         forwarded: &str,
         peer: Option<IpAddr>,
@@ -506,8 +385,6 @@ mod tests {
     ) -> ClientOrigin {
         ClientOrigin::resolve(Some(forwarded), None, None, peer, trusted)
     }
-
-    // ── The peer gate ───────────────────────────────────────────────────────
 
     #[test]
     fn no_peer_address_is_unknown() {
@@ -517,17 +394,11 @@ mod tests {
         );
     }
 
-    // The default deployment: nothing is trusted, so a header a caller set is
-    // never read. This is the regression that mattered — the extractor used to
-    // return the peer with `forwarded = false` for a *different* reason (a
-    // `return` above the header branches), which read as correct behaviour
-    // while making the trusted-proxy case unreachable too.
     #[test]
     fn an_untrusted_peer_ignores_forwarding_headers() {
         let origin = resolve(Some("203.0.113.50"), Some(ip("192.0.2.10")), &[]);
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
 
-        // Even a well-formed multi-hop chain from an untrusted peer.
         let origin = resolve(
             Some("203.0.113.50, 10.0.0.99"),
             Some(ip("192.0.2.10")),
@@ -536,23 +407,14 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    // ── Behind a trusted proxy ──────────────────────────────────────────────
-
-    // B-HTTP-1: the real client is the hop the proxy APPENDED (the rightmost
-    // non-trusted), not the leftmost — the leftmost is the client-authored,
-    // spoofable value.
     #[test]
     fn a_trusted_proxy_yields_the_rightmost_untrusted_hop() {
         let proxy = ip("10.0.0.1");
-        // The proxy received the request from 192.0.2.1 and appended it; the
-        // leftmost "203.0.113.50" is a header the client set.
+        // The leftmost hop is the one the client set.
         let origin = resolve(Some("203.0.113.50, 192.0.2.1"), Some(proxy), &[proxy]);
         assert_eq!(origin, ClientOrigin::Forwarded(ip("192.0.2.1")));
     }
 
-    // B-HTTP-1 (the core exploit): an attacker prepends a random or victim IP.
-    // The genuine hop sits to its right and is the one selected, so the
-    // prepended value can neither mint a fresh identity nor claim a victim's.
     #[test]
     fn a_prepended_spoofed_hop_cannot_change_the_answer() {
         let proxy = ip("10.0.0.1");
@@ -573,17 +435,14 @@ mod tests {
         );
     }
 
-    // A two-layer chain (LB → nginx → app): both infra hops are trusted, so the
-    // client is the rightmost hop that is not one of them.
     #[test]
     fn a_two_layer_proxy_chain_selects_the_real_client() {
         let nginx = ip("10.0.0.1");
         let lb = ip("10.0.0.2");
-        // client(203.0.113.50) → lb appended it → nginx appended lb.
+        // client → lb appended it → nginx appended lb.
         let origin = resolve(Some("203.0.113.50, 10.0.0.2"), Some(nginx), &[nginx, lb]);
         assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
 
-        // And a spoofed hop prepended inside that chain is still skipped.
         let origin = resolve(
             Some("9.9.9.9, 203.0.113.50, 10.0.0.2"),
             Some(nginx),
@@ -616,7 +475,6 @@ mod tests {
                 "hop {raw:?}",
             );
         }
-        // Malformed shapes yield no hop at all.
         for raw in ["[malformed::]", "not-an-ip"] {
             assert_eq!(
                 resolve(Some(raw), Some(proxy), &[proxy]),
@@ -633,7 +491,6 @@ mod tests {
             ClientOrigin::resolve(None, None, Some("198.51.100.20"), Some(proxy), &[proxy]);
         assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.20")));
 
-        // The chain outranks it when it carries a usable hop.
         let origin = ClientOrigin::resolve(
             None,
             Some("203.0.113.50"),
@@ -643,7 +500,6 @@ mod tests {
         );
         assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
 
-        // And an untrusted peer's X-Real-IP is ignored like everything else.
         let origin = ClientOrigin::resolve(
             None,
             None,
@@ -654,8 +510,6 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    // Degenerate: every recorded hop is itself a trusted proxy — the outermost
-    // recorded address is still more specific than the peer.
     #[test]
     fn an_all_trusted_chain_falls_back_to_the_outermost_hop() {
         let (a, b, c) = (ip("10.0.0.1"), ip("10.0.0.2"), ip("10.0.0.3"));
@@ -675,10 +529,6 @@ mod tests {
         }
     }
 
-    // ── RFC 7239 `Forwarded` ────────────────────────────────────────────────
-
-    // The RFC's own examples, §4 and §7.1. Each is a shape a conformant proxy
-    // emits, and every one of them used to resolve to the balancer.
     #[test]
     fn the_rfc_7239_examples_resolve_to_their_for_node() {
         let proxy = ip("10.0.0.1");
@@ -697,25 +547,19 @@ mod tests {
             ),
             // §4, two elements — the rightmost is the hop appended last.
             ("for=192.0.2.43, for=198.51.100.17", Some("198.51.100.17")),
-            // §7.1, the parameter name is case-insensitive and the node may be
-            // quoted with a port.
+            // §7.1.
             ("FOR=\"192.0.2.43:47011\"", Some("192.0.2.43")),
         ];
         for (header, expected) in cases {
             let origin = resolve_forwarded(header, Some(proxy), &[proxy]);
             let expected = match expected {
                 Some(addr) => ClientOrigin::Forwarded(ip(addr)),
-                // Nothing an address can be read from ⇒ the same answer an
-                // empty chain gives, never a bucket keyed on the raw string.
                 None => ClientOrigin::TrustedProxy(proxy),
             };
             assert_eq!(origin, expected, "Forwarded: {header}");
         }
     }
 
-    // §6.2 / §6.3: both are *valid* node identifiers that name no address, so
-    // they are skipped rather than accepted — a rate-limit bucket keyed on
-    // `unknown` is one bucket for every caller a proxy chose not to name.
     #[test]
     fn unknown_and_obfuscated_nodes_are_skipped_like_an_unparseable_hop() {
         let proxy = ip("10.0.0.1");
@@ -727,16 +571,12 @@ mod tests {
             resolve_forwarded("for=_hidden", Some(proxy), &[proxy]),
             ClientOrigin::TrustedProxy(proxy),
         );
-        // And a real hop beside one still answers.
         assert_eq!(
             resolve_forwarded("for=203.0.113.50, for=unknown", Some(proxy), &[proxy]),
             ClientOrigin::Forwarded(ip("203.0.113.50")),
         );
     }
 
-    // The security rule is the header's, not the parser's: the rightmost hop
-    // wins here exactly as it does on `X-Forwarded-For`, so a prepended element
-    // is as inert on the standard header as on the de-facto one.
     #[test]
     fn a_prepended_forwarded_element_cannot_change_the_answer() {
         let proxy = ip("10.0.0.1");
@@ -752,8 +592,6 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    // A two-layer chain, and the all-trusted degenerate case — the same two
-    // rules the de-facto chain follows, on the standard header.
     #[test]
     fn a_forwarded_chain_follows_the_same_trust_rules_as_the_de_facto_one() {
         let (nginx, lb) = (ip("10.0.0.1"), ip("10.0.0.2"));
@@ -772,13 +610,6 @@ mod tests {
         );
     }
 
-    // **Neither header outranks the other where they disagree**, and the earlier
-    // reading — "the one with a grammar wins" — is the spoof this refuses: a
-    // proxy that appends `X-Forwarded-For` and passes unknown client headers
-    // through (nginx's default) lets a caller send a `Forwarded` of its own,
-    // which would then beat the hop the proxy actually wrote. RFC 7239 §8.1
-    // makes the header trustworthy only insofar as the trusted intermediary
-    // authored it, and nothing here can tell which of two it authored.
     #[test]
     fn the_standard_header_does_not_outrank_the_de_facto_one() {
         let proxy = ip("10.0.0.1");
@@ -795,8 +626,6 @@ mod tests {
             "a disagreement names no client rather than picking a header",
         );
 
-        // And it falls through when the standard header names no address, so a
-        // proxy emitting `for=unknown` beside a usable chain is still readable.
         let origin = ClientOrigin::resolve(
             Some("for=unknown"),
             Some("198.51.100.7"),
@@ -807,9 +636,6 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.7")));
     }
 
-    // A quoted value may carry the separators, which is why the scan is
-    // quote-aware rather than a `split`. Getting this wrong reads
-    // `for="[2001:db8::1]:4711"` as two pairs and resolves neither.
     #[test]
     fn a_quoted_value_carrying_a_separator_is_one_pair() {
         let proxy = ip("10.0.0.1");
@@ -842,11 +668,7 @@ mod tests {
         }
     }
 
-    // ── The extractor over the resolution ───────────────────────────────────
-
-    /// A request carrying a real transport peer — what a built `Request` lacks,
-    /// and what every branch past `Unknown` needs. `poem`'s builder cannot set
-    /// one, so the parts are assembled directly.
+    /// A request carrying a real transport peer, which poem's builder cannot set.
     fn req_from(peer: &str, headers: &[(&str, &str)]) -> Request {
         use poem::Addr;
         use poem::web::{LocalAddr, RemoteAddr};
@@ -871,9 +693,7 @@ mod tests {
         )
     }
 
-    /// Extract under an ambient request scope over a container holding `config`
-    /// — the shape the transport edge installs, and the only place the
-    /// trusted-proxy list comes from.
+    /// Extract under an ambient request scope over a container holding `config`.
     async fn extract_under(config: Option<HttpConfig>, req: Request) -> ClientIp {
         let mut builder = nest_rs_core::Container::builder();
         if let Some(config) = config {
@@ -895,9 +715,6 @@ mod tests {
         }
     }
 
-    // The wiring, end to end: a peer, a forwarding header, and an `HttpConfig`
-    // naming that peer. Every unit above tests the rule; this tests that the
-    // extractor actually reaches it.
     #[tokio::test]
     async fn the_extractor_reads_the_trusted_proxies_off_the_booted_config() {
         let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
@@ -906,9 +723,6 @@ mod tests {
         assert!(extracted.forwarded);
     }
 
-    // The wiring for the standard header: `of_with` has to *look it up*. Every
-    // unit above proves the rule and none of them would notice a transport that
-    // never reads `Forwarded` — which is the state this replaces.
     #[tokio::test]
     async fn the_extractor_reads_the_rfc_7239_header() {
         let req = req_from(
@@ -920,10 +734,6 @@ mod tests {
         assert!(extracted.forwarded);
     }
 
-    // The default deployment — `trusted_proxies` empty, so the same request
-    // resolves to the peer. This is the regression: the extractor used to
-    // answer the peer here *and* in the case above, because the header branches
-    // were unreachable on TCP.
     #[tokio::test]
     async fn an_empty_trusted_proxy_list_resolves_the_same_request_to_the_peer() {
         let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
@@ -932,8 +742,6 @@ mod tests {
         assert!(!extracted.forwarded);
     }
 
-    // No config in reach at all (a hand-built request off the transport task):
-    // the same answer an unconfigured deployment gives, never a panic.
     #[tokio::test]
     async fn no_reachable_config_trusts_nothing() {
         let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
@@ -951,13 +759,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_with_no_peer_and_no_trusted_proxy_extracts_the_default() {
-        // A built `Request` has no peer socket — the `Unknown` branch.
+        // A built `Request` has no peer socket.
         let ip = extract(Request::builder().finish()).await;
         assert_eq!(ip, ClientIp::unknown());
     }
 
-    // The end-to-end shape of the bug: headers present, no trusted proxy
-    // declared, so the extractor reports the peer and says so.
     #[tokio::test]
     async fn headers_alone_never_set_forwarded() {
         let req = Request::builder()

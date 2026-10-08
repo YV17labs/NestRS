@@ -1,13 +1,9 @@
 //! Per-message request-scope bridge for WS message handlers — the WS mirror of
 //! [`nest_rs_http::Scoped<T>`] and `nest_rs_mcp::Scoped<T>`.
 //!
-//! A WS connection is a single HTTP upgrade, but each inbound message is
-//! dispatched on the connection task *after* the upgrade request unwound, so
-//! there is no per-message request to carry a scope through. The gateway
-//! endpoint captures the singleton container once at upgrade; the dispatch loop
-//! then opens a fresh [`RequestScope`](nest_rs_core::RequestScope) per message — the same per-message model
-//! guards already run under — and installs it as a task-local. A handler reads
-//! it back with [`Scoped::<T>::from_context`].
+//! The dispatch loop opens a fresh [`RequestScope`](nest_rs_core::RequestScope)
+//! per message through [`nest_rs_core::with_request_scope`]; a handler reads it
+//! back with [`Scoped::<T>::from_context`].
 //!
 //! ```
 //! # use std::sync::atomic::{AtomicU64, Ordering};
@@ -63,15 +59,7 @@
 //! ```
 //!
 //! Scope is **per message**, so an `#[injectable(scope = request)]` provider is
-//! rebuilt for each message and shared within that one dispatch — connection is
-//! not request.
-//!
-//! **The installer is the kernel's** ([`nest_rs_core::with_request_scope`]),
-//! called by the dispatch loop. It used to be a task-local of this crate's own,
-//! which made `Scoped<T>` work here while `nest_rs_core::current_trace_id()` —
-//! the one accessor every other edge offers — returned `None` inside a message
-//! handler. One ambient context, one accessor, every edge: a second mechanism is
-//! a blind spot by construction.
+//! rebuilt for each message and shared within that one dispatch.
 
 use std::any::type_name;
 use std::ops::Deref;
@@ -98,10 +86,9 @@ impl<T> Deref for Scoped<T> {
 }
 
 impl<T: Send + Sync + 'static> Scoped<T> {
-    /// Resolve `T` from the message's request scope, installed by the gateway's
-    /// connection loop as a task-local for the duration of the dispatch. A
-    /// singleton falls through [`RequestScope::get`](nest_rs_core::RequestScope::get) (prefer plain `#[inject]`
-    /// for those); a request-scoped provider is built fresh per message.
+    /// Resolve `T` from the message's request scope. A singleton falls through
+    /// (prefer plain `#[inject]` for those); a request-scoped provider is built
+    /// fresh per message.
     pub fn from_context() -> Result<Self, WsScopeError> {
         let scope = nest_rs_core::current_request_scope().ok_or(WsScopeError::NoScope)?;
         match scope.get::<T>() {
@@ -119,8 +106,6 @@ mod tests {
 
     use super::*;
 
-    /// A request-scoped provider whose id is stamped once when the scope builds
-    /// it — distinct per message, stable within one.
     struct Probe(u64);
 
     fn scoped_container() -> Container {

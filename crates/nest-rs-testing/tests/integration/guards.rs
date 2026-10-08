@@ -1,8 +1,5 @@
-//! Guard effectiveness across the three Layer-System scopes — **handler**,
-//! **controller**, and **global** (`use_guards_global`) — plus multi-guard
-//! ordering and unguarded (public) routes, driven end-to-end through the HTTP
-//! harness. One `#[test]` per scenario; the fixtures are tiny inline
-//! controllers, no product entities and no database.
+//! Guard effectiveness across the three scopes — **handler**, **controller**
+//! and **global** — plus multi-guard ordering and `#[public]` routes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -46,8 +43,6 @@ impl Guard for ChallengeGuard {
 }
 
 impl HttpGuard for ChallengeGuard {}
-
-// --- handler + controller scope ----------------------------------------------
 
 #[controller(path = "/h")]
 struct HandlerScope;
@@ -112,8 +107,6 @@ async fn guard_on_a_controller_protects_every_route() {
     }
 }
 
-// --- global scope -------------------------------------------------------------
-
 #[controller(path = "/g")]
 struct PublicEverywhere;
 
@@ -142,7 +135,6 @@ async fn a_global_guard_protects_every_route_without_use_guards() {
         .await
         .expect("boots with a global guard");
 
-    // No handler here carries `#[use_guards]`, yet the global guard denies all.
     for path in ["/g/a", "/g/b"] {
         app.http()
             .get(path)
@@ -154,10 +146,6 @@ async fn a_global_guard_protects_every_route_without_use_guards() {
 
 #[tokio::test]
 async fn without_a_global_guard_the_same_routes_stay_open() {
-    // The default-derived `DenyGuard` provider stays registered, but with no
-    // `use_guards_global` call no `GuardSpecs` is seeded, so the global chain
-    // is empty — `RouteShaper` runs no global, no controller, no
-    // method guards, and the route stays open.
     let app = TestApp::builder()
         .module::<PublicModule>()
         .build()
@@ -169,16 +157,7 @@ async fn without_a_global_guard_the_same_routes_stay_open() {
     }
 }
 
-// --- dedup across scopes ------------------------------------------------------
-//
-// Scope is a *declaration* concern: a guard named at several scopes belongs to
-// one pool, is deduplicated by `TypeId`, and executes **exactly once** per
-// request. A *denying* guard cannot prove "once" — a 403 looks identical whether
-// the guard ran one time or five. So these two tests use a *counting* guard that
-// increments a process-global counter and then admits: the response is always
-// `200` and the counter is the assertion surface, making the dedup real coverage
-// rather than a tautology. (The full seven-combination sweep lives in
-// `layer_pool.rs`; these keep the guards-file coverage honest.)
+// A denying guard cannot prove it ran once, so the dedup tests count and admit.
 
 /// One process-global counter shared by the two counting tests, so they are
 /// serialized behind [`GATE`] to keep their reads deterministic.
@@ -228,7 +207,6 @@ async fn the_same_guard_at_controller_and_method_scope_executes_once() {
     let _gate = GATE.lock().await;
     let app = TestApp::for_module::<DedupModule>().await.expect("boots");
 
-    // Controller scope only: one declaration, one execution.
     COUNTER.store(0, Ordering::SeqCst);
     app.http()
         .get("/dedup/c-only")
@@ -241,8 +219,6 @@ async fn the_same_guard_at_controller_and_method_scope_executes_once() {
         "a controller-scope guard runs exactly once",
     );
 
-    // Controller *and* method scope: two declarations of the same `TypeId`,
-    // deduped to a single execution. A broken dedup would count 2 here.
     COUNTER.store(0, Ordering::SeqCst);
     app.http()
         .get("/dedup/c-and-m")
@@ -276,9 +252,6 @@ async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
     let _gate = GATE.lock().await;
     COUNTER.store(0, Ordering::SeqCst);
 
-    // Global declares `CountingGuard`; the method re-declares it. The per-route
-    // shaper composes global + method and dedups by `TypeId` (broadest scope
-    // wins), so the guard runs once — a broken dedup would count 2.
     let app = TestApp::builder()
         .module::<GlobalDedupModule>()
         .use_guards_global([guard::<CountingGuard>()])
@@ -297,8 +270,6 @@ async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
         "a guard declared global + method is deduped to one execution",
     );
 }
-
-// --- ordering -----------------------------------------------------------------
 
 #[controller(path = "/order")]
 struct OrderScope;
@@ -320,8 +291,6 @@ struct OrderModule;
 async fn the_first_listed_guard_runs_before_the_second() {
     let app = TestApp::for_module::<OrderModule>().await.expect("boots");
 
-    // ChallengeGuard is listed first; it short-circuits with 401, so DenyGuard's
-    // 403 is never reached. A 403 here would mean the order was inverted.
     app.http()
         .get("/order/x")
         .send()
@@ -329,15 +298,8 @@ async fn the_first_listed_guard_runs_before_the_second() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-// --- #[public] bypasses an active global guard --------------------------------
-//
-// A `#[public]` route attaches a `Public` marker to its route metadata. The
-// framework never skips a guard on its behalf — a guard *reads* the marker (via
-// `Reflector::is_public`) and decides what public means for it. `AuthnGuard` uses
-// exactly this to let an anonymous request through a public route; here a
-// minimal guard distills that posture: admit when public, deny otherwise. The
-// global guard runs post-routing in the `RouteShaper`, so the marker is already
-// attached by the time it reads it.
+// The framework never skips a guard for `#[public]`: a guard reads the marker
+// (`Reflector::is_public`) and decides what public means for it.
 
 /// Denies every request *unless* the route is `#[public]`, in which case it
 /// admits with no principal — the `AuthnGuard` posture, distilled.
@@ -364,8 +326,8 @@ struct PublicScope;
 
 #[routes]
 impl PublicScope {
-    // Handler fn names generate module-global types, so keep them unique across
-    // the file (`pub_*`); the URL paths stay `/open` and `/closed`.
+    // Handler fn names generate module-global types, so they are unique across
+    // the file.
     #[get("/open")]
     #[public]
     async fn pub_open(&self) -> &'static str {
@@ -390,27 +352,18 @@ async fn a_public_route_bypasses_an_active_global_guard() {
         .await
         .expect("boots with a global guard");
 
-    // The global guard runs post-routing, reads `#[public]`, and admits — the
-    // public route answers 200 without a principal.
     app.http()
         .get("/pub/open")
         .send()
         .await
         .assert_status_is_ok();
 
-    // The sibling route carries no `#[public]`, so the same global guard denies.
     app.http()
         .get("/pub/closed")
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
 }
-
-// --- Ctx<T> round-trip: guard attaches, handler reads back --------------------
-//
-// A guard may attach request-scoped context (the authenticated principal is the
-// canonical case) by inserting it into the request extensions; a handler reads
-// it back with `Ctx<T>`. This pins that hand-off end-to-end.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Principal(String);
@@ -445,8 +398,6 @@ struct CtxScope;
 
 #[routes]
 impl CtxScope {
-    // `Ctx<Principal>` extracts the value the guard attached; its presence is
-    // what arms the round-trip — remove the guard and this rejects with 500.
     #[get("/whoami")]
     async fn whoami(&self, principal: Ctx<Principal>) -> String {
         principal.into_inner().0
@@ -460,8 +411,6 @@ struct CtxModule;
 async fn a_guard_attached_context_is_read_back_by_the_handler() {
     let app = TestApp::for_module::<CtxModule>().await.expect("boots");
 
-    // The guard reads `x-user` and attaches it; the handler echoes what `Ctx`
-    // hands back — proving the value survived guard → handler.
     let resp = app
         .http()
         .get("/ctx/whoami")
@@ -471,7 +420,6 @@ async fn a_guard_attached_context_is_read_back_by_the_handler() {
     resp.assert_status_is_ok();
     resp.assert_text("alice").await;
 
-    // Default branch: no header ⇒ the guard attaches `anon`, still round-tripped.
     let anon = app.http().get("/ctx/whoami").send().await;
     anon.assert_status_is_ok();
     anon.assert_text("anon").await;
@@ -482,7 +430,6 @@ struct CtxUnguarded;
 
 #[routes]
 impl CtxUnguarded {
-    // No guard attaches `Principal`, so `Ctx<Principal>` cannot resolve.
     #[get("/whoami")]
     async fn bare_whoami(&self, principal: Ctx<Principal>) -> String {
         principal.into_inner().0
@@ -500,7 +447,6 @@ async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
 
     let resp = app.http().get("/ctx-bare/whoami").send().await;
     resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
-    // The Rust type name belongs in the logs, never the response body.
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
         !body.contains("Principal"),

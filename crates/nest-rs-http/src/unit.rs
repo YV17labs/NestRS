@@ -1,13 +1,8 @@
 //! The canonical name of the unit of work this edge opens.
 //!
-//! Declared here rather than in the kernel, through [`nest_rs_core::unit!`],
-//! whose compile-time evaluation holds the `<edge>.<unit>` grammar: both are
-//! argued once, in [`nest_rs_core::operation_log`].
-//!
-//! One constant, three slots: the [`operation_span!`](nest_rs_core::operation_span)
-//! that opens the unit, and the [`operation_line!`](nest_rs_core::operation_line)
-//! that files its line, as the line's `name:` and its `message`. Both take the
-//! unit as a path, and both refuse one this crate did not declare:
+//! [`operation_span!`](nest_rs_core::operation_span) and
+//! [`operation_line!`](nest_rs_core::operation_line) take it as a path, and
+//! refuse one this crate did not declare:
 //!
 //! ```
 //! use nest_rs_core::operation_log::OK;

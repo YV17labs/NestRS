@@ -1,8 +1,5 @@
-//! `RedisScheduleModule`'s composition, in process: the occurrence lock it binds
-//! is a *declaration*, so a second lock backend imported beside it fails the
-//! boot naming the port's remedy — before any factory runs, so before Redis is
-//! dialled — and the binding imported without the connection it claims over
-//! fails the boot naming the import that opens it.
+//! `RedisScheduleModule`'s composition, in process: what the boot refuses before
+//! any factory runs, so before Redis is dialled.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,9 +61,6 @@ struct TwoLocksModule;
 #[module(imports = [RedisScheduleModule])]
 struct NoConnectionModule;
 
-/// Without the declaration, whichever binding `imports` listed last would claim
-/// every occurrence in silence — and two replicas importing the two in different
-/// orders would claim in two stores, so each would fire every occurrence.
 #[tokio::test]
 async fn a_second_occurrence_lock_beside_redis_fails_the_boot_naming_the_remedy() {
     let Err(error) = App::builder().module::<TwoLocksModule>().build().await else {
@@ -79,8 +73,6 @@ async fn a_second_occurrence_lock_beside_redis_fails_the_boot_naming_the_remedy(
     );
 }
 
-/// The binding claims over the connection `RedisModule::for_root` opens, and
-/// says so when it is imported alone.
 #[tokio::test]
 async fn the_binding_without_its_connection_fails_the_boot_naming_the_import() {
     let Err(error) = App::builder().module::<NoConnectionModule>().build().await else {

@@ -12,11 +12,9 @@ use crate::error::ConfigError;
 /// One key's value and the variable that supplied it: `<KEY>` when it was
 /// inline, `<KEY>_FILE` when it was read from the file that variable names.
 ///
-/// It exists so a consumer that judges a value words its refusal through
-/// [`refuse`](Self::refuse), which names the spelling the deployment actually
-/// set, and quotes the value only through [`shown`](Self::shown), which never
-/// repeats what a file held — `_FILE` is the secrets channel, and a boot error
-/// lands in every log and CI transcript that captures it.
+/// A consumer judging the value refuses it through [`refuse`](Self::refuse) and
+/// quotes it only through [`shown`](Self::shown), which never repeats what a
+/// file held.
 ///
 /// `Debug` shows the variable and never the value.
 #[derive(Clone)]
@@ -84,11 +82,8 @@ impl Setting {
     /// The value decoded from JSON as `T`, refused under this setting's variable
     /// when it does not decode.
     ///
-    /// The refusal is [`ConfigError::Decode`], worded by
-    /// [`DecodeError`] for both spellings: where the value failed, the kind of
-    /// value found and the type expected, never the value — unlike
-    /// [`parse`](Self::parse), which keeps an inline parser's reason, since a
-    /// structured value is where records carrying credentials are written.
+    /// The refusal is [`ConfigError::Decode`], worded by [`DecodeError`] for
+    /// both spellings, never quoting the value.
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, ConfigError> {
         serde_json::from_str(&self.value).map_err(|error| ConfigError::Decode {
             var: self.var.clone(),

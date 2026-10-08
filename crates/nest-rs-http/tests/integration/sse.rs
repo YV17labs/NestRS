@@ -1,10 +1,5 @@
-//! `#[sse]` — the `text/event-stream` route, its ceiling and its refusals.
-//!
-//! The compile-time refusals (`#[authorize]`, a response decorator, a declared
-//! `response_content_type`) are trybuild snapshots in `nest-rs-macro-hygiene`;
-//! what is asserted here is what only a running route can show: the media type
-//! on the wire, the frames a client actually reads, and the ceiling ending a
-//! stream that would otherwise never stop.
+//! `#[sse]` on a running route: the media type, the frames, and the ceiling. Its
+//! compile-time refusals are trybuild snapshots in `nest-rs-macro-hygiene`.
 
 use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;
@@ -25,7 +20,7 @@ struct FeedController;
 
 #[routes]
 impl FeedController {
-    /// Three events, then the stream ends on its own — the ordinary case.
+    /// Three events, then the stream ends on its own.
     #[sse("/ticks")]
     #[public]
     async fn ticks(&self) -> SseStream {
@@ -36,8 +31,7 @@ impl FeedController {
         ]))
     }
 
-    /// A fallible open whose `Result` is spelled another way: it fails like a
-    /// spelled one, with its error's status, because the open is read by type.
+    /// A fallible open whose `Result` is spelled through an alias.
     #[sse("/closed")]
     #[public]
     async fn closed(&self) -> poem::Result<SseStream> {
@@ -53,9 +47,7 @@ impl FeedController {
         Ok(SseStream::new(stream::iter([SseEvent::message("one")])))
     }
 
-    /// A stream that never ends. Without the ceiling this request never
-    /// completes, which is precisely the shape the ceiling exists for: the test
-    /// below finishes only because the stream is closed for it.
+    /// A stream that never ends; only the ceiling closes it.
     #[sse("/forever")]
     #[public]
     async fn forever(&self) -> SseStream {
@@ -66,9 +58,7 @@ impl FeedController {
 /// A fallible open under another name.
 type Opened = Result<SseStream, poem::Error>;
 
-/// A one-second ceiling, so the endless stream is closed inside the test rather
-/// than four hours later. Pinned on the module, which is how the transport under
-/// test learns it — the same seam a deployment uses.
+/// A one-second ceiling, pinned on the module as a deployment would.
 #[module(imports = [HttpModule::for_root(
     HttpConfig { sse_max_connection: Some(Duration::from_secs(1)), ..HttpConfig::default() },
 )], providers = [FeedController])]
@@ -79,8 +69,7 @@ async fn an_sse_route_answers_text_event_stream() {
     let client = boot::<FeedModule>().await;
     let resp = client.get("/feed/ticks").send().await;
     resp.assert_status_is_ok();
-    // `assert_header` would compare against the exact string; poem appends the
-    // charset, so the assertion is on the media type it starts with.
+    // poem appends the charset, so only the media type's prefix is compared.
     let content_type = resp
         .0
         .headers()
@@ -94,8 +83,6 @@ async fn an_sse_route_answers_text_event_stream() {
     );
 }
 
-/// The open is read by type, so a `Result` spelled `poem::Result<…>` or behind
-/// an alias fails with its own status, or streams.
 #[tokio::test]
 async fn a_fallible_open_is_known_by_its_type_whatever_it_is_called() {
     let client = boot::<FeedModule>().await;
@@ -115,9 +102,6 @@ async fn the_events_reach_the_client_with_their_type_and_id() {
     let client = boot::<FeedModule>().await;
     let body = client.get("/feed/ticks").send().await.0.into_body();
     let text = body.into_string().await.expect("the stream is text");
-    // The wire framing is the protocol's, not ours — asserting on it is what
-    // proves the decorator emitted a real `text/event-stream` rather than a
-    // body that merely carries the right header.
     assert!(
         text.contains("event: tick"),
         "event type is framed: {text:?}"
@@ -132,10 +116,7 @@ async fn the_events_reach_the_client_with_their_type_and_id() {
 #[tokio::test(start_paused = true)]
 async fn the_connection_ceiling_closes_a_stream_that_never_ends() {
     let client = boot::<FeedModule>().await;
-    // The whole assertion is that this returns at all. `stream::pending()`
-    // yields nothing, ever; only `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS` ends it.
-    // The timeout is the failure mode made explicit — without the ceiling the
-    // await below would hang until the harness killed the run.
+    // The assertion is that this returns at all: only the ceiling ends the stream.
     let served = tokio::time::timeout(Duration::from_secs(20), async {
         client
             .get("/feed/forever")
@@ -155,12 +136,8 @@ async fn the_connection_ceiling_closes_a_stream_that_never_ends() {
     );
 }
 
-// ---- The residual, witnessed rather than claimed closed ---------------------
-
-/// A client's receive buffer, pinned small — which is what makes "the peer
-/// stopped reading" mean it. Setting `SO_RCVBUF` turns off Linux's window
-/// autotuning, so the kernel stops absorbing megabytes on behalf of an
-/// application that never reads and the server's write parks for real.
+/// A client's receive buffer, pinned small: setting `SO_RCVBUF` turns off Linux's
+/// window autotuning, so the server's write parks for real.
 const CLIENT_RECV_BUFFER: u32 = 2048;
 
 /// The ceiling the streaming route below is mounted with.
@@ -171,8 +148,7 @@ struct FloodController;
 
 #[routes]
 impl FloodController {
-    /// Emits as fast as it is polled, in chunks big enough to fill a socket the
-    /// peer is not draining — which is what parks the write.
+    /// Emits as fast as it is polled, in chunks big enough to park the write.
     #[sse("/events")]
     #[public]
     async fn events(&self) -> SseStream {
@@ -187,17 +163,8 @@ impl FloodController {
 )], providers = [FloodController])]
 struct FloodModule;
 
-/// The ceiling bounds **emission**, and this is what it does not bound. A peer
-/// that stops reading parks the write, hyper stops polling the body, and the
-/// socket — its task, its buffers, everything the stream holds — outlives the
-/// ceiling until that peer reads again.
-///
-/// Asserted, not merely admitted, because two attempts to close it from inside
-/// this crate were wrong in opposite directions and both looked right: bounding
-/// the *socket* truncated unrelated responses under a declared `content-length`,
-/// because a socket does not know whose bytes are queued. Until the transport
-/// can express "this response is stalled", this test is what stops the gap from
-/// being quietly reclassified as closed.
+/// The known gap: the ceiling bounds emission, not the socket. A peer that stops
+/// reading parks the write, and the socket outlives the ceiling.
 #[tokio::test]
 async fn a_peer_that_stops_reading_still_holds_its_socket_past_the_ceiling() {
     let app = App::builder()
@@ -229,15 +196,14 @@ async fn a_peer_that_stops_reading_still_holds_its_socket_past_the_ceiling() {
         .expect("the request is sent");
     socket.flush().await.expect("the request is flushed");
 
-    // Well past the ceiling, without reading a byte — on paused time, since
-    // nothing waits meanwhile but the transport on its parked write.
+    // Paused time: nothing waits meanwhile but the parked write.
     tokio::time::pause();
     tokio::time::sleep(CEILING * 2).await;
     tokio::time::resume();
     let mut buf = [0_u8; 1024];
     let still_there = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut buf)).await;
     cancel.cancel();
-    // The parked write holds the shutdown too: paused again, as nothing reads.
+    // The parked write holds the shutdown too.
     tokio::time::pause();
     let _ = tokio::time::timeout(Duration::from_secs(5), serving).await;
     tokio::time::resume();
@@ -251,8 +217,7 @@ async fn a_peer_that_stops_reading_still_holds_its_socket_past_the_ceiling() {
 }
 
 /// Loopback on a socket whose receive buffer is pinned to
-/// [`CLIENT_RECV_BUFFER`], retrying while the listener comes up — `serve` binds
-/// on its own task, so the first connect can lose the race.
+/// [`CLIENT_RECV_BUFFER`], retrying while the listener comes up.
 async fn connect(port: u16) -> TcpStream {
     let addr = format!("127.0.0.1:{port}")
         .parse()

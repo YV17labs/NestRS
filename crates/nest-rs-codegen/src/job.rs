@@ -1,20 +1,9 @@
 //! The worker-job family — `#[process]`, `#[every]`, `#[cron]` and `#[after]` —
 //! and the one table of the keys its members take.
 //!
-//! All four declare a unit of work a worker transport drives, so a key one member
-//! takes is answered at every member: built where it means something, refused
-//! where it cannot, naming the fact that makes it meaningless there. That answer
-//! is one table, `cell`, and it is the only statement of it: every member reads
-//! its keys through its [`Grammar`](JobDecorator::grammar), whose keys are the
-//! member's column ([`job_keys`]) and whose refusal of a key another member
-//! takes reads the same cell. A key added to a parser and not to the table does not compile —
-//! the parser matches on [`JobKey`], whose every variant the table must place at
-//! every member — and a key the table gives a member its parser does not read
-//! fails that parser's own tests.
-//!
-//! `transactional` is the one key every member takes: every worker job runs
-//! through the one `JobContext` seam, so there is no site that cannot. Its value
-//! is read here too, so a bad one reads the same wherever it is typed.
+//! A key one member takes is answered at every member, by one table, `cell`:
+//! each member's [`Grammar`](JobDecorator::grammar) takes its column
+//! ([`job_keys`]) and refuses another member's key naming why.
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -32,9 +21,7 @@ pub const TRANSACTIONAL: &str = "transactional";
 /// The key, spelled once.
 pub const TIMEOUT: &str = "timeout";
 
-/// The longest `timeout` a job decorator takes: past a day an attempt is a
-/// process of its own rather than a unit of work, and a deadline set past it
-/// bounds nothing an operator would wait for.
+/// The longest `timeout` a job decorator takes: a day.
 const TIMEOUT_CEILING_MILLIS: u64 = 24 * 60 * 60 * 1000;
 
 /// A member of the worker-job family — a decorator that declares a unit of work
@@ -109,8 +96,7 @@ impl JobDecorator {
 /// A member's column of the table as names, and how many of them it holds.
 type Column = ([&'static str; JobKey::ALL.len()], usize);
 
-/// `member`'s column, computed from the table at compile time — so the keys a
-/// grammar takes and the table cannot say two things.
+/// `member`'s column, computed from the table at compile time.
 const fn column(member: JobDecorator) -> Column {
     let mut names = [""; JobKey::ALL.len()];
     let mut len = 0;
@@ -207,11 +193,7 @@ enum Cell {
 
 /// **The job-key table**: every key against every member, one cell each.
 ///
-/// A `match` rather than a list, because a list is closed only by a test and a
-/// match by the compiler: a key or a member added without a cell at every
-/// crossing does not build, and a cell written twice is an unreachable pattern.
-/// No arm is a wildcard, for the same reason — `transactional` names all four
-/// members rather than `_`, so a fifth member states its own answer.
+/// No arm is a wildcard, so a new key or member does not build without its cells.
 const fn cell(key: JobKey, member: JobDecorator) -> Cell {
     use Cell::{Refuses, Takes};
     use JobDecorator::{After, Cron, Every, Process};
@@ -267,9 +249,7 @@ const fn cell(key: JobKey, member: JobDecorator) -> Cell {
 const RUNS_IN_PROCESS: &str = "a scheduled tick runs in process and is not delivered from a \
      queue — push a job from the tick to reach one";
 
-/// The one overlap fact both recurring triggers state. Per replica, because that
-/// is what `concurrency` counts and all a schedule holds to: across replicas, a
-/// job firing once may run on two at once when a run outlasts its period.
+/// The one overlap fact both recurring triggers state.
 const NEVER_OVERLAPS: &str = "a replica runs one occurrence of a scheduled job at a time — one \
      falling due inside a run there is skipped and counted";
 
@@ -280,9 +260,8 @@ pub fn job_keys(member: JobDecorator) -> impl Iterator<Item = JobKey> {
         .filter(move |key| matches!(cell(*key, member), Cell::Takes))
 }
 
-/// The [`JobKey`] a member's [`Grammar`](JobDecorator::grammar) handed over —
-/// every key of its column is one, so the refusal is a framework defect, worded
-/// by [`unread_job_key`]'s sentence rather than a panic.
+/// The [`JobKey`] a member's [`Grammar`](JobDecorator::grammar) handed over;
+/// a miss is a framework defect, refused through [`unread_job_key`].
 pub fn job_key(member: JobDecorator, arg: &Arg<'_>) -> syn::Result<JobKey> {
     JobKey::ALL
         .into_iter()
@@ -317,10 +296,8 @@ fn job_argument_refused(member: JobDecorator, key: &str) -> Option<String> {
 /// The refusal a parser returns for a key its [`Grammar`] handed it and it does
 /// not read — the table gives `#[member]` the key, the parser was not taught it.
 ///
-/// A framework defect, never the developer's: each member's tests read every key
-/// of its column, so this sentence fails a test before it can reach a build. It
-/// is a sentence rather than a panic because a proc macro's panic reaches the
-/// developer as "proc macro panicked", naming nothing.
+/// A sentence rather than a panic: a proc macro's panic reaches the developer
+/// as "proc macro panicked", naming nothing.
 pub fn unread_job_key(member: JobDecorator, key: JobKey, at: &impl ToTokens) -> syn::Error {
     syn::Error::new_spanned(
         at,
@@ -332,9 +309,7 @@ pub fn unread_job_key(member: JobDecorator, key: JobKey, at: &impl ToTokens) -> 
     )
 }
 
-/// What each value *does* — the half of both refusals below that a developer is
-/// actually choosing between, and the reason both are worded here: one key, four
-/// decorators, one sentence.
+/// What each value *does*, stated by both refusals below.
 const WHAT_THE_VALUES_DO: &str = "`true` (the default) settles the job's data-layer work as one \
      transaction per attempt, so a failed attempt leaves nothing for the retry to repeat; `false` \
      runs it on the pool, for a job that brackets long work that is not the database's";
@@ -342,11 +317,7 @@ const WHAT_THE_VALUES_DO: &str = "`true` (the default) settles the job's data-la
 /// Read a `transactional = …` value written at `#[member]` off the expression
 /// the key was given.
 ///
-/// The sentence names the decorator, as every value refusal does
-/// ([`crate::args::site`]), and then what each value *does* rather than the type
-/// it wanted: a developer reaching for this key is choosing between two
-/// behaviours, not fixing a typo, and the choice is the thing worth stating at
-/// the point of refusal.
+/// The refusal states what each value *does*, not the type it wanted.
 pub fn transactional_value(member: JobDecorator, expr: &Expr) -> syn::Result<bool> {
     match ungrouped_expr(expr) {
         Expr::Lit(ExprLit {
@@ -380,9 +351,7 @@ pub fn timeout_value(member: JobDecorator, expr: &Expr) -> syn::Result<u64> {
 }
 
 /// The deadline a parsed `timeout` sets, rooted at the surface crate the
-/// calling macro emits through. `None` — the key was not written — is the
-/// family's default, `nest_rs_worker::JOB_TIMEOUT`, spelled out so the
-/// expansion states it.
+/// calling macro emits through; `None` is `nest_rs_worker::JOB_TIMEOUT`.
 pub fn job_timeout(millis: Option<u64>, surface: &TokenStream) -> TokenStream {
     match millis {
         Some(millis) => quote! { ::core::time::Duration::from_millis(#millis) },
@@ -391,13 +360,6 @@ pub fn job_timeout(millis: Option<u64>, surface: &TokenStream) -> TokenStream {
 }
 
 /// The refusal for the key written **bare**, with no value.
-///
-/// A separate sentence from the one above, because the two mistakes differ: a
-/// wrong value is a choice mis-typed, a missing one is a declaration that says
-/// nothing. What both sites owed and neither gave was the second half — a bare
-/// `expected =` names the grammar and not the key, and on a trigger it did not
-/// even land on the right decorator, the argument list parsing through a
-/// `Punctuated` whose failure is reported at the enclosing `#[scheduled]`.
 fn transactional_needs_a_value(member: JobDecorator) -> String {
     format!(
         "{} needs a value — write `{TRANSACTIONAL} = true` or `{TRANSACTIONAL} = false`. \
@@ -409,10 +371,6 @@ fn transactional_needs_a_value(member: JobDecorator) -> String {
 /// The refusal for **any** key of a job decorator written bare — the shared
 /// sentence, or the `transactional` one when that is the key. `name` is the key
 /// as the member spells it, nested ones included (`throttle(limit)`).
-///
-/// One call rather than the `if name == TRANSACTIONAL { … } else { … }` both job
-/// decorators had written out: the branch is the shared thing, not just its two
-/// arms.
 pub fn job_argument_needs_a_value(member: JobDecorator, name: &str) -> String {
     if name == TRANSACTIONAL {
         transactional_needs_a_value(member)
@@ -422,9 +380,7 @@ pub fn job_argument_needs_a_value(member: JobDecorator, name: &str) -> String {
 }
 
 /// The refusal of a job method answering `()` — written or not — naming what its
-/// `Result` decides. `#[process]` and the three triggers state it one way; only
-/// what an `Err` does differs, because a job has a retry budget and an occurrence
-/// has the next one.
+/// `Result` decides.
 pub fn job_returns_a_result(member: JobDecorator) -> String {
     let outcome = match member {
         JobDecorator::Process => {
@@ -445,8 +401,7 @@ pub fn job_returns_a_result(member: JobDecorator) -> String {
 /// The `JobTransaction` variant a parsed value selects, rooted at the surface
 /// crate the calling macro emits through (`::nest_rs_queue`, `::nest_rs_schedule`).
 ///
-/// `None` — the key was not written — is `PerAttempt`, spelled out rather than
-/// left to `Default` so the expansion states which behaviour it chose.
+/// `None` — the key was not written — is `PerAttempt`, spelled out.
 pub fn job_transaction(value: Option<bool>, surface: &TokenStream) -> TokenStream {
     match value {
         Some(false) => quote! { #surface::nest_rs_worker::JobTransaction::Pool },
@@ -473,8 +428,6 @@ mod tests {
         read.ok_or_else(|| "nothing read".to_owned())
     }
 
-    /// A key no member takes is dead vocabulary rather than a family key: it
-    /// would be refused everywhere, as a word the family claims.
     #[test]
     fn every_key_is_taken_by_some_member() {
         for key in JobKey::ALL {
@@ -488,8 +441,6 @@ mod tests {
         }
     }
 
-    /// Every crossing of the table reaches the developer as its cell says: the
-    /// key where it is taken, the family's sentence where it is refused.
     #[test]
     fn each_cell_is_read_as_the_table_states_it() {
         for member in JobDecorator::ALL {
@@ -510,8 +461,6 @@ mod tests {
         }
     }
 
-    /// A key no member takes is unknown, and the sentence lists the member's
-    /// column — the table's, in its order.
     #[test]
     fn a_key_no_member_takes_is_unknown_and_lists_the_members_column() {
         assert_eq!(

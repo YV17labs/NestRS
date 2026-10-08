@@ -1,20 +1,9 @@
 //! `version = "…"` on an edge that has no address for it — and the one place
 //! each transport's own answer is worded.
 //!
-//! `#[controller(version = "1")]` declares a version because an HTTP route *is*
-//! an address a caller selects, and `#[gateway]` follows for the same reason. On
-//! the edges below the mount is not selectable that way, so the unity the
-//! framework owes the developer is not "accept the key everywhere" — it is that
-//! the key either means what it means on HTTP, or the compiler says what this
-//! transport does instead. A silently ignored `version` and a bare "unknown
-//! key" are the same failure: the developer is left guessing.
-//!
-//! This is [`crate::attrs::reject_http_only_layers`]'s shape applied to an
-//! argument rather than an attribute, and it is worded here rather than in five
-//! macro crates for the reason [`crate::pair::DecoratorPair`] and
-//! [`crate::posture::PostureRules`] are:
-//! `rg 'Edge::' crates/*-macros/src/` names every rejection site, and a sentence
-//! that lives once cannot drift into naming a remedy that no longer exists.
+//! An HTTP route or a gateway is an address a caller selects; on the edges
+//! below it is not, so `version` there is refused naming what the transport
+//! does instead.
 //!
 //! ```
 //! # use nest_rs_codegen::Edge;
@@ -33,24 +22,15 @@ use quote::ToTokens;
 use syn::punctuated::Punctuated;
 use syn::{Expr, ExprLit, Lit, LitStr, Token};
 
-/// The longest version token the framework accepts, declared or stated.
-///
-/// A version is spliced into a URL path and echoed into an `operationId`, so it
-/// is bounded on both sides of the wire. It lived only on the runtime side once,
-/// which meant a 40-character `#[controller(version = …)]` compiled, mounted,
-/// logged and documented — and was then refused with `400` the moment a caller
-/// named it. A declaration the framework accepts and its own wire half rejects
-/// is the worst place for the two to disagree.
+/// The longest version token the framework accepts, declared or stated — the
+/// same bound on both sides of the wire.
 pub const MAX_VERSION_LEN: usize = 32;
 
 /// Whether `raw` is a version token: bare alphanumerics, `.` and `-`, non-empty,
 /// within [`MAX_VERSION_LEN`].
 ///
-/// This is the grammar, worded here so the compile-time half and the wire half
-/// are one rule. `nest-rs-http` cannot call it — this crate pulls `syn`, and
-/// dragging that into every app's dependency graph is what the umbrella rule
-/// forbids — so it carries its own copy of *this function only*, pinned against
-/// this one by `versioning::the_wire_grammar_matches_the_declared_grammar`.
+/// `nest-rs-http` cannot depend on this crate (it pulls `syn`), so it carries a
+/// copy pinned by `versioning::the_wire_grammar_matches_the_declared_grammar`.
 pub fn is_valid_version(raw: &str) -> bool {
     !raw.is_empty()
         && raw.len() <= MAX_VERSION_LEN
@@ -62,23 +42,13 @@ pub fn is_valid_version(raw: &str) -> bool {
 /// Parse a declared version, in either accepted spelling: `version = "1"` or
 /// `version = ["1", "2"]`.
 ///
-/// `#[controller]`, `#[version]` and `#[gateway]` all come through here, so the three cannot
-/// word "what a version may look like" differently — and it is worth stating
-/// once, because a declared version is spliced straight into a URL path.
-///
-/// The grammar itself is [`is_valid_version`], the
-/// same rule the wire-side validator in `nest-rs-http` applies to a version a
-/// *caller* states. This half catches your own typo at compile time instead of
-/// mounting `/va%2Fb/posts`; what it adds beyond the grammar is the list shape
-/// and the duplicate check.
+/// The grammar is [`is_valid_version`]; this adds the list shape and the
+/// duplicate check.
 pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitStr>> {
     // `decorator` arrives as `"#[controller]"`; the shared sentence brackets the
     // name itself, so it is handed the bare word.
     let attr = decorator.trim_start_matches("#[").trim_end_matches(']');
-    // Through the invisible group a `macro_rules!` forwards `$v:expr` in, as
-    // every other value reader reads: a forwarded list arrived as
-    // `Expr::Group(Array)`, fell to the scalar arm, and was refused as "takes a
-    // string literal" — false for the list, which it did not even offer.
+    // A forwarded `$v:expr` list arrives as `Expr::Group(Array)`.
     let literals = match crate::ungrouped_expr(value) {
         Expr::Array(array) => array
             .elems
@@ -117,12 +87,8 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
 /// The route's own spelling, `#[version("1", "2")]` — the same grammar as
 /// [`parse_version_list`], read off the attribute's positional arguments.
 ///
-/// **Its site is the attribute alone** (``#[version]: "a b" is not a path
-/// segment``). It came through [`parse_version_list`] as a synthesized array,
-/// so its refusals named a key — ``#[version] `version` `` — that the attribute
-/// has none of, and a value that was not a string never reached the grammar at
-/// all: the list was read as string literals first, and syn's
-/// `expected string literal` named neither.
+/// Its refusals name the attribute alone (``#[version]: "a b" is not a path
+/// segment``), which has no key.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -198,9 +164,8 @@ fn check_versions(literals: &[LitStr], attr: &str, key: Option<&str>) -> syn::Re
 /// An edge whose mount is not an address a client selects, and which therefore
 /// answers `version = "…"` with its own alternative instead of accepting it.
 ///
-/// The list is closed on purpose: an edge belongs here only after the question
-/// "what does a caller select?" has been answered, and the answer is what
-/// [`Edge::answer`] carries.
+/// An edge belongs here once [`Edge::answer`] can say what a caller selects
+/// instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edge {
     /// GraphQL — refused by `#[resolver]`.
@@ -216,10 +181,6 @@ pub enum Edge {
 }
 
 /// One edge's answer, split so neither half can be left blank.
-///
-/// `because` is the reasoning and `instead` is the remedy, and the second is the
-/// one that makes the diagnostic worth reading: an edge that refuses a
-/// declaration owes the developer the declaration it does accept.
 pub struct VersionAnswer {
     /// The decorator that refuses the key, as written — `"#[resolver]"`.
     pub decorator: &'static str,
@@ -251,10 +212,7 @@ impl Edge {
                           `#[graphql(deprecation = \"use `author` instead\")]` beside \
                           the `#[query]` / `#[mutation]` it retires",
             },
-            // `#[mcp]` does take a `version`, and it is not this one: it overrides
-            // `serverInfo.version` for an endpoint that stands apart. So the
-            // answer names both readings — the addressing one the developer
-            // probably meant, and the identity one they would otherwise get.
+            // Names both readings: addressing, and `serverInfo.version`.
             Self::Mcp => VersionAnswer {
                 decorator: "#[mcp]",
                 because: "an MCP endpoint is addressed by its whole path, and `version` \
@@ -318,14 +276,8 @@ impl Edge {
 
     /// Refuse a top-level `version` key in a decorator's raw argument tokens.
     ///
-    /// Called **before** the decorator's own unknown-argument arm, which is the
-    /// whole point: a generic "takes no arguments" or "unknown key" reads as a
-    /// typo and sends the developer looking for the right spelling of something
-    /// this transport does not have.
-    ///
-    /// Only the top level is scanned — a `version` nested inside some other
-    /// argument's parentheses belongs to that argument's grammar, not to this
-    /// question.
+    /// Call it **before** the decorator's own unknown-argument arm. Only the top
+    /// level is scanned.
     pub fn reject_version(self, args: &TokenStream) -> syn::Result<()> {
         for tree in args.clone() {
             if let TokenTree::Ident(ident) = tree
@@ -343,9 +295,6 @@ mod tests {
     use super::*;
     use quote::quote;
 
-    /// A list a `macro_rules!` forwarded as `$versions:expr` arrives inside an
-    /// invisible group, and is the same list — it was refused as "takes a
-    /// string literal".
     #[test]
     fn a_forwarded_version_list_is_read_through_its_group() {
         let list: Expr = syn::parse_quote!(["1", "2"]);
@@ -370,11 +319,6 @@ mod tests {
         );
     }
 
-    // A variant added later cannot ship a blank sentence: every edge owes a
-    // reason *and* a remedy, and both have to reach the message the developer
-    // reads. The remedy is the load-bearing half — refusing a declaration
-    // without naming the one this transport accepts is the "unknown key" this
-    // module exists to replace.
     #[test]
     fn every_edge_names_a_reason_and_an_alternative() {
         for edge in Edge::ALL {
@@ -412,8 +356,6 @@ mod tests {
 
     #[test]
     fn arguments_this_edge_does_not_own_fall_through() {
-        // The scan answers one question. Anything else is the decorator's own
-        // grammar to accept or refuse — this must not become a second parser.
         assert!(Edge::Queue.reject_version(&quote!()).is_ok());
         assert!(Edge::Queue.reject_version(&quote!(retries = 3)).is_ok());
     }

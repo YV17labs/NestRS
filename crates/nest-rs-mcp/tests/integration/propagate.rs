@@ -1,27 +1,11 @@
-//! `src/propagate.rs`: every `ServerHandler` method reaches the wrapped host,
-//! and an operation ends when it is stopped as well as when it settles.
+//! `src/propagate.rs`: every `ServerHandler` method reaches the wrapped host —
+//! a dropped delegation is answered by rmcp's default, silently — and an
+//! operation ends when it is stopped as well as when it settles.
 //!
-//! [`PropagatingHandler`](nest_rs_mcp::PropagatingHandler) has to *be* a
-//! `ServerHandler` since rmcp 3.x — the single `Service::handle_request` seam it
-//! used to wrap is gone. A method it forgets to delegate does not merely lose
-//! the ambient request scope: rmcp's **default** answers instead, so the host's
-//! own `prompts/get` becomes `-32601 Method not found` and its `tools/list`
-//! becomes an empty list. Silently, and only on the wire.
-//!
-//! So this suite drives a probe host that records the name of every method it
-//! is asked for, through the real streamable-HTTP endpoint, and asserts the
-//! recorded set. Adding a capability to the delegation means adding it here.
-//!
-//! **This proves delegation, not exhaustiveness** — the probe is hand-written,
-//! so `#[deny(clippy::missing_trait_methods)]` on the impl is what makes the
-//! list complete. Two methods are absent from [`EXPECTED`] on purpose:
-//! `initialize` for the reason below, and `negotiate_initialize` because it is
-//! reachable *through* that `initialize`, so the wire cannot tell a delegated
-//! call from an inherited one. `src/propagate.rs` proves that one directly.
+//! This proves delegation, not exhaustiveness: `#[deny(clippy::missing_trait_methods)]`
+//! on the wrapper does that. `negotiate_initialize` is absent from [`EXPECTED`]:
+//! the wire cannot tell it delegated, so `src/propagate.rs` proves it.
 
-// The probe implements the *whole* trait, deprecated members included: rmcp
-// still routes legacy protocol versions to `subscribe`/`unsubscribe` and
-// `logging/setLevel`, so a wrapper that drops them drops real traffic.
 #![expect(
     deprecated,
     reason = "rmcp still routes the deprecated methods for legacy protocol versions"
@@ -55,7 +39,6 @@ use nest_rs_testing::{LogCapture, TestApp};
 use poem::test::TestClient;
 use tokio::sync::Notify;
 
-/// The set of method names the probe host was asked for.
 type Seen = Arc<Mutex<BTreeSet<&'static str>>>;
 
 /// Client capabilities declaring the SEP-2663 tasks extension, without which
@@ -64,11 +47,8 @@ fn tasks_client_capabilities() -> serde_json::Value {
     json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } })
 }
 
-/// A host that implements every `ServerHandler` method this suite asserts on,
-/// and records which one ran. `initialize` is deliberately not overridden: rmcp's
-/// default performs protocol negotiation through a `pub(crate)` helper a host
-/// cannot call, and a wrapper that dropped it would break the handshake this
-/// whole suite depends on — the loudest possible failure, so it needs no probe.
+/// Records which `ServerHandler` method ran. `initialize` is not overridden:
+/// rmcp's default negotiates through a `pub(crate)` helper a host cannot call.
 #[derive(Clone)]
 struct ProbeHandler {
     seen: Seen,
@@ -111,13 +91,11 @@ impl ServerHandler for ProbeHandler {
         _requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
         self.mark("accepted_subscription_filter");
-        // Accepting is what routes the request on to `listen`; declining would
-        // leave the wrapper's longest-lived delegation unexercised.
+        // Accepting routes the request on to `listen`.
         Some(_requested.clone())
     }
 
-    /// Returns at once rather than awaiting cancellation, so the suite proves
-    /// the delegation without holding the request open.
+    /// Returns at once, so the request is not held open.
     async fn listen(
         &self,
         _context: nest_rs_mcp::service::SubscriptionContext,
@@ -312,8 +290,6 @@ impl ServerHandler for ProbeHandler {
     }
 }
 
-/// Every method the wire exercises below are expected to reach on the host. A
-/// delegation this wrapper drops makes the corresponding name go missing.
 const EXPECTED: &[&str] = &[
     "accepted_subscription_filter",
     "call_tool",
@@ -344,8 +320,7 @@ const EXPECTED: &[&str] = &[
     "update_task",
 ];
 
-/// The revision that carries SEP-2575 discovery/subscriptions and SEP-2243
-/// standard headers — the surface the legacy session below cannot reach.
+/// The revision carrying SEP-2575 discovery/subscriptions and SEP-2243 headers.
 const MODERN_VERSION: &str = "2026-07-28";
 
 /// Per-request `_meta` a modern (stateless, inline-lifecycle) request must
@@ -361,8 +336,7 @@ fn modern_meta() -> serde_json::Value {
 }
 
 /// Notifications are answered `202` and processed on the session worker, so the
-/// recorder lags the POST. Poll until the expected names land rather than
-/// sleeping a guessed interval.
+/// recorder lags the POST.
 async fn await_seen(seen: &Seen, expected: &[&str]) {
     for _ in 0..200 {
         let current = seen.lock().expect("probe lock").clone();
@@ -384,7 +358,7 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         move || host.clone(),
     ));
 
-    // --- a legacy session: the capabilities reachable through `initialize` ---
+    // A legacy session: the capabilities reachable through `initialize`.
     let session = open_session_with(&client, "/", None, &[], tasks_client_capabilities()).await;
 
     let requests: &[(&str, serde_json::Value)] = &[
@@ -418,8 +392,7 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         call_method(&client, "/", &session, None, method, params.clone()).await;
     }
 
-    // Notifications. `notifications/initialized` already ran inside the
-    // handshake; the rest are sent here.
+    // `notifications/initialized` already ran inside the handshake.
     let notifications: &[(&str, serde_json::Value)] = &[
         (
             "notifications/cancelled",
@@ -436,11 +409,8 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         notify(&client, "/", &session, None, method, params.clone()).await;
     }
 
-    // --- the 2026-07-28 surface: stateless, inline-lifecycle requests -------
-    // `server/discover` and `subscriptions/listen` do not exist for a legacy
-    // session, and `get_tool` is only consulted to validate SEP-2243
-    // `Mcp-Param-*` headers — all three are new in the revision this upgrade is
-    // about, so leaving them unexercised would leave the new surface unproven.
+    // `server/discover`, `subscriptions/listen` and `get_tool` (consulted only to
+    // validate SEP-2243 `Mcp-Param-*` headers) need stateless 2026-07-28 requests.
     let modern: &[(&str, serde_json::Value)] = &[
         ("server/discover", json!({ "_meta": modern_meta() })),
         (
@@ -504,9 +474,7 @@ async fn post_modern<E: poem::Endpoint>(
     request.send().await;
 }
 
-/// The wrapper is a `ServerHandler`, which is what `StreamableHttpService`
-/// bounds on since rmcp 3.x. Asserting it in a test keeps the bound from being
-/// re-satisfied by accident (e.g. by an inherent method of the same name).
+/// `StreamableHttpService` bounds on `ServerHandler`.
 #[test]
 fn the_wrapper_is_itself_a_server_handler() {
     fn assert_server_handler<T: ServerHandler>() {}
@@ -583,10 +551,8 @@ async fn operation_line(logs: &LogCapture, operation: &str) -> nest_rs_testing::
     panic!("no mcp.operation line was filed for {operation}");
 }
 
-/// rmcp runs an operation on a task of its own, so the shutdown window cutting
-/// the connection that asked for it used to leave it running on — through the
-/// shutdown hooks, to an `ok` for an answer nobody received. It is stopped with
-/// the transport now: dropped before `serve` returns, and filed as `cancelled`.
+/// rmcp runs an operation on a task of its own, which outlives the connection
+/// the shutdown window cuts unless the transport stops it.
 #[tokio::test]
 async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_cancelled() {
     let logs = LogCapture::install();
@@ -638,9 +604,7 @@ async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_canc
     assert_eq!(stopped.field("stopped").as_deref(), Some("1"));
 }
 
-/// A client's `notifications/cancelled` reaches rmcp as a cancelled token that
-/// no handler is obliged to watch, so the operation used to run to its end and
-/// file `ok`. It is dropped where it waits, and filed as `cancelled`.
+/// `notifications/cancelled` reaches rmcp as a token no handler is obliged to watch.
 #[tokio::test]
 async fn an_operation_its_client_cancels_is_dropped_and_files_cancelled() {
     let logs = LogCapture::install();
@@ -703,11 +667,8 @@ impl ExplodingTools {
 #[module(providers = [ExplodingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct ExplodingModule;
 
-/// rmcp runs a tool on a task of its own, so a tool that panicked took that task
-/// down with nothing answered: the client waited for its own timeout and the
-/// operation filed no line. The panic is contained at the dispatch — the unit
-/// files `panic`, the client is answered with an internal error that says
-/// nothing of what unwound, and the panic's text goes to the operator.
+/// rmcp runs a tool on a task of its own: a panic there answers nothing unless
+/// the dispatch contains it.
 #[tokio::test]
 async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
     let logs = LogCapture::install();
@@ -745,7 +706,6 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
         line.field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::PANIC),
     );
-    // The operation's span fails with the line's word.
     let span = logs
         .spans()
         .into_iter()
@@ -807,11 +767,8 @@ impl ServerHandler for SubscribedHost {
 #[module(providers = [SubscribedHost, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct SubscribedModule;
 
-/// A subscription has no end of its own, so at the shutdown signal the server
-/// ends it the way the 2026-07-28 schema defines a graceful teardown — the
-/// final `SubscriptionsListenResult` — rather than holding the window open for
-/// a cancellation that is not coming and cutting it at the close. The
-/// subscriber did not end it, so its line says `cancelled`.
+/// The 2026-07-28 schema's graceful teardown is the final
+/// `SubscriptionsListenResult`; the subscriber did not end it, so it files `cancelled`.
 #[tokio::test]
 async fn a_subscription_is_answered_its_final_result_at_the_shutdown_signal() {
     let logs = LogCapture::install();

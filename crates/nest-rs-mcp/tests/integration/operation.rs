@@ -1,11 +1,5 @@
-//! The ambient MCP operation — `src/operation.rs`, and the per-operation guard
-//! chain that hangs off it.
-//!
-//! An operation is dispatched on a task rmcp spawned, with no request and no
-//! context parameter to carry the app through. These assert that the seam
-//! closing that gap actually closes it: a `#[use_guards]` beside a `#[tool]`
-//! runs, a host-scope one runs for every operation, and both reach the caller's
-//! ambient state rather than a request that no longer exists.
+//! `src/operation.rs` and the per-operation guard chain, run on the task rmcp
+//! spawns, where no request is left.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -21,9 +15,8 @@ use nest_rs_testing::mcp::{call_method, call_tool, open_session};
 
 const PATH: &str = "/mcp/layers";
 
-/// Counts what it saw, so a test can assert a guard ran *and* what it was told
-/// about the operation — a guard that runs but is handed the wrong operation is
-/// the failure a bare "did it run" assertion misses.
+/// Records what each check was told: a guard handed the wrong operation passes a
+/// bare "did it run" assertion.
 #[injectable]
 #[derive(Default)]
 struct Recorder {
@@ -189,8 +182,6 @@ async fn a_guard_bound_to_an_operation_is_under_the_access_contract() {
 
 #[tokio::test]
 async fn the_operation_reports_its_kind_and_name() {
-    // `McpOperationContext` is what a guard is handed; the accessors are the
-    // whole surface, so they are asserted rather than assumed.
     let container = nest_rs_core::Container::default();
     let ctx = McpOperationContext::new(&container, "LayeredTool", McpOperationKind::Tool, "open");
 
@@ -201,9 +192,7 @@ async fn the_operation_reports_its_kind_and_name() {
     assert_eq!(ctx.container().id(), container.id());
 }
 
-/// A guard in the app-wide pool that counts each check separately. `static`
-/// rather than an injected handle because nextest runs each test in its own
-/// process, so the counters are this test's alone.
+/// `static` counters are this test's alone: nextest runs each test in its own process.
 static POOLED_HTTP_CALLS: AtomicUsize = AtomicUsize::new(0);
 static POOLED_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -247,10 +236,6 @@ impl PooledTool {
 #[module(providers = [PooledTool, Pooled])]
 struct PooledModule;
 
-/// The pool gates both scopes and each exactly once: `check_http` for the
-/// request at the endpoint, `check_mcp` for the operation in band — and the
-/// host-scope declaration of the same guard dedups onto the pooled entry rather
-/// than checking the operation a second time.
 #[tokio::test]
 async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
     let app = TestApp::builder()
@@ -260,8 +245,7 @@ async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
         .await
         .expect("a pooled guard also declared on the host boots");
 
-    // Measure the tool call alone: the handshake before it is two more HTTP
-    // requests, and each of those legitimately runs the pool at the edge once.
+    // The handshake's own HTTP requests run the pool at the edge too.
     let session = open_session(app.http(), "/mcp/pooled", None).await;
     let http_before = POOLED_HTTP_CALLS.load(Ordering::SeqCst);
     let mcp_before = POOLED_MCP_CALLS.load(Ordering::SeqCst);
@@ -293,10 +277,8 @@ async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
     );
 }
 
-/// The defect this pair replaces, stated as the shape that proved it: a global
-/// guard that gates MCP and nothing else. It was never consulted — while its
-/// presence made the pool non-empty, disarming the endpoint's deny-all tail. So
-/// registering a guard *opened* an endpoint that refused everything without it.
+/// A global guard gating MCP alone: its presence disarms the deny-all tail, so it
+/// must be consulted per operation or registering it opens the endpoint.
 static POOL_ONLY_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
@@ -360,14 +342,8 @@ async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
     );
 }
 
-/// The other half of the same rule, and the one a naive dedup gets wrong: a
-/// guard the endpoint did **not** run must still run per operation, even when
-/// the app-wide pool happens to contain it.
-///
-/// The failing shape is an app with a registered bridge — the documented norm —
-/// plus a guard that is both global and declared on a `#[tool]`. Deduping the
-/// scoped declaration onto the pool entry and then dropping the pool entry
-/// leaves nothing, so a `#[use_guards]` the developer wrote silently never runs.
+/// Global and declared on a `#[tool]`, under a bridge that runs nothing from the
+/// pool: deduping onto the pool entry would leave the declaration never run.
 static DECLARED_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
@@ -386,8 +362,7 @@ impl Guard for DeclaredEverywhere {
 
 impl McpGuard for DeclaredEverywhere {}
 
-/// Stands in for `McpAbilityBridge`: gates the request itself and reports that
-/// it ran nothing from the pool — which is the truth for a real bridge.
+/// Stands in for `McpAbilityBridge`, which runs nothing from the pool.
 #[injectable]
 #[derive(Default)]
 struct BridgeStub;

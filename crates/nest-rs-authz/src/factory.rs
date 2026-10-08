@@ -46,15 +46,12 @@ pub trait AbilityFactory: Send + Sync + 'static {
     /// rules are written against.
     type Actor: Clone + Send + Sync + 'static;
 
-    /// Populate `ability` with this actor's rules — the single place an app
-    /// declares who may do what, called once per request the actor makes.
+    /// Populate `ability` with this actor's rules, called once per request the
+    /// actor makes.
     fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder);
 
     /// The unauthenticated visitor's rules, consulted on a `#[public]` route
-    /// only — there is no actor to key them off, so this is where a genuinely
-    /// public resource is declared. The default grants nothing: an app that
-    /// never overrides it keeps every anonymous read fail-closed, and the
-    /// rules stay as greppable as [`define`](Self::define)'s.
+    /// only. The default grants nothing.
     ///
     /// ```
     /// # use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};

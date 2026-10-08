@@ -2,14 +2,8 @@
 //! value (GraphQL, WS, queue) — the analog of the HTTP `Piped<P, E>` / `Valid<E>`
 //! extractors, which wrap a poem *extractor* `E`.
 //!
-//! HTTP can wrap a `FromRequest` extractor because poem calls it per argument.
-//! The other transports deserialize a single typed value, so there is no
-//! extractor to wrap: each transport's macro (`#[resolver]`, `#[messages]`,
-//! `#[processor]`) strips `Piped<P, T>` / `Valid<T>` from the *wire* signature
-//! (exposing `T`), runs the pipe, and hands the handler this carrier. Same
-//! developer surface as HTTP (`into_inner` / `Deref`), a different binding —
-//! the framework already splits one concept across transports this way
-//! (`Bind<S, A>` on HTTP vs `bind` on GraphQL).
+//! Each transport's macro strips `Piped<P, T>` / `Valid<T>` from the wire
+//! signature, exposing `T`, runs the pipe and hands the handler this carrier.
 
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -57,12 +51,8 @@ impl<P: Pipe, T> Deref for Piped<P, T> {
 /// `Piped<ValidationPipe<T>, T>`; the transport macro exposes `T` on the wire
 /// and calls [`Valid::apply`].
 ///
-/// The field is public so the handler can **destructure** the carrier in its
-/// parameter list — `Valid(note): Valid<Note>` — the way poem's own extractors
-/// are written. That grants nothing: a developer who wants an unvalidated value
-/// can already declare the bare `T`, so a hand-built `Valid(x)` is not a bypass
-/// of anything the framework enforces on their behalf. (`Authorized<A, E>` is
-/// the opposite case and stays sealed — that proof *does* gate a data read.)
+/// The field is public so a handler can destructure it (`Valid(note): Valid<Note>`);
+/// a hand-built `Valid(x)` bypasses nothing, as a bare `T` is already unvalidated.
 pub struct Valid<T>(pub T);
 
 impl<T: Validate> Valid<T> {

@@ -1,27 +1,11 @@
 //! Open social-login provider contract for nestrs.
 //!
-//! Social login is a first-class capability with an **open provider
-//! contract**: the framework ships the [`SocialProvider`] trait, an
-//! inventory-based [`SocialRegistry`], the base [`SocialModule`], and two
-//! first-party providers (GitHub, Google). A third-party developer publishes
-//! their own provider as an independent crate that depends on this one,
-//! implements [`SocialProvider`] + [`SocialProviderConfig`], and submits one
-//! [`SocialProviderEntry`] — the exact same public seam the first-party
-//! providers use (dogfooded, no crate-private shortcut).
+//! It ships the [`SocialProvider`] trait, an inventory-based [`SocialRegistry`],
+//! the [`SocialModule`] that gates discovery, and two providers (GitHub, Google).
+//! A third-party provider is a crate implementing [`SocialProvider`] +
+//! [`SocialProviderConfig`] and submitting one [`SocialProviderEntry`].
 //!
-//! # `SocialModule` is the module gate
-//!
-//! A social provider is **not** a DI provider: it is never `#[inject]`ed by
-//! type, only reached through [`SocialRegistry`] as `Arc<dyn SocialProvider>`.
-//! So the module that owns every registry entry is [`SocialModule`], and
-//! discovery is module-gated by it exactly like any other concern — no app
-//! imports `SocialModule`, no entry is ever considered.
-//!
-//! Within that gate, what decides a provider's fate is **configuration** — and
-//! the configuration is the *provider's own*, never the module's. Each entry
-//! names its `#[config]` type ([`SocialProviderEntry::config_namespace`]), so
-//! discovering a provider is what loads its credentials; [`SocialModule`] takes
-//! no configuration at all, because it never learns which providers exist.
+//! Each provider reads its own `#[config]` ([`SocialProviderEntry::config_namespace`]):
 //!
 //! | `<PREFIX>_SOCIAL__<KEY>__*`, over any base the provider's config resolved | Outcome |
 //! |---|---|
@@ -29,27 +13,15 @@
 //! | absent entirely | inert, one boot `warn` — its routes 404 like an unknown key |
 //! | partial, or invalid | **boot fails**, naming the provider |
 //!
-//! Real credentials are a deployment's explicit intent, so activation never
-//! happens by accident, and a half-configured login is never silently dropped.
 //! A duplicate key, or a registry key that disagrees with the provider's own
-//! [`SocialProvider::key`], **fails boot**.
-//!
-//! The contract is **flow-owning**: [`SocialProvider::authorize`] and
+//! [`SocialProvider::key`], **fails boot**. [`SocialProvider::authorize`] and
 //! [`SocialProvider::exchange`] default to the shared PKCE/CSRF flow, so a
-//! standard provider implements only [`SocialProvider::profile`]. A provider
-//! with a non-standard protocol overrides a step without changing the trait —
-//! the ecosystem never breaks on a new provider shape.
+//! standard provider implements only [`SocialProvider::profile`].
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Discovered social providers and their credential state.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::social";
 
 mod module;

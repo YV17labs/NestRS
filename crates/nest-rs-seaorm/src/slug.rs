@@ -1,10 +1,3 @@
-//! Slug generation and collision-free allocation for soft-deletable entities.
-//!
-//! [`resolve_unique_slug`] is the public entry point: it slugifies a source
-//! string and walks suffixes until it finds one no live row holds, scoped by an
-//! optional extra [`Condition`] (e.g. a tenant column). The text helpers
-//! (`slugify`, `with_suffix`) are private — the only caller is the resolver.
-
 use std::borrow::Cow;
 
 use sea_orm::sea_query::Condition;
@@ -24,12 +17,8 @@ const MAX_ATTEMPTS: u32 = 100;
 /// Returns the first free candidate (`base`, then `base-2`, `base-3`, …), or a
 /// [`ServiceError`] after `MAX_ATTEMPTS` collisions.
 ///
-/// Probes through [`Repo::unscoped`] (the sanctioned system-probe escape) on
-/// the **explicit** `conn`, because uniqueness is a global property: a slug
-/// must be free across every live row, including ones the caller cannot see —
-/// scoping the probe by ability would be a correctness bug. Per-tenant
-/// uniqueness is opted into explicitly via `extra`, never inferred from the
-/// ambient ability.
+/// Probes through [`Repo::unscoped`] on the explicit `conn`: a slug must be free
+/// across every live row, including those the caller cannot see.
 pub async fn resolve_unique_slug<E, C>(
     conn: &C,
     slug_column: E::Column,
@@ -92,8 +81,7 @@ fn with_suffix(base: &str, attempt: u32) -> String {
 }
 
 /// Map the Latin-1 accented letters to their ASCII base. Non-Latin scripts pass
-/// through unchanged (and are then dropped by [`slugify`]) — a documented limit;
-/// reach for a full transliteration crate (`deunicode`) if that becomes a need.
+/// through unchanged, then [`slugify`] drops them.
 fn transliterate(input: &str) -> Cow<'_, str> {
     if input.is_ascii() {
         return Cow::Borrowed(input);

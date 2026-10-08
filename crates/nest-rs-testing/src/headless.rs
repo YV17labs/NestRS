@@ -1,4 +1,4 @@
-//! Booted app with no HTTP client — for queue workers, schedulers, etc.
+//! Booted app with no HTTP client, for queue workers and schedulers.
 
 use anyhow::Result;
 use nest_rs_core::{App, Container, Transport};
@@ -21,8 +21,7 @@ impl HeadlessApp {
         self.app.container()
     }
 
-    /// Run the app's init phases (lifecycle hooks, bootstrap wiring) without
-    /// standing up any transport.
+    /// Run the app's init phases without standing up any transport.
     pub async fn init(&self) -> Result<()> {
         self.app.init().await
     }
@@ -45,8 +44,7 @@ pub struct TransportHandle {
 }
 
 impl TransportHandle {
-    /// Cancel the transport task and await its clean exit, surfacing any error
-    /// it terminated with.
+    /// Cancel the transport task and await its exit, surfacing its error.
     pub async fn shutdown(self) -> Result<()> {
         self.cancel.cancel();
         self.join.await.map_err(|e| anyhow::anyhow!(e))?

@@ -5,30 +5,11 @@ use syn::{Expr, ExprLit, Lit, LitStr};
 use crate::ungrouped::ungrouped_expr;
 
 /// Interpret an already-parsed attribute-argument value as a string literal,
-/// cloning it out — the value half of a `syn::MetaNameValue` you already hold,
-/// the caller having parsed the `key =` itself.
-///
-/// **One sentence for this question, and there were two.** `attrs::expr_str`
-/// answered the same one with `"expected a string literal"` at seven call
-/// sites — naming neither the decorator nor the key — while this named both,
-/// and it lived in the module whose own doc says it handles *whole* attributes
-/// "as opposed to `crate::args`, which parses the values *inside* one". The
-/// sharpest instance was `versioning::parse_version_list`, which threads a
-/// `decorator` through every refusal it words itself and delegated this one,
-/// so `#[controller(version = 1)]` answered with no decorator named inside a
-/// function whose whole design is that the sentence names one.
+/// cloning it out, read through any `macro_rules!` invisible group.
 ///
 /// On a non-string value it errors (spanned at the value) through
 /// [`takes_value`] — ``#[{attr}] `{key}` takes a string literal, e.g.
-/// `{key} = "{example}"` `` — where `example` is the placeholder value shown in
-/// the hint (`"seaorm"`, `"..."`).
-///
-/// **A value a `macro_rules!` forwarded is read through its invisible group**,
-/// as every other value reader here reads it ([`crate::ungrouped_expr`]). This
-/// one did not, so a literal passed down as `$path:expr` was refused as "not a
-/// string literal" by the one reader whose whole question is whether it is one —
-/// and only where syn had kept the group, which depends on the argument's
-/// position in the list.
+/// `{key} = "{example}"` ``.
 pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> syn::Result<LitStr> {
     match ungrouped_expr(value) {
         Expr::Lit(ExprLit {
@@ -47,19 +28,10 @@ pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> sy
 
 /// Where a value refusal points: the decorator, then the key in backticks —
 /// ``#[process] `retries` `` — or the decorator alone for a decorator's one
-/// positional argument (`#[every("30s")]`, `#[get("/users")]`). A decorator
-/// whose positional arguments are several names each by the word its grammar
-/// gives it — `#[redirect(url, status)]` points at ``#[redirect] `status` ``.
+/// positional argument (`#[every("30s")]`, `#[get("/users")]`).
 ///
-/// **Every value refusal a decorator prints opens with it**, and it is worded
-/// here so that stays one fact rather than a convention: a value of the wrong
-/// kind through [`takes_value`], a value that breaks a rule as
-/// `{site}: {value} is not …`. Public because the macro crates word the second
-/// form themselves — what a value is *not* belongs to the decorator that reads
-/// it — and the opening is the part that must not vary. Read without its source
-/// frame — a problems list, a CI summary — a sentence naming the key and not
-/// the decorator said which key and not whose, and `transactional` is a key of
-/// four decorators.
+/// Every value refusal a decorator prints opens with it: a value that breaks a
+/// rule reads `{site}: {value} is not …`.
 pub fn site(attr: &str, key: Option<&str>) -> String {
     match key {
         Some(key) => format!("#[{attr}] `{key}`"),
@@ -71,16 +43,8 @@ pub fn site(attr: &str, key: Option<&str>) -> String {
 /// where a string goes, a string where `true` or `false` does, a path where a
 /// literal does: ``#[process] `retries` takes a whole number``.
 ///
-/// The sixth refusal a declaration grammar owes, beside [`duplicate_argument`],
-/// [`unknown_argument`], [`needs_a_value`], [`unknown_value`] and
-/// [`missing_argument`], and worded here for their reason: `#[process]`'s
-/// `retries`, `concurrency` and `throttle` values, the shared `transactional`
-/// and `replicas` values, the duration grammar and [`require_str_lit`] each
-/// wrote it — in two verbs, and five of the eight without the decorator.
-/// `what` is what the key takes, as a phrase; a site with more to say — what
-/// each value *does* — appends it after ` — `.
-///
-/// `key` is `None` for a positional argument, which has no key to name.
+/// `what` is what the key takes, as a phrase; a site with more to say appends
+/// it after ` — `. `key` is `None` for a positional argument.
 pub fn takes_value(attr: &str, key: Option<&str>, what: &str) -> String {
     format!("{} takes {what}", site(attr, key))
 }
@@ -91,14 +55,8 @@ pub(crate) fn takes_one_of(attr: &str, key: &str, values: &[&str]) -> String {
     takes_value(attr, Some(key), &expected_list(values, "no value"))
 }
 
-/// The sentence a decorator prints when one of its arguments is written twice.
-///
-/// Accepting the repeat means dropping one of two declarations, and which one
-/// it drops is source order — the shape every unified grammar here exists to
-/// remove. So the refusal is worded once, for every decorator whose arguments
-/// are a list of `key = value` pairs, and issued once, by
-/// [`Grammar`](crate::Grammar), for every key a grammar takes: a refusal that multiplies with the argument
-/// matrix is a refusal that gets skipped.
+/// The sentence a decorator prints when one of its arguments is written twice,
+/// issued by [`Grammar`](crate::Grammar) for every key it takes.
 pub fn duplicate_argument(attr: &str, name: &str) -> String {
     format!("#[{attr}] takes at most one `{name}`")
 }
@@ -106,21 +64,8 @@ pub fn duplicate_argument(attr: &str, name: &str) -> String {
 /// The sentence a decorator prints for an argument written **bare**, with no
 /// value.
 ///
-/// The third of the three refusals a `key = value` grammar owes, beside
-/// [`duplicate_argument`] and [`unknown_argument`], and worded here for the same
-/// reason: a bare `expected `=`` names the grammar and not the key, and two
-/// sites wording it themselves is how one of them ends up with its decorator
-/// name as a literal.
-///
-/// A key that has more to say about *which* values it takes wraps this — see
-/// `job::transactional_needs_a_value`.
-///
-/// **A nested key's remedy goes inside its parentheses**, because that is where
-/// the value it is missing is written. A caller names such a key the way the
-/// other two refusals do — `throttle(limit)` — and spelling the remedy as
-/// `throttle(limit) = ...` prescribes an edit that does not parse. Handled here
-/// rather than at the call site so every nested grammar gets it: the sentence is
-/// shared, so its remedy is too.
+/// A nested key, named `throttle(limit)`, gets its remedy inside the
+/// parentheses: `throttle(limit = ...)`.
 pub fn needs_a_value(attr: &str, name: &str) -> String {
     format!(
         "{} needs a value — write `{}`",
@@ -132,12 +77,7 @@ pub fn needs_a_value(attr: &str, name: &str) -> String {
 /// `name`, with ` = {value}` written where its value belongs: after the key, or
 /// inside the innermost parentheses when the key is nested.
 ///
-/// **The innermost, not the first** — `split_once('(')` reads `a(b(c))` as
-/// `a` + `b(c))` and renders `a(b(c) = ...)`, which is unbalanced and does not
-/// parse. No two-level grammar exists in the repo today, so that was latent
-/// rather than live; it is written correctly here because the next one inherits
-/// it, and because the whole point of this sentence is that a reader can paste
-/// the remedy.
+/// The innermost: `split_once('(')` would render `a(b(c) = ...)`, unbalanced.
 fn with_a_value(name: &str, value: &str) -> String {
     let core = name.trim_end_matches(')');
     let closes = &name[core.len()..];
@@ -150,16 +90,7 @@ fn with_a_value(name: &str, value: &str) -> String {
 /// The sentence a decorator prints for an argument it does not know, listing the
 /// ones it does.
 ///
-/// Worded once for the same reason [`duplicate_argument`] is, and it arrived
-/// later for a reason worth remembering: the two halves of the job family had
-/// drifted into two forms — ``unknown #[process] key `x` (expected …)`` against
-/// ``unknown #[every] argument `x`; expected …`` — and the first spelled
-/// `transactional` as a literal in a file that already imports the constant. A
-/// shared key whose refusal reads differently at two of its four sites is a
-/// shared key on paper.
-///
-/// `expected` is listed in the order the decorator declares it — see
-/// `expected_list`.
+/// `expected` is listed in the order the decorator declares it.
 pub fn unknown_argument(attr: &str, name: &str, expected: &[&str]) -> String {
     format!(
         "unknown #[{attr}] argument `{name}`; expected {}",
@@ -171,17 +102,8 @@ pub fn unknown_argument(attr: &str, name: &str, expected: &[&str]) -> String {
 /// `#[crud(ops = [...])]`'s op names, `#[injectable(scope = …)]`'s scopes,
 /// `#[expose]`'s modes.
 ///
-/// The fourth refusal a declaration grammar owes, and the one that had drifted
-/// furthest: a key's value set is as much a closed vocabulary as its key set, so
-/// naming the offender and listing the alternatives is the same obligation. It
-/// was written five ways, three of which named neither the decorator nor the
-/// key — a bare `expected `cursor` or `none`` leaves a reader who wrote
-/// `#[crud(paginate = pages)]` to guess which of the seven keys the compiler is
-/// talking about.
-///
 /// `what` names the position the value sits in — `"op"`, `"scope"`, the key's
-/// own name — because that is what tells the reader *where* in the attribute to
-/// look, and a value has no `key =` of its own to point at.
+/// own name.
 pub fn unknown_value(attr: &str, what: &str, name: &str, expected: &[&str]) -> String {
     format!(
         "unknown #[{attr}] {what} `{name}`; expected {}",
@@ -192,17 +114,7 @@ pub fn unknown_value(attr: &str, what: &str, name: &str, expected: &[&str]) -> S
 /// The sentence a decorator prints for a **required** argument that was not
 /// written at all.
 ///
-/// The fifth refusal a `key = value` grammar owes, and the last one to be
-/// worded here. It was live at eight sites in six crates in three verbs
-/// (`requires` / `needs` / `is required`) and three shapes (`requires <key>`,
-/// `requires a <key> argument`, `<key> is required`) — and six of the eight were
-/// spanned at `Span::call_site()`, so the caret landed on the item rather than
-/// on the declaration that is short a key. That is the same drift
-/// [`unknown_argument`] was extracted to end, one refusal over.
-///
-/// `example` is a value the key actually takes, because "requires `path`" tells
-/// a reader which key and not what to write there; every sibling in this module
-/// carries one for the same reason.
+/// `example` is a value the key actually takes.
 pub fn missing_argument(attr: &str, key: &str, example: &str) -> String {
     format!(
         "#[{attr}] requires `{key}` — write `{}`",
@@ -213,28 +125,9 @@ pub fn missing_argument(attr: &str, key: &str, example: &str) -> String {
 /// The one role attribute a decorated method carries — its index in `attrs`,
 /// `None` when it carries none — or the refusal of a method carrying more.
 ///
-/// All nine impl-half decorators impose this rule — `#[routes]`, `#[messages]`,
-/// `#[operations]`, `#[tools]`, `#[processor]`, `#[scheduled]`, `#[listeners]`,
-/// `#[indicators]` and `#[hooks]` — and it was worded four ways plus two
-/// silences: `#[routes]` and `#[messages]` took the first verb and left the rest
-/// on the method, and `#[tools]` took the first role and let rmcp route the
-/// second as an operation nobody declared. **The span is chosen here, never by
-/// the caller**: the error sits on the *second* role attribute, the one that
-/// made the method two, because six callers spanning it themselves had put the
-/// caret on the signature, on the `#`, and on the attribute, in no pattern.
-///
-/// A role is an attribute whose path is one of `accepted`, written bare
-/// (`"get"`, `"on_module_init"`) and bracketed here, so `#[..]` is written once
-/// rather than at each call site. `noun` is what the family is called at this
-/// site — a phase, a probe, a trigger, a role — because that is the word the
-/// developer just wrote and the one they will search for. `why` is what a site
-/// has to add about its own roles (GraphQL's `_entities` root), empty for the
-/// rest.
-///
-/// The sentence carries both what the method wrote and what is accepted. **One
-/// attribute written again is its own sentence**: both copies name the same
-/// role, so no role nobody wrote could run, and saying so would be false. A role
-/// repeated beside another is named once.
+/// The error is spanned at the *second* role attribute. `accepted` names are
+/// written bare (`"get"`); `noun` is what the family is called at this site
+/// (a phase, a probe, a trigger); `why` is appended, empty for most sites.
 pub fn one_role_per_method(
     noun: &str,
     attrs: &[syn::Attribute],
@@ -290,9 +183,6 @@ fn role_sentence(noun: &str, declared: &[String], accepted: &[&str]) -> String {
              Accepted: {accepted}. A method that must be two is two methods."
         );
     }
-    // `and`, not the `or` [`expected_list`] joins with: the method declared
-    // both of these, and reading it back as a choice describes the opposite of
-    // what happened.
     let written = distinct
         .iter()
         .map(|name| format!("`#[{name}]`"))
@@ -306,17 +196,7 @@ fn role_sentence(noun: &str, declared: &[String], accepted: &[&str]) -> String {
     )
 }
 
-/// The offending key as written, so a refusal names it rather than only listing
-/// the alternatives. A path that is not a bare identifier is reported as
-/// written, which is still more than "unknown option" said.
-///
-/// Read by [`one_role_per_method`] naming the *role* attributes a method
-/// declared, and by the decorators that name a path value as written.
-///
-/// That third caller had its own copy, returning `?` for a non-ident path —
-/// the "nicer placeholder" the paragraph above condemns, ninety lines from the
-/// sentence condemning it. One fallback, because one of the two has to be
-/// right and a reader picking between them at a new call site had no basis.
+/// The offending key as written, `::`-joined when it is not a bare identifier.
 pub fn key_as_written(path: &syn::Path) -> String {
     path.get_ident()
         .map(ToString::to_string)
@@ -330,9 +210,6 @@ pub fn key_as_written(path: &syn::Path) -> String {
 }
 
 /// `` `a`, `b` or `c` ``, in the order the decorator declares them.
-///
-/// Declaration order rather than alphabetical: an alphabetical sort would put
-/// the required argument last on half the decorators.
 fn expected_list(expected: &[&str], empty: &str) -> String {
     let quoted: Vec<String> = expected.iter().map(|key| format!("`{key}`")).collect();
     match quoted.split_last() {
@@ -346,8 +223,6 @@ fn expected_list(expected: &[&str], empty: &str) -> String {
 mod tests {
     use super::*;
 
-    /// A literal a `macro_rules!` forwarded as `$x:expr` reaches the reader
-    /// inside an invisible group, and is still the literal.
     #[test]
     fn a_forwarded_string_literal_is_read_through_its_group() {
         let forwarded = Expr::Group(syn::ExprGroup {
@@ -366,10 +241,7 @@ mod tests {
             .to_string()
     }
 
-    /// Every value refusal this crate words opens with its site — the decorator,
-    /// then the key — which is the one fact [`site`] exists to keep. Listed by
-    /// hand, as the members of a unit test are; the list is every function here
-    /// that refuses a value, and a new one joins it the day it is written.
+    /// Lists every function here that refuses a value; a new one joins it.
     #[test]
     fn every_value_refusal_opens_with_the_decorator_and_the_key() {
         use quote::quote;
@@ -426,8 +298,6 @@ mod tests {
             );
         }
 
-        // The job family's value readers take a member of the family rather
-        // than any name, and open with it the same way.
         let every = crate::job::JobDecorator::Every;
         for (refusal, key) in [
             (
@@ -458,8 +328,6 @@ mod tests {
             );
         }
 
-        // The positional grammar has no key, and names the decorator alone —
-        // the route's `#[version(...)]` and every `#[use_*]` layer list too.
         let positional =
             err(crate::duration::duration_millis("probe", None, &parse_quote!(60)).map(drop));
         assert!(positional.starts_with("#[probe] takes "), "{positional}");
@@ -491,9 +359,6 @@ mod tests {
             assert!(refusal.starts_with(site), "{refusal}");
         }
 
-        // `#[crud]` words its own, at its own name — a value of the wrong kind
-        // included, which its parser used to leave to syn's `expected
-        // identifier`.
         for (args, key) in [
             (
                 quote!(service = svc, entity = E, output = O, ops = []),
@@ -537,8 +402,6 @@ mod tests {
             );
         }
 
-        // A value outside a closed set keeps the `unknown` shape, which names
-        // both as well.
         let unknown = err(crate::replicas::replicas_value(every, &parse_quote!("all")).map(drop));
         assert!(
             unknown.starts_with("unknown #[every] replicas `all`"),

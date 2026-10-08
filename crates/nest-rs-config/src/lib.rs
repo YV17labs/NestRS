@@ -18,12 +18,6 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The `.env` cascade, resolved namespaces, and refused values.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::config";
 
 mod authorities;
@@ -55,8 +49,7 @@ pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
-/// injectable [`Config`]. Re-exported from `nest-rs-config-macros` so apps write
-/// `nest_rs_config::config`.
+/// injectable [`Config`].
 ///
 /// ```
 /// # use validator::Validate as _;
@@ -76,12 +69,10 @@ pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 /// ```
 pub use nest_rs_config_macros::config;
 
-// `#[config]` injects the `Validate` derive and its `crate = ` override, so a
-// `#[config]` struct needs no `validator` line and no version to align.
+// `#[config]`'s `Validate` derive resolves through this path.
 #[doc(hidden)]
 pub use validator;
 
-// `#[config]` files its namespace with the link-time registry through this
-// path, so a `#[config]` struct needs no `inventory` line either.
+// `#[config]` files its namespace with the link-time registry through this path.
 #[doc(hidden)]
 pub use nest_rs_core::inventory;

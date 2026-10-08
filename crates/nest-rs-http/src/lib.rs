@@ -86,9 +86,7 @@ pub use versioning::{
     ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, VersionSelector, declared_versions,
 };
 
-// Cross-crate wiring seams — `pub` by necessity (sibling framework crates and
-// macro-emitted code name them) but not public API: `#[doc(hidden)]` so they do
-// not render as documented surface and freeze at 1.0.
+// Not public API: sibling crates and macro output name them.
 #[doc(hidden)]
 pub use controller::{SchemaFn, schema_of};
 #[doc(hidden)]
@@ -99,14 +97,10 @@ pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 pub use shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
 
 pub use poem;
-// The stream vocabulary an `#[sse]` route is built from — `stream::iter`,
-// `StreamExt`, the channel adapters. Re-exported beside `poem` so a controller
-// that streams declares the umbrella and nothing else.
+// The stream vocabulary an `#[sse]` route is built from.
 pub use futures_util;
 pub use schemars;
-// `#[input]` carries the DTO derives so the developer does not; routing them
-// through here is what keeps `serde` / `validator` / `schemars` out of their
-// manifest. Plumbing, not curated surface.
+// `#[input]`'s derives resolve through here, so an app's manifest never names them.
 #[doc(hidden)]
 pub use serde;
 #[doc(hidden)]
@@ -182,8 +176,7 @@ pub use nest_rs_http_macros::routes;
 /// re-emitted under [`#[routes]`](macro@routes).
 ///
 /// Each route delegates to the service's `nest_rs_seaorm::CrudService` and
-/// declares `Authorize<Action, Entity>`, so the running example sits on that
-/// trait, beside the GraphQL one.
+/// declares `Authorize<Action, Entity>`.
 pub use nest_rs_http_macros::crud;
 
 /// `#[interceptor]` — mounts a struct implementing

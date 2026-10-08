@@ -4,27 +4,12 @@
 //!
 //! **The port pushes; a backend enqueues.** Every push goes through
 //! [`JobProducerExt`], which checks the queue's name and the options, refuses an
-//! option the backend does not declare, serializes the payload, mints each job's
-//! [`JobId`] and seals the envelope — then hands the backend sealed jobs, and
-//! answers the caller with receipts it wrote itself. A backend implements two
-//! methods and cannot skip any of that: it never receives an option it did not
-//! declare, it cannot build an [`Envelope`] of its own, and it cannot hand back
-//! an id the port did not mint.
+//! option the backend does not declare, mints each job's [`JobId`] and seals the
+//! [`Envelope`] — then hands the backend sealed jobs and answers the caller with
+//! receipts it wrote itself. A cancel takes the same path back.
 //!
-//! **A cancel takes the same path back.** [`JobProducerExt::cancel`] and
-//! [`cancel_unique`](JobProducerExt::cancel_unique) check what they are handed,
-//! refuse a backend without [`Capability::Cancellation`] before it sees the call,
-//! and say on `nest_rs::queue` what they cancelled. A backend declaring the
-//! capability implements [`remove`](JobProducer::remove) and
-//! [`remove_unique`](JobProducer::remove_unique); one declaring it and
-//! implementing neither is told so, as the driver defect it is.
-//!
-//! **Every call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most.** A backend that
-//! does not answer by then is dropped where it stands, and the caller gets
-//! [`QueueError::Unanswered`], naming the queue — a push or a cancel never
-//! holds its caller for as long as a backend stays silent. A push of many jobs
-//! reaches the backend [`ENQUEUE_BATCH`] at a time, so the net bounds a call a
-//! healthy backend always answers in time, whatever the push's size.
+//! **Every call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at
+//! most**, then answers [`QueueError::Unanswered`], naming the queue.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -39,10 +24,7 @@ use crate::{
 
 /// The most jobs the port hands a backend's [`JobProducer::enqueue`] in one
 /// call. A push of more is filed in calls of this many, in order, each under
-/// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT): the net then bounds a call of known size, which a
-/// healthy backend answers well inside it — a hundred jobs are a hundred round
-/// trips on the Redis adapter, well under a second on a healthy Redis — rather
-/// than a call as long as the push, which a healthy backend could not.
+/// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT).
 pub const ENQUEUE_BATCH: usize = 100;
 
 /// What a queue backend implements to enqueue jobs. Inject it as
@@ -63,12 +45,9 @@ pub trait JobProducer: Send + Sync + 'static {
     /// enqueued, and the error does not say how many.
     ///
     /// `envelopes` holds [`ENQUEUE_BATCH`] at most, and the port waits
-    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for the answer: past it the call is dropped where it
-    /// stands and the caller told [`QueueError::Unanswered`]. So bound each round
-    /// trip well inside the net — a net is the last resort, never a budget — and
-    /// leave nothing a dropped call would have had to undo: what an enqueue
-    /// opened and never filed lapses on its own, as it does after any failure to
-    /// answer.
+    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for the answer before dropping the
+    /// call: bound each round trip well inside it, and leave nothing a dropped call
+    /// would have had to undo.
     ///
     /// A backend declaring [`Capability::UniquePush`] refuses an envelope whose
     /// key another job on `queue` still holds with [`QueueError::UniqueKeyHeld`],
@@ -85,13 +64,10 @@ pub trait JobProducer: Send + Sync + 'static {
     /// is unknown.
     ///
     /// `true` is a promise, and only a job that was still waiting earns it — on
-    /// its queue, or on the schedule a delay or a retry holds it on. A job that
-    /// started is left to run to its outcome. Cancelling a job is its terminal
-    /// outcome, so the backend releases what the job held: its unique key, and
-    /// its checkpoint. Called by the port only, on a backend declaring
-    /// [`Capability::Cancellation`], and waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at
-    /// most; such a backend overrides this body, which answers the driver defect
-    /// when it does not.
+    /// its queue, or on the schedule a delay or a retry holds it on. Cancelling is
+    /// the job's terminal outcome, so the backend releases its unique key and its
+    /// checkpoint. A backend declaring [`Capability::Cancellation`] overrides this
+    /// body, which answers the driver defect when it does not.
     async fn remove(&self, queue: &QueueName, id: &JobId) -> Result<bool, QueueError> {
         let _ = (queue, id);
         Err(unimplemented(self.backend(), "remove"))
@@ -102,10 +78,9 @@ pub trait JobProducer: Send + Sync + 'static {
     /// will, which frees the key; `Ok(false)` when it already started, already
     /// finished, or no job holds the key.
     ///
-    /// Called by the port only, after it checked `key`, on a backend declaring
-    /// [`Capability::UniquePush`] and [`Capability::Cancellation`], and waited on
-    /// for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most; such a backend overrides this body, which
-    /// answers the driver defect when it does not.
+    /// A backend declaring [`Capability::UniquePush`] and
+    /// [`Capability::Cancellation`] overrides this body, which answers the driver
+    /// defect when it does not.
     async fn remove_unique(&self, queue: &QueueName, key: &str) -> Result<bool, QueueError> {
         let _ = (queue, key);
         Err(unimplemented(self.backend(), "remove_unique"))
@@ -203,15 +178,6 @@ pub trait JobProducerExt: JobProducer {
             .into_iter()
             .map(|job| serde_json::to_value(&job))
             .collect::<Result<Vec<_>, _>>()?;
-        // **An empty batch is refused on the same grounds a full one is.** The
-        // short-circuit used to return before `push_values`, so a push declaring
-        // an option the backend does not honour — a delay — answered
-        // `Ok(vec![])` instead of `Unsupported`, and the
-        // answer depended on the runtime length of the iterator: a
-        // `push_many(q, ids.filter(..), delayed)` was `Ok` in staging over an
-        // empty list and `Unsupported` in production on the first match. Nothing
-        // reaches the backend either way, which is what makes it the port's own
-        // refusal to give.
         push_values(self, &queue, payloads, &options).await
     }
 
@@ -321,8 +287,8 @@ async fn push_values<P: JobProducer + ?Sized>(
 ) -> Result<Vec<PushReceipt>, QueueError> {
     refuse_what_no_push_may_carry(producer.backend(), options)?;
 
-    // Refused above, answered here: the port owes an empty batch the same
-    // refusals as a full one, and the backend owes it no round trip.
+    // Refused above, never short-circuited before: an empty batch owes the same
+    // refusals as a full one.
     if payloads.is_empty() {
         return Ok(Vec::new());
     }
@@ -396,9 +362,8 @@ fn refuse_what_no_push_may_carry(
     backend.check(options.required_capabilities())
 }
 
-/// What a backend's default removal body answers: the refusal a backend without
-/// job cancellation owes, or — on one declaring it — the driver defect of a
-/// capability declared and not implemented, which that refusal would misname.
+/// What a backend's default removal body answers: `Unsupported` without
+/// cancellation, or the driver defect of a capability declared and not implemented.
 fn unimplemented(backend: &QueueBackend, method: &'static str) -> QueueError {
     if backend.capabilities().contains(Capability::Cancellation) {
         QueueError::backend(Unimplemented {

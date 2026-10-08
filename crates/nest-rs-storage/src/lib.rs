@@ -1,22 +1,8 @@
 //! S3-compatible object storage for nestrs.
 //!
 //! A thin, injectable [`Storage`] client over the
-//! [`object_store`](https://docs.rs/object_store) crate — the generic
-//! object-store abstraction maintained under Apache Arrow. Infra only: this
-//! crate holds no domain entity, just the bytes-and-URLs seam that feature
-//! modules (presigned uploads, media variants) build on.
-//!
-//! ## Why `object_store`
-//!
-//! `object_store` is **multi-driver** (S3, GCS, Azure, local filesystem,
-//! in-memory) behind one [`ObjectStore`](object_store::ObjectStore) trait, and
-//! its presigning lives in a separate [`Signer`](object_store::signer::Signer)
-//! trait implemented by the S3 driver. It is **reqwest/rustls-based** with no
-//! `aws-runtime`/`aws-sdk-*` in its tree, so it builds cleanly on the
-//! workspace's pinned Rust toolchain (where the official AWS SDK currently does
-//! not). This crate wires the [`AmazonS3`](object_store::aws::AmazonS3) driver
-//! by default; pointing at GCS/Azure/fs later is a builder change in
-//! [`Storage`], not an API change for consumers.
+//! [`object_store`](https://docs.rs/object_store) crate's
+//! [`AmazonS3`](object_store::aws::AmazonS3) driver.
 //!
 //! ## Usage
 //!
@@ -67,33 +53,18 @@
 //!
 //! ## How long a call waits
 //!
-//! Two bounds, named for the AWS SDK's: a call waits for S3's answer within
-//! [`StorageConfig::operation_timeout`], every retry included — an upload's body
-//! is part of its request, so [`put_stream`](Storage::put_stream) ships parts
-//! that each fit it — and past it fails as its own error, naming the budget. A
-//! download's body is a transfer, never cut for its size nor for its reader's
-//! pauses: one that sends nothing for [`StorageConfig::read_timeout`] while it
-//! is read is cut and resumed from where it stopped, and fails naming the bound
-//! when the resumed body sends nothing within it. The operation
-//! timeout is the client's `nest_rs_core::Budget`, so the boot refuses it at or
-//! past a net reaching the client.
-//!
-//! A call whose attempts keep failing ends on S3's own error and its last
-//! cause before the budget does: `object_store` stops retrying once half the
-//! budget is spent. Only a call S3 never answers reaches the budget, and a
-//! download whose body stops — stalled, or broken past `object_store`'s own
-//! resumption — is resumed from where it stopped, said at `warn`.
+//! A call waits for S3's answer within [`StorageConfig::operation_timeout`],
+//! every retry included, and past it fails naming the budget;
+//! [`put_stream`](Storage::put_stream) ships parts that each fit it. A
+//! download's body is never cut for its size: one that sends nothing for
+//! [`StorageConfig::read_timeout`] is resumed from where it stopped, and fails
+//! naming the bound when the resumed body sends nothing within it. The boot
+//! refuses an operation timeout at or past a net reaching the client.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — Object storage operations.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::storage";
 
 mod client;

@@ -3,11 +3,9 @@
 //! An `#[expose]` entity, a `CrudService`, and a `#[crud]` HTTP controller
 //! behind the app's guards — the `demo/crates/features/src/orgs/` shape.
 //!
-//! **The guards are load-bearing, not hardening.** `Repo` filters every read by
-//! the caller's ambient `Ability`, which only an `AbilityGuard` installs; a
-//! DB-backed controller without one compiles and mounts, then answers 500 on
-//! every route (no ability) with no row ever reaching Postgres. So there is no
-//! unguarded variant to generate — `g resource` bootstraps `g auth` instead.
+//! **The guards are load-bearing**: `Repo` filters every read by the ambient
+//! `Ability`, which only an `AbilityGuard` installs, so an unguarded DB-backed
+//! controller answers 500 on every route. `g resource` bootstraps `g auth`.
 
 pub(crate) const MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
 

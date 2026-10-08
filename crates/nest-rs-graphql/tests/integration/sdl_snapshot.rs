@@ -1,15 +1,6 @@
-//! Behavioural guard for the pinned async-graphql registry API (see the
-//! `nest-rs-graphql` crate `//!` doc). The compile-time canary in
-//! `src/resolver.rs` catches shape changes to `MetaType::Object`; this test
-//! catches drift the compiler cannot see — e.g. a change to
-//! `remove_unused_types` that leaks member object types into the SDL, or a
-//! change in how sorted SDL export renders.
-//!
-//! It composes a two-resolver schema (a query-only resolver and one carrying
-//! both a query and a mutation) and asserts the emitted SDL byte-for-byte
-//! against the committed snapshot below. A diff here after an async-graphql
-//! bump is the review signal: intended ⇒ update the snapshot; unexpected ⇒
-//! regression.
+//! Behavioural guard for the pinned async-graphql registry API: the drift the
+//! compile-time canary in `src/resolver.rs` cannot see (`remove_unused_types`,
+//! sorted SDL export), asserted byte-for-byte against the committed snapshot.
 
 use std::path::PathBuf;
 
@@ -64,10 +55,8 @@ struct AlphaModule;
 #[module(providers = [BetaResolver])]
 struct BetaModule;
 
-/// Per-process temp file the boot-time `emit_sdl` writes to. `render_sdl` is
-/// `pub(crate)`, so the SDL is captured through the same production path an app
-/// uses (`NESTRS_GRAPHQL__EMIT_SDL`) rather than by reaching into crate
-/// internals.
+/// Per-process temp file the boot-time `emit_sdl` writes to: `render_sdl` is
+/// `pub(crate)`, so the SDL is captured through the production path.
 fn snapshot_path(stem: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "nest_rs_graphql_{stem}_{}.graphql",
@@ -87,9 +76,7 @@ fn snapshot_path(stem: &str) -> PathBuf {
 struct SnapshotApp;
 
 /// The committed SDL (tab-indented, as `render_sdl` emits it). Regenerate
-/// deliberately — never blindly — via the bump procedure in the crate `//!`
-/// doc. Fields, arguments, and enum items are sorted by `render_sdl`, so the
-/// only churn a legitimate change produces is the change itself.
+/// deliberately, via the bump procedure in the crate `//!` doc.
 const EXPECTED_SDL: &str = "\
 type Mutation {\n\
 \tbump(by: Int!): Int!\n\
@@ -140,17 +127,9 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// What the emit says when it cannot write. `emit_sdl` is a *dev* convenience —
-// the committed `schema.graphql` refreshed as a side effect of a run — so a
-// failed write must never stop a boot that otherwise serves fine. Which leaves
-// the event as the only signal, and a developer whose schema silently stopped
-// refreshing has nothing else to go on: the app answers queries at the new
-// shape while the committed SDL, and every client generated from it, stay at
-// the old one.
+// A failed `emit_sdl` write never stops the boot, so its event is the only signal.
 
-/// A path under a directory that does not exist, so `std::fs::write` fails with
-/// `NotFound` rather than on a permission the test would have to arrange.
+/// A path under a directory that does not exist, so `std::fs::write` fails.
 fn unwritable_path() -> PathBuf {
     std::env::temp_dir()
         .join(format!("nest_rs_graphql_absent_{}", std::process::id()))
@@ -208,11 +187,7 @@ async fn an_sdl_emit_that_cannot_write_warns_and_still_serves() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The federated branch of `render_sdl`. `SDLExportOptions::federation()` is
-// taken only when `GraphqlConfig::federation` is on, and the app above is not a
-// subgraph — so the *committed* SDL of a federated app, which is the artefact a
-// router's composition reads, had no test at all.
+// The federated branch of `render_sdl`, taken only when `GraphqlConfig::federation` is on.
 
 #[derive(SimpleObject)]
 struct Gadget {
@@ -254,9 +229,8 @@ impl GadgetResolver {
 ])]
 struct SubgraphSnapshotApp;
 
-/// The committed **subgraph** form: `@key` on the federated type, and the two
-/// fields a router calls (`_service` / `_entities`) stripped, as the Apollo spec
-/// asks of an exported subgraph schema.
+/// The committed **subgraph** form: `@key` on the federated type, `_service` /
+/// `_entities` stripped.
 const EXPECTED_SUBGRAPH_SDL: &str = "\
 type Gadget @key(fields: \"id\") {\n\
 \tid: Int!\n\
@@ -303,9 +277,7 @@ async fn subgraph_sdl_matches_committed_snapshot() {
          composition reads, so review the diff before updating the constant",
     );
 
-    // And it is the same schema `_service` publishes, bar the newline the file
-    // ends with — the two are rendered from one registry through two option
-    // sets, and a reader has to be able to trust that.
+    // The same schema `_service` publishes, bar the file's trailing newline.
     let resp = app
         .http()
         .post("/graphql")

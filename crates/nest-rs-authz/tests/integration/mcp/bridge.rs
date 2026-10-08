@@ -1,10 +1,5 @@
-//! Mirror test for `src/mcp/bridge.rs`.
-//!
-//! `McpAbilityBridge` is the MCP twin of `GraphqlAbilityBridge`: it runs the
-//! same authn→authz chain (`run_ability_chain`) and installs the caller's
-//! ambient `Ability` for the operation through `around`. These pin the two
-//! behaviours that used to differ from the GraphQL side — the denial's status
-//! survives, and the *guard* (not the data context) is what scopes a tool body.
+//! Mirror test for `src/mcp/bridge.rs`: the denial's status survives, and the
+//! guard's `around` is what scopes a tool body.
 
 use std::sync::Arc;
 
@@ -37,8 +32,7 @@ impl Layer for PassGuard {}
 #[async_trait]
 impl Guard for PassGuard {}
 
-/// Stands in for a throttler sitting in the authn slot: it denies with a `429`,
-/// the status the bridge used to flatten to `401`.
+/// Stands in for a throttler sitting in the authn slot: it denies with a `429`.
 #[injectable]
 #[derive(Default)]
 struct RateLimitedGuard;
@@ -126,10 +120,7 @@ struct ScopingMcpModule;
 )]
 struct ThrottledMcpModule;
 
-// D2: on GraphQL the bridge's `around` installs the ability; MCP now answers
-// the same way. Nothing here registers an `McpToolContext`, so before this the
-// tool body ran unscoped — fail-closed under `Repo`, but silently unscoped for
-// any non-`Repo` read.
+// No `McpToolContext` is registered: only the bridge's `around` can scope the tool body.
 #[tokio::test]
 async fn the_bridge_scopes_a_tool_body_with_no_data_context_registered() {
     let app = TestApp::for_module::<ScopingMcpModule>()
@@ -145,9 +136,8 @@ async fn the_bridge_scopes_a_tool_body_with_no_data_context_registered() {
     );
 }
 
-// D3: the bridge maps the `Denial` it was given instead of answering a blanket
-// `401`, so a `429` raised anywhere in the chain reaches the client intact —
-// `Retry-After` included.
+// The bridge maps the `Denial`, so a `429` raised anywhere in the chain reaches
+// the client intact, `Retry-After` included.
 #[tokio::test]
 async fn a_rate_limited_denial_reaches_the_client_as_429() {
     let app = TestApp::for_module::<ThrottledMcpModule>()
@@ -168,17 +158,8 @@ async fn a_rate_limited_denial_reaches_the_client_as_429() {
 
 /// A capture the bridge does not recognise.
 ///
-/// `McpOperationGuard::capture` hands back an opaque `Arc<dyn Any>` and
-/// `around` downcasts it. The pair is the framework's on both sides today, so a
-/// mismatch is a framework bug — but the trait is public, and what happens on a
-/// mismatch is what decides whether the tool body runs with the caller's
-/// ability or with none.
-///
-/// Running unscoped is the deliberate answer: `Repo` denies without an ambient
-/// ability, so the tool fails closed rather than the endpoint panicking. That
-/// makes the failure look exactly like an anonymous call, which is why the
-/// event exists — it is the only thing separating "this caller is anonymous"
-/// from "the bridge lost the caller's ability".
+/// A mismatch runs the body unscoped (`Repo` then denies), which looks like an
+/// anonymous call: the event is what separates the two.
 #[tokio::test]
 async fn a_capture_the_bridge_does_not_recognise_runs_unscoped_and_says_so() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -189,8 +170,7 @@ async fn a_capture_the_bridge_does_not_recognise_runs_unscoped_and_says_so() {
 
     let foreign: nest_rs_mcp::Captured = Arc::new("not an ability");
     // `OperationValue` has no public constructor, so the body reports through
-    // the error half — which is enough: what is under test is whether the body
-    // ran at all, and with what ambient state.
+    // the error half.
     let outcome = bridge
         .around(
             &foreign,

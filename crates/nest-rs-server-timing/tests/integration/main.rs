@@ -1,9 +1,5 @@
-//! Integration tests mirroring `src/`.
-//!
-//! Documented gaps (no test file required): `src/lib.rs` re-exports only;
-//! `src/module.rs` is a bare `#[module]`, exercised by the boot in
-//! `interceptor`; `src/entry.rs` and `src/format.rs` carry their own
-//! `#[cfg(test)]` units.
+//! Integration tests mirroring `src/`; `entry` and `format` carry their own
+//! unit tests.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

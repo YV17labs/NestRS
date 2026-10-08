@@ -1,20 +1,15 @@
 //! The unclaimed-variable report, through the path a boot takes: a `#[config]`
 //! resolved from the environment, the events read back off the capture.
 //!
-//! Every variable here is built — `var_name`, `EnvPrefix::var`,
-//! `Environment::var_name` — so each test asserts the name a deployment under
-//! the active prefix would actually export. Each test owns its process
-//! (nextest), which is what makes the once-per-process ledger its own; and each
-//! reads the events *for its own variables*, because the first read also checks
-//! every namespace this suite links against whatever the ambient environment
-//! carries.
+//! Each test owns its process (nextest) for the once-per-process ledger, and
+//! reads the events for its own variables only: the first read also checks the
+//! ambient environment.
 
 use nest_rs_config::unclaimed::{MISSPELLED_CONFIG_NAMESPACE, UNREAD_CONFIG_VARIABLE};
 use nest_rs_config::{Config, ConfigService, Environment, config, var_name};
 use nest_rs_core::EnvPrefix;
 use nest_rs_testing::{CapturedEvent, LogCapture};
 
-/// A config shaped like the framework's own: two keys, read unconditionally.
 #[config(namespace = "unclaimed_keys")]
 #[derive(Clone, Default)]
 struct KeysConfig {
@@ -31,8 +26,7 @@ impl Config for KeysConfig {
     }
 }
 
-/// A family member: its namespace carries the family as a level, the shape
-/// 7.0 gave `oauth__client` and `oauth__resource`.
+/// A family member: its namespace carries the family as a level.
 #[config(namespace = "unclaimed__member")]
 #[derive(Clone, Default)]
 struct MemberConfig {
@@ -47,10 +41,8 @@ impl Config for MemberConfig {
     }
 }
 
-/// Namespaces the framework-wide names begin with, read by configs whose keys
-/// make three of those names equal a name read here once separators are set
-/// aside — `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG__FORMAT` — so the silence
-/// asserted for them is owed to their being known, and to nothing else.
+/// Makes `<PREFIX>_LOG_FORMAT` equal a name read here once separators are set
+/// aside, so the framework-wide names stay silent only by being known.
 #[config(namespace = "log")]
 #[derive(Clone, Default)]
 struct LogShapedConfig {
@@ -191,8 +183,8 @@ fn a_file_spelling_is_known_and_its_typo_is_answered() {
     });
 }
 
-/// The family-level rename: the variable keeps the 6.x spelling, the config
-/// reads the default, and the event names the spelling that is read.
+/// A family-level rename: the variable keeps the former spelling, and the event
+/// names the spelling that is read.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -249,11 +241,8 @@ fn a_namespace_is_checked_once_its_config_is_read() {
     });
 }
 
-/// Stand-ins for three framework namespaces a binary links — `openapi`'s
-/// length, `authn`'s and `ws`'s, one key each, under namespaces of their own:
-/// with features unified this binary may link the real ones, and a namespace
-/// belongs to one type. Beside them another binary of the same deployment owns
-/// one edit away from each.
+/// Stand-ins for `openapi`, `authn` and `ws` (the real ones may be linked too,
+/// and a namespace belongs to one type).
 #[config(namespace = "unclaimed_openapi")]
 #[derive(Clone, Default)]
 struct OpenapiShapedConfig {
@@ -296,12 +285,9 @@ impl Config for WsShapedConfig {
     }
 }
 
-/// config-2r2: a correct deployment of several binaries filed a misspelling for
-/// every namespace one edit from a framework one — `OPENAI` for `openapi`,
-/// `AUTH`/`AUTHZ` for `authn`, `ES` for `ws` — with a suggestion that would
-/// break the binary that owns it. A short namespace has no room for a typo that
-/// is not also a word, and a long one is reported only under a key it reads;
-/// the value is reported nowhere.
+/// Another binary's namespace one edit from a linked one (`OPENAI`, `AUTH`,
+/// `ES`) is silent: a short namespace has no typo reach, and a long one is
+/// reported only under a key it reads.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -399,10 +385,8 @@ fn a_linked_config_that_is_never_read_files_no_key_report() {
     });
 }
 
-/// The framework-wide names carry no `__` after the prefix, so they are compared
-/// with the names read here whole — and three of them equal one once separators
-/// are set aside. Known from the constants that name them, all five stay
-/// silent; the controls prove both comparisons ran over this very environment.
+/// The framework-wide names stay silent; the controls prove both comparisons
+/// ran over this very environment.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -627,10 +611,8 @@ fn under_a_custom_prefix_only_its_own_names_are_examined() {
     });
 }
 
-/// The loader is exact — neither the environment nor the cascade folds case —
-/// so a namespace or a prefix spelled in another case configures nothing. It
-/// was treated as correctly spelled and reported by nothing; each is now
-/// reported with the name the loader reads.
+/// The loader is exact, so a namespace or a prefix spelled in another case
+/// configures nothing, and is reported with the name the loader reads.
 #[test]
 #[expect(
     clippy::result_large_err,

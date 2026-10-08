@@ -10,16 +10,8 @@ use crate::QueueError;
 
 /// The id a push gives a job: a UUID v7, written in its hyphenated string form.
 ///
-/// **The port mints it, and no backend does.** A push mints the id, seals it in
-/// the job's envelope and returns it in the [`PushReceipt`](crate::PushReceipt);
-/// a delivery reads it back out of the envelope. So the id a caller holds, the
-/// `messaging.message.id` every attempt's span reports, the job a cancel names,
-/// the job a unique key is held by and the job a checkpoint belongs to are one
-/// value on every backend — and none of them is a storage's own task id, which a
-/// backend reports beside it as `backend_id` when it has one.
-///
-/// Version 7 because it sorts by the millisecond it was minted: ids read back in
-/// push order, and an id says roughly when its job was pushed.
+/// The port mints it, and no backend does: a storage's own task id is reported
+/// beside it as `backend_id`. Ids sort in push order.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct JobId(Uuid);
 
@@ -32,8 +24,7 @@ impl JobId {
     /// An id read back — from a receipt kept in a database, or from an envelope.
     ///
     /// Refused with [`QueueError::InvalidJobId`] unless `raw` is a version-7
-    /// UUID: an id no push could have minted names no job, and a cancel or a
-    /// lookup with it would answer for nothing rather than say so.
+    /// UUID.
     pub fn parse(raw: &str) -> Result<Self, QueueError> {
         match Uuid::try_parse(raw) {
             Ok(uuid) if uuid.get_version_num() == 7 => Ok(Self(uuid)),
@@ -97,9 +88,6 @@ mod tests {
         assert_eq!(JobId::parse(&written).expect("a minted id parses"), id);
     }
 
-    /// An id says how long ago its job was pushed, read off its own
-    /// millisecond: a fresh one is no older than the test, one minted in 2023
-    /// is years old, and one minted ahead of the clock is no age at all.
     #[test]
     fn an_id_says_how_long_ago_it_was_minted() {
         assert!(JobId::mint().age() < Duration::from_secs(60));

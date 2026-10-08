@@ -1,23 +1,17 @@
 //! [`OAuthResourceModule`] — turns this app into a conformant OAuth 2.1
 //! resource server.
 //!
-//! Importing it does three things, all of them at boot so a misconfiguration is
-//! a build-time failure rather than a `401` nobody can act on:
+//! Importing it, at boot:
 //!
 //! 1. Validates [`OAuthResourceConfig`] into the served
 //!    [`ProtectedResourceMetadata`], and provides it as global infrastructure.
 //! 2. Mounts `GET /.well-known/oauth-protected-resource` (RFC 9728 §3),
 //!    declared `#[public]`.
-//! 3. Attaches [`ResourceChallenge`], so
-//!    every `401` carries `resource_metadata`.
+//! 3. Attaches [`ResourceChallenge`], so every `401` carries `resource_metadata`.
 //!
-//! **And it makes audience validation mandatory.** The MCP authorization spec
-//! requires a server to verify that a token was issued *for it* — the defence
-//! against a confused deputy replaying a token minted for another service.
-//! `<PREFIX>_AUTHN__AUDIENCE` is optional in [`AuthnConfig`](nest_rs_authn::AuthnConfig) on its own; under this
-//! module it is required, and boot fails naming it. That is the whole point of
-//! the capability: without it the well-known document advertises a resource
-//! identity the verifier never checks.
+//! It also makes `<PREFIX>_AUTHN__AUDIENCE`, optional in
+//! [`AuthnConfig`](nest_rs_authn::AuthnConfig), required — the MCP authorization
+//! spec's confused-deputy defence — and boot fails naming it.
 
 use std::any::TypeId;
 
@@ -30,19 +24,15 @@ use crate::controller::OAuthResourceController;
 use crate::interceptor::ResourceChallenge;
 use crate::metadata::ProtectedResourceMetadata;
 
-/// The discovery surface itself. Private, and deliberately: it is inert without
-/// the [`ProtectedResourceMetadata`] factory that only
-/// [`OAuthResourceSetup`] queues, so a bare `imports = [..]` of it would
-/// fail boot on an unmet dependency. `for_root` is the single seam, the same
-/// shape [`AuthnModule`](nest_rs_authn::AuthnModule) has.
+/// The discovery surface, private: inert without the [`ProtectedResourceMetadata`]
+/// factory only [`OAuthResourceSetup`] queues, so `for_root` is the single seam.
 #[module(
     imports = [ConfigModule::for_feature::<OAuthResourceConfig>()],
     providers = [OAuthResourceController, ResourceChallenge, AudienceBinding],
 )]
 struct OAuthResourceHost;
 
-/// DI module for the RFC 9728 discovery surface. See the module docs for what
-/// importing it enforces.
+/// DI module for the RFC 9728 discovery surface.
 pub struct OAuthResourceModule;
 
 impl OAuthResourceModule {

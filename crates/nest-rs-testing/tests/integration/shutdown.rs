@@ -1,8 +1,6 @@
 //! The way down, read across the crates that bound it: each transport's window,
 //! the kernel's shutdown-hooks budget, the telemetry flush. No crate owns the
-//! sum, so it is asserted here, where every one of them is reachable — as
-//! dev-dependencies, never behind a feature, so the Definition-of-done run
-//! compiles it.
+//! sum, so it is asserted here, where every one of them is reachable.
 
 use std::time::Duration;
 
@@ -16,14 +14,11 @@ use nest_rs_schedule::Scheduler;
 const KUBERNETES_DEFAULT_GRACE: Duration = Duration::from_secs(30);
 
 /// The way down the documentation states, to the millisecond: the longest
-/// transport's stop, then the hooks' budget, then the flush. Pinned rather than
-/// recomputed, so a constant that moves fails here and sends its author to every
-/// page that quotes the figure.
+/// transport's stop, then the hooks' budget, then the flush. Pinned, so a moved
+/// constant sends its author to every page that quotes the figure.
 const STATED_WAY_DOWN: Duration = Duration::from_millis(28_500);
 
-/// Every transport a module can contribute, as it stands at its defaults. Each
-/// states its own bound through the required [`Transport::stop_bound`], so a
-/// row is the bound the transport answers for rather than a label beside it.
+/// Every transport a module can contribute, at its defaults.
 fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
     [
         ("HttpTransport", Box::new(HttpTransport::default())),
@@ -32,13 +27,8 @@ fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
     ]
 }
 
-/// Each transport's stop, then the shutdown hooks' budget, then the telemetry
-/// flush, sums under the grace a Kubernetes pod is given by default between
-/// `SIGTERM` and `SIGKILL`. Past it the kill lands first and says nothing,
-/// taking the hooks and the flush with it. The runtime's teardown adds nothing:
-/// `#[nest_rs::main]` holds it to what the hooks and the flush left of the
-/// hooks' budget. Read off each transport's own bound and the two constants, so
-/// moving any one of them past the sum fails here rather than in a rollout.
+/// The runtime's teardown adds nothing: `#[nest_rs::main]` holds it to what the
+/// hooks and the flush left of the hooks' budget.
 #[test]
 fn the_default_shutdown_steps_sum_under_a_kubernetes_grace_period() {
     let after = SHUTDOWN_HOOKS_TIMEOUT + FLUSH_TIMEOUT;

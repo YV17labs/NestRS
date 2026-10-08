@@ -9,21 +9,17 @@
 //! `providers` it owns and the `imports` it depends on; a *provider* is any
 //! injectable value — a service, a controller, a guard — that names its
 //! dependencies with `#[inject]`. The container is a single flat registry keyed
-//! by `TypeId`. Visibility is Rust's job, not a per-module export list: expose a
-//! `pub trait`, bind an implementation with `provide_dyn`, and consumers inject
-//! `Arc<dyn Trait>`.
+//! by `TypeId`; to hide an implementation, expose a `pub trait`, bind it with
+//! `provide_dyn`, and inject `Arc<dyn Trait>`.
 //!
-//! # Wiring is checked, not reflected
+//! # Wiring is checked at boot
 //!
-//! The dependency graph is validated at boot, never resolved by reflection at
-//! runtime. The boot walks the module tree from the root and fails with a
-//! named error before any transport starts: [`AccessGraphError`] when a provider reaches across a
-//! module boundary no `import` covers, [`MissingDependencyError`] when a
-//! dependency no module provides would otherwise panic at first resolution,
-//! [`BudgetPastNetError`] when a resource's [`Budget`] reaches past a [`Net`]
-//! that waits on it. A misconfigured import is a startup error naming the fix,
-//! not a `Cannot resolve` on the first request. `#[use_guards]` / `#[use_filters]` /
-//! `#[use_interceptors]` are checked the same way.
+//! The boot walks the module tree from the root and fails with a named error
+//! before any transport starts: [`AccessGraphError`] when a provider reaches
+//! across a module boundary no `import` covers, [`MissingDependencyError`] when
+//! no module provides a dependency, [`BudgetPastNetError`] when a resource's
+//! [`Budget`] reaches past a [`Net`] that waits on it. `#[use_guards]` /
+//! `#[use_filters]` / `#[use_interceptors]` are checked the same way.
 //!
 //! # Scopes and lifecycle
 //!
@@ -34,23 +30,17 @@
 //! `#[on_module_destroy]`, …) run per phase as [`App::run`] drains them —
 //! init failure aborts boot, shutdown is best-effort.
 //!
-//! The two are not free to combine: a hook — like a scheduled method, a
-//! listener, an indicator and a processor — resolves its host with
-//! `Container::get::<Host>()` outside any request, so the host must be a
-//! **singleton stored under its own type**. [`ProviderResidency`] is that requirement
-//! made checkable, and the three shapes that can never satisfy it are compile
-//! errors rather than a boot-time notice. The fourth, a host bound only as
-//! `dyn Trait`, is the app's composition to fix and carries
-//! [`INERT_HOST_HINT`].
+//! A hook host — like a scheduled method, a listener, an indicator and a
+//! processor — is resolved outside any request, so it must be a **singleton
+//! stored under its own type** ([`ProviderResidency`]); a host bound only as
+//! `dyn Trait` is inert and carries [`INERT_HOST_HINT`].
 //!
 //! # Discovery
 //!
 //! Module-wired items implement [`Discoverable`] and are found through link-time
 //! `inventory`, gated on reachability from the running app's root
 //! ([`ReachableProviders`]). An item linked into the binary but living in no
-//! reachable module is inert, with a boot `warn` — which is what lets one shared
-//! feature crate serve different per-binary subsets (an API mounts HTTP and
-//! GraphQL; a worker mounts only the queue).
+//! reachable module is inert, with a boot `warn`.
 //!
 //! ```
 //! use nest_rs_core::{App, injectable, module};
@@ -100,12 +90,6 @@ pub mod transport;
 mod type_name;
 mod way_down;
 
-// The three access-graph validators have no caller outside `src/` in either
-// workspace and are `pub(crate)`: visibility wider than its use is a promise
-// nobody priced. `AccessError` left this list for the same reason — it is the
-// bare pass's internal wrapper, discarded before any error leaves the crate, so
-// no public signature could hand a caller one. Why the eight below live in
-// `error` rather than beside the pass is that module's own doc.
 pub use access::{
     Composition, ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders,
 };
@@ -148,54 +132,28 @@ pub use trace_context::{
 #[doc(hidden)]
 pub use trace_context::{current_correlation, set_actor_id};
 pub use transport::{Transport, TransportContribution};
-// The pipes word a refusal with it; not public API.
 #[doc(hidden)]
 pub use type_name::short_type_name;
-// `#[nest_rs::main]`'s expansion — see the `way_down` module.
 #[doc(hidden)]
 pub use way_down::__main;
 
-// Cross-crate Layer-System wiring — `pub` for the five registry crates and
-// macro output, not public API. `LayerSpec` (above) is the one deliberate
-// vocabulary type; the chain-composition primitives around it are plumbing.
 #[doc(hidden)]
 pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain};
-
-// Macro plumbing — `#[module]`-generated code names this to register a module in
-// the boot inventory. Hidden at its definition; kept off the curated list here.
 #[doc(hidden)]
 pub use module::{__dynamic_import_module, __module_registered};
 
-// Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the
-// framework — apps never depend on `inventory` directly.
-pub use inventory;
-
-// Re-exported so `operation_span!` resolves `info_span!` and `field::Empty`
-// through the kernel rather than against the expanding crate's extern prelude.
-// Every framework crate happens to declare `tracing`, so this changes nothing
-// today — and the day one does not, the macro keeps working instead of failing
-// inside an expansion nobody can read.
-pub use tracing;
-
-// Re-exported so the `#[hooks]`-generated run-fn signature
-// (`anyhow::Result<()>`) resolves through the framework — a downstream app
-// using `#[hooks]` without a direct `anyhow` dependency must still compile.
+// Macro output resolves these through the framework, so an app needs no
+// direct dependency on them.
 pub use anyhow;
-// `#[input]` carries the wire-DTO derives so the developer does not; routing
-// them through the kernel keeps them reachable from every capability.
+pub use inventory;
 #[doc(hidden)]
 pub use schemars;
 #[doc(hidden)]
 pub use serde;
+pub use tracing;
 #[doc(hidden)]
 pub use validator;
 
-// A `pub trait` + `as dyn Trait` provider — the documented way to hide an impl
-// behind the DI container — needs `#[async_trait]` on both the trait and the
-// impl. That is a *container* concern, not a transport one, so it is reachable
-// as `nest_rs::core::async_trait`. Every surface crate re-exports it too, but
-// routing a plain service trait through `nest_rs::guards::async_trait` (the
-// only path that used to exist for one) reads as a mistake.
 pub use async_trait::async_trait;
 
 /// Declare application lifecycle hooks on a provider's impl block, for the
@@ -328,10 +286,8 @@ pub use nest_rs_core_macros::module;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 ///
-/// Every `#[inject]` field must be an `Arc<T>` or `Arc<dyn Trait>` — a
-/// dependency is resolved from the container as a shared `Arc` — so a non-`Arc`
-/// injected field is rejected at compile time rather than failing with a
-/// cryptic type error in generated code:
+/// Every `#[inject]` field must be an `Arc<T>` or `Arc<dyn Trait>`; anything
+/// else is a compile error:
 ///
 /// ```compile_fail
 /// use nest_rs_core::injectable;

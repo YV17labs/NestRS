@@ -1,18 +1,8 @@
 //! [`Reflector`] — read per-handler metadata a `#[meta(...)]` attribute
-//! attached. Lets a guard read declarative route metadata by type (e.g. a
-//! guard reads the route's required roles to vary its decision).
+//! attached.
 //!
-//! Implements [`HandlerMetadata`] so a Layer written against the trait stays
-//! portable across transports — the trait's [`is_public`](HandlerMetadata::is_public) default reads the
-//! attached [`Public`](crate::metadata::Public) marker uniformly.
-//!
-//! Scope does not change what a guard reads. `#[routes]` attaches the metadata
-//! as route data *outside* the guard chain, so it is on the request by the time
-//! any guard runs — pooled globally with `use_guards_global` or bound per route
-//! with `#[use_guards]`, both read it here.
-//!
-//! A self-mounted endpoint (`/graphql`, `/mcp`, a gateway) has no route data to
-//! read: there is no `#[meta]` site there, and the reflector finds nothing.
+//! Every guard reads it, global or per route; a self-mounted endpoint
+//! (`/graphql`, `/mcp`, a gateway) has no `#[meta]` site, so it finds nothing.
 
 use std::any::Any;
 

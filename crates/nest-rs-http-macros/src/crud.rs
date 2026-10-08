@@ -1,9 +1,5 @@
 //! `#[crud]` — generate standard REST operations on a `#[controller]` impl
-//! block (all five by default; a subset with `ops = [list, get, ...]`) and
-//! re-emit under `#[routes]`. Read ops delegate to the entity's
-//! `CrudService` (`access` for by-id route-model binding); the write ops
-//! delegate to its opt-in `Creatable`/`Updatable`/`Deletable` impls. A
-//! hand-written method overrides its generated counterpart.
+//! block and re-emit it under `#[routes]`.
 
 use nest_rs_codegen::pair;
 use std::collections::HashSet;
@@ -16,8 +12,6 @@ use syn::{ImplItem, ItemImpl, parse_quote};
 use nest_rs_codegen::{Paginate, impl_self_ident, parse_crud_args};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
-    // `#[crud]` is the generated spelling of the impl half, so it answers a wrong
-    // shape exactly as `#[routes]` does — through the edge's one pair constant.
     let item = match pair::HTTP.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -32,8 +26,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     let cfg = parse_crud_args(args)?;
     let ops = cfg.generated_ops()?;
     let self_ty = item.self_ty.clone();
-    // Kept for the diagnostic it raises on a non-path `impl` target; the name
-    // itself is no longer needed now that the error mapper is one shared fn.
+    // Kept for the diagnostic it raises on a non-path `impl` target.
     let _ = impl_self_ident(&self_ty, "#[crud]")?;
 
     let existing: HashSet<String> = item
@@ -54,12 +47,8 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         .map(|s| s.ident.to_string())
         .unwrap_or_else(|| "Resource".to_owned());
 
-    // Reject non-UUID-v7 ids before loading — validation half of route-model
-    // binding. The sentence is `nest_rs_core::UUID_V7_REQUIRED`, emitted as a
-    // **path** rather than interpolated: the two runtime sites that enforce the
-    // same rule (`Bind<S, A>` and the GraphQL `bind` helper) cannot depend on a
-    // macro-time crate, so a value baked in here would be a wording only this
-    // one could read.
+    // Emitted as a path, not interpolated: `Bind<S, A>` and the GraphQL `bind`
+    // helper enforce the same rule and must read the same sentence.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
             return ::core::result::Result::Err(::nest_rs_http::poem::Error::from_string(
@@ -74,8 +63,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if ops.list && !existing.contains("list") {
         let summary = format!("List {tag}");
         let list_method: ImplItem = match cfg.paginate {
-            // Explicit opt-out (`paginate = none`): the full ability-scoped
-            // collection, still backstopped by `CrudService::list`'s hard cap.
             Paginate::None => parse_quote! {
                 #[get("/")]
                 #[api(summary = #summary, tags(#tag))]
@@ -91,15 +78,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     ))
                 }
             },
-            // Keyset pagination (the default): next cursor in `x-next-cursor`
-            // so the body stays a plain (maskable) array.
             Paginate::Cursor => parse_quote! {
                 #[get("/")]
-                // The handler returns a hand-built `Response` (it carries
-                // `x-next-cursor`), so the document cannot read the payload off
-                // the signature — it is declared instead. Without it the list
-                // route advertised no schema at all and a generated client
-                // typed the collection as `any`.
+                // A built `Response` hides the payload from the signature: declared here.
                 #[api(summary = #summary, tags(#tag), response = ::std::vec::Vec<#output>)]
                 async fn list(
                     &self,
@@ -116,9 +97,6 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
                     let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
-                    // Infallible by construction (a UUID renders ASCII), but
-                    // never `expect` on the per-request path: a failure just
-                    // omits the pagination header.
                     if let ::core::option::Option::Some(__cursor) = __p.next_cursor
                         && let ::core::result::Result::Ok(__value) =
                             ::nest_rs_http::poem::http::HeaderValue::from_str(
@@ -176,30 +154,18 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         let summary = format!("Create {tag}");
         generated.push(parse_quote! {
             #[post("/")]
-            // The handler hands back a built `Response` (it carries
-            // `Location`), so the document cannot read the payload off the
-            // signature — it is declared, exactly as the paginated list op
-            // declares its array.
+            // A built `Response` hides the payload from the signature: declared here.
             #[api(summary = #summary, tags(#tag), response = #output)]
             #[crud_write]
-            // Marker read by `#[routes]`: the handler below builds a `Location`,
-            // so the document declares it. Shipping the header without declaring
-            // it is the `Retry-After` gap on the throttler's `429`, mirrored.
+            // Read by `#[routes]` to declare the `Location` header in the document.
             #[crud_location]
-            // `201 Created` is what a route that mints a resource answers.
-            // Declared via `#[http_code]` (not a returned `StatusCode`) so
-            // `#[routes]` records it and the OpenAPI document advertises `201`,
-            // the same way the delete op advertises its `204` (OAPI-O3).
+            // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(201)]
             async fn create(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
-                // The collection URI as the caller sent it — global prefix and
-                // version segment included. Reconstructing it from the mount
-                // metadata would re-derive what the request already states.
-                // Read through `caller_path` below: the router strips a global
-                // prefix off `uri()`, and `original_uri()` is populated on the
-                // hyper path only.
+                // Read through `caller_path`: the router strips a global prefix off
+                // `uri()`, and `original_uri()` is populated on the hyper path only.
                 __req: &::nest_rs_http::poem::Request,
                 __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#create>>,
             ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
@@ -212,9 +178,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(
                     ::nest_rs_http::poem::web::Json(#output::from(&__row)),
                 );
-                // RFC 9110 §15.3.2: a `201` names what it created. Absent only
-                // for an entity that does not key on a `Uuid` — every other
-                // `#[crud]` route already takes one as its path id.
+                // RFC 9110 §15.3.2: a `201` names what it created.
                 if let ::core::option::Option::Some(__id) =
                     ::nest_rs_seaorm::model_uuid::<#entity>(&__row)
                 {
@@ -279,9 +243,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[delete("/:id")]
             #[api(summary = #summary, tags(#tag))]
             #[crud_write]
-            // A successful delete is `204 No Content`. Declared via `#[http_code]`
-            // (not a returned `StatusCode`) so `#[routes]` records it on the route
-            // and the OpenAPI document advertises `204`, not `200` (OAPI-O3).
+            // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(204)]
             async fn delete(
                 &self,
@@ -335,8 +297,6 @@ mod tests {
         crud(args, item).expect("crud generates").to_string()
     }
 
-    // `ops = [list, get, delete]` generates exactly those three routes — no
-    // `create`/`update`, and no need for `create = `/`update = ` input types.
     #[test]
     fn partial_ops_generate_only_the_listed_routes() {
         let out = generated_methods(quote! {
@@ -349,11 +309,7 @@ mod tests {
         assert!(!out.contains("fn update"), "update must be absent: {out}");
     }
 
-    /// R10: the create route builds a `Location`, and `#[routes]` only declares
-    /// it in the OpenAPI document when the handler says so — the marker is the
-    /// whole seam between "the header ships" and "a generated client can read
-    /// it". Asserted on the expansion, because a missing marker is not a
-    /// compile error anywhere: it is a silently poorer document.
+    // A missing marker is no compile error anywhere, only a poorer document.
     #[test]
     fn the_create_op_marks_the_location_it_sends() {
         let out = generated_methods(quote! {
@@ -363,7 +319,6 @@ mod tests {
             out.contains("crud_location"),
             "create stamps the marker `#[routes]` reads: {out}",
         );
-        // Read ops send no `Location`, so they must not claim one.
         let read_only = generated_methods(quote! {
             service = svc, entity = E, output = Thing, ops = [list, get]
         });
@@ -373,7 +328,6 @@ mod tests {
         );
     }
 
-    // Requesting a write op without its input type is a hard macro error.
     #[test]
     fn create_op_without_input_type_fails_to_expand() {
         let item: ItemImpl = parse_quote! { impl Things {} };

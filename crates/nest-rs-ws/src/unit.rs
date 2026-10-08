@@ -1,12 +1,5 @@
-//! The canonical names of the units of work this edge opens.
-//!
-//! Declared here rather than in the kernel, through [`nest_rs_core::unit!`],
-//! whose compile-time evaluation holds the `<edge>.<unit>` grammar: both are
-//! argued once, in [`nest_rs_core::operation_log`].
-//!
-//! A gateway dispatches *inside* the connection, so the message is the unit and
-//! the connection is a field. Both lifecycle hooks are units too: a hook is
-//! developer code that logs and writes like any handler.
+//! The canonical names of the units of work this edge opens, declared through
+//! [`nest_rs_core::unit!`]. The message is the unit; the connection is a field.
 
 use nest_rs_core::operation_log::Unit;
 

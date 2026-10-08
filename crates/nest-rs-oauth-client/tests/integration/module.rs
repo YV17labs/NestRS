@@ -1,11 +1,4 @@
 //! Covers `src/module.rs` — the `for_root` seam, executed.
-//!
-//! `OAuthClientModule::for_root` is the only in-code path a consumer has to pin an
-//! `OAuthClientConfig`, and until now nothing in either workspace called it. What a
-//! compile could never show is what actually matters here: the seam queues a
-//! *resolving* factory rather than the struct verbatim, so the pinned base and
-//! the `NESTRS_OAUTH__CLIENT__*` cascade are reconciled during the builder's factory
-//! phase — a phase only a boot runs.
 
 use std::sync::Arc;
 
@@ -14,8 +7,7 @@ use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, OAuthClientModule, OA
 
 use super::config::valid_config;
 
-/// A base distinct from every other fixture's, so an assertion below can only
-/// pass by way of this call.
+/// A base distinct from every other fixture's, so an assertion can only pass through it.
 fn pinned() -> OAuthClientSetup {
     OAuthClientModule::for_root(OAuthClientConfig {
         client_id: "pinned-through-for-root".into(),
@@ -41,9 +33,7 @@ async fn for_root_pins_the_config_and_provides_a_client_built_from_it() {
         .expect("for_root registers the resolved OAuthClientConfig");
     assert_eq!(config.client_id, "pinned-through-for-root");
 
-    // The client is the factory output, not the config: asserting on the URL it
-    // *builds* is what proves the pinned base reached the constructor rather
-    // than merely being registered beside it.
+    // The URL the client builds proves the pinned base reached its constructor.
     let client: Arc<OAuthClient> = app
         .container()
         .get()

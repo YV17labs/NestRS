@@ -1,6 +1,5 @@
 //! `scope_for` denies every row on request-scoped executors without an
-//! ability — asserted against **executed** queries on live Postgres, not
-//! rendered SQL strings.
+//! ability, asserted on executed queries rather than rendered SQL.
 
 use nest_rs_authz::Action;
 use nest_rs_seaorm::{Executor, scope_for, with_request_executor};
@@ -23,9 +22,6 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// Connect and make sure the probe table exists with its two rows. The DDL +
-/// seed are serialized in Postgres, not per process — nextest gives each test
-/// its own, so concurrent `CREATE TABLE IF NOT EXISTS` would race the catalog.
 async fn db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(

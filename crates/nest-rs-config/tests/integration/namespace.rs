@@ -1,11 +1,4 @@
 //! Covers `src/namespace.rs` — a namespace belongs to one type.
-//!
-//! Two `#[config]` structs declaring one namespace were legal, and the report
-//! on unread keys then misread a correct deployment: its key check ran once the
-//! first of the two had been read, and filed every variable of the second as
-//! read by nothing although its value was applied. The read of either is now
-//! refused, naming both — whichever is read first, since the refusal depends on
-//! what the binary links rather than on the order its modules load in.
 
 use nest_rs_config::{Config, ConfigError, ConfigService, Namespaced, Result, config};
 
@@ -69,12 +62,8 @@ fn and_at_the_read_of_the_other() {
     assert_refused_naming_both(Hosts::load().expect_err("the other read is refused too"));
 }
 
-/// A type whose `Namespaced` is written by hand files no registry entry, and
-/// still owns every variable under its namespace: it is refused beside a
-/// `#[config]` declaring the same one, under its type name. The `#[config]`
-/// cannot see a type that filed nothing, so its own read is refused only for a
-/// second declaration — which is why the hand-written side is where the check
-/// has to stand.
+/// A hand-written `Namespaced` files no registry entry, so its own read is
+/// where it is refused beside a `#[config]` declaring the same namespace.
 #[test]
 fn a_hand_written_namespace_is_refused_beside_a_declared_one() {
     #[derive(Clone, Debug, Default)]

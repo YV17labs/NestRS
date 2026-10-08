@@ -1,26 +1,14 @@
 //! Bounded retry for transient transaction conflicts.
 //!
-//! Postgres' serializable isolation surfaces a conflicting transaction as
-//! `40001` (`serialization_failure`); a deadlock as `40P01`. MySQL surfaces
-//! a deadlock as `1213`; SQL Server as `1205`. The conventional answer is
-//! "retry the whole transaction", because SeaORM's transaction handle is
-//! already aborted past a conflict — the same `DatabaseTransaction` cannot
-//! be replayed. This module is the **reusable primitive** a service can
-//! wrap around a programmatic transaction boundary; the `DbContext`
-//! interceptor consults [`is_retryable_conflict`] to tag the conflict for
-//! observability when the `observe_serialization_conflicts` config is on.
-//!
-//! [`is_retryable_conflict`]: crate::retry::is_retryable_conflict
+//! A `DatabaseTransaction` is aborted past a conflict and cannot be replayed:
+//! wrap the whole programmatic transaction in [`retry_on_conflict`].
 
 use std::time::Duration;
 
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
 
 /// SQLSTATE markers a transient conflict surfaces under across the
-/// supported backends. Matched against the typed `SqlxError::Database`'s
-/// `code()` so a digit substring appearing in a message — a port number,
-/// byte offset, row id, timestamp — does not get misclassified as a
-/// conflict and retried.
+/// supported backends.
 const RETRYABLE_SQLSTATES: &[&str] = &[
     "40001", // PG / MySQL — serialization failure
     "40P01", // PG — deadlock detected
@@ -31,10 +19,8 @@ const RETRYABLE_SQLSTATES: &[&str] = &[
 /// SQLSTATE markers a **connection** fault surfaces under: the server closed
 /// the session, or refused to open one.
 ///
-/// `08007` (`transaction_resolution_unknown`) is deliberately **absent**. It is
-/// the one connection failure whose transaction may have committed, and the
-/// whole point of [`is_transient_failure`] is that it names failures the
-/// framework *knows* rolled back.
+/// `08007` (`transaction_resolution_unknown`) is absent on purpose: that
+/// transaction may have committed.
 const CONNECTION_SQLSTATES: &[&str] = &[
     "08000", // PG — connection exception
     "08001", // PG — sqlclient unable to establish sqlconnection
@@ -47,37 +33,24 @@ const CONNECTION_SQLSTATES: &[&str] = &[
     "57P03", // PG — cannot connect now (the server is still starting)
 ];
 
-/// Hard ceiling for the public retry budget. A misconfigured `usize::MAX`
-/// would otherwise hot-spin on a persistent conflict; the cap halts the
-/// retry loop at 32 attempts (an exponential backoff that already exceeds
-/// the lifetime of any reasonable request) regardless of the input.
+/// Hard ceiling for the public retry budget, whatever the caller passes.
 pub const MAX_RETRY_ATTEMPTS: usize = 32;
 
 /// Default bounded retry budget for [`retry_on_conflict`]: 3 attempts.
 pub const DEFAULT_RETRY_ATTEMPTS: usize = 3;
 
 /// Initial backoff before the first retry — 5 ms, doubled each retry
-/// (5 ms → 10 ms → 20 ms). Small enough that a contended-but-quick conflict
-/// is invisible; jitter-free because the contention is single-process.
+/// (5 ms → 10 ms → 20 ms).
 pub const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(5);
 
-/// Per-sleep ceiling: a single retry sleep never exceeds 30 s, regardless
-/// of how many attempts have already failed. Without this cap, exponential
-/// doubling at attempt 25 already exceeds 23 hours — well past any
-/// reasonable request lifetime, and long enough that captured `Arc`s
-/// (transaction handles, services) stay pinned for hours after the real
-/// work has been abandoned. 30 s preserves coverage for genuinely
-/// transient conflicts while keeping the retry loop bounded.
+/// Per-sleep ceiling, however many attempts have failed.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-/// Whether `err` is a transient conflict worth retrying. Matches the
-/// SQLSTATE returned by `sqlx`'s typed `DatabaseError::code()` — never the
-/// formatted error string, so a digit substring in a message (a port, a
-/// row id, a timestamp) cannot trigger a false retry.
+/// Whether `err` is a transient conflict worth retrying, matched on the typed
+/// SQLSTATE, never the message text.
 pub fn is_retryable_conflict(err: &DbErr) -> bool {
-    // NOTE: widening this to `is_transient_failure` would replay a `COMMIT` whose
-    // outcome is unknown. `lazy::a_commit_whose_outcome_is_unknown_stays_deterministic`
-    // is the e2e that catches it.
+    // Widening this to `is_transient_failure` would replay a `COMMIT` whose
+    // outcome is unknown (e2e `lazy::a_commit_whose_outcome_is_unknown_stays_deterministic`).
     let sqlx_err = match err {
         DbErr::Query(RuntimeErr::SqlxError(e)) | DbErr::Exec(RuntimeErr::SqlxError(e)) => e,
         _ => return false,
@@ -94,41 +67,19 @@ pub fn is_retryable_conflict(err: &DbErr) -> bool {
 /// Whether a **statement** failure inside an open transaction is one a fresh
 /// attempt could clear — a conflict, or the connection going away.
 ///
-/// The broader half of the pair, and the asymmetry with
-/// [`is_retryable_conflict`] is load-bearing rather than an oversight:
-///
-/// - **Inside** a transaction, nothing is durable until `COMMIT`. A connection
-///   that times out at the pool, or dies mid-attempt, therefore leaves *nothing*
-///   — the server rolls the session back on close — so the framework knows the
-///   attempt wrote nothing and a replay cannot write twice. Classifying those as
-///   deterministic dead-lettered a job over an outage, which is precisely the
-///   failure a retry budget exists for.
-/// - **At** `COMMIT`, the same connection error means the opposite: the `COMMIT`
-///   may have gone out and landed. That is why the commit site keeps
-///   [`is_retryable_conflict`] and this function is not used there. "Before the
-///   commit left" versus "while it was in flight" is the whole distinction, and
-///   flattening it turns *may have written once* into *wrote twice*.
-///
-/// Matched on the typed error — the SQLSTATE, or sea-orm's own connection
-/// variants — never on message text.
+/// Never use it at `COMMIT`, where a lost connection may mean the commit landed:
+/// the commit site keeps [`is_retryable_conflict`].
 pub fn is_transient_failure(err: &DbErr) -> bool {
     if is_retryable_conflict(err) {
         return true;
     }
     match err {
-        // The pool never handed one out, so no statement reached the database.
         DbErr::ConnectionAcquire(_) => true,
-        // sea-orm's own connection variant, narrowed to the driver-reported
-        // shape on purpose. Under the pinned `sqlx-postgres` driver every
-        // `DbErr::Conn` carries a `SqlxError` (connect, ping, pool acquire), so
-        // this is today's behaviour exactly — but sea-orm's rusqlite driver maps
-        // *every* error it sees to `DbErr::Conn`, and a blanket arm would call a
-        // constraint violation transient the day someone adds that backend.
+        // Narrowed to sqlx: sea-orm's rusqlite driver maps every error, a
+        // constraint violation included, to `DbErr::Conn`.
         DbErr::Conn(RuntimeErr::SqlxError(_)) => true,
         DbErr::Exec(RuntimeErr::SqlxError(e)) | DbErr::Query(RuntimeErr::SqlxError(e)) => {
             match &**e {
-                // The socket, the pool, or sqlx's own worker — the connection is
-                // gone whichever it was, and no `COMMIT` was ever issued.
                 SqlxError::Io(_)
                 | SqlxError::PoolTimedOut
                 | SqlxError::PoolClosed
@@ -151,9 +102,7 @@ pub fn is_transient_failure(err: &DbErr) -> bool {
 /// `0` still runs the operation once and a caller passing `usize::MAX`
 /// does not hot-spin against a persistent conflict.
 ///
-/// `op` is `FnMut` because the closure re-runs from scratch on each
-/// attempt — a service that owns its transaction boundary can re-open it
-/// inside `op` and replay the work against a fresh snapshot.
+/// `op` re-runs from scratch on each attempt: open the transaction inside it.
 pub async fn retry_on_conflict<F, Fut, T>(
     attempts: usize,
     initial_backoff: Duration,
@@ -164,9 +113,6 @@ where
     Fut: std::future::Future<Output = Result<T, DbErr>>,
 {
     let attempts = attempts.clamp(1, MAX_RETRY_ATTEMPTS);
-    // Single `op()` call site: a non-retryable error returns immediately; a
-    // retryable one on the last attempt returns the error itself (no `expect`
-    // for an "impossible" empty budget), and never sleeps past the budget.
     let mut attempt = 0;
     loop {
         match op().await {
@@ -199,12 +145,7 @@ where
     }
 }
 
-/// Saturating exponential backoff, capped at [`MAX_BACKOFF`]. `1u32 <<
-/// attempt` overflows at `attempt >= 32` (UB in debug, wraps to `0` in
-/// release — which would hot-spin); a `saturating_mul` against a
-/// `saturating_pow` multiplier holds the doubling, and the final
-/// `min(MAX_BACKOFF)` keeps a single retry sleep bounded so captured
-/// `Arc`s do not stay pinned for hours.
+/// Saturating exponential backoff, capped at [`MAX_BACKOFF`].
 fn backoff_for(initial: Duration, attempt: usize) -> Duration {
     let multiplier = 2u32.saturating_pow(attempt as u32);
     initial.saturating_mul(multiplier).min(MAX_BACKOFF)
@@ -219,11 +160,6 @@ mod tests {
         DbErr::Exec(RuntimeErr::Internal(msg.into()))
     }
 
-    // A minimal `sqlx::error::DatabaseError` stub so we can construct a
-    // typed `DbErr::Exec(RuntimeErr::SqlxError(...))` carrying a chosen
-    // SQLSTATE — the only honest way to verify the positive path now
-    // that `is_retryable_conflict` matches against typed codes, not
-    // Display substrings.
     #[derive(Debug)]
     struct FakeDbError {
         code: Option<String>,
@@ -268,11 +204,6 @@ mod tests {
         DbErr::Exec(RuntimeErr::SqlxError(std::sync::Arc::new(sqlx_err)))
     }
 
-    // ---------------------------------------------------------------------
-    // The two predicates, and the line between them. `is_retryable_conflict`
-    // answers for a **commit**; `is_transient_failure` for a **statement**.
-    // Widening the first would replay a `COMMIT` that may have landed.
-
     #[test]
     fn a_statement_that_lost_its_connection_is_transient() {
         for code in ["08006", "08003", "57P01", "57P02", "57P03"] {
@@ -291,9 +222,6 @@ mod tests {
 
     #[test]
     fn a_commit_whose_outcome_is_unknown_is_not_transient() {
-        // `08007` is the connection failure that says the transaction's fate is
-        // unknown. Replaying it turns "may have written once" into "wrote twice",
-        // so it stays out of the transient set on purpose.
         let err = sqlx_db_err(Some("08007"), "transaction resolution unknown");
         assert!(!is_transient_failure(&err));
         assert!(!is_retryable_conflict(&err));
@@ -365,17 +293,12 @@ mod tests {
 
     #[test]
     fn rejects_internal_runtime_errors_even_when_message_contains_sqlstate() {
-        // The whole point of the typed match: a `DbErr::Exec(Internal(_))`
-        // whose message contains "40001" is NOT a serialization conflict —
-        // the previous substring match would have falsely retried it.
         let err = db_err("error returned from database: 40001: could not serialize access");
         assert!(!is_retryable_conflict(&err));
     }
 
     #[test]
     fn rejects_textual_serialization_phrase_without_typed_sqlstate() {
-        // Same rationale — a free-form Internal message is not a typed
-        // database error and must not classify as a conflict.
         let err = db_err("could not serialize access due to concurrent update");
         assert!(!is_retryable_conflict(&err));
     }
@@ -397,9 +320,6 @@ mod tests {
 
     #[test]
     fn rejects_substring_false_positives() {
-        // Bug 7: a connection log mentioning port 40001, a row id 1213, a
-        // byte offset 1205 would all have falsely classified as a
-        // conflict under the substring match. The typed path drops them.
         let err = db_err("connection refused at 127.0.0.1:40001");
         assert!(!is_retryable_conflict(&err));
         let err = db_err("processing row id=1213 took 1205ms");
@@ -435,12 +355,6 @@ mod tests {
         assert!(matches!(result, Err(DbErr::Exec(_))));
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
-        // A retried conflict is invisible to the caller by design — that is what
-        // the budget is for. So the two events are the only way to tell a
-        // healthy transaction from one that succeeded on its third try, which is
-        // the difference between a working deploy and one about to fall over
-        // under load. Both carry `attempt`/`attempts`, so the ratio is queryable
-        // rather than inferred from a count of lines.
         let retried = logs.expect_one(crate::TARGET, "transaction conflict — retrying");
         assert_eq!(retried.level, "warn");
         assert_eq!(retried.field("attempt").as_deref(), Some("1"));
@@ -479,8 +393,6 @@ mod tests {
 
     #[tokio::test]
     async fn zero_attempts_clamps_to_one() {
-        // A misconfigured `0` budget would otherwise loop never — clamp
-        // to a single attempt so the operation still runs.
         let attempts = std::sync::atomic::AtomicUsize::new(0);
         retry_on_conflict(0, Duration::from_millis(1), || async {
             attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -493,13 +405,6 @@ mod tests {
 
     #[tokio::test]
     async fn excessive_attempts_clamp_to_ceiling() {
-        // Bug 6: `attempts = 33` would have overflowed `1u32 << attempt`
-        // at the 32nd iteration (UB in debug, wraps to `0` in release).
-        // The clamp halts the loop at `MAX_RETRY_ATTEMPTS` and the
-        // saturating backoff keeps the sleep finite. We pass a
-        // non-retryable error to short-circuit on the first attempt — the
-        // point is to verify the entry-point does not panic / loop on a
-        // huge budget, not to actually iterate to the cap.
         let attempts = std::sync::atomic::AtomicUsize::new(0);
         let result: Result<(), DbErr> =
             retry_on_conflict(usize::MAX, Duration::from_millis(1), || async {
@@ -517,22 +422,14 @@ mod tests {
 
     #[test]
     fn backoff_saturates_past_shift_overflow() {
-        // The arithmetic that overflowed: `1u32 << 32` is UB in debug.
-        // `backoff_for` must hold past 32 instead of panicking or wrapping
-        // to zero (which would hot-spin the retry loop).
         let base = Duration::from_millis(5);
-        // Sanity: small attempts double cleanly below the per-sleep cap.
         assert_eq!(backoff_for(base, 0), Duration::from_millis(5));
         assert_eq!(backoff_for(base, 3), Duration::from_millis(40));
-        // The overflow boundary: this must not panic.
         let big = backoff_for(base, 32);
         assert!(
             big > Duration::ZERO,
             "shift cap must not wrap to zero — that would hot-spin the retry loop",
         );
-        // Past the doubling point where exponential growth would exceed
-        // 30 s, the per-sleep cap [`MAX_BACKOFF`] takes over and every
-        // further attempt produces the same bounded sleep.
         assert_eq!(
             big, MAX_BACKOFF,
             "large attempts cap at MAX_BACKOFF, not at base * u32::MAX",
@@ -545,10 +442,6 @@ mod tests {
 
     #[test]
     fn backoff_never_exceeds_max_backoff() {
-        // Y3: per-sleep ceiling. Without the cap, doubling at attempt 25
-        // already exceeds 23 hours and at attempt 31 reaches years —
-        // pinning captured `Arc`s long after the request is dead. Every
-        // call must stay `<= MAX_BACKOFF`.
         let base = Duration::from_millis(5);
         for attempt in 0..=MAX_RETRY_ATTEMPTS {
             let b = backoff_for(base, attempt);
@@ -557,11 +450,7 @@ mod tests {
                 "attempt {attempt}: backoff {b:?} exceeds MAX_BACKOFF {MAX_BACKOFF:?}",
             );
         }
-        // The specific attempt the bug report named: 31 doublings would
-        // saturate `Duration` without the cap — assert it stays bounded.
         assert!(backoff_for(base, 31) <= MAX_BACKOFF);
-        // And the absurd-input boundary: a usize::MAX-style attempt count
-        // (clamped elsewhere, but the function itself must still hold).
         assert!(backoff_for(base, 1_000_000) <= MAX_BACKOFF);
     }
 }

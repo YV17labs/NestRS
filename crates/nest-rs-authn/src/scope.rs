@@ -1,11 +1,6 @@
 //! The OAuth `scope` claim — one space-delimited string on the wire (RFC 6749
 //! §3.3), a list in Rust.
 //!
-//! Every resource server needs this translation and none of them should write
-//! it: getting it wrong silently produces one scope named `"posts:read
-//! posts:write"` that matches nothing, and the failure looks like an
-//! authorization bug rather than a parsing one.
-//!
 //! ```
 //! # use nest_rs_authn::PrincipalIdentity;
 //! # use serde::{Deserialize, Serialize};
@@ -48,12 +43,8 @@ pub mod space_delimited {
 
     /// Read the claim into a list.
     ///
-    /// Accepts the standard string form *and* a JSON array, because a
-    /// deployment does not choose which shape its authorization server emits:
-    /// RFC 6749 defines the string, while Entra ID's `roles`, Keycloak's
-    /// `realm_access.roles` and several `scp` implementations emit an array.
-    /// Refusing the array would reject a valid token for a spelling the client
-    /// cannot influence. `null` reads as no scopes.
+    /// Accepts the standard string *and* a JSON array (Entra ID, Keycloak and
+    /// several `scp` implementations emit one). `null` reads as no scopes.
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Vec<String>, D::Error> {
@@ -66,9 +57,7 @@ pub mod space_delimited {
 
         Ok(match Option::<Claim>::deserialize(deserializer)? {
             None => Vec::new(),
-            // `split_whitespace`, not `split(' ')`: a claim padded with a tab or
-            // a double space would otherwise yield empty scopes that match
-            // nothing and are impossible to spot in a log.
+            // `split_whitespace`: a tab or double space must not yield an empty scope.
             Some(Claim::Delimited(raw)) => raw.split_whitespace().map(str::to_owned).collect(),
             Some(Claim::List(list)) => list
                 .into_iter()
@@ -118,8 +107,6 @@ mod tests {
 
     #[test]
     fn the_array_form_is_accepted_too() {
-        // Not RFC 6749's spelling, but one several authorization servers emit —
-        // and the deployment does not get to choose.
         assert_eq!(parse(r#"{"scope":["posts:read"]}"#), ["posts:read"]);
     }
 

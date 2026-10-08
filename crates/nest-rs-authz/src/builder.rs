@@ -21,10 +21,8 @@ use crate::predicate::{Predicate, PredicateBuilder};
 #[derive(Default)]
 pub struct AbilityBuilder {
     ability: Ability,
-    /// Rules whose relation predicate was rejected (the [`Predicate::Deny`]
-    /// sentinel). Collected as rules commit so [`build`](Self::build) can fail
-    /// the construction instead of letting a malformed denial silently go
-    /// fail-open. Empty in the overwhelmingly common valid case.
+    /// Rules whose relation predicate was rejected, so [`build`](Self::build)
+    /// fails rather than a malformed denial going fail-open.
     malformed: Vec<MalformedRuleError>,
     /// What the actor's credential was granted, or `None` when the credential
     /// is not scope-aware. See [`with_granted_scopes`](Self::with_granted_scopes).
@@ -48,22 +46,14 @@ impl AbilityBuilder {
     ///
     /// The ability guard calls this with the request's
     /// `nest_rs_guards::GrantedScopes::shared()`; an app writing an
-    /// `AbilityFactory` never does. Shared rather than owned because the guard
-    /// runs on every authenticated request and the list is already allocated —
-    /// and because this crate's engine must not depend on the transport
-    /// bindings' `nest-rs-guards`.
+    /// `AbilityFactory` never does.
     pub fn with_granted_scopes(mut self, scopes: Option<Arc<[String]>>) -> Self {
         self.granted_scopes = scopes;
         self
     }
 
-    /// The scopes `required` names that this actor's credential does not carry.
-    /// Empty when nothing is required, or when the credential is not
-    /// scope-aware.
-    ///
-    /// The comparison is an exact string match, which is what RFC 6749 §3.3
-    /// defines: scopes are opaque tokens, so `posts:*` is a value a deployment
-    /// may mint but never a pattern this framework expands.
+    /// The scopes `required` names that this actor's credential does not carry,
+    /// compared exactly (RFC 6749 §3.3: scopes are opaque tokens, never patterns).
     fn missing_from_grant(&self, required: &[String]) -> Vec<String> {
         let Some(granted) = &self.granted_scopes else {
             return Vec::new();
@@ -94,9 +84,7 @@ impl AbilityBuilder {
     }
 
     /// Finalize the rule set. Fails with [`MalformedRuleError`] if any rule's
-    /// relation predicate was rejected as malformed — a misconfiguration that,
-    /// on the denial side, would otherwise combine fail-*open*. A valid rule set
-    /// (the common case) always succeeds.
+    /// relation predicate was rejected as malformed.
     pub fn build(mut self) -> Result<Ability, MalformedRuleError> {
         match self.malformed.drain(..).next() {
             Some(err) => Err(err),
@@ -106,12 +94,7 @@ impl AbilityBuilder {
 
     /// [`build`](Self::build) for the **anonymous** caller: the rule set is
     /// identical, but the result answers `true` to
-    /// [`Ability::is_visitor`](crate::Ability::is_visitor). The ability guard
-    /// calls this on its
-    /// [`define_visitor`](crate::AbilityFactory::define_visitor) branch, which
-    /// is what lets a transport that admits anonymous callers at the edge
-    /// (GraphQL) still refuse an operation whose declared posture is
-    /// `#[authorize(...)]` rather than `#[public]`.
+    /// [`Ability::is_visitor`](crate::Ability::is_visitor).
     pub fn build_visitor(self) -> Result<Ability, MalformedRuleError> {
         self.build().map(|mut ability| {
             ability.mark_visitor();
@@ -201,15 +184,6 @@ where
     /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
     /// ```
     ///
-    /// One declaration, three effects, and **no second decision site**: the
-    /// rule is withheld when the scope is absent (so the gate, the query filter
-    /// and the mask all refuse together, as they already do for a rule that was
-    /// never written), the refusal remembers `scope` so the transport can
-    /// answer `insufficient_scope` naming it, and the scope stays readable
-    /// beside the permission it conditions rather than in a parallel table.
-    /// The decision is still the guard's — this only says what the credential
-    /// must carry for the rule to exist.
-    ///
     /// Call it more than once to require **all** of the named scopes; a caller
     /// missing any one of them loses the rule, and the refusal names the ones
     /// they lack. Scopes are opaque tokens compared exactly (RFC 6749 §3.3),
@@ -217,8 +191,7 @@ where
     ///
     /// A credential that is not scope-aware — no
     /// [`PrincipalIdentity::scopes`](https://docs.rs/nest-rs-authn) — is not
-    /// gated by this at all, so adding it to a rule never breaks an app that
-    /// authenticates by session.
+    /// gated by this at all.
     pub fn requires_scope(mut self, scope: impl Into<String>) -> Self {
         self.required_scopes.push(scope.into());
         self
@@ -231,13 +204,8 @@ where
     E::Column: Send + Sync + 'static,
 {
     fn drop(&mut self) {
-        // A `Deny` predicate only ever comes from a rejected `related(...)`; a
-        // denial that carries it is the fail-open case, a grant the silent one.
-        // Record it so `build` fails naming the rule, before it can be consumed.
-        //
-        // Checked before the scope gate below, and deliberately: a malformed
-        // rule is a developer error, and whether it surfaces must not depend on
-        // which token the caller happened to present.
+        // A `Deny` predicate only comes from a rejected `related(...)`. Checked
+        // before the scope gate, so a developer error surfaces whatever the token.
         if matches!(self.predicate, Predicate::Deny) {
             self.builder.malformed.push(MalformedRuleError {
                 action: self.action,
@@ -248,11 +216,8 @@ where
 
         let missing = self.builder.missing_from_grant(&self.required_scopes);
         if !missing.is_empty() {
-            // A grant the credential cannot reach is remembered so the refusal
-            // can name the scope, then dropped. A *denial* it cannot reach is
-            // dropped silently: `cannot(...)` narrows, so withholding one would
-            // let a narrower token see more than a wider one — and there is
-            // nothing for the client to go ask for either way.
+            // A withheld grant is remembered so the refusal can name the scope;
+            // a withheld denial is dropped unreported.
             if !self.inverted {
                 tracing::debug!(
                     target: crate::TARGET,
@@ -348,9 +313,7 @@ mod tests {
 
     #[test]
     fn a_scope_is_an_opaque_token_never_a_wildcard() {
-        // RFC 6749 §3.3 — `widgets:*` is a value a deployment may mint, and it
-        // matches the rule requiring exactly it and nothing else. Expanding it
-        // would silently widen every credential that carries one.
+        // RFC 6749 §3.3: `widgets:*` is a value, never a pattern.
         let ability = ability_with(Some(scopes(["widgets:*"])));
         assert!(!ability.can_class(Action::Read, subject()));
         assert_eq!(
@@ -361,8 +324,6 @@ mod tests {
 
     #[test]
     fn a_credential_that_is_not_scope_aware_is_never_gated() {
-        // The session/mTLS/test case, and the reason adding `requires_scope` to
-        // a rule cannot break an app that does not use OAuth at all.
         let ability = ability_with(None);
         assert!(ability.can_class(Action::Read, subject()));
         assert!(ability.missing_scopes(Action::Read, subject()).is_empty());
@@ -400,9 +361,6 @@ mod tests {
 
     #[test]
     fn a_withheld_rule_beside_a_granted_one_is_not_a_denial() {
-        // The case `missing_scopes` must never be read as a check of its own:
-        // the narrow token still reaches the subject by the unscoped rule, so
-        // the gate allows and there is nothing to ask for.
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Read, widget::Entity);
         ab.can(Action::Read, widget::Entity)
@@ -414,9 +372,6 @@ mod tests {
 
     #[test]
     fn a_scope_withheld_on_the_manage_wildcard_answers_a_read_refusal() {
-        // `rules_for` widens `Read` to `Manage` on the grant side; the reason
-        // for a refusal has to widen the same way or the client is told
-        // nothing.
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Manage, widget::Entity)
             .requires_scope("widgets:write");
@@ -431,9 +386,6 @@ mod tests {
 
     #[test]
     fn a_withheld_denial_is_dropped_without_being_advertised() {
-        // A `cannot` narrows. Withholding one would let a *narrower* token see
-        // more than a wider one, and there is nothing for the client to request
-        // either way — so it is dropped silently, never reported as missing.
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Read, widget::Entity);
         ab.cannot(Action::Read, widget::Entity)

@@ -1,17 +1,8 @@
-//! Integration coverage for the queue port, in process: the `#[queue]` and
-//! `#[processor]` decorators against the types they implement, pushes through a
-//! backend that records them, and attempts at a job through the port's own
-//! `consume` — against a backend declaring every capability and one declaring
-//! none, so each refusal a capability-less backend owes is proved here, while the
-//! behaviour a real backend adds is proved by that backend's e2e suite.
+//! The queue port in process: its decorators, pushes and attempts, against a
+//! backend declaring every capability and one declaring none.
 //!
-//! **This suite is also the call-site hygiene proof for `#[processor]`.** The
-//! manifest declares no `nest-rs-worker`, so a `#[process]` expansion naming it
-//! directly fails to compile here — which is what a freshly generated
-//! `crates/features` would see.
-//!
-//! Suite root: each test lives in the module named for the `src/` concern it
-//! covers; this file holds the fixtures several of them share.
+//! The manifest declares no `nest-rs-worker`: this suite is the call-site
+//! hygiene proof for `#[processor]`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -42,7 +33,6 @@ struct TranscodeCommand {
     file: String,
 }
 
-// A static queue: the one artifact producer and consumer both import.
 #[queue(name = "transcode", job = TranscodeCommand)]
 struct TranscodeQueue;
 
@@ -51,7 +41,6 @@ struct SyncCommand {
     org: String,
 }
 
-// A second static queue, for the method declaring every key.
 #[queue(name = "sync", job = SyncCommand)]
 struct SyncQueue;
 
@@ -77,9 +66,7 @@ static TRANSCODED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 struct TranscodeProcessor;
 
-// Hand-provided below, which is a singleton registration. No decorator built
-// this type, so nothing has stated its residency and the hand-written path is
-// open — the one place it still is.
+// Hand-provided: no decorator built this type to state its residency.
 impl nest_rs_core::ProviderResidency for TranscodeProcessor {
     const SINGLETON: bool = true;
 }

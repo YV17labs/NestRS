@@ -1,11 +1,6 @@
-//! Dependency auto-wiring for generated code.
-//!
-//! Adding a transport adapter to a fresh workspace usually needs a crate the
-//! starter `Cargo.toml` doesn't carry yet (a resource needs `nest-rs-seaorm`,
-//! a GraphQL adapter needs `async-graphql`, …). These [`Transform`]s splice
-//! the missing entries into the root `[workspace.dependencies]` and the
-//! `crates/features` manifest — idempotently, so an already-equipped workspace
-//! (the nestrs repo itself) is a no-op.
+//! Dependency auto-wiring for generated code: [`Transform`]s splice what a
+//! generator's output needs into the root `[workspace.dependencies]` and the
+//! `crates/features` manifest, idempotently.
 
 use toml_edit::{DocumentMut, Item, Value};
 
@@ -23,9 +18,8 @@ pub(crate) struct Dep {
     features: &'static [&'static str],
 }
 
-/// A capability of the umbrella. `workspace_value` is unused for these — the
-/// version tracks the CLI's own release line (see [`framework_req`]) — and the
-/// name is always the single `nest-rs` entry every generated manifest carries.
+/// A capability of the umbrella; its version tracks the CLI's own release line
+/// ([`framework_req`]).
 const fn nest_rs(features: &'static [&'static str]) -> Dep {
     Dep {
         name: "nest-rs",
@@ -47,12 +41,8 @@ impl Dep {
 }
 
 pub(super) const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
-// `#[expose]` and `#[wire_enum]` ride `seaorm`, which is the one feature that
-// activates both `nest-rs-resource` and `nest-rs-seaorm`. They cannot be two
-// features: `#[expose]` emits twelve `::nest_rs_seaorm::` paths and `#[crud]`
-// emits `::nest_rs_resource::`, so each half's expansion names the other's
-// crate — two features that must imply each other, which Cargo rejects as a
-// cycle. `cargo add nest-rs --features resource` could not compile `#[expose]`.
+// `#[expose]` and `#[wire_enum]` ride `seaorm`: the `nest-rs-resource` and
+// `nest-rs-seaorm` expansions name each other's crate, so they are one feature.
 pub(super) const RESOURCE: Dep = nest_rs(&["seaorm"]);
 pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
@@ -64,9 +54,7 @@ pub(super) const REDIS: Dep = nest_rs(&["redis"]);
 pub(super) const MCP: Dep = nest_rs(&["mcp"]);
 pub(super) const AUTHN: Dep = nest_rs(&["authn"]);
 pub(super) const AUTHZ: Dep = nest_rs(&["authz", "http"]);
-// Mirrors the feature set `nest-rs-seaorm` itself resolves — a divergent list
-// (or a release-candidate floor) would be a manifest the user inherits and has
-// to un-learn later.
+// Mirrors the feature set `nest-rs-seaorm` itself resolves.
 const SEA_ORM: Dep = Dep {
     name: "sea-orm",
     workspace_value: "{ version = \"2.0\", default-features = false, features = [\"sqlx-postgres\", \"runtime-tokio\", \"macros\", \"with-uuid\", \"with-chrono\"] }",
@@ -87,13 +75,8 @@ const ASYNC_GRAPHQL: Dep = Dep {
     workspace_value: "{ version = \"7.2\", features = [\"dataloader\"] }",
     features: &[],
 };
-// `ws` writes a `tracing::warn!` for a failed broadcast — the one scaffolded
-// event that is not the edge's own operation line, and now the only skeleton
-// naming this crate at all. `queue`/`schedule` return `anyhow::Result`.
-// `templates::workspace` now ships both from `nestrs new`, so on a scaffolded
-// tree these two entries are idempotent no-ops; they stay for the workspace
-// assembled by hand, where the generator is the only thing that knows what its
-// own skeleton names.
+// The `ws` skeleton writes `tracing::warn!`; `queue`/`schedule` return
+// `anyhow::Result`. No-ops on a tree `nestrs new` wrote.
 const TRACING: Dep = Dep {
     name: "tracing",
     workspace_value: "\"0.1\"",
@@ -115,39 +98,26 @@ const TRACING_SUBSCRIBER: Dep = Dep {
     features: &[],
 };
 
-/// The crates a resource port (DB-backed CRUD + HTTP) needs.
-///
-/// `#[expose]` carries its own derives now, each routed back through the
-/// framework, so `schemars` / `validator` / `uuid` / `chrono` are no longer
-/// call-site deps. `authz` stays because `#[crud]` emits `Authorize<…>`
-/// parameters — the developer's `#[authorize]` is what turns it on.
+/// The crates a resource port (DB-backed CRUD + HTTP) needs; `authz` because
+/// `#[crud]` emits `Authorize<…>` parameters.
 pub(super) fn resource_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE]
 }
 
-/// The crates one `#[expose]`d entity needs, and no more — [`resource_deps`]
-/// without `authz`, which belongs to the `#[crud]` controller rather than to the
-/// entity. `seaorm` is the entity's own: `soft_delete` expands to the
-/// `SoftDeletable` impl that crate declares.
+/// The crates one `#[expose]`d entity needs — [`resource_deps`] without `authz`.
 pub(super) fn entity_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &RESOURCE, &SEA_ORM, &SERDE]
 }
 
 /// The crates the authn/authz adapter (`g auth`) needs.
 pub(super) fn auth_deps() -> Vec<&'static Dep> {
-    // `RESOURCE` is what `#[wire_enum]` on `Role` needs: the principal's role
-    // enum is named by `Claims` *and* by the development token DTO, so it
-    // carries the wire derives rather than serde alone.
+    // `RESOURCE` for `#[wire_enum]` on `Role`.
     vec![&AUTHN, &AUTHZ, &RESOURCE, &SERDE, &UUID]
 }
 
 /// The crates the `migrations` + `seed` bootstrap crates need — the union of
-/// what `templates::migration`'s two manifests declare `workspace = true`. A
-/// name missing here is a generated crate whose own `Cargo.toml` names a
-/// workspace dependency the root does not define, so keep the two in step.
-/// (`async-trait` is deliberately absent: the migration template writes
-/// `#[async_trait::async_trait]`, which `sea_orm_migration::prelude` re-exports
-/// — the demo's migrations crate does not depend on it either.)
+/// what `templates::migration`'s two manifests declare `workspace = true`; keep
+/// the two in step. No `async-trait`: `sea_orm_migration::prelude` re-exports it.
 pub(super) fn migrations_deps() -> Vec<&'static Dep> {
     vec![
         &SEAORM,
@@ -164,10 +134,8 @@ pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         Transport::Http => vec![],
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
         Transport::Ws => vec![&WS, &TRACING],
-        // `SERDE`: the payload `g queue` writes at the port carries plain
-        // derives rather than `#[input]` — a producer↔worker contract has to
-        // accept a field a newer producer added, and `deny_unknown_fields`
-        // would dead-letter those jobs on their first attempt.
+        // `SERDE`: the payload carries plain derives, not `#[input]`, whose
+        // `deny_unknown_fields` would dead-letter a newer producer's jobs.
         Transport::Queue => vec![&REDIS, &ANYHOW, &SERDE],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
         Transport::Mcp => vec![&MCP],
@@ -176,10 +144,7 @@ pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
 }
 
 /// What an **app crate** needs to depend on to name the transport's root
-/// module — the one the generator's own printed next step tells the reader to
-/// import. Empty where the scaffold already carries it: every app crate
-/// `nestrs new` writes depends on `nest-rs-http`, so HTTP, WS and MCP add
-/// nothing.
+/// module; empty where every scaffolded app crate already carries it.
 pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http | Transport::Ws | Transport::Mcp => vec![],
@@ -189,10 +154,6 @@ pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
         Transport::Events => vec![&EVENTS],
     }
 }
-
-// The crates each `authz/<transport>/` bridge needs are listed on the bridge
-// itself (`generate::auth`), beside the files that name them — one row per
-// transport rather than a helper per transport.
 
 /// What exposing an entity over GraphQL needs: `#[expose(graphql)]` derives the
 /// async-graphql object through `nest_rs_resource::graphql`, which that crate
@@ -212,10 +173,8 @@ pub(super) fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
     ensure_deps(deps, &["dependencies"], |_| Item::Value(workspace_value()))
 }
 
-/// The shared half: insert what is absent, then enable any feature the entry is
-/// missing. The second step is what a capability needs — it is a **feature** of
-/// the single `nest-rs` entry, so an already-present entry still has to gain
-/// it, or `g graphql` on an equipped workspace silently leaves it off.
+/// Insert what is absent, then enable any feature the entry is missing: a
+/// capability is a feature of the single `nest-rs` entry, already present or not.
 fn ensure_deps(
     deps: Vec<&'static Dep>,
     path: &'static [&'static str],
@@ -272,8 +231,6 @@ fn enable_features(entry: &mut Item, wanted: &[&str]) -> bool {
     }
     if changed {
         table.insert("features", Item::Value(Value::Array(features)));
-        // Re-space the entry we just widened, so the manifest the developer
-        // inherits reads as if it had been written by hand.
         if let Some(inline) = entry.as_value_mut().and_then(Value::as_inline_table_mut) {
             inline.fmt();
         }
@@ -289,9 +246,7 @@ fn parse_value(raw: &str) -> Item {
         .unwrap_or_else(|| Item::Value(Value::from(raw)))
 }
 
-/// A bare `{ workspace = true }` entry — [`enable_features`] then adds whatever
-/// the dependency needs on top, so the feature list is built in one place
-/// whether the entry is new or already there.
+/// A bare `{ workspace = true }` entry; [`enable_features`] adds the features.
 fn workspace_value() -> Value {
     let mut table = toml_edit::InlineTable::new();
     table.insert("workspace", Value::from(true));
@@ -307,10 +262,8 @@ mod tests {
         let src = "[workspace.dependencies]\nanyhow = \"1\"\n";
         let t = ensure_workspace_deps(vec![&SEAORM]);
         let out = t(src).expect("adds nest-rs");
-        // The pin tracks the CLI's own release line, not a hard-coded literal.
         assert!(out.contains("nest-rs"), "{out}");
         assert!(out.contains("seaorm"), "{out}");
-        // already present → no-op
         assert!(ensure_workspace_deps(vec![&SEAORM])(&out).is_none());
     }
 
@@ -323,9 +276,8 @@ mod tests {
         assert!(out.contains("\"http\""));
     }
 
-    // The `g graphql` case: the crate is already a dependency (every scaffolded
-    // workspace carries `nest-rs-guards`), so only its feature is missing —
-    // and without it `#[resolver]` expands to names that do not exist.
+    // `g graphql` on a workspace already depending on `nest-rs`: only its feature
+    // is missing.
     #[test]
     fn enables_a_missing_feature_on_a_dependency_already_declared() {
         let src = "[dependencies]\nnest-rs.workspace = true\n";
@@ -353,15 +305,8 @@ mod tests {
         );
     }
 
-    /// Every crate a generated skeleton *names* has to be in that transport's
-    /// dependency list. Derived from the template text rather than from a
-    /// hand-kept list, so a skeleton that starts logging (or starts returning
-    /// `anyhow::Result`) drags its dependency along on the same commit.
-    ///
-    /// The class this closes: three generators wrote `tracing::info!` into the
-    /// handler body while adding only their own `nest-rs-*` crate, so the first
-    /// `cargo check` after `nestrs g queue` was `cannot find module or crate
-    /// `tracing``.
+    /// Every crate a generated skeleton *names* is in that transport's dependency
+    /// list, derived from the template text.
     #[test]
     fn a_skeleton_that_names_a_crate_declares_it() {
         // (token appearing in a skeleton, crate that must then be a dependency)
@@ -380,8 +325,7 @@ mod tests {
             for crud_port in [false, true] {
                 let (handler, module) =
                     crate::commands::generate::adapter::templates_for(transport, crud_port);
-                // The queue payload rides at the port, but `g queue` is what
-                // writes it — so it counts against the same dependency list.
+                // The queue payload rides at the port, but `g queue` writes it.
                 let extra = if transport == Transport::Queue {
                     crate::templates::adapter::QUEUE_COMMAND
                 } else {
@@ -392,10 +336,7 @@ mod tests {
                     if !src.contains(token) {
                         continue;
                     }
-                    // Two legal ways to reach it, and a skeleton must take one:
-                    // declare the crate, or import the framework's re-export
-                    // (`use nest_rs::mcp::rmcp;`) — which is what keeps the
-                    // generated manifest at a single `nest-rs` entry.
+                    // Or imported through the framework's re-export (`use nest_rs::mcp::rmcp;`).
                     let reexported = src.contains(&format!("::{};", krate.replace('-', "_")));
                     assert!(
                         declared.contains(krate) || reexported,
@@ -425,12 +366,8 @@ mod tests {
         r.render(handler)
     }
 
-    /// A2: `count()` exists only on the `g feature` service. A `g resource`
-    /// port's service is a `CrudService`, so a skeleton calling it produced a
-    /// workspace that did not compile — and rustc blamed `Iterator::count`,
-    /// sending the reader after an iterator bug. The CLI page's guarantee is
-    /// unconditional ("a freshly-generated port plus **any** adapter compiles
-    /// immediately"), so no CRUD skeleton may name it.
+    /// `count()` exists only on the `g feature` service, so no CRUD skeleton may
+    /// call it (rustc would blame `Iterator::count`).
     #[test]
     fn no_crud_port_skeleton_calls_the_plain_features_count() {
         for transport in Transport::ALL {
@@ -445,8 +382,7 @@ mod tests {
         }
     }
 
-    /// …and the plain-feature skeletons must keep delegating, so the two
-    /// variants cannot silently collapse into one inert stub.
+    /// The plain-feature skeletons keep delegating.
     #[test]
     fn the_plain_feature_skeletons_still_delegate_to_the_port() {
         for transport in [Transport::Http, Transport::Graphql, Transport::Ws] {
@@ -461,8 +397,6 @@ mod tests {
         }
     }
 
-    // A hand-rolled manifest may pin a version literally; the feature list then
-    // has nowhere to go until the entry is widened into a table.
     #[test]
     fn a_version_pinned_dependency_is_widened_to_carry_features() {
         let src = "[dependencies]\nnest-rs = \"1.1\"\n";

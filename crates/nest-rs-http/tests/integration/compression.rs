@@ -1,7 +1,5 @@
-//! `HttpConfig.compression` — boot the real `App`, mount a controller, and pin
-//! that the transport negotiates response compression from `Accept-Encoding`:
-//! a `gzip` body when the client accepts it, plain bytes otherwise, and nothing
-//! at all when the knob is off.
+//! `HttpConfig.compression`: the transport negotiates response compression
+//! from `Accept-Encoding`, and never encodes when the knob is off.
 
 use std::time::Duration;
 
@@ -17,8 +15,6 @@ struct EchoController;
 impl EchoController {
     #[get("/")]
     async fn echo(&self) -> String {
-        // A body long enough to be worth compressing; the middleware has no size
-        // floor, but a realistic payload keeps the test honest.
         "nestrs compression payload ".repeat(64)
     }
 
@@ -83,11 +79,8 @@ async fn compression_off_never_encodes_even_when_accepted() {
 
 #[tokio::test]
 async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
-    // The compression layer runs inside the error boundary, so it stamps
-    // `Content-Encoding: gzip` on the timeout's `Ok(503)` before the boundary
-    // rewrites the body into (uncompressed) problem+json. The rewrite must drop
-    // the stale encoding, or a browser (which always sends Accept-Encoding)
-    // hits ERR_CONTENT_DECODING_FAILED.
+    // Compression runs inside the error boundary: it stamps `gzip` on the
+    // timeout's `503` before the boundary rewrites the body uncompressed.
     let logs = nest_rs_testing::LogCapture::install();
     let client = boot_with(true, Some(Duration::from_millis(50))).await;
     let resp = client
@@ -96,15 +89,8 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
         .send()
         .await;
     assert_eq!(resp.0.status(), StatusCode::SERVICE_UNAVAILABLE);
-    // The `Retry-After` the origin's own status is paired with (RFC 9110
-    // §15.6.4) has to survive the rewrite into problem+json.
     resp.assert_header(header::RETRY_AFTER, "1");
 
-    // A `503` is what the client sees; it says nothing about which ceiling
-    // fired. The event carries the configured `timeout`, which is the
-    // difference between "this handler is slow" and "the deployment's
-    // `NESTRS_HTTP__TIMEOUT` is too tight" — and a burst of these is the first
-    // sign of the second.
     let event = logs.expect_one("nest_rs::http", "request timed out");
     assert_eq!(event.level, "warn");
     assert!(
@@ -113,7 +99,6 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
         event.fields,
     );
     resp.assert_header_is_not_exist(header::CONTENT_ENCODING);
-    // The body is the real, uncompressed problem+json — parseable as-is.
     let bytes = resp.0.into_body().into_bytes().await.expect("body");
     let problem: serde_json::Value = serde_json::from_slice(&bytes).expect("problem+json body");
     assert_eq!(problem["status"], 503);

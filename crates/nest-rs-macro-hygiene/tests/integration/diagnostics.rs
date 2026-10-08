@@ -1,16 +1,8 @@
-//! trybuild snapshots of every decorator's refusals, one folder of fixtures per
-//! umbrella module, each written through `nest_rs::` as a developer writes it:
-//! the exact error a developer reads is part of the contract (CORE-I10), so a
-//! wording or span regression fails here instead of shipping.
+//! trybuild snapshots of every decorator's refusals, one fixture folder per
+//! umbrella module, written through `nest_rs::`.
 //!
-//! They share this one crate on purpose. trybuild runs cargo with the identity
-//! of the crate under test, and ring's build script tracks it (cargo#16134), so
-//! suites spread over several crates rebuilt ring and its dependents for each
-//! other in the `target/tests/trybuild` they share. One `TestCases` compiles
-//! every fixture in one cargo run.
-//!
-//! Boot-time diagnostics (a missing dependency, an unimported module) are
-//! runtime errors, pinned by `nest-rs-core`'s suite.
+//! One crate, one `TestCases`: ring's build script tracks the crate under test
+//! (cargo#16134), so suites spread over crates rebuild ring for each other.
 
 #[test]
 fn every_decorator_refuses_in_the_words_pinned() {

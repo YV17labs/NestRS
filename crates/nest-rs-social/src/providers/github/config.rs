@@ -3,11 +3,7 @@ use nest_rs_oauth_client::OAuthClientConfig;
 
 use crate::registry::SocialProviderConfig;
 
-/// GitHub OAuth deployment config. Only credentials, redirect, and scopes are
-/// deployment config — the auth/token/userinfo endpoint URLs are provider
-/// constants (see `GithubSocialConfig::oauth2_config`).
-///
-/// Dual-path (env `<PREFIX>_SOCIAL__GITHUB__*` **and** the pinned struct). No
+/// GitHub OAuth deployment config; the endpoint URLs are provider constants. No
 /// `Debug`: `client_secret` must not leak through a derived format.
 #[config(namespace = "social__github")]
 #[derive(Clone, Default)]
@@ -21,8 +17,7 @@ pub struct GithubSocialConfig {
     /// The registered redirect URL the callback returns to.
     #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub redirect_url: String,
-    /// Defaults to `read:user user:email` (the canonical login set) when unset
-    /// — see `GithubSocialConfig::scopes_or_default`.
+    /// Defaults to `read:user user:email` when unset.
     pub scopes: Vec<String>,
 }
 
@@ -90,9 +85,6 @@ mod tests {
         }
     }
 
-    /// A credential holding only whitespace is configured, not absent — so the
-    /// provider is not inert — and it fails validation naming the field, as a
-    /// partial set does.
     #[test]
     fn whitespace_only_credentials_are_refused_like_a_partial_set() {
         use validator::Validate;

@@ -1,6 +1,5 @@
-//! The lazy request executor: `BEGIN` is deferred to the first data-layer
-//! touch, so a guard-denied mutating request opens **zero** transactions,
-//! while a handler that writes still commits through the lazily opened one.
+//! The lazy request executor: `BEGIN` waits for the first data-layer touch, so
+//! a guard-denied mutating request opens no transaction.
 
 use std::sync::Arc;
 
@@ -27,8 +26,6 @@ fn status_of(result: Result<Response>) -> StatusCode {
     }
 }
 
-// The counting seam itself: no data-layer touch ⇒ the cell stays empty ⇒ no
-// `BEGIN` was ever issued against Postgres.
 #[tokio::test]
 async fn no_data_layer_touch_opens_no_transaction() {
     let conn = crate::harness::connect_arc().await;
@@ -74,9 +71,6 @@ async fn first_query_opens_the_transaction_once() {
         .expect("rollback the probe transaction");
 }
 
-// End-to-end through `DbContext`: a denied mutating request (403 before any
-// query) flows through unchanged — the finalizer finds no transaction to
-// commit or roll back.
 #[tokio::test]
 async fn a_denied_mutating_request_passes_through_with_no_transaction() {
     let ctx = DbContext::new(
@@ -90,8 +84,6 @@ async fn a_denied_mutating_request_passes_through_with_no_transaction() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
-// End-to-end through `DbContext`: a handler that writes commits through the
-// lazily opened transaction — visible from the pool afterwards.
 #[tokio::test]
 async fn a_writing_handler_commits_through_the_lazy_transaction() {
     let conn = crate::harness::connect_arc().await;
@@ -132,22 +124,12 @@ async fn a_writing_handler_commits_through_the_lazy_transaction() {
         .expect("clean up the probe table");
 }
 
-// ---------------------------------------------------------------------------
-// What a **connection** fault costs an attempt. Both cases below are ones the
-// framework knows wrote nothing — no `COMMIT` was ever issued — so both are
-// retryable, and both were classified `deterministic` and dead-lettered before
-// `is_transient_failure` existed. The in-doubt commit at the end is the
-// deliberate exception, and it is what keeps the classification honest.
-
 /// The pool never hands out a connection, so `BEGIN` cannot even be issued.
-/// Nothing reached the database; an outage is exactly what a retry budget is
-/// for.
 #[tokio::test]
 async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     let logs = nest_rs_testing::LogCapture::install();
     let pool = crate::harness::starved_pool().await;
 
-    // Hold the only connection for the duration of the attempt.
     let hog = sea_orm::TransactionTrait::begin(&pool)
         .await
         .expect("hold the only connection");
@@ -155,8 +137,7 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
     let reported_success = with_request_executor(Executor::Lazy(lazy.clone()), async {
         let executor = current_executor().expect("ambient executor installed");
-        // The shape `Poisoned` exists for: the job swallows the `DbErr` and
-        // reports success.
+        // Swallowed, and success reported: the shape `Poisoned` exists for.
         let _ = executor.execute_unprepared("SELECT 1").await;
         true
     })
@@ -170,12 +151,6 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
         other => panic!("expected a poisoned boundary, got {other:?}"),
     }
 
-    // Its own message, distinct from the transaction-was-opened twin: nothing
-    // was opened here, so `NoTransaction` would have been the honest-looking
-    // answer and the wrong one — it says "nothing to settle" about work that
-    // was meant to land and did not. An operator reading this line learns the
-    // request never reached the database at all, which is a different incident
-    // from one whose statements ran and were thrown away.
     let event = logs.expect_one(
         nest_rs_seaorm::TARGET,
         "a statement failed before this boundary could open its transaction, but the \
@@ -199,8 +174,6 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     hog.rollback().await.expect("release the held connection");
 }
 
-/// The table the terminated attempt writes to, so "nothing landed" is a row
-/// count rather than an assumption.
 const TERMINATED_PROBE_TABLE: &str = "lazy_terminated_probe";
 
 /// The server closes the session mid-attempt (`57P01`). Postgres rolls the
@@ -241,9 +214,6 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
         other => panic!("expected a poisoned boundary, got {other:?}"),
     }
 
-    // The claim the classification rests on, asserted rather than assumed: the
-    // attempt's write is not durable. `retryable: true` is only safe because of
-    // this row count.
     let surviving = pool
         .query_one_raw(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -261,14 +231,8 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// An **abandoned** boundary: the future holding the executor is dropped before
-// anything settles it. That is the framework's own shutdown path — a queue
-// worker's drain window closing cuts the job's attempt where it stands — and
-// if that is mid-statement, the transaction stays open until
-// the abandoned statement drains server-side. Nothing can cancel it from here,
-// so what the framework owes is the event.
-
+// A worker's drain window drops the attempt mid-statement: the transaction stays
+// open until the statement drains server-side, and nothing here can cancel it.
 #[tokio::test]
 async fn a_boundary_abandoned_mid_statement_says_so() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -282,8 +246,7 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
                 .execute_unprepared("SELECT 1")
                 .await
                 .expect("the first statement opens the transaction");
-            // In flight when the attempt is dropped, which is the case that
-            // costs something: the rollback cannot go out until it drains.
+            // In flight when dropped: the rollback cannot go out until it drains.
             let _ = executor.execute_unprepared("SELECT pg_sleep(1)").await;
             true
         });
@@ -311,12 +274,8 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     );
 }
 
-/// The deliberate exception, and the one that keeps the widened classification
-/// honest: the connection is lost with the transaction **clean**, so nothing
-/// poisoned it and `finalize` reaches the `COMMIT` — which then fails without
-/// saying whether it landed. That one is **not** replayed. Widening
-/// `CommitError::is_retryable_conflict` to match `is_transient_failure` would
-/// turn "may have written once" into "wrote twice"; this is what would catch it.
+/// A connection lost with the transaction clean fails the `COMMIT` without
+/// saying whether it landed, so it is never replayed.
 #[tokio::test]
 async fn a_commit_whose_outcome_is_unknown_stays_deterministic() {
     let pool = crate::harness::connect().await;
@@ -333,8 +292,7 @@ async fn a_commit_whose_outcome_is_unknown_stays_deterministic() {
     })
     .await;
 
-    // Killed *after* the last statement returned, so no statement failed and the
-    // boundary is clean: the failure lands on the `COMMIT` itself.
+    // Killed after the last statement, so the failure lands on the `COMMIT`.
     crate::harness::terminate_backend(&killer, pid).await;
 
     match lazy.finalize(true).await {

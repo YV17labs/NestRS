@@ -1,10 +1,5 @@
-//! [`RedisConfig`] — the connection's `#[config]`: how to reach Redis.
-//!
-//! Namespace `redis`, read off the path like every other config's. The
-//! connection is the crate's own subject — every binding folder (`queue/`,
-//! `schedule/`, `throttler/`) shares it — so it lives at the crate root under the
-//! crate's word, `<PREFIX>_REDIS__*`, and the operator configures the resource
-//! they provisioned rather than the capability that happened to ask first.
+//! [`RedisConfig`] — the connection's `#[config]`: how to reach Redis, under
+//! `<PREFIX>_REDIS__*`.
 
 use std::time::Duration;
 
@@ -17,23 +12,11 @@ use crate::RedisTls;
 
 const DEFAULT_URL: &str = "redis://127.0.0.1/";
 
-/// Default boot budget for reaching Redis: 10s — long enough to ride out a
-/// cold DNS lookup or a sidecar still starting, short enough that a
-/// misconfigured URL fails the container's startup probe instead of parking it.
+/// Default boot budget for reaching Redis: 10s.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// The connect budget's range, the variable that sets it, and why. The floor is
-/// above zero rather than a whole second: the budget also bounds every command,
-/// and a sub-second one set in code is a fail-fast choice, not a mistake.
-///
-/// The ceiling is an hour, and it is one knob's ceiling on purpose — the budget
-/// bounds the boot's wait, every command a caller waits on, and the socket's
-/// liveness, and a second budget for any one of them would be a second answer to
-/// one question. Past an hour none of them is bounding anything: a Redis that
-/// has not answered a command in an hour is gone rather than slow, and a boot
-/// that waits longer is the parked process the budget exists to end. It also
-/// keeps the liveness the budget sets under what the kernel accepts — a
-/// keepalive idle past 32 767 s failed every dial with `EINVAL` — which
+/// The connect budget's range, the variable that sets it, and why. The ceiling
+/// also keeps the socket's liveness under what the kernel accepts, which
 /// `connection.rs` asserts at compile time.
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
     "CONNECT_TIMEOUT_SECS",
@@ -61,10 +44,7 @@ pub struct RedisConfig {
     pub url: String,
     /// How long boot may spend reaching Redis before failing with a named
     /// error, and afterwards the most any command a caller waits on may take
-    /// from end to end — past it the command fails as a timeout. The client
-    /// retries an unreachable endpoint on its own, so without a budget a wrong
-    /// URL parks the process with an empty log — never healthy, never crashed —
-    /// and an outage holds every caller. Read from
+    /// from end to end — past it the command fails as a timeout. Read from
     /// `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
     /// refused outside, and in code anything above zero up to an hour; defaults
     /// to 10s. The boot refuses a budget at or past a net waiting on the
@@ -100,12 +80,9 @@ impl Default for RedisConfig {
 }
 
 impl Config for RedisConfig {
-    /// The loopback URL is a dev convenience, so the *unpinned* baseline drops it
-    /// outside dev/test: an unset `<PREFIX>_REDIS__URL` then fails boot naming the
-    /// variable instead of silently pointing every Redis binding at a
-    /// non-existent local Redis (REDIS-Q1). It lives here rather than in
-    /// `from_env` so it applies only where it is a default, never over a pinned
-    /// value.
+    /// The *unpinned* baseline drops the loopback URL outside dev/test, so an
+    /// unset `<PREFIX>_REDIS__URL` fails boot naming the variable; here rather
+    /// than in `from_env`, so it never overrides a pinned value.
     fn defaults() -> Self {
         let d = Self::default();
         if matches!(
@@ -132,11 +109,7 @@ impl Config for RedisConfig {
 
 /// Resolve the Redis URL from the raw `<PREFIX>_REDIS__URL` value and the active
 /// profile. Unset or blank falls back to the loopback default **only** in
-/// dev/test; in staging/production it aborts boot — a silent
-/// `redis://127.0.0.1/` there points the queue and the rate limiter at a
-/// non-existent local Redis, a fail-open default (REDIS-Q1). Mirrors the DB
-/// posture. Pure, so the profile-dependent branch is testable without mutating
-/// the process env.
+/// dev/test; in staging/production it aborts boot.
 fn resolve_url(raw: Option<String>, environment: Environment) -> Result<String> {
     match raw {
         Some(url) if !url.trim().is_empty() => Ok(url),
@@ -168,9 +141,6 @@ mod tests {
 
     #[test]
     fn the_namespace_is_the_crate_word() {
-        // The connection is the crate's subject, shared by every binding — so
-        // the operator sees the resource they provisioned, not the capability
-        // that first asked for it.
         assert_eq!(RedisConfig::NAMESPACE, "redis");
     }
 
@@ -197,8 +167,6 @@ mod tests {
         );
     }
 
-    /// A zero budget given as a file is refused under the `_FILE` spelling
-    /// that supplied it.
     #[test]
     #[expect(
         clippy::let_underscore_must_use,
@@ -231,8 +199,6 @@ mod tests {
         );
     }
 
-    /// A budget pinned in code is held to the floor the variable is: a zero one
-    /// resolved and then gave up before its first attempt, blaming the URL.
     #[test]
     fn a_zero_connect_timeout_pinned_in_code_is_refused_naming_the_field() {
         let err = RedisConfig::from_env(
@@ -267,7 +233,6 @@ mod tests {
 
     #[test]
     fn resolve_url_aborts_when_unset_in_staging_or_production() {
-        // REDIS-Q1: no silent localhost fallback outside dev/test.
         for env in [Environment::Staging, Environment::Production] {
             let err = resolve_url(None, env).expect_err("must abort");
             assert!(
@@ -282,9 +247,6 @@ mod tests {
         }
     }
 
-    // C6: the connect budget is the knob that turns an unreachable backend from
-    // a silent forever-hang into a named boot failure — so it must be
-    // configurable, and a zero must not quietly restore the hang.
     #[test]
     fn connect_timeout_defaults_to_10s_and_reads_the_env() {
         assert_eq!(

@@ -2,19 +2,12 @@
 //! walked end to end by a client that knows only one thing: the URL of a
 //! protected route.
 //!
-//! This is the conformance test the capability exists for. It does not assert
-//! that a header is present — it *uses* the header the way an MCP client does,
-//! and every hop is a real request through the booted app:
-//!
 //! ```text
 //! GET /posts            → 401 + WWW-Authenticate: Bearer resource_metadata="…"
 //! GET <resource_metadata>  → the RFC 9728 document
 //! GET <authorization_servers[0]>/.well-known/oauth-authorization-server
 //!                       → the AS metadata, whose `issuer` the client validates
 //! ```
-//!
-//! Break any link — drop the challenge, serve the document at the wrong path,
-//! advertise an issuer nobody serves — and the walk stops at that hop.
 
 use crate::AlwaysUnauthorized;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
@@ -25,21 +18,15 @@ use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use serde_json::Value;
 
-/// This deployment's canonical URI. `TestClient` speaks paths, so the origin is
-/// the loopback one a client would see locally.
+/// This deployment's canonical URI: the loopback origin, as `TestClient` speaks paths.
 const RESOURCE: &str = "http://localhost";
-/// The authorization server this resource advertises — served, in this test, by
-/// the stub controller below so the last hop is a real response too. It carries
-/// a path component on purpose: that is the case where a client must walk the
-/// RFC 8414 §3.1 priority order rather than guess one URL.
+/// The advertised authorization server, served by the stub below; its path
+/// component makes a client walk the RFC 8414 §3.1 priority order.
 const ISSUER: &str = "http://localhost/stub-as";
 /// 32 bytes: HS256's floor, enforced in `JwtService::new`.
 const SECRET: &str = "discovery-flow-secret-0123456789";
-/// The one scope this deployment advertises — the challenge is asserted against
-/// the same constant the config names, so the two cannot drift apart.
+/// The one scope this deployment advertises.
 const SCOPE: &str = "posts:read";
-
-// --- the protected resource ------------------------------------------------
 
 #[controller(path = "/posts")]
 #[use_guards(AlwaysUnauthorized)]
@@ -53,17 +40,8 @@ impl PostsController {
     }
 }
 
-// --- the stub authorization server -----------------------------------------
-
-/// Stands in for the authorization server's own metadata endpoint. It exists so
-/// the final hop of the flow is an actual request whose `issuer` the client
-/// validates, rather than an assertion that a string was present in the previous
-/// document.
-///
-/// It answers only the **third** endpoint in the discovery priority order
-/// (OpenID Connect path-appending), so the client has to fall through the first
-/// two — which is the behaviour the spec requires and the reason a client that
-/// probes a single URL is not conformant.
+/// Stands in for the authorization server's metadata endpoint, answering only the
+/// third URL of the discovery order, so a client must fall through the first two.
 #[controller(path = "/stub-as")]
 struct StubAuthorizationServer;
 
@@ -81,14 +59,10 @@ impl StubAuthorizationServer {
     }
 }
 
-// --- the app ---------------------------------------------------------------
-
 fn authn() -> AuthnConfig {
     AuthnConfig {
         secret: Some(SECRET.into()),
-        // The audience `OAuthResourceModule` requires — and requires to be
-        // the resource identifier, so a token minted for another service is
-        // rejected rather than replayed here.
+        // The audience `OAuthResourceModule` requires: the resource identifier.
         audience: Some(RESOURCE.into()),
         ..AuthnConfig::default()
     }
@@ -110,16 +84,14 @@ fn resource() -> OAuthResourceConfig {
 )]
 struct DiscoveryApp;
 
-/// Pull a quoted parameter out of a `WWW-Authenticate` value, the way a client
-/// parses the challenge it was handed.
+/// Pull a quoted parameter out of a `WWW-Authenticate` value.
 fn challenge_param(challenge: &str, name: &str) -> Option<String> {
     let start = challenge.find(&format!("{name}=\""))? + name.len() + 2;
     let rest = &challenge[start..];
     Some(rest[..rest.find('"')?].to_owned())
 }
 
-/// `TestClient` addresses paths; a client on a socket would use the absolute
-/// URL. Asserting the prefix before stripping it is what keeps this honest.
+/// The path of an advertised absolute URL, once it is shown to live under `origin`.
 fn path_of(absolute: &str, origin: &str) -> String {
     assert!(
         absolute.starts_with(origin),
@@ -139,12 +111,9 @@ async fn a_client_walks_from_a_401_to_the_authorization_server() {
     denied.assert_status(StatusCode::UNAUTHORIZED);
     let challenge = crate::challenge(&denied.0);
 
-    // The challenge also tells the client which scopes to ask for, so it does
-    // not request more than the operation needs.
     assert_eq!(challenge_param(&challenge, "scope").as_deref(), Some(SCOPE));
 
-    // Hop 2 — follow `resource_metadata` rather than guessing the well-known
-    // path. That the two agree is the property under test.
+    // Hop 2 — follow `resource_metadata` rather than guessing the well-known path.
     let metadata_url = challenge_param(&challenge, "resource_metadata")
         .expect("the challenge must point at the metadata document");
     assert_eq!(
@@ -172,9 +141,8 @@ async fn a_client_walks_from_a_401_to_the_authorization_server() {
         .expect("RFC 9728 requires at least one authorization server")
         .to_owned();
 
-    // Hop 3 — the issuer has a path component, so a conformant client tries the
-    // three well-known endpoints in the order the spec fixes and takes the
-    // first that answers.
+    // Hop 3 — the issuer has a path, so the three well-known URLs are tried in the
+    // order the spec fixes.
     let (origin, tenant) = issuer.split_at(
         issuer["https://".len()..]
             .find('/')
@@ -204,8 +172,7 @@ async fn a_client_walks_from_a_401_to_the_authorization_server() {
         panic!("no authorization server metadata answered any of {candidates:?}")
     });
 
-    // The validation every client MUST perform: a document served from an
-    // issuer's well-known URL that names a *different* issuer is rejected.
+    // Every client MUST reject a document naming a different issuer.
     assert_eq!(
         as_document["issuer"], issuer,
         "the AS metadata's issuer must equal the issuer used to build the URL",
@@ -218,9 +185,6 @@ async fn a_client_walks_from_a_401_to_the_authorization_server() {
 
 #[tokio::test]
 async fn the_metadata_endpoint_is_reachable_without_a_token() {
-    // Declared `#[public]`, not public by omission. A discovery endpoint behind
-    // the guard chain would be a flow that can never start: the client has no
-    // token precisely because it has not read this document yet.
     let app = TestApp::for_module::<DiscoveryApp>().await.expect("boots");
 
     app.http()
@@ -230,8 +194,7 @@ async fn the_metadata_endpoint_is_reachable_without_a_token() {
         .assert_status_is_ok();
 }
 
-/// `TestApp` is not `Debug`, so `expect_err` cannot be used directly on a boot
-/// result; this keeps the failure message at the call site.
+/// `TestApp` is not `Debug`, so `expect_err` cannot take a boot result.
 async fn boot_error<M: nest_rs_core::Module + 'static>(msg: &str) -> anyhow::Error {
     match TestApp::for_module::<M>().await {
         Ok(_) => panic!("{msg}"),
@@ -241,9 +204,6 @@ async fn boot_error<M: nest_rs_core::Module + 'static>(msg: &str) -> anyhow::Err
 
 #[tokio::test]
 async fn a_deployment_that_cannot_name_itself_fails_boot() {
-    // The other half of the contract: the capability refuses to advertise a
-    // resource identity it has not been given, rather than serving a document
-    // that tells a client nothing.
     #[module(imports = [
         AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig::default()),
@@ -262,9 +222,6 @@ async fn a_deployment_that_cannot_name_itself_fails_boot() {
 
 #[tokio::test]
 async fn an_unbound_audience_fails_boot() {
-    // The confused-deputy defence. Without `aud` pinned, this server accepts
-    // any token its issuer signed — including one a user granted to a different
-    // service, which that service can replay here.
     #[module(imports = [
         AuthnModule::for_root(AuthnConfig { secret: Some(SECRET.into()), ..AuthnConfig::default() }),
         OAuthResourceModule::for_root(resource()),
@@ -282,9 +239,7 @@ async fn an_unbound_audience_fails_boot() {
     );
 }
 
-/// RFC 9728 §1.2 defines the resource identifier as "a URL that uses the https
-/// scheme and has no fragment component". A `http://` identifier used to boot
-/// clean and publish a document a §3.3-validating client may refuse.
+/// RFC 9728 §1.2: a resource identifier uses the https scheme.
 #[tokio::test]
 async fn a_non_https_resource_identifier_is_refused() {
     #[module(imports = [
@@ -304,8 +259,7 @@ async fn a_non_https_resource_identifier_is_refused() {
     );
 }
 
-/// The loopback carve-out, because that is where `http` is a real case and the
-/// spec's transport concern does not apply.
+/// Loopback is spared, for local development.
 #[tokio::test]
 async fn http_on_loopback_is_accepted_for_local_development() {
     #[module(imports = [
@@ -327,9 +281,8 @@ async fn http_on_loopback_is_accepted_for_local_development() {
         .expect("localhost boots");
 }
 
-/// RFC 9728 §2: "Defined values are ["header", "body", "query"]". The framework
-/// reads a bearer token only from the `Authorization` header, so advertising
-/// another defined method would tell clients to use a form this server refuses.
+/// RFC 9728 §2's other defined methods are refused: the framework reads a bearer
+/// token only from the `Authorization` header.
 #[tokio::test]
 async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
     #[module(imports = [
@@ -362,15 +315,8 @@ async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
     assert!(format!("{err:#}").contains("RFC 9728 §2"), "got: {err:#}",);
 }
 
-/// RFC 9728 §3.1 puts the well-known suffix between the host and "the path
-/// and/or query components", so a resource carrying a query advertises a
-/// `metadata_url` that carries it too. The *route* still matches on the URL
-/// path, which never carries a query — so the query rode into `resource_path`
-/// and the deployment answered `404` at its own advertised URL.
-///
-/// The inversion is what makes it silent: a **conformant** client following the
-/// challenge dead-ended, while one that ignored it and guessed the origin form
-/// succeeded.
+/// The route matches the URL path, which never carries the query a `metadata_url`
+/// may (RFC 9728 §3.1).
 #[tokio::test]
 async fn a_resource_with_a_query_serves_the_url_its_challenge_advertises() {
     #[module(imports = [
@@ -389,8 +335,6 @@ async fn a_resource_with_a_query_serves_the_url_its_challenge_advertises() {
 
     let app = TestApp::for_module::<QueryResource>().await.expect("boots");
 
-    // The path the challenge's `resource_metadata` resolves to, minus the
-    // origin — the query is a URL component the route never sees.
     let response = app
         .http()
         .get(format!("{WELL_KNOWN_PATH}/mcp"))

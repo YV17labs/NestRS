@@ -1,7 +1,5 @@
-//! `WorkerDbContext` installs a live executor around a job so a
-//! `#[scheduled]`/`#[processor]` queries through `Repo` without an injected
-//! connection — and settles what that job wrote. Driven against the dev
-//! Postgres, because the settling is the part no in-process double can show.
+//! `WorkerDbContext` installs a live executor around a job, so a
+//! `#[scheduled]`/`#[processor]` reaches `Repo`, and settles what the job wrote.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -12,8 +10,7 @@ use nest_rs_seaorm::{Executor, WorkerDbContext, current_executor};
 use nest_rs_worker::{JobContext, JobSettlement, JobTransaction};
 use sea_orm::{ConnectionTrait, Statement};
 
-/// A table this file owns, dropped and recreated per test so a rollback is
-/// observable as row count rather than inferred from a log.
+/// A table recreated per test, so a rollback is observable as a row count.
 async fn scratch_table(conn: &sea_orm::DatabaseConnection, name: &str) {
     for sql in [
         format!("DROP TABLE IF EXISTS {name}"),
@@ -87,8 +84,6 @@ async fn a_failed_job_leaves_nothing_for_the_retry_to_repeat() {
     scratch_table(&conn, "worker_rollback_probe").await;
     let ctx = context(conn.clone());
 
-    // The whole point of the default: the job wrote, then failed. Before this,
-    // the row survived and the retry inserted a second one.
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         current_executor()
             .expect("ambient executor")
@@ -115,8 +110,6 @@ async fn the_opt_out_runs_on_the_pool_and_each_statement_stands_alone() {
     scratch_table(&conn, "worker_pool_probe").await;
     let ctx = context(conn.clone());
 
-    // `transactional = false` is what every job did before the default changed:
-    // the write is already committed when the job goes on to fail.
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         let executor = current_executor().expect("ambient executor");
         assert!(
@@ -151,10 +144,8 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
         .expect("the row the job will collide with");
     let ctx = context(conn.clone());
 
-    // The commonest job shape there is: loop, log what fails, carry on. Postgres
-    // aborts the whole transaction on the first failed statement and then
-    // *succeeds* the `COMMIT` while rolling back — so before the poison flag
-    // this job reported `Ok`, wrote nothing, and said nothing about it.
+    // Postgres aborts the transaction on the first failed statement, then
+    // succeeds the `COMMIT` while rolling back.
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
         let executor = current_executor().expect("ambient executor");
         let collided = executor
@@ -185,11 +176,8 @@ async fn a_job_that_swallows_a_db_error_and_returns_ok_is_not_reported_as_succee
     );
 }
 
-/// The failure that motivated classifying at all: a constraint checked at
-/// `COMMIT`. Every statement succeeds, the job succeeds, and the commit is
-/// refused — identically on every attempt, because the two rows the job writes
-/// are what collide. Retrying it replays the whole body, side effects and all,
-/// once per unit of retry budget, and dead-letters anyway.
+/// A constraint checked at `COMMIT`, refused identically on every attempt: the
+/// two rows the job writes are what collide.
 #[tokio::test]
 async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
     let conn = crate::harness::connect_arc().await;
@@ -231,14 +219,8 @@ async fn a_commit_the_next_attempt_would_lose_too_is_not_retried() {
     );
 }
 
-/// The other half, and the reason "abort everything" is not the answer either:
-/// a transient conflict. Two `SERIALIZABLE` transactions read each other's
-/// predicate and then write into it; the second to commit is refused with
-/// `40001`, and running the attempt again is exactly what clears it.
-///
-/// Postgres may raise the conflict at the write or at the `COMMIT` — which is
-/// the point of reading its SQLSTATE rather than the site: the classification
-/// is the same wherever it surfaces.
+/// A `40001` serialization conflict, which the next attempt clears; Postgres
+/// may raise it at the write or at the `COMMIT`, classified the same.
 #[tokio::test]
 async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
     let conn = crate::harness::connect_arc().await;
@@ -256,8 +238,7 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
 
     let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async move {
         let executor = current_executor().expect("ambient executor");
-        // First statement on the attempt's transaction, before any query has
-        // fixed its snapshot — which is the only point Postgres accepts it.
+        // Postgres accepts it only before a query has fixed the snapshot.
         executor
             .execute_unprepared("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             .await
@@ -296,14 +277,7 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
     );
 }
 
-/// A job whose `COMMIT` the database refuses.
-///
-/// The queue's whole promise is "an attempt that fails leaves nothing for the
-/// retry to write again", and a commit-time constraint is where that promise is
-/// either kept or silently broken: the job body succeeded, so a context that
-/// reported the body's answer would ack a job that wrote nothing. The event is
-/// also what carries `retryable`, and a schedule reports it while a queue spends
-/// its budget on it — so getting it wrong either wastes a budget or drops work.
+/// A job whose `COMMIT` the database refuses, though its body succeeded.
 #[tokio::test]
 async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -319,7 +293,6 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
             )
             .await
             .expect("a deferred constraint lets the statement through");
-        // The job body itself succeeded. Everything after this is the boundary.
         true
     });
 

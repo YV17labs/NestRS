@@ -14,10 +14,8 @@ pub trait AppBuilderExceptionFiltersExt: Sized {
     /// **route** composes in, deduped by type against controller/method-scope
     /// declarations.
     ///
-    /// Scope note: unlike a global `Filter` (`nest_rs_filters`), which attaches
-    /// a wrap at the transport edge, these are read per route by the `#[routes]`
-    /// composer. An error raised where no route matched — a 404, a self-mounted
-    /// surface such as `/graphql` or `/mcp`, a WS upgrade — never reaches them.
+    /// Read per route by the `#[routes]` composer, so an error raised where no
+    /// route matched (a 404, `/graphql`, `/mcp`, a WS upgrade) never reaches them.
     fn use_exception_filters_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = ExceptionFilterSpec>;

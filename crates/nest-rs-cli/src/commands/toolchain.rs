@@ -1,19 +1,11 @@
 //! First-run bootstrap of the dev toolchain.
 //!
-//! `just`, `bacon`, `cargo-nextest` and `cargo-llvm-cov` are tools the CLI
-//! *drives* but does not bundle — Cargo deliberately has no post-install hook
-//! (the safeguard that keeps Rust clear of npm-style `postinstall` supply-chain
-//! attacks), so the CLI installs them on the first command that needs them
-//! instead. Detection is a version probe on PATH; install prefers
-//! `cargo binstall` (prebuilt, fast) and falls back to `cargo install --locked`.
+//! `just`, `bacon`, `cargo-nextest` and `cargo-llvm-cov` are driven but not
+//! bundled — Cargo has no post-install hook — so the CLI installs them on the
+//! first command that needs them: `cargo binstall`, else `cargo install --locked`.
 //!
-//! What is *not* here is `llvm-tools-preview`, which `cargo-llvm-cov` shells
-//! out to. It is not a crate, its binaries land in the sysroot and never on
-//! PATH — so the probe below would report it missing forever and reinstall it on
-//! every `nestrs run` — and it is a component of one toolchain rather than a
-//! tool of one machine. Every scaffold therefore pins it in
-//! `rust-toolchain.toml`, where rustup honours it per toolchain and follows the
-//! `channel` it is versioned against.
+//! `llvm-tools-preview` is not here: its binaries never land on PATH, so a probe
+//! would reinstall it forever. Every scaffold pins it in `rust-toolchain.toml`.
 
 use std::process::{Command, Stdio};
 
@@ -27,25 +19,14 @@ struct Tool {
     krate: &'static str,
     /// Arguments that make the binary print its version and exit `0`.
     ///
-    /// Carried per tool rather than fixed at `--version`, because a cargo
-    /// subcommand reads its own verb back as the first argument: nextest
-    /// tolerates the bare flag, while `cargo-llvm-cov --version` answers
-    /// `expected subcommand 'llvm-cov'` and exits `1`. A probe that assumed the
-    /// flag would call an installed tool missing and reinstall it on every
-    /// `nestrs run`.
+    /// Carried per tool: a cargo subcommand reads its own verb back as the first
+    /// argument, so `cargo-llvm-cov --version` exits `1`.
     probe: &'static [&'static str],
 }
 
 /// Installed all-at-once on first run — `just` is needed everywhere, the rest by
 /// the shipped recipes (`bacon` for `dev`, `cargo-nextest` for `test`,
 /// `cargo-llvm-cov` for `test cov`).
-///
-/// All-at-once means a developer who never asks for coverage still pays for
-/// `cargo-llvm-cov`, and that cost is taken deliberately: it is one prebuilt
-/// download behind `cargo binstall`, it is paid once, and the alternative —
-/// deciding per recipe which tools to fetch — cannot be right for the recipes a
-/// project adds itself, which the CLI forwards without knowing what they run.
-/// Whoever wants to pay nothing already has `--no-bootstrap`.
 const TOOLCHAIN: &[Tool] = &[
     Tool {
         bin: "just",
@@ -71,10 +52,7 @@ const TOOLCHAIN: &[Tool] = &[
 
 /// Env var that disables the first-run bootstrap (CI / offline).
 ///
-/// Not affected by a project's `--env-prefix`: this configures the `nestrs`
-/// **tool**, which is the same binary whatever a project renamed its own
-/// variables to. Prefixing it per project would mean the same CI step needs a
-/// different variable per repository.
+/// Not affected by a project's `--env-prefix`: it configures the `nestrs` tool.
 const NO_BOOTSTRAP_ENV: &str = "NESTRS_NO_BOOTSTRAP";
 
 /// Ensures every tool in [`TOOLCHAIN`] is on PATH, installing what is missing.
@@ -95,10 +73,8 @@ pub(super) fn ensure_toolchain(no_bootstrap: bool) -> CliResult<()> {
     let crates: Vec<&str> = missing.iter().map(|tool| tool.krate).collect();
 
     if no_bootstrap || env_disables_bootstrap() {
-        // Bootstrap off (CI / offline): only `just` is mandatory — it runs the
-        // recipe. The others are recipe-specific, so let just (or cargo) report
-        // them if a recipe actually invokes one. Blocking on them here would
-        // refuse recipes that need none.
+        // Bootstrap off: only `just` is mandatory; a recipe reports the others it
+        // actually invokes.
         if missing.iter().any(|tool| tool.bin == "just") {
             return Err(CliError::Anyhow(anyhow::anyhow!(
                 "missing dev tools: {names}. Bootstrap is disabled — install them manually:\n  cargo install --locked {names}",
@@ -174,8 +150,7 @@ fn install(crates: &[&str]) -> CliResult<()> {
     Ok(())
 }
 
-/// `cargo binstall` is probed through its own verb for the reason every cargo
-/// subcommand is: the binary reads the verb back as its first argument.
+/// `cargo binstall` is probed through its own verb, as every cargo subcommand is.
 fn binstall_available() -> bool {
     tool_available("cargo", &["binstall", "--version"])
 }
@@ -184,21 +159,15 @@ fn binstall_available() -> bool {
 mod tests {
     use super::*;
 
-    /// The bootstrap's whole promise is that a freshly generated project needs
-    /// no manual install, so every tool a shipped recipe invokes is on this
-    /// list. `cargo-llvm-cov` was the one that was not, and `nestrs run test
-    /// cov` failed on a project minutes old.
+    /// Every tool a shipped recipe invokes is on the list.
     #[test]
     fn toolchain_covers_every_tool_the_shipped_recipes_invoke() {
         let crates: Vec<&str> = TOOLCHAIN.iter().map(|tool| tool.krate).collect();
         assert_eq!(crates, ["just", "bacon", "cargo-nextest", "cargo-llvm-cov"]);
     }
 
-    /// A probe that answers `false` for an installed tool is worse than no
-    /// probe: the bootstrap reinstalls on every `nestrs run` and never says so.
-    /// `cargo-llvm-cov` is exactly that case — it refuses a bare `--version` —
-    /// so the arguments are read off the tool, and this asserts the two spellings
-    /// stay distinct rather than collapsing back to a constant.
+    /// `cargo-llvm-cov` refuses a bare `--version`, so the probe arguments stay
+    /// per tool.
     #[test]
     fn a_cargo_subcommand_is_probed_through_its_verb() {
         let llvm_cov = TOOLCHAIN

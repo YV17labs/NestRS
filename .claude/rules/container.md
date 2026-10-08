@@ -31,9 +31,9 @@ framework half.
   refused (`LateFactoryError`), and a module imported in a collect alone
   (`UnregisteredModuleError`).
 - **Providers are singletons unless scoped.** `scope = request` is built per
-  request from the singleton root and is **one level deep**: it may inject
-  singletons, never the reverse nor another request-scoped provider, and it is
-  reached through the edge's `Scoped<T>`, never `#[inject]`. `scope = transient`
+  request from the singleton root: it may inject singletons and other
+  request-scoped providers (one instance each per request), never the reverse,
+  and a handler reaches it through the edge's `Scoped<T>`. `scope = transient`
   is rebuilt on every resolution; a transient cycle panics at first resolution
   naming the chain — the one provider error not caught at boot.
 - **Modules compose by type or by configured value** (`DynamicModule`), and a

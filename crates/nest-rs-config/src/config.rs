@@ -26,35 +26,12 @@ pub trait Namespaced {
 
 /// Read `C`'s namespace over `base`, recording which variables it claimed.
 ///
-/// The seam every path into `from_env` takes, and it exists because there are
-/// **three**: [`Config::resolve`] for a `for_root` pin and for a bare
-/// `for_feature` import, and a discovery registry reading a plugin's own
-/// namespace — `architecture.md`'s third row, which `nest-rs-social` takes and
-/// which claimed nothing while the recording sat on `resolve` alone. A registry
-/// that must tell *unconfigured* from *invalid* cannot call `resolve` (it
-/// validates after its own check), so the claim had to move below the
-/// validation rather than the registry move above it.
-///
-/// **A free function, not a trait method with a default body**, and that
-/// distinction is the whole guarantee. [`Config`] is hand-implemented by every
-/// `#[config]` author — the decorator emits only [`Namespaced`] — so writing
-/// `fn read` beside their own `from_env` withdrew that type from the claim
-/// registry silently, with the boot green and no diagnostic anywhere.
-/// That shape is a shipped defect — a refusal that reads a missing marker is
-/// fillable — and here it was worse, a *present* default the checked party
-/// could replace. It stays `pub` — `nest-rs-social`'s registry is the third
-/// caller — because what had to go is the *override*, not the reachability: a
-/// free function cannot be replaced by the type it checks.
-///
-/// It refuses first a namespace another type declares too
-/// ([`ConfigError::SharedNamespace`](crate::ConfigError)): before any variable
-/// is read, so neither type claims a value the other would have been given.
-///
-/// It is also where the environment is checked for variables no config claims
-/// ([`crate::unclaimed`]): the read just finished is the one moment this
-/// namespace's keys are known, so the report runs here, before either error
-/// below can end the boot — a renamed variable is named ahead of the failure
-/// its absence causes.
+/// The seam every path into `from_env` takes, a discovery registry's included;
+/// a free function so a `Config` impl cannot override it and leave the claim
+/// registry. It refuses first a namespace another type declares too
+/// ([`ConfigError::SharedNamespace`](crate::ConfigError)), and runs the
+/// unclaimed-variable report ([`crate::unclaimed`]) before a read error can end
+/// the boot.
 pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
     crate::namespace::sole_declaration::<C>()?;
     let (value, claim) = crate::service::claiming::<C, _>(|| C::from_env(env, base));
@@ -74,27 +51,20 @@ pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
 ///
 /// # The environment can always override, per field
 ///
-/// A module configured in code (`HttpModule::for_root(HttpConfig { port: 3000,
-/// ..Default::default() })`) hands that struct in as the **base**, not as the
-/// answer: [`resolve`](Self::resolve) still runs `from_env` over it, so
-/// `<PREFIX>_HTTP__TLS_CERT` reaches an app whose author only meant to pin the
-/// port. The whole precedence chain is
+/// A config pinned in code (`HttpModule::for_root(cfg)`) is the **base**, not
+/// the answer: [`resolve`](Self::resolve) still runs `from_env` over it, per
+/// **field**:
 ///
 /// ```text
 /// real env  >  pinned in code  >  .env cascade  >  Config::defaults()
 /// ```
 ///
-/// and it is per **field**, never per struct — which is what makes the
-/// framework's dual-path rule true rather than aspirational. The one hard pin
-/// left is seeding the value on the builder (`App::builder().provide(cfg)`): a
-/// seed short-circuits the factory `resolve` runs in, which is the escape hatch
-/// a test wanting hermetic values takes.
+/// The one hard pin is seeding the value on the builder
+/// (`App::builder().provide(cfg)`), for hermetic tests.
 pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized + 'static {
     /// Field-by-field overlay of this namespace's environment over `base`: every
     /// field takes its `<PREFIX>_<NAMESPACE>__<KEY>` value when the variable is
-    /// set, and the matching field of `base` when it is not. One body serves
-    /// both the pinned and the unpinned path, so no field can be reachable one
-    /// way only.
+    /// set, and the matching field of `base` when it is not.
     ///
     /// A set-but-unparseable variable returns `Err` (naming it) and aborts
     /// boot — never a silent fallback.
@@ -102,36 +72,24 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
 
     /// The base the environment overlays when the call site pinned nothing.
     ///
-    /// Defaults to [`Default::default`]. Override it when a field's *safe*
-    /// baseline depends on the active profile rather than being a constant —
-    /// `StorageConfig::allow_http`, `OpenApiConfig::enabled` and
-    /// `RedisConfig::url` all default one way in dev and another in
-    /// staging/production, and that belongs here rather than inside `from_env`
-    /// where it would also silently rewrite a pinned value.
+    /// Defaults to [`Default::default`]. Override it when a field's safe
+    /// baseline depends on the active profile: inside `from_env` it would also
+    /// rewrite a pinned value.
     fn defaults() -> Self {
         Self::default()
     }
 
     /// Resolve this config for the boot: the environment overlaid on `pinned`
     /// when the call site supplied one, on [`defaults`](Self::defaults)
-    /// otherwise, then validated. The single entry point
-    /// `ConfigModule::provide_feature` calls.
-    ///
-    /// The precedence a pin buys is narrower than a pin looks: a pinned base is
-    /// deliberate, so only the *deployment* tier outranks it, while an unpinned
-    /// base is a default the `.env` cascade outranks too.
+    /// otherwise, then validated. A pinned base is outranked by the deployment
+    /// tier alone, an unpinned one by the `.env` cascade too.
     fn resolve(pinned: Option<Self>) -> Result<Self> {
         let env = ConfigService::for_namespace(Self::NAMESPACE);
-        // A pinned base is deliberate, so only the deployment tier outranks it;
-        // an unpinned base is a default, so the `.env` cascade outranks it too.
         let (env, base) = match pinned {
             Some(pinned) => (env.over_pinned(), pinned),
             None => (env, Self::defaults()),
         };
         let config = read(&env, base)?;
-        // Tagged with the namespace here rather than through a blanket `From`:
-        // the namespace is what tells an operator *which* config failed when
-        // several are loaded, and only this call site knows it.
         config
             .validate()
             .map_err(|errors| crate::ConfigError::validation(Self::NAMESPACE, errors))?;
@@ -212,9 +170,8 @@ mod tests {
         });
     }
 
-    /// One `port` config per namespace — the tier tests below each publish a
-    /// process-env name, and `load_cascade`'s set-if-absent write plus the
-    /// `PUBLISHED` set are process-global, so no two tests may share a name.
+    /// One namespace per test: `load_cascade`'s set-if-absent write and the
+    /// `PUBLISHED` set are process-global.
     macro_rules! port_config {
         ($ty:ident, $ns:literal) => {
             #[derive(Clone, Validate)]
@@ -242,22 +199,12 @@ mod tests {
     port_config!(PinnedVsFileCfg, "pinfile");
     port_config!(PinnedVsDeployCfg, "pindeploy");
 
-    /// The precedence table `/configuration/` publishes — `real env > pinned in
-    /// code > .env cascade > defaults` — asserted end to end through the public
-    /// `resolve`, not at the `deployment_env_var` seam underneath it.
-    ///
-    /// It is the tier a reader is most likely to get backwards, because the
-    /// prose beside the table describes a pin as "the base the environment
-    /// overlays": true of the *real* environment, false of a committed `.env`.
-    /// The scaffolded shape is reproduced exactly — `Environment::init` merges
-    /// the cascade into `std::env` before anything resolves.
+    /// A committed `.env` loses to a pin, asserted through the public `resolve`.
     #[test]
     fn a_committed_dotenv_file_loses_to_a_for_root_pin() {
         figment::Jail::expect_with(|jail| {
-            // Built, not spelled: a `.env` line is a variable name like any
-            // other, and a literal one is read by nobody under a renamed prefix
-            // — which reads as "the cascade lost", i.e. as this test passing for
-            // the wrong reason.
+            // Built, not spelled: a literal name under a renamed prefix would
+            // pass this test for the wrong reason.
             jail.create_file(".env", &format!("{}=3555", var_name("pinfile", "PORT")))?;
             crate::dotenv::load_cascade(std::path::Path::new("."), crate::Environment::Development);
 
@@ -277,8 +224,6 @@ mod tests {
         });
     }
 
-    /// …and the tier above it: a variable the deployment actually exports wins,
-    /// which is the half the prose gets right.
     #[test]
     fn a_real_deployment_variable_outranks_a_for_root_pin() {
         figment::Jail::expect_with(|jail| {

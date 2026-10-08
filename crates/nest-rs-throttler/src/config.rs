@@ -67,9 +67,8 @@ const SHORT_KEY: &str = "must be at least 32 bytes: HMAC-SHA256's key is as stro
                          length up to the hash's size (RFC 2104 §3) — `openssl rand -base64 32` \
                          gives one";
 
-// Trusted proxies live on `HttpConfig` (`<PREFIX>_HTTP__TRUSTED_PROXIES`), not
-// here: which reverse proxies a deployment believes decides who *every* request
-// is attributed to, the `ClientIp` extractor's answer as much as the bucket's.
+// Trusted proxies live on `HttpConfig` (`<PREFIX>_HTTP__TRUSTED_PROXIES`): they
+// decide who every request is attributed to, not only the bucket.
 
 impl Config for ThrottlerConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
@@ -129,8 +128,7 @@ mod tests {
         assert_eq!(cfg.window_secs, Some(5), "the untouched pin survives");
     }
 
-    /// A zero window turned the limiter off on both stores with no word; it is
-    /// refused naming the variable, from the environment or pinned in code.
+    /// A zero window would turn the limiter off on both stores.
     #[test]
     fn a_zero_window_is_refused_from_either_side() {
         let var = nest_rs_config::var_name("throttler", "WINDOW_SECS");
@@ -161,8 +159,6 @@ mod tests {
         );
     }
 
-    /// Every duration a deployment sets has a ceiling: a window past a day is
-    /// refused naming the variable, from either side.
     #[test]
     fn a_window_past_a_day_is_refused_from_either_side() {
         let var = nest_rs_config::var_name("throttler", "WINDOW_SECS");
@@ -193,8 +189,7 @@ mod tests {
     }
 
     /// A key short enough to guess would let anyone holding the store recover
-    /// each client's address by hashing every address there is: refused from
-    /// either side, naming the variable, and never repeating what was set.
+    /// each client's address by hashing every address there is.
     #[test]
     fn a_short_pseudonym_key_is_refused_from_either_side_without_its_value() {
         let var = nest_rs_config::var_name("throttler", "PSEUDONYM_KEY");

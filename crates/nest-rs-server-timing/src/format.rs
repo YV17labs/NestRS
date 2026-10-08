@@ -44,9 +44,8 @@ fn write_entry(buf: &mut String, e: &Entry) {
                         buf.push('\\');
                         buf.push(ch);
                     }
-                    // A quoted-string cannot carry a control character, and one
-                    // left in would fail the whole header — every entry and the
-                    // total with it — over one tooltip.
+                    // A control character is illegal in a quoted-string and would
+                    // fail the whole header.
                     _ if ch.is_control() => buf.push(' '),
                     _ => buf.push(ch),
                 }

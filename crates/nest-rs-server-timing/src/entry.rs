@@ -89,15 +89,11 @@ mod tests {
             first.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
             ["a", "b", "c"],
         );
-        // After drain, the accumulator is empty — a second drain yields nothing.
         assert!(t.drain().is_empty(), "drain must reset");
     }
 
     #[test]
     fn clone_shares_the_underlying_accumulator() {
-        // Pulled from request extensions, the `Timings` is cloned to each
-        // recorder — both writers must hit the same buffer the interceptor
-        // drains at end-of-handler.
         let a = Timings::default();
         let b = a.clone();
         a.record("from-a", Duration::from_millis(1));

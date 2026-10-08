@@ -1,7 +1,5 @@
-//! Namespaced-config flow end-to-end: load via `ConfigModule::for_feature`,
-//! inject as `Arc<C>`, verify a seed wins over the env-reading factory, and —
-//! the dual-path rule the framework promises — verify a config **pinned in
-//! code** still lets the environment override it **per field**.
+//! Namespaced config end-to-end: `ConfigModule::for_feature`, a seed winning
+//! over the factory, and a config pinned in code overridden per field.
 
 use nest_rs_config::var_name;
 use std::any::TypeId;
@@ -60,9 +58,6 @@ impl DemoService {
 )]
 struct DemoModule;
 
-// `from_env` reads its namespaced vars hermetically from a `MapSource` — no
-// process env, no `.env`, no `unsafe`. This is the config-read half of the
-// wiring; the module boot below covers load/inject/seed-override.
 #[test]
 fn from_env_maps_each_namespaced_var_from_its_source() {
     let service = ConfigService::with_source(
@@ -79,8 +74,6 @@ fn from_env_maps_each_namespaced_var_from_its_source() {
 
 #[tokio::test]
 async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
-    // No env set: the `for_feature` factory loads the in-code defaults and
-    // injects the config as `Arc<DemoConfig>`.
     let app = TestApp::builder()
         .module::<DemoModule>()
         .build_headless()
@@ -97,7 +90,6 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
         "the loaded config is a factory output, present in the container"
     );
 
-    // A seeded config wins over the env-reading factory.
     let app = TestApp::builder()
         .module::<DemoModule>()
         .provide(DemoConfig {
@@ -117,9 +109,7 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
 }
 
 /// What every configurable module's `for_root(cfg)` does: hand the pinned struct
-/// to `ConfigModule::provide_feature`. Standing in for `HttpModule::for_root`
-/// here keeps the test on the seam all of them share rather than on one crate's
-/// spelling of it.
+/// to `ConfigModule::provide_feature`.
 struct DemoPinnedSetup(DemoConfig);
 
 impl DynamicModule for DemoPinnedSetup {
@@ -133,8 +123,6 @@ impl DynamicModule for DemoPinnedSetup {
 }
 
 fn pinned_module() -> DemoPinnedSetup {
-    // The scaffold's shape: pin one field, let `..Default::default()` fill the
-    // rest. That is exactly the case that used to freeze the whole namespace.
     DemoPinnedSetup(DemoConfig {
         max_connections: 42,
         ..Default::default()
@@ -144,21 +132,14 @@ fn pinned_module() -> DemoPinnedSetup {
 #[module(imports = [pinned_module()], providers = [DemoService])]
 struct DemoPinnedModule;
 
-/// The finding this closes: `provide_feature(Some(cfg))` registered the struct
-/// verbatim, so **every** `NESTRS_DEMOAPP__*` variable went inert — a deployment
-/// setting one of them got silence, not an override. Pinning one field must
-/// leave the others live, and a set variable must beat the pin.
 #[test]
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
 fn a_pinned_config_still_lets_the_environment_override_each_field() {
-    // `Jail` isolates the real process env (and reverts it), which is what the
-    // deployment tier means — no `unsafe { set_var }` in this crate. It hands
-    // nothing back out, so the boot's observations land in `seen`, and the
-    // runtime is built inside rather than via `#[tokio::test]` (which would
-    // already be running one).
+    // `Jail` returns nothing, and `#[tokio::test]` would already be running a
+    // runtime, so the boot runs inside and reports through `seen`.
     let mut seen: Option<(String, u32)> = None;
     figment::Jail::expect_with(|jail| {
         jail.set_env(var_name("demoapp", "URL"), "postgres://from-deployment/app");
@@ -191,8 +172,6 @@ fn a_pinned_config_still_lets_the_environment_override_each_field() {
     );
 }
 
-/// The other half: with nothing in the environment, the pin is the answer. Guards
-/// against "fixing" the override by dropping the pinned value on the floor.
 #[tokio::test]
 async fn a_pinned_field_survives_an_environment_that_says_nothing() {
     let app = TestApp::builder()

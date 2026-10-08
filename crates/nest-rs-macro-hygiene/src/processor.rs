@@ -1,16 +1,11 @@
-//! `#[queue]` + `#[processor]` + `#[process]` — the queue edge's decorators.
-//!
-//! Their expansion reaches three crates the developer never names: the job
-//! context lives in `nest-rs-worker`, the pipe carriers in `nest-rs-pipes`, and
-//! the registry in `nest-rs-queue`. So the umbrella's `queue` feature has to
-//! pull `worker` and `pipes` too — this module is what proves it does, rather
-//! than a manifest line anyone can read as correct without testing it.
+//! `#[queue]` + `#[processor]` + `#[process]`: the expansion reaches
+//! `nest-rs-worker`, `nest-rs-pipes` and `nest-rs-queue`, so the umbrella's
+//! `queue` feature must pull all three.
 
 use nest_rs::core::{injectable, input};
 use nest_rs::pipes::Valid;
 use nest_rs::queue::{Checkpoint, processor, queue};
 
-/// The wire payload, validated by a per-argument pipe below.
 #[input]
 #[derive(Clone)]
 pub struct HygieneCommand {
@@ -18,23 +13,18 @@ pub struct HygieneCommand {
     pub file: String,
 }
 
-/// The port both sides agree on: one queue name, one job type.
 #[queue(name = "hygiene", job = HygieneCommand)]
 pub struct HygieneQueue;
 
-/// The queue a tuned method drains.
 #[queue(name = "hygiene-tuned", job = HygieneCommand)]
 pub struct HygieneTunedQueue;
 
-/// The queue a resumable method drains.
 #[queue(name = "hygiene-import", job = HygieneCommand)]
 pub struct HygieneImportQueue;
 
-/// The queue a synchronous method drains.
 #[queue(name = "hygiene-sync", job = HygieneCommand)]
 pub struct HygieneSyncQueue;
 
-/// Minimal processor host.
 #[queue(name = "hygiene-steady", job = HygieneCommand)]
 pub struct HygieneSteadyQueue;
 
@@ -43,21 +33,15 @@ pub struct HygieneProcessor;
 
 #[processor]
 impl HygieneProcessor {
-    /// `Valid<T>` is the queue's per-argument pipe form: the wire payload is
-    /// `T`, the pipe runs after deserialization, and a rejection becomes a job
-    /// error. It is exercised here because the carrier is the part of the
-    /// expansion that reaches `nest-rs-pipes`.
-    /// `transactional = false` is the opt-out: the expansion names
-    /// `JobTransaction` through `nest-rs-worker`, which the queue feature has
-    /// to pull for this to resolve.
+    /// `Valid<T>` reaches `nest-rs-pipes`; `transactional = false` names
+    /// `JobTransaction` through `nest-rs-worker`.
     #[process(queue = HygieneQueue, retries = 1, transactional = false)]
     async fn transcode(&self, job: Valid<HygieneCommand>) -> nest_rs::core::anyhow::Result<()> {
         let _ = job.into_inner().file;
         Ok(())
     }
 
-    /// Every tuning key: the expansion builds the method's options and its
-    /// throttle through `nest-rs-queue` alone.
+    /// Every tuning key.
     #[process(
         queue = HygieneTunedQueue,
         concurrency = 4,
@@ -69,8 +53,6 @@ impl HygieneProcessor {
         Ok(())
     }
 
-    /// A `Checkpoint<S>` parameter, which the expansion opens through the port
-    /// before the body runs.
     #[process(queue = HygieneImportQueue, transactional = false)]
     async fn import(
         &self,
@@ -81,20 +63,19 @@ impl HygieneProcessor {
         Ok(())
     }
 
-    /// A synchronous job is called without an `.await`.
     #[process(queue = HygieneSyncQueue)]
     fn audit(&self, job: HygieneCommand) -> nest_rs::core::anyhow::Result<()> {
         let _ = job.file;
         Ok(())
     }
 
-    /// A job compiled out takes its handler and its registry entry with it.
     #[process(queue = HygieneSteadyQueue, transactional = false)]
     async fn steady(&self, job: HygieneCommand) -> Result<(), crate::never::Never> {
         let _ = job.file;
         Ok(())
     }
 
+    /// A job compiled out takes its handler and registry entry with it.
     #[cfg(any())]
     #[process(queue = crate::does_not_exist::Queue)]
     async fn compiled_out(&self, job: crate::does_not_exist::Job) -> crate::does_not_exist::Answer {

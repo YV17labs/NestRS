@@ -31,7 +31,6 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
         return quote! {};
     }
 
-    // A non-`Uuid` PK (e.g. auto-increment) is left `NotSet` for the DB.
     let pk_seed = match model.fields.iter().find(|f| f.is_pk) {
         Some(pk) if is_uuid(&pk.ty) => {
             let id = &pk.ident;

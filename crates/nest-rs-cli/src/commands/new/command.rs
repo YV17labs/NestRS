@@ -4,9 +4,7 @@
 
 //! **One starter, no template flag.** Every layout writes the shared
 //! [`hello`](crate::templates::hello) module — a service with a greeting and a
-//! `#[public] GET /`. A freshly created project has to prove it started, and a
-//! `404` proves nothing to the developer looking at a browser, so there is no
-//! routeless variant to pick.
+//! `#[public] GET /`, so a fresh project proves it started.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,9 +26,6 @@ pub(crate) struct NewOptions {
 }
 
 pub(crate) fn run(opts: NewOptions) -> CliResult<()> {
-    // Reject a name that would derive an invalid crate identifier (e.g.
-    // `"Bad Name!"` → `bad-name!`) before scaffolding a project that won't
-    // compile (CLI-I6).
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
 
@@ -41,9 +36,8 @@ pub(crate) fn run(opts: NewOptions) -> CliResult<()> {
     let env_prefix = opts.env_prefix.as_deref().unwrap_or(DEFAULT_ENV_PREFIX);
 
     if let Some(ws) = NestrsWorkspace::discover(&opts.output)? {
-        // The prefix belongs to the deployment, not to a crate: an app added to
-        // an existing project inherits whatever its environment names, and
-        // silently ignoring the flag would leave the caller believing it took.
+        // The prefix belongs to the deployment: an app added to an existing project
+        // inherits it, and ignoring the flag silently would mislead the caller.
         if opts.env_prefix.is_some() {
             return Err(CliError::Anyhow(anyhow::anyhow!(
                 "`--env-prefix` applies to project creation only — an app added to an \
@@ -61,15 +55,8 @@ pub(crate) fn run(opts: NewOptions) -> CliResult<()> {
 /// Seed every prefix placeholder — the value templates interpolate into
 /// variable names, and the two lines that *set* it for the processes this
 /// project starts.
-///
-/// Both setters are empty on the default, so an ordinary project carries no
-/// noise about a prefix it never changed. There is no third site and no file in
-/// the source tree: the runtime reads the prefix from the environment, so
-/// anything a crate said about it would be decoration.
-///
-/// The `.env` cascade deliberately does **not** carry it. It is read *after* the
-/// prefix has already selected which cascade to read, so a value placed there
-/// would rename nothing — the framework aborts on it rather than let that pass.
+/// Both setters are empty on the default. The `.env` cascade does **not** carry
+/// it: the prefix selects the cascade, and the framework aborts on one inside it.
 pub(crate) fn with_env_prefix(r: Renderer, env_prefix: &str) -> Renderer {
     prefix_vars(env_prefix)
         .into_iter()
@@ -78,20 +65,10 @@ pub(crate) fn with_env_prefix(r: Renderer, env_prefix: &str) -> Renderer {
 
 /// Every renderer key whose value depends on the project's env prefix, in one
 /// list so the default seed (`Renderer::new`) and the `--env-prefix` override
-/// cannot disagree about what the set contains.
-///
-/// One list rather than two lists plus a test comparing them: a key added to
-/// the override alone is a `{{placeholder}}` written verbatim into whatever the
-/// other paths render, and nothing in a compile or a scaffold would say so.
-///
-/// The two setter lines are empty on the default — a project on `NESTRS` sets
-/// nothing — and the note is rendered here because substitution is one pass, so
+/// cannot disagree. The note is rendered here because substitution is one pass:
 /// a raw `{{env_prefix}}` inside a seeded value would survive it.
 pub(crate) fn prefix_vars(env_prefix: &str) -> Vec<(&'static str, String)> {
-    // Both keys these two templates carry. `{{env_prefix_var}}` does not match
-    // `{{env_prefix}}` (the closing braces differ), so order is irrelevant —
-    // but leaving it out ships the placeholder, which is what this list exists
-    // to make impossible.
+    // `{{env_prefix_var}}` does not match `{{env_prefix}}`, so order is irrelevant.
     let fill = |template: &str| {
         template
             .replace("{{env_prefix_var}}", crate::context::ENV_PREFIX_VAR)
@@ -129,9 +106,8 @@ pub(crate) fn queue_env_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
 /// format every coding agent reads, and a `CLAUDE.md` that imports it (Claude
 /// Code reads only the latter).
 ///
-/// The document is `INTRO + LAYOUT + BODY`, assembled here so the three pieces
-/// stay separately editable — the middle one is the layout a project is handed,
-/// and the last embeds the architecture rules verbatim.
+/// Assembled as `INTRO + LAYOUT + BODY`; the body embeds the architecture rules
+/// verbatim.
 pub(crate) fn queue_agent_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
     let body = format!(
         "{}{}{}",
@@ -162,9 +138,8 @@ pub(crate) fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
 mod tests {
     use crate::templates::{hello, workspace};
 
-    /// The starter's whole promise: whichever layout renders it, the controller
-    /// mounts `/` and declares its posture. A template that stopped emitting
-    /// either would ship a project answering 404 on its first page.
+    /// Whichever layout renders it, the controller mounts `/` and declares its
+    /// posture.
     #[test]
     fn the_shared_hello_controller_mounts_root_as_public() {
         assert!(hello::CONTROLLER.contains(r#"#[controller(path = "/")]"#));

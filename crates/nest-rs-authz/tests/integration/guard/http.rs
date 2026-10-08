@@ -1,10 +1,4 @@
-//! Covers `src/guard.rs` — what `AbilityGuard` *says* when it denies.
-//!
-//! The refusals themselves are asserted elsewhere; what nothing read was the
-//! event. Both are `warn`+ on `nest_rs::authz`, the events queried under
-//! incident: an operator answering "why did this 500" has only these lines,
-//! and a denial that fails closed while logging nothing is indistinguishable
-//! from a bug in the handler.
+//! Covers `src/guard.rs` — the events `AbilityGuard` files when it denies.
 
 use std::sync::Arc;
 
@@ -39,8 +33,6 @@ impl AbilityFactory for Malformed {
     type Actor = Actor;
 
     fn define(&self, _actor: &Self::Actor, ability: &mut AbilityBuilder) {
-        // The subject is `child`, whose `Parent` relation points at `parent` —
-        // declaring `child` as the related entity is the mismatch.
         ability.can(Action::Read, child::Entity).when(|p| {
             p.related::<child::Entity, _>(child::Relation::Parent, |c| c.eq(child::Column::Id, 1))
         });
@@ -73,9 +65,7 @@ async fn a_route_reached_with_no_actor_warns_that_no_authn_guard_ran() {
         "ability guard denied: no authenticated actor and route is not public",
     );
     assert_eq!(event.level, "warn");
-    // The field is what makes the line actionable: it names the actor type the
-    // factory expected, which is what the missing authn guard would have
-    // inserted.
+    // The field names the actor type the missing authn guard would have inserted.
     assert!(
         event
             .field("actor_type")

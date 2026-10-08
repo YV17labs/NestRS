@@ -40,19 +40,12 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
         .expect("transaction verifies as a handshake token");
     assert!(auth.url.contains(&format!("state={}", tx.csrf)));
     assert!(!tx.pkce.is_empty());
-    // The transaction names what it is and which provider it belongs to, so a
-    // shared cookie cannot carry it across flows.
     assert_eq!(tx.typ, "oauth_tx");
     assert_eq!(tx.provider, "acme");
 }
 
-/// The transaction cookie is handed to a user agent, so what matters is not
-/// that *we* can read it back but that a **resource server cannot mistake it
-/// for a credential**. RFC 9068 §2.1 gives `at+jwt` exactly that job —
-/// "preventing … tokens issued for other purposes from being accepted as access
-/// tokens by resource servers" — and the cookie is signed by the same service,
-/// with the same key, carrying the same `aud`/`iss`. The media type is the only
-/// thing separating them, so it is asserted rather than assumed.
+/// The cookie is signed by the same service, key, `aud` and `iss` as an access
+/// token: the media type (RFC 9068 §2.1) is the only thing telling them apart.
 #[test]
 fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
     let jwt = crate::jwt();
@@ -67,8 +60,6 @@ fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
     );
 }
 
-/// The mirror direction: an access token replayed as the transaction cookie.
-/// Without it the callback would accept any token this deployment ever minted.
 #[test]
 fn an_access_token_is_not_accepted_as_a_transaction() {
     let jwt = crate::jwt();
@@ -97,8 +88,7 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
     let jwt = crate::jwt();
     let auth = client().authorize(&jwt, "acme").expect("authorize");
 
-    // `TokenSet` is intentionally not `Debug` (it carries tokens), so match
-    // rather than `expect_err`.
+    // `TokenSet` is not `Debug` (it carries tokens).
     let Err(err) = client()
         .exchange(&jwt, "acme", &auth.transaction, "not-the-csrf", "some-code")
         .await
@@ -107,10 +97,6 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
     };
     assert!(matches!(err, AuthError::Failed(_)));
 
-    // A CSRF mismatch on a callback is an attack signature, not a user error:
-    // the caller is told only "OAuth state mismatch", so the `reason` field is
-    // what separates a replayed transaction from a forged one in the log an
-    // incident queries.
     let event = logs.expect_one(TARGET, "OAuth callback rejected");
     assert_eq!(event.level, "warn");
     assert_eq!(
@@ -121,12 +107,7 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
 
 #[tokio::test]
 async fn exchange_reports_a_transaction_cookie_that_does_not_verify() {
-    // Regression: the third way a callback is refused. `JwtService` files its
-    // typed decode reason at `debug` because on the *strategy* path `AuthnGuard`
-    // emits the single `warn` — but nothing guards this path, and
-    // `AuthError::render` logs only `Failed`/`Unavailable`, so a forged or
-    // replayed handshake cookie produced an `InvalidSignature` that left no
-    // `warn` anywhere while its two siblings both did.
+    // On this path no guard emits the `warn`, and `JwtService` logs its reason at `debug`.
     let logs = LogCapture::install();
     let attacker = JwtService::new(JwtOptions::new("attacker-secret-padded-to-32-byt"))
         .expect("HMAC JwtService");
@@ -167,10 +148,6 @@ async fn exchange_reports_a_transaction_cookie_that_does_not_verify() {
 
 #[tokio::test]
 async fn an_expired_transaction_cookie_is_reported_the_same_way() {
-    // The replay half of the same class: a cookie this service really did mint,
-    // presented after its 10-minute window. `AuthError::Expired` is the one
-    // decode outcome `JwtService` never even logs at `debug`, so without the
-    // site's own `warn` it was silent end to end.
     let logs = LogCapture::install();
     let jwt = crate::jwt();
     let stale = jwt
@@ -196,21 +173,7 @@ async fn an_expired_transaction_cookie_is_reported_the_same_way() {
     assert_eq!(event.field("token_reason").as_deref(), Some("expired"));
 }
 
-// --- the client's bounds -------------------------------------------------------
-//
-// Every call the client makes to a provider is bounded — `CONNECT_TIMEOUT` to
-// reach it, `CALL_TIMEOUT` for the whole call — and a call that ends without an
-// answer, or with the provider saying it cannot answer now, is the provider's
-// outage, `AuthError::Unavailable` (a `503`: the caller did nothing wrong);
-// a provider that answers and refuses is `AuthError::Failed`. Both name the
-// endpoint in their sentence. The providers below are local listeners;
-// none of them answers the way a provider would. The connect bound is driven in
-// the unit suite (`src/client.rs`), on the backend `new` builds with a resolver
-// that never answers: no local listener can leave a handshake hanging.
-
-/// Secrets a failed call must never repeat. The client secret and the code
-/// travel in the exchange's body, the access token in a read's header, and the
-/// query in the configured URL, where a deployment may keep an API key.
+/// Secrets a failed call must never repeat.
 const CLIENT_SECRET: &str = "client-secret-never-quoted";
 const CODE: &str = "authorization-code-never-quoted";
 const ACCESS_TOKEN: &str = "access-token-never-quoted";
@@ -228,8 +191,7 @@ fn client_for(addr: std::net::SocketAddr) -> OAuthClient {
     .expect("client builds")
 }
 
-/// The sentence a provider's outage is reported under — no answer, or an answer
-/// saying it cannot answer now — checked to quote none of the call's secrets.
+/// The sentence a provider's outage is reported under, checked to quote no secret.
 fn unavailable_sentence_of(error: &AuthError, extra: &[&str]) -> String {
     let AuthError::Unavailable { detail, .. } = error else {
         panic!("a provider that gave no answer is unavailable, not a failed sign-in: {error:?}");
@@ -245,8 +207,7 @@ fn sentence_of(error: &AuthError, extra: &[&str]) -> String {
     secret_free(sentence, extra)
 }
 
-/// `sentence`, once it is shown to quote none of the call's secrets — `extra`
-/// names the ones only this call carried.
+/// `sentence`, once shown to quote none of the call's secrets (`extra`: this call's own).
 fn secret_free(sentence: &str, extra: &[&str]) -> String {
     for secret in [CLIENT_SECRET, CODE, ACCESS_TOKEN, QUERY_SECRET]
         .iter()
@@ -260,15 +221,11 @@ fn secret_free(sentence: &str, extra: &[&str]) -> String {
     sentence.to_owned()
 }
 
-/// A provider that accepts every connection and never answers — a process
-/// wedged behind a healthy socket.
+/// A provider that accepts every connection and never answers.
 ///
-/// The clock stops the moment the first connection is accepted. The handshake
-/// is complete then, on both sides, so what is left to wait is exactly the part
-/// `CALL_TIMEOUT` governs — and on a stopped clock that wait costs the suite
-/// nothing, while the connection itself was made in real time. It stays stopped,
-/// so a test drives one call: a second connection made on a stopped clock races
-/// the clock's jump to its connect bound.
+/// The clock stops once the first connection is accepted, so the `CALL_TIMEOUT`
+/// wait is free; a test drives one call, since a second connection would race the
+/// clock's jump to its connect bound.
 async fn silent_provider() -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -287,9 +244,7 @@ async fn silent_provider() -> std::net::SocketAddr {
     addr
 }
 
-/// Await `call` for twice `bound` and no longer, so a client that stopped
-/// bounding its calls fails here, naming the bound, instead of holding the
-/// suite the way it held the callback.
+/// Await `call` for twice `bound` and no longer, so an unbounded client fails here.
 async fn within_twice<T>(
     bound: std::time::Duration,
     call: impl std::future::Future<Output = T>,
@@ -299,9 +254,6 @@ async fn within_twice<T>(
         .unwrap_or_else(|_| panic!("no answer within twice the bound ({bound:?})"))
 }
 
-/// The exchange is the call a login cannot do without: a provider that accepts
-/// it and never answers fails it at `CALL_TIMEOUT`, in a sentence naming the
-/// token endpoint and the bound — and nothing the exchange carried.
 #[tokio::test]
 async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     let addr = silent_provider().await;
@@ -336,8 +288,6 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     );
 }
 
-/// The read after the exchange — the userinfo endpoint — is bounded the same
-/// way, and names itself.
 #[tokio::test]
 async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() {
     let addr = silent_provider().await;
@@ -361,8 +311,6 @@ async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() 
     );
 }
 
-/// …and so is a provider's own second read through `fetch`, GitHub's verified
-/// emails being the one shipped, which no standard names.
 #[tokio::test]
 async fn a_fetch_the_provider_never_answers_fails_at_the_call_timeout() {
     let addr = silent_provider().await;
@@ -389,9 +337,7 @@ async fn a_fetch_the_provider_never_answers_fails_at_the_call_timeout() {
     );
 }
 
-/// The family the bounds belong to: every call that gets no usable answer names
-/// its endpoint the same way. A refused connection says why, without the URL
-/// reqwest would have quoted whole.
+/// A refused connection says why, without the URL reqwest would have quoted whole.
 #[tokio::test]
 async fn a_refused_connection_names_the_endpoint_and_the_cause() {
     let addr = {
@@ -417,8 +363,6 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
     );
 }
 
-/// A provider that answers, and refuses the token: the status is the cause,
-/// after the endpoint that gave it.
 #[tokio::test]
 async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status() {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -452,9 +396,8 @@ async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status(
     );
 }
 
-/// A local provider answering its first request with `status_line`, the
-/// `Retry-After` `retry_after` when given, and an HTML page — the body a
-/// provider's outage page has, which no §5.2 error parses from.
+/// A local provider answering its first request with `status_line`, an optional
+/// `Retry-After`, and an HTML outage page, which no §5.2 error parses from.
 async fn provider_answering(
     status_line: &'static str,
     retry_after: Option<&'static str>,
@@ -483,11 +426,8 @@ async fn provider_answering(
     addr
 }
 
-/// Q12: a provider saying it cannot answer now — a `5xx`, or `429` — is its
-/// outage, never the caller's failed sign-in, on the read and on the exchange
-/// alike; its own `Retry-After` travels when it gave one in seconds. The
-/// exchange's case was a `401`: `oauth2` drops the status, and an outage page
-/// parses as no §5.2 error.
+/// A `5xx` or `429` is the provider's outage, never the caller's failed sign-in,
+/// on the read and on the exchange; a delay-seconds `Retry-After` travels.
 #[tokio::test]
 async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     let addr = provider_answering("503 Service Unavailable", Some("7")).await;
@@ -533,9 +473,7 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     );
 }
 
-/// A profile that does not decode as the app's shape is reported by where and
-/// what kind of value was found — never by the value, which is the caller's
-/// profile or a token the provider put where the app expected something else.
+/// A profile that does not decode is reported by where and what kind, never by the value.
 #[tokio::test]
 async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -578,8 +516,6 @@ async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
     );
 }
 
-/// The bounds against each other: the connection has to fit inside the call,
-/// or a slow handshake would be reported as a call that did not answer.
 #[test]
 fn the_connection_is_bounded_inside_the_call() {
     assert!(

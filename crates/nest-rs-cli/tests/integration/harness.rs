@@ -69,8 +69,7 @@ pub(crate) fn run_ok(dir: &Path, args: &[&str]) -> String {
 }
 
 /// The scaffolded `.env.example` sends a test override to a file the cascade
-/// actually loads under `NESTRS_ENV=test` (see `templates::shared::ENV_EXAMPLE`
-/// for why the wrong answer fails silently).
+/// loads under `NESTRS_ENV=test`.
 pub(crate) fn assert_env_example_points_test_overrides_somewhere_loaded(root: &Path) {
     let example = fs::read_to_string(root.join(".env.example")).unwrap();
     assert!(

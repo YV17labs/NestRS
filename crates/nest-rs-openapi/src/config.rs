@@ -13,18 +13,9 @@ use nest_rs_config::{Config, ConfigService, Environment, Result, config};
 pub struct OpenApiConfig {
     /// Master switch for the documentation endpoints.
     ///
-    /// Both `/api-json` (the document) and `/api` (Swagger UI) self-mount
-    /// `EdgePosture::Exempt` — deliberately **public**, no auth — so while
-    /// enabled the full document (every path, parameter, and schema linked into
-    /// the binary) is served to any anonymous caller. Because that surface is
-    /// public and unauthenticated, [`from_env`](Config::from_env) defaults it
-    /// **OFF outside a dev/test profile** (HTTP-S5): a dev run keeps the docs on
-    /// for ergonomics; staging/production must opt in with
-    /// `<PREFIX>_OPENAPI__ENABLED=true`, which is honored but logged loudly at
-    /// boot. When `false`, [`OpenApiModule`](crate::OpenApiModule) mounts neither
-    /// endpoint. A set-but-unparseable `<PREFIX>_OPENAPI__ENABLED` fails boot
-    /// naming the variable — it never silently falls back to on. (The struct
-    /// `Default` stays `true` for the pinned-config / dev path.)
+    /// Both endpoints are **public**, unauthenticated, so the unpinned default is
+    /// off outside a dev/test profile; enabling them there is honoured and logged
+    /// at `warn`.
     pub enabled: bool,
     /// The API title shown in the document `info` block and Swagger UI.
     pub title: String,
@@ -33,9 +24,7 @@ pub struct OpenApiConfig {
     /// Optional long-form API description for the `info` block.
     pub description: Option<String>,
     /// (Re)write [`document_path`](Self::document_path) with the built document
-    /// once at boot — the OpenAPI analogue of the GraphQL SDL emit, so the
-    /// committed `openapi.json` stays fresh as a side effect of a dev run.
-    /// Default `false`; the demo turns it on with `<PREFIX>_OPENAPI__EMIT_DOCUMENT=true`.
+    /// once at boot. Default `false`.
     pub emit_document: bool,
     /// Where [`emit_document`](Self::emit_document) writes the JSON document,
     /// relative to the process working directory. Default `openapi.json`.
@@ -56,11 +45,7 @@ impl Default for OpenApiConfig {
 }
 
 impl Config for OpenApiConfig {
-    /// Secure-by-default (HTTP-S5): the docs endpoints are public and
-    /// unauthenticated, so the *unpinned* baseline turns them OFF outside a
-    /// dev/test profile. This lives here rather than in `from_env` so it applies
-    /// only where it is a default — overlaying it onto a pinned `enabled: true`
-    /// would silently rewrite a deliberate choice.
+    // Not in `from_env`: overlaying it would rewrite a pinned `enabled: true`.
     fn defaults() -> Self {
         Self {
             enabled: docs_default_enabled(Environment::from_env()),
@@ -71,9 +56,6 @@ impl Config for OpenApiConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let d = base;
         let environment = Environment::from_env();
-        // `flag` returns `Err` (naming the var) on a set-but-unparseable value,
-        // so a typo'd `<PREFIX>_OPENAPI__ENABLED` stays boot-fatal — it never
-        // silently falls back to on.
         let enabled = env.flag("ENABLED", d.enabled)?;
         if enabled && !docs_default_enabled(environment) {
             tracing::warn!(
@@ -96,8 +78,6 @@ impl Config for OpenApiConfig {
     }
 }
 
-/// HTTP-S5: the public, unauthenticated docs endpoints default ON only in a
-/// dev/test profile — OFF in staging/production unless explicitly enabled.
 fn docs_default_enabled(environment: Environment) -> bool {
     !matches!(environment, Environment::Production | Environment::Staging)
 }
@@ -156,9 +136,6 @@ mod tests {
         assert!(cfg.enabled);
     }
 
-    // HTTP-S5: the public, unauthenticated docs default OFF outside a dev/test
-    // profile — a deployed binary that forgets `<PREFIX>_OPENAPI__ENABLED` must not
-    // publish its API surface.
     #[test]
     fn docs_default_off_outside_dev() {
         assert!(docs_default_enabled(Environment::Development));
@@ -167,8 +144,6 @@ mod tests {
         assert!(!docs_default_enabled(Environment::Production));
     }
 
-    // The set-but-unparseable contract: a bad boolean must fail boot naming the
-    // variable, never silently default the public docs back on.
     #[test]
     fn enabled_rejects_unparseable_value_naming_the_var() {
         let service = ConfigService::with_vars("openapi", [("ENABLED", "maybe")]);
@@ -180,14 +155,6 @@ mod tests {
         );
     }
 
-    /// Docs on in production is a *deliberate* configuration — `enabled` was
-    /// set, and `flag` makes a typo boot-fatal, so nothing here is accidental.
-    ///
-    /// What is accidental is the exposure: `/api` and `/api-json` are
-    /// `EdgePosture::Exempt`, so they answer without the global guard pool.
-    /// A deployment that copied a dev `.env` therefore serves its whole route
-    /// table, unauthenticated, and no status code or test will ever say so.
-    /// This is the line that does.
     #[test]
     #[expect(
         clippy::result_large_err,
@@ -196,8 +163,6 @@ mod tests {
     fn docs_enabled_outside_a_dev_profile_are_reported() {
         figment::Jail::expect_with(|jail| {
             let logs = nest_rs_testing::LogCapture::install();
-            // Read from the *process* env, not the `ConfigService` — the
-            // cascade chooses which `.env` to read, so it cannot live in one.
             jail.set_env(nest_rs_config::Environment::var_name(), "production");
 
             let cfg = OpenApiConfig::from_env(
@@ -217,8 +182,6 @@ mod tests {
         });
     }
 
-    /// And a dev profile says nothing: docs on in development is the default,
-    /// so warning there would train the reader to ignore the line that matters.
     #[test]
     #[expect(
         clippy::result_large_err,

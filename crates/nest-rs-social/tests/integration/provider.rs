@@ -5,9 +5,7 @@ use nest_rs_authn::{JwtOptions, JwtService};
 use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, TokenSet};
 use nest_rs_social::{ProfileFuture, SocialProfile, SocialProvider};
 
-/// A provider that keeps the default `authorize`/`exchange` and implements only
-/// `profile` — the shape a real first-party provider takes, so exercising its
-/// `authorize` proves the default delegates to `client()`.
+/// A provider keeping the default `authorize`/`exchange`, as a first-party one does.
 struct StubProvider {
     client: OAuthClient,
 }

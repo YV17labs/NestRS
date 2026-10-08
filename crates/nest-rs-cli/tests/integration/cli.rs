@@ -45,9 +45,8 @@ fn run_subcommand_is_listed_in_help() {
 
 #[test]
 fn run_without_toolchain_and_no_bootstrap_errors_clearly() {
-    // Hide just/bacon/cargo from the child so the toolchain probe finds nothing,
-    // then assert the bootstrap-disabled path reports a manual-install hint
-    // instead of silently installing or panicking.
+    // Hide just/bacon/cargo from the child, so the bootstrap-disabled path must
+    // report a manual-install hint.
     let empty = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
         .args(["run", "--no-bootstrap", "dev"])
@@ -61,8 +60,7 @@ fn run_without_toolchain_and_no_bootstrap_errors_clearly() {
     assert!(stderr.contains("cargo install"), "stderr: {stderr}");
 }
 
-/// A1: `--version` / `-V` is the near-universal CLI convention; rejecting it
-/// with `unexpected argument` reads as a broken install.
+/// `--version` / `-V` are accepted.
 #[test]
 fn version_is_also_reachable_through_the_conventional_flags() {
     for flag in ["--version", "-V"] {

@@ -15,10 +15,8 @@ fn repo() -> PathBuf {
 /// Run `nestrs <args…>` with cwd at `dir` and `env` on the process, asserting
 /// success, and hand back what it printed.
 ///
-/// The environment is explicit because the CLI reads the project's env prefix
-/// from its own: a generator writing variable names behaves differently in a
-/// shell that names one and a shell that does not. Passing it here is what a
-/// developer's `direnv`, devcontainer or `nestrs run` does.
+/// The environment is explicit: the CLI reads the project's env prefix from its
+/// own.
 fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
         .args(args)
@@ -37,12 +35,9 @@ fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
 
 /// Point the generated `nest-rs` requirement at this working tree.
 ///
-/// The scaffold pins the *published* umbrella — which is the right thing for a
-/// user and the wrong thing for this test twice over: the version under
-/// development is not on crates.io yet, and even once it is, checking against
-/// the registry would prove that yesterday's release compiles rather than
-/// today's templates. Patching the umbrella alone is enough: its own siblings
-/// are declared `{ workspace = true }` and resolve through the repo's paths.
+/// The version under development is not on crates.io, and the registry would
+/// prove yesterday's release. The umbrella alone is enough: its siblings resolve
+/// through the repo's paths.
 fn patch_to_working_tree(workspace: &Path) {
     let manifest = workspace.join("Cargo.toml");
     let mut raw = std::fs::read_to_string(&manifest).expect("the generated manifest is readable");
@@ -56,17 +51,8 @@ fn patch_to_working_tree(workspace: &Path) {
 /// `cargo clippy --workspace --all-targets --all-features -- -D warnings` over the generated
 /// tree — **the gate the generated project sets for itself**.
 ///
-/// It used to be a bare `cargo check`, and that gap shipped two defects: a
-/// template importing a name no rendered body used, and a borrow the lint
-/// rejects. Both compiled, so both reached a user on their first `just lint` and
-/// nowhere earlier. A generator that emits code failing the lint it also emits
-/// is a generator defect, so this suite holds it to the same bar rather than a
-/// lower one.
-///
-/// Every scaffold builds into one shared target directory so the framework's
-/// artifacts are reused rather than rebuilt per test. Two builds writing it at
-/// once corrupt each other, and nextest runs each test in its own process, so a
-/// file lock takes them one at a time.
+/// Every scaffold builds into one shared target directory; nextest runs each
+/// test in its own process, so a file lock takes them one at a time.
 #[expect(
     clippy::disallowed_methods,
     reason = "CARGO is the cargo that runs the suite, set by cargo itself"
@@ -99,10 +85,6 @@ fn cargo_check(workspace: &Path) -> Result<(), String> {
 }
 
 /// Scaffold `acme`, run `generate` inside it, and compile the result.
-///
-/// The fragile part is the arrange — the `[patch.crates-io]` repoint and the
-/// shared target directory — so it lives here once: a fix to it must not have to
-/// be made per test.
 fn scaffold_and_check(generate: &[&[&str]], what: &str) {
     scaffold_write_and_check(generate, &[], what);
 }
@@ -116,8 +98,7 @@ fn scaffold_write_and_check(generate: &[&[&str]], write: &[(&str, &str)], what: 
 
 /// The same, with the `nestrs new` invocation, the environment every `nestrs`
 /// runs under, and an inspection hook over the generated tree and what each
-/// generator printed — for a flag whose effect is spread across the Justfile and
-/// the `.env` cascade, or a step a generator tells the developer to take.
+/// generator printed.
 fn scaffold_write_and_check_in(
     new: &[&str],
     generate: &[&[&str]],
@@ -152,8 +133,6 @@ fn read(workspace: &Path, path: &str) -> String {
 
 #[test]
 fn a_greenfield_workspace_compiles() {
-    // The first thing anyone does with the CLI. If this breaks, `nestrs new`
-    // hands a new user a repository that does not build.
     scaffold_write_and_check_in(
         &["new", "acme"],
         &[],
@@ -161,9 +140,7 @@ fn a_greenfield_workspace_compiles() {
         &[],
         "the scaffolded workspace",
         |workspace, _| {
-            // A prefix placeholder is empty on the default, and `cargo check`
-            // would never notice one left unrendered in a non-Rust file — the
-            // Justfile is read by `just`, not by the compiler.
+            // `cargo check` never reads the Justfile.
             let justfile = read(workspace, "Justfile");
             assert!(
                 !justfile.contains("{{env_prefix"),
@@ -178,13 +155,10 @@ const EMPTY_DEFINE: &str = "fn define(&self, _actor: &Claims, _ab: &mut AbilityB
 
 #[test]
 fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {
-    // `#[crud]` and `#[expose]` are absent from `nest-rs-macro-hygiene` because
-    // they need a real entity and service, so their contract is proved here. The
-    // entity sits on a plain `g feature` port on purpose: its service is no
-    // `CrudService`, so `#[expose(service = …)]` naming it would fail inside the
-    // expansion, the case `g resource` never exercises. A resource serves
-    // nothing until its grant is written, and the developer writes it by pasting
-    // what each generator prints into `define`, renaming `_ab` as the step says.
+    // `#[crud]` and `#[expose]` need a real entity and service, so their contract
+    // is proved here, not in `nest-rs-macro-hygiene`. The entity sits on a plain
+    // `g feature` port, whose service is no `CrudService`; the grants each
+    // generator prints are pasted into `define`, as the developer would.
     scaffold_write_and_check_in(
         &["new", "acme"],
         &[
@@ -224,9 +198,8 @@ fn a_generated_resource_and_entity_compile_with_the_grants_they_print() {
 
 /// `crates/features/src/lib.rs` with the auth adapter's modules dropped.
 ///
-/// The files stay on disk; Rust compiles the module tree, not the directory, so
-/// undeclaring them is enough to take `authn/claims.rs` — and its `uuid` —
-/// out of the build.
+/// Rust compiles the module tree, not the directory, so undeclaring them takes
+/// `authn/claims.rs` — and its `uuid` — out of the build.
 const RESOURCE_ONLY_LIB: &str = r#"pub mod hello;
 pub mod post;
 
@@ -258,8 +231,7 @@ impl PostController {}
 "#;
 
 /// The resource's HTTP module without the `AuthzModule` import the guards
-/// brought — the second and last thread tying the generated resource to the
-/// auth adapter.
+/// brought.
 const UNGUARDED_CRUD_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::controller::PostController;
@@ -274,21 +246,9 @@ pub struct PostHttpModule;
 
 #[test]
 fn crud_needs_no_dependency_the_controller_does_not_name() {
-    // The test the suite above only *looked* like it was running.
-    //
-    // `#[crud]` emitted `::uuid::Uuid` for three routes, so a crate that wrote
-    // the attribute and nothing else failed with `E0433` naming a crate the
-    // developer never wrote — the hard "no" that a macro expansion may not put
-    // a line in a manifest. It shipped anyway, because the compile witness did
-    // not apply `#[crud]` then (`nest-rs-macro-hygiene` does now) and the case
-    // above passes for an unrelated reason: `g resource` bootstraps `g auth`, whose claims type
-    // names `uuid`, so the dependency is there whether the macro needs it or not.
-    //
-    // This case takes that accident away. The auth modules leave the module
-    // tree, the controller drops the guards that were the only thing importing
-    // them, and `uuid` leaves the manifest — leaving a crate whose entire claim
-    // on `uuid` is whatever `#[crud]` emits. `resource_deps()` never listed it,
-    // so the generator always agreed; it is the decorator that has to.
+    // Without the auth adapter (whose claims name `uuid`) and the guards, the
+    // crate's whole claim on `uuid` is whatever `#[crud]` emits: a macro expansion
+    // may not put a line in a manifest.
     scaffold_write_and_check_in(
         &["new", "acme"],
         &[&["g", "resource", "post"]],
@@ -326,9 +286,7 @@ fn crud_needs_no_dependency_the_controller_does_not_name() {
 /// both crates the docs never tell anyone to add: the `tracing` façade for an
 /// application log, and `anyhow` for the fallible hook's return type.
 ///
-/// A transcription, so it can drift from the page. It is the narrowest form of
-/// the general answer — compiling the docs' ~450 rust fences — which is an owner
-/// call, not something to half-build here.
+/// A transcription, so it can drift from the page.
 const LIFECYCLE_PAGE_SERVICE: &str = r#"use nest_rs::core::{hooks, injectable};
 
 #[injectable]
@@ -352,12 +310,6 @@ impl BlogService {
 
 #[test]
 fn a_feature_can_log_and_return_a_fallible_hook() {
-    // R12 L-1: the scaffolded features crate declared neither `tracing` nor
-    // `anyhow`, so this paste failed with `E0433: cannot find module or crate
-    // tracing` — then, once that was added by hand, with the same error on
-    // `anyhow`. Both are the developer's own source naming its own crate, so the
-    // scaffold declares them; nothing else in the generated tree uses them, and
-    // a manifest entry no test exercises is one a later cleanup deletes.
     scaffold_write_and_check(
         &[&["g", "feature", "blog"]],
         &[(
@@ -370,25 +322,15 @@ fn a_feature_can_log_and_return_a_fallible_hook() {
 
 #[test]
 fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
-    // `--env-prefix` is only real if two sides agree: the variable that *sets*
-    // the prefix on every process this project starts, and the `.env` keys
-    // those processes then read. A project where one of them still says NESTRS
-    // boots with defaults and no error — which is the failure this asserts
-    // against, and the reason `g auth` runs here: it appends a key to an
-    // existing cascade, so it is the generator most able to disagree.
+    // `--env-prefix` holds only when the variable setting the prefix and the `.env`
+    // keys agree; `g auth` appends to an existing cascade, so it runs here.
     scaffold_write_and_check_in(
         &["new", "acme", "--env-prefix", "ACME"],
         &[&["g", "auth"]],
-        // What the developer's shell, devcontainer or `nestrs run` supplies —
-        // and what `g auth` must build its key from.
         &[("NESTRS_ENV_PREFIX", "ACME")],
         &[],
         "a workspace scaffolded with a custom env prefix",
         |workspace, _| {
-            // The prefix is set on the process, not declared in a crate. The
-            // Justfile is where `nestrs run` picks it up, so a missing export
-            // there means every recipe starts an app reading NESTRS_* against
-            // an ACME_* cascade.
             assert!(
                 read(workspace, "Justfile").contains(r#"export NESTRS_ENV_PREFIX := "ACME""#),
                 "the Justfile must set the prefix for every process it starts",
@@ -401,9 +343,6 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
                     "{file} still writes a NESTRS_ key the app will never read:\n{body}",
                 );
             }
-            // `.env` must not carry the prefix *variable* either: it is read
-            // after the prefix has already chosen which cascade to read, so the
-            // framework aborts on it rather than let the rename silently fail.
             assert!(
                 !read(workspace, ".env").contains("ENV_PREFIX"),
                 "the prefix cannot come from `.env` — the runtime aborts on it",
@@ -418,20 +357,15 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
     );
 }
 
-/// Every edge the CLI generates an adapter for, by its folder — the closed
-/// vocabulary `Transport` carries. Listed rather than read from the enum, which
-/// is crate-private; `naming`'s unit suite joins the two, so an edge the CLI
-/// gains and this list does not fails the crate's own tests instead of shipping
-/// a generator no compiler has read.
+/// Every edge the CLI generates an adapter for, by its folder. `Transport` is
+/// crate-private; `naming`'s unit suite joins the two.
 const EDGES: [&str; 7] = [
     "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
 ];
 
 /// `nestrs g <edge> <feature>` for every edge in [`EDGES`] but `skip`, each run
-/// **from inside the scaffolded app** (`-p apps/hello`). That is where a
-/// developer stands, and it is what makes a generator write its edits into the
-/// app's `module.rs` and manifest as well as the feature's — two more files the
-/// compiler has to agree with, and ones no run from the workspace root touches.
+/// **from inside the scaffolded app** (`-p apps/hello`), so the generator also
+/// edits the app's `module.rs` and manifest.
 fn every_edge<'a>(feature: &'a str, skip: &[&str]) -> Vec<Vec<&'a str>> {
     EDGES
         .iter()
@@ -448,15 +382,9 @@ fn check_all(generate: &[Vec<&str>], what: &str) {
 
 #[test]
 fn every_adapter_over_a_plain_port_compiles() {
-    // The guarantee the CLI page makes — a freshly generated port plus **any**
-    // adapter compiles — held over this port for one edge of seven: the suite
-    // compiled `events` here and nothing else, so the HTTP, GraphQL, WS, queue,
-    // schedule and MCP skeletons were proved by the text
-    // assertions alone, which read a wrong import as readily as a right one.
     let mut generate = vec![vec!["g", "feature", "blog"]];
     generate.extend(every_edge("blog", &[]));
-    // The other path out of `nestrs new`: an app added to a workspace that has
-    // one, with its own `hello` feature and app crate beside the first.
+    // An app added to a workspace that already has one.
     generate.push(vec!["new", "admin"]);
     check_all(
         &generate,
@@ -466,25 +394,8 @@ fn every_adapter_over_a_plain_port_compiles() {
 
 #[test]
 fn every_adapter_over_a_resource_port_compiles() {
-    // F4: `g ws` and `g mcp` named `AuthzWsModule` / `features::authz::mcp` in
-    // their own output while writing neither. They write both now — and a
-    // bridge module is exactly the shape the text assertions cannot judge:
-    // they assert on the *text* a generator produced, so a `#[module]` naming a
-    // provider behind a feature the manifest never enabled reads as correct
-    // there and fails on the user's first `cargo check`. The bridges share the
-    // `authz/` tree, so this also pins that they land side by side without
-    // clobbering each other's index lines.
-    //
-    // The resolver is the case that made this every edge rather than two: over a
-    // resource, `g graphql` bound `#[use_guards(AuthnGuard, AuthzGuard)]` on a
-    // `#[resolver]`, which the guard-capability check refuses — `/graphql`
-    // authenticates through its bridge, and `AuthnGuard` has no `check_graphql`.
-    // It shipped in 6.0 and 6.1, because this test compiled `ws` and `mcp` over a
-    // resource and never `graphql`.
-    //
-    // `http` is skipped because `g resource` writes it — the guarded `#[crud]`
-    // controller — and refuses a second. The migration is the resource's table,
-    // the pair the scaffolded README generates together.
+    // The authz bridges share the `authz/` tree and name providers behind
+    // features only a compile can judge. `http` is skipped: `g resource` writes it.
     let mut generate = vec![vec!["g", "resource", "post", "-p", "apps/hello"]];
     generate.extend(every_edge("post", &["http"]));
     generate.push(vec!["g", "migration", "create_post"]);

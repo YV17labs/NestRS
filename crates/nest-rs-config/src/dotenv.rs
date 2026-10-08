@@ -6,17 +6,10 @@
 //!
 //! `.env.local` is skipped under [`Environment::Test`] so tests stay hermetic.
 //!
-//! The cascade is parsed once into an in-crate map (`dotenv_values`) that the
-//! config layer consults through `env_var` — the real process env always wins,
-//! dotenv only fills what the real env leaves unset. Resolving config therefore
-//! **never mutates the process environment**, so no `set_var` can race a
-//! concurrent `getenv` on a worker thread (`std::env::set_var` is `unsafe` and
-//! unsound under that race). The one path that still writes to the process env
-//! is `load_cascade` — the explicit bootstrapper for consumers that read dotenv
-//! values through raw `std::env::var`, which no `ConfigService` serves. It has
-//! exactly two sanctioned callers, both single-threaded at startup:
-//! `Environment::init` (the top of `main`) and the e2e harness. Resolving
-//! config never reaches it.
+//! The cascade is parsed once into an in-crate map that `env_var` consults under
+//! the real process env, so resolving config **never mutates the process
+//! environment** (`set_var` is unsound against a concurrent `getenv`). The one
+//! writer is `load_cascade`, called single-threaded at startup only.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -28,23 +21,17 @@ use nest_rs_core::EnvPrefix;
 use crate::environment::Environment;
 
 /// The parsed `.env` cascade for the active [`Environment`], rooted at the
-/// current directory. Built once, lazily; side-effect-free (reads files only —
-/// **no** process-env mutation). Consulted by `env_var` as the fallback under
-/// the real process environment, so config lookups see dotenv values without
-/// `set_var`.
+/// current directory. Built once, lazily, without mutating the process env.
 pub(crate) fn dotenv_values() -> &'static HashMap<String, String> {
     static VALUES: OnceLock<HashMap<String, String>> = OnceLock::new();
     VALUES.get_or_init(|| cascade_map(Path::new("."), Environment::from_env()))
 }
 
 /// Parse the `.env` cascade rooted at `dir` into a map (most-specific file
-/// wins). Reads files only and never touches the process environment — real-env
-/// precedence is applied at read time by `env_var`. Its one refusal is the env
-/// prefix, below.
+/// wins), without touching the process environment.
 pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, String> {
     let e = env.as_str();
-    // Most specific first: `or_insert` makes the first writer win, so this
-    // order encodes the documented precedence.
+    // Most specific first: `or_insert` makes the first writer win.
     let mut files = vec![format!(".env.{e}.local")];
     if env != Environment::Test {
         files.push(".env.local".to_owned());
@@ -61,20 +48,12 @@ pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, Strin
     values
 }
 
-/// Abort if the cascade tries to name the env prefix.
-///
-/// On the shared parse rather than on one of its consumers: `dotenv_values`
-/// (every config read, including tools that never call `Environment::init`) and
-/// `load_cascade` (the explicit bootstrapper `nest-rs-testing` uses) both come
-/// through here, so neither can be the path that skips the check. A prefix
-/// written into a file would otherwise sit in this map having renamed nothing —
-/// the cascade it appears in was chosen before it was read.
+/// Abort if the cascade tries to name the env prefix: the prefix chose the
+/// cascade before it was read.
 fn assert_prefix_not_from_cascade(values: &HashMap<String, String>) {
     let Some(declared) = values.get(EnvPrefix::VAR) else {
         return;
     };
-    // Equal is redundant, not wrong: the process env must already carry it for
-    // the resolution to match, so the file is merely restating a settled fact.
     let resolved = EnvPrefix::current();
     assert!(
         declared == resolved,
@@ -88,16 +67,9 @@ fn assert_prefix_not_from_cascade(values: &HashMap<String, String>) {
 
 /// Abort if the cascade tries to name the active environment.
 ///
-/// Same refusal as the prefix, one notch stricter. `<PREFIX>_ENV` chooses
-/// which cascade to read, so a value inside a file arrives too late to have
-/// done so — and unlike the prefix, it cannot be tolerated when it merely
-/// matches the *resolved* environment: absence resolves to `development` for
-/// cascade selection while `Environment::declared` answers `None`, and
-/// [`publish`] would launder the file's value into the process env where
-/// `declared` reads it — a committed file arming every development-only
-/// affordance (`nestrs g auth`'s token minter) on any deployment that left the
-/// variable unset. The file may only restate a value the **process** actually
-/// carries; anything else aborts before [`publish`] can see the key.
+/// Stricter than the prefix: the file may only restate the value the
+/// **process** carries, since [`publish`] would otherwise launder it into
+/// `Environment::declared` and arm development-only affordances.
 fn assert_environment_not_from_cascade(values: &HashMap<String, String>) {
     let var = Environment::var_name();
     let Some(declared) = values.get(&var) else {
@@ -123,9 +95,6 @@ fn assert_environment_not_from_cascade(values: &HashMap<String, String>) {
 fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
-        // A missing cascade file is the normal case — the loader walks every
-        // candidate. Anything else (permissions, invalid UTF-8) is a present
-        // file we failed to read: surface it rather than silently dropping it.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) => {
             tracing::warn!(
@@ -157,8 +126,6 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
             .entry(key.to_owned())
             .or_insert_with(|| parse_value(value.trim()));
     }
-    // One aggregate warning per file — a malformed line means a config value the
-    // user expects is quietly absent.
     if skipped > 0 {
         tracing::warn!(
             target: crate::TARGET,
@@ -170,22 +137,15 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
 }
 
 /// Merge the `.env` cascade rooted at `dir` into the **process environment**
-/// (set-if-absent — real env wins). This is the only path that mutates the
-/// process env; it exists for the consumers that read dotenv values through raw
-/// `std::env::var`, which no `ConfigService` serves: the framework's own
-/// `<PREFIX>_LOG*` setup, `OpenTelemetry::init`, a `migrate`/`seed` binary.
+/// (set-if-absent — real env wins), for consumers reading raw `std::env::var`.
 ///
-/// Two sanctioned callers, both single-threaded before any task is spawned:
-/// [`Environment::init`](crate::Environment::init) at the top of `main`, and
-/// the e2e harness in its setup. Config *resolution* never calls it — it reads
-/// `dotenv_values` through `env_var`, so no request path mutates anything.
+/// Call it only single-threaded, before any task reads the environment: it
+/// runs `std::env::set_var`.
 pub fn load_cascade(dir: &Path, env: Environment) {
     publish(&cascade_map(dir, env));
 }
 
-/// `Environment::init`'s spelling: publish the cascade **already parsed** into
-/// the in-crate map, so the top of `main` reads the `.env` files once rather
-/// than once per consumer.
+/// Publish the cascade already parsed into the in-crate map.
 pub(crate) fn publish_dotenv_values() {
     publish(dotenv_values());
 }
@@ -193,13 +153,9 @@ pub(crate) fn publish_dotenv_values() {
 /// Names this process wrote into `std::env` **from a cascade file** — the real
 /// environment left them unset and a committed `.env` supplied the value.
 ///
-/// Publishing is what makes `<PREFIX>_LOG` and a `migrate` binary see the
-/// cascade, but it also erases the one distinction the documented precedence
-/// tier rests on: afterwards a bare `std::env::var` cannot tell a deployment
-/// variable from a file checked in beside the code. Recording the names
-/// restores it for [`ConfigSource::get_from_deployment`], so
-/// `real env > pinned in code > .env cascade` holds in a scaffolded app exactly
-/// as it does in a library-only one.
+/// Once published, `std::env::var` cannot tell a deployment variable from a
+/// committed file; these names restore it for
+/// [`ConfigSource::get_from_deployment`].
 ///
 /// [`ConfigSource::get_from_deployment`]: crate::ConfigSource::get_from_deployment
 static PUBLISHED: LazyLock<RwLock<HashSet<String>>> = LazyLock::new(|| RwLock::new(HashSet::new()));
@@ -212,8 +168,7 @@ pub(crate) fn published_from_cascade(name: &str) -> bool {
         .is_ok_and(|published| published.contains(name))
 }
 
-/// Set-if-absent, the single process-env write. Carries the `unsafe` block both
-/// callers' contracts are written against.
+/// Set-if-absent, the single process-env write.
 #[expect(
     clippy::disallowed_methods,
     reason = "the cascade is what fills the process environment; it reads it to write set-if-absent"
@@ -227,13 +182,9 @@ fn publish(values: &HashMap<String, String>) {
         if let Some(published) = published.as_mut() {
             published.insert(key.clone());
         }
-        // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`
-        // on another thread. Config *resolution* never reaches here — those
-        // reads go through `dotenv_values`/`env_var`. The two sanctioned
-        // callers (`Environment::init` at the top of `main`, the e2e harness in
-        // its setup) both run single-threaded, before spawning any task that
-        // reads the environment, so the write happens-before every later
-        // `getenv`. Any caller of `load_cascade` carries that obligation.
+        // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`.
+        // Config resolution never reaches here, and every caller of
+        // `load_cascade` runs single-threaded before any task reads the env.
         #[expect(
             unsafe_code,
             reason = "set_var before any thread reads the environment, per the SAFETY note above"
@@ -360,10 +311,6 @@ mod tests {
         });
     }
 
-    // `parse_value` is the per-line parser shared by every cascade tier — pin
-    // each quoting variant directly so a future rewrite of `merge_file`
-    // doesn't silently change PEM-multiline support.
-
     #[test]
     fn parse_value_unquoted_passes_through_unchanged() {
         assert_eq!(parse_value("plain"), "plain");
@@ -378,9 +325,6 @@ mod tests {
 
     #[test]
     fn parse_value_double_quoted_expands_escapes() {
-        // \n / \t / \r / \\ / \" — the documented set; a PEM private key
-        // ships as one logical line with \n for newlines, so this is
-        // load-bearing.
         assert_eq!(parse_value(r#""a\nb""#), "a\nb");
         assert_eq!(parse_value(r#""a\tb""#), "a\tb");
         assert_eq!(parse_value(r#""a\rb""#), "a\rb");
@@ -390,37 +334,26 @@ mod tests {
 
     #[test]
     fn parse_value_double_quoted_preserves_unknown_escapes_verbatim() {
-        // A `\z` isn't a known escape — keep the backslash + the char so the
-        // user sees the typo rather than getting silent data loss.
         assert_eq!(parse_value(r#""a\zb""#), r"a\zb");
     }
 
     #[test]
     fn parse_value_double_quoted_trailing_backslash_is_kept_literal() {
-        // Inner = `x\` (one literal backslash at end, no follower); keep it
-        // verbatim instead of consuming the closing quote.
         let input = "\"x\\\""; // string `"x\"`
         assert_eq!(parse_value(input), "x\\"); // string `x\`
     }
 
     #[test]
     fn parse_value_single_quoted_is_literal_no_escape_expansion() {
-        // Single quotes are the literal form — `\n` stays two chars.
         assert_eq!(parse_value(r#"'a\nb'"#), r"a\nb");
         assert_eq!(parse_value("'plain'"), "plain");
     }
 
     #[test]
     fn parse_value_mismatched_quotes_are_not_treated_as_quoted() {
-        // `"x'` — different opening/closing quote chars: not quoted.
         assert_eq!(parse_value(r#""x'"#), r#""x'"#);
-        // Single char that looks like an opening quote: not quoted.
         assert_eq!(parse_value(r#"""#), r#"""#);
     }
-
-    // `merge_file` exercises every parse-line branch (comment, empty,
-    // missing equal, `export` prefix, set-if-absent). Drive them all via
-    // a temp file.
 
     #[test]
     #[expect(
@@ -454,7 +387,6 @@ mod tests {
             )?;
             load_cascade(Path::new("."), Environment::Development);
             assert_eq!(std::env::var("VALID_KEY").unwrap(), "ok");
-            // The bad lines must not be loaded under any key.
             assert!(std::env::var("").is_err());
             Ok(())
         });
@@ -467,9 +399,6 @@ mod tests {
     )]
     fn merge_file_is_a_no_op_when_the_path_doesnt_exist() {
         figment::Jail::expect_with(|jail| {
-            // No `.env` files created — load_cascade walks all candidates and
-            // every read fails silently. We mainly check that no panic
-            // happens and existing env stays intact.
             jail.set_env("CASCADE_PRESERVE_ME", "kept");
             load_cascade(Path::new("."), Environment::Development);
             assert_eq!(std::env::var("CASCADE_PRESERVE_ME").unwrap(), "kept");
@@ -497,10 +426,6 @@ mod tests {
         });
     }
 
-    // Publishing is what erased the deployment-vs-file distinction that the
-    // documented `real env > pinned in code > .env cascade` order depends on.
-    // Pin the bookkeeping that restores it: a key the cascade supplied is
-    // marked, a key the real env already held is not.
     #[test]
     #[expect(
         clippy::result_large_err,
@@ -525,10 +450,6 @@ mod tests {
         });
     }
 
-    // `cascade_map` is the live-runtime path: it resolves file precedence into a
-    // map **without** mutating the process env. Pin both — most-specific file
-    // wins, and no `set_var` leaks the values into `std::env` (the whole point
-    // of the fix — the config layer reads this map, it does not merge it).
     #[test]
     #[expect(
         clippy::result_large_err,
@@ -542,7 +463,6 @@ mod tests {
             let map = cascade_map(Path::new("."), Environment::Development);
             assert_eq!(map.get("MAP_A").map(String::as_str), Some("base"));
             assert_eq!(map.get("MAP_B").map(String::as_str), Some("dev_local"));
-            // The read path must not have written anything into the real env.
             assert!(std::env::var("MAP_A").is_err());
             assert!(std::env::var("MAP_B").is_err());
             Ok(())

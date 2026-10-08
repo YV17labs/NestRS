@@ -6,10 +6,10 @@ use proc_macro::TokenStream;
 
 mod scheduled;
 
-/// Walks the methods; for each one
-/// tagged with a trigger attribute, submits a `ScheduledMethod` to the
-/// link-time inventory the [`Scheduler`](../nest_rs_schedule/struct.Scheduler.html)
-/// drains at boot. The struct itself must be a regular `#[injectable]`.
+/// Orchestrator on a provider's `impl` block: each method tagged with a trigger
+/// attribute is submitted as a `ScheduledMethod` to the link-time inventory the
+/// [`Scheduler`](../nest_rs_schedule/struct.Scheduler.html) drains at boot. The
+/// struct itself must be a regular `#[injectable]`.
 ///
 /// Per-method trigger attributes (exactly one per method):
 ///
@@ -47,10 +47,8 @@ mod scheduled;
 /// preset path is validated when `Scheduler` configures, naming the offending
 /// job.
 ///
-/// Multiple decorated methods on the same `#[scheduled]` impl block all
-/// share the provider's `#[inject]` dependencies — pooling related cron
-/// methods on a single service keeps shared state (clients, caches) in
-/// one place.
+/// Several decorated methods on one impl block share the provider's
+/// `#[inject]` dependencies.
 ///
 /// The impl is re-emitted unchanged, its methods still callable, with no
 /// `Discoverable` — the host's own `#[injectable]` owns it.

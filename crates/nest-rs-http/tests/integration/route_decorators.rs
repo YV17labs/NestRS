@@ -38,8 +38,7 @@ impl DecoratorProbeController {
         Err(ForbiddenError)
     }
 
-    /// The same refusal through a `Result` renamed on import — the spelling
-    /// the shaper once read took it for a value and rewrote its 403 to 201.
+    /// The same refusal through a `Result` renamed on import.
     #[post("/forbidden-by-import")]
     #[http_code(201)]
     #[response_header("x-created", "yes")]
@@ -47,8 +46,7 @@ impl DecoratorProbeController {
         Err(ForbiddenError.into())
     }
 
-    /// And through a type alias whose error is only a `ResponseError`: the
-    /// response is built from the success value alone, so no
+    /// Through a type alias whose error is only a `ResponseError`: no
     /// `Result<T, E>: IntoResponse` bound is asked of it.
     #[post("/forbidden-by-alias")]
     #[http_code(201)]
@@ -63,9 +61,7 @@ impl DecoratorProbeController {
         Ok("created")
     }
 
-    /// The shapers written path-qualified, as an exported attribute macro may
-    /// be. `#[routes]` read only the bare spelling, so these survived it,
-    /// expanded to nothing, and the route answered `200` with neither.
+    /// The shapers written path-qualified, as an exported attribute macro may be.
     #[post("/qualified")]
     #[nest_rs_http::http_code(201)]
     #[nest_rs_http::response_header("x-probe", "yes")]
@@ -148,10 +144,8 @@ async fn http_code_does_not_override_the_status_of_err_responses() {
     resp.assert_status(StatusCode::FORBIDDEN);
 }
 
-/// A failure is known by its type, never by how its type is spelled: renamed
-/// on import or behind an alias, an `Err` keeps the status its
-/// `ResponseError` set and gets none of the success path's headers, while an
-/// `Ok` behind the same alias is shaped as ever.
+/// A failure is known by its type, however it is spelled: an `Err` keeps its
+/// `ResponseError` status and gets none of the success path's headers.
 #[tokio::test]
 async fn http_code_does_not_override_an_err_whatever_its_result_is_called() {
     let client = boot().await;

@@ -1,7 +1,5 @@
-//! `src/guard.rs` + the guard half of `src/endpoint.rs`: the mount's guard
-//! preference order (registered bridge → global pool → deny-all) and the
-//! `around` seam that installs an operation's ambient state inside rmcp's
-//! spawned dispatch.
+//! `src/guard.rs` + the guard half of `src/endpoint.rs`: registered bridge →
+//! global pool → deny-all, and `around` crossing rmcp's spawned dispatch.
 
 use std::sync::Arc;
 
@@ -52,9 +50,6 @@ async fn a_mounted_guard_rejects_before_the_handler_runs() {
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
 }
 
-// `endpoint` picks the deny-all guard, and `resolve_operation_guard`'s tail
-// picks the same one — so an app with neither a registered bridge nor a global
-// pool fails closed rather than serving the tool surface open.
 #[tokio::test]
 async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -62,11 +57,8 @@ async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
     let resp = TestClient::new(open).post("/").send().await;
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
 
-    // Failing closed is only half the contract: an endpoint that refuses
-    // everything because nobody wired a guard looks exactly like one that
-    // refuses because the caller is unauthorized. The deploy that gets this
-    // wrong learns it from this line or not at all, so the line is asserted
-    // rather than assumed. Single-thread runtime — `LogCapture` is thread-local.
+    // A missing wiring answers like a refused caller; only this line tells them
+    // apart. Single-thread runtime — `LogCapture` is thread-local.
     let announced = logs
         .find(
             "nest_rs::mcp",
@@ -92,8 +84,6 @@ async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
     );
 }
 
-// The explicit opt-in counterpart to deny-all: wiring `AllowAllMcpGuard`
-// admits the request so a deliberately public tool can be served.
 #[tokio::test]
 async fn allow_all_guard_admits_the_request() {
     let guard = nest_rs_mcp::AllowAllMcpGuard;
@@ -101,15 +91,11 @@ async fn allow_all_guard_admits_the_request() {
     assert!(guard.before(&mut req).await.is_ok());
 }
 
-// --- `around`: ambient state crosses rmcp's spawn --------------------------
-
 tokio::task_local! {
     /// Stand-in for the authz bridge's ambient `Ability`.
     static AMBIENT: String;
 }
 
-/// What `before` attaches to the request and `around` must find again from
-/// inside the spawned dispatch.
 #[derive(Clone)]
 struct Attached(String);
 
@@ -152,9 +138,7 @@ struct AmbientProbeTool;
 
 #[tool_router]
 impl AmbientProbeTool {
-    /// Reports over the wire whether the guard's ambient state reached the
-    /// body — the response *is* the assertion, so there is no process-global
-    /// flag for a second test to clobber.
+    /// Answers over the wire, so no process-global flag is shared between tests.
     #[tool(description = "Report whether the guard's ambient state reached this tool body.")]
     async fn probe_ambient(&self) -> Result<CallToolResult, McpError> {
         let seen = AMBIENT.try_with(|value| value.clone()).is_ok();
@@ -169,10 +153,7 @@ impl AmbientProbeTool {
 #[tool_handler]
 impl ServerHandler for AmbientProbeTool {}
 
-// D2: the guard — not the data context — installs the operation's ambient
-// state, and it lands *inside* rmcp's spawned dispatch. No `McpToolContext` is
-// registered here, which is the point: an app that binds the guard but forgets
-// the data context still gets a scoped tool body.
+// No `McpToolContext` registered: the guard alone installs the ambient state.
 #[tokio::test]
 async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context() {
     let guard = Arc::new(AmbientGuard) as Arc<dyn McpOperationGuard>;
@@ -190,8 +171,6 @@ async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context(
     );
 }
 
-// --- the global-pool fallback ---------------------------------------------
-
 #[mcp]
 #[derive(Clone)]
 struct PoolTool;
@@ -202,9 +181,7 @@ impl PoolTool {}
 #[tool_handler]
 impl ServerHandler for PoolTool {}
 
-// `ThrottlerGuard` is *not* listed here: `ThrottlerModule` registers it
-// alongside the store it reads, so importing the module is the whole wiring.
-// Listing it as well is now a duplicate registration and fails the boot.
+// `ThrottlerModule` registers `ThrottlerGuard`; listing it too fails the boot.
 #[module(imports = [ThrottlerModule::for_root(one_per_minute())], providers = [PoolTool])]
 struct PoolModule;
 
@@ -216,8 +193,6 @@ fn one_per_minute() -> ThrottlerConfig {
     }
 }
 
-/// A guard that refuses everything, to prove which side of the preference
-/// order actually ran.
 #[nest_rs_core::injectable]
 #[derive(Default)]
 struct DenyEverythingGuard;
@@ -239,10 +214,6 @@ struct BridgeWinsModule;
 #[module(providers = [PoolTool])]
 struct NoPoolModule;
 
-// D1, the headline: `use_guards_global` reaches `/mcp` the way it already
-// reaches `/graphql`. Before the fallback existed a global `ThrottlerGuard`
-// could not rate-limit a tool call at all — `/mcp` was either dead (401) or
-// ungoverned by the pool.
 #[tokio::test]
 async fn a_global_throttler_guard_rate_limits_mcp() {
     let app = TestApp::builder()
@@ -272,8 +243,6 @@ async fn a_global_throttler_guard_rate_limits_mcp() {
     );
 }
 
-// A registered `dyn McpOperationGuard` **replaces** the fallback — it owns the
-// chain, exactly as a registered `GraphqlOperationGuard` bridge does.
 #[tokio::test]
 async fn a_registered_guard_replaces_the_global_pool_fallback() {
     let app = TestApp::builder()
@@ -291,8 +260,6 @@ async fn a_registered_guard_replaces_the_global_pool_fallback() {
     );
 }
 
-// The fallback only ever *widens* what the app opted into: with no global pool
-// at all, `/mcp` stays deny-all rather than becoming an empty-chain pass.
 #[tokio::test]
 async fn no_global_pool_leaves_mcp_deny_all() {
     let app = TestApp::for_module::<NoPoolModule>().await.expect("boots");

@@ -4,12 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::context::{ENV_PREFIX_VAR, EnvPrefixSource};
 use crate::error::{CliError, CliResult};
 
-/// The floor, **derived** from the manifest rather than retyped: this crate's
-/// `rust-version` is inherited from the workspace, so a bump moves the floor
-/// doctor certifies against with it. Hand-typed it was a second authority on a
-/// number Cargo already exports — and one that certified a toolchain the
-/// workspace no longer builds on, with every floor-derived fixture in this
-/// module still passing, because they read the stale constant too.
+/// The floor, derived from this crate's `rust-version`, inherited from the workspace.
 const MIN_RUST_VERSION: (u32, u32) = parse_floor(env!("CARGO_PKG_RUST_VERSION"));
 
 /// `major.minor` of a `rust-version`, in const so a manifest that stops parsing
@@ -38,23 +33,17 @@ pub(crate) struct DoctorOptions {
 
 #[derive(Debug, Default)]
 pub(crate) struct DoctorReport {
-    /// What asking for the toolchain produced, kept structural: a consumer
-    /// reads the outcome rather than matching on an English sentence, and the
-    /// three fields this replaced could disagree with one another.
+    /// What asking for the toolchain produced.
     pub rustc: Rustc,
     pub cargo_ok: bool,
     pub in_nestrs_workspace: bool,
     /// Set when workspace detection itself failed (e.g. a malformed manifest),
     /// as distinct from a clean "not a workspace" result.
     pub workspace_error: Option<String>,
-    /// Where the prefix came from — reported rather than just resolved,
-    /// because "this shell names none" and "this shell names ACME" produce the
-    /// same variable list only by accident, and the operator needs to know
-    /// which of the two they are looking at.
+    /// Where the prefix came from — reported, not just resolved.
     pub env_prefix_source: EnvPrefixSource,
     /// Each optional variable doctor looked for, resolved name and all, in
-    /// report order. Names are stored rather than rebuilt at print time: the
-    /// name reported is then the name probed, by construction.
+    /// report order.
     pub env_vars: Vec<EnvVar>,
     /// What the `.env` cascade names that the loader refuses as a whole — see
     /// [`cascade_refusals`].
@@ -62,14 +51,12 @@ pub(crate) struct DoctorReport {
 }
 
 impl DoctorReport {
-    /// The prefix every name below is built from — derived, never stored, so
-    /// the two cannot disagree.
+    /// The prefix every name below is built from.
     pub(crate) fn env_prefix(&self) -> &str {
         self.env_prefix_source.prefix()
     }
 
-    /// Whether the toolchain meets the floor. Derived, so it cannot disagree
-    /// with the outcome it summarises.
+    /// Whether the toolchain meets the floor.
     pub(crate) fn rustc_ok(&self) -> bool {
         matches!(self.rustc, Rustc::Version { release: Some(release), .. } if release >= MIN_RUST_VERSION)
     }
@@ -87,10 +74,7 @@ pub(crate) struct EnvVar {
 /// The optional variables doctor answers for, as `(namespace, key, always
 /// reported)`.
 const CHECKED: &[(&str, &str, bool)] = &[
-    // The namespace is the config's stem, never a resource word: `seaorm` and
-    // `redis` are what `#[config(namespace = …)]` declares, so they are the
-    // only names a project can set. `DATABASE`/`QUEUE` named neither the crate
-    // nor the type that parses them, and nothing has ever read them.
+    // The namespace is the config's stem, as `#[config(namespace = …)]` declares it.
     ("SEAORM", "URL", true),
     ("REDIS", "URL", true),
     ("HTTP", "HOST", false),
@@ -112,11 +96,8 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         Err(e) => report.workspace_error = Some(e.to_string()),
     }
 
-    // Read from *this* environment, which is the same source the app reads —
-    // no project file to disagree with.
     report.env_prefix_source = EnvPrefixSource::detect();
 
-    // One cascade read for all four, rather than up to four files per variable.
     let cascade = cascade_text(&start, report.env_prefix(), process_env);
     report.cascade_refusals = cascade_refusals(process_env, &cascade, report.env_prefix());
     report.env_vars = CHECKED
@@ -133,11 +114,8 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
 
     print_report(&report);
 
-    // An unusable prefix blocks like a missing toolchain does: every app in
-    // this environment aborts on the first name it builds. So does a variable
-    // the loader would refuse — a `_FILE` it cannot read, a value given twice:
-    // every app that reads it aborts its boot on it — and a cascade the loader
-    // refuses whole, which aborts every app at its first config read.
+    // A refused prefix, variable or cascade aborts every app's boot, so it blocks
+    // as a missing toolchain does.
     let prefix_ok = !matches!(report.env_prefix_source, EnvPrefixSource::Invalid(_));
     let variables_ok = report
         .env_vars
@@ -157,9 +135,6 @@ fn print_report(report: &DoctorReport) {
     println!("nestrs doctor");
     println!();
 
-    // Every sentence written once, here, and every one of them names the floor
-    // — a version and a verdict without the requirement is what the docs page
-    // promising `rustc ≥ 1.97` described and doctor did not do.
     let (major, minor) = MIN_RUST_VERSION;
     let needs = format!("nestrs needs {major}.{minor} or newer");
     let toolchain = match &report.rustc {
@@ -191,11 +166,7 @@ fn print_report(report: &DoctorReport) {
 
     println!();
     println!("Environment (optional — only needed for DB/Redis apps):");
-    // Named even on the default, so the answers below are unambiguous: a reader
-    // seeing `not set` can tell a missing value from a prefix mismatch. The
-    // source comes with it, because doctor answers for the shell it runs in —
-    // a project whose deployment renames its variables looks untouched from a
-    // terminal that does not.
+    // Named even on the default, so `not set` reads apart from a prefix mismatch.
     match &report.env_prefix_source {
         EnvPrefixSource::Environment(prefix) => {
             println!("  env prefix: {prefix} (from {ENV_PREFIX_VAR})");
@@ -258,9 +229,8 @@ pub enum Resolution {
     Refused(String),
 }
 
-/// The process environment, as [`resolve_variable`] and [`cascade_text`] read
-/// it — the one place doctor consults the shell it runs in, so every helper
-/// below takes its environment as an argument and a test hands it one.
+/// The process environment — the one place doctor consults its shell, so every
+/// helper below takes its environment as an argument.
 #[expect(
     clippy::disallowed_methods,
     reason = "doctor reports what the process environment holds, without linking the loader"
@@ -276,27 +246,14 @@ const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
 /// (`real`) **or** the `.env` cascade (`cascade`), inline or through the file
 /// `<NAME>_FILE` names — answered as the loader answers it.
 ///
-/// **The deployment chooses the spelling**: when the process environment holds
-/// either, empty included, both are read from the process alone and the
-/// cascade is shadowed; a value that is not UTF-8 there is unset, as the loader
-/// reads it. An empty value is unset in either tier, and nothing is trimmed
-/// that the loader keeps. Both spellings set is refused; a `_FILE` path has its
-/// surrounding whitespace trimmed and must name a regular file of at most a
-/// mebibyte holding UTF-8 text — a file holding only line breaks is unset. **A
-/// relative path is opened from `dir`**, the directory the app is started in,
-/// since the loader opens it from its own working directory: opened from
-/// doctor's instead, `nestrs doctor -p <dir>` failed a correct project from
-/// outside it and passed one whose file sat beside the caller.
+/// The deployment chooses the spelling: when the process environment holds
+/// either, empty included, the cascade is shadowed; a value that is not UTF-8
+/// there is unset. Both spellings set is refused; a `_FILE` path is trimmed and
+/// must name a regular file of at most a mebibyte holding UTF-8 text. **A
+/// relative path is opened from `dir`**, the directory the app is started in.
 ///
-/// **A mirror, not a borrow, and held to its original by execution.** The CLI
-/// depends on no framework crate, so that `cargo install nest-rs-cli` stays
-/// independent of the version a project pins; the conformance suite runs this
-/// function beside the loader over every shape a deployment can give, which is
-/// what keeps the two from drifting. It answered `set` for a `_FILE` naming an
-/// empty or missing file, for a value given twice, and for a shell value that
-/// is not UTF-8 — four answers the loader contradicts. Reading only `std::env`
-/// is the mistake `/database/migrations/` warns tool authors against: it made
-/// doctor report `not set` for a variable the workspace's own `.env` defines.
+/// A mirror of the loader (the CLI links no framework crate), held to it by the
+/// conformance suite.
 pub fn resolve_variable(
     real: impl Fn(&str) -> Option<OsString>,
     cascade: &str,
@@ -353,14 +310,10 @@ fn file_resolution(file_name: &str, path: &Path) -> Resolution {
 /// whole, every app started here aborting at its first config read: the two
 /// variables that choose the cascade, written into it.
 ///
-/// The prefix (`NESTRS_ENV_PREFIX`) is refused unless it restates the one
-/// resolved from the process (`prefix`), and the environment selector
-/// (`<PREFIX>_ENV`) unless the process (`real`) carries the same value — a
-/// value inside the cascade arrives after the files were chosen, and the
-/// selector arms development-only affordances, which no committed file may do.
-/// That is `nest_rs_config`'s `cascade_map`, mirrored like
-/// [`resolve_variable`] and held to it by the same conformance join. Each
-/// sentence names the variable, never its value.
+/// The prefix is refused unless it restates the one resolved from the process
+/// (`prefix`), the selector unless the process (`real`) carries the same value.
+/// Mirrors `nest_rs_config`'s `cascade_map`; each sentence names the variable,
+/// never its value.
 pub fn cascade_refusals(
     real: impl Fn(&str) -> Option<OsString>,
     cascade: &str,
@@ -392,14 +345,9 @@ pub fn cascade_refusals(
     refused
 }
 
-/// Every cascade file rooted at `dir`, concatenated. Mirrors
-/// `nest_rs_config::dotenv`'s file set — including skipping `.env.local` under
-/// `<PREFIX>_ENV=test`, so doctor answers what an app would actually resolve.
-/// Most specific first, as the loader merges them: the first assignment of a key wins.
-///
-/// `real` is the process environment the selector is read from: a parameter so
-/// the answer is a function of what it is handed, and a test never inherits the
-/// `<PREFIX>_ENV` of the shell that runs it.
+/// Every cascade file rooted at `dir`, concatenated most specific first, as
+/// `nest_rs_config::dotenv` reads them — `.env.local` skipped under `test`.
+/// `real` is the environment the selector is read from.
 fn cascade_text(dir: &Path, env_prefix: &str, real: impl Fn(&str) -> Option<OsString>) -> String {
     let declared = real(&format!("{env_prefix}_ENV")).and_then(|value| value.into_string().ok());
     let env = cascade_environment(declared.as_deref());
@@ -416,12 +364,9 @@ fn cascade_text(dir: &Path, env_prefix: &str, real: impl Fn(&str) -> Option<OsSt
         .join("\n")
 }
 
-/// The environment whose files the loader reads for a `<PREFIX>_ENV` value —
-/// `nest_rs_config::Environment`'s classification, mirrored because the CLI
-/// links no framework crate. Its aliases and its fallback are the loader's:
-/// `prod` reads `.env.production`, and empty, unset or unrecognised read the
-/// development files. Taking the raw value as a file name instead sent doctor
-/// to `.env.prod` and `.env.` — files no app ever reads.
+/// The environment whose files the loader reads for a `<PREFIX>_ENV` value,
+/// mirroring `nest_rs_config::Environment`: `prod` reads `.env.production`, and
+/// empty, unset or unrecognised read the development files.
 fn cascade_environment(declared: Option<&str>) -> &'static str {
     match declared.map(str::trim) {
         Some("production" | "prod") => "production",
@@ -431,12 +376,8 @@ fn cascade_environment(declared: Option<&str>) -> &'static str {
     }
 }
 
-/// The cascade's value for `name`, split out so the line grammar (`export`
-/// prefix, comments, quotes) is unit-testable. The first assignment wins, as
-/// the loader's set-if-absent merge does — `cascade_text` concatenates the files
-/// most specific first — so an empty assignment in a more specific file unsets
-/// the key for every file after it. A quoted value is unquoted as the loader
-/// unquotes it, since a `_FILE` path read from here is opened.
+/// The cascade's value for `name`: the first assignment wins, as the loader's
+/// set-if-absent merge does, and a quoted value is unquoted as the loader does.
 fn cascade_value(contents: &str, name: &str) -> Option<String> {
     contents
         .lines()
@@ -492,18 +433,11 @@ fn unquote(value: &str) -> String {
 }
 
 /// What asking `rustc` for its version produced.
-///
-/// Three outcomes, kept apart all the way to the printed line. Collapsed into
-/// one `None` they all rendered as `rustc not found`, so a `rustc` that *was*
-/// on `PATH` and printed a diagnosis was reported as absent and its diagnosis
-/// discarded — the operator was sent to fix the wrong thing.
 #[derive(Debug, Default)]
 pub(crate) enum Rustc {
     Version {
         line: String,
-        /// `None` when the line carries no version to read — which is not the
-        /// same as a compiler that is merely old, and no longer shares its
-        /// sentence with one.
+        /// `None` when the line carries no version to read.
         release: Option<(u32, u32)>,
     },
     /// Nothing has been probed yet — a default report, never an answer.
@@ -537,8 +471,7 @@ pub(super) fn rustc_probe() -> Rustc {
 }
 
 /// The `rustc --version` line, or `None` when there is none to report. Shared
-/// with `nestrs info`, which reports the toolchain without doctor's verdict and
-/// so has nothing to do with *why* there isn't one.
+/// with `nestrs info`.
 pub(super) fn rustc_version() -> Option<String> {
     match rustc_probe() {
         Rustc::Version { line, .. } => Some(line),
@@ -559,10 +492,7 @@ fn which(program: &str) -> bool {
 /// The `(major, minor)` a `rustc --version` line reports, or `None` when the
 /// line carries none to read.
 ///
-/// Kept apart from the verdict because the two have different fixes: parsing a
-/// component with `unwrap_or(0)` turned `rustc 1.x.0` into version zero, and an
-/// unreadable line was then reported in the same sentence as a compiler that is
-/// merely old. Both still fail closed — an unreadable version is never enough.
+/// Unreadable is kept apart from old, and both fail closed.
 fn rustc_release(version_line: &str) -> Option<(u32, u32)> {
     let rest = version_line.strip_prefix("rustc ")?;
     let token = rest.split_whitespace().next()?;
@@ -585,31 +515,24 @@ mod tests {
             rustc_release(&format!("rustc {major}.{minor}.0 (abc 2025-01-01)")),
             Some(MIN_RUST_VERSION)
         );
-        // Below the floor on the axis that always has room: decrementing the
-        // minor overflowed at a `(2, 0)` floor, which is a trap for whoever
-        // bumps next rather than a fixture.
+        // Below the floor on the minor axis would overflow at a `(2, 0)` floor.
         let below = format!("{}.{minor}", major.saturating_sub(1));
         assert!(!verdict(&format!("rustc {below}.0 (abc 2025-01-01)")));
         assert!(verdict(&format!(
             "rustc {major}.{minor}.0 (abc 2025-01-01)"
         )));
 
-        // Unreadable is not old — the distinction the printed line now makes,
-        // and every one of these used to parse as version zero and be reported
-        // as a compiler that is merely out of date.
         assert_eq!(rustc_release("rustc 1.97"), Some((1, 97)));
         assert_eq!(rustc_release("rustc 1.97.0-nightly (abc)"), Some((1, 97)));
         assert_eq!(rustc_release("rustc 1.x.0 (abc)"), None);
         assert_eq!(rustc_release("rustc 4294967296.0.0"), None);
         assert_eq!(rustc_release("hello world"), None);
         assert_eq!(rustc_release(""), None);
-        // Everything unreadable still fails closed.
         assert!(!verdict("rustc 1.x.0 (abc)"));
         assert!(!verdict("hello world"));
     }
 
-    /// `rustc_ok` for a report whose probe returned `line` — the real path the
-    /// verdict travels, rather than a comparison written twice.
+    /// `rustc_ok` for a report whose probe returned `line`.
     fn verdict(line: &str) -> bool {
         DoctorReport {
             rustc: Rustc::Version {
@@ -621,9 +544,6 @@ mod tests {
         .rustc_ok()
     }
 
-    // B9: doctor read only `std::env`, so it answered `not set` for a variable
-    // the workspace's own generated `.env` defines — and then reassured the
-    // reader that "none set" was fine for their DB-backed app.
     /// Whether the cascade text alone sets `name`.
     fn file_defines(contents: &str, name: &str) -> bool {
         cascade_value(contents, name).is_some_and(|value| !value.is_empty())
@@ -668,9 +588,8 @@ mod tests {
         ));
     }
 
-    /// Hermetic: the process environment is handed in empty, so a shell that
-    /// exports `<PREFIX>_REDIS__URL` — the one a developer running this suite is
-    /// most likely to have — cannot answer for the cascade.
+    /// Hermetic: the process environment is handed in empty, so a developer's
+    /// shell cannot answer for the cascade.
     #[test]
     fn the_cascade_is_consulted_from_the_starting_directory() {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-{}", std::process::id()));
@@ -721,9 +640,7 @@ mod tests {
         assert_eq!(cascade_environment(None), "development");
     }
 
-    /// A variable given as a file is set: the loader reads `<NAME>_FILE` as the
-    /// same variable, so doctor must not report it missing — when the file
-    /// holds a value, as the loader reads it.
+    /// A variable given as a file is set, when the file holds a value.
     #[test]
     fn a_variable_given_as_a_file_is_reported_set() {
         let dir = scratch("file-set");
@@ -734,10 +651,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The four answers the audit found doctor giving against the loader: a
-    /// `_FILE` naming an empty file is unset, one naming a missing file is a
-    /// boot error, a value given twice is a boot error, and a shell value that
-    /// is not UTF-8 is unset.
+    /// A `_FILE` naming an empty file is unset, one naming a missing file is a
+    /// boot error, a value given twice is a boot error, and a non-UTF-8 shell value
+    /// is unset.
     #[test]
     fn a_variable_is_answered_as_the_loader_reads_it() {
         let dir = scratch("loader");
@@ -863,13 +779,8 @@ mod tests {
         assert!(!file_defines("NESTRS_SEAORM__URL=''", "NESTRS_SEAORM__URL"));
     }
 
-    /// A project that renamed its variables must be answered in its own names.
-    /// Reporting `<PREFIX>_SEAORM__URL: not set` there is worse than silence:
-    /// it sends the reader to add a key the app will never read.
-    ///
-    /// Hermetic for the same reason as the cascade test above: the default name
-    /// is asserted *absent*, which a developer's own `<PREFIX>_SEAORM__URL` would
-    /// otherwise contradict from outside the test.
+    /// A project that renamed its variables is answered in its own names; hermetic,
+    /// since the default name is asserted absent.
     #[test]
     fn a_custom_prefix_project_is_answered_in_its_own_variable_names() {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-acme-{}", std::process::id()));
@@ -884,8 +795,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// config-3r2: a relative `<NAME>_FILE` is opened from the directory the
-    /// app starts in, which is the one doctor examines — not doctor's own.
+    /// A relative `<NAME>_FILE` is opened from the directory the app starts in.
     #[test]
     fn a_relative_file_is_opened_from_the_directory_examined() {
         let dir = scratch("relative");
@@ -908,9 +818,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// config-5r2: the two variables that choose the cascade, written into it,
-    /// abort every app at its first config read — refused unless the process
-    /// says the same, and named without their value.
+    /// The two variables that choose the cascade, written into it, are refused
+    /// unless the process says the same, and named without their value.
     #[test]
     fn a_cascade_naming_what_chooses_it_is_refused() {
         let env = "NESTRS_ENV=production\n";

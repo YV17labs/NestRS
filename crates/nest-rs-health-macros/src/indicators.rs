@@ -1,12 +1,5 @@
-//! `#[indicators]` — orchestrator on a provider's `impl` block. Walks the
-//! methods, finds those tagged with `#[liveness]` / `#[readiness]` /
-//! `#[startup]`, strips the attribute, and submits one `HealthIndicator` per
-//! method to the link-time inventory. The methods stay on the impl block
-//! unchanged so they remain regular methods callable from anywhere.
-//!
-//! Discoverable is NOT emitted here — the provider's own `#[injectable]` owns
-//! it. Inventory is exactly the seam `#[hooks]`, `#[scheduled]`, and
-//! `#[processor]` use, for the same reason.
+//! `#[indicators]`: strips each probe attribute and submits one
+//! `HealthIndicator` per method; `Discoverable` stays with `#[injectable]`.
 
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
@@ -62,10 +55,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        // One probe per method, through the family's helper, and that one taken
-        // through `take_flag_attr`, so an argument on it —
-        // `#[readiness(timeout = "5s")]` compiled and meant nothing — is a named
-        // compile error rather than something dropped.
+        // `take_flag_attr`: an argument such as `#[readiness(timeout = "5s")]`
+        // is a compile error, never dropped.
         let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
         let index =
             match nest_rs_codegen::one_role_per_method("probe", &method.attrs, &accepted, "") {
@@ -95,9 +86,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let kind_ident = syn::Ident::new(kind_variant, method_ident.span());
         let cfgs = cfg_attrs(&method.attrs);
 
-        // Adapt the method's return to `anyhow::Result<()>`. A method answering
-        // `()` — written or not — is infallible (always `up`); any other must
-        // yield `Result<(), E: Into<anyhow::Error>>`.
         let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_ident(&__provider)));
         let invoke = if returns_unit(&method.sig.output) {
             quote! {
@@ -119,10 +107,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     kind: ::nest_rs_health::ProbeKind::#kind_ident,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     run: |__container| ::std::boxed::Box::pin(async move {
-                        // Not an `expect`: this runs inside a probe request, so a
-                        // panic would take the response down where an `Err` is
-                        // reported as `down` with the reason on the crate's `warn`.
-                        // The sentence is the kernel's — see `unresolved_host`.
+                        // Not an `expect`: a panic would take the probe response down.
                         let __provider = match ::nest_rs_core::Container::get::<#self_ty>(
                             __container,
                         ) {

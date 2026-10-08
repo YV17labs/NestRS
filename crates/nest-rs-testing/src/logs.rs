@@ -1,10 +1,5 @@
 //! Assert on what the framework *said*, not only on what it returned.
 //!
-//! A whole class of defect is invisible to a response assertion: a denial that
-//! fails closed but logs nothing, a dead-lettered job with no event, a warning
-//! filed under the wrong target. Those are the lines an operator queries during
-//! an incident, so they deserve the same coverage as a status code.
-//!
 //! ```
 //! # use nest_rs_testing::LogCapture;
 //! # const TARGET: &str = "features::orders";
@@ -14,29 +9,16 @@
 //! assert_eq!(event.field("order").as_deref(), Some("7"));
 //! ```
 //!
-//! The target is read from the constant the code under test logs on, never
-//! retyped: a test asserting a copied literal passes while the code drifts away
-//! from it.
+//! Read the target from the constant the code under test logs on, never a
+//! retyped literal.
 //!
-//! The capture is **thread-local** ([`tracing::subscriber::set_default`]), so
-//! parallel tests do not see each other's events. Hold the [`LogCapture`] across
-//! `.await` points only on a current-thread runtime — which is what
-//! `#[tokio::test]` gives you by default.
+//! The capture is **thread-local** ([`tracing::subscriber::set_default`]): hold
+//! the [`LogCapture`] across `.await` points only on a current-thread runtime,
+//! and reach for [`LogCapture::install_global`] for events emitted off the
+//! test's thread (a `spawn_blocking` write, a socket's writer half).
 //!
-//! That thread-locality is blind in one place, and it is not a corner: an event
-//! the framework emits from a task it *spawned* — a `spawn_blocking` write, a
-//! socket's writer half — never runs on the test's thread. Reach for
-//! [`LogCapture::install_global`] there.
-//!
-//! # Spans are captured too, and they carry the contract
-//!
-//! Most of what the framework promises an operator lives on the **operation
-//! span**, not on an event: `trace_id`, `span_id`, `actor_id`, `http.route`,
-//! `otel.name`. A harness that could only read events could assert none of it,
-//! which is why [`spans`](LogCapture::spans) exists — and why fields recorded
-//! *after* a span opens are captured as well as the ones declared at creation.
-//! That second half is the whole point at an HTTP edge, where the route template
-//! and the status are only known once the inner tree has answered.
+//! [`spans`](LogCapture::spans) captures spans too, with fields recorded after
+//! creation as well as those declared at it.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -53,15 +35,8 @@ use tracing_subscriber::registry::Registry;
 pub struct CapturedEvent {
     /// The event's target — `nest_rs::orm`, `features::users`, …
     pub target: String,
-    /// The event's `name:` — its metadata identity, which an OTLP log bridge
-    /// exports as `event.name`.
-    ///
-    /// A unit of work is named three times: by the
-    /// `operation_span!` that opens it, by the operation line's `name:`, and by
-    /// that line's `message`. Without this field a harness could match only the
-    /// message, so a line whose `name:` had drifted from it passed every
-    /// assertion in the repo. `tracing` defaults it to `event <file>:<line>`
-    /// where the macro states none.
+    /// The event's `name:`, which an OTLP log bridge exports as `event.name`;
+    /// `tracing` defaults it to `event <file>:<line>`.
     pub name: String,
     /// The event's level, as its lowercase name (`warn`, `debug`, …).
     pub level: String,
@@ -70,13 +45,8 @@ pub struct CapturedEvent {
     /// Every other field, formatted with `Debug` (so a `%`/`?` value reads the
     /// way it does in the JSON output, minus the quoting).
     pub fields: BTreeMap<String, String>,
-    /// The `trace_id` the line renders: read off the ambient context when the
-    /// event fired, exactly as the formatters read it, and `None` where no edge
-    /// had opened a unit of work.
-    ///
-    /// Beside `fields`, never inside them — an event writing its trace ids as
-    /// fields is the duplicate the formatters exist to prevent, and a test
-    /// reading them there would pass on exactly that defect.
+    /// The `trace_id` the line renders, read off the ambient context as the
+    /// formatters read it; `None` outside a unit of work. Never in `fields`.
     pub trace_id: Option<String>,
     /// The `span_id` the line renders, read as [`trace_id`](Self::trace_id) is.
     pub span_id: Option<String>,
@@ -96,16 +66,13 @@ impl CapturedEvent {
 pub struct CapturedSpan {
     /// The span's target — `nest_rs::http`, `nest_rs::ws`, …
     pub target: String,
-    /// The span's level, as its lowercase name — the *Level per layer* contract
-    /// was assertable for events and not for spans.
+    /// The span's level, as its lowercase name.
     pub level: String,
-    /// The span's *name* as `tracing` fixes it (`http.request`), which is a
-    /// literal and never the exported OTel name — that one is the `otel.name`
-    /// field, because `tracing` cannot vary a name per instance.
+    /// The span's *name* as `tracing` fixes it (`http.request`); the exported
+    /// OTel name is the `otel.name` field.
     pub name: String,
     /// Fields declared at creation **and** recorded afterwards, last write
-    /// winning. A field declared `Empty` and never filled is absent, which is
-    /// exactly the silent no-op worth asserting against.
+    /// winning; a field declared `Empty` and never filled is absent.
     pub fields: BTreeMap<String, String>,
 }
 
@@ -136,36 +103,16 @@ impl LogCapture {
         }
     }
 
-    /// Start capturing on **every** thread of this process, for the rest of it.
+    /// Start capturing on **every** thread of this process, for the rest of it
+    /// (sound because nextest runs each test in its own process).
     ///
-    /// [`install`](Self::install) is thread-local, which is what keeps parallel
-    /// tests from reading each other's events — and what makes it blind to the
-    /// events a framework emits from a task it spawned. Those are not a corner
-    /// case: a background write and a socket's writer half are exactly the
-    /// failures nothing else reports, so they are the ones most worth asserting.
-    ///
-    /// Sound here because **nextest runs each test in its own process**, so a
-    /// global subscriber cannot leak into another test. It is also permanent —
-    /// `tracing` allows one global default per process and offers no way back.
-    ///
-    /// Three consequences, and the first two are the ones that bite:
-    ///
-    /// - **Call it before anything boots an app.** `App::builder().build()`
-    ///   installs `tracing`'s console fallback, which takes the one global slot;
-    ///   after that this panics. It is the first statement of a test, not a line
-    ///   near the assertion.
-    /// - **Never beside [`install`](Self::install).** A thread-local default
-    ///   shadows the global one for that thread, silently: the global handle
-    ///   then sees nothing, a positive assertion fails with the confusing
-    ///   `captured: []`, and a *negative* one — `assert!(logs.find(..)
-    ///   .is_empty())` — passes for the wrong reason. Nothing can distinguish
-    ///   "shadowed" from "quiet", which is why this is a rule rather than a
-    ///   check.
-    /// - **Reach for it only when the events really are off-thread.**
-    ///   `#[tokio::test]` is a *current-thread* runtime, so a spawned task still
-    ///   runs on the test's own thread and [`install`](Self::install) sees it.
-    ///   What needs this is a `spawn_blocking`, a `flavor = "multi_thread"`
-    ///   test, or a `std::thread`.
+    /// - **Call it before anything boots an app**: `App::builder().build()`
+    ///   takes the one global slot, and this then panics.
+    /// - **Never beside [`install`](Self::install)**: a thread-local default
+    ///   silently shadows the global one, so a negative assertion passes for the
+    ///   wrong reason.
+    /// - Only for events off the test's thread: a `spawn_blocking`, a
+    ///   `flavor = "multi_thread"` test, a `std::thread`.
     ///
     /// # Panics
     ///
@@ -212,8 +159,7 @@ impl LogCapture {
     }
 
     /// The single event on `target` with `message`, or a panic naming what was
-    /// captured instead — a wrong target is the failure this exists to catch,
-    /// so the diagnostic has to show the targets that did fire.
+    /// captured instead.
     #[track_caller]
     pub fn expect_one(&self, target: &str, message: &str) -> CapturedEvent {
         let mut hits = self.find(target, message);
@@ -236,12 +182,6 @@ impl LogCapture {
 
     /// The single span on `target` named `name`, or a panic naming what was
     /// captured instead.
-    ///
-    /// Reach for this to assert the fields an operator actually queries —
-    /// `trace_id`, `actor_id`, `http.route`. A field declared `Empty` and never
-    /// recorded is **absent** here, which is what makes a `record` call nobody
-    /// wired assertable at all: `tracing` fixes a span's fields at creation, so
-    /// such a call is a silent no-op and nothing else in a test can see it.
     #[track_caller]
     pub fn expect_span(&self, target: &str, name: &str) -> CapturedSpan {
         let mut hits: Vec<_> = self
@@ -258,14 +198,8 @@ impl LogCapture {
         hits.remove(0)
     }
 
-    /// Assert nothing on `target` carried `message` — the quiet half, and the
-    /// one worth wording once.
-    ///
-    /// A negative assertion is the easiest to write and the easiest to write
-    /// uselessly: it passes when the event is absent, and equally when the
-    /// target is misspelt, the capture is shadowed, or nothing ran at all. So
-    /// the diagnostic has to show what *was* captured, and that is the half a
-    /// hand-written `assert!(logs.find(..).is_empty())` keeps forgetting.
+    /// Assert nothing on `target` carried `message`, printing what was captured
+    /// on failure.
     #[track_caller]
     pub fn expect_none(&self, target: &str, message: &str) {
         let hits = self.find(target, message);
@@ -302,10 +236,8 @@ where
             name: meta.name().to_string(),
             fields: visitor.fields,
         });
-        // The buffer entry *is* the storage — a later `record` writes straight
-        // into it. The index rides the registry's own per-span extensions rather
-        // than a map keyed by id, because an id is reused once a span closes and
-        // a map would merge two unrelated spans under one entry.
+        // Not a map keyed by id: an id is reused once a span closes, which would
+        // merge two unrelated spans.
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(SpanIndex(spans.len() - 1));
         }
@@ -388,10 +320,6 @@ mod tests {
     #[test]
     fn captures_target_level_message_and_fields() {
         let logs = LogCapture::install();
-        // A literal, and it must stay one: this is a *fixture* standing in for
-        // an ORM event, not an emission. `nest-rs-testing` does not depend on
-        // `nest-rs-seaorm` and should not grow the dependency to spell a string
-        // the capture is only ever asked to match verbatim.
         tracing::warn!(target: "nest_rs::orm", entity = "post", action = 3, "denying all rows");
         tracing::debug!(target: "nest_rs::orm", "listing rows");
 
@@ -399,15 +327,11 @@ mod tests {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("entity").as_deref(), Some("post"));
         assert_eq!(event.field("action").as_deref(), Some("3"));
-        // The message is the constant event name; data stays in fields.
         assert!(!event.message.contains("post"));
         assert_eq!(logs.find("nest_rs::orm", "listing rows").len(), 1);
         assert!(logs.find("nest_rs::http", "denying all rows").is_empty());
     }
 
-    /// What a line renders is read off the ambient context, so an event filed
-    /// outside any unit of work carries no ids — the case a line emitted before
-    /// its edge installed the context falls into.
     #[tokio::test]
     async fn an_event_carries_the_trace_context_it_was_filed_under() {
         let logs = LogCapture::install();

@@ -1,10 +1,5 @@
-//! Integration tests mirroring `src/`.
-//!
-//! Documented gaps for the initial pass:
-//! - `src/context.rs` — trait-only seam; exercised by the data-context bridge
-//!   tests in `nest-rs-seaorm/tests/e2e/ws.rs`.
-//! - `src/server.rs` — `WsServer` registry has inline `#[cfg(test)] mod tests`.
-//! - `src/envelope.rs`, `src/guard.rs` — coverage to add when next touched.
+//! Integration tests mirroring `src/`; the `SocketContext` seam is exercised by
+//! `nest-rs-seaorm/tests/e2e/ws.rs`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

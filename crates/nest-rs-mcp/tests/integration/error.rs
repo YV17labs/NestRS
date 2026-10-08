@@ -1,8 +1,4 @@
-//! Covers `src/error.rs` — what `.opaque()` says about a tool body's own decode
-//! failure, and what `pipe_error` tells the model of a refused argument. The
-//! model is told the one constant sentence, or the pipe's; the operator's line
-//! carries the cause, said without the value it refused, through the documented
-//! shape: `anyhow::Result` and `?`.
+//! Covers `src/error.rs`: `.opaque()` and `pipe_error` never say a refused value.
 
 use nest_rs_core::anyhow::{self, Context};
 use nest_rs_core::module;
@@ -50,10 +46,8 @@ fn an_anyhow_chained_decode_failure_is_said_without_its_value() {
     assert!(text.starts_with("the upstream reply: "), "{text}");
 }
 
-/// A decode failure worded by the type itself — the shape no reading of
-/// serde's wording recognises, which only the chain reaches. anyhow's own box
-/// hides the error it holds from `source()`, so this is the case that fails
-/// when `.opaque()` boxes with `.into()` rather than `boxed_error`.
+/// anyhow's own box hides the error it holds from `source()`: this fails when
+/// `.opaque()` boxes with `.into()` rather than `boxed_error`.
 #[test]
 fn a_decode_failure_in_a_type_s_own_words_is_said_without_its_value() {
     let refused = ValueError::custom(format!("token {SECRET} is not ours"));
@@ -98,9 +92,7 @@ impl IdListTool {
 #[module(providers = [IdListTool, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct IdListModule;
 
-/// A list item the pipe refuses is said without its value, in the reply and on
-/// every line. `ParseArray`'s refusal quoted the item, and `pipe_error` hands a
-/// pipe's refusal to the model as it is.
+/// `pipe_error` hands a pipe's refusal to the model as it is.
 #[tokio::test]
 async fn a_refused_list_item_is_never_quoted_to_the_model() {
     let logs = LogCapture::install();

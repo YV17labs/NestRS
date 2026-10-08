@@ -1,26 +1,11 @@
 //! [`GlobalPoolMcpGuard`] — the fallback `McpOperationGuard`.
 //!
-//! The twin of [`GlobalPoolOperationGuard`](super::GlobalPoolOperationGuard):
-//! `/mcp` is `EdgePosture::Exempt` too, so the per-operation seam is the only
-//! gate. An app normally registers its authz bridge there (`AuthzMcpBridge as dyn
-//! McpOperationGuard`); when it does not, this fallback folds the **global
-//! guard pool** in-band, so `use_guards_global(...)` reaches `/mcp` exactly as
-//! it reaches `/graphql` — a global `ThrottlerGuard` rate-limits tool calls,
-//! and a forgotten bridge module still authenticates them.
-//!
-//! **What runs here is `check_http`, and that is the whole of it.** The endpoint
-//! holds a request, not an operation, so a pooled guard's `check_mcp` runs where
-//! the operation exists — in the per-operation chain, which folds the pool for
-//! exactly that reason (`dispatch/mcp_chain.rs`).
-//!
-//! **Two deliberate differences from the GraphQL twin.** `/mcp` carries no
+//! `/mcp` is `EdgePosture::Exempt` too. With no authz bridge registered, this
+//! folds the global guard pool in-band, running `check_http`; a pooled
+//! `check_mcp` runs in the per-operation chain. `/mcp` carries no
 //! [`Public`](nest_rs_http::Public) marker, so a pooled `AuthnGuard` refuses an
-//! unauthenticated tool call instead of admitting it to a resolver-level gate.
-//! And `use_guards_global` seeds this fallback **only for a non-empty pool** —
-//! MCP's no-guard default is closed, so an empty pool must leave `/mcp`
-//! deny-all rather than fold an empty (i.e. pass-through) chain over it. That
-//! gate lives in the builder, which is the one place that knows whether the
-//! pool is empty; this guard therefore always has a chain to run.
+//! unauthenticated call, and the builder seeds this only for a non-empty pool:
+//! MCP's no-guard default is closed.
 
 use std::sync::Arc;
 
@@ -58,11 +43,8 @@ impl GlobalPoolMcpGuard {
 impl McpOperationGuard for GlobalPoolMcpGuard {
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            // An empty pool must not read as "every guard passed": `/mcp`'s
-            // default is closed, and the builder's non-empty-pool gate answers
-            // a different question than this one (a spec that fails to resolve
-            // is dropped from the chain). Deny here so this guard is closed on
-            // its own terms, not by cooperation with the builder.
+            // An empty resolved pool is not "every guard passed": a spec that
+            // fails to resolve is dropped, so this guard stays closed on its own terms.
             if self.pool.is_empty() {
                 tracing::warn!(
                     target: nest_rs_mcp::TARGET,
@@ -75,10 +57,7 @@ impl McpOperationGuard for GlobalPoolMcpGuard {
                     "no guard resolved for this endpoint",
                 )));
             }
-            // `denial_to_http_error`, not `Error::from_response(...)`: the
-            // latter drops the response's extensions, which is how a pooled
-            // guard's `insufficient_scope` evidence would reach `/mcp`'s edge
-            // stripped of the scopes a client needs.
+            // `denial_to_http_error`: `Error::from_response` would drop the scope evidence.
             self.pool.check(req).await.map_err(denial_to_http_error)
         })
     }

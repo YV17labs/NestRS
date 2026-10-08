@@ -1,15 +1,5 @@
 //! Covers `src/app.rs` — how the serve loop reports the transports it runs:
 //! the way down they bound, and a transport that stops.
-//!
-//! Both events are `error` on `nest_rs::app`, and both are the last thing the
-//! process says before it exits: `run` returns the error to `main`, which prints
-//! it, but *which* transport died and whether it returned or panicked is only
-//! here. On a binary serving HTTP beside a scheduler and a queue worker, that
-//! difference is the whole diagnosis.
-//!
-//! A panicking transport is the sharper of the two — `JoinSet` reports a join
-//! error rather than the panic payload, so without this line the operator sees
-//! a bare "task panicked" with nothing naming the surface.
 
 use std::time::Duration;
 
@@ -22,8 +12,6 @@ use nest_rs_core::{
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
 
-/// A transport that configures cleanly and then fails, the way a socket bind
-/// that loses its port mid-flight would.
 struct Failing;
 
 #[async_trait::async_trait]
@@ -52,8 +40,6 @@ impl Module for FailingModule {
     }
 }
 
-/// The same shape, except the task dies rather than returning — so the serve
-/// loop learns about it through `JoinSet` instead of through a `Result`.
 struct Panicking;
 
 #[async_trait::async_trait]
@@ -113,9 +99,6 @@ async fn a_transport_task_that_panics_is_reported_as_a_panic_not_as_an_error() {
         .expect_err("a panicked transport still fails the app");
     assert!(err.to_string().contains("panic"), "{err}");
 
-    // The distinction is what makes this worth its own line: a transport that
-    // *returned* an error stopped on purpose, one that panicked did not, and
-    // the two lead an operator to different places.
     let event = logs.expect_one(target::APP, "transport task panicked; shutting down");
     assert_eq!(event.level, "error");
     assert!(
@@ -125,8 +108,6 @@ async fn a_transport_task_that_panics_is_reported_as_a_panic_not_as_an_error() {
     );
 }
 
-/// A transport that stops at once and states the bound it was configured with —
-/// the shape the boot line reads, without the wait.
 struct Stated(Duration);
 
 #[async_trait::async_trait]
@@ -160,10 +141,6 @@ impl Module for TwoBoundsModule {
     }
 }
 
-/// The transports stop together, so the way down an app spends is the longest
-/// bound among the ones it mounted, then the hooks' budget — filed once at
-/// boot, where a deployment that raised a window reads what its grace period
-/// has to hold.
 #[tokio::test]
 async fn the_boot_line_files_the_longest_stop_bound_beside_the_hooks_budget() {
     let logs = LogCapture::install();

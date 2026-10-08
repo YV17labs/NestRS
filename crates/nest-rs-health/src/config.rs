@@ -1,57 +1,26 @@
 //! [`HealthConfig`] — the two ceilings that bound a probe response.
 //!
-//! **The unit is milliseconds, and that is the kubelet's doing rather than a
-//! deviation for its own sake.** Every other duration this framework configures
-//! is a whole-second `*_SECS` key, because every other one bounds a connection
-//! that lives for hours. A probe is bounded by `timeoutSeconds`, whose
-//! Kubernetes default is **1** — the kubelet scores a probe that has not
-//! answered by then as a *failure*, and on a liveness probe a failure repeated
-//! `failureThreshold` times restarts the container. A grammar that cannot
-//! express a value **inside** one second therefore cannot express the only
-//! interval that matters here, so both ceilings are read in milliseconds.
-//!
-//! **`0` is not the unlimited sentinel here, and the refusal is the point.**
-//! A connection ceiling reads `0` as *off*
-//! ([`Floor::UnitsOrOff`]), which is right
-//! where the ceiling bounds how long a connection may replay privileges it
-//! authenticated with once: turning it off restores the pre-ceiling behaviour,
-//! and the deployment that asks for that has asked for something coherent. Here *off* is the defect — an
-//! unbounded probe outliving the kubelet's deadline is exactly what these two
-//! fields exist to prevent — so a `0` cannot mean "no ceiling" without meaning
-//! "restart loop", and it cannot mean "zero milliseconds" either, which would
-//! fail every probe on the first poll. Both are read through
-//! [`DurationBounds`] from one millisecond to a
-//! minute, so `0` is a boot error naming the variable — from the environment or
-//! pinned in code alike, in the sentence every bounded duration of the
-//! framework is refused in.
-//!
-//! Dual-path like every `nest-rs-*` config: settable via `<PREFIX>_HEALTH__*` env
-//! vars **and** via the pinned struct passed to
-//! [`HealthModule::for_root`](crate::HealthModule::for_root), composing per
-//! field.
+//! Milliseconds, unlike the framework's `*_SECS` keys: the kubelet's
+//! `timeoutSeconds` defaults to 1, so the only interval that matters is inside
+//! a second. `0` is refused rather than read as *off* ([`Floor::UnitsOrOff`]):
+//! an unbounded probe outlives the kubelet's deadline, a zero one fails every
+//! poll.
 
 use std::time::Duration;
 
 use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 
-/// Per-indicator ceiling: 750 ms. Under the probe deadline by a margin, so the
-/// common single-slow-indicator case is reported **by name** (`health indicator
-/// timed out` carries which one) instead of being swept up by the probe-wide
-/// deadline, which can only say how many did not answer.
+/// Per-indicator ceiling: under the probe deadline, so a slow indicator is
+/// reported by name before the probe-wide deadline sweeps it up.
 const DEFAULT_INDICATOR_TIMEOUT_MS: u64 = 750;
 
-/// Probe-wide ceiling: 900 ms — inside Kubernetes' own `timeoutSeconds` default
-/// of 1 s, with the remainder left to the connection and the response. A
-/// deployment that raised `timeoutSeconds` raises this to match; one that did
-/// not gets a `503` it can read and log, rather than a kubelet timeout it
-/// cannot.
+/// Probe-wide ceiling: inside Kubernetes' 1 s `timeoutSeconds` default, the
+/// remainder left to the connection and the response.
 const DEFAULT_PROBE_DEADLINE_MS: u64 = 900;
 
-/// Why neither ceiling may be zero — the reason both refusals give.
 const NOT_ZERO: &str = "an unbounded probe outlives the kubelet's deadline and a zero one fails \
                         every probe on the first poll, so neither is a ceiling";
 
-/// Why neither ceiling may pass a minute — the reason both refusals give.
 const PAST_A_MINUTE: Bound = Bound {
     count: 60_000,
     why: "a probe answered later than a minute has been scored a failure already — the kubelet \
@@ -59,7 +28,6 @@ const PAST_A_MINUTE: Bound = Bound {
           bounds nothing an orchestrator waits for",
 };
 
-/// The per-indicator ceiling's range, the variable that sets it, and why.
 const INDICATOR_TIMEOUT: DurationBounds = DurationBounds::millis(
     "INDICATOR_TIMEOUT_MS",
     "HealthConfig::indicator_timeout_ms",
@@ -70,7 +38,6 @@ const INDICATOR_TIMEOUT: DurationBounds = DurationBounds::millis(
     PAST_A_MINUTE,
 );
 
-/// The probe deadline's range, the variable that sets it, and why.
 const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
     "PROBE_DEADLINE_MS",
     "HealthConfig::probe_deadline_ms",
@@ -81,27 +48,18 @@ const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
     PAST_A_MINUTE,
 );
 
-/// Health probe options resolved at boot (namespace `health`). See the module
-/// docs for why the unit is milliseconds and why `0` is refused.
+/// Health probe options resolved at boot (namespace `health`).
 #[config(namespace = "health")]
 #[derive(Clone, Debug)]
 pub struct HealthConfig {
-    /// Wall-clock ceiling on **one** indicator. An indicator probing a dead
-    /// peer (a hung TCP connect, a stalled query) reports `down` with an opaque
-    /// reason at this point, and a `warn` on `nest_rs::health` names it.
+    /// Wall-clock ceiling on **one** indicator, past which it reports `down`.
     /// Read from `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS`, from 1 to 60000; defaults
-    /// to 750 ms.
-    ///
-    /// Indicators run concurrently, so this bounds the slowest one rather than
-    /// the sum. Setting it at or above
-    /// [`probe_deadline_ms`](Self::probe_deadline_ms) is legal and costs the
-    /// per-indicator diagnostic: the probe deadline then always fires first.
+    /// to 750 ms. At or above [`probe_deadline_ms`](Self::probe_deadline_ms) it
+    /// never fires, and the per-indicator diagnostic is lost.
     pub indicator_timeout_ms: u64,
-    /// Wall-clock ceiling on the **whole** probe response, whatever the
-    /// indicator count. Indicators that have answered by then are reported as
-    /// they answered; the rest are `down` with an opaque reason, and the probe
-    /// is `down` overall. Read from `<PREFIX>_HEALTH__PROBE_DEADLINE_MS`, from 1 to
-    /// 60000; defaults to 900 ms.
+    /// Wall-clock ceiling on the **whole** probe response; indicators that have
+    /// not answered by then are `down`. Read from
+    /// `<PREFIX>_HEALTH__PROBE_DEADLINE_MS`, from 1 to 60000; defaults to 900 ms.
     pub probe_deadline_ms: u64,
 }
 
@@ -138,9 +96,7 @@ impl HealthConfig {
     }
 }
 
-/// Whole milliseconds, saturating. A `Duration` of ~584 million years is the
-/// only input that clamps, and clamping it is still a ceiling — the alternative
-/// on a hot path is a panic on a value nobody can type by accident.
+/// Whole milliseconds, saturating.
 fn as_millis(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
@@ -162,9 +118,6 @@ mod tests {
 
     #[test]
     fn defaults_fit_inside_the_kubelet_default_deadline() {
-        // Kubernetes' `timeoutSeconds` defaults to 1 and a timed-out httpGet
-        // probe is a *failure*, so both ceilings must land under a second — the
-        // probe deadline with room left for the connection and the body.
         let cfg = HealthConfig::default();
         assert!(cfg.probe_deadline() < Duration::from_secs(1));
         assert!(
@@ -173,8 +126,6 @@ mod tests {
         );
     }
 
-    // The dual-path rule is framework-wide: a pinned `HealthConfig` still takes
-    // its overrides per field from `<PREFIX>_HEALTH__*`.
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = HealthConfig::default()
@@ -215,9 +166,6 @@ mod tests {
         );
     }
 
-    /// `0` is refused rather than read as the framework's usual unlimited
-    /// sentinel: an unbounded probe is the defect these fields exist to
-    /// prevent, and a zero-millisecond one fails every probe on the first poll.
     #[test]
     fn zero_is_refused_on_both_ceilings() {
         for (zeroed, key) in [
@@ -257,8 +205,6 @@ mod tests {
         }
     }
 
-    /// Every duration a deployment sets has a ceiling: past a minute either
-    /// ceiling is refused naming its variable, from either side.
     #[test]
     fn a_ceiling_past_a_minute_is_refused_on_both() {
         for key in ["INDICATOR_TIMEOUT_MS", "PROBE_DEADLINE_MS"] {

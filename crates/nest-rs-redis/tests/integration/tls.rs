@@ -8,11 +8,6 @@ use nest_rs_redis::{RedisConnection, RedisError, RedisTls};
 use crate::harness::AT_ONCE;
 use crate::harness::tls::{TlsProxy, config, trusting_the_test_authority};
 
-/// A certificate the client does not accept fails the boot at once, sending the
-/// operator to the setting that fixes it: the same certificate is refused on
-/// every attempt, so retrying it would only spend the budget. Two ways to be
-/// refused — signed by an authority nothing trusts, which the authority setting
-/// fixes, and trusted but issued for another name, which the URL's host fixes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_certificate_the_client_does_not_accept_fails_the_boot_at_once() {
     let untrusted = TlsProxy::start(None, None).await;

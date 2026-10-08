@@ -1,8 +1,5 @@
 //! Integration suite for `nest-rs-oauth-resource` — the RFC 9728 discovery
 //! flow, booted through `TestApp`. Paths mirror `src/`.
-//!
-//! Shared fixtures live here at the suite root (`crate::…`); every module below
-//! mirrors a `src/` counterpart.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -21,13 +18,7 @@ use nest_rs_mcp::{ServerHandler, mcp, rmcp, tool_handler, tool_router};
 use poem::Request;
 use poem::http::header;
 
-/// Refuses every caller, which is what an unauthenticated client meets on any
-/// edge. It denies through `Denial::unauthorized` — the framework's ordinary
-/// guard path, whose `401` carries `problem+json` and, before this capability,
-/// no challenge whatsoever.
-///
-/// Shared: the HTTP walk and the WS upgrade need the same refusal, and two
-/// copies of it drift into two different denial messages for one condition.
+/// Refuses every caller through `Denial::unauthorized`, the ordinary guard path.
 #[injectable]
 #[derive(Default)]
 pub struct AlwaysUnauthorized;
@@ -43,8 +34,7 @@ impl Guard for AlwaysUnauthorized {
 
 impl HttpGuard for AlwaysUnauthorized {}
 
-/// Read the `WWW-Authenticate` challenge off a response, failing with the
-/// status when absent so a broken test says what actually came back.
+/// Read the `WWW-Authenticate` challenge off a response, panicking with its status when absent.
 pub fn challenge(resp: &poem::Response) -> String {
     resp.headers()
         .get(header::WWW_AUTHENTICATE)
@@ -54,13 +44,8 @@ pub fn challenge(resp: &poem::Response) -> String {
         .to_owned()
 }
 
-/// A tool host with no tools: enough to mount `/mcp`, which is all a suite
-/// asserting on the transport edge needs — the refusal it checks happens before
-/// any tool would run.
-///
-/// rmcp's own host macros expand against the call site's scope; the `rmcp`
-/// re-export imported above is what supplies that name without an `rmcp`
-/// manifest entry.
+/// A tool host with no tools, enough to mount `/mcp`. rmcp's host macros expand
+/// against the call site's scope, which the imported `rmcp` re-export supplies.
 #[mcp]
 #[derive(Clone)]
 pub struct EchoTool;

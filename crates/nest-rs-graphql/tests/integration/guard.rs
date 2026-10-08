@@ -75,9 +75,7 @@ impl GraphqlGuard for RequireAdmin {}
 #[use_guards(RequireAdmin)]
 struct GuardedResolver;
 
-// `secret` has no `&Context` of its own — the macro injects one to run the
-// guard. `whoami` already declares one; the macro reuses it (the path the
-// `#[crud]`-generated ops follow).
+// `secret` has no `&Context`, so the macro injects one; `whoami`'s is reused.
 #[operations]
 impl GuardedResolver {
     #[query]
@@ -130,8 +128,6 @@ async fn resolver_guard_allows_an_admin() {
         "classified",
     );
 
-    // Reuse path: the guard runs on an op declaring its own `&Context`, and
-    // the body still sees the seeded role.
     let who = app
         .http()
         .post("/graphql")
@@ -171,10 +167,7 @@ async fn resolver_guard_denies_a_non_admin() {
         "a non-admin is forbidden by the resolver guard",
     );
 
-    // GraphQL answers a denial with `200 OK` and an error frame, so the HTTP
-    // status carries nothing an operator can alert on. This event is the
-    // structural floor `deny_http` has on the other side: every denial visible
-    // at `warn`+ whatever the individual guard chose to log.
+    // A denial answers `200 OK`, so this event is what an operator alerts on.
     let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
     assert_eq!(event.level, "warn");
     assert!(
@@ -199,13 +192,8 @@ async fn resolver_guard_denies_a_non_admin() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The chain runs whatever an operation returns. It was once emitted only for a
-// `Result`-returning operation, so under a deny-all resolver guard `-> i32` and
-// `-> Vec<String>` answered their data, and an app-wide guard protected only
-// the operations that happened to be fallible. Every role is here — a query
-// (async and sync), a subscription and a field resolver — because the gate was
-// one condition shared by all of them.
+// The chain runs whatever an operation returns, in every role: a query (async
+// and sync), a subscription and a field resolver.
 
 /// Refuses every GraphQL operation it is asked about.
 #[injectable]
@@ -352,8 +340,8 @@ impl SealedResolver {
         nest_rs_graphql::async_graphql::futures_util::stream::iter([42])
     }
 
-    /// Extends a type another resolver's root produces — a root that never ran
-    /// this resolver's guards, so the field has to run them itself.
+    /// Extends a type another resolver's root produces, so the field runs this
+    /// resolver's guards itself.
     #[field_resolver]
     async fn sealed_note(&self, parent: &Vault) -> String {
         format!("classified-{}", parent.id)
@@ -460,9 +448,6 @@ async fn an_app_wide_guard_runs_on_a_bare_return_operation() {
     );
 }
 
-/// The pool runs once per root field, never once per parent a field resolver
-/// extends: the root field that produced the parents already ran it in the same
-/// request.
 #[tokio::test]
 async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
     let app = chain_app(Some(guard::<CountingGuard>())).await;

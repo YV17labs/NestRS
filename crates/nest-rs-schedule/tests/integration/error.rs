@@ -1,7 +1,5 @@
 //! `OccurrenceLockError` carries a backend's failure as a link the scheduler's
-//! line can read: a decode failure in it is said without its value, even when
-//! its sentence is the decoder's own words, which only the exact reading of the
-//! chain reaches.
+//! line can read, so a decode failure in it is said without its value.
 
 use nest_rs_core::serde::de::Error as _;
 use nest_rs_core::serde::de::value::Error as ValueError;
@@ -21,9 +19,7 @@ fn a_backend_s_decode_failure_is_said_without_its_value() {
     assert!(!said.contains(SECRET), "{said}");
 }
 
-/// The documented backend shape: `anyhow::Result` and `?`. anyhow's own box
-/// hides the error it holds from `source()`, so the lock error has to be built
-/// from the error itself for the line to find it.
+/// anyhow's own box hides the error it holds from `source()`.
 #[test]
 fn a_decode_failure_in_an_anyhow_chain_is_said_without_its_value() {
     let said =

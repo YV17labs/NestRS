@@ -1,9 +1,7 @@
 //! [`Denial`] — transport-agnostic guard rejection.
 //!
 //! A guard returns `Err(Denial::...)`; each transport's shaper converts it
-//! to that transport's native error (HTTP `Response`, GraphQL error frame,
-//! WS error message). The dev never reaches for a transport-specific error
-//! type.
+//! to that transport's native error.
 
 use std::borrow::Cow;
 
@@ -17,11 +15,8 @@ pub enum Denial {
     /// 401 — a credential was **presented and rejected**, carrying the RFC 6750
     /// §3.1 code that says why.
     ///
-    /// Distinct from [`Unauthorized`](Self::Unauthorized) because §3 draws the
-    /// same line: a request that "lacks any authentication information" is told
-    /// no reason, while a rejected credential names one — which is what lets a
-    /// client tell "refresh and retry" from "start discovery" instead of
-    /// re-walking discovery on every token expiry.
+    /// A request with no credential is told no reason (RFC 6750 §3), so a client
+    /// can tell "refresh and retry" from "start discovery".
     InvalidCredential {
         /// Human-readable reason, rendered as the problem envelope's `detail`.
         reason: Cow<'static, str>,
@@ -37,11 +32,8 @@ pub enum Denial {
     /// 403 — the token is valid but too narrow: the operation is gated behind
     /// scopes the credential does not carry (RFC 6750 §3.1).
     ///
-    /// Distinct from [`Forbidden`](Self::Forbidden) because the remedy is
-    /// different, and only the client can apply it: a plain `403` says "you may
-    /// not", this says "come back with a wider token, here is which one". The
-    /// transports carry `required` to the edge so the OAuth challenge naming
-    /// those scopes is written in exactly one place.
+    /// The transports carry `required` to the edge, where the OAuth challenge
+    /// naming those scopes is written.
     InsufficientScope {
         /// Scopes that would have granted the operation. Empty is legal — a
         /// deployment may refuse without naming its internals — and then this
@@ -122,10 +114,6 @@ impl Denial {
 
     /// The `Retry-After` value this denial carries, in seconds: a rate limit's
     /// always, an unavailable dependency's when it is known, nothing else's.
-    ///
-    /// One accessor rather than a `match` per transport, for the reason
-    /// [`required_scopes`](Self::required_scopes) is one: every edge reports the
-    /// wait, in one unit.
     pub fn retry_after_secs(&self) -> Option<u32> {
         match self {
             Self::RateLimited {
@@ -157,9 +145,6 @@ impl Denial {
     /// The RFC 6750 §3.1 error code this denial reports on the
     /// `WWW-Authenticate` challenge, or `None` when the specification says to
     /// report none.
-    ///
-    /// One accessor rather than a `match` per transport, for the same reason
-    /// [`required_scopes`](Self::required_scopes) is one.
     pub fn bearer_error(&self) -> Option<&'static str> {
         match self {
             Self::InvalidCredential { code, .. } => Some(code),
@@ -182,10 +167,6 @@ impl Denial {
     /// The scopes that would have granted the refused operation — empty for
     /// every denial that is not about scope, and for an
     /// [`InsufficientScope`](Self::InsufficientScope) that names none.
-    ///
-    /// One accessor rather than a `match` per transport: "an empty set carries
-    /// no challenge" is the rule each renderer would otherwise re-encode, and a
-    /// transport added later gets it for free.
     pub fn required_scopes(&self) -> &[String] {
         match self {
             Self::InsufficientScope { required, .. } => required,

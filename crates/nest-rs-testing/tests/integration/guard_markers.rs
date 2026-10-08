@@ -1,17 +1,6 @@
-//! A marker trait is a compile-time attestation, and the global pool cannot see
-//! one.
-//!
-//! `HttpGuard`, `GraphqlGuard`, `WsGuard` and `McpGuard` are bounds the
-//! decorators emit for the guards declared at their site, so binding a guard
-//! where it has no `check_*` is a compile error rather than a chain entry that
-//! passes everything. `use_guards_global` takes no such bound, and the pool it
-//! seeds holds `Arc<dyn Guard>`: every edge calls its own `check_*` through that
-//! object, which carries no marker to consult. So a pooled guard that overrides
-//! a check runs it at that edge **whether or not it declares the marker** — a
-//! missing marker on a global guard loses a compile-time bound and nothing at
-//! runtime. Each guard below overrides one check, declares no marker, and is
-//! refused nothing. WS, the fourth edge, needs a socket and is held in
-//! `nest-rs-ws`'s gateway suite.
+//! A global guard overriding a `check_*` runs it at that edge whether or not it
+//! declares the edge's marker trait (`HttpGuard`, …), which only the
+//! decorators bound. WS needs a socket and is held in `nest-rs-ws`'s suite.
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;

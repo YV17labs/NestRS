@@ -27,9 +27,8 @@ pub(crate) struct PseudonymStore {
 
 impl PseudonymStore {
     /// The store a guard counts in: `store` itself when its counters never
-    /// leave this process, otherwise `store` behind `key` — which it cannot run
-    /// without, since each replica would otherwise count its own buckets in the
-    /// shared store, or the store would hold every client's address.
+    /// leave this process, otherwise `store` behind `key`, which it cannot run
+    /// without.
     pub(crate) fn wrap(
         store: Arc<dyn ThrottlerStore>,
         key: Option<&str>,
@@ -92,8 +91,6 @@ mod tests {
         }
     }
 
-    /// Every replica names one subject alike, and a key of its own names it
-    /// apart — rotating the key starts every bucket afresh.
     #[test]
     fn a_pseudonym_is_the_subject_s_under_one_key_and_another_under_another() {
         let subject = "http\u{1f}/login\u{1f}203.0.113.7";
@@ -111,8 +108,6 @@ mod tests {
         );
     }
 
-    /// The in-process store keeps its counters in this process's memory, which
-    /// nothing outside it reads: it is handed the subject as is.
     #[test]
     fn an_in_process_store_is_counted_in_as_it_is() {
         let store: Arc<dyn ThrottlerStore> = Arc::new(InMemoryThrottler::new());

@@ -1,24 +1,9 @@
-//! [`McpModule`] — the app's say over its MCP surface: where it lives and what
-//! it runs on ([`McpConfig`]), and who the app is ([`McpIdentity`]).
+//! [`McpModule`] — the app's say over its MCP surface: the streamable-HTTP
+//! server ([`McpConfig`]) and who the app is ([`McpIdentity`]).
 //!
-//! **It is not an activation seam.** MCP still activates the way it always has:
-//! list the `#[mcp]`-decorated provider, and the endpoint mounts itself on the
-//! HTTP transport. Import this module to configure the streamable-HTTP server —
-//! most importantly the `Host` allowlist a public deployment needs — and to name
-//! the app once for every endpoint it exposes. Without it every mount runs on
-//! [`McpConfig::default`] (rmcp's own loopback-only posture) and reports
-//! whatever its hosts declare.
-//!
-//! [`McpConfig`] loads from `<PREFIX>_MCP__*` by default (importing `McpModule`
-//! is enough); [`McpModule::for_root`] supplies a base for those variables to
-//! overlay, so a field pinned in code is still overridable per field by the
-//! deployment (see `nest_rs_config::Config`).
-//!
-//! Identity is **not** config: a server's name and version are part of what the
-//! app *is*, the same way a GraphQL schema's root type is, so they are declared
-//! in code and carry no `<PREFIX>_MCP__*` twin. That is why [`McpOptions`] exists
-//! — the two declarations travel together into the one `for_root` seam instead
-//! of the identity arriving through a second call.
+//! It activates nothing: listing an `#[mcp]` provider mounts the endpoint.
+//! Without it every mount runs on [`McpConfig::default`] and reports what its
+//! hosts declare. Identity has no `<PREFIX>_MCP__*` twin, so it travels in [`McpOptions`].
 
 use std::any::TypeId;
 
@@ -30,7 +15,7 @@ use crate::identity::McpIdentity;
 use crate::registry;
 
 /// DI module that resolves [`McpConfig`] and carries the app's own
-/// [`McpIdentity`]. See the module docs for why it is optional.
+/// [`McpIdentity`].
 #[module(imports = [ConfigModule::for_feature::<McpConfig>()])]
 pub struct McpModule;
 
@@ -98,16 +83,10 @@ impl McpModule {
 #[derive(Clone, Debug, Default)]
 pub struct McpOptions {
     /// The base `<PREFIX>_MCP__*` overlays, per field. `None` ⇒ the environment
-    /// over [`McpConfig::default`]. It stays an `Option` because
-    /// `nest_rs_config::Config::resolve` ranks the `.env` cascade *below* a
-    /// pinned base and *above* the defaults — a bare `McpConfig` here would
-    /// demote the cascade for apps that pinned nothing.
+    /// over [`McpConfig::default`]; a bare `McpConfig` would demote the `.env` cascade.
     pub config: Option<McpConfig>,
-    /// Who this app is: the `serverInfo` every endpoint reports, and the
-    /// branding a client shows beside it. A `#[mcp]` host overrides it per
-    /// field for its own endpoint. Declaring it in an app no `#[mcp]` host
-    /// serves fails boot — a declaration that reaches nothing is a typo, not a
-    /// no-op.
+    /// Who this app is: the `serverInfo` every endpoint reports unless an `#[mcp]`
+    /// host overrides it per field. Declared where no `#[mcp]` host serves, it fails boot.
     pub server: Option<McpIdentity>,
 }
 
@@ -128,8 +107,7 @@ impl From<Option<McpConfig>> for McpOptions {
 
 /// [`DynamicModule`] returned by [`McpModule::for_root`]: resolves
 /// [`McpConfig`] (env over the pinned base) and provides the app's declared
-/// [`McpIdentity`]. The pinned base is a declaration, so it supersedes the
-/// plain env factory the base module queues, wherever the two fall.
+/// [`McpIdentity`].
 pub struct McpSetup {
     options: McpOptions,
 }
@@ -144,10 +122,7 @@ impl DynamicModule for McpSetup {
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        // Provider-less metadata: the app's identity is a statement about
-        // itself, not a role played by some provider, so there is nothing to
-        // attach it to and nothing for module-gating to gate — the import of
-        // this module is itself the gate.
+        // Provider-less metadata: importing this module is itself the gate.
         let builder = match self.options.server {
             Some(server) => builder
                 .provide_meta(server)
@@ -167,7 +142,6 @@ mod tests {
 
     use super::*;
 
-    /// Pinned allowlist for the `for_root` test below, as a real import site.
     fn pinned_mcp() -> McpSetup {
         McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"]))
     }
@@ -177,10 +151,6 @@ mod tests {
 
     #[tokio::test]
     async fn for_root_pins_the_host_allowlist() {
-        // `for_root(Some(cfg))` queues the resolving factory rather than
-        // providing the struct verbatim — that is what keeps `<PREFIX>_MCP__*`
-        // live for every field the call site did not pin — so the value
-        // materializes in the AppBuilder's factory phase.
         let app = App::builder()
             .module::<PinnedMcpHost>()
             .build()
@@ -194,10 +164,6 @@ mod tests {
         );
     }
 
-    /// An app that pins no identity still calls `for_root` exactly like every
-    /// other module's — that is the whole reason `McpOptions` carries the
-    /// conversions rather than forcing a struct literal. `pinned_mcp` above is
-    /// the `Some` arm of the same claim, booted; this is the `None` one.
     #[test]
     fn a_config_only_call_site_needs_no_options_literal() {
         let unpinned: McpOptions = McpModule::for_root(None).options;

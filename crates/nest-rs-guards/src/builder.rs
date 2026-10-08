@@ -30,11 +30,9 @@ use nest_rs_ws::WsDataPipe;
 ///
 /// The example on [`guard`](fn@crate::guard) registers through it.
 ///
-/// Declaration order matters — the runtime chain runs in the order you list
-/// the guards (with [`Layer::priority`](nest_rs_core::Layer::priority) as an
-/// optional tiebreaker). If you list `AuthzGuard` before `AuthnGuard` you'll
-/// get an authorization check before authentication has attached the
-/// principal — usually a bug.
+/// Declaration order is the runtime order, with
+/// [`Layer::priority`](nest_rs_core::Layer::priority) as an optional tiebreaker:
+/// list `AuthnGuard` before `AuthzGuard`.
 pub trait AppBuilderGuardsExt: Sized {
     /// Register `specs` as the global guard chain, run in list order at the
     /// route shaper — order matters (authn before authz).
@@ -49,19 +47,11 @@ impl AppBuilderGuardsExt for AppBuilder {
         I: IntoIterator<Item = GuardSpec>,
     {
         let collected: Vec<GuardSpec> = specs.into_iter().collect();
-        // Seed `GuardSpecs` — read by the per-route `RouteShaper`, which runs
-        // the global guard pool (deduped against controller / method
-        // declarations) *after* routing so a guard sees `#[public]`. Plus the
-        // two single-site executors for surfaces without a shaper:
-        //
-        // - `SelfMountGuardWrap` — a `Guarded` self-mount (WS upgrade) gets
-        //   the global chain at its HTTP edge;
-        // - `FallbackOperationGuard` / `FallbackMcpGuard` — `/graphql` and
-        //   `/mcp` are `Exempt` at the edge and gate per operation; when the
-        //   app registers no bridge for that transport, the global pool runs
-        //   there in-band, so a forgotten bridge module never leaves operations
-        //   unguarded. A registered bridge replaces the fallback (it runs
-        //   the same guards itself — nothing runs twice).
+        // `GuardSpecs` feeds each route's `RouteShaper`, after routing so a guard
+        // sees `#[public]`. Surfaces without a shaper get a single-site executor:
+        // `SelfMountGuardWrap` at a `Guarded` self-mount's edge, and a fallback on
+        // `/graphql` and `/mcp` when no bridge is registered, so a forgotten
+        // bridge never leaves operations unguarded.
         let active = !collected.is_empty();
         #[cfg_attr(
             not(any(feature = "graphql", feature = "mcp")),
@@ -74,11 +64,8 @@ impl AppBuilderGuardsExt for AppBuilder {
         #[cfg(feature = "graphql")]
         {
             builder = builder.provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory));
-            // `_service` / `_entities` are resolved above the merged root, so
-            // the resolver-site chain cannot reach them. Seeded whether or not
-            // the pool is empty: an empty chain passes, and a schema whose gate
-            // depends on the pool being non-empty is one more thing that has to
-            // be true for the endpoint to be gated.
+            // `_service` / `_entities` resolve above the merged root, out of the
+            // resolver-site chain's reach. Seeded even for an empty pool.
             builder = builder.provide(FederationGate(GlobalPoolFederationGuard::factory));
         }
         // MCP's no-guard default is deny-all, not pass-through, so the fallback
@@ -146,15 +133,11 @@ impl AppBuilderPipesExt for AppBuilder {
         I: IntoIterator<Item = PipeSpec>,
     {
         let builder = self.provide(PipeSpecs(specs.into_iter().collect()));
-        // Bridge the global pipes onto `/graphql` operation variables — the
-        // operation-level analog of the HTTP `transform_body` site. The endpoint
-        // (`nest-rs-graphql`) owns the call; this crate owns `PipeSpecs`, so it
-        // seeds the fn (same seeded-fn-pointer pattern as `FallbackOperationGuard`).
+        // Global pipes over `/graphql` operation variables; the endpoint holds
+        // only the fn pointer.
         #[cfg(feature = "graphql")]
         let builder = builder.provide(GraphqlVariablePipe(run_graphql_variable_pipes));
-        // WS per-message data pipes (`transform_ws_data`). The gateway resolves
-        // this bridge at mount (it has the container) and folds it over each
-        // message's `data` after guards, before dispatch.
+        // WS per-message data pipes, folded over `data` after guards, before dispatch.
         #[cfg(feature = "ws")]
         let builder = builder.provide(WsDataPipe(run_ws_data_pipes));
         builder.provide_meta(HttpBootCheck::new(|container| {
@@ -172,9 +155,7 @@ impl AppBuilderPipesExt for AppBuilder {
 }
 
 /// The seed behind [`GraphqlVariablePipe`]: fold every registered global pipe's
-/// `transform_graphql_variables` over an operation's variables. Lives here (not
-/// in `nest-rs-graphql`) because it reads the `PipeSpecs` registry this crate
-/// owns; the endpoint only holds the fn pointer.
+/// `transform_graphql_variables` over an operation's variables.
 #[cfg(feature = "graphql")]
 fn run_graphql_variable_pipes(
     container: &nest_rs_core::Container,
@@ -191,8 +172,7 @@ fn run_graphql_variable_pipes(
 }
 
 /// The seed behind [`WsDataPipe`]: fold every registered global pipe's
-/// `transform_ws_data` over a message's `data`. Lives here (not in `nest-rs-ws`)
-/// because it reads the `PipeSpecs` registry this crate owns.
+/// `transform_ws_data` over a message's `data`.
 #[cfg(feature = "ws")]
 fn run_ws_data_pipes(
     container: &nest_rs_core::Container,
@@ -209,13 +189,9 @@ fn run_ws_data_pipes(
     Ok(())
 }
 
-/// Runs the composed global guard chain at a `Guarded` self-mounted
-/// endpoint's edge (it has no per-route shaper), applied through
-/// `SelfMountGuardWrap`. A plain endpoint, not an `Interceptor` wrap — the
-/// chain is a linear short-circuit walk, so it needs no continuation and
-/// none of the interceptor plumbing's per-request boxing. Resolved eagerly
-/// at configure time — the container is final there, so a broken chain
-/// surfaces at boot, not on the first request.
+/// Runs the composed global guard chain at a `Guarded` self-mounted endpoint's
+/// edge, applied through `SelfMountGuardWrap`. Resolved at configure time, so a
+/// broken chain surfaces at boot.
 struct SelfMountGuarded {
     chain: Vec<ResolvedLayer<dyn Guard>>,
     inner: BoxEndpoint<'static, poem::Response>,
@@ -236,8 +212,6 @@ impl poem::Endpoint for SelfMountGuarded {
     }
 }
 
-// Every test here exercises the WS data-pipe bridge, so the module is only
-// compiled when the `ws` feature is on.
 #[cfg(all(test, feature = "ws"))]
 mod tests {
     use super::*;
@@ -267,10 +241,7 @@ mod tests {
         }
     }
 
-    // The full WS bridge: `use_pipes_global` seeds `WsDataPipe(run_ws_data_pipes)`,
-    // the gateway resolves it into a container-bound fold, and the fold runs the
-    // registered global pipe's `transform_ws_data`. Only the (trivial) call from
-    // `handle_text` is not covered here.
+    // The full WS bridge, short of the trivial call from `handle_text`.
     #[test]
     fn ws_data_pipe_bridge_folds_transform_ws_data() {
         let container = Container::builder()

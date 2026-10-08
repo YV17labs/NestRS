@@ -1,4 +1,4 @@
-//! Covers `src/extractors.rs`.
+//! Covers `src/credentials.rs`.
 
 use base64::Engine as _;
 use nest_rs_authn::{basic_credentials, bearer_token};
@@ -34,8 +34,7 @@ fn basic_credentials_decodes_id_and_secret() {
 
 #[test]
 fn basic_credentials_matches_scheme_case_insensitively() {
-    // RFC 7235: auth schemes are case-insensitive — `basic`/`BASIC` must
-    // decode exactly like `Basic` (mirrors `bearer_token`).
+    // RFC 7235: auth schemes are case-insensitive.
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"client-id:client-secret");
     for scheme in ["basic", "BASIC", "BaSiC"] {
         let req = crate::request(&[("Authorization", &format!("{scheme} {encoded}"))]);
@@ -61,9 +60,7 @@ fn basic_credentials_allows_colons_in_secret() {
 }
 
 /// RFC 6749 §2.3.1 / OAuth 2.1 §2.4.1: both halves of a `Basic` credential
-/// arrive `application/x-www-form-urlencoded`. Without the decode, whether
-/// authentication works depends on the client library rather than on the
-/// secret — and the failure is indistinguishable from a wrong password.
+/// arrive `application/x-www-form-urlencoded`.
 #[test]
 fn basic_credentials_form_urldecode_both_halves() {
     // `a b+c%d` is what the deployment stored; `a+b%2Bc%25d` is what a
@@ -98,16 +95,11 @@ fn a_malformed_escape_is_left_verbatim() {
     assert_eq!(basic_credentials(&req), Some(("id".into(), "100%".into())));
 }
 
-/// RFC 3986 §2.1: `pct-encoded = "%" HEXDIG HEXDIG`. `u8::from_str_radix`
-/// accepts a leading sign, so `%+1` decoded to `\x01` — aliasing a second wire
-/// spelling onto one secret, and silently rewriting a literal secret that
-/// happened to contain it. Only `-` and whitespace were refused, and only by
-/// accident.
+/// RFC 3986 §2.1: `pct-encoded = "%" HEXDIG HEXDIG`. A sign is no hex digit, so
+/// `%+1` must not decode to `\x01`.
 #[test]
 fn a_signed_escape_is_not_a_hex_escape() {
-    // The `%` is malformed, so it stays; the `+` that follows is a separate
-    // rule and is still a space. What must never happen is the escape being
-    // *accepted*: `%+1` decoded to `\x01`, the same byte `%01` gives.
+    // The `%` is malformed, so it stays; the `+` that follows is still a space.
     for (raw, expected) in [
         ("%+1", "% 1"),
         ("%+a", "% a"),

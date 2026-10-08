@@ -18,15 +18,8 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let namespace_lit = namespace.value();
 
-    // The decorator carries `Validate` and points it back at the framework's
-    // own copy. Without the `crate = ` override the derive would emit
-    // `::validator::` against the *call site's* prelude, which is what used to
-    // force `validator = "0.20"` — and an exact version to align — into the
-    // manifest of every crate holding a `#[config]` struct.
-    //
-    // `validate = "manual"` opts out, for the config that validates across
-    // fields and writes the impl by hand: deriving on top of that is a
-    // conflicting impl, and cross-field rules are a real need, not a mistake.
+    // Without `crate = ` the derive emits `::validator::`, which the call site
+    // would have to depend on.
     let derive = (!manual_validate).then(|| {
         quote! {
             #[derive(::nest_rs_config::validator::Validate)]
@@ -34,13 +27,7 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
-    // The namespace is also filed with the link-time registry, so the binary
-    // knows every config namespace it carries before any module reads one —
-    // the population the unclaimed-variable report checks a variable's
-    // namespace against, and the one a second type declaring the same
-    // namespace is refused against. The literal and the declaration, not the
-    // type: a generic config files one entry, and nothing about the namespace
-    // depends on the parameters.
+    // The literal and the declaration, not the type: a generic config files one entry.
     let declaration = quote! {
         ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#name))
     };
@@ -60,12 +47,6 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-// Deliberately bespoke. `nest-rs-codegen` carried a shared "parse the sole
-// `key = \"...\"`" helper for a while and this was the one crate that evaluated
-// it: such a parser reads the value and cannot name an *unexpected* argument,
-// whereas `#[config]` rejects unknown keys by name (see the `other` arm below).
-// Nothing else ever called it, so it went; the friendlier diagnostic is worth
-// the local parser, and that is the reason rather than an oversight.
 struct Args {
     namespace: LitStr,
     manual_validate: bool,
@@ -110,17 +91,9 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     })
 }
 
-/// Lowercase env-domain segment, so it reaches `<PREFIX>_<DOMAIN>__` uppercased
-/// and unambiguous.
-///
-/// **It does not round-trip, and the earlier wording said it did.** `_` is
-/// admitted, so `#[config(namespace = "social__google")]` is legal and names the
-/// same variable as `("social", "GOOGLE__CLIENT_ID")` — two key pairs, one
-/// variable, and the tree ships both spellings because `nest-rs-social` uses the
-/// separator as a nesting device. The consequence is recorded where it bites, on
-/// `nest_rs_config`'s claim registry, which keys on the resolved *name* for
-/// exactly this reason; it is restated here because this is the earliest site
-/// that can see the fact, and it said the opposite of it.
+/// Lowercase env-domain segment. It does not round-trip: `_` is admitted, so
+/// `("social__google", "CLIENT_ID")` and `("social", "GOOGLE__CLIENT_ID")` name
+/// one variable — the claim registry keys on the resolved name for that.
 fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
     let valid = !value.is_empty()

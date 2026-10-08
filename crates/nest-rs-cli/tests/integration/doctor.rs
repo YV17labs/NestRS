@@ -1,21 +1,9 @@
 //! `nestrs doctor` — the toolchain report, and the variables it answers for.
 //!
-//! **Run with a cleared environment in an empty directory.** Doctor reads the
-//! shell it runs in and the `.env` cascade of the directory it starts from, so
-//! a suite inheriting the developer's own — an exported `NESTRS_ENV_PREFIX`
-//! doctor calls unusable, a `.env` beside the checkout — failed or passed
-//! because of that shell rather than the code. Only what finds the toolchain is
-//! handed through; every other input is given by the test that needs it.
-//!
-//! **Doctor mirrors the loader, so the two run side by side.** It links no
-//! framework crate, so `cargo install nest-rs-cli` stays independent of the
-//! version a project pins, and its answer is therefore a second implementation
-//! of `nest-rs-config`'s — one that drifts in silence: it answered `set` for a
-//! `_FILE` naming an empty or a missing file and for a value given twice, and
-//! called healthy a cascade naming its own selector. The parity tests at the end
-//! run both over every shape a deployment can give one variable and every
-//! cascade naming a selector. The loader is a dev-dependency, which never
-//! reaches `cargo install`.
+//! **Run with a cleared environment in an empty directory**: doctor reads its
+//! shell and the `.env` cascade beside it. Doctor mirrors the loader without
+//! linking it, so the parity tests at the end run both side by side (the loader
+//! is a dev-dependency).
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -90,8 +78,7 @@ fn an_unusable_prefix_blocks() {
 }
 
 /// A `_FILE` the loader cannot read aborts every app that reads the variable,
-/// so doctor says so and blocks — it used to answer `set`. The file's path is
-/// never printed, only the variable naming it.
+/// so doctor blocks; only the variable is printed, never the path.
 #[test]
 fn a_file_the_loader_cannot_read_blocks_naming_the_variable() {
     let dir = tempfile::tempdir().expect("an empty directory");
@@ -138,10 +125,8 @@ fn a_file_holding_nothing_is_not_set() {
     assert!(report.contains("ACME_REDIS__URL: not set"), "{report}");
 }
 
-/// config-3r2: an app started in the project opens a relative `_FILE` from the
-/// project, so doctor examining it from anywhere else does too. It opened the
-/// path from its own working directory, and failed a correct project with a
-/// blocking error the moment it was run from outside it.
+/// An app started in the project opens a relative `_FILE` from the project, so
+/// doctor examining it from anywhere else does too.
 #[test]
 fn a_relative_file_is_opened_from_the_project_examined_wherever_doctor_runs() {
     let project = tempfile::tempdir().expect("a project");
@@ -160,9 +145,8 @@ fn a_relative_file_is_opened_from_the_project_examined_wherever_doctor_runs() {
     assert!(report.contains("NESTRS_SEAORM__URL: set"), "{report}");
 }
 
-/// config-5r2: a `.env` naming the environment selector aborts every app started
-/// beside it at its first config read, so doctor blocks on it — it reported a
-/// healthy environment — and names the variable, not its value.
+/// A `.env` naming the environment selector aborts every app started beside it,
+/// so doctor blocks on it, naming the variable, not its value.
 #[test]
 fn a_cascade_naming_its_own_selector_blocks() {
     let dir = tempfile::tempdir().expect("a project");
@@ -184,8 +168,6 @@ fn a_cascade_naming_its_own_selector_blocks() {
         stdout(&restated)
     );
 }
-
-// ---- Parity with the loader ---------------------------------------------------
 
 const NAMESPACE: &str = "mirror";
 const KEY: &str = "URL";

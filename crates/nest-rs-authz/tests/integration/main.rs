@@ -1,8 +1,5 @@
-//! Integration tests mirroring `src/`.
-//!
-//! Transport-binding tests are gated on the same feature that exposes them in
-//! `src/`: run with `cargo test -p nest-rs-authz --features full` to exercise
-//! every bridge in this crate.
+//! Integration tests mirroring `src/`; run with `--features full` to exercise
+//! every transport binding.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -14,8 +11,7 @@
 mod ability;
 mod builder;
 
-// `src/guard.rs` is transport-agnostic, so its mirror is here and not under an
-// edge; the files inside carry the per-entry feature gates.
+// `src/guard.rs` is transport-agnostic, so its mirror sits here, not under an edge.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
 
@@ -34,11 +30,6 @@ mod ws;
 /// A parent/child pair whose one job is to be the *wrong* relation: `child`
 /// belongs_to `parent`, so a `related` call naming any other entity is the
 /// mismatch that trips the fail-closed `Deny` sentinel.
-///
-/// At the suite root for the reason [`widget`] is: two modules assert on that
-/// sentinel — the builder's own rejection and the `warn` `AbilityGuard` emits —
-/// and with a copy each they could drift into testing different mismatches
-/// while both reporting the rule holds.
 pub(crate) mod parent {
     use sea_orm::entity::prelude::*;
 
@@ -84,10 +75,6 @@ pub(crate) mod child {
 /// server-only column (`secret`) the wire DTOs never carry —
 /// [`WireModelDefaults`](nest_rs_resource::WireModelDefaults) reconstructs it so
 /// policy can read it, and the exposed-key strainer drops it again.
-///
-/// At the suite root because the `mcp` and `ws` mirrors both mask against it: one
-/// `widget` per test binary, so the two suites cannot drift into masking
-/// different shapes and reporting the same conclusion.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 pub(crate) mod widget {
     use sea_orm::entity::prelude::*;

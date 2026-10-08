@@ -55,8 +55,7 @@ mod tests {
 
     #[test]
     fn display_matches_message() {
-        // `PipeError`'s `#[error("{message}")]` discipline matters — a renderer
-        // (HTTP, WS) writes `Display`, never the inner struct.
+        // A renderer (HTTP, WS) writes `Display`, never the inner struct.
         let err = PipeError::new("not a uuid");
         assert_eq!(err.to_string(), "not a uuid");
     }

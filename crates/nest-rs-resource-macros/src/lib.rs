@@ -26,9 +26,7 @@ mod wire_enum;
 /// **Exposure is opt-in.** A column crosses the wire only when it carries
 /// `#[expose]`; a field with no `#[expose]` is hidden from every transport
 /// (HTTP, GraphQL, WS). `#[expose(input(...))]` opts the field into the write
-/// DTOs *and* implies read. The payoff is fail-secure evolution: a column added
-/// by a later migration stays invisible until someone deliberately exposes it —
-/// no `mfa_secret` ever leaks by omission.
+/// DTOs *and* implies read.
 ///
 /// Generates `User`, `CreateUser`, `UpdateUser`, `From<&Model> for User`.
 ///
@@ -45,27 +43,22 @@ pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(expose::expose(args, item).into()).into()
 }
 
-/// An `#[expose]`d column of a custom enum passes through to the wire DTO
-/// verbatim, so the **enum** is what must carry `Serialize`, `Deserialize`,
-/// `JsonSchema` and — under `graphql` — `async_graphql::Enum`. Written by hand
-/// that puts `schemars` and `async-graphql` in the entity crate's manifest for
-/// code it never wrote. `#[wire_enum]` emits them with their `crate = `
-/// overrides routed through `nest-rs-resource`, so the manifest names neither.
+/// Makes a column's custom enum a wire type: `Serialize`, `Deserialize`,
+/// `JsonSchema` and — under `graphql` — `async_graphql::Enum`, routed through
+/// `nest-rs-resource` so the entity crate's manifest names none of them.
 ///
 /// It emits the value shape those derives require — `Clone`, `Copy`, `Debug`,
 /// `PartialEq`, `Eq` — and **nothing from SeaORM**: `EnumIter`,
 /// `DeriveActiveEnum`, `#[sea_orm(rs_type = …, db_type = …)]` and the
-/// per-variant `string_value` stay the developer's, because the column's
-/// storage type is theirs to choose.
+/// per-variant `string_value` stay the developer's.
 ///
 /// # Expands to
 ///
 /// The enum unchanged, under the derives above, each with its `crate = `
 /// override (`serde`, `schemars`, and `graphql` for `Enum`).
 ///
-/// Drop `graphql` for an enum that only ever crosses HTTP; the flag means
-/// exactly what it means on `#[expose(…, graphql)]`, and needs the same
-/// `graphql` feature on `nest-rs-resource`.
+/// Drop `graphql` for an enum that only ever crosses HTTP; like
+/// `#[expose(…, graphql)]`, it needs the `graphql` feature on `nest-rs-resource`.
 #[proc_macro_attribute]
 pub fn wire_enum(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(wire_enum::wire_enum(args.into(), item.into())).into()

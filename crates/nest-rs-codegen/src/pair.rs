@@ -1,16 +1,10 @@
 //! [`DecoratorPair`] — the two halves an edge decorator is written with, and the
 //! one place their wrong-shape diagnostics are worded.
 //!
-//! An attribute macro is a single path in the macro namespace, so a name worn by
-//! both a struct and its `impl` gives one rustdoc page for two argument grammars
-//! and one symbol for go-to-definition. An edge is therefore written as a
-//! **pair**: the host on the struct, and on the impl a sibling named for what it
-//! collects. What makes the pair usable is the diagnostic — reaching for the
-//! wrong half must say *which decorator the other shape wants*, never syn's
-//! `expected struct`.
-//!
-//! Two shapes produce that message, and they are the same two sentences with the
-//! halves swapped, so they live here rather than in nine macro crates:
+//! One name on both a struct and its `impl` would give one rustdoc page for two
+//! grammars, so an edge is a **pair**: the host on the struct, and on the impl a
+//! sibling named for what it collects. Reaching for the wrong half names the
+//! other:
 //!
 //! ```
 //! # use quote::quote;
@@ -28,14 +22,8 @@
 //! # }
 //! ```
 //!
-//! **Every pair is declared here, and only here.** The fields are private and
-//! the constructors `pub(crate)`, so a macro crate reads its pair from this
-//! module and cannot declare one beside it: [`ALL`] is the whole population,
-//! and this crate's unit tests run each wrong shape against every member of it.
-//! Both halves read the *same* constant, which is what keeps the two sentences
-//! from drifting into naming decorators that no longer exist. An impl-half
-//! decorator whose struct half is the generic `#[injectable]` is built with
-//! `on_provider` and gets the same treatment.
+//! **Every pair is declared here, and only here**: the constructors are
+//! `pub(crate)`, so [`ALL`] is the whole population.
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -43,15 +31,11 @@ use syn::{Item, ItemImpl, ItemStruct};
 
 /// One edge's decorator pair: the vocabulary its two wrong-shape diagnostics are
 /// built from.
-///
-/// Built only in this module — see the module doc — so the struct half and the
-/// impl half cannot describe each other differently, and no pair exists outside
-/// [`ALL`].
 pub struct DecoratorPair {
     /// The struct half as written, e.g. `"#[controller]"`.
     host: &'static str,
     /// How to name the struct the host half decorates, e.g. `"controller
-    /// struct"`. Read by *both* messages, so the two agree on what the item is.
+    /// struct"`.
     subject: &'static str,
     /// The impl half as written, e.g. `"#[routes]"`.
     operations: &'static str,
@@ -155,25 +139,8 @@ impl DecoratorPair {
 
 impl DecoratorPair {
     /// Refuse a host-scope layer written on the impl half, naming the struct
-    /// half it belongs on.
-    ///
-    /// **The sentence must not enumerate the siblings**, and that is the whole
-    /// reason this is here. Two edges worded it themselves and had already
-    /// drifted in *content*, not merely in phrasing: MCP's named
-    /// `#[controller]`, `#[resolver]` and `#[gateway]`, GraphQL's named
-    /// `#[controller]` and `#[gateway]` — so a resolver author was told the
-    /// uniformity spanned two edges when it spanned four, and every edge added
-    /// later would have inherited a list that was wrong the day it landed. The
-    /// pair already knows its own two nouns; a reader needs those, not a roll
-    /// call.
-    ///
-    /// The other two edges said nothing at all. `#[use_guards]` is not a
-    /// standalone attribute macro anywhere in the tree — it exists only as text
-    /// a host decorator consumes — so on a `#[routes]` or `#[messages]` impl it
-    /// reached rustc as `cannot find attribute `use_guards` in this scope`,
-    /// which is verbatim the failure `attrs.rs` cites as the reason
-    /// `HTTP_ONLY_LAYERS` is a constant: no transport named, no reason, no
-    /// remedy.
+    /// half it belongs on. `#[use_guards]` is no attribute macro of its own, so
+    /// unrefused it reaches rustc as `cannot find attribute`.
     pub fn reject_host_layers(&self, attrs: &[syn::Attribute]) -> syn::Result<()> {
         const HOST_SCOPE: [&str; 2] = ["use_guards", "force_guards"];
         for attr in attrs {
@@ -198,9 +165,7 @@ impl DecoratorPair {
     }
 
     /// A pair whose struct half is the generic `#[injectable]` — a queue
-    /// processor, a scheduled-task host, an event-listener host. There is no
-    /// edge-specific struct decorator to name, but reaching for the impl half on
-    /// a struct still deserves better than `expected impl`.
+    /// processor, a scheduled-task host, an event-listener host.
     pub(crate) const fn on_provider(operations: &'static str, collects: &'static str) -> Self {
         Self {
             host: "#[injectable]",
@@ -210,25 +175,9 @@ impl DecoratorPair {
         }
     }
 
-    /// The third wrong-shape refusal, and the one only rustc can deliver: the
-    /// impl half sits on an `impl` block all right, but the container will not
-    /// hold the type it collects for.
-    ///
-    /// An `on_provider` half resolves its host with
-    /// `Container::get::<Host>()`, outside any request — which answers only for
-    /// a singleton stored under its own type. An edge host registers metadata;
-    /// a `scope = request` provider registers a factory; a `scope = transient`
-    /// one hands back a throwaway whose effects are dropped. A macro cannot see
-    /// the struct's decorator from the impl block, so the refusal reads the fact
-    /// the *struct's* decorator recorded: `nest_rs_core::ProviderResidency`.
-    ///
-    /// Two diagnostics fall out, and both are the framework's own words: a type
-    /// no decorator built has no impl at all and gets the trait's
-    /// `#[diagnostic::on_unimplemented]`; a type whose decorator recorded
-    /// `SINGLETON = false` fails this `const` assertion. **Reading a stated fact
-    /// rather than requiring a marker is the whole point** — a marker is absent
-    /// for the shapes it refuses, and absence is fillable by hand, which is how
-    /// a transient host once slipped through the very bound meant to refuse it.
+    /// Refuse an impl half whose host the container does not hold as a
+    /// singleton under its own type, reading the
+    /// `nest_rs_core::ProviderResidency` the struct's decorator recorded.
     ///
     /// Every `on_provider` half emits this after a successful
     /// [`parse_operations`](Self::parse_operations); the edge pairs must not —
@@ -257,18 +206,8 @@ impl DecoratorPair {
     /// type — the fact [`provider_host_check`](Self::provider_host_check)
     /// reads, written by the decorator that builds the provider.
     ///
-    /// Every edge host records `false`: `#[controller]`, `#[gateway]`,
-    /// `#[resolver]` and `#[mcp]` register *metadata*, and the instance is
-    /// built at mount. It is written rather than omitted so that contradicting
-    /// it is `E0119` — a marker that is merely absent for the shapes it refuses
-    /// can be filled in by hand, which is how a `scope = transient` host once
-    /// slipped through the bound meant to refuse it.
-    ///
-    /// Here rather than in each `*-macros` crate for the reason the four copies
-    /// demonstrated: the edge *form* is open, so the path a fifth edge follows
-    /// is whatever the other four did — and a forgotten copy reopens that hole
-    /// silently, since a missing impl falls back to the trait's
-    /// `on_unimplemented` note, which reads plausibly.
+    /// Every edge host records `false`, explicitly, so a hand-written impl
+    /// contradicting it is `E0119`.
     pub fn host_residency(&self, name: &syn::Ident, generics: &syn::Generics) -> TokenStream {
         debug_assert!(
             self.host != "#[injectable]",
@@ -280,14 +219,7 @@ impl DecoratorPair {
     /// Refuse an argument list on the **impl** half, naming what does declare
     /// the thing the developer probably reached for.
     ///
-    /// The impl half collects; it declares nothing. Every edge owes the same
-    /// sentence, and every edge was writing its own — nine copies, differing in
-    /// wording and in span mechanism. Refusals are shared, not per key:
-    /// per-key refusals multiply with the matrix, and what multiplies is what
-    /// gets skipped. The pair already carries both nouns the sentence needs.
-    ///
-    /// `declares` names what the host half takes, so the remedy points at the
-    /// line above rather than merely refusing.
+    /// `declares` names what the host half takes.
     pub fn reject_args(&self, args: &TokenStream, declares: &str) -> syn::Result<()> {
         if args.is_empty() {
             return Ok(());
@@ -310,10 +242,8 @@ impl DecoratorPair {
     /// Parse the **struct** half's input, naming the impl half when the
     /// developer decorated an `impl` block instead.
     ///
-    /// The item is parsed as an [`Item`] *before* the shape is judged: a struct
-    /// with a genuine syntax error must report that error, not "you wanted the
-    /// other decorator" — which is the failure mode this whole indirection
-    /// exists to avoid.
+    /// The item is parsed as an [`Item`] *before* the shape is judged, so a
+    /// genuine syntax error reports itself.
     pub fn parse_host(&self, input: TokenStream) -> syn::Result<ItemStruct> {
         match syn::parse2::<Item>(input)? {
             Item::Struct(item) => Ok(item),
@@ -334,21 +264,10 @@ impl DecoratorPair {
     /// Parse the **impl** half's input, naming the struct half when the
     /// developer decorated the struct instead.
     ///
-    /// Returns the `impl` as written, and refuses a **trait** impl for every
-    /// pair: it parses as an `Item::Impl` like any other, so the shape check
-    /// alone waves it through and the expansion collects nothing. Eight of the
-    /// nine halves had no answer to that shape at all and one wrote its own,
-    /// which is the drift this const exists to prevent.
+    /// Returns the `impl` as written, and refuses a **trait** impl, whose
+    /// methods the expansion would silently not collect.
     pub fn parse_operations(&self, input: TokenStream) -> syn::Result<ItemImpl> {
         match syn::parse2::<Item>(input)? {
-            // A trait impl parses as an `Item::Impl` like any other, so the
-            // shape check above waves it through — and the expansion then
-            // collects nothing, because the methods it looks for are the
-            // trait's. The half is accepted, the route or the tick declared
-            // there never exists, and nothing says so. Refused here rather than
-            // per decorator: eight of nine had no answer at all, the ninth
-            // worded its own, and one sentence is what keeps the nine from
-            // drifting apart.
             Item::Impl(item) if item.trait_.is_some() => {
                 #[expect(
                     clippy::expect_used,
@@ -408,14 +327,8 @@ impl DecoratorPair {
     /// taken off (`helpers`, plus the layers and the posture every half consumes)
     /// and the trait impls a host is required to carry filled in by `fallback`.
     ///
-    /// A refusal used to drop the whole `impl`, so the one real error arrived
-    /// under a cascade it caused: every method became `no method found`, every
-    /// import `unused`, and the host failed `Discoverable` or `McpHost` at the
-    /// module listing it — `E0277` blamed on a line that is right. The item stays,
-    /// so what rustc reports beside the refusal is only what is wrong in the
-    /// developer's own code. `fallback` runs for an inherent impl alone: a trait
-    /// impl is itself the refusal, and a second impl of the host's traits would
-    /// only add a conflict.
+    /// Keeping the item spares a cascade of `no method found` and `E0277`
+    /// errors. `fallback` runs for an inherent impl alone.
     pub fn keep_item_on_refusal(
         &self,
         input: TokenStream,
@@ -432,9 +345,7 @@ impl DecoratorPair {
         let Item::Impl(mut item) = item else {
             return quote!(#expansion #input);
         };
-        // By the last segment: an exported marker (`#[nest_rs::http::http_code]`)
-        // is consumed path-qualified as well as bare, and one left on the item
-        // would add its own "unread" refusal to the one being reported.
+        // By the last segment: a marker is consumed path-qualified as well as bare.
         let consumed = |attr: &syn::Attribute| {
             let Some(last) = attr.path().segments.last() else {
                 return false;
@@ -463,10 +374,6 @@ impl DecoratorPair {
 
 /// Whether `tokens` hold `compile_error!` invocations and nothing else — the
 /// shape `syn::Error::to_compile_error` writes, one error or several combined.
-///
-/// Read structurally rather than flagged by the caller: a half has dozens of
-/// refusal sites, and an expansion that expanded always holds the item it was
-/// given, so a stream of nothing but errors is a refusal by construction.
 fn only_compile_errors(tokens: &TokenStream) -> bool {
     use proc_macro2::TokenTree;
     let mut named_the_macro = false;
@@ -489,18 +396,8 @@ fn only_compile_errors(tokens: &TokenStream) -> bool {
 /// Parse `#[injectable]`'s input, naming the impl halves when the developer
 /// decorated the impl block instead.
 ///
-/// Free rather than a [`DecoratorPair`] method for the same reason as
-/// [`provider_residency`]: `#[injectable]` owns no pair — it *is* the generic
-/// struct half all five `on_provider` pairs name. So it is the one host whose
-/// refusal cannot name *the* sibling, and names the family instead; which of
-/// the five the developer wanted is theirs to know, and all five are one
-/// sentence away.
-///
-/// Worded here rather than in `#[injectable]`'s own crate because that is the
-/// whole point of this module: the five pairs already say "the struct itself
-/// takes `#[injectable]`", and the sentence coming back the other way has to
-/// agree with them. It answered `expected struct` until this existed — the one
-/// phrasing that is the defect.
+/// Free, not a [`DecoratorPair`] method: `#[injectable]` owns no pair — it is
+/// the struct half every `on_provider` pair names — so it names the family.
 pub fn parse_provider_host(input: TokenStream) -> syn::Result<ItemStruct> {
     match syn::parse2::<Item>(input)? {
         Item::Struct(item) => Ok(item),
@@ -513,13 +410,9 @@ pub fn parse_provider_host(input: TokenStream) -> syn::Result<ItemStruct> {
     }
 }
 
-/// The `impl ProviderResidency` a provider-building decorator emits, spelled
-/// once for all five: `#[injectable]` (with `singleton` from its scope) and the
-/// four edge hosts (always `false`, through
-/// [`DecoratorPair::host_residency`]).
-///
-/// Free rather than a method because `#[injectable]` owns no pair — it *is* the
-/// generic struct half every `on_provider` pair names.
+/// The `impl ProviderResidency` a provider-building decorator emits:
+/// `#[injectable]` (with `singleton` from its scope) and the four edge hosts
+/// (always `false`, through [`DecoratorPair::host_residency`]).
 pub fn provider_residency(
     name: &syn::Ident,
     generics: &syn::Generics,
@@ -551,9 +444,6 @@ mod tests {
         pair.host() == "#[injectable]"
     }
 
-    // The whole point of a pair: each half's refusal names the *other* half, so
-    // the compiler tells the reader which decorator it is looking at. Run over
-    // every pair the framework declares, since `ALL` is the population.
     #[test]
     fn the_host_half_on_an_impl_names_the_operations_half() {
         for pair in ALL.iter().filter(|pair| !on_provider(pair)) {
@@ -563,8 +453,6 @@ mod tests {
         }
     }
 
-    /// `#[injectable]` owns no pair, so its refusal names the family — every
-    /// impl half whose struct half it is.
     #[test]
     fn injectable_on_an_impl_names_every_provider_half() {
         let msg = refusal(parse_provider_host(quote!(impl Host {})), "#[injectable]");
@@ -632,7 +520,6 @@ mod tests {
         }
     }
 
-    /// What a macro crate reads off a pair is what the pair declares.
     #[test]
     fn the_accessors_read_the_declared_halves() {
         assert_eq!(
@@ -644,8 +531,6 @@ mod tests {
         }
     }
 
-    /// One decorator, one pair: an impl half named twice would give two pairs
-    /// one rustdoc page.
     #[test]
     fn every_pair_has_its_own_halves() {
         for (i, pair) in ALL.iter().enumerate() {
@@ -660,9 +545,6 @@ mod tests {
         }
     }
 
-    // Neither message may swallow a real syntax error: a struct that does not
-    // parse has to report *that*, or the indirection has made diagnostics worse
-    // rather than better.
     #[test]
     fn a_genuine_syntax_error_is_reported_as_itself() {
         let msg = refusal(
@@ -675,8 +557,6 @@ mod tests {
         );
     }
 
-    /// A refusal keeps the item, minus what the half consumes; an expansion is
-    /// left alone.
     #[test]
     fn a_refusal_keeps_the_item_without_the_consumed_attributes() {
         let input = quote! {

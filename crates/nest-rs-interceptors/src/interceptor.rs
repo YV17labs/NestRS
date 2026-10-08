@@ -10,12 +10,9 @@ use nest_rs_core::Layer;
 use nest_rs_core::layer_chain::ResolvedLayer;
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 
-/// Wraps handler execution. An [`Interceptor`] sees the inputs before the
-/// handler runs and the outputs after. `intercept(req, next)` is the HTTP
-/// entry. A GraphQL `POST` and a WS upgrade are HTTP requests, so a *global*
-/// interceptor covers them through the transport-edge wrap; per-resolver /
-/// per-message wrapping is not offered (a former reserved seam was removed
-/// until it is actually wired).
+/// Wraps handler execution: an [`Interceptor`] sees the inputs before the handler
+/// runs and the outputs after. A *global* one also covers a GraphQL `POST` and a
+/// WS upgrade, which are HTTP requests.
 ///
 /// `Interceptor` extends [`Layer`] so the same impl can be declared at any
 /// scope (global / controller / method) and the Layer System dedups by
@@ -27,16 +24,12 @@ use poem::{Endpoint, IntoResponse, Request, Response, Result};
 /// `#[query]` / `#[subscribe_message]`.
 #[async_trait]
 pub trait Interceptor: Layer {
-    /// HTTP entry. The per-route shaper calls this once for every HTTP
-    /// route. Required (no default) so an `Interceptor` impl that
-    /// genuinely targets HTTP cannot forget to wire it.
+    /// HTTP entry, called by the per-route shaper once for every HTTP route.
     async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
 }
 
-// Manual forward, not `#[async_trait]`: the macro would wrap the inner
-// (already boxed) future in a second box, taxing every call made through an
-// `Arc<dyn Interceptor>` without `.as_ref()` — the erased form every
-// composition site holds.
+// Manual forward, not `#[async_trait]`: the macro would box the already-boxed
+// future a second time on every call through an `Arc<dyn Interceptor>`.
 impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
     fn intercept<'s, 'n, 'fut>(
         &'s self,
@@ -56,11 +49,8 @@ impl<T: Interceptor + ?Sized> Interceptor for Arc<T> {
 /// [`Next::run`] to delegate to the rest of the chain (the remaining
 /// interceptors, then the inner endpoint).
 ///
-/// Internally a cursor over an interceptor slice plus the erased tail
-/// endpoint: delegating steps the cursor instead of nesting one wrapper
-/// endpoint per interceptor, so a chain of N interceptors costs N boxed
-/// `intercept` futures and a single boxed tail call — not the 3-4 boxed
-/// hops per link the former endpoint-per-interceptor composition paid.
+/// A cursor over the interceptor slice plus the erased tail endpoint: a chain of
+/// N interceptors costs N boxed `intercept` futures and one boxed tail call.
 pub struct Next<'a> {
     /// Interceptors still to run, outermost-first; empty when only the tail
     /// endpoint remains.
@@ -86,9 +76,8 @@ impl<'a> Next<'a> {
     /// endpoint) with `req`.
     pub async fn run(self, req: Request) -> Result<Response> {
         match self.chain.split_first() {
-            // `as_ref()` dispatches straight on the erased interceptor:
-            // calling through the `Interceptor for Arc<T>` blanket would nest
-            // a second boxed future around every link, per request.
+            // `as_ref()` dispatches on the erased interceptor: the `Arc<T>`
+            // blanket would nest a second boxed future around every link.
             Some((entry, rest)) => {
                 entry
                     .layer
@@ -108,10 +97,7 @@ impl<'a> Next<'a> {
 }
 
 /// A poem endpoint wrapped by a whole interceptor chain, run outermost-first
-/// through one [`Next`] cursor. The composition sites (per-route and
-/// transport edge) build one of these from the composed
-/// [`ResolvedLayer`] chain instead of nesting an
-/// [`InterceptorEndpoint`] per entry.
+/// through one [`Next`] cursor.
 pub struct InterceptorChain<E> {
     chain: Vec<ResolvedLayer<dyn Interceptor>>,
     inner: E,
@@ -132,9 +118,7 @@ where
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        // An empty chain (a composed stack whose interceptor stage is
-        // unused) delegates straight to the inner endpoint — no cursor, no
-        // boxed tail call.
+        // An empty chain delegates straight to the inner endpoint.
         if self.chain.is_empty() {
             return self.inner.call(req).await.map(IntoResponse::into_response);
         }

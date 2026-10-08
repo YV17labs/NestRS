@@ -1,14 +1,6 @@
 //! [`RoutePath`] — a `#[routes]` path read with poem's own grammar, so the
 //! address the macro checks is the address poem mounts.
 //!
-//! A route's identity used to be its path *as written*. poem reads it through a
-//! grammar, so three spellings of one address passed the check as three routes:
-//! `/q/:id` beside `/q/:other` mounted both and served the first; `/p/:id` for
-//! `GET` beside `/p/:other` for `DELETE` mounted two nodes and answered `DELETE`
-//! with `405`; `/u` beside `/u/` mounted both while the edge trims a request's
-//! trailing slash, so the second was unreachable. And `/t` beside `t` reached poem
-//! as one path twice and panicked at boot.
-//!
 //! The grammar is poem 3.1's `Route::at` — `normalize_path` then
 //! `parse_path_segments` — plus the one rule this framework adds before routing,
 //! the edge's trailing-slash trim:
@@ -20,11 +12,8 @@
 //!   else is literal text — `{name}` included, which poem does not read as a
 //!   parameter.
 //!
-//! The **identity** keeps what decides which requests reach a node — the text,
-//! the kind of each parameter, a constraint's expression — and drops the names,
-//! which decide nothing about routing. Pinned against poem in
-//! `nest-rs-http/tests/integration/controller.rs`, so an upgrade that reads a
-//! path differently fails there rather than in a deployment.
+//! The **identity** drops parameter names, which decide nothing about routing.
+//! Pinned against poem in `nest-rs-http/tests/integration/controller.rs`.
 
 /// One route path, as poem mounts it.
 #[derive(Debug, Clone, PartialEq, Eq)]

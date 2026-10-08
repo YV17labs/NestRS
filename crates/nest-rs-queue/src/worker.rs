@@ -47,10 +47,8 @@ use crate::{
     QueueConfig, QueueError, QueueName, Received, TARGET,
 };
 
-/// The longest a receive waits for a job before it asks again: a push wakes a
-/// receive the backend blocks, so the wait only bounds what an idle method
-/// costs — one receive a second — and how long a stopping one waits for its
-/// last.
+/// The longest a receive waits for a job before it asks again; a push wakes a
+/// receive the backend blocks.
 const RECEIVE_WAIT: Duration = Duration::from_secs(1);
 
 /// The first wait after a call failed, doubling up to [`LONGEST_RETRY`].
@@ -70,7 +68,6 @@ impl Backoff {
         self.0 = FIRST_RETRY;
     }
 
-    /// The wait before the next call, doubling the one after it.
     fn wait(&mut self) -> Duration {
         let wait = self.0;
         self.0 = (wait * 2).min(LONGEST_RETRY);
@@ -225,8 +222,7 @@ pub(crate) struct Serving {
     cancel: CancellationToken,
 }
 
-/// A [`JobConsumer`] behind the one type the container holds — the only call
-/// that crosses it per worker is the loop's start, so no job pays for it.
+/// A [`JobConsumer`] behind the one type the container holds.
 pub(crate) trait Run: Send + Sync {
     fn backend(&self) -> &'static QueueBackend;
     fn prepare<'a>(

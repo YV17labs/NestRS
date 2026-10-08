@@ -3,8 +3,7 @@ use nest_rs_oauth_client::OAuthClientConfig;
 
 use crate::registry::SocialProviderConfig;
 
-/// Google OIDC deployment config. Dual-path (env `<PREFIX>_SOCIAL__GOOGLE__*`
-/// **and** the pinned struct). No `Debug`: `client_secret` must not leak.
+/// Google OIDC deployment config. No `Debug`: `client_secret` must not leak.
 #[config(namespace = "social__google")]
 #[derive(Clone, Default)]
 pub struct GoogleSocialConfig {
@@ -89,9 +88,6 @@ mod tests {
         assert_eq!(cfg.oauth2_config().auth_url, GoogleSocialConfig::AUTH_URL);
     }
 
-    /// A credential holding only whitespace is configured, not absent — so the
-    /// provider is not inert — and it fails validation naming the field, as a
-    /// partial set does.
     #[test]
     fn whitespace_only_credentials_are_refused_like_a_partial_set() {
         use validator::Validate;

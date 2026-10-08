@@ -9,9 +9,7 @@ use std::time::Duration;
 const POLL: Duration = Duration::from_millis(10);
 
 /// Poll `ready` until it holds, and fail the test at the caller's line once
-/// `within` elapses — so a regression fails where it waited rather than
-/// hanging, or passing the wait to fail at a later assertion that names
-/// something else. On a paused clock the wait costs nothing.
+/// `within` elapses. On a paused clock the wait costs nothing.
 #[track_caller]
 pub fn wait_until(within: Duration, mut ready: impl FnMut() -> bool) -> impl Future<Output = ()> {
     wait_for(within, move || std::future::ready(ready()))

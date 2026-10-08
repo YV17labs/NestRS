@@ -1,29 +1,6 @@
-//! The span targets **this crate** emits on.
-//!
-//! The shape is fixed — dotted, lowercase, **rooted at the crate that
-//! emits them**, the crate picking the root and the concern the tail — and that
-//! rule decides where a constant lives as much as what it says. A target's one
-//! job is to name *where* an event came from, so the crate that **owns the
-//! concern** is the crate that names it: `nest_rs_events::TARGET` belongs to
-//! `nest-rs-events`, and a table here holding it would have meant the kernel
-//! carrying a name for a concern it does not know exists. The kernel owns five,
-//! and declares five.
-//!
-//! **Owns, not emits, and the difference is real.** `nest_rs::layers` is emitted
-//! from here and from three crates above; `nest_rs::routes` from five. A shared
-//! concern is declared once by whichever crate the others already depend on —
-//! `nest_rs_http::target::ROUTES` for the route table — and read from there. The
-//! two are only ever the same crate when a concern has one emitter.
-//!
-//! It is a module rather than a bare `TARGET` for the same reason
-//! `nest-rs-http` has one: a crate owning several concerns needs several names.
-//! Every crate owning exactly one spells it `TARGET` at its root.
-//!
-//! **The operation log is deliberately not here.** It is
-//! [`operation_log::TARGET`](crate::operation_log::TARGET), the one target
-//! naming a *category of line* rather than a subsystem — which is the whole
-//! reason it exists, and is a different thing from a concern several crates
-//! emit on.
+//! The span targets of the concerns **this crate** owns, read by every crate
+//! that emits on them. The operation log's is
+//! [`operation_log::TARGET`](crate::operation_log::TARGET).
 
 /// Composition root: transports attached, boot phases, shutdown.
 pub const APP: &str = "nest_rs::app";
@@ -40,16 +17,8 @@ pub const MODULE: &str = "nest_rs::module";
 mod tests {
     use super::*;
 
-    /// Every target this crate declares.
-    ///
-    /// Test-local, and deliberately: a `pub` list would have no reader outside
-    /// these three checks, and a published array nobody calls is surface to
-    /// keep in step for nothing.
     const ALL: [&str; 5] = [APP, CONTAINER, LAYERS, LIFECYCLE, MODULE];
 
-    /// The fixed shape: `nest_rs::<concern>`, lowercase, **two**
-    /// segments. A third would be a hierarchy this table does not have, and the
-    /// prose has no way to notice one.
     #[test]
     fn every_target_is_two_lowercase_segments_rooted_at_the_framework() {
         for target in ALL {
@@ -67,18 +36,13 @@ mod tests {
         }
     }
 
-    /// Two concerns under one name cannot be filtered apart, and the duplicate
-    /// would read as a longer table rather than a shorter one.
     #[test]
     fn no_two_concerns_share_a_target() {
         let distinct: std::collections::BTreeSet<&str> = ALL.into_iter().collect();
         assert_eq!(distinct.len(), ALL.len(), "a target is declared twice");
     }
 
-    /// `EnvFilter` matches a directive by `starts_with` on the raw string, so a
-    /// target that prefixes another cannot be silenced alone — the defect
-    /// `nest_rs::access` / `nest_rs::access_graph` shipped as. This crate's own
-    /// five are checked here; across crates the property is review's.
+    /// `EnvFilter` matches a directive by `starts_with` on the raw string.
     #[test]
     fn no_target_is_a_prefix_of_another() {
         for outer in ALL {

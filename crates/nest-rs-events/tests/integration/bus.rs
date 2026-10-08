@@ -1,6 +1,4 @@
-//! End-to-end: producer emits via the bus; the discovered `#[on_event]`
-//! method runs. A second `#[on_event]` on the same provider proves the
-//! multi-method orchestrator pattern (shared `#[inject]` deps, one struct).
+//! A producer emits via the bus; the discovered `#[on_event]` methods run.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -117,11 +115,7 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
     bus.emit(Unobserved).await;
 }
 
-/// A boundary's transaction as the bus meets it — through the data layer's
-/// port, with no ORM behind it: it keeps the work [`after_commit`] hands it
-/// until the test settles the boundary one way or the other.
-///
-/// [`after_commit`]: nest_rs_database::after_commit
+/// A boundary's transaction through the data layer's port, no ORM behind it.
 #[derive(Default)]
 struct OpenTransaction(std::sync::Mutex<Vec<nest_rs_database::Deferred>>);
 
@@ -143,7 +137,6 @@ impl OpenTransaction {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// What a boundary does once its transaction has committed.
     async fn commit(&self) {
         let held = std::mem::take(&mut *self.held());
         for work in held {
@@ -151,7 +144,6 @@ impl OpenTransaction {
         }
     }
 
-    /// What a boundary does once its transaction has rolled back.
     fn roll_back(&self) {
         self.held().clear();
     }
@@ -168,10 +160,6 @@ async fn booted() -> (App, Arc<Awarder>, Arc<Ledger>) {
     (app, awarder, ledger)
 }
 
-/// The demo's publish shape, reduced: a service emits a fact inside the
-/// transaction that writes it. The listener must not see the fact before the
-/// write lands — before this, `emit` dispatched inline, and a listener pushing a
-/// job or notifying a subscriber did so about a row nothing had committed yet.
 #[tokio::test]
 async fn an_event_emitted_inside_a_transaction_is_dispatched_once_it_commits() {
     let (_app, awarder, ledger) = booted().await;
@@ -188,8 +176,6 @@ async fn an_event_emitted_inside_a_transaction_is_dispatched_once_it_commits() {
     assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
 }
 
-/// A fact the transaction rolled back never happened, so nothing reacts to it —
-/// and nothing files a unit of work for a listener that never started.
 #[tokio::test]
 async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
     let (_app, awarder, ledger) = booted().await;
@@ -211,9 +197,6 @@ async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
     );
 }
 
-/// An executor with no transaction to wait for — a pool, a transaction its
-/// caller commits — hands the work back, and the listeners run before `emit`
-/// returns, exactly as they do with no data layer at all.
 #[tokio::test]
 async fn an_event_with_no_transaction_to_wait_for_is_dispatched_before_emit_returns() {
     struct Pool;
@@ -228,10 +211,7 @@ async fn an_event_with_no_transaction_to_wait_for_is_dispatched_before_emit_retu
     assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
 }
 
-/// A provider whose listeners are declared and reachable, in an app that never
-/// imported `EventsModule`. Nothing in the `#[listeners]` expansion makes the
-/// host depend on `EventBus`, so this composition boots clean and reacts to
-/// nothing — the shape the bootstrap hook has to report rather than skip.
+/// Reachable listeners in an app that never imported `EventsModule`.
 #[module(providers = [Ledger, PointsListeners])]
 struct BuslessModule;
 
@@ -322,12 +302,8 @@ impl r#loop {
 #[module(imports = [EventsModule], providers = [ShapedListeners])]
 struct ShapedModule;
 
-/// Compiling is the first half: a listener compiled out takes its wiring and its
-/// entry with it — without them the expansion names a method and an event that
-/// do not exist. `-> ()` written out and a typed `self: &Self` are the plain
-/// shapes spelled out, `self: &Arc<Self>` borrows what the container holds, and a
-/// raw identifier is a name — the expansion panicked on `r#` — so every listener
-/// is subscribed, and a raw host is named by its name.
+/// Compiling is the first half: a compiled-out listener names a method and an
+/// event that do not exist.
 #[tokio::test]
 async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_served() {
     let app = App::new::<ShapedModule>().expect("boots");

@@ -4,24 +4,14 @@
 //! `otlp` feature is on and `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` is set). The returned
 //! guard flushes on drop, so it must outlive `main`.
 //!
-//! [`OpenTelemetryModule`] provides the OTel meter. Everything else this crate
-//! adds — the remote parent link and the sampler's verdict — is seeded onto the
-//! framework's span constructor at `init`, so it reaches **every** edge rather
-//! than the one transport an interceptor could hang from.
-//!
-//! The span, the W3C trace context and the access log belong to the transports
-//! and to `nest-rs-core`: they must exist whether or not this crate does.
+//! [`OpenTelemetryModule`] provides the OTel meter. The remote parent link and
+//! the sampler's verdict are seeded onto the framework's span constructor at
+//! `init`, so they reach **every** edge.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — The exporter's own diagnostics.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::opentelemetry";
 
 mod config;

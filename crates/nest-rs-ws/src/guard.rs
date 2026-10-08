@@ -1,8 +1,5 @@
-//! Per-event layer table — a frozen, mount-time view of the Layer System
-//! chain for each `#[subscribe_message]` event. Distinct from the per-route
-//! HTTP path because a WS message carries no `poem::Request` — the same
-//! `Guard::check_ws_message` runs, but the chain itself is composed and
-//! deduped at gateway mount instead of per-request.
+//! Per-event layer table — the guard chain of each `#[subscribe_message]`
+//! event, composed and deduped once at gateway mount.
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -10,13 +7,9 @@ use std::sync::Arc;
 
 use crate::server::WsClient;
 
-/// Object-safe view of `nest_rs_guards::Guard::check_ws_message` so the
-/// table can store any guard without importing the trait directly (avoids a
-/// nest-rs-ws → nest-rs-guards dep cycle).
-///
-/// `nest-rs-guards` provides a [`GuardAsWsMessageCheck`](../../nest_rs_guards/struct.GuardAsWsMessageCheck.html)
-/// wrapper that adapts any `Guard` to this trait — the `#[messages]` macro
-/// emits the wrapper at gateway mount.
+/// Object-safe view of `nest_rs_guards::Guard::check_ws_message`, declared here
+/// to avoid a nest-rs-ws → nest-rs-guards dependency cycle; `nest-rs-guards`'
+/// `GuardAsWsMessageCheck` adapts any `Guard` to it.
 #[async_trait::async_trait]
 pub trait WsMessageCheck: Send + Sync + 'static {
     /// Returns the message a denied check sends back to the client.
@@ -56,16 +49,14 @@ impl<T: WsMessageCheck + ?Sized> WsMessageCheck for Arc<T> {
     }
 }
 
-/// Per-gateway event-name → guard chain, built once at mount by
-/// `#[messages]` from the global + per-message Layer-System chain. Frozen
-/// for the rest of the process: the dispatcher just iterates.
+/// Per-gateway event-name → guard chain, built once at mount by `#[messages]`.
 #[derive(Default)]
 pub struct EventLayerTable {
     by_event: HashMap<&'static str, Vec<Arc<dyn WsMessageCheck>>>,
 }
 
 impl EventLayerTable {
-    /// An empty table — `#[messages]` fills it at mount, one entry per event.
+    /// An empty table.
     pub fn new() -> Self {
         Self::default()
     }
@@ -75,8 +66,7 @@ impl EventLayerTable {
         self.by_event.insert(event, chain);
     }
 
-    /// Run every guard in the chain for `event`, in canonical order.
-    /// `Ok(())` when the event has no chain (including the no-guards case).
+    /// Run every guard in the chain for `event`, in order; `Ok(())` when it has none.
     pub async fn check(
         &self,
         client: &WsClient,

@@ -1,14 +1,5 @@
-//! The push surface through a backend that records what it is handed: the
-//! destination names the queue, the port checks and seals before any backend
-//! sees a job, and each push-time declaration a backend without its capability
-//! cannot honour is refused at the push — as a cancel is refused before the
-//! backend sees it, and says what it removed.
-//!
-//! **And the net under every call.** A backend that never answers holds a push
-//! or a cancel for `BACKEND_TIMEOUT` and no longer, the error naming the queue
-//! and the call; one answering inside it is waited for; and a push of many
-//! reaches the backend `ENQUEUE_BATCH` jobs at a time, so the net bounds a call
-//! of known size — proved on a paused clock, so the suite never waits it out.
+//! The push and cancel surface through a backend that records what it is
+//! handed, and the net under every call, on a paused clock.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -222,13 +213,6 @@ async fn a_push_of_nothing_reaches_no_backend() {
     assert!(producer.filed().is_empty());
 }
 
-/// An empty batch is refused on the same grounds a full one is.
-///
-/// The short-circuit used to return before the capability check, so the answer
-/// depended on the **runtime length** of the iterator: a filter that matched
-/// nothing made a delayed push on a backend without `DelayedPush` read as
-/// honoured, and the same call turned into `Unsupported` the first time the
-/// filter matched — in production, at the one site nothing tested.
 #[tokio::test]
 async fn a_push_of_nothing_is_still_refused_what_the_backend_cannot_honour() {
     let producer = RecordingProducer::on(&BARE);
@@ -279,9 +263,7 @@ async fn the_raw_hatch_takes_a_runtime_name_and_checks_it() {
     );
 }
 
-/// The refusal a backend without `capability` owes a push declaring it:
-/// `Unsupported`, naming the capability and the backend, before the backend sees
-/// anything.
+/// The refusal a backend without `capability` owes a push declaring it.
 fn assert_refused_at_the_push(
     result: Result<PushReceipt, QueueError>,
     capability: Capability,
@@ -344,8 +326,6 @@ async fn a_backend_declaring_the_options_receives_them_as_declared() {
     );
 }
 
-/// A unique push under a key another job still holds is refused, naming the
-/// job holding it — the caller learns which job to wait for, or to cancel.
 #[tokio::test]
 async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder() {
     let producer = RecordingProducer::on(&FULL);
@@ -405,8 +385,6 @@ async fn a_unique_key_is_refused_on_a_push_of_many_and_an_invalid_one_anywhere()
     assert!(producer.filed().is_empty());
 }
 
-/// A receipt is data a caller keeps — in a column, a message, a file — and
-/// reads back to cancel with later; both halves are checked on the way back.
 #[tokio::test]
 async fn a_receipt_kept_as_data_still_names_its_job() {
     let producer = RecordingProducer::on(&FULL);
@@ -434,11 +412,7 @@ async fn a_receipt_kept_as_data_still_names_its_job() {
     }
 }
 
-// --- a cancel -------------------------------------------------------------------
-
-/// The refusal a backend lacking what a cancel needs owes it: `Unsupported`,
-/// naming the first capability missing and the backend, before the backend sees
-/// the call.
+/// The refusal a backend lacking what a cancel needs owes it.
 fn assert_cancel_refused(
     result: Result<bool, QueueError>,
     capability: Capability,
@@ -481,9 +455,6 @@ async fn cancellation_is_refused_by_a_backend_without_what_it_needs() {
     );
 }
 
-/// `Ok(true)` only for a job that had not started and now never will;
-/// `Ok(false)` for one that is gone or was never known — and the cancel says on
-/// `nest_rs::queue` which job it cancelled.
 #[tokio::test]
 async fn a_cancel_reaches_the_backend_and_says_what_it_cancelled() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -592,9 +563,6 @@ impl JobProducer for ForgetfulProducer {
     }
 }
 
-/// A backend declaring job cancellation and implementing neither removal is a
-/// driver defect, and is told so: the refusal a backend without the capability
-/// owes would tell it the capability was missing.
 #[tokio::test]
 async fn cancellation_declared_and_not_implemented_is_named_a_driver_defect() {
     let outcomes = [
@@ -625,9 +593,6 @@ async fn cancellation_declared_and_not_implemented_is_named_a_driver_defect() {
     }
 }
 
-/// A push of more jobs than one call carries reaches the backend a batch at a
-/// time, in order, and still answers one receipt per job in input order — so
-/// the net bounds a call of known size, whatever the size of the push.
 #[tokio::test]
 async fn a_push_of_more_than_a_batch_reaches_the_backend_a_batch_at_a_time_in_order() {
     let producer = RecordingProducer::on(&BARE);
@@ -669,8 +634,6 @@ async fn a_push_of_more_than_a_batch_reaches_the_backend_a_batch_at_a_time_in_or
         json!({ "file": format!("{}.wav", jobs - 1) }),
     );
 }
-
-// --- the net ------------------------------------------------------------------
 
 /// A backend that answers its first `answered` calls to `enqueue` after `delay`,
 /// then no call at all — a store gone silent behind a network that still takes
@@ -738,8 +701,6 @@ fn unanswered(error: &QueueError, queue: &str, call: &str) -> bool {
     ) && error.to_string().contains(&format!("on queue `{queue}`"))
 }
 
-/// A push the backend never answers holds its caller for the net and no
-/// longer, and fails naming the queue and the call.
 #[tokio::test(start_paused = true)]
 async fn a_push_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
     let producer = SilentProducer::answering(0, Duration::ZERO);
@@ -759,8 +720,6 @@ async fn a_push_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
     );
 }
 
-/// A cancel the backend never answers fails at the net the same way — by
-/// receipt, and by unique key.
 #[tokio::test(start_paused = true)]
 async fn a_cancel_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
     let producer = SilentProducer::answering(1, Duration::ZERO);
@@ -785,8 +744,6 @@ async fn a_cancel_the_backend_never_answers_fails_at_the_net_naming_the_queue() 
     );
 }
 
-/// The net is a net, never a budget: a backend answering just inside it is
-/// waited for, and its answer is the push's.
 #[tokio::test(start_paused = true)]
 async fn a_backend_answering_inside_the_net_is_waited_for() {
     let producer = SilentProducer::answering(1, BACKEND_TIMEOUT - Duration::from_millis(1));
@@ -796,10 +753,6 @@ async fn a_backend_answering_inside_the_net_is_waited_for() {
         .expect("answered inside the net");
 }
 
-/// A push of many the net cuts short fails naming the call, and nothing is
-/// handed to the backend after it — and the error carries the receipts of the
-/// batch the backend accepted, which is queued. They were missing: a caller
-/// could neither cancel nor leave out of a retry the jobs already queued.
 #[tokio::test(start_paused = true)]
 async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
     let producer = SilentProducer::answering(1, Duration::ZERO);
@@ -841,7 +794,6 @@ async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
         "the first batch was answered, the second never was, and nothing followed it",
     );
 
-    // A push failing at its first call queued nothing: its error is the failure.
     let silent = SilentProducer::answering(0, Duration::ZERO);
     let refused = within_twice_the_net(silent.push_many(
         TranscodeQueue,

@@ -1,7 +1,7 @@
 ---
 /**
  * The capability grid — one card per concern, each linking to the section of
- * this site that documents it. Twelve cards, thirty-one features: the cards
+ * this site that documents it. Twelve cards, thirty-three features: the cards
  * group what a reader shops for, the figure below them is the gated count.
  */
 interface Capability {
@@ -11,13 +11,13 @@ interface Capability {
 }
 
 const caps: Capability[] = [
-  { name: 'HTTP', desc: 'Controllers, versioning, extractors, streaming, TLS', href: '/http/' },
+  { name: 'HTTP', desc: 'Controllers, versioning, streaming, static files, TLS', href: '/http/' },
   { name: 'GraphQL', desc: 'Resolvers, dataloaders, subscriptions, federation', href: '/graphql/' },
   { name: 'OpenAPI', desc: 'Spec + Swagger UI derived from the route table', href: '/openapi/' },
   { name: 'WebSockets', desc: 'Gateways, namespaces, rooms, server push', href: '/websockets/' },
   { name: 'MCP', desc: 'Tools, prompts and resources under the same guards', href: '/mcp/' },
   { name: 'Database', desc: 'Entities, Repo, ambient transactions, migrations', href: '/database/' },
-  { name: 'Authentication', desc: 'JWT on EdDSA, OAuth2 + PKCE, Argon2id, social', href: '/security/authentication/' },
+  { name: 'Authentication', desc: 'JWT (EdDSA, JWKS), OAuth2 + PKCE, Argon2id, social', href: '/security/authentication/' },
   { name: 'Authorization', desc: 'Abilities, row-level filtering, field masking', href: '/security/authorization/' },
   { name: 'Queue & Schedule', desc: 'Redis-backed queues, retries, cron, events', href: '/queue/' },
   { name: 'Storage', desc: 'S3-compatible client, presigned URLs, streaming', href: '/storage/' },

@@ -100,8 +100,10 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 - security/
   - **authentication/**
     - [index.mdx](/security/authentication/) — `Strategy`, `AuthnGuard<S>`, reading the principal back with `Ctx<P>`
-    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS vs EdDSA keys, claims
+    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS, EdDSA or JWK Set keys, claims
+    - [external-identity-provider.mdx](/security/authentication/external-identity-provider/) — another issuer's tokens, against its JWK Set (better-auth end to end)
     - [oauth2.mdx](/security/authentication/oauth2/) — authorization-code flow with PKCE
+    - [social-login.mdx](/security/authentication/social-login/) — the provider contract, GitHub and Google
     - [password.mdx](/security/authentication/password/) — Argon2id hashing and `burn_verify`
     - [split-deployment.mdx](/security/authentication/split-deployment/) — the split-deploy pattern
   - **authorization/**

@@ -61,8 +61,10 @@ cold start (spawn → first 200). Raw oha JSON is kept beside the report.
    build = "composer install --no-dev && ..."
    start = "php artisan octane:start --port=3130"
    ```
-2. Implement the contract idiomatically (routes, DI, service — as the
-   framework's own docs teach) and pass `just conformance`.
+2. Start from the framework's own CLI scaffold, kept whole, and implement
+   the contract idiomatically (routes, DI, service — with the CLI's
+   generators where it has them, as its own docs teach). Pass
+   `just conformance`.
 3. Add a `Dockerfile` for containerized runs.
 
 That is the whole interface — the harness globs `sut/*/provider.toml`.

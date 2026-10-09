@@ -35,15 +35,22 @@ review of the SUT source, which is deliberately small enough to read.
 
 ## Runtime posture
 
-- Production build: `cargo build --release` / `tsc` + `node dist/` with
-  `NODE_ENV=production`.
+- Production build: `cargo build --release` / `nest build` + `node
+  dist/main` with `NODE_ENV=production`.
 - Framework defaults **as scaffolded by each framework's own CLI** —
   no tuning, no middleware removed or added beyond what the scaffold
-  ships. One deliberate exception: NestJS string responses default to
-  `text/html`, so the T0 handler pins `text/plain` via the documented
-  `@Header` decorator.
-- No per-request logging or telemetry on either side — both scaffolds
-  ship none. Boot-time logging stays on — it is part of each
+  ships. A NestJS SUT is `nest new --skip-tests --no-observe` as
+  generated, plus the `hello` module, controller and service that
+  `nest generate` writes; the Fastify variant swaps the adapter the way
+  NestJS's performance guide shows. One deliberate exception: on
+  Express, a NestJS string response defaults to `text/html`, so that
+  SUT's T0 handler pins `text/plain` with the documented `@Header`
+  decorator. Fastify already answers `text/plain` and carries none.
+- No per-request logging or telemetry on either side. The nestrs
+  scaffold ships none; `nest new` offers the `@nestjs/observe` agent,
+  which reports to a hosted service under an account's keys, and the
+  SUT declines it (`--no-observe`, the CLI's own answer without a
+  terminal). Boot-time logging stays on — it is part of each
   framework's honest default.
 - No reverse proxy, no TLS, no compression (bodies are below any
   threshold anyway).

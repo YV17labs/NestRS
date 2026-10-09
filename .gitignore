@@ -37,5 +37,6 @@ docs/.astro/
 /bench/sut/nestrs/target/
 /bench/sut/*/node_modules/
 /bench/sut/*/dist/
+/bench/sut/*/*.tsbuildinfo
 /bench/results/*
 !/bench/results/.gitkeep

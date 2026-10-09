@@ -123,10 +123,10 @@ check belongs where only a change can turn it red**: the bans, licences and
 sources are `just lint`'s, while the advisories, which the database moves
 overnight, are `just audit`'s, over the framework's and the demo's lockfiles —
 run by `audit.yml` on a change to a tree (blocking) and by `publish.yml` before
-a release. The npm trees (`docs/`, the bench SUTs) are third-party tooling, kept
-to what they use and taking their vendor's fixes as they ship
-(`decisions/npm-lockfile-advisories.md`). The workflows stay hardened —
-actions pinned by SHA, a local action referenced `$/`
+a release. The npm trees are third-party tooling taking their vendor's fixes as
+they ship: `docs/` kept to what it uses, a bench SUT whole as its framework's
+CLI scaffolds it (`decisions/npm-lockfile-advisories.md`). The workflows stay
+hardened — actions pinned by SHA, a local action referenced `$/`
 (`decisions/self-repository-actions.md`), `persist-credentials: false`, least
 permissions — held by zizmor's offline audits and actionlint in `just lint`
 (`decisions/workflow-lint.md`); an exception is a `# zizmor: ignore[…]` beside

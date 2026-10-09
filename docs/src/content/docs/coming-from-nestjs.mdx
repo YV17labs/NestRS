@@ -54,6 +54,7 @@ resolver — carries across intact.
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
+| `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `AppModule` |
 | `nest g resource users` | `nestrs g resource users` |
 | Runtime DI resolution | access graph checked at boot, with a named error |

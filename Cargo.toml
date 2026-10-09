@@ -132,6 +132,11 @@ tempfile = "3.27"
 tokio-rustls = "0.26"
 libc = "0.2"
 
+# The embedded source of `nest-rs-static-files`: a folder compiled into the
+# binary. `debug-embed` embeds in a debug build too, so what a test serves is
+# what a release serves, and the mode reading the folder at runtime never runs.
+rust-embed = { version = "8.13", features = ["debug-embed"] }
+
 # `=`: macro expansions call #[doc(hidden)] items semver does not cover.
 nest-rs-core = { version = "=7.0.0", path = "crates/nest-rs-core" }
 nest-rs-authn = { version = "=7.0.0", path = "crates/nest-rs-authn" }
@@ -174,6 +179,7 @@ nest-rs-social = { version = "=7.0.0", path = "crates/nest-rs-social" }
 nest-rs-opentelemetry = { version = "=7.0.0", path = "crates/nest-rs-opentelemetry" }
 nest-rs-testing = { version = "=7.0.0", path = "crates/nest-rs-testing" }
 nest-rs-storage = { version = "=7.0.0", path = "crates/nest-rs-storage" }
+nest-rs-static-files = { version = "=7.0.0", path = "crates/nest-rs-static-files" }
 nest-rs-worker = { version = "=7.0.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "=7.0.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "=7.0.0", path = "crates/nest-rs-ws-macros" }

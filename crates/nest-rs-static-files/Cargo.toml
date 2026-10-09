@@ -1,0 +1,48 @@
+[package]
+name = "nest-rs-static-files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Static files and single-page apps for NestRS, from a directory or a folder embedded in the binary, served beside the API as the router's fallback."
+keywords = ["framework", "nestrs", "static", "spa", "http"]
+categories = ["web-programming::http-server"]
+
+[dependencies]
+nest-rs-core.workspace = true
+# `StaticFilesModule` owns its `#[config]` `StaticFilesConfig` (namespace
+# `static_files`), loaded from `<PREFIX>_STATIC_FILES__*`.
+nest-rs-config.workspace = true
+# Mounts as the router's fallback through `HttpFallbackMeta`.
+nest-rs-http.workspace = true
+# The endpoint and its typed conditional headers; no poem type is public.
+poem.workspace = true
+# `#[derive(Embed)]` and the trait the embedded source is read through,
+# re-exported so a use site names neither the crate nor a version.
+rust-embed.workspace = true
+# An embedded file, and a small file read whole, answered without a copy.
+bytes.workspace = true
+thiserror.workspace = true
+# A file is resolved and opened off the executor, and a large one streamed.
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# `O_NONBLOCK` on open: a FIFO under the root would otherwise block the
+# opening thread until a writer appears.
+libc.workspace = true
+
+[dev-dependencies]
+nest-rs-testing = { path = "../nest-rs-testing" }
+# A global deny-all guard, to prove the files are public by import.
+nest-rs-guards = { path = "../nest-rs-guards" }
+# The OpenAPI self-mount at `/api`, whose subtree the fallback never answers.
+nest-rs-openapi = { path = "../nest-rs-openapi" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

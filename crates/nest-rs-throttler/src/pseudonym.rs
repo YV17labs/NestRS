@@ -55,14 +55,9 @@ impl PseudonymStore {
     /// `subject`'s pseudonym: the leading [`PSEUDONYM_BYTES`] of its HMAC, in
     /// lowercase hex.
     fn pseudonym(&self, subject: &str) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
         let tag = hmac::sign(&self.key, subject.as_bytes());
-        let mut pseudonym = String::with_capacity(PSEUDONYM_BYTES * 2);
-        for byte in &tag.as_ref()[..PSEUDONYM_BYTES] {
-            pseudonym.push(char::from(HEX[usize::from(byte >> 4)]));
-            pseudonym.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        pseudonym
+        let mut out = [0; PSEUDONYM_BYTES * 2];
+        nest_rs_core::trace_context::hex(&tag.as_ref()[..PSEUDONYM_BYTES], &mut out).to_owned()
     }
 }
 

@@ -54,7 +54,7 @@ full = [
     "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
     "interceptors", "filters", "exception-filters", "worker",
-    "storage",
+    "storage", "static-files",
 ]
 
 # `#[controller]` / `#[routes]` expand to the per-route Layer System chain —
@@ -194,6 +194,9 @@ health = ["dep:nest-rs-health", "http", "nest-rs-seaorm?/health"]
 # one dependency an HTTP-only app pays for.
 throttler = ["dep:nest-rs-throttler", "http"]
 server-timing = ["dep:nest-rs-server-timing", "http"]
+# Mounts as the HTTP router's fallback; `#[derive(Embed)]` resolves through
+# `nest_rs::static_files::rust_embed`, so an embedded source needs no line of its own.
+static-files = ["dep:nest-rs-static-files", "http"]
 testing = ["dep:nest-rs-testing"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
 # authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
@@ -233,6 +236,7 @@ nest-rs-openapi = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }
 nest-rs-throttler = { workspace = true, optional = true }
 nest-rs-server-timing = { workspace = true, optional = true }
+nest-rs-static-files = { workspace = true, optional = true }
 nest-rs-testing = { workspace = true, optional = true }
 nest-rs-guards = { workspace = true, optional = true }
 nest-rs-pipes = { workspace = true, optional = true }

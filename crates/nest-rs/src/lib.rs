@@ -83,6 +83,9 @@ pub use nest_rs_throttler as throttler;
 #[cfg(feature = "server-timing")]
 pub use nest_rs_server_timing as server_timing;
 
+#[cfg(feature = "static-files")]
+pub use nest_rs_static_files as static_files;
+
 #[cfg(feature = "testing")]
 pub use nest_rs_testing as testing;
 

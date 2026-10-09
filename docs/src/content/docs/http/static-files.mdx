@@ -1,0 +1,208 @@
+---
+title: Static files
+description: Serve a built single-page app and public files from the API's own binary, from a directory or embedded, safely by default.
+sidebar:
+  order: 11
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Your front end's `dist/` and your public files ship with the API: one
+binary, one port, no second server. `StaticFilesModule` serves them as the
+HTTP router's fallback, so every route answers first, and holds what it
+serves to the rules a public folder needs. Requests are answered through
+[poem](https://docs.rs/poem); a folder compiled into the binary is
+[rust-embed](https://docs.rs/rust-embed)'s.
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::static_files::{StaticFilesConfig, StaticFilesModule};
+
+#[module(imports = [StaticFilesModule::for_root(StaticFilesConfig {
+    root: Some("web/dist".into()),
+    spa_fallback: true,
+    ..Default::default()
+})])]
+pub struct ApiModule;
+```
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features static-files
+```
+
+## Wire it in
+
+`root` names a directory read at runtime — relative to the working directory,
+resolved at boot — so a file changed under it is served as it now is. Leave it
+out of the pin, or import `StaticFilesModule::for_root(None)`, and the
+deployment sets it:
+
+```bash frame="terminal"
+NESTRS_STATIC_FILES__ROOT=web/dist nestrs run dev api
+```
+
+To ship a single binary, compile the folder in instead. `#[derive(Embed)]`
+names it, relative to the crate's manifest, and its `crate_path` routes the
+derive through `nest-rs`, so the manifest gains no line:
+
+```rust title="apps/api/src/assets.rs"
+use nest_rs::static_files::Embed;
+
+#[derive(Embed)]
+#[folder = "../../web/dist"]
+#[crate_path = "nest_rs::static_files::rust_embed"]
+pub struct WebAssets;
+```
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::static_files::{Embedded, StaticFilesModule};
+
+use crate::assets::WebAssets;
+
+#[module(imports = [StaticFilesModule::for_root(Embedded::of::<WebAssets>())])]
+pub struct ApiModule;
+```
+
+The embedded folder is code: no variable names it, and a `ROOT` set beside it
+fails the boot. A debug build embeds the folder too, so what `nestrs run test`
+serves is what the release serves; serve the directory while you rebuild the
+front end often.
+
+## Where the files answer
+
+The files answer under `path`, `/` by default, and only what nothing else
+claims. A route wins on its own path, and a controller's prefix, a
+self-mount's path (`/graphql`, OpenAPI's `/api`) and the
+[global prefix](/http/configuration/) are their owners' namespaces: a typo
+under one is that owner's `404`, never a file and never the app. The files
+sit outside the global prefix, so `global_prefix: "/api"` keeps the API at
+`/api/…` and the app at `/`.
+
+<Aside type="caution">
+A route serving `GET` at the files' own path keeps the index from it — the
+starter's `GET /` beside an app mounted at `/` answers "Hello World". The boot
+says so at `warn`; drop the route, or mount the files elsewhere.
+</Aside>
+
+A `path` under another owner's fails the boot instead, since the files would
+answer nothing there: `/api/assets` under a global prefix of `/api`, or
+`/graphql/ide` under GraphQL's path.
+
+## The single-page app's navigation
+
+With `spa_fallback`, a browser that navigates to a client-side route — say
+`/settings/profile`, which no file matches — gets the root's `index.html`, and
+the app's router takes over. A navigation is a `GET` or `HEAD` that asks for a
+page: `Accept` lists `text/html`, or `Sec-Fetch-Mode` is `navigate`. Anything
+else that misses gets the framework's `404`
+[problem document](/http/errors/), so an API client never parses HTML. A miss
+whose last segment names a file, `/assets/missing.js`, is a missing file for
+everyone. The fallback answers with `Vary: Accept, Sec-Fetch-Mode`, so a cache
+keeps the two apart.
+
+## What is served, and what never is
+
+Each rule holds for both sources, and none has a switch:
+
+- **`GET` and `HEAD` alone.** Another method on a file is `405` with
+  `Allow: GET, HEAD`; on a path holding nothing, `404`.
+- **No hidden name.** A segment beginning with `.` — `/.env`, `/.git/config` —
+  is a `404`, except a leading `/.well-known/` (RFC 8615), so `security.txt`
+  (RFC 9116) is served.
+- **No way out of the root.** The path is percent-decoded once, strictly:
+  `..`, an encoded `/` or `\`, and a control character are a `404`; a `%` that
+  is not an escape, or bytes that are not UTF-8, a `400`. Every file is
+  resolved through its links and must stay under the root and off a hidden
+  name, so a link pointing out is a `404`.
+- **Regular files alone, and no listing.** A directory answers with its
+  `index.html`, or `404`.
+- **The type is read off the extension.** An unlisted one is
+  `application/octet-stream`, and the edge's
+  `X-Content-Type-Options: nosniff` tells the browser to believe it.
+
+A refused climb out of the root and a link leaving it are logged at `warn` on
+`nest_rs::static_files`, with a `reason` field and never the path, which the
+request's span already carries. A hidden name asked for is a scanner's
+background noise, logged at `debug`.
+
+## Caching and ranges
+
+Every file carries a strong `ETag` — its length and modification time on
+disk, the digest of its bytes when embedded — and `Last-Modified` when known.
+`If-None-Match` and `If-Modified-Since` answer `304`, `If-Match` and
+`If-Unmodified-Since` `412`, and a single `Range` `206`, or `416` when it
+reaches no byte; `If-Range` sends a changed file whole.
+
+An HTML document is always `Cache-Control: no-cache`: no bundler fingerprints
+it. Every other file is `no-cache` too until you set `max_age`, which is the
+right call only when the file names change with their content, as a
+fingerprinting build's do. A config beside an embedded folder goes in
+`StaticFilesOptions`:
+
+```rust title="apps/api/src/module.rs"
+use std::time::Duration;
+
+use nest_rs::core::module;
+use nest_rs::static_files::{Embedded, StaticFilesConfig, StaticFilesModule, StaticFilesOptions};
+
+use crate::assets::WebAssets;
+
+#[module(imports = [StaticFilesModule::for_root(StaticFilesOptions {
+    config: Some(StaticFilesConfig {
+        spa_fallback: true,
+        max_age: Some(Duration::from_secs(365 * 24 * 60 * 60)),
+        ..Default::default()
+    }),
+    embedded: Some(Embedded::of::<WebAssets>()),
+})])]
+pub struct ApiModule;
+```
+
+## Configuration
+
+Every field is set in code or by its variable, the variable winning field by
+field.
+
+| Field | Variable | Default | Meaning |
+|---|---|---|---|
+| `root` | `<PREFIX>_STATIC_FILES__ROOT` | unset | the directory served; refused when unset, missing or not a directory, and beside an embedded folder |
+| `path` | `<PREFIX>_STATIC_FILES__PATH` | `/` | where the files answer: a literal path the router matches as written |
+| `spa_fallback` | `<PREFIX>_STATIC_FILES__SPA_FALLBACK` | `false` | answer a navigation no file matches with the root's `index.html` |
+| `max_age` | `<PREFIX>_STATIC_FILES__MAX_AGE_SECS` | unset | `public, max-age` on every file but HTML, from one second to a year; `0` or unset revalidates |
+
+## Limits
+
+- The files are public whatever the global guards: importing the module is
+  the opening. Keep anything private out of the folder.
+- A directory's index is served at the directory's path with or without its
+  trailing slash, since the edge trims it: link the page's assets from the
+  root (`/assets/app.js`, a bundler's default), not relative to it.
+- One module serves one folder at one path.
+- A segment carrying an encoded `/`, `\` or control character is refused,
+  even as a client-side route.
+- With the transport's [`compression`](/http/compression/) on, poem encodes a
+  ranged `206` like any other response, under the same `ETag`: leave
+  compression to the proxy in front when you serve ranges.
+
+## What fails if you get it wrong
+
+Each refusal names every way to set the directory, never its value:
+
+```text
+NESTRS_STATIC_FILES__ROOT (or NESTRS_STATIC_FILES__ROOT_FILE), or `StaticFilesConfig::root` in code, names a directory that does not resolve: No such file or directory (os error 2)
+```
+
+```text
+NESTRS_STATIC_FILES__ROOT (or NESTRS_STATIC_FILES__ROOT_FILE), or `StaticFilesConfig::root` in code, is set, and StaticFilesModule serves api::assets::WebAssets, a folder embedded in the binary: a source is one or the other — unset the directory, or drop the embedded source to serve it
+```
+
+## Going further
+
+- [HTTP configuration](/http/configuration/) — the global prefix the files sit
+  outside, and the edge's security headers.
+- [Errors](/http/errors/) — the problem document every miss answers with.
+- [Env-var reference](/configuration/env-reference/) — every
+  `<PREFIX>_STATIC_FILES__*` variable beside the others.

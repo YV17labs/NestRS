@@ -154,6 +154,18 @@ survives a swap of the backend underneath.
 | `OPERATION_TIMEOUT_SECS` | the most a call waits for S3's answer, every retry included — an upload's body is part of its request, and `put_stream` moves each 5 MiB part within it. Retries stop once half of it is spent, so a call whose attempts keep failing ends on S3's error and its cause; past it a call S3 never answered fails as its own error naming this variable. Defaults to `15`; whole seconds from `1` to `3600`, refused outside. An app whose authentication strategy injects `Storage` keeps it under the guard's 20 seconds: the boot refuses one at or past it |
 | `READ_TIMEOUT_SECS` | the most a download waits for its next bytes while it is read: one that stalls longer is cut and resumed from where it stopped, provided the object is still the version it started on, and fails naming this variable when the resumed body sends nothing within it; one that moves, or whose reader pauses, is never cut. Defaults to `30`; whole seconds from `1` to `3600`, refused outside |
 
+## `static_files` — `<PREFIX>_STATIC_FILES__*`
+
+Read once `StaticFilesModule` is imported, and pinned through its `for_root`
+([Static files](/http/static-files/)).
+
+| Key | Meaning |
+|---|---|
+| `ROOT` | the directory `StaticFilesModule` serves, relative to the working directory. Resolved at boot: unset, missing or not a directory **fails boot**, and so does any value beside a folder embedded in the binary (`Embedded::of::<T>()`) |
+| `PATH` | where the files answer, outside the global prefix and after every route — default `/`. A literal path the router matches as written: an empty, `.` or `..` segment, pattern syntax (`:` `*` `<`), `%`, `?`, `#` or `\` is refused |
+| `SPA_FALLBACK` | answer a browser's navigation that no file matches with the root's `index.html` — default `false`. A request that does not ask for a page, or whose last segment names a file, still gets the `404` problem document |
+| `MAX_AGE_SECS` | `Cache-Control: public, max-age` on every file but an HTML document, from `1` to a year (`31536000`); `0` or unset revalidates every file (`no-cache`), the default |
+
 ## `opentelemetry` — `<PREFIX>_OPENTELEMETRY__*`
 
 | Key | Meaning |

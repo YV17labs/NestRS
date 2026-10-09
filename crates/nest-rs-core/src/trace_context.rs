@@ -594,9 +594,10 @@ pub fn link_span(span: &crate::tracing::Span, correlation: &Correlation) {
     }
 }
 
-/// Lower-case hex into a caller-owned buffer, table-driven rather than
-/// `{:02x}` per byte: it runs several times per request.
-fn hex<'a>(bytes: &[u8], out: &'a mut [u8]) -> &'a str {
+/// Lower-case hex into a caller-owned buffer of exactly twice `bytes`' length,
+/// table-driven rather than `{:02x}` per byte: it runs several times per request.
+#[doc(hidden)]
+pub fn hex<'a>(bytes: &[u8], out: &'a mut [u8]) -> &'a str {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     for (byte, pair) in bytes.iter().zip(out.as_chunks_mut::<2>().0) {
         pair[0] = DIGITS[usize::from(byte >> 4)];

@@ -3,9 +3,8 @@
 _default:
     @just --list
 
-# Formatting and clippy over the Rust benchmarks, warnings refused
+# Formatting and clippy over the nestrs SUT, warnings refused
 lint:
-    cd queue && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
     cd sut/nestrs && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
 
 # Build every SUT (release / production build).
@@ -35,7 +34,3 @@ bench-one provider:
 # Re-render REPORT.md for an existing results dir.
 report dir:
     ./harness/report.sh {{dir}}
-
-# The job queue over Redis — needs <PREFIX>_REDIS__URL on a throwaway Redis.
-queue:
-    queue/run.sh

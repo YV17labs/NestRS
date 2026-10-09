@@ -63,8 +63,8 @@ lists.
   shared code; `nest-rs-cli` is the `nestrs` binary.
 - `demo/` — the "Publish" product, its own workspace on the framework by path,
   driven with `nestrs run`. Nothing at the root builds or tests it.
-- `bench/` — standalone benchmarks: HTTP against NestJS, and the job queue over
-  Redis (`bench/queue/`). `docs/` — nestrs.dev.
+- `bench/` — the standalone HTTP benchmark, nestrs against other frameworks on
+  one contract. `docs/` — nestrs.dev.
   `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
 
 ```bash

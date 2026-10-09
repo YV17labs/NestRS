@@ -217,7 +217,7 @@ pub fn declared_versions(container: &Container) -> Vec<String> {
 /// Loose on purpose, since poem decides last: a false match costs a `404`, a
 /// false non-match serves another controller's body. Runs on every request, so
 /// it does not allocate.
-fn route_matches(path: &str, pattern: &str) -> bool {
+pub(crate) fn route_matches(path: &str, pattern: &str) -> bool {
     let mut segments = path.split('/');
     let mut expected = pattern.split('/');
     loop {
@@ -246,7 +246,7 @@ fn route_matches(path: &str, pattern: &str) -> bool {
 /// any non-empty text; a literal before it must still match, so `/@:handle`
 /// accepts `@bob` and refuses `bob`.
 fn segment_matches(segment: &str, pattern: &str) -> bool {
-    match pattern.find([':', '<']) {
+    match crate::transport::parameter_start(pattern) {
         None => segment == pattern,
         Some(0) => !segment.is_empty(),
         Some(literal) => segment.len() > literal && segment.starts_with(&pattern[..literal]),

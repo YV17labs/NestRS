@@ -22,6 +22,7 @@ mod drain;
 mod edge;
 mod endpoint;
 mod error;
+mod fallback;
 mod header;
 mod interceptor;
 mod link;
@@ -62,6 +63,7 @@ pub use deprecation::DeprecationMeta;
 pub use deprecation::deprecated_route;
 pub use detached::DetachedWork;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};
+pub use fallback::HttpFallbackMeta;
 pub use header::Header;
 pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
@@ -86,7 +88,8 @@ pub use trace_context::{
     TRACEPARENT_HEADER, TRACERESPONSE_HEADER, TRACESTATE_HEADER, UPSTREAM_REQUEST_ID_HEADER,
 };
 pub use transport::{
-    HttpTransport, join_path, normalize_mount_path, version_path, versions_declare,
+    HttpTransport, join_path, literal_mount_path, normalize_mount_path, version_path,
+    versions_declare,
 };
 pub use versioning::{
     ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, VersionSelector, declared_versions,

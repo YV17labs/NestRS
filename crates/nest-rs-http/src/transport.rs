@@ -17,6 +17,7 @@ use crate::controller::HttpControllerMeta;
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
+use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::interceptor::HttpEndpointWrap;
 use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
@@ -129,6 +130,35 @@ pub fn normalize_mount_path(raw: &str) -> String {
     }
 }
 
+/// `raw` as [`normalize_mount_path`] writes it, when every segment is a
+/// literal the router matches as written: none empty, `.` or `..`, none
+/// holding what poem reads as pattern syntax (`:name`, `<regex>`, `*rest`), nor
+/// `%`, `?`, `#`, `\`, whitespace or a control character. `None` otherwise.
+pub fn literal_mount_path(raw: &str) -> Option<String> {
+    let path = normalize_mount_path(raw);
+    let literal = path.split('/').skip(1).all(|segment| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && !is_pattern_segment(segment)
+            && !segment.contains(['%', '?', '#', '\\'])
+            && !segment.chars().any(|c| c.is_whitespace() || c.is_control())
+    });
+    (path == "/" || literal).then_some(path)
+}
+
+/// Where a capture opens in a route pattern's segment — `:name` or `<regex>`,
+/// after any literal it is glued to (`@:handle`).
+pub(crate) fn parameter_start(segment: &str) -> Option<usize> {
+    segment.find([':', '<'])
+}
+
+/// Whether a route pattern's segment is anything but a literal: a capture, or
+/// a `*rest` catch-all.
+pub(crate) fn is_pattern_segment(segment: &str) -> bool {
+    segment.starts_with('*') || parameter_start(segment).is_some()
+}
+
 /// Claim `path` for `owner`, or fail boot naming both claimants — before poem
 /// panics in route assembly (`duplicate path: <prefix>/*--poem-rest`).
 fn claim_exclusive_path(
@@ -145,6 +175,46 @@ fn claim_exclusive_path(
         );
     }
     Ok(())
+}
+
+/// Mount the router's fallback, or fail the boot when its path lies under a
+/// prefix someone owns, where the router would answer everything first.
+fn mount_fallback(
+    container: &Container,
+    meta: &HttpFallbackMeta,
+    claims: Claims,
+    get_routes: &[(String, &'static str)],
+) -> anyhow::Result<Fallback> {
+    if let Some((prefix, owner)) = claims.owner_of(meta.path()) {
+        anyhow::bail!(
+            "the router fallback {} answers at {:?}, under {prefix:?}, which {owner} owns: \
+             the route table claims everything there, so the fallback would answer nothing — \
+             give it a path outside {prefix:?}",
+            meta.owner(),
+            meta.path(),
+        );
+    }
+    if let Some((_, controller)) = get_routes.iter().find(|(path, _)| path == meta.path()) {
+        tracing::warn!(
+            target: crate::target::ROUTES,
+            path = meta.path(),
+            controller,
+            fallback = meta.owner(),
+            "a route answers GET at the router fallback's own path, which the fallback never \
+             answers",
+        );
+    }
+    tracing::info!(
+        target: crate::target::ROUTES,
+        kind = "fallback",
+        path = meta.path(),
+        "mounted endpoint",
+    );
+    Ok(Fallback::new(
+        meta.path().to_owned(),
+        claims,
+        meta.mount(container).boxed(),
+    ))
 }
 
 /// What to do about two controllers claiming one mount prefix.
@@ -359,9 +429,21 @@ impl Transport for HttpTransport {
         // anything, an unversioned controller route only against a *default* version.
         let mut self_mounts: Vec<String> = Vec::new();
         let mut unversioned_routes: Vec<String> = Vec::new();
+        // What the router's fallback never answers. A controller's prefix is its
+        // namespace although its routes mount flat; one at `/` owns its routes alone.
+        let mut claims = Claims::default();
+        let mut get_routes: Vec<(String, &'static str)> = Vec::new();
         for d in discovery.meta::<HttpControllerMeta>() {
+            let at_root = literal_prefix(d.meta.path) == "/";
+            if !at_root {
+                // The address a non-URI version selector is called at.
+                claims.prefix(d.meta.path, d.meta.controller);
+            }
             for version in d.meta.mounted_versions() {
                 let prefix = d.meta.effective_prefix(version);
+                if !at_root {
+                    claims.prefix(&prefix, d.meta.controller);
+                }
                 claim_exclusive_path(
                     &mut prefix_owner,
                     "controller prefix",
@@ -374,6 +456,19 @@ impl Transport for HttpTransport {
                         continue;
                     }
                     let path = join_path(&prefix, r.path);
+                    // Under a non-URI selector a versioned route is called unversioned.
+                    let addresses = match version {
+                        Some(_) => vec![path.clone(), join_path(d.meta.path, r.path)],
+                        None => vec![path.clone()],
+                    };
+                    for address in addresses {
+                        if r.verb == crate::HttpVerb::Get {
+                            get_routes.push((address.clone(), d.meta.controller));
+                        }
+                        if at_root {
+                            claims.route(address);
+                        }
+                    }
                     match version.is_some() {
                         true => versioned_routes.push(path.clone()),
                         false => unversioned_routes.push(path.clone()),
@@ -475,6 +570,10 @@ impl Transport for HttpTransport {
             // exactly the declared paths — a surface owning a subtree says so via `also_mounts`.
             for path in d.meta.paths() {
                 self_mounts.push(path.to_owned());
+                claims.prefix(
+                    path,
+                    format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
+                );
                 claim_exclusive_path(
                     &mut endpoint_owner,
                     "self-mounted endpoint path",
@@ -538,7 +637,11 @@ impl Transport for HttpTransport {
                 "imperative mounts bypass the global guard pool",
             );
         }
-        for (_, mount) in self.mounts.drain(..) {
+        for (path, mount) in self.mounts.drain(..) {
+            claims.prefix(
+                &path,
+                format!("the endpoint HttpTransport::mount added at {path:?}"),
+            );
             route = mount(container, route);
         }
 
@@ -558,8 +661,26 @@ impl Transport for HttpTransport {
         }
 
         if let Some(prefix) = self.global_prefix.take() {
+            let owner = format!(
+                "the global prefix ({})",
+                nest_rs_config::var_name("http", "GLOBAL_PREFIX"),
+            );
+            claims.only(prefix.clone(), owner);
+            // Every route answers under the prefix, never at a path of its own.
+            get_routes.clear();
             route = Route::new().nest(prefix, route);
         }
+        let fallback = match discovery.meta::<HttpFallbackMeta>().as_slice() {
+            [] => None,
+            [only] => Some(mount_fallback(container, &only.meta, claims, &get_routes)?),
+            [first, second, ..] => anyhow::bail!(
+                "two router fallbacks: {} and {} — the router has one fallback, which answers \
+                 whatever nothing else claims; import one of them",
+                first.meta.owner(),
+                second.meta.owner(),
+            ),
+        };
+        let route = WithFallback::new(route, fallback);
 
         // Ascending priority, whatever the registration order; the stable sort
         // keeps insertion order within a band.
@@ -763,6 +884,34 @@ mod tests {
     fn version_path_leaves_an_unversioned_path_alone() {
         assert_eq!(version_path(None, "/users"), "/users");
         assert_eq!(version_path(None, "/"), "/");
+    }
+
+    #[test]
+    fn a_literal_mount_path_is_kept_canonical() {
+        assert_eq!(literal_mount_path("").as_deref(), Some("/"));
+        assert_eq!(literal_mount_path("assets/").as_deref(), Some("/assets"));
+        assert_eq!(
+            literal_mount_path("/.well-known").as_deref(),
+            Some("/.well-known")
+        );
+        assert_eq!(literal_mount_path("/app/v2").as_deref(), Some("/app/v2"));
+    }
+
+    #[test]
+    fn a_mount_path_poem_would_read_as_a_pattern_is_refused() {
+        for raw in [
+            "/assets/*rest",
+            "/:id",
+            "/files/<\\d+>",
+            "/a//b",
+            "/a/../b",
+            "/a%2fb",
+            "/a b",
+            "/a?b",
+            "/a\\b",
+        ] {
+            assert_eq!(literal_mount_path(raw), None, "{raw}");
+        }
     }
 
     #[test]

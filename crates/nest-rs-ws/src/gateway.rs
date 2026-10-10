@@ -50,7 +50,6 @@ pub type WsDataFold = dyn Fn(&str, &mut serde_json::Value) -> Result<(), PipeErr
 /// Bridge slot for global pipes on a WS message's `data`, seeded by
 /// `nest-rs-guards` (which depends on this crate, not the reverse) with a fold
 /// of every [`GlobalPipe::transform_ws_data`](nest_rs_pipes::GlobalPipe).
-#[doc(hidden)] // Internal ABI — a seeded fn-pointer wired by the framework crates (lockstep).
 pub struct WsDataPipe(pub fn(&Container, &str, &mut serde_json::Value) -> Result<(), PipeError>);
 
 /// Resolve the [`WsDataPipe`] bridge at gateway mount into a runner with the

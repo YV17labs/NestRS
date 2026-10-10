@@ -25,7 +25,7 @@ use nest_rs_graphql::__private::{FallbackOperationGuard, FederationGate, Graphql
 #[cfg(feature = "mcp")]
 use nest_rs_mcp::__private::FallbackMcpGuard;
 #[cfg(feature = "ws")]
-use nest_rs_ws::WsDataPipe;
+use nest_rs_ws::__private::WsDataPipe;
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
 ///
@@ -248,10 +248,11 @@ mod tests {
         let container = Container::builder()
             .provide(WsUpcase)
             .provide(PipeSpecs(vec![pipe::<WsUpcase>()]))
-            .provide(nest_rs_ws::WsDataPipe(run_ws_data_pipes))
+            .provide(nest_rs_ws::__private::WsDataPipe(run_ws_data_pipes))
             .build();
 
-        let fold = nest_rs_ws::resolve_ws_data_pipe(&container).expect("a bridge is registered");
+        let fold = nest_rs_ws::__private::resolve_ws_data_pipe(&container)
+            .expect("a bridge is registered");
 
         let mut data = json!({ "msg": "hi" });
         fold("chat", &mut data).expect("the transform runs");
@@ -267,6 +268,6 @@ mod tests {
     #[test]
     fn no_bridge_means_no_fold() {
         let container = Container::builder().build();
-        assert!(nest_rs_ws::resolve_ws_data_pipe(&container).is_none());
+        assert!(nest_rs_ws::__private::resolve_ws_data_pipe(&container).is_none());
     }
 }

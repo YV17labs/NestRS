@@ -157,21 +157,30 @@ pub use envelope::{
     ReplyValueFallback, WsEnvelope, WsError, WsReply,
 };
 pub use error::WsScopeError;
-pub use gateway::{
-    Gateway, GatewayEndpoint, WsDataFold, WsDataPipe, gateway_endpoint, resolve_ws_data_pipe,
-};
+pub use gateway::{Gateway, GatewayEndpoint, WsDataFold, gateway_endpoint};
 pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::{WsModule, WsSetup};
-pub use namespace::{WsNamespaceEntry, WsNamespaces};
+pub use namespace::WsNamespaces;
 pub use opaque::Opaque;
 pub use scope::Scoped;
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::gateway::{WsDataPipe, resolve_ws_data_pipe};
+    pub use crate::namespace::WsNamespaceEntry;
+}
+
 // Re-exported so macro-generated code resolves these through the framework.
 pub use async_trait::async_trait;
-#[doc(hidden)]
+/// The JSON a message's `data` is, re-exported so a gateway, a guard or a
+/// broadcast names `serde_json::Value` without its own dependency.
 pub use serde_json;
-#[doc(hidden)]
+/// The gateway's logger, re-exported so a gateway logs without its own
+/// `tracing` dependency.
 pub use tracing;
 
 /// The RFC 6455 §7.4.1 status codes the gateway closes with.

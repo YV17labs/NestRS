@@ -90,7 +90,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let namespace_submission = match &namespace {
         Some(_) => quote! {
             ::nest_rs_core::inventory::submit! {
-                ::nest_rs_ws::WsNamespaceEntry {
+                ::nest_rs_ws::__private::WsNamespaceEntry {
                     key: || ::core::any::TypeId::of::<::nest_rs_ws::WsServer<#ns_ty>>(),
                     label: #registry_label,
                     provide: |__builder| ::nest_rs_core::ContainerBuilder::provide(

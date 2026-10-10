@@ -504,7 +504,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             let __ctx = ::nest_rs_core::Container::get_dyn::<
                                 dyn ::nest_rs_ws::SocketContext,
                             >(__container);
-                            let __data_pipe = ::nest_rs_ws::resolve_ws_data_pipe(__container);
+                            let __data_pipe = ::nest_rs_ws::__private::resolve_ws_data_pipe(__container);
                             let __ep = ::nest_rs_ws::gateway_endpoint(
                                 __gw,
                                 __server,

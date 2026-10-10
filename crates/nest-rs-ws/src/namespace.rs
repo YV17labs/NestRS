@@ -9,10 +9,6 @@ use std::any::TypeId;
 use nest_rs_core::{ContainerBuilder, Discoverable, inventory};
 
 /// One namespaced registry a linked `#[gateway(namespace = N)]` needs.
-///
-/// **Internal ABI** — submitted by the `#[gateway]` macro, lockstep with this
-/// crate; do not hand-construct.
-#[doc(hidden)]
 pub struct WsNamespaceEntry {
     /// `TypeId::of::<WsServer<N>>()`, the container key.
     pub key: fn() -> TypeId,

@@ -12,9 +12,6 @@ use parking_lot::RwLock;
 type BoxedEvent = Box<dyn Any + Send>;
 type ListenerFn = Arc<dyn Fn(BoxedEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-/// What a listener registered without a declared name is filed as.
-const ANONYMOUS_LISTENER: &str = "<anonymous>";
-
 /// One registered listener, carrying the `Provider::method` its unit of work is
 /// filed under.
 #[derive(Clone)]
@@ -34,44 +31,6 @@ impl EventBus {
     /// An empty bus with no listeners registered yet.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Subscribe a listener that files its unit of work under `name`; the seam
-    /// `#[listeners]` emits.
-    #[doc(hidden)]
-    pub fn subscribe_named<E, H, Fut>(&self, name: &'static str, listener: H)
-    where
-        E: Any + Send + 'static,
-        H: Fn(E) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
-            #[expect(
-                clippy::expect_used,
-                reason = "listeners are keyed by the TypeId of E, so only an E reaches this one"
-            )]
-            let event = *boxed
-                .downcast::<E>()
-                .expect("event downcasts to the type its listener subscribed for");
-            Box::pin(listener(event)) as Pin<Box<dyn Future<Output = ()> + Send>>
-        });
-        self.listeners
-            .write()
-            .entry(TypeId::of::<E>())
-            .or_default()
-            .push(Listener { name, run });
-    }
-
-    /// [`subscribe_named`](Self::subscribe_named) for a listener with no
-    /// declared name — a hand-built bus in a test.
-    #[doc(hidden)]
-    pub fn subscribe<E, H, Fut>(&self, listener: H)
-    where
-        E: Any + Send + 'static,
-        H: Fn(E) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.subscribe_named(ANONYMOUS_LISTENER, listener);
     }
 
     /// Runs each listener in registration order, awaited in turn — once the
@@ -192,11 +151,46 @@ impl Drop for DispatchLine<'_> {
     }
 }
 
+/// Subscribe a listener on `bus` that files its unit of work under `name`; the
+/// seam `#[listeners]` emits.
+pub fn subscribe_named<E, H, Fut>(bus: &EventBus, name: &'static str, listener: H)
+where
+    E: Any + Send + 'static,
+    H: Fn(E) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
+        #[expect(
+            clippy::expect_used,
+            reason = "listeners are keyed by the TypeId of E, so only an E reaches this one"
+        )]
+        let event = *boxed
+            .downcast::<E>()
+            .expect("event downcasts to the type its listener subscribed for");
+        Box::pin(listener(event)) as Pin<Box<dyn Future<Output = ()> + Send>>
+    });
+    bus.listeners
+        .write()
+        .entry(TypeId::of::<E>())
+        .or_default()
+        .push(Listener { name, run });
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    /// A listener with no declared name, as a hand-built bus files it.
+    pub(super) fn subscribe<E, H, Fut>(bus: &EventBus, listener: H)
+    where
+        E: Any + Send + 'static,
+        H: Fn(E) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        subscribe_named(bus, "<anonymous>", listener);
+    }
 
     #[derive(Clone)]
     struct OrderPlaced {
@@ -217,7 +211,7 @@ mod tests {
         let bus = EventBus::new();
         let seen = Arc::new(AtomicUsize::new(0));
         let seen2 = seen.clone();
-        bus.subscribe(move |evt: OrderPlaced| {
+        subscribe(&bus, move |evt: OrderPlaced| {
             let seen = seen2.clone();
             async move {
                 seen.fetch_add(evt.id as usize, Ordering::SeqCst);
@@ -234,21 +228,21 @@ mod tests {
         let order = Arc::new(parking_lot::Mutex::new(Vec::<u32>::new()));
 
         let o1 = order.clone();
-        bus.subscribe(move |_: OrderPlaced| {
+        subscribe(&bus, move |_: OrderPlaced| {
             let o = o1.clone();
             async move {
                 o.lock().push(1);
             }
         });
         let o2 = order.clone();
-        bus.subscribe(move |_: OrderPlaced| {
+        subscribe(&bus, move |_: OrderPlaced| {
             let o = o2.clone();
             async move {
                 o.lock().push(2);
             }
         });
         let o3 = order.clone();
-        bus.subscribe(move |_: OrderPlaced| {
+        subscribe(&bus, move |_: OrderPlaced| {
             let o = o3.clone();
             async move {
                 o.lock().push(3);
@@ -266,14 +260,14 @@ mod tests {
         let shipped = Arc::new(AtomicUsize::new(0));
 
         let p = placed.clone();
-        bus.subscribe(move |_: OrderPlaced| {
+        subscribe(&bus, move |_: OrderPlaced| {
             let p = p.clone();
             async move {
                 p.fetch_add(1, Ordering::SeqCst);
             }
         });
         let s = shipped.clone();
-        bus.subscribe(move |_: OrderShipped| {
+        subscribe(&bus, move |_: OrderShipped| {
             let s = s.clone();
             async move {
                 s.fetch_add(1, Ordering::SeqCst);
@@ -296,7 +290,7 @@ mod tests {
 
         for _ in 0..3 {
             let c = counter.clone();
-            bus.subscribe(move |evt: OrderPlaced| {
+            subscribe(&bus, move |evt: OrderPlaced| {
                 let c = c.clone();
                 async move {
                     c.fetch_add(evt.id as usize, Ordering::SeqCst);
@@ -316,6 +310,7 @@ mod panic_containment {
     use nest_rs_testing::LogCapture;
     use parking_lot::Mutex;
 
+    use super::tests::subscribe;
     use super::*;
 
     #[derive(Clone)]
@@ -329,17 +324,17 @@ mod panic_containment {
         let ran = Arc::new(Mutex::new(Vec::<u32>::new()));
 
         let r1 = ran.clone();
-        bus.subscribe(move |_: NotifyRequested| {
+        subscribe(&bus, move |_: NotifyRequested| {
             let r = r1.clone();
             async move { r.lock().push(1) }
         });
-        bus.subscribe(move |e: NotifyRequested| async move {
+        subscribe(&bus, move |e: NotifyRequested| async move {
             if e.id == "boom" {
                 panic!("listener panic for boom");
             }
         });
         let r3 = ran.clone();
-        bus.subscribe(move |_: NotifyRequested| {
+        subscribe(&bus, move |_: NotifyRequested| {
             let r = r3.clone();
             async move { r.lock().push(3) }
         });
@@ -370,7 +365,7 @@ mod panic_containment {
     #[tokio::test]
     async fn emit_returns_to_its_caller_after_a_listener_panics() {
         let bus = EventBus::new();
-        bus.subscribe(move |_: NotifyRequested| async move {
+        subscribe(&bus, move |_: NotifyRequested| async move {
             panic!("listener panic");
         });
 
@@ -387,7 +382,8 @@ mod panic_containment {
     #[tokio::test]
     async fn a_healthy_dispatch_files_its_unit_and_no_containment_event() {
         let bus = EventBus::new();
-        bus.subscribe_named(
+        subscribe_named(
+            &bus,
             "Notifier::on_notify_requested",
             move |_: NotifyRequested| async move {},
         );
@@ -422,8 +418,16 @@ mod panic_containment {
     #[tokio::test]
     async fn two_listeners_file_two_units_inside_one_trace() {
         let bus = EventBus::new();
-        bus.subscribe_named("Notifier::first", move |_: NotifyRequested| async move {});
-        bus.subscribe_named("Notifier::second", move |_: NotifyRequested| async move {});
+        subscribe_named(
+            &bus,
+            "Notifier::first",
+            move |_: NotifyRequested| async move {},
+        );
+        subscribe_named(
+            &bus,
+            "Notifier::second",
+            move |_: NotifyRequested| async move {},
+        );
         let logs = LogCapture::install();
         bus.emit(NotifyRequested { id: "two" }).await;
 
@@ -466,9 +470,13 @@ mod panic_containment {
     #[tokio::test]
     async fn a_panicking_listener_files_its_unit_as_a_panic() {
         let bus = EventBus::new();
-        bus.subscribe_named("Notifier::boom", move |_: NotifyRequested| async move {
-            panic!("listener exploded");
-        });
+        subscribe_named(
+            &bus,
+            "Notifier::boom",
+            move |_: NotifyRequested| async move {
+                panic!("listener exploded");
+            },
+        );
         let logs = LogCapture::install();
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -489,9 +497,13 @@ mod panic_containment {
     #[tokio::test]
     async fn a_listener_dropped_with_its_emitter_files_its_unit_cancelled() {
         let bus = EventBus::new();
-        bus.subscribe_named("Notifier::waits", move |_: NotifyRequested| async move {
-            std::future::pending::<()>().await;
-        });
+        subscribe_named(
+            &bus,
+            "Notifier::waits",
+            move |_: NotifyRequested| async move {
+                std::future::pending::<()>().await;
+            },
+        );
         let logs = LogCapture::install();
 
         let emitted = tokio::time::timeout(

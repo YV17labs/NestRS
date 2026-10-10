@@ -26,6 +26,14 @@ pub use bus::EventBus;
 pub use inventory::ListenerMethod;
 pub use module::{EventsModule, NO_BUS_REPORT};
 
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::bus::subscribe_named;
+}
+
 /// Orchestrator on a provider's `impl` block: each `#[on_event]` method in it
 /// listens on the [`EventBus`] for the event type it takes.
 ///

@@ -124,7 +124,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         "` is not registered — add it to a reachable module's \
                          `providers = [...]`",
                     ));
-                __bus.subscribe_named::<#event_ty, _, _>(#qualified_name, move |__event| {
+                ::nest_rs_events::__private::subscribe_named::<#event_ty, _, _>(__bus, #qualified_name, move |__event| {
                     let __provider = ::std::sync::Arc::clone(&__provider);
                     async move {
                         #call

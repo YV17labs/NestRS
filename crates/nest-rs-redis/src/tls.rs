@@ -12,6 +12,7 @@
 use std::fmt;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs_config::{ConfigError, ConfigService, Material, Result, Setting};
 
@@ -234,6 +235,36 @@ pub(crate) fn observe_refusal<T>(
             }
         }
         Err(_) => {}
+    }
+}
+
+/// Redis's TLS refusal of a handshake of `client`'s, heard in order — `None`
+/// over plaintext, when Redis accepts it, or when it fails some other way or
+/// not within `budget`, and the caller's own error stands.
+///
+/// TLS 1.3 refuses a client certificate after the client's side of the
+/// handshake is over, so the refusal is the first record Redis sends. `redis`'s
+/// multiplexed connection drops one it reads before a command is in flight
+/// (`PipelineSink::send_result` has no caller to hand it to) and its callers
+/// meet a closed connection; its blocking connection writes before it reads.
+pub(crate) async fn refusal(client: &redis::Client, budget: Duration) -> Option<redis::RedisError> {
+    if !matches!(
+        client.get_connection_info().addr(),
+        redis::ConnectionAddr::TcpTls { .. }
+    ) {
+        return None;
+    }
+    let client = client.clone();
+    let heard = tokio::task::spawn_blocking(move || {
+        let mut connection = client.get_connection_with_timeout(budget)?;
+        connection.set_write_timeout(Some(budget))?;
+        connection.set_read_timeout(Some(budget))?;
+        redis::cmd("PING").query::<()>(&mut connection)
+    });
+    match tokio::time::timeout(budget, heard).await {
+        Ok(Ok(Err(refused))) if negotiation_failed(&refused) => Some(refused),
+        Ok(Err(failed)) if failed.is_panic() => std::panic::resume_unwind(failed.into_panic()),
+        _ => None,
     }
 }
 

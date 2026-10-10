@@ -53,6 +53,39 @@ pub(crate) async fn tls_listener() -> (std::net::SocketAddr, tokio::task::JoinHa
     (addr, serving)
 }
 
+/// A TLS listener requiring a client certificate the test authority issued, as
+/// Valkey with `tls-auth-clients yes` does, and answering nothing past the
+/// handshake. A refused handshake ends as a TLS server ends it: what the
+/// client sent after its alert is read before the socket closes, since a
+/// socket dropped with data unread answers with a reset that can overtake the
+/// alert.
+pub(crate) async fn mutual_tls_listener() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let acceptor = SERVER.acceptor(Some(&AUTHORITY));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a TLS listener");
+    let addr = listener.local_addr().expect("the listener's address");
+    let serving = tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                if let Err((_, mut refused)) = acceptor.accept(socket).into_fallible().await {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "a client already gone has nothing left to read"
+                    )]
+                    let _ = refused.shutdown().await;
+                    let mut sink = [0u8; 1024];
+                    while refused.read(&mut sink).await.is_ok_and(|read| read > 0) {}
+                }
+            });
+        }
+    });
+    (addr, serving)
+}
+
 /// A listener that accepts and never answers: the connection opens, and the
 /// round trip that would prove it never returns.
 pub(crate) async fn silent_listener() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {

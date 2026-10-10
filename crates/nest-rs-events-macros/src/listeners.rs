@@ -9,7 +9,8 @@ use syn::ImplItem;
 use syn::ext::IdentExt;
 
 use nest_rs_codegen::{
-    Edge, await_if_async, cfg_attrs, impl_self_ident, payload_arg_type, returns_unit, snake_case,
+    VersionedEdge, await_if_async, cfg_attrs, impl_self_ident, payload_arg_type, returns_unit,
+    snake_case,
 };
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -23,7 +24,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     // `version` before the blanket refusal, which would answer another question.
-    if let Err(err) = Edge::Events.reject_version(&args) {
+    if let Err(err) = VersionedEdge::Events.reject_version(&args) {
         return err.to_compile_error().into();
     }
     if let Err(err) = pair::LISTENERS.reject_args(&args, "the provider's scope is declared by") {

@@ -7,11 +7,11 @@ use nest_rs_codegen::pair;
 use std::str::FromStr;
 
 use nest_rs_codegen::{
-    Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs, duration_millis,
-    impl_self_ident, invalid_time_zone, job_key, job_keys, job_returns_a_result, job_timeout,
-    job_transaction, key_value, key_without_replicas_one, replicas_value, require_str_lit,
-    returns_unit, shared_receiver, site, takes_value, timeout_value, transactional_value,
-    ungrouped_expr, unread_job_key,
+    HostBorrow, JobDecorator, JobKey, Replicas, VersionedEdge, await_if_async, cfg_attrs,
+    duration_millis, impl_self_ident, invalid_time_zone, job_key, job_keys, job_returns_a_result,
+    job_timeout, job_transaction, key_value, key_without_replicas_one, replicas_value,
+    require_str_lit, returns_unit, shared_receiver, site, takes_value, timeout_value,
+    transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -158,7 +158,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 /// collects; `version` gets an answer of its own.
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
-    Edge::Schedule.reject_version(&args)?;
+    VersionedEdge::Schedule.reject_version(&args)?;
     pair::SCHEDULED.reject_args(&args, "the provider's scope is declared by")
 }
 

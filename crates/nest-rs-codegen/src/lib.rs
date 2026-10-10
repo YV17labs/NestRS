@@ -88,4 +88,4 @@ pub use ty::{
     shared_receiver, type_label,
 };
 pub use ungrouped::ungrouped_expr;
-pub use versioning::{Edge, VersionAnswer};
+pub use versioning::{VersionAnswer, VersionedEdge};

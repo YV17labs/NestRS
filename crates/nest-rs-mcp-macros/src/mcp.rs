@@ -5,9 +5,9 @@ use quote::quote;
 use syn::{Expr, ItemStruct, LitStr};
 
 use nest_rs_codegen::{
-    Edge, InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
-    injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
-    scoped_specs, take_path_list,
+    InjectableBody, VersionedEdge, build_injectable_body, from_container_method,
+    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
+    reject_http_only_layers, scoped_specs, take_path_list,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -191,7 +191,7 @@ struct McpArgs {
 
 fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
     // Before the grammar, so `version` gets its own refusal, not the unknown-key one.
-    Edge::Mcp.reject_version(&args)?;
+    VersionedEdge::Mcp.reject_version(&args)?;
     let mut parsed = McpArgs::default();
     nest_rs_codegen::MCP_GRAMMAR.parse2(args, |arg| {
         match arg.key() {

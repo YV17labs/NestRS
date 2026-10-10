@@ -6,10 +6,10 @@
 
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
-    Edge, Grammar, JobDecorator, JobKey, PipeWrapper, await_if_async, cfg_attrs, duration_millis,
-    generic_args, impl_self_ident, job_key, job_returns_a_result, job_timeout, job_transaction,
-    missing_argument, payload_arg_type, pipe_wrapper, returns_unit, snake_case, takes_value,
-    timeout_value, transactional_value, ungrouped_expr, unread_job_key,
+    Grammar, JobDecorator, JobKey, PipeWrapper, VersionedEdge, await_if_async, cfg_attrs,
+    duration_millis, generic_args, impl_self_ident, job_key, job_returns_a_result, job_timeout,
+    job_transaction, missing_argument, payload_arg_type, pipe_wrapper, returns_unit, snake_case,
+    takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -407,7 +407,7 @@ fn checkpoint_parameter(method: &syn::ImplItemFn) -> syn::Result<Option<Checkpoi
 /// a developer arrives with from `#[controller(version = "1")]`.
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
-    Edge::Queue.reject_version(&args)?;
+    VersionedEdge::Queue.reject_version(&args)?;
     pair::PROCESSOR.reject_args(&args, "the provider's scope is declared by")
 }
 

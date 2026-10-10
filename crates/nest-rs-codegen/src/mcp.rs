@@ -8,7 +8,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::ToTokens;
 
 use crate::grammar::Grammar;
-use crate::versioning::Edge;
+use crate::versioning::VersionedEdge;
 
 /// The keys a host declares; a key naming a field of the server's identity is
 /// refused by name in [`SERVER_FIELDS`].
@@ -20,12 +20,12 @@ pub const MCP_GRAMMAR: Grammar = Grammar::new("mcp", &KEYS).elsewhere(server_fie
 
 /// Whether `#[mcp]` answers `key` — takes it, or refuses it naming its owner —
 /// rather than leaving it to the bare unknown-key sentence; `version` is
-/// answered by [`Edge::Mcp`].
+/// answered by [`VersionedEdge::Mcp`].
 pub fn mcp_answers(key: &str) -> bool {
     let written: TokenStream = Ident::new(key, Span::call_site()).into_token_stream();
     KEYS.contains(&key)
         || server_field(key).is_some()
-        || Edge::Mcp.reject_version(&written).is_err()
+        || VersionedEdge::Mcp.reject_version(&written).is_err()
 }
 
 /// Where a host's own prose goes, for the fields with a per-operation twin.
@@ -43,7 +43,7 @@ struct ServerField {
 }
 
 /// Every identity field the app owns, refused by name; `version` is refused
-/// first by [`Edge::Mcp`].
+/// first by [`VersionedEdge::Mcp`].
 const SERVER_FIELDS: [ServerField; 4] = [
     ServerField {
         key: "description",

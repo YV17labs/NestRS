@@ -15,7 +15,7 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    Collision, Conditional, DispatchKeys, Edge, HostBorrow, InjectableBody, PipeWrapper,
+    Collision, Conditional, DispatchKeys, HostBorrow, InjectableBody, PipeWrapper, VersionedEdge,
     await_if_async, build_injectable_body, cfg_attrs, delegated_attrs, force_guard_typeids,
     forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
     impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
@@ -26,7 +26,7 @@ use nest_rs_codegen::{
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     // Before the blanket refusal, so `version = "…"` gets its own sentence.
-    if let Err(err) = Edge::Graphql.reject_version(&args) {
+    if let Err(err) = VersionedEdge::Graphql.reject_version(&args) {
         return err.to_compile_error().into();
     }
     if let Err(err) = reject_resolver_args(&args) {
@@ -734,7 +734,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             reject_misplaced_ctx(&method.sig)?;
         }
         if let Some(version) = method.attrs.iter().find(|a| a.path().is_ident("version")) {
-            return Err(Edge::Graphql.refuse_version(version));
+            return Err(VersionedEdge::Graphql.refuse_version(version));
         }
         let is_entity = verb_attr.path().is_ident("entity");
         if is_entity {

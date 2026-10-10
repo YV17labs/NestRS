@@ -6,10 +6,10 @@
 //! does instead.
 //!
 //! ```
-//! # use nest_rs_codegen::Edge;
+//! # use nest_rs_codegen::VersionedEdge;
 //! # fn refuse(args: proc_macro2::TokenStream, value: syn::LitStr) -> syn::Result<()> {
-//! Edge::Schedule.reject_version(&args)?;        // raw decorator argument tokens
-//! return Err(Edge::Mcp.refuse_version(&value)); // a value already parsed out
+//! VersionedEdge::Schedule.reject_version(&args)?;        // raw decorator argument tokens
+//! return Err(VersionedEdge::Mcp.refuse_version(&value)); // a value already parsed out
 //! # }
 //! # let declared = refuse(quote::quote!(version = "1"), syn::parse_quote!("1"));
 //! # assert!(declared.is_err_and(|e| e.to_string().contains("#[scheduled]")));
@@ -164,10 +164,10 @@ fn check_versions(literals: &[LitStr], attr: &str, key: Option<&str>) -> syn::Re
 /// An edge whose mount is not an address a client selects, and which therefore
 /// answers `version = "…"` with its own alternative instead of accepting it.
 ///
-/// An edge belongs here once [`Edge::answer`] can say what a caller selects
+/// An edge belongs here once [`VersionedEdge::answer`] can say what a caller selects
 /// instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Edge {
+pub enum VersionedEdge {
     /// GraphQL — refused by `#[resolver]`.
     Graphql,
     /// MCP — refused by `#[mcp]`, which spends the word on `serverInfo.version`.
@@ -190,7 +190,7 @@ pub struct VersionAnswer {
     pub instead: &'static str,
 }
 
-impl Edge {
+impl VersionedEdge {
     /// Every edge that refuses `version`, so a variant added later is forced
     /// through the same checks as its siblings.
     pub const ALL: [Self; 5] = [
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn every_edge_names_a_reason_and_an_alternative() {
-        for edge in Edge::ALL {
+        for edge in VersionedEdge::ALL {
             let VersionAnswer {
                 decorator,
                 because,
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn a_version_argument_is_refused_by_name() {
-        let err = Edge::Schedule
+        let err = VersionedEdge::Schedule
             .reject_version(&quote!(version = "1"))
             .expect_err("`version` must be refused");
         let message = err.to_string();
@@ -356,14 +356,18 @@ mod tests {
 
     #[test]
     fn arguments_this_edge_does_not_own_fall_through() {
-        assert!(Edge::Queue.reject_version(&quote!()).is_ok());
-        assert!(Edge::Queue.reject_version(&quote!(retries = 3)).is_ok());
+        assert!(VersionedEdge::Queue.reject_version(&quote!()).is_ok());
+        assert!(
+            VersionedEdge::Queue
+                .reject_version(&quote!(retries = 3))
+                .is_ok()
+        );
     }
 
     #[test]
     fn a_nested_version_belongs_to_the_argument_that_holds_it() {
         assert!(
-            Edge::Mcp
+            VersionedEdge::Mcp
                 .reject_version(&quote!(server(version = "1")))
                 .is_ok(),
             "only a top-level `version` is this module's question"

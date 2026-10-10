@@ -1755,3 +1755,146 @@ async fn a_pooled_guard_without_ws_guard_still_checks_every_message() {
 
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+/// Refuses every message with an internal denial whose text names the server's
+/// own address.
+#[injectable]
+#[derive(Default)]
+struct LeakyInternalGuard;
+
+impl Layer for LeakyInternalGuard {}
+
+#[async_trait]
+impl Guard for LeakyInternalGuard {
+    async fn check_ws_message(
+        &self,
+        _client: &WsClient,
+        _event: &str,
+        _data: &serde_json::Value,
+    ) -> Result<(), Denial> {
+        Err(Denial::internal("secret detail: redis at 10.0.3.7 refused"))
+    }
+}
+
+impl nest_rs_guards::WsGuard for LeakyInternalGuard {}
+
+/// Refuses every message as a rate limit lifting in seven seconds.
+#[injectable]
+#[derive(Default)]
+struct SevenSecondsGuard;
+
+impl Layer for SevenSecondsGuard {}
+
+#[async_trait]
+impl Guard for SevenSecondsGuard {
+    async fn check_ws_message(
+        &self,
+        _client: &WsClient,
+        _event: &str,
+        _data: &serde_json::Value,
+    ) -> Result<(), Denial> {
+        Err(Denial::rate_limited(7, "too many messages"))
+    }
+}
+
+impl nest_rs_guards::WsGuard for SevenSecondsGuard {}
+
+#[gateway(path = "/refusing")]
+struct RefusingGateway;
+
+#[messages]
+impl RefusingGateway {
+    #[subscribe_message("internal")]
+    #[use_guards(LeakyInternalGuard)]
+    #[public]
+    async fn internal(&self) -> String {
+        "unreachable".into()
+    }
+
+    #[subscribe_message("limited")]
+    #[use_guards(SevenSecondsGuard)]
+    #[public]
+    async fn limited(&self) -> String {
+        "unreachable".into()
+    }
+}
+
+#[module(imports = [WsModule], providers = [RefusingGateway, LeakyInternalGuard, SevenSecondsGuard])]
+struct RefusingModule;
+
+/// A guard's internal denial answers the opaque message, never its text, and is
+/// filed once, by the bridge that still holds the `Denial`, as the other three
+/// edges file theirs.
+#[tokio::test]
+async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the_layers_target() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<RefusingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway with per-message guards boots");
+
+    let mut socket = app.socket("/refusing").connect().await;
+    socket.send("internal", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["event"], "internal");
+    assert_eq!(
+        reply["data"]["error"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{reply}"
+    );
+    assert!(
+        !reply.to_string().contains("secret detail"),
+        "the guard's text reached the client: {reply}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let denied = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the message");
+    assert_eq!(denied.level, "warn");
+    assert!(
+        denied
+            .field("guard")
+            .is_some_and(|guard| guard.contains("LeakyInternalGuard")),
+        "{denied:#?}",
+    );
+    assert_eq!(
+        denied.field("event").as_deref(),
+        Some("internal"),
+        "{denied:#?}"
+    );
+    assert_eq!(
+        denied.field("status").as_deref(),
+        Some("500"),
+        "{denied:#?}"
+    );
+    assert!(
+        !format!("{denied:?}").contains("secret detail"),
+        "the site files what it knows, never the guard's text: {denied:#?}",
+    );
+    assert!(
+        logs.events()
+            .iter()
+            .all(|event| event.target != nest_rs_ws::TARGET || event.level != "warn"),
+        "the denial is filed once, not again on the gateway's target: {:#?}",
+        logs.events(),
+    );
+}
+
+/// A rate limit's wait reaches the client in the frame's structured half.
+#[tokio::test]
+async fn a_per_message_rate_limit_carries_its_reason_and_its_wait() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<RefusingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway with per-message guards boots");
+
+    let mut socket = app.socket("/refusing").connect().await;
+    socket.send("limited", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["data"]["error"], "too many messages", "{reply}");
+    assert_eq!(reply["data"]["errors"]["reason"], "rate_limited", "{reply}");
+    assert_eq!(reply["data"]["errors"]["code"], "RATE_LIMITED", "{reply}");
+    assert_eq!(reply["data"]["errors"]["retryAfterSeconds"], 7, "{reply}");
+    app.shutdown().await.expect("the transport stops cleanly");
+}

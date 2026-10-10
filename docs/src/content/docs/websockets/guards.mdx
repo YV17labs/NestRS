@@ -30,7 +30,8 @@ A guard listed at gateway scope **rejects the upgrade** — the response
 goes back as HTTP, no socket is opened, no `on_connect` fires. A guard
 listed at message scope **rejects the dispatch** — the connection
 stays open, the envelope is replaced with an error frame on the same
-event name, and a `warn!` lands in `nest_rs::ws`.
+event name, and a `warn!` lands in `nest_rs::layers` naming the guard,
+the event and the status — never the guard's text, as on every edge.
 
 ## Connection-level: the upgrade gate
 
@@ -142,14 +143,25 @@ impl ChatGateway {
 }
 ```
 
-A denial surfaces as a wire-shaped error frame on the rejected event:
+A denial surfaces as a wire-shaped error frame on the rejected event,
+the class a client branches on under `errors` — `code`, the member a
+`Problem` answers under too, and the same class as `reason`:
 
 ```text frame="terminal"
 > {"event":"message","data":{"author":"banned","text":"hi"}}
-< {"event":"message","data":{"error":"author `banned` is not allowed to post"}}
+< {"event":"message","data":{"error":"author `banned` is not allowed to post","errors":{"code":"FORBIDDEN","reason":"forbidden"}}}
 ```
 
 The connection stays open; the client can fire other events.
+
+A refusal reads the same here as on HTTP, GraphQL and MCP. A `4xx`
+denial carries its own sentence, and its `errors` adds what the client
+acts on: `retryAfterSeconds` for a rate limit, `requiredScopes` for a
+token too narrow. A `5xx` never carries the guard's text: an internal
+denial answers `"internal error"` (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`),
+and an unavailable dependency `"service unavailable"`
+(`UNAVAILABLE_CLIENT_MESSAGE`) with `code: "UNAVAILABLE"` and, when
+known, `retryAfterSeconds`.
 
 ## Mount-time dedup
 

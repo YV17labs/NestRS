@@ -12,7 +12,7 @@ use nest_rs_http::poem::Request as HttpRequest;
 #[cfg(feature = "mcp")]
 use nest_rs_mcp::McpOperationContext;
 #[cfg(feature = "ws")]
-use nest_rs_ws::{WsClient, WsMessageCheck};
+use nest_rs_ws::{WsClient, WsError, WsMessageCheck};
 #[cfg(feature = "ws")]
 use serde_json::Value;
 
@@ -312,10 +312,22 @@ impl WsMessageCheck for GuardAsWsMessageCheck {
         client: &WsClient,
         event: &str,
         data: &Value,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<(), WsError> {
         match self.inner.check_ws_message(client, event, data).await {
             Ok(()) => Ok(()),
-            Err(denial) => Err(denial.message().to_owned()),
+            Err(denial) => {
+                // Structural floor mirroring `deny_http`, filed here, where the
+                // denial is still held; its text never reaches the line.
+                tracing::warn!(
+                    target: nest_rs_core::target::LAYERS,
+                    guard = self.name,
+                    conn_id = client.id(),
+                    event,
+                    status = denial.http_status(),
+                    "guard denied the message",
+                );
+                Err(crate::dispatch::denial_to_ws_error(denial))
+            }
         }
     }
 

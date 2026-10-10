@@ -93,30 +93,46 @@ pub fn denial_to_http_error(denial: Denial) -> Error {
     error
 }
 
-/// Convert a [`Denial`] to an async-graphql error frame.
+/// The one sentence the in-band edges answer a denial with: a `4xx`'s own
+/// reason, and a `5xx`'s condition — never what the refusal said of the server.
+#[cfg(any(feature = "graphql", feature = "mcp", feature = "ws"))]
+fn client_message(denial: &Denial) -> String {
+    match denial {
+        Denial::Internal(_) => nest_rs_core::OPAQUE_CLIENT_MESSAGE.to_owned(),
+        Denial::Unavailable { .. } => nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE.to_owned(),
+        _ => denial.message().to_owned(),
+    }
+}
+
+/// The [`Code`](nest_rs_core::Code) a denial is known by on the edges with no
+/// status line: the member a `Problem`'s class rides under there too.
+#[cfg(any(feature = "graphql", feature = "mcp", feature = "ws"))]
+fn denial_code(denial: &Denial) -> nest_rs_core::Code {
+    use nest_rs_core::problem::code;
+
+    match denial {
+        Denial::Unauthorized(_) | Denial::InvalidCredential { .. } => code::UNAUTHENTICATED,
+        Denial::Forbidden(_) => code::FORBIDDEN,
+        Denial::InsufficientScope { .. } => code::INSUFFICIENT_SCOPE,
+        Denial::RateLimited { .. } => code::RATE_LIMITED,
+        Denial::Unavailable { .. } => code::UNAVAILABLE,
+        Denial::Internal(_) => code::INTERNAL,
+    }
+}
+
+/// Convert a [`Denial`] to an async-graphql error frame: its message, its
+/// `extensions.code`, and the scopes or the wait it names.
 ///
 /// The required scopes of a scope denial ride as a `requiredScopes` list
-/// extension, since an error frame has no `401` to enrich.
+/// extension, since an error frame has no `401` to enrich. A `5xx` answers its
+/// condition's sentence, never the guard's text.
 #[cfg(feature = "graphql")]
 pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
-    let code = match &denial {
-        Denial::InsufficientScope { .. } => "INSUFFICIENT_SCOPE",
-        _ => match denial.http_status() {
-            401 => "UNAUTHENTICATED",
-            403 => "FORBIDDEN",
-            429 => "RATE_LIMITED",
-            503 => "UNAVAILABLE",
-            _ => "INTERNAL",
-        },
-    };
-    let message = match &denial {
-        Denial::Internal(_) => "internal server error".to_owned(),
-        _ => denial.message().to_owned(),
-    };
+    let code = denial_code(&denial).as_str();
     let scopes = denial.required_scopes();
     let required = (!scopes.is_empty()).then(|| scopes.to_vec());
     let retry_after = denial.retry_after_secs();
-    GraphqlError::new(message).extend_with(move |_, e| {
+    GraphqlError::new(client_message(&denial)).extend_with(move |_, e| {
         e.set("code", code);
         if let Some(required) = required {
             e.set("requiredScopes", required);
@@ -130,9 +146,9 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
 /// Convert a [`Denial`] to the JSON-RPC error one MCP operation answers with.
 ///
 /// MCP has no status line: the code picks the closest JSON-RPC family and the
-/// `data` carries the machine-readable `reason`, plus `requiredScopes` when the
-/// denial names them. An internal denial is opaque (`nest_rs_mcp::Opaque`): the
-/// reader is a language model.
+/// `data` carries the machine-readable `code` and `reason`, plus
+/// `requiredScopes` when the denial names them. An internal denial is opaque
+/// (`nest_rs_mcp::Opaque`): the reader is a language model.
 #[cfg(feature = "mcp")]
 pub fn denial_to_mcp_error(denial: Denial) -> nest_rs_mcp::McpError {
     use nest_rs_mcp::McpError;
@@ -140,36 +156,35 @@ pub fn denial_to_mcp_error(denial: Denial) -> nest_rs_mcp::McpError {
     if matches!(denial, Denial::Internal(_)) {
         return McpError::internal_error(nest_rs_core::OPAQUE_CLIENT_MESSAGE, None);
     }
+    let data = Some(serde_json::Value::Object(structured_reason(&denial)));
     // Not the caller's request: something the server depends on did not
     // answer, which JSON-RPC files under its internal error, with the reason
     // and the wait a client acts on.
     if matches!(denial, Denial::Unavailable { .. }) {
-        return McpError::internal_error(
-            denial.message().to_owned(),
-            Some(serde_json::Value::Object(structured_reason(&denial))),
-        );
+        return McpError::internal_error(client_message(&denial), data);
     }
-    McpError::invalid_request(
-        denial.message().to_owned(),
-        Some(serde_json::Value::Object(structured_reason(&denial))),
-    )
+    McpError::invalid_request(client_message(&denial), data)
 }
 
 /// The machine-readable half of a refusal, for the two transports with no status
-/// line to carry it: the `reason` a client branches on, plus `requiredScopes`
-/// when the denial names them.
+/// line to carry it: the `code` a client branches on, the member a `Problem`
+/// answers under, and the same class as `reason`, the member these edges
+/// carried first; plus `requiredScopes` when the denial names them.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Value> {
     let reason = match denial {
+        Denial::Unauthorized(_) | Denial::InvalidCredential { .. } => "unauthenticated",
+        Denial::Forbidden(_) => "forbidden",
         Denial::InsufficientScope { .. } => "insufficient_scope",
-        _ => match denial.http_status() {
-            401 => "unauthenticated",
-            403 => "forbidden",
-            503 => "unavailable",
-            _ => "rate_limited",
-        },
+        Denial::RateLimited { .. } => "rate_limited",
+        Denial::Unavailable { .. } => "unavailable",
+        Denial::Internal(_) => "internal",
     };
     let mut data = serde_json::Map::new();
+    data.insert(
+        "code".to_owned(),
+        serde_json::Value::from(denial_code(denial).as_str()),
+    );
     data.insert("reason".to_owned(), serde_json::Value::from(reason));
     let scopes = denial.required_scopes();
     if !scopes.is_empty() {
@@ -187,9 +202,10 @@ fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Val
 
 /// Convert a [`Denial`] to the error frame one WS message answers with.
 ///
-/// No status line either: the message, plus `reason` and `requiredScopes` under
-/// the frame's `data.errors`, where a `Valid<T>` rejection's details ride. An
-/// internal denial is opaque.
+/// No status line either: the message, plus `code`, `reason` and
+/// `requiredScopes` under the frame's `data.errors`, where a `Valid<T>`
+/// rejection's details ride. An internal denial is opaque, and an unavailable
+/// dependency answers its condition, never what the guard said of it.
 #[cfg(feature = "ws")]
 pub fn denial_to_ws_error(denial: Denial) -> nest_rs_ws::WsError {
     use nest_rs_ws::WsError;
@@ -198,7 +214,7 @@ pub fn denial_to_ws_error(denial: Denial) -> nest_rs_ws::WsError {
         return WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE);
     }
     WsError::with_details(
-        denial.message().to_owned(),
+        client_message(&denial),
         serde_json::Value::Object(structured_reason(&denial)),
     )
 }
@@ -355,6 +371,89 @@ mod tests {
             denial_to_http_response(Denial::unavailable(None, "authentication unavailable"));
         assert_eq!(unknown.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(unknown.headers().get(header::RETRY_AFTER).is_none());
+    }
+
+    /// What an unavailable dependency's refusal said of it — an address, a
+    /// host — stays on the server on the three in-band edges, as it does on
+    /// HTTP; the reason a client branches on and the wait it acts on travel.
+    #[cfg(all(feature = "graphql", feature = "mcp", feature = "ws"))]
+    #[test]
+    fn an_unavailable_denial_tells_no_edge_what_the_dependency_said() {
+        let denial = || Denial::unavailable(Some(7), "store at 10.0.0.1 down");
+
+        let graphql = serde_json::to_value(
+            denial_to_graphql_error(denial()).into_server_error(Default::default()),
+        )
+        .expect("serializes");
+        let ws = serde_json::to_value(denial_to_ws_error(denial())).expect("serializes");
+        let mcp = serde_json::to_value(denial_to_mcp_error(denial())).expect("serializes");
+        for (edge, answer) in [("graphql", &graphql), ("ws", &ws), ("mcp", &mcp)] {
+            assert!(
+                !answer.to_string().contains("10.0.0.1"),
+                "{edge} answers what the dependency said: {answer}",
+            );
+        }
+
+        assert_eq!(graphql["message"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(graphql["extensions"]["code"], "UNAVAILABLE");
+        assert_eq!(graphql["extensions"]["retryAfterSeconds"], 7);
+        assert_eq!(ws["error"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(ws["errors"]["reason"], "unavailable");
+        assert_eq!(ws["errors"]["retryAfterSeconds"], 7);
+        assert_eq!(mcp["message"], nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(mcp["data"]["reason"], "unavailable");
+        assert_eq!(mcp["data"]["retryAfterSeconds"], 7);
+    }
+
+    /// An internal denial reads the one constant every edge's opaque answer
+    /// reads, so a client cannot tell a wiring bug from any other failure.
+    #[cfg(all(feature = "graphql", feature = "mcp", feature = "ws"))]
+    #[test]
+    fn an_internal_denial_answers_the_opaque_message_on_every_in_band_edge() {
+        let denial = || Denial::internal("redis at 10.0.3.7 refused");
+
+        let graphql = denial_to_graphql_error(denial());
+        assert_eq!(graphql.message, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        let extensions = serde_json::to_value(&graphql.extensions).expect("serializes");
+        assert_eq!(extensions["code"], "INTERNAL");
+        assert_eq!(
+            denial_to_ws_error(denial()).error,
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE
+        );
+        assert_eq!(
+            denial_to_mcp_error(denial()).message,
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE
+        );
+    }
+
+    /// A client branches on one member, `code`, whether a guard refused it or a
+    /// `Problem` answered it, on each edge with no status line.
+    #[cfg(all(feature = "graphql", feature = "mcp", feature = "ws"))]
+    #[test]
+    fn a_denial_names_its_class_by_the_code_a_problem_carries_on_every_in_band_edge() {
+        let denials = [
+            (Denial::unauthorized("no token"), "UNAUTHENTICATED"),
+            (
+                Denial::invalid_credential("expired", "invalid_token"),
+                "UNAUTHENTICATED",
+            ),
+            (Denial::forbidden("not yours"), "FORBIDDEN"),
+            (
+                Denial::insufficient_scope(["posts:write"], "too narrow"),
+                "INSUFFICIENT_SCOPE",
+            ),
+            (Denial::rate_limited(7, "slow down"), "RATE_LIMITED"),
+            (Denial::unavailable(Some(7), "store down"), "UNAVAILABLE"),
+        ];
+        for (denial, code) in denials {
+            let graphql = serde_json::to_value(&denial_to_graphql_error(denial.clone()).extensions)
+                .expect("serializes");
+            let ws = serde_json::to_value(denial_to_ws_error(denial.clone())).expect("serializes");
+            let mcp = serde_json::to_value(denial_to_mcp_error(denial)).expect("serializes");
+            assert_eq!(graphql["code"], code, "graphql: {graphql}");
+            assert_eq!(ws["errors"]["code"], code, "ws: {ws}");
+            assert_eq!(mcp["data"]["code"], code, "mcp: {mcp}");
+        }
     }
 
     /// The HTTP half of the same denial, so the two are pinned together: one

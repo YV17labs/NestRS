@@ -678,15 +678,9 @@ async fn handle_text<G: Gateway>(
     let event_ref = event.clone();
     let conn_id = client.id();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
-        if let Err(reason) = guards.check(client, &event_ref, &data).await {
-            tracing::warn!(
-                target: crate::TARGET,
-                conn_id,
-                event = %event_ref,
-                reason = %reason,
-                "websocket message denied by a guard",
-            );
-            return WsReply::Error(crate::WsError::new(reason));
+        // The guard bridge filed the denial while it still held it.
+        if let Err(frame) = guards.check(client, &event_ref, &data).await {
+            return WsReply::Error(frame);
         }
         // Guards see the raw value; global data pipes run after them.
         if let Some(pipe) = data_pipe
@@ -888,8 +882,11 @@ mod tests {
             _client: &WsClient,
             _event: &str,
             _data: &serde_json::Value,
-        ) -> Result<(), String> {
-            Err("author `banned` is not allowed to post".into())
+        ) -> Result<(), crate::WsError> {
+            Err(crate::WsError::with_details(
+                "author `banned` is not allowed to post",
+                serde_json::json!({ "reason": "forbidden" }),
+            ))
         }
 
         fn type_key(&self) -> TypeId {
@@ -921,7 +918,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_denied_message_warns_on_the_websocket_target() {
+    async fn a_denied_message_answers_the_frame_its_check_rendered_and_files_nothing_more() {
         let logs = nest_rs_testing::LogCapture::install();
         let mut guards = EventLayerTable::new();
         guards.insert("moderated", vec![Arc::new(DenyAll)]);
@@ -936,22 +933,21 @@ mod tests {
         .await
         .expect("a denial replies with an error frame");
 
-        assert!(
-            frame.contains("is not allowed to post"),
-            "the client is told why: {frame}"
+        let frame: serde_json::Value = serde_json::from_str(&frame).expect("a JSON frame");
+        assert_eq!(frame["event"], "moderated");
+        assert_eq!(
+            frame["data"]["error"],
+            "author `banned` is not allowed to post"
         );
-
-        let event = logs.expect_one("nest_rs::ws", "websocket message denied by a guard");
-        assert_eq!(event.level, "warn");
-        assert_eq!(event.field("event").as_deref(), Some("moderated"));
-        assert!(
-            event.field("reason").is_some_and(|r| r.contains("banned")),
-            "the denial reason rides as a field: {event:#?}",
+        assert_eq!(
+            frame["data"]["errors"]["reason"], "forbidden",
+            "the structured half the check rendered travels whole: {frame}",
         );
         assert!(
-            logs.find("nest_rs::layers", "websocket message denied by a guard")
-                .is_empty(),
-            "…and only there: {:#?}",
+            logs.events()
+                .iter()
+                .all(|event| event.target != crate::TARGET || event.level != "warn"),
+            "the check filed the denial where it held it; the gateway adds no second line: {:#?}",
             logs.events(),
         );
     }
@@ -969,7 +965,11 @@ mod tests {
         .await
         .expect("an echo reply");
         assert!(frame.contains("hi"), "{frame}");
-        logs.expect_none("nest_rs::ws", "websocket message denied by a guard");
+        assert!(
+            logs.events().iter().all(|event| event.level != "warn"),
+            "an answered message files no warning: {:#?}",
+            logs.events(),
+        );
     }
 
     /// Pins the event, not the path: every `try_send` failure routes through

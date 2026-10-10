@@ -244,10 +244,13 @@ read as a wave of authentication failures. It is logged at `error` and
 rendered as a `503` with a `Retry-After` when `retry_after` is known — an
 identity provider's own, given in seconds — and none invented when it is
 not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`
-with the same 503 and the same `"authentication unavailable"`, and files
-its own `warn` saying the strategy never answered. On the GraphQL, MCP
-and WebSocket edges, which have no status line, the refusal carries
-`reason: "unavailable"` and, when known, `retryAfterSeconds`.
+with the same 503, and files its own `warn` saying the strategy never
+answered. What the refusal says of the identity store stays on the
+server: HTTP's 503 carries no `detail`, and the GraphQL, MCP and
+WebSocket edges, which have no status line, answer `"service
+unavailable"` with the class a client branches on — `extensions.code:
+"UNAVAILABLE"` on GraphQL, `code: "UNAVAILABLE"` under `data` on MCP and
+`data.errors` on WebSocket — and, when known, `retryAfterSeconds`.
 
 A rejected credential also names *why* on the challenge, per RFC 6750
 §3.1:

@@ -5,6 +5,7 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::envelope::WsError;
 use crate::server::WsClient;
 
 /// Object-safe view of `nest_rs_guards::Guard::check_ws_message`, declared here
@@ -12,13 +13,14 @@ use crate::server::WsClient;
 /// `GuardAsWsMessageCheck` adapts any `Guard` to it.
 #[async_trait::async_trait]
 pub trait WsMessageCheck: Send + Sync + 'static {
-    /// Returns the message a denied check sends back to the client.
+    /// Returns the error frame a denied check answers, already rendered — the
+    /// one place the denial is still held, so it is logged there too.
     async fn check(
         &self,
         client: &WsClient,
         event: &str,
         data: &serde_json::Value,
-    ) -> Result<(), String>;
+    ) -> Result<(), WsError>;
 
     /// Stable identity for dedup by `TypeId` at table construction.
     fn type_key(&self) -> TypeId;
@@ -36,7 +38,7 @@ impl<T: WsMessageCheck + ?Sized> WsMessageCheck for Arc<T> {
         client: &WsClient,
         event: &str,
         data: &serde_json::Value,
-    ) -> Result<(), String> {
+    ) -> Result<(), WsError> {
         (**self).check(client, event, data).await
     }
 
@@ -66,13 +68,14 @@ impl EventLayerTable {
         self.by_event.insert(event, chain);
     }
 
-    /// Run every guard in the chain for `event`, in order; `Ok(())` when it has none.
+    /// Run every guard in the chain for `event`, in order; `Ok(())` when it has
+    /// none, the first refusal's frame otherwise.
     pub async fn check(
         &self,
         client: &WsClient,
         event: &str,
         data: &serde_json::Value,
-    ) -> Result<(), String> {
+    ) -> Result<(), WsError> {
         let Some(chain) = self.by_event.get(event) else {
             return Ok(());
         };
@@ -95,7 +98,7 @@ mod tests {
 
     #[async_trait]
     impl WsMessageCheck for Allow {
-        async fn check(&self, _: &WsClient, _: &str, _: &serde_json::Value) -> Result<(), String> {
+        async fn check(&self, _: &WsClient, _: &str, _: &serde_json::Value) -> Result<(), WsError> {
             Ok(())
         }
 
@@ -106,8 +109,8 @@ mod tests {
 
     #[async_trait]
     impl WsMessageCheck for Deny {
-        async fn check(&self, _: &WsClient, _: &str, _: &serde_json::Value) -> Result<(), String> {
-            Err("nope".into())
+        async fn check(&self, _: &WsClient, _: &str, _: &serde_json::Value) -> Result<(), WsError> {
+            Err(WsError::new("nope"))
         }
 
         fn type_key(&self) -> TypeId {
@@ -133,6 +136,6 @@ mod tests {
         let mut table = EventLayerTable::new();
         table.insert("msg", vec![Arc::new(Allow), Arc::new(Deny)]);
         let denied = table.check(&client(), "msg", &json!(1)).await;
-        assert_eq!(denied.unwrap_err(), "nope");
+        assert_eq!(denied.map_err(|frame| frame.error), Err("nope".to_owned()));
     }
 }

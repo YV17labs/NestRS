@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
+use nest_rs_seaorm::SeaOrmConfig;
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement,
 };
@@ -15,6 +16,10 @@ use crate::env::load_project_env;
 /// Fresh Postgres database created for one e2e run, migrated, then **dropped
 /// when this guard drops**. Seed `db.connection()` into a `TestApp` and the
 /// real connection short-circuits `SeaOrmDatabaseModule`'s `for_root` factory.
+///
+/// Every connection it opens is the app's pool's
+/// ([`SeaOrmConfig::connect_options`]): TLS verified or off, as the URL says,
+/// and a URL asking for TLS without verification refused.
 ///
 /// Orphans from crashed runs are reaped on the next [`create`](Self::create).
 pub struct EphemeralDatabase {
@@ -43,7 +48,7 @@ impl EphemeralDatabase {
 
     /// Create and migrate a fresh database against an explicit admin URL.
     pub async fn create_with<M: MigratorTrait>(admin_url: &str) -> Result<Self> {
-        let admin = Database::connect(options(admin_url)).await?;
+        let admin = Database::connect(options(admin_url)?).await?;
         let name = unique_name();
 
         // Concurrent CREATEs fail with "source database template1 is being
@@ -57,8 +62,7 @@ impl EphemeralDatabase {
         }
 
         let url = crate::url_on(admin_url, &name);
-        let mut options = options(&url);
-        options.connect_timeout(POOL_BUDGET);
+        let mut options = options(&url)?;
         options.statement_timeout(STATEMENT_BOUND);
         let connection = Database::connect(options).await?;
         M::up(&connection, None).await?;
@@ -101,7 +105,10 @@ impl Drop for EphemeralDatabase {
                 return;
             };
             rt.block_on(async move {
-                if let Ok(admin) = Database::connect(options(&admin_url)).await {
+                let Ok(options) = options(&admin_url) else {
+                    return;
+                };
+                if let Ok(admin) = Database::connect(options).await {
                     let _ = admin
                         .execute_unprepared(&format!(
                             "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"
@@ -115,11 +122,6 @@ impl Drop for EphemeralDatabase {
 }
 
 static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// How long a query on the fixture's pool waits for a connection: sqlx's 30 s
-/// is past the authentication guard's net, which the boot holds a seeded pool
-/// under.
-const POOL_BUDGET: Duration = Duration::from_secs(10);
 
 /// How long a statement on the fixture's pool runs before Postgres cancels it:
 /// the app pool's default.
@@ -184,23 +186,13 @@ fn unique_name() -> String {
     format!("{PREFIX}_{}_{}_{}", std::process::id(), now_nanos(), seq)
 }
 
-/// `url`'s connect options, trusting the system's authorities unless the URL
-/// names an authority file: sqlx alone trusts only its compiled-in roots.
-fn options(url: &str) -> ConnectOptions {
-    let mut options = ConnectOptions::new(url.to_owned());
-    let names_a_file = url.split_once('?').is_some_and(|(_, query)| {
-        query.split('&').any(|pair| {
-            pair.split_once('=').is_some_and(|(key, value)| {
-                matches!(key, "sslrootcert" | "ssl-root-cert" | "ssl-ca") && value != "system"
-            })
-        })
-    });
-    if !names_a_file {
-        options.map_sqlx_postgres_opts(|options| {
-            options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
-        });
+/// `url`'s connect options, as the app's pool opens its connections.
+fn options(url: &str) -> Result<ConnectOptions> {
+    Ok(SeaOrmConfig {
+        url: url.to_owned(),
+        ..SeaOrmConfig::default()
     }
-    options
+    .connect_options()?)
 }
 
 #[cfg(test)]

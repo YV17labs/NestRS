@@ -56,7 +56,7 @@ impl DynamicModule for SeaOrmSetup {
             let config = container
                 .get::<SeaOrmConfig>()
                 .expect("SeaOrmConfig is resolved by ConfigModule::provide_feature");
-            connect(&config, config.app_connect_options()).await
+            connect(config.app_connect_options()?).await
         })
     }
 }
@@ -159,41 +159,16 @@ fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
 /// container (`migrate`, `seed`).
 pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
     use nest_rs_config::Config;
-    let config = SeaOrmConfig::load()?;
-    connect(&config, config.connect_options()).await
+    connect(SeaOrmConfig::load()?.connect_options()?).await
 }
 
-/// Open `config`'s pool with `options`. The URL may carry credentials, so it is
-/// never logged.
-async fn connect(
-    config: &SeaOrmConfig,
-    options: ConnectOptions,
-) -> anyhow::Result<DatabaseConnection> {
-    if config.url.is_empty() {
-        anyhow::bail!(
-            "{} must be set",
-            nest_rs_config::spellings(NAMESPACE, "URL")
-        );
-    }
-    // A seeded config skipped `from_env`'s range check; sqlx panics past it.
-    if let Some(secs) = config.connect_timeout_secs {
-        CONNECT_TIMEOUT.check(
-            NAMESPACE,
-            CONNECT_TIMEOUT.field(),
-            Duration::from_secs(secs),
-        )?;
-    }
-    if let Some(secs) = config.statement_timeout_secs {
-        STATEMENT_TIMEOUT.check(
-            NAMESPACE,
-            STATEMENT_TIMEOUT.field(),
-            Duration::from_secs(secs),
-        )?;
-    }
-    config.tls_mode().map_err(anyhow::Error::msg)?;
+/// Open a pool with `options`, which
+/// [`SeaOrmConfig::connect_options`] built and checked. The URL may carry
+/// credentials, so it is never logged.
+async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> {
     tracing::info!(
         target: crate::TARGET,
-        max_connections = ?config.max_connections,
+        max_connections = ?options.get_max_connections(),
         "connecting to database"
     );
     Ok(Database::connect(options).await?)
@@ -202,44 +177,6 @@ async fn connect(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn a_seeded_budget_past_the_ceiling_is_refused_before_sqlx_sees_it() {
-        let config = SeaOrmConfig {
-            url: "postgres://nobody@127.0.0.1:1/none".to_owned(),
-            connect_timeout_secs: Some(u64::MAX),
-            ..SeaOrmConfig::default()
-        };
-        let refused = connect(&config, config.app_connect_options())
-            .await
-            .expect_err("refused rather than handed to sqlx")
-            .to_string();
-        assert!(
-            refused.contains(&nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"))
-                && refused.contains("above the 3600s it must be at most"),
-            "{refused}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_seeded_statement_bound_past_the_ceiling_is_refused_before_the_pool_opens() {
-        let config = SeaOrmConfig {
-            url: "postgres://nobody@127.0.0.1:1/none".to_owned(),
-            statement_timeout_secs: Some(60 * 60 + 1),
-            ..SeaOrmConfig::default()
-        };
-        let refused = connect(&config, config.app_connect_options())
-            .await
-            .expect_err("refused rather than handed to Postgres")
-            .to_string();
-        assert!(
-            refused.contains(&nest_rs_config::var_name(
-                "seaorm",
-                "STATEMENT_TIMEOUT_SECS"
-            )) && refused.contains("above the 3600s it must be at most"),
-            "{refused}"
-        );
-    }
 
     #[test]
     fn the_statement_bound_is_read_as_postgres_reads_it() {

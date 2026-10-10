@@ -18,6 +18,7 @@ pub(crate) fn options(url: String) -> sea_orm::ConnectOptions {
         ..nest_rs_seaorm::SeaOrmConfig::default()
     }
     .connect_options()
+    .expect("the suite's Postgres URL verifies TLS")
 }
 
 pub(crate) async fn connect() -> DatabaseConnection {

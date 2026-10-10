@@ -41,3 +41,10 @@ Cluster's nodes present their certificate to each other on the cluster bus,
 which always asks for one, so the certificate carries `clientAuth` beside
 `serverAuth`; one issued before is issued again
 (`decisions/valkey-topologies.md`).
+
+**2026-10-10 — the database fixture verifies too.** `EphemeralDatabase` built
+connect options of its own that set no `sslmode`, so sqlx's `prefer` applied:
+encrypted without verifying, and plaintext with a server declining TLS, on
+every e2e suite built on it. It now opens through
+`SeaOrmConfig::connect_options`, the one constructor the pool, the tools and
+the fixture share, which refuses a mode that does not verify.

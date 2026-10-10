@@ -11,6 +11,7 @@
 mod access_contract;
 mod config;
 mod cors;
+mod database;
 mod destructured_args;
 mod env_cascade;
 mod exception_filters;

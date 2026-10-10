@@ -20,8 +20,9 @@ all-features = true
 [features]
 # Satisfy the OpenTelemetryModule boot guard in tests (`with_test_telemetry`).
 opentelemetry = ["dep:nest-rs-opentelemetry"]
-# An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`).
-orm = ["dep:sea-orm", "dep:sea-orm-migration", "dep:sqlx"]
+# An ephemeral, migrated Postgres database fixture for e2e (`EphemeralDatabase`),
+# opening its connections through the app pool's own options.
+orm = ["dep:nest-rs-seaorm", "dep:sea-orm", "dep:sea-orm-migration"]
 # The graphql-ws subscription driver (`TestApp::graphql_socket`). Gated because a
 # headless app's suite should not link a GraphQL schema to assert on a queue.
 graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
@@ -91,12 +92,20 @@ nest-rs-queue = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
+# Behind `orm`: `SeaOrmConfig::connect_options`, the one constructor of a
+# Postgres connection, so the fixture verifies TLS as the app's pool does. It
+# also selects the pool's TLS backend. `nest-rs-seaorm` dev-depends on this
+# crate with `orm`; cargo allows that cycle, and its test binaries link one
+# copy of it.
+nest-rs-seaorm = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
 sea-orm-migration = { workspace = true, optional = true }
-# The fixture's TLS backend, as `nest-rs-seaorm` selects it for the pool.
-sqlx = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Self dev-dependency: the suite proves the fixture against a TLS double, so it
+# runs with `EphemeralDatabase` and `TestAuthority` on whatever features a
+# caller builds with.
+nest-rs-testing = { path = ".", features = ["orm", "tls"] }
 # `transport_parity` boots one module serving both `Exempt`-edge transports to
 # pin that they answer one app wiring identically. That is cross-crate wiring
 # (guards' fallbacks × graphql × mcp), so it lives here rather than in any

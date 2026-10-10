@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::str::FromStr;
 
 use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, Result, config,
+    Bound, Config, ConfigError, ConfigService, DurationBounds, Floor, Namespaced, Result, config,
 };
 use sea_orm::ConnectOptions;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
@@ -131,14 +131,19 @@ impl std::fmt::Debug for SeaOrmConfig {
 
 impl SeaOrmConfig {
     /// The app's pool: [`connect_options`](Self::connect_options) with every
-    /// statement bounded.
-    pub(crate) fn app_connect_options(&self) -> ConnectOptions {
-        let mut opts = self.connect_options();
-        opts.statement_timeout(
-            self.statement_timeout_secs
-                .map_or(DEFAULT_STATEMENT_TIMEOUT, Duration::from_secs),
-        );
-        opts
+    /// statement bounded, the bound refused outside its range.
+    pub(crate) fn app_connect_options(&self) -> Result<ConnectOptions> {
+        let mut opts = self.connect_options()?;
+        let bound = match self.statement_timeout_secs {
+            Some(secs) => STATEMENT_TIMEOUT.check(
+                Self::NAMESPACE,
+                STATEMENT_TIMEOUT.field(),
+                Duration::from_secs(secs),
+            )?,
+            None => DEFAULT_STATEMENT_TIMEOUT,
+        };
+        opts.statement_timeout(bound);
+        Ok(opts)
     }
 
     /// The TLS the pool's connections open with: `verify-full` — the server's
@@ -148,31 +153,35 @@ impl SeaOrmConfig {
     /// A mode that encrypts without verifying, or may (`allow`, `prefer`,
     /// `require`, `verify-ca`), is refused, naming the variable and never the
     /// URL, which carries the password.
-    pub(crate) fn tls_mode(&self) -> std::result::Result<PgSslMode, String> {
+    fn tls_mode(&self) -> Result<PgSslMode> {
+        let refuse = |message: String| ConfigError::parse(self.url_variable(), message);
         let named = self.query(&["sslmode", "ssl-mode"]).is_some();
-        let url = || nest_rs_config::spellings(Self::NAMESPACE, "URL");
         #[expect(
             clippy::map_err_ignore,
             reason = "sqlx's parse error can quote the URL, which carries the password"
         )]
         let parsed = PgConnectOptions::from_str(&self.url)
-            .map_err(|_| format!("{} is not a Postgres URL", url()))?;
+            .map_err(|_| refuse("is not a Postgres URL".to_owned()))?;
         match parsed.get_ssl_mode() {
             PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
             mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
-            unverified => Err(format!(
-                "{} asks Postgres for TLS without verifying its certificate (sslmode={}): write \
+            unverified => Err(refuse(format!(
+                "asks Postgres for TLS without verifying its certificate (sslmode={}): write \
                  sslmode=verify-full, with sslrootcert naming the authority that signed the \
                  server's certificate, or sslmode=disable for a server without TLS",
-                url(),
                 match unverified {
                     PgSslMode::Allow => "allow",
                     PgSslMode::Prefer => "prefer",
                     PgSslMode::Require => "require",
                     _ => "verify-ca",
                 },
-            )),
+            ))),
         }
+    }
+
+    /// `<PREFIX>_SEAORM__URL`, the variable every refusal of the URL names.
+    fn url_variable(&self) -> String {
+        nest_rs_config::var_name(Self::NAMESPACE, "URL")
     }
 
     /// Whether the pool trusts the system's authorities: when the URL names no
@@ -192,33 +201,55 @@ impl SeaOrmConfig {
         })
     }
 
-    /// What every connection this config opens shares: its pool bounds, and TLS
-    /// verified against the system's authorities unless the URL names its own.
-    pub fn connect_options(&self) -> ConnectOptions {
-        let mut opts = ConnectOptions::new(self.url.clone());
-        if let Ok(mode) = self.tls_mode() {
-            let system = self.trusts_the_system();
-            opts.map_sqlx_postgres_opts(move |options| {
-                let options = options.ssl_mode(mode);
-                if system {
-                    options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
-                } else {
-                    options
-                }
-            });
+    /// What every connection this config opens shares: TLS verified
+    /// (`verify-full`, against the system's authorities unless `sslrootcert`
+    /// names a file) or off (`sslmode=disable`), and the pool bounds.
+    ///
+    /// The one constructor every path reaches — the app's pool,
+    /// [`connect_from_env`](crate::connect_from_env), a tool or a test
+    /// opening a connection of its own — so each refuses what the boot does:
+    /// an empty URL, a mode that encrypts without verifying, and a connect
+    /// budget outside its range, which a config built in code never had
+    /// checked. A refusal names its variable, and never quotes the URL, which
+    /// carries the password.
+    pub fn connect_options(&self) -> Result<ConnectOptions> {
+        if self.url.is_empty() {
+            return Err(ConfigError::parse(
+                self.url_variable(),
+                format!(
+                    "must be set, inline or through {}",
+                    nest_rs_config::var_name(Self::NAMESPACE, "URL_FILE")
+                ),
+            ));
         }
+        let mode = self.tls_mode()?;
+        let budget = match self.connect_timeout_secs {
+            Some(secs) => CONNECT_TIMEOUT.check(
+                Self::NAMESPACE,
+                CONNECT_TIMEOUT.field(),
+                Duration::from_secs(secs),
+            )?,
+            None => DEFAULT_CONNECT_TIMEOUT,
+        };
+        let mut opts = ConnectOptions::new(self.url.clone());
+        let system = self.trusts_the_system();
+        opts.map_sqlx_postgres_opts(move |options| {
+            let options = options.ssl_mode(mode);
+            if system {
+                options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
+            } else {
+                options
+            }
+        });
         if let Some(n) = self.max_connections {
             opts.max_connections(n);
         }
         if let Some(n) = self.min_connections {
             opts.min_connections(n);
         }
-        opts.connect_timeout(
-            self.connect_timeout_secs
-                .map_or(DEFAULT_CONNECT_TIMEOUT, Duration::from_secs),
-        );
+        opts.connect_timeout(budget);
         opts.sqlx_logging(self.sqlx_logging);
-        opts
+        Ok(opts)
     }
 }
 
@@ -249,23 +280,53 @@ mod tests {
     }
 
     #[test]
-    fn tls_is_verified_or_off_and_verified_unless_the_url_says_otherwise() {
-        use sea_orm::sqlx::postgres::PgSslMode;
+    fn connect_options_refuses_a_mode_that_encrypts_without_verifying() {
         for unverified in ["allow", "prefer", "require", "verify-ca"] {
             let refused = pinned(&format!(
                 "postgres://app:s3cret@db/app?sslmode={unverified}"
             ))
-            .tls_mode()
-            .expect_err(unverified);
+            .connect_options()
+            .expect_err(unverified)
+            .to_string();
             assert!(
-                refused.contains(&nest_rs_config::var_name("seaorm", "URL"))
-                    && refused.contains(&format!("sslmode={unverified}"))
+                refused.starts_with(&format!(
+                    "invalid value for {}",
+                    nest_rs_config::var_name("seaorm", "URL")
+                )) && refused.contains(&format!("sslmode={unverified}"))
                     && refused.contains("verify-full")
                     && refused.contains("disable")
                     && !refused.contains("s3cret"),
                 "{refused}"
             );
         }
+        for url in [
+            "postgres://app:s3cret@db/app",
+            "postgres://app:s3cret@db/app?sslmode=disable",
+            "postgres://app:s3cret@db/app?sslmode=verify-full&sslrootcert=/ca.pem",
+        ] {
+            assert!(pinned(url).connect_options().is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn connect_options_refuses_what_is_not_a_postgres_url_without_quoting_it() {
+        for (url, said) in [
+            ("", "must be set"),
+            ("postgres://app:s3cret@db:port/app", "is not a Postgres URL"),
+        ] {
+            let refused = pinned(url).connect_options().expect_err(url).to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("seaorm", "URL"))
+                    && refused.contains(said)
+                    && !refused.contains("s3cret"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn tls_is_verified_or_off_and_verified_unless_the_url_says_otherwise() {
+        use sea_orm::sqlx::postgres::PgSslMode;
         for (url, mode) in [
             ("postgres://db/app", PgSslMode::VerifyFull),
             (
@@ -306,13 +367,17 @@ mod tests {
 
     #[test]
     fn connect_options_carries_url() {
-        let opts = pinned("postgres://localhost/app").connect_options();
+        let opts = pinned("postgres://localhost/app")
+            .connect_options()
+            .expect("a verified URL");
         assert_eq!(opts.get_url(), "postgres://localhost/app");
     }
 
     #[test]
     fn connect_options_omits_pool_bounds_by_default() {
-        let opts = pinned("postgres://localhost/app").connect_options();
+        let opts = pinned("postgres://localhost/app")
+            .connect_options()
+            .expect("a verified URL");
         assert_eq!(opts.get_max_connections(), None);
         assert_eq!(opts.get_min_connections(), None);
     }
@@ -321,16 +386,28 @@ mod tests {
     fn the_apps_pool_bounds_its_statements_and_the_tools_do_not() {
         let config = pinned("postgres://localhost/app");
         assert_eq!(
-            config.app_connect_options().get_statement_timeout(),
+            config
+                .app_connect_options()
+                .expect("a verified URL")
+                .get_statement_timeout(),
             Some(DEFAULT_STATEMENT_TIMEOUT)
         );
-        assert_eq!(config.connect_options().get_statement_timeout(), None);
+        assert_eq!(
+            config
+                .connect_options()
+                .expect("a verified URL")
+                .get_statement_timeout(),
+            None
+        );
         let pinned = SeaOrmConfig {
             statement_timeout_secs: Some(3),
             ..config
         };
         assert_eq!(
-            pinned.app_connect_options().get_statement_timeout(),
+            pinned
+                .app_connect_options()
+                .expect("a bound in range")
+                .get_statement_timeout(),
             Some(Duration::from_secs(3))
         );
     }
@@ -349,6 +426,7 @@ mod tests {
     fn the_default_budget_sits_below_every_net_a_query_runs_under() {
         let budget = pinned("postgres://localhost/app")
             .connect_options()
+            .expect("a verified URL")
             .get_connect_timeout()
             .expect("a budget of the framework's, not sqlx's 30 s");
         assert!(budget < nest_rs_authn::AUTHENTICATE_TIMEOUT, "{budget:?}");
@@ -370,7 +448,8 @@ mod tests {
             sqlx_logging: true,
             observe_serialization_conflicts: false,
         }
-        .connect_options();
+        .connect_options()
+        .expect("bounds in range");
         assert_eq!(opts.get_max_connections(), Some(50));
         assert_eq!(opts.get_min_connections(), Some(5));
         assert_eq!(opts.get_connect_timeout(), Some(Duration::from_secs(8)));
@@ -379,7 +458,9 @@ mod tests {
 
     #[test]
     fn connect_options_disables_sqlx_logging_by_default() {
-        let opts = pinned("postgres://localhost/app").connect_options();
+        let opts = pinned("postgres://localhost/app")
+            .connect_options()
+            .expect("a verified URL");
         assert!(
             !opts.get_sqlx_logging(),
             "noisy by default would spam prod logs"
@@ -477,6 +558,45 @@ mod tests {
         assert!(
             pinned.contains(&var) && pinned.contains("above the 3600s it must be at most"),
             "{pinned}"
+        );
+    }
+
+    #[test]
+    fn a_budget_built_in_code_past_the_ceiling_is_refused_before_sqlx_sees_it() {
+        let refused = SeaOrmConfig {
+            connect_timeout_secs: Some(u64::MAX),
+            ..pinned("postgres://nobody@127.0.0.1:1/none")
+        }
+        .connect_options()
+        .expect_err("refused rather than handed to sqlx")
+        .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"))
+                && refused.contains("above the 3600s it must be at most"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_statement_bound_built_in_code_past_the_ceiling_is_refused_before_the_pool_opens() {
+        let config = SeaOrmConfig {
+            statement_timeout_secs: Some(60 * 60 + 1),
+            ..pinned("postgres://nobody@127.0.0.1:1/none")
+        };
+        let refused = config
+            .app_connect_options()
+            .expect_err("refused rather than handed to Postgres")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name(
+                "seaorm",
+                "STATEMENT_TIMEOUT_SECS"
+            )) && refused.contains("above the 3600s it must be at most"),
+            "{refused}"
+        );
+        assert!(
+            config.connect_options().is_ok(),
+            "a tool opens without the bound, so it is not refused one"
         );
     }
 

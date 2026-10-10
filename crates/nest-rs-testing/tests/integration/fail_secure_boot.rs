@@ -1,13 +1,15 @@
 //! Boot-time fail-secure contract of the layer pool: a global layer spec whose
-//! provider was never registered, or two controllers on one prefix, fail the
-//! boot.
+//! provider was never registered, a controller guard no module provides, or two
+//! controllers on one prefix, fail the boot.
 
 use nest_rs_core::{Layer, injectable, module, target};
+use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
+use nest_rs_filters::{Filter, RequestSnapshot, filter};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
+use poem::{IntoResponse, Request, Response};
 
 /// Registered as a provider: the resolvable control case.
 #[injectable]
@@ -55,6 +57,36 @@ impl Interceptor for GhostInterceptor {
     }
 }
 
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostFilter;
+
+impl Layer for GhostFilter {}
+
+#[async_trait]
+impl Filter for GhostFilter {
+    async fn filter(&self, _req: &RequestSnapshot, error: poem::Error) -> Response {
+        error.into_response()
+    }
+}
+
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostExceptionFilter;
+
+impl Layer for GhostExceptionFilter {}
+
+#[async_trait]
+impl ExceptionFilter for GhostExceptionFilter {
+    type Exception = std::fmt::Error;
+
+    async fn catch(&self, _err: std::fmt::Error) -> Response {
+        poem::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    }
+}
+
 #[module(providers = [WiredGuard])]
 struct GuardOnlyModule;
 
@@ -95,8 +127,96 @@ async fn an_unresolvable_global_interceptor_fails_boot() {
         "a global interceptor with no provider must fail boot",
     );
     assert!(
-        err.to_string().contains("GhostInterceptor"),
-        "the error names the unresolvable interceptor: {err}",
+        format!("{err:#}").contains("GhostInterceptor"),
+        "the error names the unresolvable interceptor: {err:#}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_interceptor() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_interceptors_global([interceptor::<GhostInterceptor>()])
+        .build_headless()
+        .await;
+    let Err(err) = result else {
+        panic!("a worker would boot with a global interceptor silently dropped");
+    };
+    assert!(
+        format!("{err:#}").contains("GhostInterceptor"),
+        "the error names the unresolvable interceptor: {err:#}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_filter() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_filters_global([filter::<GhostFilter>()])
+        .build_headless()
+        .await;
+    let Err(err) = result else {
+        panic!("a worker would boot with a global filter silently dropped");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GhostFilter") && chain.contains("nest_rs::filters::global"),
+        "the error names the unresolvable filter and the wiring refusing it: {chain}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_exception_filter() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_exception_filters_global([exception_filter::<GhostExceptionFilter>()])
+        .build_headless()
+        .await;
+    let Err(err) = result else {
+        panic!("a worker would boot with a global exception filter silently dropped");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GhostExceptionFilter")
+            && chain.contains("nest_rs::exception_filters::global"),
+        "the error names the unresolvable exception filter and the wiring refusing it: {chain}",
+    );
+}
+
+/// Gated by a guard no module provides.
+#[controller(path = "/ghost-gated")]
+#[use_guards(GhostGuard)]
+struct GhostGatedController;
+
+#[routes]
+impl GhostGatedController {
+    #[get("/")]
+    async fn read(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [GhostGatedController])]
+struct GhostGatedModule;
+
+#[tokio::test]
+async fn a_controller_guard_no_module_provides_fails_the_boot_naming_it_and_the_controller() {
+    // Built by hand, so the access graph does not refuse first.
+    let container = nest_rs_core::Container::builder()
+        .import::<GhostGatedModule>()
+        .build();
+    let mut transport = nest_rs_http::HttpTransport::default();
+    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
+        panic!("the controller would serve without the guard it declares");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GhostGuard") && chain.contains("GhostGatedController"),
+        "the refusal names the guard and the controller declaring it: {chain}",
+    );
+    assert!(
+        chain.contains("no imported module provides it"),
+        "…and the remedy: {chain}",
     );
 }
 

@@ -17,7 +17,7 @@
 //! composed chain per container — GraphQL has no mount seam to bake a shaper
 //! into, so the site is its own. WS has no inline runner: the
 //! `#[messages]` macro composes its per-event guard table at gateway
-//! mount, wrapping each guard via `GuardAsWsMessageCheck`.
+//! mount through `ws_chain`, wrapping each guard via `GuardAsWsMessageCheck`.
 
 // The per-site chain the two in-band transports share.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
@@ -41,6 +41,8 @@ mod route_layers;
 mod route_shaper;
 mod scoped_spec;
 mod validate;
+#[cfg(feature = "ws")]
+pub(crate) mod ws_chain;
 
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;

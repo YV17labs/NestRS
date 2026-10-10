@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
@@ -217,6 +217,9 @@ pub struct Container {
     metadata: Arc<HashMap<TypeId, Vec<MetaEntry>>>,
     scoped: Arc<HashMap<TypeId, ScopedFactory>>,
     transient: Arc<HashMap<TypeId, TransientFactory>>,
+    /// The first refusal of a site a transport composed against this
+    /// container — a mount has no `Result` to return it through.
+    refusal: Arc<Mutex<Option<anyhow::Error>>>,
 }
 
 impl Default for Container {
@@ -227,6 +230,7 @@ impl Default for Container {
             metadata: Arc::default(),
             scoped: Arc::default(),
             transient: Arc::default(),
+            refusal: Arc::default(),
         }
     }
 }
@@ -1106,6 +1110,7 @@ impl ContainerBuilder {
             metadata: Arc::new(self.metadata),
             scoped: Arc::new(self.scoped),
             transient: Arc::new(self.transient),
+            refusal: Arc::default(),
         }
     }
 
@@ -1120,6 +1125,7 @@ impl ContainerBuilder {
             metadata: Arc::new(self.metadata.clone()),
             scoped: Arc::new(self.scoped.clone()),
             transient: Arc::new(self.transient.clone()),
+            refusal: Arc::default(),
         }
     }
 }
@@ -1128,9 +1134,35 @@ impl ContainerBuilder {
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
+    use std::sync::PoisonError;
 
-    use super::{ContainerBuilder, ImportSite};
+    use super::{Container, ContainerBuilder, ImportSite};
     use crate::module::{Collecting, DynamicModule, Registering};
+
+    /// Refuse the boot from a site a transport composes at `configure` — a route,
+    /// a gateway — against the built `container`: a mount has no `Result` to
+    /// return, so the site files the refusal, mounts something that denies, and
+    /// the boot fails on [`take_site_refusal`] once its transports are
+    /// configured. The first refusal is the one kept.
+    pub fn refuse_site(container: &Container, error: anyhow::Error) {
+        let mut slot = container
+            .refusal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(error);
+        }
+    }
+
+    /// The refusal a site filed against `container` ([`refuse_site`]), taken by
+    /// whatever configured its transports, to end the boot with.
+    pub fn take_site_refusal(container: &Container) -> Option<anyhow::Error> {
+        container
+            .refusal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
 
     /// Collect phase for one dynamic import: run its
     /// [`DynamicModule::collect`], then park the value for

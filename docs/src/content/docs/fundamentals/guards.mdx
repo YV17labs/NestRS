@@ -221,8 +221,10 @@ App::builder()
 ```
 
 Across scopes the chain composes **global → controller → handler**,
-outermost first. `Layer::priority` is an optional tiebreaker when
-declaration order cannot express intent — most guards leave it at `0`.
+outermost first. `Layer::priority` is an optional tiebreaker within one scope
+when declaration order cannot express intent — it never moves a guard ahead of
+a broader scope's, and most guards leave it at `0`. Listing an authorization
+guard before the authentication guard it reads fails the boot, at any scope.
 
 ```mermaid
 flowchart TB

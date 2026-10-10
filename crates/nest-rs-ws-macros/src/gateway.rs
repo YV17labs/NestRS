@@ -58,7 +58,6 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
 
-    let guard_layers = guard_layers(&guards);
     let has_edge_guards = !guards.is_empty();
     let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     // The upgrade is an HTTP `GET`: a gateway-scope guard attests `HttpGuard`,
@@ -174,11 +173,14 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             where
                 __E: ::nest_rs_ws::poem::Endpoint + 'static,
             {
-                let __ep = ::nest_rs_ws::poem::EndpointExt::boxed(
-                    ::nest_rs_ws::poem::EndpointExt::map_to_response(__ep),
-                );
-                #(#guard_layers)*
-                __ep
+                ::nest_rs_guards::__private::guard_ws_upgrade(
+                    __container,
+                    ::nest_rs_ws::poem::EndpointExt::boxed(
+                        ::nest_rs_ws::poem::EndpointExt::map_to_response(__ep),
+                    ),
+                    &Self::__nestrs_edge_guard_specs(),
+                    &Self::__nestrs_mount_path(),
+                )
             }
         }
     }
@@ -259,50 +261,6 @@ fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
             ),
         )),
     }
-}
-
-/// The connection-level guard layers, reversed so the first-listed guard ends
-/// up outermost. A guard also seeded globally is skipped: the transport's
-/// `SelfMountGuardWrap` already runs it at the edge.
-fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
-    paths
-        .iter()
-        .rev()
-        .map(|p| {
-            quote! {
-                let __ep = {
-                    let __type_id = ::core::any::TypeId::of::<#p>();
-                    let __is_global = ::nest_rs_core::Container::get::<
-                        ::nest_rs_guards::GuardSpecs,
-                    >(__container)
-                        .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
-                    if __is_global {
-                        ::nest_rs_ws::tracing::debug!(
-                            target: ::nest_rs_ws::target::LAYERS,
-                            layer = ::core::any::type_name::<#p>(),
-                            scope = "gateway",
-                            "guard declared at multiple scopes — broadest (global) wins, this scope skipped",
-                        );
-                        __ep
-                    } else {
-                        ::nest_rs_ws::poem::EndpointExt::boxed(
-                            ::nest_rs_ws::poem::EndpointExt::map_to_response(
-                            ::nest_rs_guards::GuardExt::guard(
-                                __ep,
-                                ::nest_rs_core::Container::get::<#p>(__container)
-                                    .map(|__arc| __arc as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>)
-                                    .expect(concat!(
-                                        "#[use_guards] guard `",
-                                        stringify!(#p),
-                                        "` is not registered — add it to a module's providers"
-                                    )),
-                            ),
-                        ))
-                    }
-                };
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

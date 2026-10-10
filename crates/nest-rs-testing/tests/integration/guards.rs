@@ -453,3 +453,134 @@ async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
         "the response body must not leak the context type name: {body:?}"
     );
 }
+
+/// Attaches the principal: an authentication-phase guard.
+#[injectable]
+#[derive(Default)]
+struct SessionGuard;
+
+impl Layer for SessionGuard {}
+
+#[async_trait]
+impl Guard for SessionGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl HttpGuard for SessionGuard {}
+
+/// Reads the principal: an authorization-phase guard.
+#[injectable]
+#[derive(Default)]
+struct PolicyGuard;
+
+impl Layer for PolicyGuard {}
+
+#[async_trait]
+impl Guard for PolicyGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl HttpGuard for PolicyGuard {}
+
+#[controller(path = "/misordered")]
+struct MisorderedScope;
+
+#[routes]
+impl MisorderedScope {
+    #[get("/x")]
+    #[use_guards(PolicyGuard, SessionGuard)]
+    async fn x(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [SessionGuard, PolicyGuard, MisorderedScope])]
+struct MisorderedModule;
+
+#[tokio::test]
+async fn a_route_whose_method_scope_lists_authorization_first_fails_the_boot_naming_both() {
+    let Err(refused) = TestApp::for_module::<MisorderedModule>().await else {
+        panic!("the route would answer 500 on every request instead");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("PolicyGuard") && chain.contains("SessionGuard"),
+        "the refusal names both guards: {chain}",
+    );
+    assert!(
+        chain.contains("get /x"),
+        "…and the route they are misordered on, as `#[routes]` labels it: {chain}",
+    );
+}
+
+static FRESH_SESSION_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+/// An authentication-phase guard that counts its runs, so a replay is seen.
+#[injectable]
+#[derive(Default)]
+struct FreshSessionGuard;
+
+impl Layer for FreshSessionGuard {}
+
+#[async_trait]
+impl Guard for FreshSessionGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+        FRESH_SESSION_RUNS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl HttpGuard for FreshSessionGuard {}
+
+#[controller(path = "/replayed")]
+struct ReplayedScope;
+
+#[routes]
+impl ReplayedScope {
+    #[get("/x")]
+    #[use_guards(FreshSessionGuard)]
+    #[force_guards(FreshSessionGuard)]
+    async fn x(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [FreshSessionGuard, PolicyGuard, ReplayedScope])]
+struct ReplayedModule;
+
+#[tokio::test]
+async fn a_forced_authentication_replay_after_the_global_pool_boots_and_runs_again() {
+    let app = TestApp::builder()
+        .module::<ReplayedModule>()
+        .use_guards_global([guard::<FreshSessionGuard>(), guard::<PolicyGuard>()])
+        .build()
+        .await
+        .unwrap_or_else(|err| panic!("a replay is no misorder: {err:#}"));
+
+    app.http()
+        .get("/replayed/x")
+        .send()
+        .await
+        .assert_status_is_ok();
+    assert_eq!(
+        FRESH_SESSION_RUNS.load(Ordering::SeqCst),
+        2,
+        "the global run, then the replay after the authorization guard",
+    );
+}

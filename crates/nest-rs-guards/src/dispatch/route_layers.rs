@@ -26,9 +26,11 @@
 //!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers};
-use nest_rs_core::Container;
+use nest_rs_core::__private::{
+    ResolvedLayer, compose_chain, dedup_bucket, refuse_site, resolve_global_layers,
+};
 use nest_rs_core::layer_chain::LayerSite;
+use nest_rs_core::{Container, UnresolvedLayerError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
 use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
 use nest_rs_http::MappedError;
@@ -36,8 +38,10 @@ use nest_rs_interceptors::{Interceptor, InterceptorChain, InterceptorSpecs};
 use poem::endpoint::BoxEndpoint;
 use poem::{Endpoint, EndpointExt, Request, Response};
 
+use crate::dispatch::route_shaper::refused_route;
 use crate::dispatch::scoped_spec::{
-    ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedInterceptorSpec, resolve_specs,
+    ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedInterceptorSpec, report_unresolved,
+    resolve_scoped,
 };
 
 /// One HTTP route's endpoint as it leaves [`wrap_route_response_layers`]:
@@ -74,6 +78,9 @@ where
 /// interceptors / filters participate in the dedup only — they execute at
 /// the transport edge. Called by the `#[routes]` macro at mount time; with
 /// every chain empty the endpoint passes through untouched.
+///
+/// A declared layer that does not resolve refuses the boot through the
+/// container, and the route answers an opaque `500` in the meantime.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is one chain a decorator collected; a struct would only rename them"
@@ -92,19 +99,31 @@ pub fn wrap_route_response_layers<E>(
 where
     E: Endpoint<Output = Response> + 'static,
 {
-    let exception_filters = compose_exception_filters(
+    let composed = compose_exception_filters(
         container,
         controller_exception_filters,
         method_exception_filters,
         route_label,
-    );
-    let filters = compose_route_filters(container, controller_filters, method_filters, route_label);
-    let interceptors = compose_route_interceptors(
-        container,
-        controller_interceptors,
-        method_interceptors,
-        route_label,
-    );
+    )
+    .and_then(|exception_filters| {
+        let filters =
+            compose_route_filters(container, controller_filters, method_filters, route_label)?;
+        let interceptors = compose_route_interceptors(
+            container,
+            controller_interceptors,
+            method_interceptors,
+            route_label,
+        )?;
+        Ok((exception_filters, filters, interceptors))
+    });
+    let (exception_filters, filters, interceptors) = match composed {
+        Ok(chains) => chains,
+        Err(unresolved) => {
+            report_unresolved(&unresolved);
+            refuse_site(container, unresolved.into());
+            return RouteEndpoint::Layered(poem::endpoint::make_sync(|_| refused_route()).boxed());
+        }
+    };
     if exception_filters.is_empty() && filters.is_empty() && interceptors.is_empty() {
         return RouteEndpoint::Plain(endpoint);
     }
@@ -135,17 +154,17 @@ fn compose_exception_filters(
     controller: &[ScopedExceptionFilterSpec],
     method: &[ScopedExceptionFilterSpec],
     route_label: &str,
-) -> Vec<ResolvedLayer<dyn ExceptionFilterErased>> {
+) -> Result<Vec<ResolvedLayer<dyn ExceptionFilterErased>>, UnresolvedLayerError> {
     let global = resolve_global_layers::<ExceptionFilterSpecs>(container);
-    let controller = resolve_specs(container, controller, LayerSite::Host);
-    let method = resolve_specs(container, method, LayerSite::Method);
-    compose_chain::<dyn ExceptionFilterErased>(
+    let controller = resolve_scoped(container, controller, LayerSite::Host, route_label)?;
+    let method = resolve_scoped(container, method, LayerSite::Method, route_label)?;
+    Ok(compose_chain::<dyn ExceptionFilterErased>(
         dedup_bucket(global),
         controller,
         method,
         &[],
         route_label,
-    )
+    ))
 }
 
 /// Compose the route-scoped filter survivors: the full chain (global +
@@ -156,15 +175,15 @@ fn compose_route_filters(
     controller: &[ScopedFilterSpec],
     method: &[ScopedFilterSpec],
     route_label: &str,
-) -> Vec<ResolvedLayer<dyn Filter>> {
+) -> Result<Vec<ResolvedLayer<dyn Filter>>, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_layers::<FilterSpecs>(container));
-    let controller = resolve_specs(container, controller, LayerSite::Host);
-    let method = resolve_specs(container, method, LayerSite::Method);
+    let controller = resolve_scoped(container, controller, LayerSite::Host, route_label)?;
+    let method = resolve_scoped(container, method, LayerSite::Method, route_label)?;
     let chain = compose_chain::<dyn Filter>(global, controller, method, &[], route_label);
-    chain
+    Ok(chain
         .into_iter()
         .filter(|e| e.source != LayerSite::Global)
-        .collect()
+        .collect())
 }
 
 /// Compose the route-scoped interceptor survivors — same site rule as
@@ -176,15 +195,15 @@ fn compose_route_interceptors(
     controller: &[ScopedInterceptorSpec],
     method: &[ScopedInterceptorSpec],
     route_label: &str,
-) -> Vec<ResolvedLayer<dyn Interceptor>> {
+) -> Result<Vec<ResolvedLayer<dyn Interceptor>>, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_layers::<InterceptorSpecs>(container));
-    let controller = resolve_specs(container, controller, LayerSite::Host);
-    let method = resolve_specs(container, method, LayerSite::Method);
+    let controller = resolve_scoped(container, controller, LayerSite::Host, route_label)?;
+    let method = resolve_scoped(container, method, LayerSite::Method, route_label)?;
     let chain = compose_chain::<dyn Interceptor>(global, controller, method, &[], route_label);
-    chain
+    Ok(chain
         .into_iter()
         .filter(|e| e.source != LayerSite::Global)
-        .collect()
+        .collect())
 }
 
 /// Runs the deduped exception-filter chain on the error path: first matching
@@ -222,6 +241,105 @@ where
                 }
                 Err(current)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::take_site_refusal;
+    use nest_rs_core::LayerSpec;
+    use nest_rs_testing::LogCapture;
+    use poem::http::StatusCode;
+
+    use super::*;
+
+    /// A layer no imported module provides: its spec resolves to nothing.
+    struct Unprovided;
+
+    fn unprovided<L: ?Sized>() -> LayerSpec<L> {
+        LayerSpec::new(TypeId::of::<Unprovided>(), "GhostLayer", |_| None)
+    }
+
+    /// The response-side slots `#[routes]` fills for one route.
+    #[derive(Clone, Copy, Debug)]
+    enum Slot {
+        ControllerExceptionFilter,
+        MethodExceptionFilter,
+        ControllerFilter,
+        MethodFilter,
+        ControllerInterceptor,
+        MethodInterceptor,
+    }
+
+    #[tokio::test]
+    async fn a_response_layer_no_module_provides_refuses_the_boot_and_answers_500_meanwhile() {
+        for slot in [
+            Slot::ControllerExceptionFilter,
+            Slot::MethodExceptionFilter,
+            Slot::ControllerFilter,
+            Slot::MethodFilter,
+            Slot::ControllerInterceptor,
+            Slot::MethodInterceptor,
+        ] {
+            let logs = LogCapture::install();
+            let container = Container::default();
+            let mut controller_exception_filters: Vec<ScopedExceptionFilterSpec> = Vec::new();
+            let mut method_exception_filters: Vec<ScopedExceptionFilterSpec> = Vec::new();
+            let mut controller_filters: Vec<ScopedFilterSpec> = Vec::new();
+            let mut method_filters: Vec<ScopedFilterSpec> = Vec::new();
+            let mut controller_interceptors: Vec<ScopedInterceptorSpec> = Vec::new();
+            let mut method_interceptors: Vec<ScopedInterceptorSpec> = Vec::new();
+            match slot {
+                Slot::ControllerExceptionFilter => controller_exception_filters.push(unprovided()),
+                Slot::MethodExceptionFilter => method_exception_filters.push(unprovided()),
+                Slot::ControllerFilter => controller_filters.push(unprovided()),
+                Slot::MethodFilter => method_filters.push(unprovided()),
+                Slot::ControllerInterceptor => controller_interceptors.push(unprovided()),
+                Slot::MethodInterceptor => method_interceptors.push(unprovided()),
+            }
+
+            let route = wrap_route_response_layers(
+                &container,
+                poem::endpoint::make_sync(|_| Response::builder().body("the handler ran")),
+                &controller_exception_filters,
+                &method_exception_filters,
+                &controller_filters,
+                &method_filters,
+                &controller_interceptors,
+                &method_interceptors,
+                "get /x",
+            );
+            let response = route
+                .call(Request::default())
+                .await
+                .expect("a refused route answers");
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{slot:?}: the route would run without the layer it declares",
+            );
+
+            let refusal = take_site_refusal(&container)
+                .map(|refusal| format!("{refusal:#}"))
+                .unwrap_or_else(|| panic!("{slot:?}: the boot finds no refusal to fail on"));
+            assert!(
+                refusal.contains("GhostLayer") && refusal.contains("get /x"),
+                "{slot:?}: the refusal names the layer and the route: {refusal}",
+            );
+            let event = logs.expect_one(
+                "nest_rs::layers",
+                "a layer the site declares is provided by no imported module",
+            );
+            assert_eq!(event.level, "error", "{slot:?}");
+            assert_eq!(
+                event.field("layer").as_deref(),
+                Some("GhostLayer"),
+                "{slot:?}"
+            );
+            assert_eq!(event.field("site").as_deref(), Some("get /x"), "{slot:?}");
         }
     }
 }

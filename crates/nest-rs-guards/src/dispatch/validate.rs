@@ -7,7 +7,7 @@ use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket};
 use nest_rs_core::Container;
 use nest_rs_core::layer_chain::LayerSite;
 
-use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resolve_specs};
+use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resolve_scoped};
 use crate::{Guard, GuardPhase};
 
 /// Validate one resolved guard chain (in execution order).
@@ -19,7 +19,19 @@ use crate::{Guard, GuardPhase};
 /// producer anywhere in the chain only warns — a controller may serve
 /// exclusively `#[public]` routes, where the authorization guard admits the
 /// anonymous actor.
+///
+/// A guard is checked where it first runs: a `#[force_guards]` replay later in
+/// the chain is no misorder, since every guard between the two runs already
+/// read what the first one attached.
 pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> Result<(), String> {
+    let first_runs: Vec<&ResolvedLayer<dyn Guard>> = chain
+        .iter()
+        .enumerate()
+        .filter(|(i, entry)| !chain[..*i].iter().any(|e| e.type_id == entry.type_id))
+        .map(|(_, entry)| entry)
+        .collect();
+    let chain = first_runs.as_slice();
+
     let mut saw_authorization: Option<&'static str> = None;
     for entry in chain {
         match entry.layer.phase() {
@@ -88,18 +100,19 @@ pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> 
     Ok(())
 }
 
-/// Boot check for one controller: compose the global pool with the
-/// controller-scope specs (same dedup as the route shaper) and validate the
-/// result. Method-scope guards compose per route at mount; the canonical
-/// authn/authz pairing is declared at controller or global scope, which this
-/// covers.
+/// Boot check for one controller or gateway upgrade: compose the global pool
+/// with the host-scope specs (same dedup as the route shaper) and validate the
+/// result. A host-scope spec no imported module provides fails it, naming the
+/// guard and `label`. A route whose method scope declares guards is validated
+/// again, whole, as it mounts.
 pub fn boot_validate_guards(
     container: &Container,
     controller_specs: &[ScopedGuardSpec],
     label: &str,
 ) -> Result<(), String> {
     let global = resolve_global_guards(container);
-    let controller = resolve_specs(container, controller_specs, LayerSite::Host);
+    let controller = resolve_scoped(container, controller_specs, LayerSite::Host, label)
+        .map_err(|unresolved| unresolved.to_string())?;
     let chain =
         compose_chain::<dyn Guard>(dedup_bucket(global), controller, Vec::new(), &[], label);
     validate_guard_chain(label, &chain)
@@ -173,6 +186,15 @@ mod tests {
         let chain = vec![entry(Authz, "Authz"), entry(Authn, "Authn")];
         let err = validate_guard_chain("test", &chain).expect_err("reversed order");
         assert!(err.contains("after authorization guard"), "{err}");
+    }
+
+    #[test]
+    fn a_forced_authentication_replay_after_authorization_passes() {
+        let mut replay = entry(Authn, "Authn");
+        replay.source = LayerSite::Method;
+        let chain = vec![entry(Authn, "Authn"), entry(Authz, "Authz"), replay];
+        validate_guard_chain("test", &chain)
+            .expect("the authorization guard read what the first authentication run attached");
     }
 
     #[test]

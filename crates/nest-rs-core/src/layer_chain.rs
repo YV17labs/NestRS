@@ -2,9 +2,9 @@
 //! execution site of the Layer System.
 //!
 //! Each resolved entry is tagged with its [`LayerSite`]; the chain keeps the
-//! broadest site for any duplicated [`TypeId`] and runs entries in declaration
-//! order, with [`Layer::priority`](crate::Layer::priority) as the tiebreaker
-//! within a site.
+//! broadest site for any duplicated [`TypeId`] and runs the sites from the
+//! broadest in, each in declaration order with
+//! [`Layer::priority`](crate::Layer::priority) as the tiebreaker within it.
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
@@ -141,7 +141,9 @@ pub(crate) mod __private {
     ///
     /// 1. Dedup by `TypeId` — the broadest site wins.
     /// 2. A `TypeId` listed in `force` survives even when declared more broadly.
-    /// 3. Stable sort by [`Layer::priority`]; declaration order breaks ties.
+    /// 3. Each site's entries are sorted stably by [`Layer::priority`], so
+    ///    declaration order breaks ties; the sites then run Global, Host,
+    ///    Method — a priority orders within its site, never across.
     ///
     /// `chain` names the dispatch site (a route, a WS message, `transport`), not
     /// only a route.
@@ -164,6 +166,7 @@ pub(crate) mod __private {
                 LayerSite::Host => &host,
                 _ => &method,
             };
+            let start = entries.len();
             for entry in bucket {
                 let forced = force.contains(&entry.type_id);
                 if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
@@ -183,9 +186,9 @@ pub(crate) mod __private {
                 seen.push((entry.type_id, entry.source));
                 entries.push(entry.clone());
             }
+            // Stable, so declaration order breaks a tie.
+            entries[start..].sort_by_key(|e| e.layer.priority());
         }
-
-        entries.sort_by_key(|e| e.layer.priority());
 
         entries
     }
@@ -295,6 +298,66 @@ mod tests {
                 std::any::type_name::<Authz>(),
                 std::any::type_name::<Audit>(),
             ],
+        );
+    }
+
+    /// A layer whose priority the test chooses, one type per entry.
+    struct Ranked<const N: u8>(i8);
+    impl<const N: u8> Layer for Ranked<N> {
+        fn priority(&self) -> i8 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn a_method_priority_never_jumps_the_global_bucket() {
+        let chain = compose_chain::<dyn Layer>(
+            vec![
+                entry(Ranked::<1>(0), LayerSite::Global),
+                entry(Ranked::<2>(5), LayerSite::Global),
+            ],
+            vec![entry(Ranked::<3>(0), LayerSite::Host)],
+            vec![entry(Ranked::<4>(-10), LayerSite::Method)],
+            &[],
+            "GET /orders",
+        );
+        let sites: Vec<LayerSite> = chain.iter().map(|e| e.source).collect();
+        assert_eq!(
+            sites,
+            [
+                LayerSite::Global,
+                LayerSite::Global,
+                LayerSite::Host,
+                LayerSite::Method
+            ],
+            "a priority orders within its site, never ahead of a broader one",
+        );
+    }
+
+    #[test]
+    fn priority_orders_inside_one_bucket() {
+        let chain = compose_chain::<dyn Layer>(
+            vec![],
+            vec![],
+            vec![
+                entry(Ranked::<1>(3), LayerSite::Method),
+                entry(Ranked::<2>(-1), LayerSite::Method),
+                entry(Ranked::<3>(3), LayerSite::Method),
+                entry(Ranked::<4>(0), LayerSite::Method),
+            ],
+            &[],
+            "GET /orders",
+        );
+        let names: Vec<_> = chain.iter().map(|e| e.name).collect();
+        assert_eq!(
+            names,
+            [
+                std::any::type_name::<Ranked<2>>(),
+                std::any::type_name::<Ranked<4>>(),
+                std::any::type_name::<Ranked<1>>(),
+                std::any::type_name::<Ranked<3>>(),
+            ],
+            "lower runs first; declaration order breaks a tie",
         );
     }
 

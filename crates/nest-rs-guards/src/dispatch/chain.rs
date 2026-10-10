@@ -14,11 +14,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket};
 use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_core::{Container, ContainerId};
+use nest_rs_core::{Container, ContainerId, UnresolvedLayerError};
 
 use crate::Guard;
 use crate::dispatch::route_shaper::log_effective_chain;
-use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resolve_specs};
+use crate::dispatch::scoped_spec::{
+    ScopedGuardSpec, report_unresolved, resolve_global_guards, resolve_scoped,
+};
 
 /// The scope-tagged guard declarations of one operation site, as the decorator
 /// knows them. Read once per site, on the cache miss that composes the chain.
@@ -73,21 +75,40 @@ impl SiteChainCell {
     /// [`compose`].
     ///
     /// `global` is a function of the container, so the memo's key covers
-    /// everything the composition reads.
+    /// everything the composition reads. A site whose chain does not compose
+    /// is refused, with its `error` filed, and nothing is memoized: the unit
+    /// never runs without a layer it declares.
     pub(crate) fn chain(
         &self,
         container: &Container,
         route_label: &str,
         sources: &(dyn Fn() -> SiteChainSources + Sync),
         global: fn(&Container) -> GlobalBucket,
-    ) -> Arc<[ResolvedLayer<dyn Guard>]> {
+    ) -> Result<Arc<[ResolvedLayer<dyn Guard>]>, UnresolvedLayerError> {
+        self.cached(container, route_label, sources, global)
+            .inspect_err(report_unresolved)
+    }
+
+    fn cached(
+        &self,
+        container: &Container,
+        route_label: &str,
+        sources: &(dyn Fn() -> SiteChainSources + Sync),
+        global: fn(&Container) -> GlobalBucket,
+    ) -> Result<Arc<[ResolvedLayer<dyn Guard>]>, UnresolvedLayerError> {
         let id = container.id();
-        let primary = self.primary.get_or_init(|| Cached {
-            container: id,
-            chain: compose(container, route_label, sources(), global(container)),
-        });
+        let primary = match self.primary.get() {
+            Some(primary) => primary,
+            None => {
+                let chain = compose(container, route_label, sources(), global(container))?;
+                self.primary.get_or_init(|| Cached {
+                    container: id,
+                    chain,
+                })
+            }
+        };
         if primary.container == id {
-            return Arc::clone(&primary.chain);
+            return Ok(Arc::clone(&primary.chain));
         }
 
         // Another app in the same process. A poisoned lock must not deny
@@ -99,14 +120,14 @@ impl SiteChainCell {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(hit) = slots.iter().find(|c| c.container == id) {
-            return Arc::clone(&hit.chain);
+            return Ok(Arc::clone(&hit.chain));
         }
-        let chain = compose(container, route_label, sources(), global(container));
+        let chain = compose(container, route_label, sources(), global(container))?;
         slots.push(Cached {
             container: id,
             chain: Arc::clone(&chain),
         });
-        chain
+        Ok(chain)
     }
 }
 
@@ -125,10 +146,10 @@ fn compose(
     route_label: &str,
     sources: SiteChainSources,
     bucket: GlobalBucket,
-) -> Arc<[ResolvedLayer<dyn Guard>]> {
+) -> Result<Arc<[ResolvedLayer<dyn Guard>]>, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_guards(container));
-    let provider = resolve_specs(container, &sources.provider, LayerSite::Host);
-    let method = resolve_specs(container, &sources.method, LayerSite::Method);
+    let provider = resolve_scoped(container, &sources.provider, LayerSite::Host, route_label)?;
+    let method = resolve_scoped(container, &sources.method, LayerSite::Method, route_label)?;
 
     let mut chain =
         compose_chain::<dyn Guard>(global, provider, method, &sources.force, route_label);
@@ -136,5 +157,5 @@ fn compose(
         chain.retain(|entry| entry.source != LayerSite::Global);
     }
     log_effective_chain(route_label, "guards", &chain);
-    chain.into()
+    Ok(chain.into())
 }

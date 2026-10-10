@@ -76,7 +76,8 @@ so every stage above logs under one `trace_id` — see
 
 Interceptors sit outside filters; exception-filters sit closest to the handler
 — at both sites. `Layer::priority` orders entries *within* a site, never across
-sites.
+sites: a handler-scope guard at `-10` still runs after every global and
+controller guard.
 
 ## `#[public]` and `#[meta]`
 
@@ -101,8 +102,20 @@ provides it. `AuthzGuard` is provided by `AuthzModule` — add
 route the dependency through a module `PostsHttpModule` already imports.
 ```
 
-A global layer spec that cannot resolve (its provider's module is not imported)
-fails the boot through `HttpBootCheck`, naming the type. An imperative
+A global interceptor, filter or exception filter that cannot resolve (its
+provider's module is not imported) fails the boot of every app, one that serves
+no HTTP included, naming the type: the check runs at the boot's wiring step,
+before any hook. A global guard or pipe fails the same way when HTTP configures.
+
+A layer a site declares — on a controller, a route, a gateway or one of its
+messages — that no imported module provides fails the boot too, naming the
+layer and the site; a GraphQL or MCP operation, which composes its chain on its
+first call, refuses that call opaquely and logs one `error` naming both. No
+site ever runs without a layer it declares.
+
+A route whose guards are misordered — an authorization guard listed before the
+authentication guard whose principal it reads, at any scope — fails the boot
+naming both, rather than answering `500` to every request. An imperative
 self-mount under active global guards fails too, unless
 `fail_secure_strict = false` downgrades it to a warn (it defaults to `true`).
 

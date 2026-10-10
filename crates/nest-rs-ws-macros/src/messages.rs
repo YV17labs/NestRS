@@ -12,9 +12,9 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
-    await_if_async, cfg_attrs, guard_capability_bounds, impl_self_ident,
+    await_if_async, cfg_attrs, force_guard_typeids, guard_capability_bounds, impl_self_ident,
     injected_methods_with_layers, layer_deps, pipe_wrapper, reject_http_only_layers, returns_unit,
-    shared_receiver, take_flag_attr, take_path_list,
+    scoped_specs, shared_receiver, take_flag_attr, take_path_list,
 };
 
 /// WS's half of the shared posture grammar, mandatory per message.
@@ -114,6 +114,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut arms: Vec<TokenStream2> = Vec::new();
     let mut mounted_logs: Vec<TokenStream2> = Vec::new();
     let mut chain_inserts: Vec<TokenStream2> = Vec::new();
+    let mut event_checks: Vec<TokenStream2> = Vec::new();
     let mut all_message_layers: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
     // Every hook override is emitted under its method's `#[cfg]`; two compiled in
     // are two definitions of one trait method, which rustc refuses.
@@ -229,8 +230,24 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 .map(|guard| (cfgs.clone(), guard.clone())),
         );
 
-        let insert = chain_insert(&event, &guards, &force_guards);
-        chain_inserts.push(quote! { #(#cfgs)* let () = #insert; });
+        let method_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+        let force_typeids = force_guard_typeids(&force_guards);
+        chain_inserts.push(quote! {
+            #(#cfgs)*
+            __chains.insert(
+                #event,
+                ::nest_rs_guards::__private::ws_event_chain(
+                    __container,
+                    &#method_specs,
+                    &#force_typeids,
+                    #event,
+                ),
+            );
+        });
+        event_checks.push(quote! {
+            #(#cfgs)*
+            __events.push((#event, #method_specs));
+        });
 
         let method_name = method.sig.ident.clone();
 
@@ -485,21 +502,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             );
                             let __server = <#self_ty>::__nestrs_registry(__container);
                             let mut __chains = ::nest_rs_ws::EventLayerTable::new();
-                            let __global_guards: ::std::vec::Vec<(
-                                ::core::any::TypeId,
-                                &'static str,
-                                ::std::sync::Arc<dyn ::nest_rs_guards::Guard>,
-                            )> = match ::nest_rs_core::Container::get::<
-                                ::nest_rs_guards::GuardSpecs,
-                            >(__container) {
-                                ::core::option::Option::Some(__specs) => __specs.0
-                                    .iter()
-                                    .filter_map(|__s| __s
-                                        .resolve(__container)
-                                        .map(|__g| (__s.type_id, __s.name, __g)))
-                                    .collect(),
-                                ::core::option::Option::None => ::std::vec![],
-                            };
                             #(#chain_inserts)*
                             let __ctx = ::nest_rs_core::Container::get_dyn::<
                                 dyn ::nest_rs_ws::SocketContext,
@@ -521,17 +523,21 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS)
                     .runs_detached(__sockets),
                 )
-                // Only the upgrade chain is validated: the principal check describes
-                // `check_http`, and per-message chains have no notion of a producer yet.
+                // Only the upgrade chain is phase-validated: the principal check
+                // describes `check_http`, and per-message chains have no notion of a
+                // producer yet. Every declared guard must resolve, upgrade and events.
                 .attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpBootCheck>(
                     ::nest_rs_ws::nest_rs_http::HttpBootCheck::new(|__container| {
-                        ::nest_rs_guards::dispatch::boot_validate_guards(
+                        let mut __events: ::std::vec::Vec<(
+                            &'static str,
+                            ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>,
+                        )> = ::std::vec::Vec::new();
+                        #(#event_checks)*
+                        ::nest_rs_guards::__private::check_ws_gateway(
                             __container,
+                            &<#self_ty>::__nestrs_mount_path(),
                             &<#self_ty>::__nestrs_edge_guard_specs(),
-                            &::std::format!(
-                                "the {} gateway upgrade",
-                                <#self_ty>::__nestrs_mount_path(),
-                            ),
+                            &__events,
                         )
                     }),
                 )
@@ -626,77 +632,4 @@ fn hook_override(hook: &str, method: &ImplItemFn, at: Span) -> syn::Result<Token
             #body
         }
     })
-}
-
-/// One event's chain inputs, bound as `__global`, `__method`, `__force` and
-/// `__label`, reading `__global_guards` and `__container` from the enclosing scope.
-fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
-    let method_spec_entries = method_guards.iter().map(|p| {
-        quote! {
-            ::nest_rs_guards::__private::ResolvedLayer {
-                type_id: ::core::any::TypeId::of::<#p>(),
-                name: ::core::any::type_name::<#p>(),
-                source: ::nest_rs_guards::layer_chain::LayerSite::Method,
-                layer: ::nest_rs_core::Container::get::<#p>(__container).expect(concat!(
-                    "#[use_guards] WS message guard `",
-                    stringify!(#p),
-                    "` is not registered — add it to a module's providers"
-                )) as ::std::sync::Arc<dyn ::nest_rs_guards::Guard>,
-            }
-        }
-    });
-    let force_typeids = force_guards.iter().map(|p| {
-        quote! { ::core::any::TypeId::of::<#p>() }
-    });
-    quote! {
-        let __global: ::std::vec::Vec<
-            ::nest_rs_guards::__private::ResolvedLayer<dyn ::nest_rs_guards::Guard>
-        > = __global_guards
-            .iter()
-            .map(|(__tid, __name, __arc)| ::nest_rs_guards::__private::ResolvedLayer {
-                type_id: *__tid,
-                name: __name,
-                source: ::nest_rs_guards::layer_chain::LayerSite::Global,
-                layer: ::std::sync::Arc::clone(__arc),
-            })
-            .collect();
-        let __method: ::std::vec::Vec<
-            ::nest_rs_guards::__private::ResolvedLayer<dyn ::nest_rs_guards::Guard>
-        > = ::std::vec![#(#method_spec_entries),*];
-        let __force: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![#(#force_typeids),*];
-        let __label = ::std::format!("ws {}", #event);
-    }
-}
-
-/// Build the chain-insert for one `#[subscribe_message]` event: global plus
-/// method guards, deduped by `TypeId` unless `#[force_guards]` replays one.
-fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
-    let specs = chain_specs(event, method_guards, force_guards);
-    quote! {
-        {
-            #specs
-            let __chain = ::nest_rs_guards::__private::compose_chain::<dyn ::nest_rs_guards::Guard>(
-                __global,
-                ::std::vec![],
-                __method,
-                &__force,
-                &__label,
-            );
-            let __ws_chain: ::std::vec::Vec<
-                ::std::sync::Arc<dyn ::nest_rs_ws::WsMessageCheck>
-            > = __chain
-                .into_iter()
-                .map(|__e| {
-                    let __wrapped = ::nest_rs_guards::GuardAsWsMessageCheck::new(
-                        ::std::sync::Arc::clone(&__e.layer),
-                        __e.type_id,
-                        __e.name,
-                    );
-                    ::std::sync::Arc::new(__wrapped)
-                        as ::std::sync::Arc<dyn ::nest_rs_ws::WsMessageCheck>
-                })
-                .collect();
-            __chains.insert(#event, __ws_chain);
-        }
-    }
 }

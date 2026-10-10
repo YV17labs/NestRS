@@ -30,6 +30,9 @@ impl HeadlessApp {
     /// task, returning a [`TransportHandle`] to observe then shut it down.
     pub async fn spawn_transport<T: Transport>(&self, mut transport: T) -> Result<TransportHandle> {
         transport.configure(self.container()).await?;
+        if let Some(refusal) = nest_rs_core::__private::take_site_refusal(self.container()) {
+            return Err(refusal);
+        }
         let cancel = CancellationToken::new();
         let token = cancel.clone();
         let join = tokio::spawn(async move { Box::new(transport).serve(token).await });

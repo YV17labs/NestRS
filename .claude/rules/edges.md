@@ -185,8 +185,14 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   global interceptors observe it. A guard may attach context (`Ctx<T>`), and
   per-handler metadata is `#[meta(EXPR)]` read through `Reflector`.
 - **Boot is fail-secure.** An unresolvable global spec fails the boot naming the
-  type (`HttpBootCheck`); a hand-built `HttpTransport::mount` under active global
-  guards fails it too unless `fail_secure_strict` is turned off, which warns.
+  type — interceptors, filters and exception filters at the kernel's wiring step
+  (`provide_wiring`), in every app; guards and pipes through `HttpBootCheck`.
+  **No site runs without a layer it declares**: one composed at boot (a route, a
+  gateway's upgrade and messages) fails the boot naming the layer and the site,
+  one composed on its first dispatch (a GraphQL or MCP operation) refuses that
+  unit opaquely and files one `error` naming both. A hand-built
+  `HttpTransport::mount` under active global guards fails the boot too unless
+  `fail_secure_strict` is turned off, which warns.
   A self-mount declares an `EdgePosture`: `Guarded` (default; a WS upgrade) gets
   the global chain at its edge; `Exempt` gates in band (GraphQL, MCP) or is
   deliberately public (OpenAPI).
@@ -210,7 +216,8 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   edge); the marker matters only where a decorator binds the guard. A guard declaring a
   marker without overriding its `check_*` is a visible line, not a gap to close
   (`.claude/decisions/check-http-stays-on-guard.md`).
-- **Only route mounts, the global bucket and a WS upgrade are phase-validated**
+- **Only route mounts (global, controller and method scope composed), the global
+  bucket and a WS upgrade are phase-validated**
   (`.claude/decisions/in-band-phase-validation.md`); **MCP discovery is gated at
   the transport**, where the specification places it
   (`.claude/decisions/mcp-discovery-at-transport.md`).

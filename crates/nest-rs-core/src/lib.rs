@@ -113,7 +113,7 @@ pub use error::{
     AccessGraphError, BudgetPastNetError, ContestedDeclarationError, DecodeError,
     DuplicateProviderError, FactoryCycleError, KeyedDependencyError, LateFactoryError,
     MissingDependencyError, ProviderCycleError, ScopeViolationError, UnregisteredModuleError,
-    UnresolvedFactoryError, WiringFailedError,
+    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{boxed_error, error_message};
 pub use handler::{Handler, Posture, Reflector};
@@ -146,7 +146,8 @@ pub mod __private {
     pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::container::__private::{
-        collect_dynamic_import, enter_import, leave_import, register_dynamic_import,
+        collect_dynamic_import, enter_import, leave_import, refuse_site, register_dynamic_import,
+        take_site_refusal,
     };
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler};

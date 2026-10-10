@@ -281,6 +281,21 @@ pub struct WiringFailedError {
     pub source: anyhow::Error,
 }
 
+/// A layer declared on a site — a route, a gateway's upgrade or message, an
+/// operation — whose provider no imported module registers, so the site would
+/// otherwise run without it.
+#[derive(Debug, Error)]
+#[error(
+    "`{layer}` is declared on `{site}`, and no imported module provides it — import the module \
+     that provides it"
+)]
+pub struct UnresolvedLayerError {
+    /// The layer type, as declared.
+    pub layer: &'static str,
+    /// The site declaring it, as its boot log names it.
+    pub site: String,
+}
+
 /// A payload that did not decode, as every edge reports it: the category of the
 /// failure, the line and column when the payload was text, the kind of value
 /// found and the type expected — never the value.

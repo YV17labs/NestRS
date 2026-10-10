@@ -418,3 +418,84 @@ async fn a_guard_the_edge_did_not_run_still_runs_per_operation() {
          declaration the developer wrote",
     );
 }
+
+/// Listed by a host's `#[use_guards]`, provided by no module.
+#[injectable]
+#[derive(Default)]
+struct NeverProvided;
+
+impl Layer for NeverProvided {}
+
+#[async_trait]
+impl Guard for NeverProvided {
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl McpGuard for NeverProvided {}
+
+#[mcp(path = "/mcp/orphan")]
+#[use_guards(NeverProvided)]
+#[derive(Clone, Default)]
+struct OrphanTool;
+
+#[tools]
+impl OrphanTool {
+    /// Answer with a constant the client must never read.
+    #[tool]
+    #[public]
+    async fn reveal(&self) -> Result<String, McpError> {
+        Ok("classified".to_owned())
+    }
+}
+
+#[tokio::test]
+async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_says_why() {
+    use std::sync::Arc;
+
+    use poem::{Endpoint, EndpointExt, IntoEndpoint};
+
+    // Built by hand, so the access graph does not refuse first; the request
+    // scope stands in for the edge that installs it.
+    let container = nest_rs_core::Container::builder().build();
+    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
+    let inner = Arc::new(
+        nest_rs_mcp::endpoint(nest_rs_mcp::McpMount::deny_all().with_guard(guard), || {
+            OrphanTool
+        })
+        .into_endpoint()
+        .map_to_response(),
+    );
+    let scoped = poem::endpoint::make(move |req| {
+        let inner = Arc::clone(&inner);
+        let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));
+        let correlation = nest_rs_core::Correlation::minted(None);
+        async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
+    });
+    let client = poem::test::TestClient::new(scoped);
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let body = call_tool(&client, "/", "reveal", None).await;
+
+    assert!(
+        !body.contains("classified"),
+        "the operation never ran without its guard: {body}",
+    );
+    assert!(
+        !body.contains("NeverProvided"),
+        "the client never reads the wiring: {body}",
+    );
+    let event = logs.expect_one(
+        "nest_rs::layers",
+        "a layer the site declares is provided by no imported module",
+    );
+    assert_eq!(event.level, "error");
+    assert!(
+        event
+            .field("layer")
+            .is_some_and(|layer| layer.contains("NeverProvided")),
+        "the line names the layer: {:?}",
+        event.fields,
+    );
+}

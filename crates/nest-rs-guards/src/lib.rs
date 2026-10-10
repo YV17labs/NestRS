@@ -8,9 +8,11 @@
 //! Plug-in point for the Layer System: every guard is a [`Layer`](nest_rs_core::Layer), so the
 //! `#[routes]` / `#[operations]` / `#[messages]` shapers dedup by `TypeId` when
 //! the same guard is declared at multiple sites (global + controller +
-//! method) — the broadest [`LayerSite`](nest_rs_core::LayerSite) wins and the
-//! rest log a `warn`. The framework runs guards in **declaration order**;
-//! [`Layer::priority`](nest_rs_core::Layer::priority) is an opt-in tiebreaker.
+//! method) — the broadest [`LayerSite`](nest_rs_core::LayerSite) wins, and a
+//! redundant declaration is logged at `debug`. The framework runs guards site
+//! by site, from the broadest in, in **declaration order** within each;
+//! [`Layer::priority`](nest_rs_core::Layer::priority) is an opt-in tiebreaker
+//! within a site, never across.
 //!
 //! `#[public]` is not a framework-level skip: the macro attaches a
 //! [`Public`](nest_rs_http::Public) marker via the same metadata channel
@@ -56,9 +58,9 @@
 //! Register with `App::builder().use_guards_global([...])`
 //! ([`AppBuilderGuardsExt`]); the example on [`guard`](fn@guard) runs it.
 //!
-//! Declaration order is the runtime order. If you list `AuthzGuard` before
-//! `AuthnGuard` the authorization check runs against an empty principal — a
-//! name-based heuristic logs a `warn` at boot.
+//! Declaration order is the runtime order. List `AuthzGuard` before
+//! `AuthnGuard` — globally, on a controller or gateway, or beside one route —
+//! and the boot fails naming both, instead of every request answering `500`.
 //!
 //! The pool holds `Arc<dyn Guard>` and runs every `check_*` a pooled guard
 //! overrides, marker or not; decorator sites bind on the markers, so declare
@@ -144,6 +146,8 @@ pub mod __private {
 
     #[cfg(any(feature = "graphql", feature = "mcp"))]
     pub use crate::dispatch::chain::{SiteChainCell, SiteChainSources};
+    #[cfg(feature = "ws")]
+    pub use crate::dispatch::ws_chain::{check_ws_gateway, guard_ws_upgrade, ws_event_chain};
 
     pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};
 }

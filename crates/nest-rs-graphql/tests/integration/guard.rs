@@ -466,3 +466,109 @@ async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
         "one root field, three parents: the pool ran once",
     );
 }
+
+/// A site that composes on its first dispatch: a guard no module provides is
+/// never dropped from the chain — the operation is refused, opaquely.
+mod unresolvable {
+    use std::any::TypeId;
+
+    use nest_rs_core::{Container, Layer, ReachableProviders, injectable, module};
+    use nest_rs_graphql::GraphqlConfig;
+    use nest_rs_graphql::async_graphql::{Executor, Request, Result};
+    use nest_rs_graphql::{GraphqlOperationContext, async_trait, operations, resolver};
+    use nest_rs_guards::{Denial, GraphqlGuard, Guard};
+    use nest_rs_testing::LogCapture;
+
+    #[injectable]
+    #[derive(Default)]
+    struct NeverProvided;
+
+    impl Layer for NeverProvided {}
+
+    #[async_trait]
+    impl Guard for NeverProvided {
+        async fn check_graphql(
+            &self,
+            _op: &GraphqlOperationContext<'_>,
+        ) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GraphqlGuard for NeverProvided {}
+
+    #[resolver]
+    #[use_guards(NeverProvided)]
+    struct OrphanGuardedResolver;
+
+    #[operations]
+    impl OrphanGuardedResolver {
+        #[query]
+        #[public]
+        async fn orphan_secret(&self) -> Result<String> {
+            Ok("classified".into())
+        }
+    }
+
+    #[module(providers = [OrphanGuardedResolver])]
+    struct OrphanModule;
+
+    #[tokio::test]
+    async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_says_why() {
+        // Built by hand, so the access graph does not refuse first.
+        let container = Container::builder()
+            .import::<OrphanModule>()
+            .provide(ReachableProviders(
+                [TypeId::of::<OrphanGuardedResolver>()]
+                    .into_iter()
+                    .collect(),
+            ))
+            .build();
+        let schema =
+            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default());
+        let logs = LogCapture::install();
+
+        let response = schema.execute(Request::new("{ orphanSecret }")).await;
+
+        let json = serde_json::to_value(&response).expect("a response serializes");
+        let body = json.to_string();
+        assert!(
+            !body.contains("classified"),
+            "the operation never ran without its guard: {body}",
+        );
+        assert_eq!(response.errors.len(), 1, "one field error: {body}");
+        assert_eq!(
+            response.errors[0].message,
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            "opaque to the client: {body}",
+        );
+        assert_eq!(
+            json["errors"][0]["extensions"]["code"],
+            nest_rs_core::problem::code::INTERNAL.as_str(),
+            "under the internal class: {body}",
+        );
+        assert!(
+            !body.contains("NeverProvided"),
+            "the client never reads the wiring: {body}",
+        );
+        let event = logs.expect_one(
+            "nest_rs::layers",
+            "a layer the site declares is provided by no imported module",
+        );
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("layer")
+                .is_some_and(|layer| layer.contains("NeverProvided")),
+            "the line names the layer: {:?}",
+            event.fields,
+        );
+        assert!(
+            event
+                .field("site")
+                .is_some_and(|site| site.contains("orphan_secret")),
+            "…and the site: {:?}",
+            event.fields,
+        );
+    }
+}

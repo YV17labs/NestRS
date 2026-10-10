@@ -2,7 +2,7 @@
 //! resolver- / gateway- / method-scope layer declaration. Carries the
 //! `TypeId` so dedup against the global chain finds the same key.
 
-use nest_rs_core::Container;
+use nest_rs_core::{Container, UnresolvedLayerError};
 use nest_rs_exception_filters::ExceptionFilterErased;
 use nest_rs_filters::Filter;
 use nest_rs_interceptors::Interceptor;
@@ -40,20 +40,42 @@ pub(crate) fn resolve_global_guards(container: &Container) -> Vec<ResolvedLayer<
     resolve_global_layers::<crate::registry::GuardSpecs>(container)
 }
 
-pub(crate) fn resolve_specs<L: ?Sized>(
+/// Resolve one site's scoped declarations into entries tagged `scope`, so dedup
+/// against the global chain finds the same key.
+///
+/// A spec whose provider no imported module registers refuses, naming the layer
+/// and `site` (as its boot log names it): a site never runs without a layer it
+/// declares.
+pub(crate) fn resolve_scoped<L: ?Sized>(
     container: &Container,
     specs: &[ScopedLayerSpec<L>],
-    source: LayerSite,
-) -> Vec<ResolvedLayer<L>> {
+    scope: LayerSite,
+    site: &str,
+) -> Result<Vec<ResolvedLayer<L>>, UnresolvedLayerError> {
     specs
         .iter()
-        .filter_map(|spec| {
-            spec.resolve(container).map(|layer| ResolvedLayer {
+        .map(|spec| match spec.resolve(container) {
+            Some(layer) => Ok(ResolvedLayer {
                 type_id: spec.type_id,
                 name: spec.name,
-                source,
+                source: scope,
                 layer,
-            })
+            }),
+            None => Err(UnresolvedLayerError {
+                layer: spec.name,
+                site: site.to_owned(),
+            }),
         })
         .collect()
+}
+
+/// The one `error` a site files when a layer it declares does not resolve —
+/// for the operator; the client reads an opaque refusal.
+pub(crate) fn report_unresolved(unresolved: &UnresolvedLayerError) {
+    tracing::error!(
+        target: nest_rs_core::target::LAYERS,
+        layer = unresolved.layer,
+        site = unresolved.site.as_str(),
+        "a layer the site declares is provided by no imported module",
+    );
 }

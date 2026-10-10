@@ -141,3 +141,86 @@ async fn a_gateway_that_declares_no_guards_boots() {
         .await
         .unwrap_or_else(|err| panic!("a gateway need not declare guards: {err}"));
 }
+
+/// Listed by a message's `#[use_guards]`, provided by no module.
+#[injectable]
+#[derive(Default)]
+struct Unprovided;
+
+impl Layer for Unprovided {}
+
+#[async_trait]
+impl Guard for Unprovided {}
+
+impl HttpGuard for Unprovided {}
+impl WsGuard for Unprovided {}
+
+#[gateway(path = "/ws/unprovided")]
+struct UnprovidedGateway;
+
+#[messages]
+impl UnprovidedGateway {
+    #[subscribe_message("ping")]
+    #[use_guards(Unprovided)]
+    #[public]
+    async fn ping(&self, _client: &WsClient) -> String {
+        "pong".into()
+    }
+}
+
+#[module(imports = [WsModule], providers = [UnprovidedGateway])]
+struct UnprovidedModule;
+
+#[tokio::test]
+async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_event() {
+    // Built by hand, so the access graph does not refuse first.
+    let container = nest_rs_core::Container::builder()
+        .import::<UnprovidedModule>()
+        .build();
+    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::default();
+    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
+        panic!("the event would run without the guard it declares");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("Unprovided") && chain.contains("ws ping"),
+        "the refusal names the guard and the event declaring it: {chain}",
+    );
+    assert!(
+        chain.contains("no imported module provides it"),
+        "…and the remedy: {chain}",
+    );
+}
+
+/// Gated by a guard no module provides.
+#[gateway(path = "/ws/unprovided-upgrade")]
+#[use_guards(Unprovided)]
+struct UnprovidedUpgradeGateway;
+
+#[messages]
+impl UnprovidedUpgradeGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self, _client: &WsClient) -> String {
+        "pong".into()
+    }
+}
+
+#[module(imports = [WsModule], providers = [UnprovidedUpgradeGateway])]
+struct UnprovidedUpgradeModule;
+
+#[tokio::test]
+async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_gateway() {
+    let container = nest_rs_core::Container::builder()
+        .import::<UnprovidedUpgradeModule>()
+        .build();
+    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::default();
+    let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
+        panic!("the upgrade would run without the guard it declares");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("Unprovided") && chain.contains("/ws/unprovided-upgrade"),
+        "the refusal names the guard and the gateway declaring it: {chain}",
+    );
+}

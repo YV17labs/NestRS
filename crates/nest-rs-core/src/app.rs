@@ -166,6 +166,10 @@ impl App {
     /// Configure each transport against the container, run the init lifecycle
     /// hooks, then run all transports concurrently. SIGINT / SIGTERM cancels the
     /// shared token; the first transport that errors also cancels the others.
+    ///
+    /// A site a transport composes as it configures — a route, a gateway — that
+    /// could not compose (a layer it declares resolves to no provider, a
+    /// misordered guard chain) fails the boot here, before any hook runs.
     /// Once the transports have stopped, the shutdown hooks run within
     /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
     /// fails or panics is reported and the rest still run.
@@ -196,6 +200,11 @@ impl App {
 
         for (_, t) in transports.iter_mut() {
             t.configure(&container).await?;
+        }
+        // A site composed at `configure` (a route, a gateway) refuses here, its
+        // mount having no `Result` to fail with.
+        if let Some(refusal) = crate::container::__private::take_site_refusal(&container) {
+            return Err(refusal);
         }
         let stop_bound = transports
             .iter()

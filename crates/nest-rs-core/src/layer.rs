@@ -16,8 +16,9 @@
 //! error path unwinding ExceptionFilter (typed catch, closest to the
 //! handler) → Filter (generic mapper) → Interceptor (observer). Global
 //! interceptors / filters execute at the transport edge instead — outside
-//! routing — same relative nesting. Inside a single kind, the chain runs in
-//! declaration order, with [`Layer::priority`] as the tiebreaker within a site.
+//! routing — same relative nesting. Inside a single kind, the sites run from
+//! the broadest in, each in declaration order, with [`Layer::priority`] as the
+//! tiebreaker within a site — never across.
 //!
 //! The sub-traits live in `nest_rs_guards`, `nest_rs_pipes`,
 //! `nest_rs_interceptors`, `nest_rs_filters` and `nest_rs_exception_filters`.
@@ -76,8 +77,9 @@ impl LayerSite {
 /// The sub-traits are named, not linked: this crate sits below theirs, and a
 /// relative URL 404s on docs.rs.
 pub trait Layer: Send + Sync + 'static {
-    /// Tiebreaker inside a kind — lower runs first. Default `0`, leaving
-    /// declaration order in charge.
+    /// Tiebreaker inside one site of a kind — lower runs first, never ahead of
+    /// a broader site's layers. Default `0`, leaving declaration order in
+    /// charge.
     fn priority(&self) -> i8 {
         0
     }

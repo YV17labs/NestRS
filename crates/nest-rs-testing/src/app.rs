@@ -214,6 +214,11 @@ impl TestAppBuilder {
             None => http_from_config(app.container())?.unwrap_or_default(),
         };
         transport.configure(app.container()).await?;
+        // What `App::run` refuses after configuring, a route or gateway whose
+        // chain did not compose, the harness refuses too.
+        if let Some(refusal) = nest_rs_core::__private::take_site_refusal(app.container()) {
+            return Err(refusal);
+        }
         app.init().await?;
         let endpoint = transport
             .take_endpoint()

@@ -25,6 +25,14 @@ form a mounted secret takes, [read the same way for every key](/configuration/#c
 The tables below name the `_FILE` spelling only where a key is usually given
 that way.
 
+**Every TLS client reads the same three keys.** In each namespace whose module
+opens a TLS connection — `redis`, `storage`, `authn` — `TLS_CA_CERT` names the
+authorities the peer's certificate must chain to, replacing the system's, and
+`TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
+requires one, both or neither. The certificate is verified whatever is set, and
+a client that cannot present a certificate fails the boot rather than ignoring
+one.
+
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the
 binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
@@ -147,6 +155,7 @@ survives a swap of the backend underneath.
 |---|---|
 | `ENDPOINT` | S3 endpoint (empty ⇒ real AWS S3); an `https://` endpoint's certificate is verified against the system's authorities, or `TLS_CA_CERT`'s |
 | `TLS_CA_CERT` | PEM certificates of the authorities the endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | refused: `object_store` presents no client certificate, so either fails the boot, naming it |
 | `REGION` | region |
 | `ACCESS_KEY` / `SECRET_KEY` | static credentials — the dev container's pair in a development or test profile's defaults, none otherwise and none in `StorageConfig::default()`, so an unset pair fails the boot by name |
 | `BUCKET` | target bucket |
@@ -196,6 +205,7 @@ it and kept fresh ([JWT](/security/authentication/jwt/#verifying-another-issuers
 | `JWKS_URI` | the JWK Set an external issuer publishes its keys at — verify-only. `https` only; beside `SECRET`, `PRIVATE_KEY` or `PUBLIC_KEY`, fails the boot |
 | `ALGORITHMS` | comma-separated JOSE algorithms a token may be signed with, case-sensitive (`EdDSA,RS256`). Unset: `HS256` with `SECRET`, `EdDSA` with a PEM key, every asymmetric one (`RS256`–`RS512`, `PS256`–`PS512`, `ES256`, `ES384`, `EdDSA`) with `JWKS_URI`. A secret or a PEM key takes exactly one that fits it, a JWK Set never an `HS*` one; an unknown name, `none` included, fails the boot |
 | `TLS_CA_CERT` | PEM certificates of the authorities the `JWKS_URI` endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or set without `JWKS_URI`, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a `JWKS_URI` endpoint that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither; without `JWKS_URI`, they fail the boot |
 | `ISSUER` | expected `iss` claim (unset ⇒ no issuer check) |
 | `AUDIENCE` | expected `aud` claim. Set ⇒ the claim is **mandatory** and must name this app. Unset does *not* disable the check: a token carrying an `aud` this app is not named in is refused either way (RFC 7519 §4.1.3) |
 | `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE`, and reported at `warn` once per boot |

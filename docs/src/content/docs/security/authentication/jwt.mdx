@@ -180,7 +180,7 @@ passed to `AuthnModule::for_root(config)`.
 | `public_key` | `<PREFIX>_AUTHN__PUBLIC_KEY`, or a path in `<PREFIX>_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
 | `jwks_uri` | `<PREFIX>_AUTHN__JWKS_URI` | An external issuer's JWK Set, `https` only — verify-only, see [below](#verifying-another-issuers-tokens) |
 | `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`). Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
-| `tls.ca_cert` | `<PREFIX>_AUTHN__TLS_CA_CERT`, or a path in `<PREFIX>_AUTHN__TLS_CA_CERT_FILE` | PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's. Without `jwks_uri`, fails the boot |
+| `tls` | `<PREFIX>_AUTHN__TLS_CA_CERT`, `<PREFIX>_AUTHN__TLS_CERT` and `<PREFIX>_AUTHN__TLS_KEY`, each or a path in its `_FILE` spelling | A `nest_rs::config::ClientTls`: the PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's, and the client certificate presented to an endpoint that requires one. Without `jwks_uri`, fails the boot |
 | `leeway_secs` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30, at most 300 — RFC 7519 §4.1.4's "a few minutes" |
 | `audience` | `<PREFIX>_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
 | `issuer` | `<PREFIX>_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
@@ -305,8 +305,12 @@ cannot be had — never fetched, past its stale ceiling, or failing while the
 key a token names is looked for — answers `503` with `Retry-After`, on a
 `#[public]` route too, never a `401`: the token was never checked. The
 endpoint must be `https`, and its certificate is verified against the system's
-authorities, or the ones `<PREFIX>_AUTHN__TLS_CA_CERT` names; the fetch
-follows no redirect.
+authorities, or the ones `<PREFIX>_AUTHN__TLS_CA_CERT` names; an issuer that
+requires a client certificate gets the one `<PREFIX>_AUTHN__TLS_CERT` and
+`<PREFIX>_AUTHN__TLS_KEY` name. A handshake that fails answers that same
+opaque `503`, while the `authentication unavailable` event it logs at `error`
+names the setting that fixes it in its `detail` field; the fetch follows no
+redirect.
 
 ## Going further
 

@@ -48,3 +48,17 @@ encrypted without verifying, and plaintext with a server declining TLS, on
 every e2e suite built on it. It now opens through
 `SeaOrmConfig::connect_options`, the one constructor the pool, the tools and
 the fixture share, which refuses a mode that does not verify.
+
+**2026-10-10 — one client vocabulary, and Postgres keeps libpq's.** Redis,
+storage and authn each grew a TLS type of their own over one variable scheme
+(`RedisTls`, `StorageTls`, `AuthnTls`); the third occurrence became
+`nest_rs_config::ClientTls`, read under every namespace's `TLS_CA_CERT`,
+`TLS_CERT` and `TLS_KEY`, judged once and handed to each library as PEM — the
+system's authorities, read once, when none is set, so every client trusts
+through the same read of the store. A client that cannot present a
+certificate (object_store) refuses one at boot rather than ignoring it.
+Postgres is the exception on purpose: its pool reads libpq's URL parameters
+(`sslmode`, `sslrootcert`, `sslcert`, `sslkey`), the connection URI every
+Postgres tool and managed console shares, and a standard beats a second
+spelling of the same three settings. No `<PREFIX>_SEAORM__TLS_*` variable is
+added, and none of those parameters is refused.

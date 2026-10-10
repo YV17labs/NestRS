@@ -113,7 +113,10 @@ sentinel and the primary, to every Cluster node — and each verifies the
 certificate for the host it dials, against the same authorities and with the
 same client certificate (`<PREFIX>_REDIS__TLS_*`). Valkey couples the two the
 same way: a sentinel speaks TLS exactly when it reaches the nodes over TLS
-(`tls-replication yes`).
+(`tls-replication yes`). A server that requires a client certificate and
+refuses the one presented, or its absence, fails the boot at once on every
+topology — whichever sentinel, primary or seed refuses it — naming
+`<PREFIX>_REDIS__TLS_CERT` and `<PREFIX>_REDIS__TLS_KEY`.
 
 The host a sentinel or a Cluster names is the one dialled, so it is the one the
 certificate names. Have them announce hostnames the certificate carries —

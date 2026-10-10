@@ -151,6 +151,12 @@ variables or tiers.
 - **A structured `#[config]` value is a payload**: decoded by
   `ConfigService::json`, never by a config's own `serde_json`, and redacted at
   the `ConfigError` sink (`CLAUDE.md`, no payload value in an error).
+- **A TLS client's material is `ClientTls`**, read under its namespace's
+  `TLS_CA_CERT`, `TLS_CERT` and `TLS_KEY`: the one client vocabulary lives
+  beside the loader, its checks run in the consumer's one constructor, and a
+  driver converts it to its library's shape rather than writing a `*Tls` of
+  its own. No switch turns verification off (`CLAUDE.md`), held by
+  `clippy.toml`'s disallowed methods.
 
 ## Discovery and its gate
 

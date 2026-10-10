@@ -128,7 +128,8 @@ witnesses, and by review.
   a Cluster, to the primary serving its key's slot alone, which its holder
   opens afresh after a `MOVED` or a loss.
 - **TLS material beside a plaintext URL fails the boot**, since it would go
-  silently unused; verification is never an option (`CLAUDE.md`). An encrypted
+  silently unused; verification is never an option (`CLAUDE.md`). The material
+  is `RedisConfig::tls`, the shared `ClientTls` (`container.md`). An encrypted
   scheme encrypts every connection its topology opens, sentinels included.
 - **Under Sentinel, every reconnection asks the sentinels again** (Valkey's
   Sentinel client spec): a connection is never reopened to the address it had.

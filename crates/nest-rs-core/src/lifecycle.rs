@@ -2,11 +2,9 @@
 //! registry that [`crate::App::run`] drains per phase, in `(provider, method)` order.
 
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
 
-use futures_util::FutureExt as _;
 use tokio::time::Instant;
 
 use crate::container::Container;
@@ -129,7 +127,7 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
             method = hook.method,
             "running lifecycle hook",
         );
-        match contained((hook.run)(container)).await {
+        match crate::panic::contain((hook.run)(container)).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 return Err(err.context(format!(
@@ -158,12 +156,6 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
     Ok(())
 }
 
-async fn contained(
-    hook: HookFuture<'_>,
-) -> Result<anyhow::Result<()>, Box<dyn std::any::Any + Send>> {
-    AssertUnwindSafe(hook).catch_unwind().await
-}
-
 /// Shutdown-phase runner: logs a failure or panic and continues, bounded by
 /// `deadline`, which the three shutdown phases share ([`SHUTDOWN_HOOKS_TIMEOUT`]).
 pub(crate) async fn run_phase_lenient(
@@ -181,7 +173,8 @@ pub(crate) async fn run_phase_lenient(
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
         // it still runs once.
-        match tokio::time::timeout_at(deadline, contained((hook.run)(container))).await {
+        match tokio::time::timeout_at(deadline, crate::panic::contain((hook.run)(container))).await
+        {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,

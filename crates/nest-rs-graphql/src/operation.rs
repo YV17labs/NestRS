@@ -7,11 +7,9 @@
 //! `check_graphql` is declared once.
 
 use std::any::Any;
-use std::panic::AssertUnwindSafe;
 
 use async_graphql::extensions::ExtensionContext;
 use async_graphql::{Context, Result};
-use futures_util::FutureExt;
 use tracing::Instrument;
 
 /// One GraphQL operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees
@@ -135,7 +133,7 @@ where
         nest_rs_core::current_request_scope(),
         correlation,
         async move {
-            match AssertUnwindSafe(fut).catch_unwind().await {
+            match nest_rs_core::panic::contain(fut).await {
                 Ok(out) => {
                     line.file(if succeeded(&out) {
                         nest_rs_core::operation_log::OK

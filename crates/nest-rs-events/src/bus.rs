@@ -1,11 +1,9 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures_util::FutureExt;
 use nest_rs_core::tracing::Instrument;
 use parking_lot::RwLock;
 
@@ -89,7 +87,7 @@ async fn dispatch_one(
         filed: false,
     };
     let outcome = continuation
-        .scope(AssertUnwindSafe(fut).catch_unwind())
+        .scope(nest_rs_core::panic::contain(fut))
         .instrument(span)
         .await;
     match outcome {

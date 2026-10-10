@@ -2697,7 +2697,6 @@ name = "nest-rs-events"
 version = "7.0.0"
 dependencies = [
  "anyhow",
- "futures-util",
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-events-macros",
@@ -2868,7 +2867,6 @@ dependencies = [
 name = "nest-rs-mcp"
 version = "7.0.0"
 dependencies = [
- "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http",
@@ -3107,7 +3105,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "futures-util",
  "inventory",
  "nest-rs-authz",
  "nest-rs-config",

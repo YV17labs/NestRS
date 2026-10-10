@@ -93,10 +93,6 @@ thiserror.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.
 tokio.workspace = true
-# `catch_unwind` around each piece of after-commit work: it runs once the
-# transaction has committed, so a panic there must not unwind into the boundary
-# and turn a committed attempt into a failed one that a queue would replay.
-futures-util.workspace = true
 
 # Optional deps for transport-binding features.
 uuid = { workspace = true, optional = true }

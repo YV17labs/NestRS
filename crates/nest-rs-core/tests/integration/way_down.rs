@@ -1,11 +1,8 @@
 //! Covers `src/way_down.rs` — a signal received while the process is already
 //! stopping. A process exiting at once cannot be asserted on from inside, so the
-//! parent signals a child: this same test binary, re-run on one test.
+//! parent signals a [`ChildProcess`].
 
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::{
@@ -13,7 +10,9 @@ use nest_rs_core::{
 };
 use tokio_util::sync::CancellationToken;
 
-const CHILD_ROLE: &str = "NEST_RS_CORE_WAY_DOWN_CHILD";
+use crate::ChildProcess;
+
+const CHILD_TEST: &str = "way_down::way_down_child_process";
 
 const READY: &str = "WAY-DOWN-CHILD SERVING";
 
@@ -127,104 +126,9 @@ async fn run_child(role: String) -> anyhow::Result<()> {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the parent test hands the child its role through the environment"
-)]
 fn way_down_child_process() {
-    if let Ok(role) = std::env::var(CHILD_ROLE) {
+    if let Some(role) = crate::child_role() {
         let _ = run_child(role);
-    }
-}
-
-struct ChildProcess {
-    child: Child,
-    lines: Receiver<String>,
-    seen: Vec<String>,
-}
-
-impl ChildProcess {
-    fn spawn(role: &str) -> Self {
-        let mut child = Command::new(std::env::current_exe().expect("the test binary"))
-            .args(["--exact", "way_down::way_down_child_process", "--nocapture"])
-            .env(CHILD_ROLE, role)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("the child starts");
-        let stdout = child.stdout.take().expect("the child's stdout");
-        let (send, lines) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if send.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Self {
-            child,
-            lines,
-            seen: Vec::new(),
-        }
-    }
-
-    fn expect_line(&mut self, needle: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match self.lines.recv_timeout(left) {
-                Ok(line) => {
-                    let found = line.contains(needle);
-                    self.seen.push(line);
-                    if found {
-                        return;
-                    }
-                }
-                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
-                    let _ = self.child.kill();
-                    panic!(
-                        "the child never printed {needle:?}; it printed {:#?}",
-                        self.seen
-                    )
-                }
-            }
-        }
-    }
-
-    fn signal(&self, name: &str) {
-        let sent = Command::new("kill")
-            .args([format!("-{name}"), self.child.id().to_string()])
-            .status()
-            .expect("`kill` runs");
-        assert!(sent.success(), "SIG{name} was delivered");
-    }
-
-    fn exit_within(&mut self, bound: Duration) -> (Option<i32>, Vec<String>) {
-        let asked = Instant::now();
-        loop {
-            if let Some(status) = self.child.try_wait().expect("the child's status") {
-                while let Ok(line) = self.lines.recv_timeout(Duration::from_millis(500)) {
-                    self.seen.push(line);
-                }
-                return (status.code(), std::mem::take(&mut self.seen));
-            }
-            if asked.elapsed() > bound {
-                let _ = self.child.kill();
-                panic!(
-                    "the child was still running {bound:?} after the second signal; it printed \
-                     {:#?}",
-                    self.seen
-                );
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-impl Drop for ChildProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
@@ -234,7 +138,7 @@ const EXITING: &str =
 #[cfg(unix)]
 #[test]
 fn a_second_signal_while_a_hook_hangs_exits_at_once_naming_the_hook() {
-    let mut child = ChildProcess::spawn("hook");
+    let mut child = ChildProcess::spawn(CHILD_TEST, "hook");
     child.expect_line(READY);
     child.signal("TERM");
     child.expect_line(HOOK_STARTED);
@@ -255,7 +159,7 @@ fn a_second_signal_while_a_hook_hangs_exits_at_once_naming_the_hook() {
 #[cfg(unix)]
 #[test]
 fn a_second_signal_while_a_transport_will_not_stop_exits_at_once_naming_it() {
-    let mut child = ChildProcess::spawn("transport");
+    let mut child = ChildProcess::spawn(CHILD_TEST, "transport");
     child.expect_line(READY);
     child.signal("TERM");
     child.expect_line("shutdown signal received");

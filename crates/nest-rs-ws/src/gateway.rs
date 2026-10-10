@@ -1,10 +1,9 @@
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::{FutureExt, SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{Container, Correlation, RequestContinuation, RequestScope, operation_log};
 use nest_rs_http::DetachedWork;
 use nest_rs_pipes::PipeError;
@@ -505,7 +504,7 @@ async fn under_connection<F: Future<Output = ()>>(
     let ran = nest_rs_core::with_request_scope(
         None,
         connection.clone(),
-        AssertUnwindSafe(hook).catch_unwind(),
+        nest_rs_core::panic::contain(hook),
     )
     .instrument(span)
     .await;
@@ -712,7 +711,7 @@ async fn handle_text<G: Gateway>(
     let ran = nest_rs_core::with_request_scope(
         scope,
         correlation,
-        AssertUnwindSafe(dispatch).catch_unwind(),
+        nest_rs_core::panic::contain(dispatch),
     )
     .instrument(span)
     .await;

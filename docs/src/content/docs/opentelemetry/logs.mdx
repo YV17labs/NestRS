@@ -171,7 +171,7 @@ a handler's return, so every edge builds both, and every edge files them:
 
 | Edge | `cancelled` | `panic` |
 |---|---|---|
-| HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — over HTTP/1 its connection goes with it (`a connection task panicked`), over HTTP/2 its stream is reset and the connection keeps serving (`an HTTP/2 stream task panicked`); one `error` on `nest_rs::http` files it, and the server keeps accepting |
+| HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — over HTTP/1 its connection goes with it (`a connection task panicked`), over HTTP/2 its stream is reset and the connection keeps serving (`an HTTP/2 stream task panicked`); one `error` on `nest_rs::http` files it beside [the process hook's](#a-panic-is-said-once-without-its-value), and the server keeps accepting |
 | WebSocket | a message or a hook still running when the window closes | a handler (its client gets an error frame), a hook (`#[on_connect]` closes the socket `1011`) |
 | GraphQL | a field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a field (over HTTP, the request unwinds too); a subscription (the socket closes `1011`) |
 | MCP | an operation its client cancelled or the window stopped; a `subscriptions/listen` at the signal | a tool or a notification — its client gets an internal error |
@@ -181,6 +181,28 @@ a handler's return, so every edge builds both, and every edge files them:
 
 So one query answers "what did this deployment do", and "what failed" is
 `outcome != ok` or `status >= 400`.
+
+### A panic is said once, without its value
+
+`#[nest_rs::main]` installs a panic hook before your `main` runs, so Rust's
+default `thread '…' panicked at …` line never reaches stderr — with it went the
+payload, written raw: `.unwrap()` on a failed decode quotes the value it could
+not read. A unit that catches its own unwind files the `error` that says what
+panicked, beside its `outcome="panic"` line; the payload goes under `panic`,
+with serde's quoted values cut, and where it happened under `panic_location`
+(`file:line:col`).
+
+A panic no unit catches — a task your code spawned, `main` itself — is one
+`error` on `nest_rs::app`, written by the hook:
+
+```text frame="terminal"
+ERROR nest_rs::app: panicked where no unit of work contains it thread="tokio-runtime-worker" panic="called `Result::unwrap()` on an `Err` value: Error(\"invalid type: a string, expected u64\", line: 1, column: 24)" panic_location="src/billing/service.rs:42:61"
+```
+
+It also carries `backtrace` when `RUST_BACKTRACE` asks for one. Before any
+subscriber exists — while the `.env` cascade loads, say — the hook writes one
+line to stderr instead, `nestrs: panicked at <file:line:col>: <message>`, with
+the same message, so no panic goes unsaid.
 
 The unit's span says the same thing to a tracing backend: every span whose unit
 did not end `ok` carries OpenTelemetry's `error.type` — the same word as the

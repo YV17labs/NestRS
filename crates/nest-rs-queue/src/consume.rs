@@ -5,11 +5,9 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::FutureExt;
 use nest_rs_core::{
     Container, Correlation, ReachableProviders, RequestScope, panic_message, with_request_scope,
 };
@@ -741,7 +739,7 @@ async fn run(
         Input::Payload(payload) => Ok(
             match tokio::time::timeout(
                 timeout,
-                AssertUnwindSafe(handler(payload, context)).catch_unwind(),
+                nest_rs_core::panic::contain(handler(payload, context)),
             )
             .await
             {

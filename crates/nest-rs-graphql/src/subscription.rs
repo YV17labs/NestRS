@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -18,7 +17,7 @@ use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{Data, Executor};
 use async_graphql_poem::GraphQLProtocol;
 use futures_util::stream::SplitSink;
-use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
+use futures_util::{SinkExt, Stream, StreamExt};
 use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
@@ -303,7 +302,7 @@ async fn serve_socket<E: Executor>(
     loop {
         // A subscription's stream is developer code polled here: a panic closes
         // the socket with 1011.
-        let next = match AssertUnwindSafe(engine.next()).catch_unwind().await {
+        let next = match nest_rs_core::panic::contain(engine.next()).await {
             Ok(next) => next,
             Err(payload) => {
                 close_socket(&mut sink, CloseCode::Error, UNWOUND).await;

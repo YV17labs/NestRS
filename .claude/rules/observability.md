@@ -162,7 +162,8 @@ shutdown window, with its worker — and `outcome = panic` for one that unwound.
 No handler's return carries either, so the line is held by a guard dropped with
 the unit's future (code that must notice a stop can miss it), and a panic is
 contained where the unit is dispatched, unless the edge's transport takes the
-connection (an HTTP/2 stream) down with it, as HTTP's does. Where a client
+connection (an HTTP/2 stream) down with it, as HTTP's does — no unit contains
+that unwind, so the process hook files its payload, redacted. Where a client
 waits, the unwind is answered: an MCP internal error, a WS error frame with the
 socket kept, `1011` on a socket whose connect hook or subscription unwound.
 
@@ -171,8 +172,12 @@ socket kept, `1011` on a socket whose connect hook or subscription unwound.
   its own unit shares the future it is dropped with. Where siblings share one —
   a GraphQL selection's fields — the unit catches its own unwind, files `panic`
   and resumes it, and a sibling dropped by it files `cancelled`.
+- **A unit contains its unwind through `nest_rs_core::panic::contain`**, the
+  one way the process hook `#[nest_rs::main]` installs learns the unit files
+  the panic itself; any other panic the hook files once, on `nest_rs::app`.
 - **The panic field is written through `nest_rs_core::panic`'s helper**, keyed
-  by `panic::FIELD`, never a literal, and tests assert the constant.
+  by `panic::FIELD` and its location by `panic::LOCATION_FIELD`, never a
+  literal, and tests assert the constants.
 - **Each edge's suite proves which of its units file `cancelled` and `panic`.**
 
 ## Targets are constants their concern's crate owns

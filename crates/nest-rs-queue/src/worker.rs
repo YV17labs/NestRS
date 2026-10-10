@@ -22,14 +22,12 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
-use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::FutureExt as _;
 use futures_util::future::BoxFuture;
 use nest_rs_core::{Container, SHUTDOWN_SETTLE_TIMEOUT, Transport, error_message};
 use serde_json::Value;
@@ -536,7 +534,7 @@ impl<C: JobConsumer> MethodRun<C> {
             tokio::select! {
                 biased;
                 () = killed.cancelled() => {}
-                ended = AssertUnwindSafe(delivery).catch_unwind() => {
+                ended = nest_rs_core::panic::contain(delivery) => {
                     // The attempt catches its handler's panics, so this one is
                     // the backend's or the worker's own.
                     if let Err(panic) = ended {

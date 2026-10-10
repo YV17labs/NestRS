@@ -1,8 +1,13 @@
-//! Path normalization at the transport edge (`src/edge.rs`), through the whole
-//! composed stack rather than the layer alone.
+//! The transport edge (`src/edge.rs`) through the whole composed stack rather
+//! than the layer alone: path normalization, and a handler that unwinds.
 
+use std::panic::AssertUnwindSafe;
+
+use futures_util::FutureExt as _;
 use nest_rs_core::module;
+use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
 use nest_rs_http::{controller, routes};
+use nest_rs_testing::LogCapture;
 use poem::http::StatusCode;
 
 #[controller(path = "/kitchen")]
@@ -89,4 +94,57 @@ async fn an_error_the_route_tree_answers_carries_the_edge_s_headers() {
     unparsed.assert_status(StatusCode::BAD_REQUEST);
     unparsed.assert_content_type("application/problem+json");
     unparsed.assert_header("x-content-type-options", "nosniff");
+}
+
+#[controller(path = "/oven")]
+struct OvenController;
+
+#[routes]
+impl OvenController {
+    #[get("/")]
+    async fn bake(&self) -> &'static str {
+        panic!("the oven caught fire")
+    }
+}
+
+#[module(providers = [OvenController])]
+struct OvenModule;
+
+#[nest_rs_core::main]
+async fn ask_the_oven() -> bool {
+    let client = crate::boot::<OvenModule>().await;
+    AssertUnwindSafe(client.get("/oven").send())
+        .catch_unwind()
+        .await
+        .is_err()
+}
+
+/// No unit contains a handler's unwind, so the process hook files it beside the
+/// request's `outcome = panic` line.
+#[test]
+fn a_handler_that_panics_is_filed_by_the_process_hook_beside_its_line() {
+    let logs = LogCapture::install();
+
+    assert!(ask_the_oven(), "the panic reached the caller");
+
+    let hook = logs.expect_one(
+        nest_rs_core::target::APP,
+        "panicked where no unit of work contains it",
+    );
+    assert_eq!(hook.level, "error");
+    assert_eq!(hook.field(FIELD).as_deref(), Some("the oven caught fire"));
+    let location = hook.field(LOCATION_FIELD).unwrap_or_default();
+    assert!(
+        location.contains("tests/integration/edge.rs:"),
+        "where it panicked: {hook:#?}"
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_http::unit::REQUEST.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{line:#?}"
+    );
 }

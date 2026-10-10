@@ -39,11 +39,11 @@ The panic is caught by the queue port itself, around the handler, which is
 what keeps the event inside the attempt's trace. Each delivery also runs on a
 task of its own, so the worker goes on to its next job.
 
-Rust's **default panic hook still prints its own `thread … panicked at …` line
-to stderr** first: catching an unwind does not replace the hook. That line
-carries no target, so `RUST_LOG` cannot filter it — the framework's own record
-is the `job dead-lettered: handler panicked` event beneath it. Install
-`std::panic::set_hook` in `main` if you need the raw line gone.
+That event is the panic's one record: under `#[nest_rs::main]` the process
+hook stays quiet for a panic the attempt contains, so no raw
+`thread … panicked at …` line reaches stderr, and the event names where the
+handler panicked under `panic_location`
+([a panic is said once](/opentelemetry/logs/#a-panic-is-said-once-without-its-value)).
 
 ## The retry shape
 

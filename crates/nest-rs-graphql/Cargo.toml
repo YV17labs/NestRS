@@ -42,9 +42,7 @@ async-trait.workspace = true
 # through the framework, keeping it out of every app's manifest.
 async-graphql-poem.workspace = true
 # The graphql-ws loop is this crate's own — the one place a socket's end can
-# enter the protocol — so it splits the socket and reads both halves as streams;
-# and an unwind is caught where it is named: a subscription's in that loop, a
-# field's at its operation line.
+# enter the protocol — so it splits the socket and reads both halves as streams.
 futures-util.workspace = true
 # Re-exported so `#[resolver]`-generated `inventory::submit!` resolves through
 # the framework without apps depending on `inventory` directly.

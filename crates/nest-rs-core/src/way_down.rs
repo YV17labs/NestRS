@@ -238,11 +238,13 @@ fn teardown_budget() -> Duration {
         })
 }
 
-/// What `#[nest_rs::main]` expands to: build the runtime, run `main` on it, and
-/// tear it down within what remains of the shutdown hooks' budget.
+/// What `#[nest_rs::main]` expands to: install the process panic hook, build
+/// the runtime, run `main` on it, and tear it down within what remains of the
+/// shutdown hooks' budget.
 ///
 /// The runtime is what `#[tokio::main]` builds; only its teardown is bounded.
 pub fn main<T, F: Future<Output = T>>(main: F) -> T {
+    std::panic::set_hook(Box::new(crate::panic::hook));
     #[expect(
         clippy::panic,
         reason = "without a runtime `main` cannot start, and nothing above it can be told"

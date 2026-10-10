@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,7 +6,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use croner::Cron;
-use futures_util::FutureExt;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use nest_rs_core::{Container, Correlation, Discovery, ReachableProviders, Transport, inventory};
@@ -954,7 +952,7 @@ async fn bounded<T>(
     tokio::select! {
         biased;
         () = cancel.cancelled() => Bounded::Cancelled,
-        answered = tokio::time::timeout(budget, AssertUnwindSafe(call).catch_unwind()) => {
+        answered = tokio::time::timeout(budget, nest_rs_core::panic::contain(call)) => {
             answered.map_or(Bounded::Stale, Bounded::Answered)
         }
     }
@@ -1385,7 +1383,7 @@ impl Runner {
     async fn fire_inner(&self, id: JobId, task: Task, line: TickLine) {
         // A panic would otherwise end this job's schedule while the process
         // reports healthy; the run starts inside the catch too.
-        let run = AssertUnwindSafe(run_in_job_context(
+        let run = nest_rs_core::panic::contain(run_in_job_context(
             self.ctx.as_ref(),
             task.transaction,
             async { (task.run)(&self.container).await },
@@ -1393,8 +1391,7 @@ impl Runner {
             // A transaction that could not settle wrote nothing: a failed tick.
             // Its retryability is reported, not acted on: a schedule has no budget.
             |why| Err(anyhow::Error::new(why)),
-        ))
-        .catch_unwind();
+        ));
         // A replica runs one occurrence at a time, so a call that never answers
         // would skip every later one for as long as the process lives.
         let outcome = match tokio::time::timeout(task.timeout, run).await {

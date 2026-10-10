@@ -147,6 +147,7 @@ pub mod __private {
     pub use crate::lifecycle::__private::LifecycleHook;
     pub use crate::module::__private::{dynamic_import_module, module_registered};
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
+    pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::trace_context::__private::{
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
@@ -206,6 +207,10 @@ pub use nest_rs_core_macros::hooks;
 
 /// Run an app's `async fn main` on the runtime the framework owns, and end the
 /// process within the shutdown budget.
+///
+/// Before the runtime exists it installs the process panic hook: a panic no
+/// unit of work contains is one `error` on `nest_rs::app`, its payload
+/// redacted by [`panic_message`], never Rust's default line on stderr.
 ///
 /// ```
 /// # use nest_rs_core::{App, module};

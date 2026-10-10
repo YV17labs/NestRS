@@ -19,8 +19,7 @@ async-trait.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-# FutureExt::catch_unwind isolates a panicking `fire` so one bad job never
-# silently kills its schedule (mirrors the queue's CatchPanicLayer).
+# `join_all`: an overrun asks its lock about every skipped occurrence at once.
 futures-util.workspace = true
 tracing.workspace = true
 # `OccurrenceLockError`, the opaque failure a lock backend reports.

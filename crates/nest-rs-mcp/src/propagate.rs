@@ -24,10 +24,8 @@
 
 use std::borrow::Cow;
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
-use futures_util::FutureExt;
 use nest_rs_core::{Correlation, RequestContinuation, operation_log};
 use nest_rs_http::DetachedWork;
 use rmcp::ServerHandler;
@@ -150,7 +148,7 @@ impl<H> PropagatingHandler<H> {
                 .run(async move {
                     tokio::select! {
                         biased;
-                        ran = AssertUnwindSafe(ran).catch_unwind() => Ended::Ran(ran),
+                        ran = nest_rs_core::panic::contain(ran) => Ended::Ran(ran),
                         answer = stopped => Ended::Stopped(answer),
                     }
                 })
@@ -331,8 +329,7 @@ macro_rules! notification_method {
                     McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
                 let method: Cow<'_, str> = ($method).into();
                 let line = OperationLine::open(&method, None, correlation.clone(), tracing::Span::none());
-                let handled =
-                    AssertUnwindSafe(self.inner.$name($($arg,)* context)).catch_unwind();
+                let handled = nest_rs_core::panic::contain(self.inner.$name($($arg,)* context));
                 nest_rs_core::with_request_scope(scope, correlation, async move {
                     match self.detached.run(handled).await {
                         Some(Ok(())) => line.file(operation_log::OK),

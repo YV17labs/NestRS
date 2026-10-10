@@ -38,9 +38,8 @@ tracing.workspace = true
 # call site needs — a bare `::nest_rs_worker::` path would resolve against the
 # consumer's extern prelude and break any app that hasn't added the crate.
 nest-rs-worker.workspace = true
-# `consume::attempt` catches a handler panic itself (`catch_unwind` on the job
-# future), so the event lands inside the per-job span instead of unwinding past
-# it into a backend's panic layer.
+# `BoxFuture`, the future a backend hands the worker for one delivery and for
+# its upkeep.
 futures-util.workspace = true
 # The `JobId` a push mints: a UUID v7, so ids sort in push order.
 uuid.workspace = true

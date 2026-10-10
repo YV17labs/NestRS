@@ -3,12 +3,10 @@
 
 use std::any::Any;
 use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
-use futures_util::FutureExt;
 use nest_rs_database::Deferred;
 
 use crate::error::CommitError;
@@ -371,7 +369,7 @@ async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, commi
         return;
     }
     for work in held {
-        if let Err(payload) = AssertUnwindSafe(work).catch_unwind().await {
+        if let Err(payload) = nest_rs_core::panic::contain(work).await {
             nest_rs_core::contained_panic!(
                 target: crate::TARGET,
                 payload.as_ref(),

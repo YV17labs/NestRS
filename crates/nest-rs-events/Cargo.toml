@@ -18,9 +18,6 @@ anyhow.workspace = true
 tracing.workspace = true
 # Listener-registry lock — poison-free locking on the emit path.
 parking_lot.workspace = true
-# `catch_unwind` on each listener future: a panicking listener is contained to
-# itself rather than unwinding through `emit` into the emitter's request.
-futures-util.workspace = true
 # `after_commit` — an event emitted inside a transaction is dispatched once that
 # transaction commits, and never when it rolls back. The seam is the data
 # layer's port, named for no ORM, so the bus waits for whichever one is bound.

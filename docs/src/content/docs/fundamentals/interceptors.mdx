@@ -93,7 +93,7 @@ or per handler.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpEndpointWrap` wrap + the per-route shaper |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level wrap + the per-route shaper |
 | **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 

@@ -17,7 +17,8 @@ categories = ["authentication", "web-programming"]
 nest-rs-core.workspace = true
 # `AuthnModule` owns `AuthnConfig` (namespace `authn`), loaded from
 # `NESTRS_AUTHN__*`. The `#[config]` derive routes through
-# `nest_rs_config::validator`, so this crate declares no `validator` of its own.
+# `nest_rs_config::__private::validator`, so this crate declares no `validator`
+# of its own.
 nest-rs-config.workspace = true
 # `Strategy` reads the `poem::Request`; `AuthnGuard` implements the `Guard` trait
 # re-exported by the HTTP surface.

@@ -188,8 +188,8 @@ async fn users_list_returns_a_page() {
 }
 ```
 
-`with_test_telemetry` calls `OpenTelemetry::init_for_tests` — a console-only
-init honouring `<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is
+`with_test_telemetry` installs console-only telemetry, honouring
+`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is
 idempotent; the first test to run wins, the rest no-op. It is gated by the
 `opentelemetry` feature on `nest-rs-testing`.
 

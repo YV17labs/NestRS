@@ -342,9 +342,8 @@ can own is the database. Two settings keep a suite apart:
 
 ## Test telemetry
 
-`with_test_telemetry()` calls `OpenTelemetry::init_for_tests` — a
-console-only init honouring `<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise
-control). It is idempotent; the first test to run wins, the rest no-op.
+`with_test_telemetry()` installs console-only telemetry, honouring
+`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is idempotent; the first test to run wins, the rest no-op.
 Required when the module tree imports `OpenTelemetryModule` (the boot
 guard panics otherwise). Gated by the `opentelemetry` feature on
 `nest-rs-testing`.

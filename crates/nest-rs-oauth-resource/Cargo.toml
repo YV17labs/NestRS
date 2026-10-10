@@ -15,7 +15,8 @@ categories = ["authentication", "web-programming"]
 nest-rs-core.workspace = true
 # `ProtectedResourceModule` owns `ProtectedResourceConfig` (namespace
 # `oauth__resource`), loaded from `NESTRS_OAUTH__RESOURCE__*`. The `#[config]`
-# derive routes through `nest_rs_config::validator`, so no `validator` here.
+# derive routes through `nest_rs_config::__private::validator`, so no
+# `validator` here.
 nest-rs-config.workspace = true
 # The document is served by a `#[controller]`, and the challenge is an
 # `#[interceptor]` auto-mounted at the transport edge.

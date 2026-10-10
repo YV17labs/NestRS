@@ -54,21 +54,21 @@ fn emit_soft_delete_registration(model: &ResourceModel) -> TokenStream2 {
 fn emit_timestamps() -> TokenStream2 {
     quote! {
         #[::nest_rs_resource::async_trait]
-        impl ::nest_rs_resource::sea_orm::ActiveModelBehavior for ActiveModel {
+        impl ::nest_rs_resource::__private::sea_orm::ActiveModelBehavior for ActiveModel {
             async fn before_save<C>(
                 mut self,
                 _db: &C,
                 insert: bool,
-            ) -> ::core::result::Result<Self, ::nest_rs_resource::sea_orm::DbErr>
+            ) -> ::core::result::Result<Self, ::nest_rs_resource::__private::sea_orm::DbErr>
             where
-                C: ::nest_rs_resource::sea_orm::ConnectionTrait,
+                C: ::nest_rs_resource::__private::sea_orm::ConnectionTrait,
             {
-                let now: ::nest_rs_resource::sea_orm::prelude::DateTimeWithTimeZone =
-                    ::nest_rs_resource::chrono::Utc::now().fixed_offset();
+                let now: ::nest_rs_resource::__private::sea_orm::prelude::DateTimeWithTimeZone =
+                    ::nest_rs_resource::__private::chrono::Utc::now().fixed_offset();
                 if insert {
-                    self.created_at = ::nest_rs_resource::sea_orm::ActiveValue::Set(now);
+                    self.created_at = ::nest_rs_resource::__private::sea_orm::ActiveValue::Set(now);
                 }
-                self.updated_at = ::nest_rs_resource::sea_orm::ActiveValue::Set(now);
+                self.updated_at = ::nest_rs_resource::__private::sea_orm::ActiveValue::Set(now);
                 ::core::result::Result::Ok(self)
             }
         }

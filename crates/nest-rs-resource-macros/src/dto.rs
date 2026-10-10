@@ -43,9 +43,9 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
             // chrono's own `Serialize` spelling (`Z` for UTC), which a masked
             // reply re-serialized from the model ships: one instant, one string.
             inits.push(quote! {
-                #name: ::nest_rs_resource::chrono::DateTime::<::nest_rs_resource::chrono::FixedOffset>::to_rfc3339_opts(
+                #name: ::nest_rs_resource::__private::chrono::DateTime::<::nest_rs_resource::__private::chrono::FixedOffset>::to_rfc3339_opts(
                     &model.#name,
-                    ::nest_rs_resource::chrono::SecondsFormat::AutoSi,
+                    ::nest_rs_resource::__private::chrono::SecondsFormat::AutoSi,
                     true,
                 )
             });
@@ -71,13 +71,13 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,
-            ::nest_rs_resource::serde::Serialize,
-            ::nest_rs_resource::serde::Deserialize,
+            ::nest_rs_resource::__private::serde::Serialize,
+            ::nest_rs_resource::__private::serde::Deserialize,
             #graphql_derives
-            ::nest_rs_resource::schemars::JsonSchema,
+            ::nest_rs_resource::__private::schemars::JsonSchema,
         )]
-        #[serde(crate = "::nest_rs_resource::serde")]
-        #[schemars(crate = "::nest_rs_resource::schemars")]
+        #[serde(crate = "::nest_rs_resource::__private::serde")]
+        #[schemars(crate = "::nest_rs_resource::__private::schemars")]
         #graphql_crate
         #complex
         pub struct #output {

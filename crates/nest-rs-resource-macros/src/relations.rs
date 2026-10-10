@@ -77,7 +77,7 @@ fn live_rows_condition(model: &ResourceModel) -> TokenStream2 {
     if model.soft_delete {
         quote! { ::nest_rs_seaorm::live_condition::<Entity>() }
     } else {
-        quote! { ::nest_rs_resource::sea_orm::Condition::all() }
+        quote! { ::nest_rs_resource::__private::sea_orm::Condition::all() }
     }
 }
 
@@ -114,7 +114,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                 )
                     #live
                     .filter(
-                        <Column as ::nest_rs_resource::sea_orm::ColumnTrait>::is_in(
+                        <Column as ::nest_rs_resource::__private::sea_orm::ColumnTrait>::is_in(
                             &Column::#pk_col,
                             __keys.iter().cloned(),
                         ),
@@ -278,7 +278,7 @@ fn emit_fk_loaders(
                     // Two aliases of one relation may ask for different windows.
                     let mut __windows: ::std::vec::Vec<(
                         u64,
-                        ::core::option::Option<::nest_rs_resource::uuid::Uuid>,
+                        ::core::option::Option<::nest_rs_resource::__private::uuid::Uuid>,
                         ::std::vec::Vec<#fk_ty>,
                     )> = ::std::vec::Vec::new();
                     for __key in __keys {
@@ -535,7 +535,7 @@ fn emit_has_many_method(
             let __after = ::core::option::Option::and_then(
                 ::core::option::Option::as_deref(&after),
                 |__c| ::core::result::Result::ok(
-                    ::nest_rs_resource::uuid::Uuid::parse_str(__c),
+                    ::nest_rs_resource::__private::uuid::Uuid::parse_str(__c),
                 ),
             );
             let __page = __loader
@@ -564,7 +564,7 @@ fn emit_has_many_method(
 fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
     if is_uuid(ty) {
         quote! {
-            ::nest_rs_resource::uuid::Uuid::parse_str(&self.#ident)
+            ::nest_rs_resource::__private::uuid::Uuid::parse_str(&self.#ident)
                 .map_err(|__e| ::nest_rs_resource::graphql::async_graphql::Error::new(__e.to_string()))?
         }
     } else {

@@ -170,18 +170,17 @@ pub use nest_rs_resource_macros::wire_enum;
 // derive carries a `crate = ` override pointing back here.
 pub use async_trait::async_trait;
 pub use serde_json;
-
-#[doc(hidden)]
-pub use chrono;
-#[doc(hidden)]
-pub use sea_orm;
-#[doc(hidden)]
-pub use uuid;
-
-#[doc(hidden)]
-pub use schemars;
-#[doc(hidden)]
-pub use serde;
 pub use tracing;
+
 #[doc(hidden)]
-pub use validator;
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use chrono;
+    pub use schemars;
+    pub use sea_orm;
+    pub use serde;
+    pub use uuid;
+    pub use validator;
+}

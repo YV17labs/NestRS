@@ -168,7 +168,7 @@ fn wire_default_reconstructs_and_strips_an_unexposed_custom_enum() {
 
 #[test]
 fn an_id_and_a_timestamp_keep_their_format_on_the_wire_string() {
-    let schema = nest_rs_resource::schemars::schema_for!(reading::Reading);
+    let schema = nest_rs_resource::__private::schemars::schema_for!(reading::Reading);
     let json = serde_json::to_value(&schema).expect("the schema serializes");
     let properties = &json["properties"];
     assert_eq!(properties["id"]["type"], "string", "{json}");

@@ -43,14 +43,14 @@ fn input_struct(
         #[derive(
             ::core::fmt::Debug,
             ::core::clone::Clone,
-            ::nest_rs_resource::serde::Deserialize,
+            ::nest_rs_resource::__private::serde::Deserialize,
             #graphql_derives
-            ::nest_rs_resource::validator::Validate,
-            ::nest_rs_resource::schemars::JsonSchema,
+            ::nest_rs_resource::__private::validator::Validate,
+            ::nest_rs_resource::__private::schemars::JsonSchema,
         )]
-        #[serde(crate = "::nest_rs_resource::serde")]
-        #[validate(crate = ::nest_rs_resource::validator)]
-        #[schemars(crate = "::nest_rs_resource::schemars")]
+        #[serde(crate = "::nest_rs_resource::__private::serde")]
+        #[validate(crate = ::nest_rs_resource::__private::validator)]
+        #[schemars(crate = "::nest_rs_resource::__private::schemars")]
         #graphql_crate
         pub struct #name {
             #(#decls),*

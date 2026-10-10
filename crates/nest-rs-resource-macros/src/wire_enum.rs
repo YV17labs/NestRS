@@ -59,13 +59,13 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
             ::core::fmt::Debug,
             ::core::cmp::PartialEq,
             ::core::cmp::Eq,
-            ::nest_rs_resource::serde::Serialize,
-            ::nest_rs_resource::serde::Deserialize,
+            ::nest_rs_resource::__private::serde::Serialize,
+            ::nest_rs_resource::__private::serde::Deserialize,
             #graphql_derive
-            ::nest_rs_resource::schemars::JsonSchema,
+            ::nest_rs_resource::__private::schemars::JsonSchema,
         )]
-        #[serde(crate = "::nest_rs_resource::serde")]
-        #[schemars(crate = "::nest_rs_resource::schemars")]
+        #[serde(crate = "::nest_rs_resource::__private::serde")]
+        #[schemars(crate = "::nest_rs_resource::__private::schemars")]
         #graphql_crate
         #item
     })

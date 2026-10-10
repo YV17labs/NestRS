@@ -27,7 +27,7 @@ fn a_wire_enum_carries_the_value_shape_the_derives_require() {
 
 #[test]
 fn a_wire_enum_describes_itself_to_openapi() {
-    let schema = nest_rs_resource::schemars::schema_for!(Tier);
+    let schema = nest_rs_resource::__private::schemars::schema_for!(Tier);
     let json = serde_json::to_value(&schema).expect("the schema serializes");
     assert_eq!(
         json.get("enum"),

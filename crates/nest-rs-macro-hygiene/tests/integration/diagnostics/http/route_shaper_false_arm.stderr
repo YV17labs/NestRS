@@ -1,45 +1,45 @@
-error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
+error[E0277]: the trait bound `Authorize<u8>: poem::FromRequest<'_>` is not satisfied
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:19:34
    |
 19 |     async fn list(&self, _authz: Authorize<u8>) -> Result<Json<u8>> {
    |                                  ^^^^^^^^^^^^^ unsatisfied trait bound
    |
-help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
+help: the trait `poem::FromRequest<'_>` is not implemented for `Authorize<u8>`
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:11:1
    |
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `FromRequest<'a>`:
+   = help: the following other types implement trait `poem::FromRequest<'a>`:
              &'a HeaderMap
              &'a HttpRequest
              &'a LocalAddr
              &'a RemoteAddr
-             &'a poem::http::Uri
+             &'a nest_rs::nest_rs_http::Uri
              Bind<A, S>
-             Body
              ClientIp
+             Ctx<T>
            and $N others
 
-error[E0277]: the trait bound `Authorize<u8>: FromRequest<'_>` is not satisfied
+error[E0277]: the trait bound `Authorize<u8>: poem::FromRequest<'_>` is not satisfied
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:16:1
    |
 16 | #[routes]
    | ^^^^^^^^^ unsatisfied trait bound
    |
-help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
+help: the trait `poem::FromRequest<'_>` is not implemented for `Authorize<u8>`
   --> tests/integration/diagnostics/http/route_shaper_false_arm.rs:11:1
    |
 11 | struct Authorize<T>(T);
    | ^^^^^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `FromRequest<'a>`:
+   = help: the following other types implement trait `poem::FromRequest<'a>`:
              &'a HeaderMap
              &'a HttpRequest
              &'a LocalAddr
              &'a RemoteAddr
-             &'a poem::http::Uri
+             &'a nest_rs::nest_rs_http::Uri
              Bind<A, S>
-             Body
              ClientIp
+             Ctx<T>
            and $N others
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
 

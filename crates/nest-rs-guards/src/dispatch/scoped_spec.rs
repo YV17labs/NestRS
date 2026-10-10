@@ -8,7 +8,7 @@ use nest_rs_filters::Filter;
 use nest_rs_interceptors::Interceptor;
 use nest_rs_pipes::GlobalPipe;
 
-use nest_rs_core::__private::{ResolvedLayer, resolve_global_layers};
+use nest_rs_core::__private::{ResolvedLayer, refuse_site, resolve_global_layers};
 use nest_rs_core::layer_chain::{LayerSite, LayerSpec};
 
 use crate::Guard;
@@ -78,4 +78,11 @@ pub(crate) fn report_unresolved(unresolved: &UnresolvedLayerError) {
         site = unresolved.site.as_str(),
         "a layer the site declares is provided by no imported module",
     );
+}
+
+/// Refuse a site composed at mount whose declared layer does not resolve: its
+/// `error`, and the refusal filed on `container` for the boot to fail on.
+pub(crate) fn refuse_unresolved(container: &Container, unresolved: UnresolvedLayerError) {
+    report_unresolved(&unresolved);
+    refuse_site(container, unresolved.into());
 }

@@ -11,7 +11,6 @@ use nest_rs_mcp::{
     McpError, McpOperationContext, McpOperationKind, current_container, unresolvable_chain,
 };
 
-use crate::Denial;
 use crate::dispatch::chain::{GlobalBucket, SiteChainCell, SiteChainSources};
 use crate::dispatch::denial_convert::denial_to_mcp_error;
 
@@ -39,12 +38,9 @@ pub async fn run_layered_mcp_chain(
         return Err(unresolvable_chain(route_label));
     };
 
-    let Ok(chain) = cell.chain(&container, route_label, sources, |_| GlobalBucket::Fold) else {
-        // Filed at `error` by the cell; the client reads an opaque refusal.
-        return Err(denial_to_mcp_error(Denial::internal(
-            "a layer the operation declares did not resolve",
-        )));
-    };
+    let chain = cell
+        .chain(&container, route_label, sources, |_| GlobalBucket::Fold)
+        .map_err(denial_to_mcp_error)?;
     if chain.is_empty() {
         return Ok(());
     }

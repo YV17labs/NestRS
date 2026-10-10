@@ -12,7 +12,6 @@ use nest_rs_graphql::__private::FederationGate;
 use nest_rs_graphql::GraphqlOperationContext;
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
 
-use crate::Denial;
 use crate::dispatch::chain::{GlobalBucket, SiteChainCell, SiteChainSources};
 use crate::dispatch::denial_convert::denial_to_graphql_error;
 
@@ -76,12 +75,9 @@ async fn run_chain(
     sources: &(dyn Fn() -> SiteChainSources + Sync),
     site: GraphqlSite,
 ) -> std::result::Result<(), GraphqlError> {
-    let Ok(chain) = cell.chain(container, route_label, sources, site.bucket()) else {
-        // Filed at `error` by the cell; the client reads an opaque refusal.
-        return Err(denial_to_graphql_error(Denial::internal(
-            "a layer the operation declares did not resolve",
-        )));
-    };
+    let chain = cell
+        .chain(container, route_label, sources, site.bucket())
+        .map_err(denial_to_graphql_error)?;
     let operation = GraphqlOperationContext::field(ctx);
     for entry in chain.iter() {
         // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`

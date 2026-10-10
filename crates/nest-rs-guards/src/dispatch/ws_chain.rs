@@ -9,7 +9,7 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::__private::{compose_chain, dedup_bucket, refuse_site};
+use nest_rs_core::__private::{compose_chain, dedup_bucket};
 use nest_rs_core::Container;
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_ws::{WsClient, WsError, WsMessageCheck};
@@ -19,7 +19,7 @@ use poem::{EndpointExt, Response};
 use crate::dispatch::denial_convert::denial_to_ws_error;
 use crate::dispatch::route_shaper::refused_route;
 use crate::dispatch::scoped_spec::{
-    ScopedGuardSpec, report_unresolved, resolve_global_guards, resolve_scoped,
+    ScopedGuardSpec, refuse_unresolved, resolve_global_guards, resolve_scoped,
 };
 use crate::dispatch::validate::boot_validate_guards;
 use crate::{Denial, Guard, GuardAsWsMessageCheck, GuardExt};
@@ -64,8 +64,7 @@ pub fn ws_event_chain(
     let method = match resolve_scoped(container, method, LayerSite::Method, &site) {
         Ok(method) => method,
         Err(unresolved) => {
-            report_unresolved(&unresolved);
-            refuse_site(container, unresolved.into());
+            refuse_unresolved(container, unresolved);
             return vec![Arc::new(RefusedEvent)];
         }
     };
@@ -95,8 +94,7 @@ pub fn guard_ws_upgrade(
     let host = match resolve_scoped(container, specs, LayerSite::Host, &site) {
         Ok(host) => host,
         Err(unresolved) => {
-            report_unresolved(&unresolved);
-            refuse_site(container, unresolved.into());
+            refuse_unresolved(container, unresolved);
             return poem::endpoint::make_sync(|_| refused_route()).boxed();
         }
     };

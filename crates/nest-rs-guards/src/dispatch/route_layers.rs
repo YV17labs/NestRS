@@ -26,9 +26,7 @@
 //!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 
-use nest_rs_core::__private::{
-    ResolvedLayer, compose_chain, dedup_bucket, refuse_site, resolve_global_layers,
-};
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers};
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, UnresolvedLayerError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
@@ -40,7 +38,7 @@ use poem::{Endpoint, EndpointExt, Request, Response};
 
 use crate::dispatch::route_shaper::refused_route;
 use crate::dispatch::scoped_spec::{
-    ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedInterceptorSpec, report_unresolved,
+    ScopedExceptionFilterSpec, ScopedFilterSpec, ScopedInterceptorSpec, refuse_unresolved,
     resolve_scoped,
 };
 
@@ -119,8 +117,7 @@ where
     let (exception_filters, filters, interceptors) = match composed {
         Ok(chains) => chains,
         Err(unresolved) => {
-            report_unresolved(&unresolved);
-            refuse_site(container, unresolved.into());
+            refuse_unresolved(container, unresolved);
             return RouteEndpoint::Layered(poem::endpoint::make_sync(|_| refused_route()).boxed());
         }
     };

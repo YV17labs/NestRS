@@ -18,11 +18,11 @@ use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, site_c
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, ContainerId, UnresolvedLayerError};
 
-use crate::Guard;
 use crate::dispatch::route_shaper::log_effective_chain;
 use crate::dispatch::scoped_spec::{
     ScopedGuardSpec, report_unresolved, resolve_global_guards, resolve_scoped,
 };
+use crate::{Denial, Guard};
 
 /// The scope-tagged guard declarations of one operation site, as the decorator
 /// knows them. Read once per site, on the cache miss that composes the chain.
@@ -68,6 +68,17 @@ struct Cached {
     chain: Weak<[ResolvedLayer<dyn Guard>]>,
 }
 
+impl Cached {
+    /// The chain, when it is `id`'s and that container still holds it.
+    fn live_for(&self, id: ContainerId) -> Option<Chain> {
+        if self.container == id {
+            self.chain.upgrade()
+        } else {
+            None
+        }
+    }
+}
+
 impl SiteChainCell {
     /// An empty cell — `const` so the macro can put one in a `static`.
     pub const fn new() -> Self {
@@ -82,26 +93,23 @@ impl SiteChainCell {
     ///
     /// `global` is a function of the container, so the memo's key covers
     /// everything the composition reads. A site whose chain does not compose
-    /// is refused, with its `error` filed, and nothing is memoized: the unit
-    /// never runs without a layer it declares.
+    /// is refused with an opaque [`Denial::internal`], its `error` filed, and
+    /// nothing is memoized: the unit never runs without a layer it declares.
     pub(crate) fn chain(
         &self,
         container: &Container,
         route_label: &str,
         sources: &(dyn Fn() -> SiteChainSources + Sync),
         global: fn(&Container) -> GlobalBucket,
-    ) -> Result<Chain, UnresolvedLayerError> {
-        let id = container.id();
-        if let Some(chain) = self
-            .primary
-            .get()
-            .filter(|primary| primary.container == id)
-            .and_then(|primary| primary.chain.upgrade())
-        {
+    ) -> Result<Chain, Denial> {
+        if let Some(chain) = self.primary.get().and_then(|p| p.live_for(container.id())) {
             return Ok(chain);
         }
         self.compose_for(container, route_label, sources, global)
-            .inspect_err(report_unresolved)
+            .map_err(|unresolved| {
+                report_unresolved(&unresolved);
+                Denial::internal("a layer the operation declares did not resolve")
+            })
     }
 
     /// The miss: another app in the process, or this site's first operation.
@@ -123,19 +131,12 @@ impl SiteChainCell {
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        // Another operation of this site may have filled the slot meanwhile.
+        // Another operation of this site may have filled a slot meanwhile.
         if let Some(chain) = self
             .primary
             .get()
-            .filter(|primary| primary.container == id)
-            .and_then(|primary| primary.chain.upgrade())
-        {
-            return Ok(chain);
-        }
-        if let Some(chain) = extra
-            .iter()
-            .find(|cached| cached.container == id)
-            .and_then(|cached| cached.chain.upgrade())
+            .and_then(|p| p.live_for(id))
+            .or_else(|| extra.iter().find_map(|cached| cached.live_for(id)))
         {
             return Ok(chain);
         }
@@ -198,7 +199,7 @@ mod tests {
         cell.chain(container, "Query.orders", &declares_nothing, |_| {
             GlobalBucket::Fold
         })
-        .unwrap_or_else(|unresolved| panic!("an empty chain composes: {unresolved}"))
+        .unwrap_or_else(|denial| panic!("an empty chain composes: {denial:?}"))
     }
 
     #[test]

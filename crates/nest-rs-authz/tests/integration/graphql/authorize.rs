@@ -89,7 +89,7 @@ impl HttpGuard for AbilityInjector {}
 
 impl HttpGuard for PassGuard {}
 
-impl nest_rs_resource::WireModelDefaults for widget::Entity {}
+impl nest_rs_authz::WireModelDefaults for widget::Entity {}
 
 #[resolver]
 struct WidgetResolver;

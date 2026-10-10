@@ -73,7 +73,7 @@ pub(crate) mod child {
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`, with a
 /// server-only column (`secret`) the wire DTOs never carry —
-/// [`WireModelDefaults`](nest_rs_resource::WireModelDefaults) reconstructs it so
+/// [`WireModelDefaults`](nest_rs_authz::WireModelDefaults) reconstructs it so
 /// policy can read it, and the exposed-key strainer drops it again.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 pub(crate) mod widget {
@@ -96,7 +96,7 @@ pub(crate) mod widget {
 }
 
 #[cfg(any(feature = "mcp", feature = "ws"))]
-impl nest_rs_resource::WireModelDefaults for widget::Entity {
+impl nest_rs_authz::WireModelDefaults for widget::Entity {
     fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
         map.entry("secret")
             .or_insert(serde_json::Value::String(String::new()));

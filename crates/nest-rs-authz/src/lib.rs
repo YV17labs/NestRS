@@ -35,6 +35,7 @@ mod predicate;
 mod subject;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod wire_mask;
+mod wire_model;
 
 /// This crate's span target.
 pub const TARGET: &str = "nest_rs::authz";
@@ -56,6 +57,7 @@ pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use wire_mask::masked_reply;
+pub use wire_model::WireModelDefaults;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;

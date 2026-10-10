@@ -79,7 +79,7 @@ pub(crate) fn emit(model: &ResourceModel) -> proc_macro2::TokenStream {
             quote! { stringify!(#key) }
         });
     quote! {
-        impl ::nest_rs_resource::WireModelDefaults for Entity {
+        impl ::nest_rs_authz::WireModelDefaults for Entity {
             fn fill_wire_defaults(
                 #param: &mut ::nest_rs_resource::serde_json::Map<::std::string::String, ::nest_rs_resource::serde_json::Value>,
             ) {

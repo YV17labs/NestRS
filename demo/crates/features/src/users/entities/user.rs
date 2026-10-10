@@ -56,7 +56,7 @@ pub struct Model {
 
 #[cfg(test)]
 mod tests {
-    use nest_rs::resource::WireModelDefaults;
+    use nest_rs::authz::WireModelDefaults;
     use serde_json::Map;
 
     use super::*;

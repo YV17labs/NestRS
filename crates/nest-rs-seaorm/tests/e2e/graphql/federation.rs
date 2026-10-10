@@ -3,12 +3,11 @@
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait, guard};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_seaorm::{
     Access, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
 };

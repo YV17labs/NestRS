@@ -6,7 +6,6 @@
 //! a hand-written resolver never calls it.
 
 use nest_rs_graphql::async_graphql::{Context, Error};
-use nest_rs_resource::WireModelDefaults;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,7 +15,7 @@ use super::context::forbidden_fields;
 use crate::ability::mask_reason;
 use crate::gate::{Refusal, reason, transport};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker};
+use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 
 /// Mask **one item of a subscription stream** through the ambient ability, and
 /// report whether it survives — `Ok(None)` meaning this subscriber may not read

@@ -1,6 +1,4 @@
-//! Output surfaces of `#[expose]`: relation loader traits ([`relations`]) and
-//! the wire defaults trait ([`wire`]) the macro fills in.
+//! Output surfaces of `#[expose]`: the relation loader traits ([`relations`]).
 
 #[cfg(feature = "graphql")]
 pub(crate) mod relations;
-pub(crate) mod wire;

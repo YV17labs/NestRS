@@ -39,9 +39,12 @@ Reach async-graphql's types the same way and the line above stays the only one:
 use nest_rs::graphql::async_graphql::{Context, Result};
 ```
 
-Declare `async-graphql = "7"` yourself only when you write **its derives** by
+Declare `async-graphql = "7.2"` yourself only when you write **its derives** by
 hand (`#[derive(SimpleObject)]` on a type of your own) — a derive you wrote
-expands against your prelude, exactly like `serde`'s.
+expands against your prelude, exactly like `serde`'s. A build without `seaorm`
+declares it too, with `features = ["uuid", "chrono"]`, when a `Uuid` or a chrono
+`DateTime` crosses the schema. Those scalars are async-graphql's own, and
+`seaorm` turns them on for its entities.
 
 ## The minimal resolver
 

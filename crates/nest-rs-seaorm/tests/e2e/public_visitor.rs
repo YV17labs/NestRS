@@ -3,12 +3,11 @@
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read, WireModelDefaults};
 use nest_rs_core::module;
 use nest_rs_guards::guard;
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{controller, routes};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
 use nest_rs_testing::TestApp;
 use sea_orm::DatabaseConnection;

@@ -4,12 +4,11 @@
 use std::sync::Arc;
 
 use nest_rs_authz::http::Authorize;
-use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_authz::{AbilityBuilder, Action, Read, WireModelDefaults};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
 use poem::Request;
 use serde::Serialize;

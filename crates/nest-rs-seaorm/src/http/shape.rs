@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use nest_rs_authz::http::AbilityShaping;
-use nest_rs_authz::{Ability, ActionMarker};
+use nest_rs_authz::{Ability, ActionMarker, WireModelDefaults};
 use nest_rs_http::{ResponseShaping, RouteResponseShaper};
-use nest_rs_resource::WireModelDefaults;
 use poem::Request;
 use sea_orm::EntityTrait;
 use serde::Serialize;

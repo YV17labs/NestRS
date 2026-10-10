@@ -216,7 +216,7 @@ To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
 body, by design, omits every unexposed column. `WireModelDefaults`
 fills them with placeholder values so deserialization succeeds:
 
-```rust title="nest_rs::resource::WireModelDefaults"
+```rust title="nest_rs::authz::WireModelDefaults"
 pub trait WireModelDefaults: EntityTrait {
     fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
 }

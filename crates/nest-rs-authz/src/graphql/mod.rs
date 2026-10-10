@@ -37,7 +37,7 @@
 //! #     pub enum Relation {}
 //! #     impl ActiveModelBehavior for ActiveModel {}
 //! # }
-//! # impl nest_rs_resource::WireModelDefaults for users::Entity {}
+//! # impl nest_rs_authz::WireModelDefaults for users::Entity {}
 //! # #[derive(SimpleObject, serde::Serialize, serde::Deserialize)]
 //! # struct User {
 //! #     id: i32,

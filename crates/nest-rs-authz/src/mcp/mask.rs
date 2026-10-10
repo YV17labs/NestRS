@@ -9,7 +9,6 @@
 
 use nest_rs_guards::{Denial, denial_to_mcp_error};
 use nest_rs_mcp::McpError;
-use nest_rs_resource::WireModelDefaults;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -17,7 +16,7 @@ use serde::de::DeserializeOwned;
 use crate::ability::mask_reason;
 use crate::gate::{Refusal, reason, transport};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker, current_ability};
+use crate::{Ability, Action, ActionMarker, WireModelDefaults, current_ability};
 
 /// What the developer changes so this refusal has a representation; rides in `remedy`.
 const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a field grant's refusal has a \

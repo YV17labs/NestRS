@@ -7,7 +7,6 @@ use crate::ability::mask_reason;
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use std::collections::BTreeSet;
 
-use nest_rs_resource::WireModelDefaults;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::{Deserialize, DeserializeOwned};
@@ -16,7 +15,7 @@ use serde_json::Value;
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use crate::FieldSet;
 use crate::error::MaskReplyError;
-use crate::{Ability, Action};
+use crate::{Ability, Action, WireModelDefaults};
 
 pub(crate) use crate::ability::warn_mask_failure;
 

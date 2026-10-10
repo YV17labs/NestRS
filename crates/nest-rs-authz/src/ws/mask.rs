@@ -10,7 +10,6 @@
 //! schema promising a key, so a stripped key is simply absent.
 
 use nest_rs_guards::{Denial, denial_to_ws_error};
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_ws::WsError;
 use sea_orm::EntityTrait;
 use serde::Serialize;
@@ -20,7 +19,7 @@ use serde_json::Value;
 use crate::ability::mask_reason;
 use crate::gate::transport;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
-use crate::{Action, ActionMarker, current_ability};
+use crate::{Action, ActionMarker, WireModelDefaults, current_ability};
 
 /// Mask a message reply through the ambient ability and return the JSON the frame
 /// should carry.

@@ -33,7 +33,6 @@ default = []
 http = [
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
-    "dep:nest-rs-resource",
     "dep:poem",
 ]
 # GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
@@ -44,13 +43,11 @@ graphql = [
     "dep:nest-rs-graphql",
     # The root `AbilityGuard` is what a resolver binds, and its `check_http`
     # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
-    # `nest-rs-http`, which the GraphQL bindings alone never named. The two
-    # sibling crates need no `dep:` line: `nest-rs-guards/graphql` and
-    # `nest-rs-resource/graphql` are the strong form, which activates the
-    # optional dependency as well as its feature.
+    # `nest-rs-http`, which the GraphQL bindings alone never named.
+    # `nest-rs-guards/graphql` needs no `dep:` line: it is the strong form,
+    # which activates the optional dependency as well as its feature.
     "dep:nest-rs-http",
     "nest-rs-guards/graphql",
-    "nest-rs-resource/graphql",
     "dep:poem",
 ]
 # MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
@@ -68,9 +65,6 @@ mcp = [
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
     "nest-rs-guards/mcp",
-    # `masked_value_for` strains a masked row against the entity's statically
-    # known exposed columns, which is `WireModelDefaults::wire_keys`.
-    "dep:nest-rs-resource",
     "dep:poem",
 ]
 # WebSocket surface: the per-message class gate (`ws::authorize`) and reply mask
@@ -88,7 +82,6 @@ ws = [
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
     "nest-rs-guards/ws",
-    "dep:nest-rs-resource",
     "dep:poem",
 ]
 # Enable every transport binding at once — useful for
@@ -123,7 +116,6 @@ nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-guards = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }
-nest-rs-resource = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 
@@ -149,6 +141,8 @@ nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The `ws` mirror suites declare a real `#[gateway]`, whose expansion names
 # `::nest_rs_ws::` paths at the call site.
 nest-rs-ws = { path = "../nest-rs-ws" }
+# The `ws` module's example writes `#[expose]`, whose expansion implements this
+# crate's `WireModelDefaults`; path-only, since that crate's tests depend back here.
 nest-rs-resource = { path = "../nest-rs-resource" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,

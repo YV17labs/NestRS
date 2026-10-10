@@ -8,7 +8,9 @@
 use std::sync::Arc;
 
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply, with_ability};
+use nest_rs_authz::{
+    AbilityBuilder, Action, MaskReplyError, Read, WireModelDefaults, masked_reply, with_ability,
+};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
@@ -18,7 +20,6 @@ use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver
 use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
-use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;

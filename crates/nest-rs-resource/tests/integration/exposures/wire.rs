@@ -145,7 +145,7 @@ fn wire_only_expose_compiles_without_graphql_tokens() {
 #[test]
 fn wire_default_reconstructs_and_strips_an_unexposed_custom_enum() {
     use account::{Entity, Tier};
-    use nest_rs_resource::WireModelDefaults;
+    use nest_rs_authz::WireModelDefaults;
 
     let mut body: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     Entity::fill_wire_defaults(&mut body);

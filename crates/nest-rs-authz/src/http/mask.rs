@@ -20,7 +20,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use nest_rs_http::{ResponseShaping, RouteFuture, RouteResponseShaper};
-use nest_rs_resource::WireModelDefaults;
 use poem::http::StatusCode;
 use poem::{Request, Response};
 use sea_orm::EntityTrait;
@@ -30,7 +29,7 @@ use serde_json::Value;
 
 use super::authorize::Authorize;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
-use crate::{Ability, Action, ActionMarker, with_ability};
+use crate::{Ability, Action, ActionMarker, WireModelDefaults, with_ability};
 
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where

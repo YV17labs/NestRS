@@ -300,13 +300,12 @@ A value out of its bounds fails the boot, whether the environment set it or
 - **Valkey, its latest release** — 9.1 at this release, the one the suite
   runs on. The connection speaks the Redis protocol, hence `redis://`,
   `rediss://` and `nest_rs::redis`; Redis itself is not a supported server.
-- **A standalone Valkey only, for now** — neither Valkey Cluster nor Sentinel
-  yet. A queue's keys share one hash slot, so the layout is a cluster's
-  already; the connection is a client of one server.
-- **No eviction of the queue's keys.** At least once covers what Redis kept: run
-  `noeviction`, or a `volatile-*` policy, which evicts only keys with an expiry —
-  of the queue's, only the throttle window has one. An `allkeys-*` policy can
-  evict a job.
+- **No eviction of a job.** At least once covers what Redis kept. A server
+  holding the queue alone runs `noeviction`, or a `volatile-*` policy, which
+  evicts only keys with an expiry — of the queue's, only the throttle window has
+  one, and an evicted window starts the next early. An `allkeys-*` policy can
+  evict a job. A server the rate limiter or the schedule shares runs
+  `noeviction`: see [Eviction](/queue/topologies/#eviction).
 - **What Redis persisted and replicated.** A job Redis acknowledged and then
   lost — a restart without persistence, a failover to a replica that had not
   received it — is gone; keep AOF on, and accept the window a failover leaves.

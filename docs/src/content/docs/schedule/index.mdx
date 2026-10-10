@@ -533,6 +533,13 @@ An app that also queues or rate-limits gives the same user the rules of
 [the queue](/queue/delivery/#where-a-queue-lives) and
 [the rate limiter](/rate-limiting/#redis-shipped) as well.
 
+**The server runs `maxmemory-policy noeviction`.** A claim carries an expiry, so
+a `volatile-*` or `allkeys-*` policy may evict one before its hold ends once the
+server reaches its `maxmemory`, and a replica reaching that occurrence later
+claims it again and fires it a second time. The boot cannot read the policy, so
+it is the deployment's to set, for every binding the server holds — see
+[Eviction](/queue/topologies/#eviction).
+
 ## The ambient data context
 
 A scheduled method has **no caller** — system work, intentionally. So **no

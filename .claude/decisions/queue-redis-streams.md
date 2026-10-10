@@ -299,3 +299,15 @@ its latest release, and CI runs every suite on it (`valkey-only.md`).
 `XAUTOCLAIM`, which the bounded `XPENDING` page was preferred to because
 Redis 6.2 answered a deleted entry as a nil, is a server's command again; the
 page stays until a measurement says the switch is worth it.
+
+## 2026-10-10 — the `volatile-*` tolerance is the queue's alone
+
+The eviction line of this decision — `noeviction` or a `volatile-*` policy,
+only the throttle's window carrying an expiry — holds for the queue's keys
+alone, never for a server the queue shares. The rate limiter's windows (`PEXPIRE`) and the schedule's
+claims (`SET … NX PX`) each carry an expiry, so under `volatile-*` at
+`maxmemory` an evicted denying window lets its client through and an evicted
+claim fires its occurrence twice. A server holding either runs `noeviction`: the
+connection's page says so once (`/queue/topologies/#eviction`), and each
+binding's page repeats its own line. The boot does not check it — `CONFIG GET`
+is outside every rule the pages prescribe — so the policy is the deployment's.

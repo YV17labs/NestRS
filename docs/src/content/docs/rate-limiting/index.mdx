@@ -294,6 +294,12 @@ An app that also queues or fires scheduled jobs once gives the same user
 [the queue's](/queue/delivery/#where-a-queue-lives) and
 [the schedule's](/schedule/#the-keys) rules as well.
 
+**The server runs `maxmemory-policy noeviction`.** A window carries an expiry, so
+a `volatile-*` or `allkeys-*` policy may evict a full one once the server reaches
+its `maxmemory`, and the next hit opens a fresh window: the client it denied gets
+through. The boot cannot read the policy, so it is the deployment's to set, for
+every binding the server holds — see [Eviction](/queue/topologies/#eviction).
+
 ### Writing your own
 
 ```rust title="crates/mythrottler/src/throttler/store.rs"

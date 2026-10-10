@@ -137,6 +137,24 @@ deployment takes to fail over — Sentinel's `down-after-milliseconds` and a
 Cluster's `cluster-node-timeout`, plus the election — to keep attempts running
 through one.
 
+## Eviction
+
+A server at its `maxmemory` evicts keys by its `maxmemory-policy`, and a
+`volatile-*` policy evicts only keys that carry an expiry. Two bindings keep
+their state in exactly such keys, so a server holding either runs `noeviction`:
+
+| Binding | Keys with an expiry | What an eviction costs |
+|---|---|---|
+| [The rate limiter](/rate-limiting/#redis-shipped) | every window | a full window gone, so the client it denied is let through: the limit fails open |
+| [The schedule](/schedule/#the-keys) | every claim | a claim gone before its hold ends, so another replica claims the same occurrence and fires it twice |
+| [The queue](/queue/delivery/#limits) | its throttle window alone | a throttle window that starts early; an `allkeys-*` policy evicts jobs |
+
+A server holding the queue alone tolerates a `volatile-*` policy; one the rate
+limiter or the schedule shares runs `noeviction`, whatever else it holds. A
+cache, which wants eviction, belongs on another server. The boot cannot check
+the policy — reading it takes `CONFIG GET`, which no rule on these pages grants —
+so it is the deployment's to set.
+
 ## ACL on Sentinel and Cluster
 
 A Valkey user is kept per server, so the rule each binding's page prescribes

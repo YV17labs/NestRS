@@ -32,6 +32,8 @@ mod namespace;
 mod service;
 mod setting;
 mod source;
+#[cfg(feature = "tls")]
+mod tls;
 pub mod unclaimed;
 
 pub use authorities::system_authorities;
@@ -45,6 +47,8 @@ pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup}
 pub use service::{ConfigService, spellings, var_name};
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
+#[cfg(feature = "tls")]
+pub use tls::{ClientTls, TlsIdentity, crypto_provider};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
 /// injectable [`Config`].
@@ -73,6 +77,8 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::namespace::ConfigNamespace;
+    #[cfg(feature = "tls")]
+    pub use crate::tls::{PairRefusal, certified_key};
 
     pub use nest_rs_core::inventory;
     pub use validator;

@@ -10,6 +10,11 @@ description = "Configuration loading for NestRS apps — namespaced env mapping 
 keywords = ["framework", "nestrs", "config", "configuration", "env"]
 categories = ["config"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 thiserror.workspace = true
@@ -37,6 +42,14 @@ nest-rs-config-macros.workspace = true
 # the framework opens trusts them by default — read once, PEM.
 rustls-native-certs.workspace = true
 base64.workspace = true
+# `tls` feature: `ClientTls` judges the material a TLS client presents with
+# rustls's own parsers and checks, the ones the libraries it is handed to run.
+rustls = { workspace = true, optional = true }
+
+[features]
+# The shared client-TLS vocabulary (`ClientTls`, `TlsIdentity`,
+# `crypto_provider`), enabled by every crate that opens a TLS client.
+tls = ["dep:rustls"]
 
 [target.'cfg(unix)'.dependencies]
 # `O_NONBLOCK` for `read_material`: opening a FIFO a `_FILE` variable names
@@ -48,7 +61,7 @@ libc.workspace = true
 # line or an unreadable file leaves the value absent, so the event is the only
 # evidence the loader ever saw it. Dev-only, so the cycle back to this crate
 # never reaches a consumer build.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # `figment::Jail` isolates the process env + cwd for the loader/cascade tests.
 figment = { workspace = true, features = ["test", "toml"] }
 # The custom-prefix suite boots a real app (`ConfigModule::for_feature` is an

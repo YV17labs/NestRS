@@ -400,9 +400,12 @@ async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() 
         .await;
         assert!(cancelled.is_err(), "the upload is cancelled, not completed");
 
-        // The abort is handed to a detached task, so give it a turn to run
-        // before the capture guard is dropped.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // The abort runs on a detached task: wait for its outcome, within the
+        // budget that bounds it, before the capture guard is dropped.
+        nest_rs_testing::wait_until(config().operation_timeout + Duration::from_secs(1), || {
+            !events.keys_for(DISCARDED).is_empty() || !events.keys_for(DANGLING).is_empty()
+        })
+        .await;
     }
 
     assert_eq!(

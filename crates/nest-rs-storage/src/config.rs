@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::StorageTls;
 use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor, Setting, config,
+    Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
+    Setting, config,
 };
 
 /// How long a call waits for S3's answer by default: under the authentication
@@ -87,9 +87,12 @@ pub struct StorageConfig {
     /// code anything above zero up to an hour; defaults to 30s.
     pub read_timeout: Duration,
     /// What an `https://` endpoint's certificate must chain to — the system's
-    /// store unless `<PREFIX>_STORAGE__TLS_CA_CERT` names an authority. The
-    /// certificate is verified either way.
-    pub tls: StorageTls,
+    /// authorities unless `<PREFIX>_STORAGE__TLS_CA_CERT` names others, which
+    /// replace them. The certificate is verified either way, and its name
+    /// checked against the endpoint's host. A client certificate
+    /// (`<PREFIX>_STORAGE__TLS_CERT` and `TLS_KEY`) is refused: object_store
+    /// cannot present one.
+    pub tls: ClientTls,
 }
 
 impl std::fmt::Debug for StorageConfig {
@@ -121,7 +124,7 @@ impl Default for StorageConfig {
             allow_http: false,
             operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
             read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
-            tls: StorageTls::default(),
+            tls: ClientTls::default(),
         }
     }
 }
@@ -150,8 +153,10 @@ impl Config for StorageConfig {
         let secret_key = env.setting("SECRET_KEY")?;
         refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
         let endpoint = resolve_endpoint(env, env.setting("ENDPOINT")?, d.endpoint, allow_http)?;
+        let tls = ClientTls::from_env(env, d.tls)?;
+        refuse_tls(env, &endpoint, &tls)?;
         Ok(Self {
-            tls: StorageTls::from_env(env, d.tls, is_plaintext(&endpoint))?,
+            tls,
             endpoint,
             region: env.get("REGION")?.unwrap_or(d.region),
             access_key: resolve_credential(env, "ACCESS_KEY", access_key, d.access_key)?,
@@ -223,6 +228,25 @@ fn refuse_half_a_credential(
         )
     };
     Err(ConfigError::parse(env.var_name(other), message))
+}
+
+/// The library the client reaches S3 through, as a refusal names it.
+const OBJECT_STORE: &str = "object_store, the library storage reaches S3 through,";
+
+/// Refuse TLS material the client cannot use: any beside a plain-http
+/// endpoint, a client certificate object_store cannot present, and material no
+/// handshake could use — at the read, and for a config built in code when the
+/// client is built.
+pub(crate) fn refuse_tls(
+    env: &ConfigService,
+    endpoint: &str,
+    tls: &ClientTls,
+) -> nest_rs_config::Result<()> {
+    if is_plaintext(endpoint) {
+        tls.refuse_beside_plaintext(env, &env.var_name("ENDPOINT"))?;
+    }
+    tls.refuse_identity(env, OBJECT_STORE)?;
+    tls.check(env)
 }
 
 /// Whether `endpoint` addresses the store over unencrypted HTTP.
@@ -394,6 +418,86 @@ mod tests {
 
     fn unset() -> ConfigService {
         ConfigService::with_vars("storage", [])
+    }
+
+    #[test]
+    fn an_authority_is_read_for_an_encrypted_endpoint() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let tls = StorageConfig::from_env(
+            &ConfigService::with_vars("storage", [("TLS_CA_CERT", authority.pem())]),
+            paired(),
+        )
+        .expect("an authority resolves")
+        .tls;
+        assert_eq!(tls.authorities_pem(), authority.pem().as_bytes());
+        assert!(
+            StorageConfig::from_env(&unset(), paired())
+                .expect("nothing set resolves")
+                .tls
+                .is_empty(),
+            "and nothing set trusts the system's authorities"
+        );
+    }
+
+    #[test]
+    fn an_authority_that_cannot_be_used_is_refused_naming_its_variable() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let var = nest_rs_config::var_name("storage", "TLS_CA_CERT");
+        let beside_plaintext = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [
+                    ("TLS_CA_CERT", authority.pem()),
+                    ("ENDPOINT", "http://rustfs:9000"),
+                    ("ALLOW_HTTP", "true"),
+                ],
+            ),
+            paired(),
+        )
+        .expect_err("an authority for a plaintext endpoint")
+        .to_string();
+        assert!(
+            beside_plaintext.contains(&var)
+                && beside_plaintext.contains(&nest_rs_config::var_name("storage", "ENDPOINT"))
+                && beside_plaintext.contains("plaintext"),
+            "{beside_plaintext}"
+        );
+        let empty = StorageConfig::from_env(
+            &ConfigService::with_vars("storage", [("TLS_CA_CERT", "not a certificate s3cret")]),
+            paired(),
+        )
+        .expect_err("an authority holding no certificate")
+        .to_string();
+        assert!(
+            empty.contains(&var)
+                && empty.contains("no CERTIFICATE block")
+                && !empty.contains("s3cret"),
+            "{empty}"
+        );
+    }
+
+    /// object_store has no client-certificate setting, so a certificate the
+    /// deployment sets would go unused while the store refuses the client.
+    #[test]
+    fn a_client_certificate_is_refused_naming_object_store_and_its_variable() {
+        let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
+        let refused = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [
+                    ("TLS_CERT", issued.cert.as_str()),
+                    ("TLS_KEY", issued.key.as_str()),
+                ],
+            ),
+            paired(),
+        )
+        .expect_err("a certificate object_store cannot present")
+        .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("storage", "TLS_CERT"))
+                && refused.contains("object_store"),
+            "{refused}"
+        );
     }
 
     /// A base holding a pair of its own, for the reads that are about

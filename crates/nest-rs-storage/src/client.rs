@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use http::Method;
+use nest_rs_config::{ConfigService, Namespaced};
 use nest_rs_core::{
     Budget, Container, ContainerBuilder, Discoverable, ProviderResidency, TaskContext,
 };
@@ -147,20 +148,28 @@ impl Storage {
             // cutting a download for its size; the budget and `download` do.
             .with_timeout_disabled()
             .with_connect_timeout(CONNECT_TIMEOUT);
-        if let Some(pem) = &self.config.tls.ca_cert {
-            let authorities = crate::tls::authorities(pem)
-                .filter(|found| !found.is_empty())
-                .ok_or_else(|| {
-                    StorageError::Init(object_store::Error::Generic {
-                        store: "S3",
-                        source: Box::new(crate::tls::no_authority()),
-                    })
-                })?;
-            options = authorities.into_iter().fold(
-                options.with_no_system_certificates(true),
-                ClientOptions::with_root_certificate,
-            );
-        }
+        // A config handed to `new` skipped `from_env`, and its refusals with it.
+        crate::config::refuse_tls(
+            &ConfigService::for_namespace(StorageConfig::NAMESPACE),
+            &self.config.endpoint,
+            &self.config.tls,
+        )
+        .map_err(|source| {
+            StorageError::Init(object_store::Error::Generic {
+                store: "S3",
+                source: Box::new(source),
+            })
+        })?;
+        // Only the authorities `authorities_pem` hands over — the system's
+        // unless the deployment named others — so every client the framework
+        // opens trusts through one read of the store.
+        let authorities =
+            object_store::Certificate::from_pem_bundle(self.config.tls.authorities_pem())
+                .map_err(StorageError::Init)?;
+        options = authorities.into_iter().fold(
+            options.with_no_system_certificates(true),
+            ClientOptions::with_root_certificate,
+        );
         let built = AmazonS3Builder::new()
             .with_client_options(options)
             .with_retry(retries_within(self.config.operation_timeout))
@@ -735,6 +744,49 @@ mod tests {
             .expect("https is always allowed");
     }
 
+    /// A config built in code skips `from_env`: the client refuses what the
+    /// read would have, before anything is signed or sent.
+    #[tokio::test]
+    async fn a_hand_built_client_refuses_tls_material_it_cannot_use() {
+        let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
+        let inline = |pem: &str| nest_rs_config::Material {
+            bytes: pem.as_bytes().to_vec(),
+            path: None,
+        };
+        for (tls, names) in [
+            (
+                nest_rs_config::ClientTls::new(
+                    None,
+                    Some(nest_rs_config::TlsIdentity::new(
+                        inline(&issued.cert),
+                        inline(&issued.key),
+                    )),
+                ),
+                "TLS_CERT",
+            ),
+            (
+                nest_rs_config::ClientTls::new(Some(inline("no certificate")), None),
+                "TLS_CA_CERT",
+            ),
+        ] {
+            let storage = Storage::new(Arc::new(StorageConfig {
+                endpoint: "https://s3.example".into(),
+                tls,
+                ..Default::default()
+            }));
+            let err = storage
+                .presign_get("k", Duration::from_secs(900))
+                .await
+                .expect_err("material the client cannot use mints nothing");
+            let shown = nest_rs_core::error_message(&err);
+            assert!(
+                matches!(err, StorageError::Init(_))
+                    && shown.contains(&nest_rs_config::var_name("storage", names)),
+                "{shown}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn listing_and_streamed_uploads_refuse_a_plaintext_endpoint_too() {
         let storage = client("http://minio.internal:9000", false);
@@ -835,6 +887,12 @@ mod tests {
             operation_timeout: budget,
             ..StorageConfig::default()
         }));
+        // The client is built on first use, reading the system's authorities
+        // once per process — not the call's to wait out. Signing is local.
+        storage
+            .presign_get("k", budget)
+            .await
+            .expect("the client builds");
         let started = tokio::time::Instant::now();
         let refused = storage.head("k").await.expect_err("nothing listens");
         let chain = nest_rs_core::error_message(&refused);

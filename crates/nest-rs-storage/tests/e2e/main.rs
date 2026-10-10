@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nest_rs_config::Config;
-use nest_rs_storage::{Storage, StorageConfig, StorageTls};
+use nest_rs_config::{ClientTls, Config, Material};
+use nest_rs_storage::{Storage, StorageConfig};
 use nest_rs_testing::{TestAuthority, TestCertificate, system_connector};
 use rustls::pki_types::ServerName;
 use std::sync::LazyLock;
@@ -53,9 +53,13 @@ fn storage() -> Storage {
 fn proxied(proxy: SocketAddr, config: StorageConfig) -> Storage {
     Storage::new(Arc::new(StorageConfig {
         endpoint: nest_rs_testing::url_at(&endpoint(), proxy),
-        tls: StorageTls {
-            ca_cert: Some(AUTHORITY.pem().as_bytes().to_vec()),
-        },
+        tls: ClientTls::new(
+            Some(Material {
+                bytes: AUTHORITY.pem().as_bytes().to_vec(),
+                path: None,
+            }),
+            None,
+        ),
         ..config
     }))
 }

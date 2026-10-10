@@ -124,6 +124,47 @@ mod tests {
     #[module(imports = [pinned_storage()])]
     struct PinnedStorageHost;
 
+    /// A client certificate pinned in code, which object_store cannot present.
+    fn presenting_storage() -> StorageSetup {
+        let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
+        let inline = |pem: String| nest_rs_config::Material {
+            bytes: pem.into_bytes(),
+            path: None,
+        };
+        StorageModule::for_root(StorageConfig {
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
+            tls: nest_rs_config::ClientTls::new(
+                None,
+                Some(nest_rs_config::TlsIdentity::new(
+                    inline(issued.cert),
+                    inline(issued.key),
+                )),
+            ),
+            ..StorageConfig::default()
+        })
+    }
+
+    #[module(imports = [presenting_storage()])]
+    struct PresentingStorageHost;
+
+    #[tokio::test]
+    async fn a_client_certificate_fails_the_boot_naming_object_store_and_its_variable() {
+        let Err(refused) = App::builder()
+            .module::<PresentingStorageHost>()
+            .build()
+            .await
+        else {
+            panic!("a certificate object_store cannot present must not boot");
+        };
+        let refused = format!("{refused:#}");
+        assert!(
+            refused.contains(&nest_rs_config::var_name("storage", "TLS_CERT"))
+                && refused.contains("object_store"),
+            "{refused}"
+        );
+    }
+
     #[tokio::test]
     async fn for_root_pins_the_config_and_still_provides_the_client() {
         let app = App::builder()

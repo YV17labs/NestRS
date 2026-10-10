@@ -70,7 +70,7 @@ pub use job::{
     unread_job_key,
 };
 pub use mcp::{MCP_GRAMMAR, mcp_answers};
-pub use mount::reject_path;
+pub use mount::{MountPath, reject_path};
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{
     ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,

@@ -53,7 +53,7 @@ impl PostsController {
         ))
     }
 
-    #[post("/:id/publish")]
+    #[post("/{id}/publish")]
     #[authorize(Update, PostEntity)]
     #[use_guards(PostAuthorGuard)]
     #[use_exception_filters(PostProblemFilter)]

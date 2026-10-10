@@ -36,7 +36,7 @@ impl HygieneController {
     }
 
     /// The same, under a response shaper's second emission path.
-    #[get("/probe/:req")]
+    #[get("/probe/{req}")]
     #[public]
     #[http_code(201)]
     #[response_header("x-hygiene", "ok")]

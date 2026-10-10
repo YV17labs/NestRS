@@ -15,7 +15,7 @@ struct OrgsController;
 #[routes]
 impl OrgsController {
     /// Parameterised, so the raw path and the template differ.
-    #[get("/:org/members/:id")]
+    #[get("/{org}/members/{id}")]
     #[public]
     async fn member(&self, org: poem::web::Path<String>, id: poem::web::Path<String>) -> String {
         format!("{}/{}", org.0, id.0)
@@ -32,7 +32,7 @@ struct JobsController;
 #[routes]
 impl JobsController {
     /// Waits on something that never comes: only dropping the request ends it.
-    #[get("/:id/wait")]
+    #[get("/{id}/wait")]
     #[public]
     async fn wait(&self, _id: poem::web::Path<String>) -> &'static str {
         WAITING.notify_one();
@@ -40,19 +40,19 @@ impl JobsController {
         "never"
     }
 
-    #[get("/:id/done")]
+    #[get("/{id}/done")]
     #[public]
     async fn done(&self, _id: poem::web::Path<String>) -> &'static str {
         "done"
     }
 
-    #[get("/:id/broken")]
+    #[get("/{id}/broken")]
     #[public]
     async fn broken(&self, _id: poem::web::Path<String>) -> poem::Result<&'static str> {
         Err(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
 
-    #[get("/:id/missing")]
+    #[get("/{id}/missing")]
     #[public]
     async fn missing(&self, _id: poem::web::Path<String>) -> poem::Result<&'static str> {
         Err(poem::Error::from_status(StatusCode::NOT_FOUND))
@@ -73,7 +73,7 @@ async fn the_span_reports_the_route_template_and_the_path_separately() {
     let span = logs.expect_span("nest_rs::http", "http.request");
     assert_eq!(
         span.field("http.route").as_deref(),
-        Some("/orgs/:org/members/:id"),
+        Some("/orgs/{org}/members/{id}"),
         "the template, never the addressed path: {:?}",
         span.fields,
     );
@@ -110,7 +110,7 @@ async fn the_exported_span_is_named_method_and_route() {
         logs.expect_span("nest_rs::http", "http.request")
             .field("otel.name")
             .as_deref(),
-        Some("GET /orgs/:org/members/:id"),
+        Some("GET /orgs/{org}/members/{id}"),
     );
 }
 
@@ -147,13 +147,13 @@ async fn a_request_dropped_before_it_answers_exports_its_span_under_its_route_an
     let span = logs.expect_span("nest_rs::http", "http.request");
     assert_eq!(
         span.field("http.route").as_deref(),
-        Some("/jobs/:id/wait"),
+        Some("/jobs/{id}/wait"),
         "{:?}",
         span.fields,
     );
     assert_eq!(
         span.field("otel.name").as_deref(),
-        Some("GET /jobs/:id/wait"),
+        Some("GET /jobs/{id}/wait"),
         "{:?}",
         span.fields,
     );

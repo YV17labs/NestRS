@@ -371,7 +371,7 @@ struct RootCatchAllController;
 
 #[routes]
 impl RootCatchAllController {
-    #[get("/*rest")]
+    #[get("/{*rest}")]
     async fn anything(&self) -> String {
         "root-catch-all".into()
     }
@@ -399,9 +399,8 @@ async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses
 
     let omitted = logs.find(
         "nest_rs::openapi",
-        "route omitted from the document: an OpenAPI path template is one whole \
-         segment, so a catch-all, an unnamed pattern, or a literal sharing a \
-         segment with a parameter cannot be described",
+        "route omitted from the document: an OpenAPI path template names one \
+         segment's value, so a catch-all or a literal brace cannot be described",
     );
     assert!(
         !omitted.is_empty(),

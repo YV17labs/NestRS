@@ -111,7 +111,7 @@ struct WidgetController;
 
 #[routes]
 impl WidgetController {
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<WidgetDto> {
         Json(WidgetDto {
             id: 1,

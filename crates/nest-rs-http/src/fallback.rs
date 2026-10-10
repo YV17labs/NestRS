@@ -13,6 +13,7 @@ use nest_rs_core::Container;
 use poem::endpoint::BoxEndpoint;
 use poem::{Endpoint, Request, Response, Result, Route};
 
+use crate::route_template::unescape;
 use crate::transport::{is_pattern_segment, normalize_mount_path};
 use crate::versioning::route_matches;
 
@@ -32,7 +33,8 @@ pub struct HttpFallbackMeta {
 
 impl HttpFallbackMeta {
     /// Declare the fallback at `path`, owned by `owner` (the type a boot error
-    /// names); `mount` registers its routes on a router of its own.
+    /// names); `mount` registers its routes on a router of its own. `path` is
+    /// one literal address: a template fails the boot.
     pub fn new<F>(
         path: impl Into<Cow<'static, str>>,
         owner: impl Into<Cow<'static, str>>,
@@ -168,14 +170,15 @@ pub(crate) fn is_under(path: &str, prefix: &str) -> bool {
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
-/// The literal segments a route pattern opens with, as a mount path:
-/// `/api-json/*version` owns `/api-json`, `/:org/members` nothing but `/`.
+/// The literal segments a route template opens with, as a request spells
+/// them: `/api-json/{*version}` owns `/api-json`, `/{org}/members` nothing but
+/// `/`.
 pub(crate) fn literal_prefix(pattern: &str) -> String {
     let literal: Vec<&str> = pattern
         .split('/')
         .take_while(|segment| !is_pattern_segment(segment))
         .collect();
-    normalize_mount_path(&literal.join("/"))
+    normalize_mount_path(&unescape(&literal.join("/")))
 }
 
 #[cfg(test)]
@@ -198,10 +201,11 @@ mod tests {
 
     #[test]
     fn a_pattern_owns_the_literal_segments_it_opens_with() {
-        assert_eq!(literal_prefix("/api-json/*version"), "/api-json");
-        assert_eq!(literal_prefix("/posts/:id/edit"), "/posts");
-        assert_eq!(literal_prefix("/files/<\\d+>"), "/files");
-        assert_eq!(literal_prefix("/:org/members"), "/");
+        assert_eq!(literal_prefix("/api-json/{*version}"), "/api-json");
+        assert_eq!(literal_prefix("/posts/{id}/edit"), "/posts");
+        assert_eq!(literal_prefix("/@{handle}/posts"), "/");
+        assert_eq!(literal_prefix("/{org}/members"), "/");
+        assert_eq!(literal_prefix("/b/{{x}}/{id}"), "/b/{x}");
         assert_eq!(literal_prefix("/graphql"), "/graphql");
     }
 
@@ -221,7 +225,7 @@ mod tests {
         claims.prefix("/api", "the API");
         claims.prefix("/graphql", "graphql");
         claims.route("/".to_owned());
-        claims.route("/:slug/edit".to_owned());
+        claims.route("/{slug}/edit".to_owned());
         claims.route("/api/posts".to_owned());
         let root = fallback("/", claims);
         assert!(!root.answers("/"), "a route at `/`");

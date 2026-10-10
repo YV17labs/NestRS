@@ -20,7 +20,7 @@ impl PostsController {
         "created"
     }
 
-    #[delete("/:id")]
+    #[delete("/{id}")]
     async fn remove(&self) -> &'static str {
         "gone"
     }

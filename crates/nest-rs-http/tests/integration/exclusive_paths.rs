@@ -171,3 +171,122 @@ fn a_mount_path_is_canonical_before_anything_compares_it() {
     assert_eq!(mount("/").path(), "/", "the root stays reachable");
     assert_eq!(mount("").path(), "/");
 }
+
+#[controller(path = "/parcels")]
+struct ParcelsController;
+
+#[routes]
+impl ParcelsController {
+    #[get("/{id}")]
+    async fn read(&self) -> &'static str {
+        "read"
+    }
+}
+
+#[controller(path = "/")]
+struct LockersController;
+
+#[routes]
+impl LockersController {
+    #[delete("/parcels/{key}")]
+    async fn release(&self) -> &'static str {
+        "released"
+    }
+}
+
+#[module(providers = [ParcelsController, LockersController])]
+struct OneAddressTwoShapesModule;
+
+#[tokio::test]
+async fn two_shapes_of_one_address_fail_boot_naming_both_handlers() {
+    let app = App::builder()
+        .module::<OneAddressTwoShapesModule>()
+        .build()
+        .await
+        .expect("the module itself builds — the clash is a transport concern");
+
+    let msg = configure_error(app.container()).await;
+    for named in [
+        "ParcelsController::read",
+        "\"/parcels/{id}\"",
+        "LockersController::release",
+        "\"/parcels/{key}\"",
+    ] {
+        assert!(msg.contains(named), "names {named}: {msg}");
+    }
+}
+
+struct TemplatedSocket;
+
+impl nest_rs_core::Discoverable for TemplatedSocket {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<TemplatedSocket, HttpEndpointMeta>(
+            HttpEndpointMeta::new("/rooms/:room", "ws", |_c, r: Route| r).owned_by("RoomsGateway"),
+        )
+    }
+}
+
+#[module(providers = [TemplatedSocket])]
+struct TemplatedSocketModule;
+
+#[tokio::test]
+async fn a_self_mount_path_out_of_the_grammar_fails_boot_instead_of_panicking() {
+    let app = App::builder()
+        .module::<TemplatedSocketModule>()
+        .build()
+        .await
+        .expect("the module itself builds");
+
+    let msg = configure_error(app.container()).await;
+    assert!(
+        msg.contains("RoomsGateway") && msg.contains("one literal address"),
+        "names the owner and why: {msg}",
+    );
+}
+
+struct DocsInThe6xSpelling;
+
+impl nest_rs_core::Discoverable for DocsInThe6xSpelling {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<DocsInThe6xSpelling, HttpEndpointMeta>(
+            HttpEndpointMeta::new("/docs", "docs", |_c, r: Route| r)
+                .also_mounts(["/docs-json/*rest"])
+                .owned_by("DocsHost")
+                .exempt(),
+        )
+    }
+}
+
+#[module(providers = [DocsInThe6xSpelling])]
+struct DocsInThe6xSpellingModule;
+
+#[tokio::test]
+async fn an_also_mounts_entry_in_the_6x_spelling_fails_boot_naming_its_7_0_spelling() {
+    let app = App::builder()
+        .module::<DocsInThe6xSpellingModule>()
+        .build()
+        .await
+        .expect("the module itself builds");
+
+    let msg = configure_error(app.container()).await;
+    assert!(
+        msg.contains("docs endpoint DocsHost") && msg.contains("write `/docs-json/{*rest}`"),
+        "names the owner and the 7.0 spelling: {msg}",
+    );
+}
+
+#[tokio::test]
+async fn an_imperative_mount_is_one_literal_address() {
+    let app = App::builder().build().await.expect("an empty app builds");
+    let mut transport =
+        HttpTransport::new().mount("/files/{name}", |_| poem::endpoint::make_sync(|_| "file"));
+    let msg = transport
+        .configure(app.container())
+        .await
+        .expect_err("a templated imperative mount must fail boot")
+        .to_string();
+    assert!(
+        msg.contains("HttpTransport::mount") && msg.contains("one literal address"),
+        "names the mount and why: {msg}",
+    );
+}

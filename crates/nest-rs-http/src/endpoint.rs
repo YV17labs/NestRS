@@ -193,6 +193,8 @@ pub struct HttpEndpointMeta {
 impl HttpEndpointMeta {
     /// Declare a self-mount at `path`, [`EdgePosture::Guarded`] until
     /// [`Self::exempt`]; `path` and `label` may be owned, read from config.
+    /// The surface answers under `path` whole, so it is one literal address:
+    /// a template fails the boot, naming the owner.
     pub fn new<F>(
         path: impl Into<Cow<'static, str>>,
         label: impl Into<Cow<'static, str>>,
@@ -218,8 +220,9 @@ impl HttpEndpointMeta {
     /// Every **other** path this surface's mount closure registers, such as
     /// `OpenApiModule`'s `/api-json` beside `/api`.
     ///
-    /// Entries are poem route patterns: a surface owning a subtree declares it
-    /// (`/.well-known/thing/*rest`); none is assumed.
+    /// Entries are route templates, which the transport reads at boot: a
+    /// surface owning a subtree declares it (`/.well-known/thing/{*rest}`);
+    /// none is assumed.
     pub fn also_mounts<I, P>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = P>,

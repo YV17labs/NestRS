@@ -239,7 +239,7 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
             nest_rs_codegen::missing_argument("gateway", "path", "\"/ws\""),
         )
     })?;
-    nest_rs_codegen::reject_path("gateway", &path)?;
+    nest_rs_codegen::reject_path("gateway", &path, nest_rs_codegen::MountPath::Literal)?;
     Ok(GatewayArgs {
         path,
         version,

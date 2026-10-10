@@ -272,7 +272,7 @@ mod tests {
         assert_ne!(dashed, plain);
         assert!(syn::parse_str::<syn::Ident>(&dotted).is_ok(), "{dotted}");
         assert!(
-            syn::parse_str::<syn::Ident>(&marker_name("#[routes]", "route", "GET /users/:id"))
+            syn::parse_str::<syn::Ident>(&marker_name("#[routes]", "route", "GET /users/{}"))
                 .is_ok()
         );
     }

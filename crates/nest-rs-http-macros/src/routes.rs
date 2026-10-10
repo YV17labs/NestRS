@@ -56,18 +56,18 @@ struct RouteHandler {
     cfgs: Vec<TokenStream2>,
 }
 
-/// Handlers grouped by address in first-seen order: poem rejects two
-/// `.at(path, ..)` for one path, so the verbs of an address share one method table.
+/// Handlers grouped by address in first-seen order: an address is mounted
+/// once, so the verbs of an address share one method table.
 ///
-/// Grouped by [`RoutePath::identity`], never by the path as written: `/p/:id`
-/// and `/p/:other/` are one address.
+/// Grouped by [`RoutePath::identity`], never by the path as written: `/p/{id}`
+/// and `/p/{other}/` are one address.
 type RoutesByPath = Vec<RouteGroup>;
 
 /// One address and every handler serving it.
 struct RouteGroup {
     /// [`RoutePath::identity`] — what makes two paths one address.
     identity: String,
-    /// The path poem mounts.
+    /// The template the address is mounted under.
     mount: LitStr,
     /// The method that first declared the address, for the refusal that names it.
     first: syn::Ident,
@@ -187,20 +187,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         let parsed_path = match RoutePath::parse(&written_path.value()) {
             Ok(parsed) => parsed,
-            Err(why) => {
+            Err(refusal) => {
                 return syn::Error::new_spanned(
                     &written_path,
                     format!(
-                        "{}: {:?} is not a path poem can mount: {why}",
+                        "{} {refusal}",
                         nest_rs_codegen::site(&declared_verb.to_string(), None),
-                        written_path.value()
                     ),
                 )
                 .to_compile_error()
                 .into();
             }
         };
-        let route_path = LitStr::new(parsed_path.mount(), written_path.span());
+        let route_path = LitStr::new(parsed_path.template(), written_path.span());
 
         let method_name = method.sig.ident.clone();
         let method_name_lit = method_name.to_string();
@@ -544,15 +543,15 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .iter_mut()
             .find(|group| group.identity == parsed_path.identity())
         {
-            // poem binds each parameter by the name the address was first mounted under.
+            // Each parameter binds by the name the address was mounted under.
             Some(group) if group.mount.value() != route_path.value() => {
                 return syn::Error::new_spanned(
                     &written_path,
                     format!(
-                        "`#[routes]` mounts one address as `{}` on `{}` and as `{}` on `{}`: poem \
-                         mounts an address once and binds each parameter by the name it was \
-                         mounted under, so one handler would read a parameter that is not there \
-                         — name the parameters alike on both",
+                        "`#[routes]` mounts one address as `{}` on `{}` and as `{}` on `{}`: an \
+                         address is mounted once and each parameter binds by its name, so one \
+                         handler would read a parameter that is not there — name the parameters \
+                         alike on both",
                         group.mount.value(),
                         group.first,
                         route_path.value(),
@@ -858,7 +857,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     #(#arms)*
                     if !__method.is_empty() {
                         __route = __route.at(
-                            ::nest_rs_http::join_path(&__prefix, #path),
+                            ::nest_rs_http::__private::poem_pattern(
+                                &::nest_rs_http::join_path(&__prefix, #path),
+                            ),
                             __method.into_endpoint(),
                         );
                     }
@@ -1256,7 +1257,7 @@ fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
             nest_rs_codegen::takes_value(
                 &verb,
                 None,
-                &format!("the route's path as a string literal, e.g. `#[{verb}(\"/:id\")]`"),
+                &format!("the route's path as a string literal, e.g. `#[{verb}(\"/{{id}}\")]`"),
             ),
         )
     };

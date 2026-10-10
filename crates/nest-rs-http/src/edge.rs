@@ -6,6 +6,7 @@
 //! problem document first. The normalizer for a raw-text error a handler
 //! answered with runs on the edge itself when it is outermost (`normalize`).
 
+use std::borrow::Cow;
 use std::future::{Future, poll_fn};
 use std::net::IpAddr;
 use std::pin::pin;
@@ -32,10 +33,11 @@ use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
 use crate::{response_body, trace_context};
 
-/// The route template poem's router matched; `None` when nothing matched.
-fn matched_route(resp: &Response) -> Option<&str> {
+/// The route template poem's router matched, as it was declared; `None` when
+/// nothing matched.
+fn matched_route(resp: &Response) -> Option<Cow<'_, str>> {
     resp.data::<PathPattern>()
-        .map(|PathPattern(pattern)| &**pattern)
+        .map(|PathPattern(pattern)| crate::route_template::declared(pattern))
 }
 
 /// `err` as the problem document it answers, keeping the template the router
@@ -335,7 +337,7 @@ where
         .await;
         // Before the normalizer, which builds a fresh response without the
         // matched template.
-        trace_context::name_route(&span, &method, matched_route(&resp));
+        trace_context::name_route(&span, &method, matched_route(&resp).as_deref());
         let mut resp = match self.normalize {
             true => crate::problem::normalize_error_response(resp).await,
             false => resp,

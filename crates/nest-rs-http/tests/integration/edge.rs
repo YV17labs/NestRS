@@ -20,7 +20,7 @@ impl KitchenController {
         "kitchen"
     }
 
-    #[get("/items/:id")]
+    #[get("/items/{id}")]
     async fn item(&self, id: poem::web::Path<String>) -> String {
         format!("item {}", id.0)
     }
@@ -30,7 +30,7 @@ impl KitchenController {
         req.uri().query().unwrap_or("none").to_owned()
     }
 
-    #[get("/shelves/:n")]
+    #[get("/shelves/{n}")]
     async fn shelf(&self, n: poem::web::Path<u32>) -> String {
         format!("shelf {}", n.0)
     }

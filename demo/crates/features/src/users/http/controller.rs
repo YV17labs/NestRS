@@ -41,7 +41,7 @@ impl UsersController {
         Ok(Json(User::from(&user)))
     }
 
-    #[get("/:id")]
+    #[get("/{id}")]
     #[api(
         summary = "Get a user in the caller's org by id",
         description = "The id is bound to the loaded, authorized user through the \

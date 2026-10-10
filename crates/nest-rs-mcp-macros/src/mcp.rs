@@ -211,7 +211,7 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
 
 /// Refuses an empty `path`: absent is the one spelling of "the default".
 fn check_path(path: &LitStr) -> syn::Result<()> {
-    nest_rs_codegen::reject_path("mcp", path)
+    nest_rs_codegen::reject_path("mcp", path, nest_rs_codegen::MountPath::Literal)
 }
 
 /// An optional identity argument as the `Option<&str>` tokens

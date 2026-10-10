@@ -33,7 +33,7 @@ impl PostsController {
         "posts"
     }
 
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn one(&self) -> poem::Result<&'static str> {
         Err(poem::error::NotFoundError.into())
     }
@@ -247,6 +247,26 @@ async fn configure_error<M: nest_rs_core::Module>() -> String {
         .await
         .expect_err("the transport must refuse this fallback")
         .to_string()
+}
+
+struct TemplatedFallback;
+
+impl Discoverable for TemplatedFallback {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<Self, HttpFallbackMeta>(fallback_at("/files/{name}", "FilesHost"))
+    }
+}
+
+#[module(providers = [TemplatedFallback])]
+struct TemplatedFallbackModule;
+
+#[tokio::test]
+async fn a_templated_fallback_path_fails_boot_naming_its_owner() {
+    let msg = configure_error::<TemplatedFallbackModule>().await;
+    assert!(
+        msg.contains("FilesHost") && msg.contains("one literal address"),
+        "names the owner and why: {msg}",
+    );
 }
 
 #[tokio::test]

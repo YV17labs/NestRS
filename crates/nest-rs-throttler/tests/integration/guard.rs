@@ -36,6 +36,13 @@ impl RatedController {
     async fn lenient(&self) -> &'static str {
         "ok"
     }
+
+    /// Two per minute across every item: one route, one bucket.
+    #[get("/items/{id}")]
+    #[meta(Throttle::per_minute(2))]
+    async fn item(&self) -> &'static str {
+        "ok"
+    }
 }
 
 #[module(
@@ -105,6 +112,30 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     assert!(
         event.field("retry_after").is_some(),
         "the event carries the wait it told the client about, got {:?}",
+        event.fields,
+    );
+}
+
+#[tokio::test]
+async fn the_bucket_key_is_the_declared_template() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = app().await;
+
+    for item in ["/rated/items/1", "/rated/items/2"] {
+        app.http().get(item).send().await.assert_status_is_ok();
+    }
+    // A third item, never asked for: the budget is the route's, not the path's.
+    app.http()
+        .get("/rated/items/3")
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+    assert_eq!(
+        event.field("route").as_deref(),
+        Some("/rated/items/{id}"),
+        "the bucket is named as the route declares it, got {:?}",
         event.fields,
     );
 }

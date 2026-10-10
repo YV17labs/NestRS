@@ -12,7 +12,7 @@ struct PipeController;
 
 #[routes]
 impl PipeController {
-    #[get("/ids/:ids")]
+    #[get("/ids/{ids}")]
     async fn ids(&self, ids: Piped<ParseArray<u64>, Path<String>>) -> String {
         format!("{:?}", ids.into_inner())
     }

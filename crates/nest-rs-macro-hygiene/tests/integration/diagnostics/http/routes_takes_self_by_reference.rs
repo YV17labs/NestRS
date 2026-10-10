@@ -9,7 +9,7 @@ struct DemoController;
 
 #[routes]
 impl DemoController {
-    #[get("/:id")]
+    #[get("/{id}")]
     #[public]
     async fn show(id: nest_rs::http::poem::web::Path<String>) -> String {
         id.0

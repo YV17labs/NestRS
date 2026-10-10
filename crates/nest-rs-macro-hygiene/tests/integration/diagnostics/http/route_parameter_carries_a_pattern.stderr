@@ -1,0 +1,11 @@
+error: #[get] `/:id<\d+>`: a route parameter carries no pattern — parse it with its type (`Path<u64>`) or a pipe
+  --> tests/integration/diagnostics/http/route_parameter_carries_a_pattern.rs:12:11
+   |
+12 |     #[get("/:id<\\d+>")]
+   |           ^^^^^^^^^^^^
+
+error: #[get] `/{id:\d+}`: a route parameter carries no pattern — parse it with its type (`Path<u64>`) or a pipe
+  --> tests/integration/diagnostics/http/route_parameter_carries_a_pattern.rs:23:11
+   |
+23 |     #[get("/{id:\\d+}")]
+   |           ^^^^^^^^^^^^

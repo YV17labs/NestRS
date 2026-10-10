@@ -34,7 +34,7 @@ struct StatusController;
 
 #[routes]
 impl StatusController {
-    #[get("/err/:code")]
+    #[get("/err/{code}")]
     #[public]
     async fn err(
         &self,
@@ -43,7 +43,7 @@ impl StatusController {
         Err(nest_rs_http::poem::Error::from_status(status(code.0)))
     }
 
-    #[get("/ok/:code")]
+    #[get("/ok/{code}")]
     #[public]
     async fn ok(&self, code: nest_rs_http::poem::web::Path<u16>) -> Response {
         Response::builder().status(status(code.0)).finish()

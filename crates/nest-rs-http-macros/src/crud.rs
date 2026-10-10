@@ -120,7 +120,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if ops.get && !existing.contains("get") {
         let summary = format!("Fetch {noun} by id");
         generated.push(parse_quote! {
-            #[get("/:id")]
+            #[get("/{id}")]
             #[api(summary = #summary)]
             async fn get(
                 &self,
@@ -200,7 +200,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     {
         let summary = format!("Update {noun} by id");
         generated.push(parse_quote! {
-            #[patch("/:id")]
+            #[patch("/{id}")]
             #[api(summary = #summary)]
             #[crud_write]
             async fn update(
@@ -242,7 +242,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
     if ops.delete && !existing.contains("delete") {
         let summary = format!("Delete {noun} by id");
         generated.push(parse_quote! {
-            #[delete("/:id")]
+            #[delete("/{id}")]
             #[api(summary = #summary)]
             #[crud_write]
             // Via `#[http_code]`, not a returned status, so the document advertises it.

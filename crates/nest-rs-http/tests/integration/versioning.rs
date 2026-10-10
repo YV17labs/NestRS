@@ -611,7 +611,7 @@ struct MixV2Controller;
 
 #[routes]
 impl MixV2Controller {
-    #[get("/@:handle")]
+    #[get("/@{handle}")]
     async fn handle(&self) -> String {
         "mix-v2".into()
     }
@@ -622,7 +622,7 @@ struct MixNeutralController;
 
 #[routes]
 impl MixNeutralController {
-    #[get("/@:handle")]
+    #[get("/@{handle}")]
     async fn handle(&self) -> String {
         "mix-neutral".into()
     }
@@ -633,7 +633,7 @@ struct RootCatchAllController;
 
 #[routes]
 impl RootCatchAllController {
-    #[get("/*rest")]
+    #[get("/{*rest}")]
     async fn any(&self) -> String {
         "root-catchall".into()
     }

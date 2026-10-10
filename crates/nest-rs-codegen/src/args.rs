@@ -269,6 +269,7 @@ mod tests {
                 err(crate::mount::reject_path(
                     "probe",
                     &parse_quote!("no leading slash"),
+                    crate::mount::MountPath::Literal,
                 )),
                 "path",
             ),

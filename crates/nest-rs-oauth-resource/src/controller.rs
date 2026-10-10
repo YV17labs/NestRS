@@ -29,7 +29,7 @@ impl OAuthResourceController {
 
     /// The path-aware form (RFC 9728 §3.1); the tail must be *this* resource's
     /// path, or every sibling path would claim this identity.
-    #[get("/oauth-protected-resource/*resource_path")]
+    #[get("/oauth-protected-resource/{*resource_path}")]
     #[public]
     async fn metadata_for_path(&self, Path(resource_path): Path<String>) -> Response {
         if resource_path.trim_end_matches('/') != self.metadata.resource_path() {

@@ -20,6 +20,7 @@ use poem::http::uri::PathAndQuery;
 use poem::http::{HeaderName, StatusCode, Uri, header};
 use poem::{Endpoint, Error, IntoResponse, Request, Response, Result};
 
+use crate::route_template::{segment_parameter, strip_literal};
 use crate::version_path;
 
 /// The media-type parameter the [`MediaType`](ApiVersioning::MediaType)
@@ -81,7 +82,7 @@ pub struct VersionSelector {
     header: HeaderName,
     default_version: Option<String>,
     /// Every **route** a versioned controller mounts, as mounted
-    /// (`/v1/posts`, `/v1/posts/:id`).
+    /// (`/v1/posts`, `/v1/posts/{id}`).
     versioned_routes: Arc<[String]>,
     /// The paths self-mounted endpoints own (`/graphql`, `/mcp`, a gateway),
     /// served as sent whatever version a caller states.
@@ -117,7 +118,7 @@ impl VersionSelector {
     }
 
     /// Teach the selector the app's shape: the routes that carry a version as
-    /// mounted (`/v1/posts/:id`), every address answered without one, and the
+    /// mounted (`/v1/posts/{id}`), every address answered without one, and the
     /// versions declared.
     pub(crate) fn with_routes(
         mut self,
@@ -208,15 +209,16 @@ pub fn declared_versions(container: &Container) -> Vec<String> {
     versions
 }
 
-/// Does `path` address the mounted route `pattern`?
+/// Does `path` address the mounted route `pattern`, a template?
 ///
-/// Segment-wise, over the forms poem's router parses: `:name` and `<regex>` take
-/// one segment, `*rest` everything left including nothing, and a segment may mix
-/// a literal with a parameter (`/@:handle`, `/report-:id`).
+/// Segment-wise, over every form the route grammar spells: `{name}` takes one
+/// segment, `{*rest}` everything left including nothing, a parameter may
+/// follow literal text in its segment (`/@{handle}`, `/report-{id}`), and `{{`
+/// is a literal brace.
 ///
-/// Loose on purpose, since poem decides last: a false match costs a `404`, a
-/// false non-match serves another controller's body. Runs on every request, so
-/// it does not allocate.
+/// Loose on purpose, since the router decides last: a false match costs a
+/// `404`, a false non-match serves another controller's body. Runs on every
+/// request, so it does not allocate.
 pub(crate) fn route_matches(path: &str, pattern: &str) -> bool {
     let mut segments = path.split('/');
     let mut expected = pattern.split('/');
@@ -225,7 +227,9 @@ pub(crate) fn route_matches(path: &str, pattern: &str) -> bool {
         match (segment, pattern) {
             (None, None) => return true,
             // A catch-all also answers an empty tail (`/cat/`).
-            (_, Some(pat)) if pat.starts_with('*') => return true,
+            (segment, Some(pat)) if let Some((at, true)) = segment_parameter(pat) => {
+                return at == 0 || segment.is_some_and(|s| strip_literal(s, &pat[..at]).is_some());
+            }
             (Some(segment), Some(pat)) => {
                 if !segment_matches(segment, pat) {
                     return false;
@@ -242,14 +246,15 @@ pub(crate) fn route_matches(path: &str, pattern: &str) -> bool {
     }
 }
 
-/// One path segment against one pattern segment. A `:name` or `<regex>` matches
-/// any non-empty text; a literal before it must still match, so `/@:handle`
+/// One path segment against one template segment. A `{name}` matches any
+/// non-empty text; a literal before it must still match, so `/@{handle}`
 /// accepts `@bob` and refuses `bob`.
 fn segment_matches(segment: &str, pattern: &str) -> bool {
-    match crate::transport::parameter_start(pattern) {
-        None => segment == pattern,
-        Some(0) => !segment.is_empty(),
-        Some(literal) => segment.len() > literal && segment.starts_with(&pattern[..literal]),
+    match segment_parameter(pattern) {
+        None => strip_literal(segment, pattern) == Some(""),
+        Some((at, _)) => {
+            strip_literal(segment, &pattern[..at]).is_some_and(|rest| !rest.is_empty())
+        }
     }
 }
 
@@ -475,17 +480,22 @@ mod tests {
     }
 
     #[test]
-    fn the_matcher_reads_every_segment_form_the_router_parses() {
-        assert!(route_matches("/posts/abc", "/posts/:id"));
+    fn the_matcher_reads_every_segment_form_the_grammar_spells() {
+        assert!(route_matches("/posts/abc", "/posts/{id}"));
         // A literal and a parameter in one segment.
-        assert!(route_matches("/mix/@bob", "/mix/@:handle"));
-        assert!(!route_matches("/mix/bob", "/mix/@:handle"));
-        assert!(route_matches("/r/report-7", "/r/report-:id"));
-        // A regex segment is one segment, not a tail.
-        assert!(route_matches("/probe/7", r"/probe/<\d+>"));
-        assert!(!route_matches("/probe/archive/7", r"/probe/<\d+>"));
-        assert!(route_matches("/cat/a/b", "/cat/*rest"));
-        assert!(route_matches("/cat/", "/cat/*rest"));
+        assert!(route_matches("/mix/@bob", "/mix/@{handle}"));
+        assert!(!route_matches("/mix/bob", "/mix/@{handle}"));
+        assert!(!route_matches("/mix/@", "/mix/@{handle}"));
+        assert!(route_matches("/r/report-7", "/r/report-{id}"));
+        // A parameter is one segment, not a tail.
+        assert!(!route_matches("/probe/archive/7", "/probe/{id}"));
+        assert!(route_matches("/cat/a/b", "/cat/{*rest}"));
+        assert!(route_matches("/cat/", "/cat/{*rest}"));
+        assert!(route_matches("/cat/x.gz", "/cat/x{*rest}"));
+        assert!(!route_matches("/cat/y.gz", "/cat/x{*rest}"));
+        // A literal brace is the brace a request carries.
+        assert!(route_matches("/b/{x}", "/b/{{x}}"));
+        assert!(!route_matches("/b/x", "/b/{{x}}"));
         assert!(route_matches("/users/", "/users"));
         assert!(!route_matches("/users/1", "/users"));
         assert!(!route_matches("/postsy", "/posts"));
@@ -518,8 +528,8 @@ mod tests {
     #[test]
     fn route_matching_follows_the_router_not_the_prefix() {
         assert!(route_matches("/ping", "/ping"));
-        assert!(route_matches("/posts/abc", "/posts/:id"));
-        assert!(route_matches("/files/a/b/c", "/files/*rest"));
+        assert!(route_matches("/posts/abc", "/posts/{id}"));
+        assert!(route_matches("/files/a/b/c", "/files/{*rest}"));
         assert!(!route_matches("/postsy", "/posts"));
         assert!(
             !route_matches("/posts/drafts", "/posts"),
@@ -530,7 +540,7 @@ mod tests {
             "a root-mounted controller's routes are ordinary routes",
         );
         assert!(
-            !route_matches("/posts", "/posts/:id"),
+            !route_matches("/posts", "/posts/{id}"),
             "a parameter segment is required, not optional",
         );
     }

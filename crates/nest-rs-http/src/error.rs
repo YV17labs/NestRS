@@ -1,5 +1,6 @@
 //! Every error type of the HTTP edge: the vocabulary's ([`BodyError`],
-//! [`HttpError`], [`ResponseError`]) and the header binding's.
+//! [`HttpError`], [`ResponseError`]), the route grammar's
+//! ([`RouteTemplateError`]) and the header binding's.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -522,6 +523,74 @@ const ACCEPTED: &str = "a value its type accepts";
 
 /// What a header binding can fail on. Each variant names the header; none
 /// carries its value.
+/// Why [`RouteTemplate::parse`](crate::RouteTemplate::parse) refuses a
+/// template: the template, then the reason — the sentence `#[routes]` prints
+/// after its site, word for word.
+///
+/// ```
+/// use nest_rs_http::RouteTemplate;
+///
+/// let refused = RouteTemplate::parse("/files/*rest").unwrap_err();
+/// assert_eq!(refused.template(), "/files/*rest");
+/// assert_eq!(
+///     refused.to_string(),
+///     "`/files/*rest`: `*rest` is the 6.x catch-all syntax — write `/files/{*rest}`",
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("`{written}`: {refusal}")]
+pub struct RouteTemplateError {
+    written: String,
+    refusal: TemplateRefusal,
+}
+
+impl RouteTemplateError {
+    pub(crate) fn new(written: &str, refusal: TemplateRefusal) -> Self {
+        Self {
+            written: written.to_owned(),
+            refusal,
+        }
+    }
+
+    /// The template as it was written.
+    pub fn template(&self) -> &str {
+        &self.written
+    }
+}
+
+/// What the route grammar refuses, worded as `nest_rs_codegen::RoutePath`
+/// words it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum TemplateRefusal {
+    #[error("`:{name}` is the 6.x parameter syntax — write `{rewrite}`")]
+    Parameter6x { name: String, rewrite: String },
+    #[error("a `:` is the 6.x parameter syntax, and names none — a parameter is `{{name}}`")]
+    UnnamedParameter6x,
+    #[error("`{written}` is the 6.x catch-all syntax — write `{rewrite}`")]
+    CatchAll6x { written: String, rewrite: String },
+    #[error(
+        "a route parameter carries no pattern — parse it with its type (`Path<u64>`) or a pipe"
+    )]
+    Pattern,
+    #[error("`{{{inside}}}` ends its segment — a parameter reads up to the next `/`")]
+    EndsItsSegment { inside: String },
+    #[error("`{{{inside}}}` comes last — a catch-all takes the rest of the path")]
+    ComesLast { inside: String },
+    #[error("`{{}}` names no parameter — write `{{name}}`")]
+    Unnamed,
+    #[error("`{{*}}` names no catch-all — write `{{*rest}}`")]
+    UnnamedCatchAll,
+    #[error("a `{{` opens a parameter that no `}}` closes — a literal brace is `{{{{`")]
+    Unclosed,
+    #[error("a `}}` closes no parameter — a literal brace is `}}}}`")]
+    Unopened,
+    #[error(
+        "it is mounted at one literal address, so it holds no parameter, no brace, and no `:`, \
+         `*` or `<`"
+    )]
+    NotLiteral,
+}
+
 #[derive(Debug)]
 pub(crate) enum HeaderError {
     /// A field without a default (i.e. not `Option<_>`) whose header is absent.

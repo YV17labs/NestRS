@@ -6,7 +6,7 @@ use std::sync::Arc;
 use nest_rs_core::{Container, Discovery};
 use nest_rs_http::{
     ApiVersioning, GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta,
-    MEDIA_TYPE_PARAM, declared_versions, join_path,
+    MEDIA_TYPE_PARAM, RouteTemplate, declared_versions, join_path,
 };
 use poem::http::{StatusCode, header};
 use schemars::SchemaGenerator;
@@ -74,15 +74,27 @@ pub(crate) fn build_document(
                 continue;
             }
             let full = join_path(&prefix, route.path);
-            let Some(key) = openapi_path(&full) else {
+            let full = match RouteTemplate::parse(&full) {
+                Ok(template) => template,
+                Err(refused) => {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        controller = meta.controller,
+                        handler = route.handler,
+                        error = %nest_rs_core::error_message(&refused),
+                        "route omitted from the document: its path is not a route template",
+                    );
+                    continue;
+                }
+            };
+            let Some(key) = openapi_path(&full).map(str::to_owned) else {
                 tracing::warn!(
                     target: crate::TARGET,
                     controller = meta.controller,
                     handler = route.handler,
                     path = %full,
-                    "route omitted from the document: an OpenAPI path template is one whole \
-                     segment, so a catch-all, an unnamed pattern, or a literal sharing a segment \
-                     with a parameter cannot be described",
+                    "route omitted from the document: an OpenAPI path template names one \
+                     segment's value, so a catch-all or a literal brace cannot be described",
                 );
                 continue;
             };
@@ -414,7 +426,7 @@ fn route_is_guarded(route: &HttpRouteMeta, global_guards: bool) -> bool {
 
 fn operation_object(
     route: &HttpRouteMeta,
-    full_path: &str,
+    full_path: &RouteTemplate,
     operation_id: &str,
     generator: &mut SchemaGenerator,
     global_guards: bool,
@@ -545,11 +557,11 @@ fn operation_object(
 /// Path parameters typed positionally from the handler's `Path<T>`, only when
 /// every segment has one: a `Bind<_, _>` leaves fewer and would misalign.
 fn typed_path_parameters(
-    path: &str,
+    path: &RouteTemplate,
     path_params: &[nest_rs_http::__private::SchemaFn],
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
-    let names = path_parameter_names(path);
+    let names: Vec<&str> = path.parameters().collect();
     let positional = path_params.len() == names.len();
     names
         .iter()
@@ -611,7 +623,7 @@ fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
 /// The error responses an operation can actually produce, as `(status, title)`.
 fn error_statuses(
     route: &HttpRouteMeta,
-    full_path: &str,
+    full_path: &RouteTemplate,
     global_guards: bool,
     requires_parameter: bool,
 ) -> Vec<(&'static str, &'static str)> {
@@ -630,7 +642,7 @@ fn error_statuses(
         out.push(("403", "Forbidden"));
     }
     // Off the path, not `path_params`: a `Bind<_, _>` route can 404 and has none.
-    if !path_parameter_names(full_path).is_empty() {
+    if full_path.parameters().next().is_some() {
         out.push(("404", "Not Found"));
     }
     if route.may_conflict {
@@ -821,50 +833,17 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// What one poem path segment is, in the terms OpenAPI can express.
-enum Segment<'a> {
-    Literal(&'a str),
-    /// `:id` and `:id<\d+>` alike.
-    Parameter(&'a str),
-    /// A template is one whole segment, so `*rest`, `<\d+>` and `/@:handle` have none.
-    Untemplatable,
-}
-
-fn classify_segment(seg: &str) -> Segment<'_> {
-    let Some(rest) = seg.strip_prefix(':') else {
-        return match seg.contains([':', '<', '*']) {
-            true => Segment::Untemplatable,
-            false => Segment::Literal(seg),
-        };
-    };
-    let name = rest.split_once('<').map_or(rest, |(name, _pattern)| name);
-    match name.is_empty() {
-        true => Segment::Untemplatable,
-        false => Segment::Parameter(name),
+/// The OpenAPI path template of `template`, which the route grammar already
+/// spells (OpenAPI 3.1 §4.8.2), or `None` for what the standard cannot
+/// template: a catch-all spans segments, and a literal brace reads as a
+/// template expression.
+fn openapi_path(template: &RouteTemplate) -> Option<&str> {
+    let path = template.as_str();
+    // A template doubles a brace only to write it literally.
+    match template.catch_all().is_some() || path.contains("{{") || path.contains("}}") {
+        true => None,
+        false => Some(path),
     }
-}
-
-fn path_parameter_names(path: &str) -> Vec<&str> {
-    path.split('/')
-        .filter_map(|seg| match classify_segment(seg) {
-            Segment::Parameter(name) => Some(name),
-            _ => None,
-        })
-        .collect()
-}
-
-/// poem path syntax (`/users/:id`) → OpenAPI syntax (`/users/{id}`), or `None`
-/// when a segment has no OpenAPI template.
-fn openapi_path(path: &str) -> Option<String> {
-    let mut out = Vec::new();
-    for seg in path.split('/') {
-        match classify_segment(seg) {
-            Segment::Literal(seg) => out.push(seg.to_owned()),
-            Segment::Parameter(name) => out.push(format!("{{{name}}}")),
-            Segment::Untemplatable => return None,
-        }
-    }
-    Some(out.join("/"))
 }
 
 #[cfg(test)]
@@ -876,43 +855,29 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn joins_and_converts_paths() {
-        assert_eq!(join_path("/users", "/:id"), "/users/:id");
-        assert_eq!(openapi_path("/users/:id").as_deref(), Some("/users/{id}"));
-        assert_eq!(join_path("/", "/"), "/");
+    fn template(path: &str) -> RouteTemplate {
+        RouteTemplate::parse(path).expect("a route template")
     }
 
     #[test]
-    fn openapi_path_handles_root_and_no_params() {
-        assert_eq!(openapi_path("/").as_deref(), Some("/"));
-        assert_eq!(openapi_path("/users").as_deref(), Some("/users"));
-        assert_eq!(openapi_path("").as_deref(), Some(""));
-    }
-
-    #[test]
-    fn openapi_path_handles_multiple_params() {
-        assert_eq!(
-            openapi_path("/orgs/:org_id/users/:id").as_deref(),
-            Some("/orgs/{org_id}/users/{id}"),
-        );
+    fn the_document_spells_a_template_as_the_route_declares_it() {
+        for path in [
+            "/",
+            "/users",
+            "/users/{id}",
+            "/orgs/{org_id}/users/{id}",
+            "/users/@{handle}",
+        ] {
+            assert_eq!(openapi_path(&template(path)), Some(path));
+        }
     }
 
     #[test]
     fn openapi_path_refuses_what_the_standard_cannot_template() {
-        assert_eq!(
-            openapi_path("/users/:id<\\d+>").as_deref(),
-            Some("/users/{id}"),
-        );
-
-        for path in [
-            "/blobs/*rest",    // a catch-all spans segments
-            "/blobs/<\\d+>",   // an unnamed pattern names no parameter
-            "/users/@:handle", // a literal sharing a segment with a parameter
-            "/users/:",        // a parameter with no name
-        ] {
+        // A catch-all spans segments; a literal brace reads as a template.
+        for path in ["/blobs/{*rest}", "/b/{{x}}"] {
             assert!(
-                openapi_path(path).is_none(),
+                openapi_path(&template(path)).is_none(),
                 "{path} has no OpenAPI path template",
             );
         }
@@ -943,21 +908,9 @@ mod tests {
     }
 
     #[test]
-    fn path_parameters_are_read_one_way() {
-        assert_eq!(
-            path_parameter_names("/orgs/:org_id/users/:id"),
-            ["org_id", "id"]
-        );
-        assert_eq!(path_parameter_names("/users/:id<\\d+>"), ["id"]);
-        assert!(path_parameter_names("/blobs/*rest").is_empty());
-        assert!(path_parameter_names("/users/@:handle").is_empty());
-        assert!(path_parameter_names("/static/css").is_empty());
-    }
-
-    #[test]
     fn derives_path_parameters() {
         let mut g = generator();
-        let params = typed_path_parameters("/users/:id", &[], &mut g);
+        let params = typed_path_parameters(&template("/users/{id}"), &[], &mut g);
         assert_eq!(params.len(), 1);
         assert_eq!(params[0]["name"], "id");
         assert_eq!(params[0]["in"], "path");
@@ -969,14 +922,14 @@ mod tests {
     #[test]
     fn path_parameters_is_empty_for_a_static_path() {
         let mut g = generator();
-        assert!(typed_path_parameters("/health", &[], &mut g).is_empty());
-        assert!(typed_path_parameters("/", &[], &mut g).is_empty());
+        assert!(typed_path_parameters(&template("/health"), &[], &mut g).is_empty());
+        assert!(typed_path_parameters(&template("/"), &[], &mut g).is_empty());
     }
 
     #[test]
     fn path_parameters_emits_one_object_per_segment() {
         let mut g = generator();
-        let params = typed_path_parameters("/orgs/:org_id/users/:id", &[], &mut g);
+        let params = typed_path_parameters(&template("/orgs/{org_id}/users/{id}"), &[], &mut g);
         assert_eq!(params.len(), 2);
         assert_eq!(params[0]["name"], "org_id");
         assert_eq!(params[1]["name"], "id");
@@ -1047,7 +1000,7 @@ mod tests {
     ) -> Value {
         operation_object(
             route,
-            full_path,
+            &template(full_path),
             &operation_id(HOST_TOKEN, route.handler, None),
             generator,
             global_guards,
@@ -1056,17 +1009,27 @@ mod tests {
     }
 
     #[test]
-    fn a_path_param_segment_advertises_404_but_a_literal_colon_does_not() {
-        let bound = error_statuses(&route("get_user", "/users/:id"), "/users/:id", false, false);
+    fn a_path_param_segment_advertises_404_but_a_literal_segment_does_not() {
+        let bound = error_statuses(
+            &route("get_user", "/users/{id}"),
+            &template("/users/{id}"),
+            false,
+            false,
+        );
         assert!(
             bound.iter().any(|(s, _)| *s == "404"),
-            "an `:id` route advertises 404",
+            "an `{{id}}` route advertises 404",
         );
 
-        let literal = error_statuses(&route("weird", "/a:b/list"), "/a:b/list", false, false);
+        let literal = error_statuses(
+            &route("weird", "/a-b/list"),
+            &template("/a-b/list"),
+            false,
+            false,
+        );
         assert!(
             !literal.iter().any(|(s, _)| *s == "404"),
-            "a literal colon in a static segment must not advertise 404",
+            "a literal segment must not advertise 404",
         );
     }
 
@@ -1138,7 +1101,7 @@ mod tests {
 
     #[test]
     fn an_unthrottled_route_does_not_advertise_429() {
-        let statuses = error_statuses(&route("list", "/audio"), "/audio", false, false);
+        let statuses = error_statuses(&route("list", "/audio"), &template("/audio"), false, false);
         assert!(
             !statuses.iter().any(|(s, _)| *s == "429"),
             "a route with no ThrottlerGuard must not advertise 429",
@@ -1180,8 +1143,8 @@ mod tests {
     #[test]
     fn operation_object_inlines_parameters_when_path_has_any() {
         let mut g = generator();
-        let r = route("get_user", "/users/:id");
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let r = route("get_user", "/users/{id}");
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         assert!(op["parameters"].is_array());
         assert_eq!(op["parameters"][0]["name"], "id");
     }
@@ -1335,9 +1298,9 @@ mod tests {
     #[test]
     fn operation_object_attaches_response_schema_when_present() {
         let mut g = generator();
-        let mut r = route("get_user", "/users/:id");
+        let mut r = route("get_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
     }
 
@@ -1365,11 +1328,11 @@ mod tests {
     #[test]
     fn a_masked_bodyless_response_keeps_the_plain_description() {
         let mut g = generator();
-        let mut r = route("delete_user", "/users/:id");
+        let mut r = route("delete_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
         r.masked = true;
         r.success_status = 204;
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         assert_eq!(op["responses"]["204"]["description"], "No Content");
         assert!(op["responses"]["204"].get("content").is_none());
     }
@@ -1390,10 +1353,10 @@ mod tests {
     fn a_204_or_redirect_success_carries_no_body() {
         for (status, reason) in [(204, "No Content"), (307, "Temporary Redirect")] {
             let mut g = generator();
-            let mut r = route("delete_user", "/users/:id");
+            let mut r = route("delete_user", "/users/{id}");
             r.success_status = status;
             r.response = Some(schema_for_dummy);
-            let op = operation(&r, "/users/:id", &mut g, false, None);
+            let op = operation(&r, "/users/{id}", &mut g, false, None);
             let key = status.to_string();
             assert_eq!(op["responses"][&key]["description"], reason);
             assert!(
@@ -1518,9 +1481,9 @@ mod tests {
     #[test]
     fn a_declared_error_body_sits_beside_the_frameworks_problem_document() {
         let mut g = generator();
-        let mut r = route("get", "/users/:id");
+        let mut r = route("get", "/users/{id}");
         r.error_responses = &[(404, schema_for_dummy)];
-        let op = operation(&r, "/users/:id", &mut g, false, None);
+        let op = operation(&r, "/users/{id}", &mut g, false, None);
         let content = &op["responses"]["404"]["content"];
         assert!(content["application/problem+json"].is_object(), "{op}");
         assert!(content["application/json"].is_object(), "{op}");
@@ -1863,8 +1826,8 @@ mod tests {
     fn a_path_parameter_alone_advertises_no_400() {
         let mut g = generator();
         let op = operation(
-            &route("get", "/users/:id"),
-            "/users/:id",
+            &route("get", "/users/{id}"),
+            "/users/{id}",
             &mut g,
             false,
             None,
@@ -1899,12 +1862,12 @@ mod tests {
 
     fn crud_routes() -> Vec<HttpRouteMeta> {
         let mut list = route("list", "/");
-        let mut get = route("get", "/:id");
+        let mut get = route("get", "/{id}");
         let mut create = route("create", "/");
         create.verb = HttpVerb::Post;
-        let mut update = route("update", "/:id");
+        let mut update = route("update", "/{id}");
         update.verb = HttpVerb::Patch;
-        let mut delete = route("delete", "/:id");
+        let mut delete = route("delete", "/{id}");
         delete.verb = HttpVerb::Delete;
         list.tags = &["crud"];
         get.tags = &["crud"];

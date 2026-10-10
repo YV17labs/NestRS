@@ -43,7 +43,7 @@ struct NotesController;
 
 #[routes]
 impl NotesController {
-    #[get("/greet/:name")]
+    #[get("/greet/{name}")]
     #[public]
     async fn greet(&self, Path(name): Path<String>) -> String {
         format!("Hello, {name}!")

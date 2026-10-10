@@ -41,7 +41,7 @@ impl OAuthController {
             .grant_client_credentials(&grant_type, scope.as_deref(), &client)?)
     }
 
-    #[get("/social/:provider/authorize")]
+    #[get("/social/{provider}/authorize")]
     #[public]
     #[use_guards(ThrottlerGuard)]
     #[meta(Throttle::per_minute(10))]
@@ -69,7 +69,7 @@ impl OAuthController {
             .finish())
     }
 
-    #[get("/social/:provider/callback")]
+    #[get("/social/{provider}/callback")]
     #[use_guards(ThrottlerGuard, OAuthGuard)]
     #[meta(Throttle::per_minute(10))]
     #[api(

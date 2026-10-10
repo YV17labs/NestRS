@@ -93,7 +93,8 @@ impl RequestBodyMeta {
 pub struct HttpRouteMeta {
     /// The method this route answers.
     pub verb: HttpVerb,
-    /// The route path, relative to the controller prefix.
+    /// The route's template (`/{id}`), relative to the controller prefix,
+    /// normalized as the router serves it.
     pub path: &'static str,
     /// The handler method's name — the `handler` field in the boot route log.
     pub handler: &'static str,
@@ -373,7 +374,7 @@ mod tests {
     fn route_meta() -> HttpRouteMeta {
         HttpRouteMeta {
             verb: HttpVerb::Get,
-            path: "/:id",
+            path: "/{id}",
             handler: "show",
             summary: Some("Fetch one"),
             description: None,

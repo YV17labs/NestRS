@@ -50,3 +50,27 @@ returns to `:name`; the refusals stay.
 
 **Status (2026-10-10): decided, not landed.** It lands with
 `refactor/route-grammar`, which appends an entry here where it departs.
+
+**2026-10-10 — landed, with three widenings of the family.**
+
+- **A controller's `path` reads the route grammar**: it opens every route's
+  template, so it may hold `{name}` (`/orgs/{org}/members`) and no catch-all,
+  which its routes would follow. A gateway's and an MCP host's `path`, a
+  self-mount's own path, a router fallback's, the global prefix and
+  `HttpTransport::mount`'s are **literal**: each is answered under whole, so a parameter, a brace, or a
+  `:`, `*` or `<` the router would read as one is refused — at compile time
+  for a decorator, at boot for a value — with that sentence first, never a
+  template remedy the path would then refuse. `also_mounts` entries are
+  templates (`/api-json/{*version}`).
+- **The transport claims an address by its identity**, so two spellings of one
+  across controllers (`/parcels/{id}`, `/parcels/{key}`) fail the boot naming
+  both handlers: poem mounts them as two nodes and one handler never runs.
+- **The document prints a parameter after literal text** (`/@{handle}`), which
+  OpenAPI's path templating spells and the poem-era reader dropped; a catch-all
+  and a literal brace (`{{`), which a template expression would misread, are
+  still left out with a `warn`.
+
+poem's spelling lives in one translation, `nest_rs_http`'s `route_template.rs`,
+both ways: a template is handed to poem's router in its spelling at mount, and
+the pattern the router matched is read back in the declared one for the span,
+the access line and the throttler's bucket.

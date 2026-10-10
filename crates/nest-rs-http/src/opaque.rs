@@ -28,7 +28,7 @@
 //! # }
 //! # #[routes]
 //! # impl ReportsController {
-//! #[get("/reports/:id")]
+//! #[get("/reports/{id}")]
 //! async fn report(&self, Path(id): Path<u64>) -> Result<Json<Report>> {
 //!     Ok(Json(self.svc.render(id).await.opaque()?))
 //! }

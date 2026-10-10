@@ -1,5 +1,5 @@
-//! Two verbs at one address mount one poem node, and poem binds a parameter by
-//! the name the node was mounted under — so the address is spelled one way.
+//! Two verbs at one address are one mount, and each parameter binds by the name
+//! the address was mounted under — so the address is spelled one way.
 
 use nest_rs::http::{controller, routes};
 
@@ -8,12 +8,12 @@ struct ParcelsController;
 
 #[routes]
 impl ParcelsController {
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn read(&self) -> String {
         "read".into()
     }
 
-    #[delete("/:other")]
+    #[delete("/{other}")]
     async fn remove(&self) -> String {
         "removed".into()
     }

@@ -193,6 +193,6 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
             nest_rs_codegen::missing_argument("controller", "path", "\"/users\""),
         )
     })?;
-    nest_rs_codegen::reject_path("controller", &path)?;
+    nest_rs_codegen::reject_path("controller", &path, nest_rs_codegen::MountPath::Prefix)?;
     Ok((path, versions))
 }

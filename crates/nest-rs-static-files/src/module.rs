@@ -160,9 +160,10 @@ fn fallback(config: &StaticFilesConfig, files: Files) -> HttpFallbackMeta {
     let endpoint =
         StaticFilesEndpoint::new(path.clone(), files, config.max_age, config.spa_fallback);
     HttpFallbackMeta::new(path.clone(), "StaticFilesModule", move |_, route: Route| {
-        route
-            .at(&path, matched(endpoint.clone()))
-            .at(join_path(&path, "*path"), matched(endpoint.clone()))
+        route.at(&path, matched(endpoint.clone())).at(
+            nest_rs_http::__private::poem_pattern(&join_path(&path, "{*path}")),
+            matched(endpoint.clone()),
+        )
     })
 }
 

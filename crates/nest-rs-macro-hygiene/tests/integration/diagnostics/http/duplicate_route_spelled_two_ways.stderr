@@ -1,8 +1,8 @@
-error: `#[routes]` declares `GET /q/:other` on `first` and again on `second`: a controller serves each verb and path with one handler in each version, so the second would never run — give one a distinct path, verb or `#[version]`
+error: `#[routes]` declares `GET /q/{other}` on `first` and again on `second`: a controller serves each verb and path with one handler in each version, so the second would never run — give one a distinct path, verb or `#[version]`
   --> tests/integration/diagnostics/http/duplicate_route_spelled_two_ways.rs:17:5
    |
-17 |     #[get("/q/:other")]
-   |     ^^^^^^^^^^^^^^^^^^^
+17 |     #[get("/q/{other}")]
+   |     ^^^^^^^^^^^^^^^^^^^^
 
 error: `#[routes]` declares `GET /u` on `first` and again on `second`: a controller serves each verb and path with one handler in each version, so the second would never run — give one a distinct path, verb or `#[version]`
   --> tests/integration/diagnostics/http/duplicate_route_spelled_two_ways.rs:33:5

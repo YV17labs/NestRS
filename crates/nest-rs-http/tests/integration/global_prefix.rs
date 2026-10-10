@@ -184,3 +184,21 @@ fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
         Ok(())
     });
 }
+
+#[tokio::test]
+async fn a_global_prefix_is_one_literal_address() {
+    let app = nest_rs_core::App::builder()
+        .module::<TwoControllersModule>()
+        .build()
+        .await
+        .expect("the module itself builds — the prefix is a transport concern");
+    let mut transport = HttpTransport::new().global_prefix("/tenants/{tenant}");
+    let msg = nest_rs_core::Transport::configure(&mut transport, app.container())
+        .await
+        .expect_err("a templated prefix must fail boot")
+        .to_string();
+    assert!(
+        msg.contains("the global prefix") && msg.contains("one literal address"),
+        "names the prefix and why: {msg}",
+    );
+}

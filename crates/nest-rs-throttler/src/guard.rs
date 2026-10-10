@@ -13,7 +13,7 @@ use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{ClientOrigin, Reflector, async_trait};
-use poem::{PathPattern, Request};
+use poem::Request;
 
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::GraphqlOperationContext;
@@ -174,12 +174,10 @@ impl Guard for ThrottlerGuard {
         // Per route: keyed on the IP alone, a lenient route would drain a strict
         // route's budget.
         let ip = ClientId::from(ClientOrigin::of(req));
-        // The matched pattern, so dynamic segments don't fragment the bucket; a
-        // self-mounted endpoint has none and falls back to the raw path.
-        let route = req
-            .data::<PathPattern>()
-            .map(|pattern| pattern.0.as_ref())
-            .unwrap_or_else(|| req.uri().path());
+        // The declared template, so dynamic segments don't fragment the bucket;
+        // a request the router matched nothing for falls back to its raw path.
+        let route = nest_rs_http::__private::matched_template(req)
+            .unwrap_or_else(|| req.uri().path().into());
         let key = bucket_key(&[&transport::HTTP, &route, &ip]);
 
         let decision = self.count(transport::HTTP, &key, limit).await;

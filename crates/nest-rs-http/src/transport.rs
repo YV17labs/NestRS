@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use crate::drain::Drain;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::interceptor::HttpEndpointWrap;
+use crate::route_template::{RouteTemplate, segment_parameter};
 use crate::server::Server;
 use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
@@ -133,47 +135,85 @@ pub fn normalize_mount_path(raw: &str) -> String {
 
 /// `raw` as [`normalize_mount_path`] writes it, when every segment is a
 /// literal the router matches as written: none empty, `.` or `..`, none
-/// holding what poem reads as pattern syntax (`:name`, `<regex>`, `*rest`), nor
-/// `%`, `?`, `#`, `\`, whitespace or a control character. `None` otherwise.
+/// holding route-template syntax (`{name}`, a brace) or what the router would
+/// read as a parameter (`:`, `*`, `<`), nor `%`, `?`, `#`, `\`, whitespace or
+/// a control character. `None` otherwise.
 pub fn literal_mount_path(raw: &str) -> Option<String> {
     let path = normalize_mount_path(raw);
     let literal = path.split('/').skip(1).all(|segment| {
         !segment.is_empty()
             && segment != "."
             && segment != ".."
-            && !is_pattern_segment(segment)
-            && !segment.contains(['%', '?', '#', '\\'])
+            && !segment.contains(['{', '}', ':', '*', '<', '%', '?', '#', '\\'])
             && !segment.chars().any(|c| c.is_whitespace() || c.is_control())
     });
     (path == "/" || literal).then_some(path)
 }
 
-/// Where a capture opens in a route pattern's segment — `:name` or `<regex>`,
-/// after any literal it is glued to (`@:handle`).
-pub(crate) fn parameter_start(segment: &str) -> Option<usize> {
-    segment.find([':', '<'])
-}
-
-/// Whether a route pattern's segment is anything but a literal: a capture, or
-/// a `*rest` catch-all.
+/// Whether a template's segment is anything but literal text: a parameter, or
+/// the catch-all.
 pub(crate) fn is_pattern_segment(segment: &str) -> bool {
-    segment.starts_with('*') || parameter_start(segment).is_some()
+    segment_parameter(segment).is_some()
 }
 
-/// Claim `path` for `owner`, or fail boot naming both claimants — before poem
-/// panics in route assembly (`duplicate path: <prefix>/*--poem-rest`).
+/// Claim the address `template` names for `owner`, or fail boot naming both
+/// claimants — before poem panics in route assembly (`duplicate path:
+/// <prefix>/*--poem-rest`). Keyed by the address, so two spellings of one
+/// (`/x/{a}`, `/x/{b}`) are one claim.
 fn claim_exclusive_path(
     owners: &mut HashMap<String, String>,
     kind: &str,
-    path: String,
+    template: &RouteTemplate,
     owner: String,
     remedy: &str,
 ) -> anyhow::Result<()> {
-    if let Some(first) = owners.insert(path.clone(), owner.clone()) {
+    if let Some(first) = owners.insert(template.identity().to_owned(), owner.clone()) {
         anyhow::bail!(
-            "duplicate {kind} {path:?}: {first} and {owner} both mount there — a {kind} is its \
+            "duplicate {kind} {:?}: {first} and {owner} both mount there — a {kind} is its \
              exclusive namespace; {remedy}",
+            template.as_str(),
         );
+    }
+    Ok(())
+}
+
+/// A route mounted on an address, and the handler that declared it.
+struct RouteClaim {
+    template: String,
+    controller: &'static str,
+    handler: &'static str,
+}
+
+/// Claim `template`'s address for one controller's route, or fail boot naming
+/// both handlers: poem mounts two spellings of one address apart, and one of
+/// them never runs. Several verbs of one controller share an address.
+fn claim_route(
+    owners: &mut HashMap<String, RouteClaim>,
+    template: &RouteTemplate,
+    controller: &'static str,
+    handler: &'static str,
+) -> anyhow::Result<()> {
+    match owners.entry(template.identity().to_owned()) {
+        Entry::Vacant(slot) => {
+            slot.insert(RouteClaim {
+                template: template.as_str().to_owned(),
+                controller,
+                handler,
+            });
+        }
+        Entry::Occupied(first) if first.get().controller == controller => {}
+        Entry::Occupied(first) => {
+            let first = first.get();
+            anyhow::bail!(
+                "duplicate route path: {}::{} mounts {:?} and {controller}::{handler} mounts \
+                 {:?}, one address — an address is mounted once and each parameter binds by \
+                 its name; give each controller route a distinct full path",
+                first.controller,
+                first.handler,
+                first.template,
+                template.as_str(),
+            );
+        }
     }
     Ok(())
 }
@@ -186,6 +226,9 @@ fn mount_fallback(
     claims: Claims,
     get_routes: &[(String, &'static str)],
 ) -> anyhow::Result<Fallback> {
+    RouteTemplate::literal(meta.path()).map_err(|refused| {
+        anyhow::anyhow!("the router fallback {} answers at {refused}", meta.owner())
+    })?;
     if let Some((prefix, owner)) = claims.owner_of(meta.path()) {
         anyhow::bail!(
             "the router fallback {} answers at {:?}, under {prefix:?}, which {owner} owns: \
@@ -216,6 +259,12 @@ fn mount_fallback(
         claims,
         meta.mount(container).boxed(),
     ))
+}
+
+/// `path`, a controller's prefix or one of its routes, read as a template; the
+/// macros read both halves, so a refusal here is a hand-built controller's.
+fn template_of(path: &str, controller: &str) -> anyhow::Result<RouteTemplate> {
+    RouteTemplate::parse(path).map_err(|refused| anyhow::anyhow!("{controller} mounts {refused}"))
 }
 
 /// What to do about two controllers claiming one mount prefix.
@@ -315,6 +364,7 @@ impl HttpTransport {
 
     /// Mount every controller under a shared prefix (e.g. `/api`). Empty or
     /// `"/"` is no prefix; a missing leading `/` is added, a trailing one stripped.
+    /// It is one literal address: a template fails the boot.
     pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.global_prefix = normalize_global_prefix(&prefix.into());
         self
@@ -376,9 +426,11 @@ impl HttpTransport {
         self
     }
 
-    /// Mount an extra endpoint at `path`. The builder closure runs at
-    /// [`Transport::configure`] time with the live container, so it can
-    /// resolve services to construct framework-specific endpoints.
+    /// Mount an extra endpoint at `path`, one literal address it answers under
+    /// whole: a parameter, a brace, or a `:`, `*` or `<` fails the boot. The
+    /// builder closure runs at [`Transport::configure`] time with the live
+    /// container, so it can resolve services to construct framework-specific
+    /// endpoints.
     pub fn mount<F, E>(mut self, path: impl Into<String>, build: F) -> Self
     where
         F: Fn(&Container) -> E + Send + Sync + 'static,
@@ -422,8 +474,8 @@ impl Transport for HttpTransport {
         let mut unguarded: Vec<String> = Vec::new();
         let mut prefix_owner: HashMap<String, String> = HashMap::new();
         // Routes mount flat (`<prefix>/<path>`), so distinct prefixes can still
-        // collide on a full path; several verbs of one controller share an entry.
-        let mut route_owner: HashMap<String, String> = HashMap::new();
+        // collide on a full path.
+        let mut route_owner: HashMap<String, RouteClaim> = HashMap::new();
 
         // Full routes, not prefixes, for the non-URI rewrite: a `/` prefix matches
         // nothing segment-wise, and `/posts` would claim another controller's `/posts/drafts`.
@@ -450,7 +502,7 @@ impl Transport for HttpTransport {
                 claim_exclusive_path(
                     &mut prefix_owner,
                     "controller prefix",
-                    prefix.clone(),
+                    &template_of(&prefix, d.meta.controller)?,
                     d.meta.controller.to_owned(),
                     &prefix_remedy(version),
                 )?;
@@ -459,6 +511,7 @@ impl Transport for HttpTransport {
                         continue;
                     }
                     let path = join_path(&prefix, r.path);
+                    let template = template_of(&path, d.meta.controller)?;
                     // Under a non-URI selector a versioned route is called unversioned.
                     let addresses = match version {
                         Some(_) => vec![path.clone(), join_path(d.meta.path, r.path)],
@@ -476,16 +529,7 @@ impl Transport for HttpTransport {
                         true => versioned_routes.push(path.clone()),
                         false => unversioned_routes.push(path.clone()),
                     }
-                    if let Some(first) =
-                        route_owner.insert(path.clone(), d.meta.controller.to_owned())
-                        && first != d.meta.controller
-                    {
-                        anyhow::bail!(
-                            "duplicate route path {path:?}: {first} and {} both mount there — \
-                             give each controller route a distinct full path",
-                            d.meta.controller,
-                        );
-                    }
+                    claim_route(&mut route_owner, &template, d.meta.controller, r.handler)?;
                     // Under a non-URI strategy `/v{n}` is where the route mounts, not
                     // what a client calls, so the version is logged as its own field.
                     let (logged, version) = match &self.version_selector {
@@ -554,12 +598,25 @@ impl Transport for HttpTransport {
         let mut unguarded_edges: Vec<String> = Vec::new();
         let mut endpoint_owner: HashMap<String, String> = HashMap::new();
         for d in discovery.meta::<HttpEndpointMeta>() {
+            let owner = format!("{} endpoint {}", d.meta.label(), d.meta.owner());
+            // Nested whole at its path; what it routes below is its own template.
+            let mut templates = Vec::new();
+            for (index, path) in d.meta.paths().enumerate() {
+                let read = match index {
+                    0 => RouteTemplate::literal(path),
+                    _ => RouteTemplate::parse(path),
+                };
+                templates
+                    .push(read.map_err(|refused| anyhow::anyhow!("the {owner} mounts {refused}"))?);
+            }
+            let identity = templates[0].identity();
             // A self-mount nests its whole subtree, so a controller on that path
             // is the same poem panic.
-            if let Some(first) = prefix_owner
-                .get(d.meta.path())
-                .or_else(|| route_owner.get(d.meta.path()))
-            {
+            if let Some(first) = prefix_owner.get(identity).cloned().or_else(|| {
+                route_owner
+                    .get(identity)
+                    .map(|claim| claim.controller.to_owned())
+            }) {
                 anyhow::bail!(
                     "duplicate mount path {:?}: controller {first} and {} endpoint {} both mount \
                      there — a mount path is its owner's exclusive namespace; give each one a \
@@ -571,17 +628,14 @@ impl Transport for HttpTransport {
             }
             // Recorded unversioned so a versioned catch-all cannot swallow them;
             // exactly the declared paths — a surface owning a subtree says so via `also_mounts`.
-            for path in d.meta.paths() {
-                self_mounts.push(path.to_owned());
-                claims.prefix(
-                    path,
-                    format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
-                );
+            for template in &templates {
+                self_mounts.push(template.as_str().to_owned());
+                claims.prefix(template.as_str(), owner.clone());
                 claim_exclusive_path(
                     &mut endpoint_owner,
                     "self-mounted endpoint path",
-                    path.to_owned(),
-                    format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
+                    template,
+                    owner.clone(),
                     "give each one a distinct path",
                 )?;
             }
@@ -641,6 +695,8 @@ impl Transport for HttpTransport {
             );
         }
         for (path, mount) in self.mounts.drain(..) {
+            RouteTemplate::literal(&path)
+                .map_err(|refused| anyhow::anyhow!("HttpTransport::mount {refused}"))?;
             claims.prefix(
                 &path,
                 format!("the endpoint HttpTransport::mount added at {path:?}"),
@@ -668,6 +724,8 @@ impl Transport for HttpTransport {
                 "the global prefix ({})",
                 nest_rs_config::var_name("http", "GLOBAL_PREFIX"),
             );
+            RouteTemplate::literal(&prefix)
+                .map_err(|refused| anyhow::anyhow!("{owner} {refused}"))?;
             claims.only(prefix.clone(), owner);
             // Every route answers under the prefix, never at a path of its own.
             get_routes.clear();
@@ -857,7 +915,7 @@ mod tests {
     #[test]
     fn join_path_concatenates_clean_segments() {
         assert_eq!(join_path("/health", "/live"), "/health/live");
-        assert_eq!(join_path("/users", "/:id"), "/users/:id");
+        assert_eq!(join_path("/users", "/{id}"), "/users/{id}");
     }
 
     #[test]
@@ -879,7 +937,7 @@ mod tests {
     #[test]
     fn version_path_prefixes_when_a_version_is_supplied() {
         assert_eq!(version_path(Some("1"), "/users"), "/v1/users");
-        assert_eq!(version_path(Some("2"), "/users/:id"), "/v2/users/:id");
+        assert_eq!(version_path(Some("2"), "/users/{id}"), "/v2/users/{id}");
         assert_eq!(version_path(Some("1"), "/"), "/v1");
     }
 
@@ -901,10 +959,13 @@ mod tests {
     }
 
     #[test]
-    fn a_mount_path_poem_would_read_as_a_pattern_is_refused() {
+    fn a_mount_path_the_router_would_read_as_a_template_is_refused() {
         for raw in [
             "/assets/*rest",
             "/:id",
+            "/{id}",
+            "/assets/{*rest}",
+            "/a{{b",
             "/files/<\\d+>",
             "/a//b",
             "/a/../b",

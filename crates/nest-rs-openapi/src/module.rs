@@ -19,7 +19,7 @@ const CSS_PATH: &str = "/api/swagger-ui.css";
 const BUNDLE_PATH: &str = "/api/swagger-ui-bundle.js";
 const PRESET_PATH: &str = "/api/swagger-ui-standalone-preset.js";
 const INITIALIZER_PATH: &str = "/api/swagger-initializer.js";
-const VERSIONED_SPEC_PATTERN: &str = "/api-json/*version";
+const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
 /// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with

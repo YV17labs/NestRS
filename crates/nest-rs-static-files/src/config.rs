@@ -71,8 +71,9 @@ impl Config for StaticFilesConfig {
             ConfigError::parse(
                 env.var_name("PATH"),
                 "must be a literal URL path such as `/` or `/assets`, which the router matches as \
-                 written: no empty, `.` or `..` segment, no pattern syntax (`:` `*` `<`), and none \
-                 of `%` `?` `#` `\\` — set here, or as `StaticFilesConfig::path` in code",
+                 written: no empty, `.` or `..` segment, no template syntax (`{` `}`) nor what the \
+                 router reads as a parameter (`:` `*` `<`), and none of `%` `?` `#` `\\` — set \
+                 here, or as `StaticFilesConfig::path` in code",
             )
         })?;
         Ok(Self {
@@ -189,6 +190,8 @@ mod tests {
         for raw in [
             "/assets/*rest",
             "/:id",
+            "/assets/{*rest}",
+            "/{id}",
             "/a//b",
             "/a/../b",
             "/a%2fb",

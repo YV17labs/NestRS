@@ -17,7 +17,7 @@ struct PairController;
 
 #[routes]
 impl PairController {
-    #[get("/:a/:b")]
+    #[get("/{a}/{b}")]
     #[public]
     async fn pair(&self, Path((a, b)): Path<(String, String)>) -> String {
         format!("{a}-{b}")

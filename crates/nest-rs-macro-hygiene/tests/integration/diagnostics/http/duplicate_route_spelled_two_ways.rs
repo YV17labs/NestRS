@@ -1,4 +1,4 @@
-//! A route's identity is the address poem mounts, not the path as written: a
+//! A route's identity is the address it mounts, not the path as written: a
 //! parameter's name, a missing leading slash and a trailing slash the edge trims
 //! all leave the address where it was, so each pair below is one route twice.
 
@@ -9,12 +9,12 @@ struct NamedController;
 
 #[routes]
 impl NamedController {
-    #[get("/q/:id")]
+    #[get("/q/{id}")]
     async fn first(&self) -> String {
         "first".into()
     }
 
-    #[get("/q/:other")]
+    #[get("/q/{other}")]
     async fn second(&self) -> String {
         "second".into()
     }

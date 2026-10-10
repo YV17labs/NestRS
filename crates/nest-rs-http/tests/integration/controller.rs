@@ -39,21 +39,21 @@ impl HygieneController {
     }
 
     /// `req` is the wrapper's `Request` local, which `Query` reads after it.
-    #[get("/req/:req")]
+    #[get("/req/{req}")]
     async fn param_named_req(&self, Path(req): Path<String>, filter: Query<Filter>) -> String {
         format!("{req} {}", filter.0.limit)
     }
 
     /// `__ctrl` is the wrapper's `&Arc<Self>` local; `marker` proves the real
     /// instance is called.
-    #[get("/ctrl/:value")]
+    #[get("/ctrl/{value}")]
     async fn param_named_ctrl(&self, Path(__ctrl): Path<String>) -> String {
         format!("{} {__ctrl}", self.marker)
     }
 
     /// A response shaper re-forwards every parameter and binds `__out`,
     /// `__response` and `res` of its own.
-    #[post("/shaped/:tag")]
+    #[post("/shaped/{tag}")]
     #[http_code(201)]
     #[response_header("x-hygiene", "ok")]
     async fn shaped(
@@ -175,12 +175,12 @@ impl AddressController {
         "two".into()
     }
 
-    #[get("/parcels/:id")]
+    #[get("/parcels/{id}")]
     async fn read_parcel(&self, Path(id): Path<String>) -> String {
         format!("read {id}")
     }
 
-    #[delete("parcels/:id/")]
+    #[delete("parcels/{id}/")]
     async fn drop_parcel(&self, Path(id): Path<String>) -> String {
         format!("dropped {id}")
     }
@@ -226,46 +226,73 @@ async fn a_route_declared_with_a_trailing_slash_is_served_at_the_address_without
     resp.assert_text("slashed").await;
 }
 
-// A poem upgrade that reads a path differently from `RoutePath::identity`
-// fails here.
+#[controller(path = "/orgs/{org}")]
+struct MembersController;
+
+#[routes]
+impl MembersController {
+    #[get("/members/{id}")]
+    async fn member(&self, ids: Path<(String, String)>) -> String {
+        let Path((org, id)) = ids;
+        format!("{org}/{id}")
+    }
+}
+
+#[module(providers = [MembersController])]
+struct MembersModule;
+
+#[tokio::test]
+async fn a_parameter_in_the_controller_path_binds_before_the_route_s_own() {
+    let bare = crate::boot::<MembersModule>().await;
+    let prefixed =
+        crate::boot_on::<MembersModule>(nest_rs_http::HttpTransport::new().global_prefix("/api"))
+            .await;
+    for (client, path) in [
+        (&bare, "/orgs/acme/members/7"),
+        (&prefixed, "/api/orgs/acme/members/7"),
+    ] {
+        let resp = client.get(path).send().await;
+        resp.assert_status_is_ok();
+        resp.assert_text("acme/7").await;
+    }
+}
+
+// A poem upgrade that reads a path differently from `RoutePath::identity`, or
+// a template the transport hands it in poem's spelling, fails here.
 #[tokio::test]
 async fn a_route_identity_is_the_address_poem_serves() {
     use nest_rs_codegen::RoutePath;
+    use nest_rs_http::__private::poem_pattern;
     use poem::{Route, endpoint::make_sync};
 
-    /// A path and a request it serves.
+    /// A template and a request it serves.
     type Probe = (&'static str, &'static str);
     // Two probes, and whether the macro calls them one address.
     let pairs: &[(Probe, Probe, bool)] = &[
         (("/t", "/t"), ("t", "/t"), true),
         (("/u", "/u"), ("/u/", "/u"), true),
         (("/a//b", "/a/b"), ("/a/b", "/a/b"), true),
-        (("/q/:id", "/q/7"), ("/q/:other", "/q/8"), true),
-        (("/n/:id<\\d+>", "/n/7"), ("/n/<\\d+>", "/n/8"), true),
-        (("/f/*", "/f/x/y"), ("/f/*rest", "/f/z"), true),
+        (("/q/{id}", "/q/7"), ("/q/{other}", "/q/8"), true),
+        (("/@{handle}", "/@bob"), ("/@{name}", "/@ada"), true),
+        (("/f/{*rest}", "/f/x/y"), ("/f/{*tail}", "/f/z"), true),
         (("/Users", "/Users"), ("/users", "/users"), false),
-        (("/q/:id", "/q/7"), ("/q/:id/x", "/q/7/x"), false),
-        (("/n/:id", "/n/abc"), ("/n/:id<\\d+>", "/n/7"), false),
-        (("/r/<\\d+>", "/r/7"), ("/r/<[a-z]+>", "/r/abc"), false),
-        (("/c/*", "/c/x/y"), ("/c/:id", "/c/x"), false),
+        (("/q/{id}", "/q/7"), ("/q/{id}/x", "/q/7/x"), false),
+        (("/m/{id}", "/m/7"), ("/m/@{id}", "/m/@7"), false),
+        (("/b/{{x}}", "/b/{x}"), ("/b/{x}", "/b/y"), false),
+        (("/c/{*rest}", "/c/x/y"), ("/c/{id}", "/c/x"), false),
     ];
 
     for ((a, probe_a), (b, probe_b), same) in pairs {
-        let identity = |path: &str| {
-            RoutePath::parse(path)
-                .unwrap_or_else(|why| panic!("`{path}`: {why}"))
-                .identity()
-                .to_owned()
-        };
+        let parsed = |path: &str| RoutePath::parse(path).unwrap_or_else(|why| panic!("{why}"));
         assert_eq!(
-            identity(a) == identity(b),
+            parsed(a).identity() == parsed(b).identity(),
             *same,
             "the macro's reading of `{a}` and `{b}`",
         );
 
         let mounted = Route::new()
-            .try_at(*a, make_sync(|_| "a"))
-            .and_then(|route| route.try_at(*b, make_sync(|_| "b")));
+            .try_at(poem_pattern(parsed(a).template()), make_sync(|_| "a"))
+            .and_then(|route| route.try_at(poem_pattern(parsed(b).template()), make_sync(|_| "b")));
         let poem_says_one = match mounted {
             Err(_) => true,
             Ok(route) => {

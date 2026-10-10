@@ -147,7 +147,6 @@ mod http {
     /// is a 409, a create the ability re-check rolled back (`RecordNotInserted`)
     /// a 403, a row that vanished before the write a 404; any other `DbErr` is
     /// a logged 500 with an empty body. Called by the `#[crud]` expansion.
-    #[doc(hidden)]
     pub fn crud_error(err: sea_orm::DbErr) -> poem::Error {
         use sea_orm::{DbErr, SqlErr};
 

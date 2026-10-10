@@ -71,8 +71,6 @@ pub mod ws;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
-#[cfg(feature = "http")]
-pub use error::crud_error;
 pub use error::{CommitError, ServiceError};
 pub use executor::{
     Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
@@ -96,6 +94,15 @@ pub use worker::WorkerDbContext;
 pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};
 #[cfg(feature = "http")]
 pub use http::{Bind, DbContext};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    #[cfg(feature = "http")]
+    pub use crate::error::crud_error;
+}
 
 /// Re-exported so an app resolves the framework's exact `sea_orm` pin, part of
 /// this crate's API.

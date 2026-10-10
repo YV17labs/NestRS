@@ -72,7 +72,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<::std::vec::Vec<#output>>> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
-                        .map_err(::nest_rs_seaorm::crud_error)?;
+                        .map_err(::nest_rs_seaorm::__private::crud_error)?;
                     ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(
                         __rows.iter().map(#output::from).collect(),
                     ))
@@ -98,7 +98,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                         __page.0.after_uuid(),
                     )
                     .await
-                    .map_err(::nest_rs_seaorm::crud_error)?;
+                    .map_err(::nest_rs_seaorm::__private::crud_error)?;
                     let __items: ::std::vec::Vec<#output> =
                         __p.items.iter().map(#output::from).collect();
                     let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
@@ -134,7 +134,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__m)))
@@ -176,7 +176,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __body.into_inner(),
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?;
+                .map_err(::nest_rs_seaorm::__private::crud_error)?;
                 let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(
                     ::nest_rs_http::poem::web::Json(#output::from(&__row)),
                 );
@@ -216,7 +216,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
@@ -225,7 +225,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                             __body.into_inner(),
                         )
                         .await
-                        .map_err(::nest_rs_seaorm::crud_error)?;
+                        .map_err(::nest_rs_seaorm::__private::crud_error)?;
                         ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
@@ -259,12 +259,12 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
-                            .map_err(::nest_rs_seaorm::crud_error)?;
+                            .map_err(::nest_rs_seaorm::__private::crud_error)?;
                         ::core::result::Result::Ok(())
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(

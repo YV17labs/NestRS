@@ -118,6 +118,11 @@ variables or tiers.
 - **A combination of variables is the consumer's**, refused at boot in the one
   constructor every path reaches — config-driven or built in code — naming what
   is set, never settled by picking one.
+- **A `#[config]` type's `Default` is the production-safe value**: a
+  development convenience — a credential the dev container accepts, plain
+  HTTP, a public surface — lives in `Config::defaults()`, armed by the
+  profile, never in `Default`, so a pin over `..Default::default()` opens
+  nothing in any profile. Held by each member's unit test, and review.
 - **A duration a deployment sets has a floor and a ceiling**, refused naming the
   variable whether pinned or read, never clamped. The floor is where the thing
   stops working; the ceiling is where a value becomes a slip, **and never above

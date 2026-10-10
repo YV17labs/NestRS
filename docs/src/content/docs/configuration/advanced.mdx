@@ -164,9 +164,11 @@ Error: configuration validation failed for 'oauth'
 ## A profile-dependent baseline
 
 `from_env` overlays the environment onto a **base**, and that base is
-`Config::defaults()` when nothing was pinned at the import site. Override it
-when a field's *safe* value differs by profile — the framework does this for
-three of its own:
+`Config::defaults()` when nothing was pinned at the import site. `Default` is
+the production-safe value, in every profile; a development convenience — a
+credential the dev container accepts, plain HTTP, public documentation — lives
+in `defaults()`, armed by the profile. The framework does this for its own
+storage and OpenAPI configs:
 
 ```rust title="apps/auth/src/config.rs"
 use nest_rs::config::Environment;
@@ -179,10 +181,10 @@ fn dev_profile() -> bool {
 
 impl Config for StorageConfig {
     fn defaults() -> Self {
-        let d = Self::default();
-        if dev_profile() { return d; }
-        // Outside dev/test: no sentinel credentials, no plain HTTP.
-        Self { access_key: String::new(), secret_key: String::new(), allow_http: false, ..d }
+        let safe = Self::default();
+        if !dev_profile() { return safe; }
+        // Development and test: the dev container's pair, plain HTTP allowed.
+        Self { access_key: "nestrs".into(), secret_key: "nestrs".into(), allow_http: true, ..safe }
     }
 
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> { /* … */ }
@@ -191,7 +193,9 @@ impl Config for StorageConfig {
 
 It belongs here rather than inside `from_env`: `from_env` also runs over a
 value pinned in code, and a profile rule there would silently rewrite a
-deliberate choice. `Default` stays the plain, pin-friendly struct value.
+deliberate choice. So a pin chooses its base in sight — `..T::defaults()` for
+the profile's, `..Default::default()` for the production-safe value — and
+`Default` holds no opening for a pin to inherit.
 
 ## Going further
 

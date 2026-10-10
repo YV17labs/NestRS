@@ -10,6 +10,19 @@ disallowed-methods = [
     { path = "redis::Script::invoke_async", reason = "run a script through RedisConnection::invoke: it loads the script again on the node that forgot it, past a SCRIPT FLUSH or a failover" },
     { path = "redis::ScriptInvocation::invoke_async", reason = "run a script through RedisConnection::invoke: it loads the script again on the node that forgot it, past a SCRIPT FLUSH or a failover" },
     { path = "redis::Script::load_async", reason = "load a script through RedisConnection::load: on a Cluster it loads on every primary, never on a replica that may be down" },
+    { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "reqwest::ClientBuilder::danger_accept_invalid_hostnames", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "reqwest::ClientBuilder::tls_danger_accept_invalid_certs", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "reqwest::ClientBuilder::tls_danger_accept_invalid_hostnames", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    # reqwest's blocking client is built only beside opentelemetry-otlp, whose default HTTP client it is.
+    { path = "reqwest::blocking::ClientBuilder::danger_accept_invalid_certs", allow-invalid = true, reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "reqwest::blocking::ClientBuilder::danger_accept_invalid_hostnames", allow-invalid = true, reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "reqwest::blocking::ClientBuilder::tls_danger_accept_invalid_certs", allow-invalid = true, reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "reqwest::blocking::ClientBuilder::tls_danger_accept_invalid_hostnames", allow-invalid = true, reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "object_store::ClientOptions::with_allow_invalid_certificates", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "rustls::ConfigBuilder::dangerous", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "rustls::ClientConfig::dangerous", reason = "verification is never optional (CLAUDE.md, hard no): trust a private authority through ClientTls" },
+    { path = "object_store::aws::AmazonS3Builder::from_env", reason = "it reads every AWS_* variable, AWS_ALLOW_INVALID_CERTIFICATES among them: build the client from StorageConfig, whose ClientTls verifies always" },
 ]
 
 disallowed-macros = [

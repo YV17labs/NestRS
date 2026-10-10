@@ -145,7 +145,7 @@ async fn posts_round_trip() {
 ```
 
 The assertions cover the entire chain: the `POST` walks validation, the
-transaction interceptor, and the service; the `GET /posts/:id` walks
+transaction interceptor, and the service; the `GET /posts/{id}` walks
 `CrudService::find_by_id` through `Repo`.
 
 ## The validation failure

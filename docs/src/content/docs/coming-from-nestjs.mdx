@@ -20,7 +20,7 @@ pub struct UsersController {
 
 #[routes]
 impl UsersController {
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))
     }
@@ -43,6 +43,7 @@ resolver — carries across intact.
 | `@Injectable()` | `#[injectable]` |
 | `@Controller('users')` | `#[controller(path = "/users")]` |
 | `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
+| `@Get(':id')`, `@Get('files/*path')` | `#[get("/{id}")]`, `#[get("/files/{*path}")]` — OpenAPI's [path templating](/http/controllers/#route-templates), the spelling the document prints |
 | `CanActivate` guard | `Guard` trait (`check_http`) + `#[use_guards(...)]` |
 | DTO + `class-validator` | entity `#[expose]` + `validate(...)` (the `validator` crate) |
 | `@Param('id')` / `@Query()` / `@Body()` | the parameter type: `Path<Uuid>`, `Query<F>`, `Json<T>` |

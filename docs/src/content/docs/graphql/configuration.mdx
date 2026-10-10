@@ -51,7 +51,7 @@ pub struct GraphqlConfig {
 
 | Field | Env var | Default | Effect |
 |---|---|---|---|
-| `path` | `<PREFIX>_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). |
+| `path` | `<PREFIX>_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). One literal path: template syntax (`{` `}`) or what the router reads as a parameter (`:` `*` `<`) fails the boot. |
 | `playground` | `<PREFIX>_GRAPHQL__PLAYGROUND` | `false` | When `true`, `GET <path>` serves the offline playground HTML. |
 | `schema_path` | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `schema.graphql` | Where the SDL gets written. |
 | `emit_sdl` | `<PREFIX>_GRAPHQL__EMIT_SDL` | `false` | When `true`, the running app writes its live SDL to `schema_path` once at boot. |

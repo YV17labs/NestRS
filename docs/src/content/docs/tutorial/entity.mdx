@@ -112,7 +112,7 @@ The decorator translates one declaration into every wire surface:
 |-----------|-----------|-------------------|
 | `Post` | The wire DTO — every `#[expose]`d column, no SeaORM internals and nothing left unexposed | HTTP responses, OpenAPI schema |
 | `CreatePost` | A struct holding fields marked `input(create)` | `POST /posts` body |
-| `UpdatePost` | A struct holding fields marked `input(update)` | `PATCH /posts/:id` body |
+| `UpdatePost` | A struct holding fields marked `input(update)` | `PATCH /posts/{id}` body |
 
 `service = super::service::PostsService` tells the macro which service
 owns the entity. The path is required as soon as the entity declares an

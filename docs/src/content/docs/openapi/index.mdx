@@ -127,7 +127,7 @@ covers each of them.
 An entity decorated with `#[expose]` produces a wire DTO whose `JsonSchema`
 ends up in `components.schemas` the moment a handler returns `Json<User>`.
 The schema generator is **shared across every route**: payloads referenced from
-multiple handlers de-duplicate, and a `User` returned from `GET /users/:id` is
+multiple handlers de-duplicate, and a `User` returned from `GET /users/{id}` is
 the same `$ref` as the one returned from the `List` endpoint.
 
 The same type powers the GraphQL output type, the wire DTO the handler returns,

@@ -28,7 +28,9 @@ const DEFAULT_MAX_REPRESENTATIONS: usize = 100;
 #[config(namespace = "graphql")]
 #[derive(Clone, Debug)]
 pub struct GraphqlConfig {
-    /// Endpoint path. Default `/graphql`.
+    /// Endpoint path. Default `/graphql`. One literal path: a template's `{`
+    /// `}`, or a `:`, `*` or `<` the router reads as a parameter, fails the
+    /// boot.
     pub path: String,
     /// Default `false` (production-safe).
     pub playground: bool,

@@ -20,7 +20,7 @@ see:
 
 | Edge | Bucket |
 |---|---|
-| HTTP | the matched route pattern + the client's network: its address in IPv4, its `/64` in IPv6 |
+| HTTP | the matched route's template as declared (`/users/{id}`, one bucket for every id) + the client's network: its address in IPv4, its `/64` in IPv6 |
 | GraphQL | the field name + the caller's actor — an operation carries no client address, but it runs inside the request's scope |
 | MCP | the tool or prompt + the caller's actor — the same, carried across the task rmcp spawns for the operation |
 | WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |

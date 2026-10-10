@@ -98,11 +98,11 @@ and what "resolve this profile to a local user" means are all yours.
 
 Two legs, both dispatched by a `:provider` path segment:
 
-- `GET /social/:provider/authorize` — begins the redirect. A plain handler:
+- `GET /social/{provider}/authorize` — begins the redirect. A plain handler:
   ask the registry for the provider, call `authorize`, return a `302` with the
   PKCE/CSRF transaction in a signed, short-lived cookie. Unknown provider ⇒
   `404`.
-- `GET /social/:provider/callback` — the redirect URI. A `Strategy` bound with
+- `GET /social/{provider}/callback` — the redirect URI. A `Strategy` bound with
   `#[use_guards(OAuthGuard)]` validates the `state` against the cookie,
   exchanges the code, fetches the profile, resolves it to a local user, and
   hands the handler a `Ctx<Caller>` to issue this app's token from. A forged
@@ -120,7 +120,7 @@ pub struct OAuthController {
 #[routes]
 impl OAuthController {
     // …
-    #[get("/social/:provider/authorize")]
+    #[get("/social/{provider}/authorize")]
     #[public]
     #[use_guards(ThrottlerGuard)]
     // … #[meta(…)], #[api(…)]
@@ -133,7 +133,7 @@ impl OAuthController {
         // … a 302 to `authorization.url`, the transaction in a short-lived cookie
     }
 
-    #[get("/social/:provider/callback")]
+    #[get("/social/{provider}/callback")]
     #[use_guards(ThrottlerGuard, OAuthGuard)]
     // … #[meta(…)], #[api(…, response = AccessTokenResponse)]
     async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {

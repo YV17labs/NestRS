@@ -20,7 +20,7 @@ guards from [Expose over HTTP](/tutorial/http/), with one blanket `Manage`
 rule standing in for a real policy. Here that policy gets teeth: the framework
 filters every read by the caller's organisation, gates every by-id load against
 their ability, and masks the response before it leaves the process. By the end
-of this page, a cross-tenant `GET /users/:id` returns `403`, a plain user sees
+of this page, a cross-tenant `GET /users/{id}` returns `403`, a plain user sees
 only their org, and the `email` column disappears from a non-admin listing.
 
 ## Two layers, two guards
@@ -146,7 +146,7 @@ impl UsersController {
         Ok(Json(User::from(&user)))
     }
 
-    #[get("/:id")]
+    #[get("/{id}")]
     // … #[api(…)]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))

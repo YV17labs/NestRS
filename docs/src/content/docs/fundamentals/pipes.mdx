@@ -155,7 +155,7 @@ use nest_rs::http::Piped;
 use nest_rs::pipes::ParseUuidV7;
 use nest_rs::http::poem::web::Path;
 
-#[get("/:id")]
+#[get("/{id}")]
 async fn get(&self, id: Piped<ParseUuidV7, Path<String>>) -> Json<User> {
     Json(self.svc.find(*id).await?)
 }
@@ -235,13 +235,13 @@ caller's scope, `403` if denied.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 // Pipe — pure conversion, no DB
-#[get("/_validate/:id")]
+#[get("/_validate/{id}")]
 async fn validate(&self, id: Piped<ParseUuidV7, Path<String>>) -> String {
     format!("{} is valid", *id)
 }
 
 // Bind — convert + load + authorize
-#[get("/:id")]
+#[get("/{id}")]
 async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
 }

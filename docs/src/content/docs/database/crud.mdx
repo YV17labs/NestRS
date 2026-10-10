@@ -61,10 +61,10 @@ mounts:
 | Verb     | Path        | Authz check        | Body                  | Returns                |
 |----------|-------------|--------------------|-----------------------|------------------------|
 | `GET`    | `/orgs`     | `Read` on `Org`    | —                     | `200` `Vec<Org>` + cursor |
-| `GET`    | `/orgs/:id` | `Read` on `Org`    | —                     | `200` `Org` (404/403)  |
+| `GET`    | `/orgs/{id}` | `Read` on `Org`    | —                     | `200` `Org` (404/403)  |
 | `POST`   | `/orgs`     | `Create` on `Org`  | `CreateOrg`         | `201` `Org` + `Location` |
-| `PATCH`  | `/orgs/:id` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
-| `DELETE` | `/orgs/:id` | `Delete` on `Org`  | —                     | `204` (404/403)        |
+| `PATCH`  | `/orgs/{id}` | `Update` on `Org`  | `UpdateOrg`         | `200` `Org` (404/403)  |
+| `DELETE` | `/orgs/{id}` | `Delete` on `Org`  | —                     | `204` (404/403)        |
 
 Every handler delegates to the same `OrgsService` instance, which goes through
 `Repo` against the ambient executor — so reads are pool, mutations sit inside
@@ -159,7 +159,7 @@ impl UsersController {
         Ok(Json(User::from(&user)))
     }
 
-    #[get("/:id")]
+    #[get("/{id}")]
     // … #[api(…)]
     async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
         Json(User::from(&*user))

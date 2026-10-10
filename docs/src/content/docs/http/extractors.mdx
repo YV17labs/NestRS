@@ -93,7 +93,7 @@ use nest_rs::pipes::ParseUuid;
 use nest_rs::http::poem::web::Path;
 use uuid::Uuid;
 
-#[get("/posts/:id")]
+#[get("/posts/{id}")]
 async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Post> {
     let id: Uuid = id.into_inner();
     Json(self.svc.find(id))

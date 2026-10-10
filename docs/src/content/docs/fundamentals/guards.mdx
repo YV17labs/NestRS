@@ -123,12 +123,12 @@ pub struct PostsController {
 
 #[routes]
 impl PostsController {
-    #[get("/:id")]
+    #[get("/{id}")]
     async fn get(&self, post: Bind<Read, PostsService>) -> Json<Post> {
         Json(Post::from(&*post))
     }
 
-    #[delete("/:id")]
+    #[delete("/{id}")]
     #[use_guards(AdminGuard)]
     async fn delete(&self, id: Path<Uuid>) -> Result<()> {
         self.svc.delete(*id).await
@@ -192,7 +192,7 @@ flowchart TB
   AZ -. "install Ability" .-> H
 ```
 
-Solid arrows are the guard chain on `GET /posts/:id`. `DELETE` adds
+Solid arrows are the guard chain on `GET /posts/{id}`. `DELETE` adds
 `AdminGuard` on top. `AuthnGuard` attaches `Claims`; `AuthzGuard` builds
 the ambient `Ability` handlers and `Bind` read through.
 
@@ -322,7 +322,7 @@ running a guard *twice on purpose*. `#[force_guards(...)]` is the opt-out,
 and it takes the same list `#[use_guards]` does:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[patch("/:id/publish")]
+#[patch("/{id}/publish")]
 #[force_guards(FreshTokenGuard)]        // replay, even though the pool ran it
 #[authorize(Update, PostEntity)]
 async fn publish(&self, post: Bind<Update, PostsService>) -> Result<Json<Post>> { /* ... */ }

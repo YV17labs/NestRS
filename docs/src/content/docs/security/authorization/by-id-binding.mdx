@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-`Bind<A, S>` is the handler argument that turns `/users/:id` into a
+`Bind<A, S>` is the handler argument that turns `/users/{id}` into a
 loaded, authorized model. It runs through the service's `access`
 method, which loads the row **under the caller's own grant** — one SQL
 lookup, filtered by the same condition a list query uses. Three outcomes,
@@ -32,7 +32,7 @@ use nest_rs::authz::{Create, Read};
 use nest_rs::seaorm::Bind;
 // …
 
-#[get("/:id")]
+#[get("/{id}")]
 // … #[api(…)]
 async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
     Json(User::from(&*user))
@@ -149,7 +149,7 @@ For mutating actions, `Bind<Update, S>` (or `Delete`) loads the row
 the caller is about to touch and refuses early if the policy says no:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-#[delete("/:id")]
+#[delete("/{id}")]
 async fn delete(&self, user: Bind<Delete, UsersService>) -> StatusCode {
     self.svc.delete_by_id(user.id).await?;
     StatusCode::NO_CONTENT
@@ -182,7 +182,7 @@ content, draft media), collapse the 403 path into a 404 in your
 handler:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[get("/:id")]
+#[get("/{id}")]
 async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
     match self.svc.access(Action::Read, id.0).await.map_err(ServiceError::from)? {
         Access::Found(post) => Ok(Json(Post::from(&post))),

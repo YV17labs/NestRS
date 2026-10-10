@@ -71,7 +71,7 @@ config survives adopting or dropping the observability stack.
 |---|---|
 | `HOST` | listen address (default `0.0.0.0`) |
 | `PORT` | listen port |
-| `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none) |
+| `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none). One literal path: template syntax (`{` `}`) or what the router reads as a parameter (`:` `*` `<`) fails the boot |
 | `MAX_BODY_BYTES` | request body cap |
 | `MAX_CONCURRENT_CONNECTIONS` | connections held open at once, an upgraded socket included until it closes — default `10000`; whole numbers from `1` to `1048576`, refused outside. Past it a new connection waits in the listen backlog, and one `warn` names the variable: see [Connections](/http/configuration/#connections) |
 | `REQUEST_TIMEOUT_SECS` | per-request timeout — default `30`; whole seconds from `1` to `3600`, or `0` ⇒ no timeout. An overrun answers `503` with a `Retry-After`, not `504`: this transport is the origin, not a gateway |
@@ -172,7 +172,7 @@ Read once `StaticFilesModule` is imported, and pinned through its `for_root`
 | Key | Meaning |
 |---|---|
 | `ROOT` | the directory `StaticFilesModule` serves, relative to the working directory. Resolved at boot: unset, missing or not a directory **fails boot**, and so does any value beside a folder embedded in the binary (`Embedded::of::<T>()`) |
-| `PATH` | where the files answer, outside the global prefix and after every route — default `/`. A literal path the router matches as written: an empty, `.` or `..` segment, pattern syntax (`:` `*` `<`), `%`, `?`, `#` or `\` is refused |
+| `PATH` | where the files answer, outside the global prefix and after every route — default `/`. A literal path the router matches as written: an empty, `.` or `..` segment, template syntax (`{` `}`), what the router reads as a parameter (`:` `*` `<`), `%`, `?`, `#` or `\` is refused |
 | `SPA_FALLBACK` | answer a browser's navigation that no file matches with the root's `index.html` — default `false`. A request that does not ask for a page, or whose last segment names a file, still gets the `404` problem document |
 | `MAX_AGE_SECS` | `Cache-Control: public, max-age` on every file but an HTML document, from `1` to a year (`31536000`); `0` or unset revalidates every file (`no-cache`), the default |
 

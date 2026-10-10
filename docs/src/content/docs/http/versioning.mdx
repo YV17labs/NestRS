@@ -64,7 +64,7 @@ impl PostsController {
         Ok(Json(self.svc.feed().await?))
     }
 
-    #[post("/:id/publish")]
+    #[post("/{id}/publish")]
     #[version("2")]
     #[authorize(Publish, posts::Entity)]
     async fn publish(&self, Path(id): Path<Uuid>) -> Result<Json<Post>> {
@@ -74,7 +74,7 @@ impl PostsController {
 ```
 
 `list` answers at `/v1/posts` and `/v2/posts`; `publish` only at
-`/v2/posts/:id/publish`. `POST /v1/posts/:id/publish` is a `405` — the path
+`/v2/posts/{id}/publish`. `POST /v1/posts/{id}/publish` is a `405` — the path
 exists in v1, that verb does not — which is the honest answer, and one a
 `404` would have hidden.
 

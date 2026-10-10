@@ -151,6 +151,8 @@ pub struct HttpConfig {
     /// Mount every controller under a shared path prefix (e.g. `/api`). `None`
     /// ⇒ no prefix. Read from `<PREFIX>_HTTP__GLOBAL_PREFIX`, normalized by
     /// [`HttpTransport::global_prefix`](crate::HttpTransport::global_prefix).
+    /// One literal path: a template's `{` `}`, or a `:`, `*` or `<` the router
+    /// reads as a parameter, fails the boot.
     pub global_prefix: Option<String>,
     /// Transport-wide cap on the request body size, for every extractor; a
     /// per-route [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit)

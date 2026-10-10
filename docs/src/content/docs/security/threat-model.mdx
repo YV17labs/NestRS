@@ -25,6 +25,7 @@ back on you.
 | [`Bind<A, S>`](/security/authorization/by-id-binding/) | Cross-tenant by-id reads (403) and missing rows (404) | Handlers that fetch by id outside `Bind` and skip `access` |
 | [`Authorize` shaper](/security/authorization/response-masking/) | Leak of unexposed columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
 | [`ThrottlerGuard`](/rate-limiting/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
+| [Connection deadlines](/http/configuration/#connection-deadlines) | A client holding connections it does not use: a head sent a byte at a time, a TLS handshake never finished, an idle socket, a peer that stops reading | Many clients each staying inside the deadlines (the connection cap holds them back; a CDN sheds them) |
 
 ## What the framework does **not** do
 

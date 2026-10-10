@@ -62,6 +62,9 @@ Real env always wins over the `.env` cascade.
 | `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
 | `max_concurrent_connections` | `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` (`1`–`1048576`) | `10 000` | `HttpConfig { max_concurrent_connections: 50_000, ..Default::default() }` |
+| `header_read_timeout` | `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS` (seconds, `1`–`300`) | `30 s` | `HttpConfig { header_read_timeout: Duration::from_secs(10), ..Default::default() }` |
+| `idle_timeout` | `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS` (seconds, `1`–`3600`) | `75 s` | `HttpConfig { idle_timeout: Duration::from_secs(620), ..Default::default() }` |
+| `send_timeout` | `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (seconds, `1`–`3600`) | `60 s` | `HttpConfig { send_timeout: Duration::from_secs(120), ..Default::default() }` |
 | `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
 | `fail_secure_strict` | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
 | `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
@@ -273,13 +276,14 @@ paired with `Retry-After`.
 ## Connections
 
 The transport accepts its connections itself, on [hyper](https://docs.rs/hyper),
-and holds at most `max_concurrent_connections` open at once — `10 000` by
-default. Past it, a new connection waits in the kernel's listen backlog until one
-closes: its client sees latency, then the kernel's own refusal once the backlog
-is full, never a reset of a connection it already holds. A socket upgraded to a
-WebSocket counts until it closes. The first connection held back files one
-`warn` on `nest_rs::http` naming the variable, and an `info` follows once a place
-is free again:
+and serves at most `max_concurrent_connections` at once — `10 000` by default.
+Past it, a new connection waits until one closes — the next one accepted and
+held unserved, the rest in the kernel's listen backlog: its client sees latency,
+then the kernel's own refusal once the backlog is full, never a reset of a
+connection it already holds. A socket upgraded to a WebSocket counts until it
+closes. When a connection waits on the cap, one `warn` on `nest_rs::http` names
+the variable, and one `info` follows once none waits any more — a pair for a
+busy spell, not one per connection, and none for connections that never wait:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__MAX_CONCURRENT_CONNECTIONS=50000
@@ -304,6 +308,45 @@ What one connection may do is fixed:
   `431 Request Header Fields Too Large` (RFC 6585 §5) rather than buffered;
 - a client speaking HTTP/2 from its first byte is served in plaintext too, and
   every socket is written without Nagle's delay (`TCP_NODELAY`).
+
+### Connection deadlines
+
+Each phase of a connection has a deadline, so a client holding one without
+using it gives its place under the cap back. Each is a `<PREFIX>_HTTP__` key:
+
+| Phase | Deadline, from | At the deadline |
+|---|---|---|
+| The first request head | `HEADER_READ_TIMEOUT_SECS`, `30` s from accept — a TLS handshake and HTTP/2's preface inside it | closed |
+| Idle, nothing in flight | `IDLE_TIMEOUT_SECS`, `75` s from the last answer's end | HTTP/1 closed, HTTP/2 sent `GOAWAY` |
+| A later HTTP/1 head | `HEADER_READ_TIMEOUT_SECS` from its first byte, or the idle deadline if sooner | closed |
+| A write the peer takes nothing of | `SEND_TIMEOUT_SECS`, `60` s from the write that started waiting | dropped — on HTTP/2, a stream the peer grants no window is reset and its connection serves on |
+
+A request in flight has no connection deadline: [its own budget](#request-timeout)
+bounds the handler, and the send deadline bounds a response — an event stream or
+a WebSocket included — whose peer stops reading. That one runs only while a write
+waits, from the moment it starts waiting, so a slow reader that keeps taking
+bytes is never cut. Each cut files one `warn`, `the peer took nothing within the
+send deadline; it is cut off`, on its edge's target: `nest_rs::http`,
+`nest_rs::ws` or `nest_rs::graphql`. On HTTP/2 the last 400 KiB or so of a
+response leave its body before the peer has taken them, so they are sent under
+the idle deadline instead.
+
+Each key takes whole seconds; `0` turns none of them off, and a value outside
+its range fails the boot naming the variable, set in the environment or pinned:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__HEADER_READ_TIMEOUT_SECS=10
+NESTRS_HTTP__IDLE_TIMEOUT_SECS=620
+NESTRS_HTTP__SEND_TIMEOUT_SECS=120
+```
+
+**Behind a load balancer**, keep `IDLE_TIMEOUT_SECS` above the balancer's own
+idle timeout for its connections to this server. A balancer that keeps one open
+longer reuses it as the server closes it, and answers that request `502`. The
+default clears the 60 seconds of AWS's Application Load Balancer and of nginx's
+upstream keep-alive; Google Cloud's load balancer keeps 600, so set `620` behind
+it. The boot line `transport listening` carries `idle_timeout_secs`, for the day
+intermittent `502`s send you looking.
 
 ## Shutdown
 

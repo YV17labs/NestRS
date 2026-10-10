@@ -154,6 +154,7 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | The shutdown signal, after the message it is answering | `1001 Going Away` | reconnects, to a replica still serving |
 | `<PREFIX>_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
 | The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
+| The client took nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) | none can reach it — it reads `1006` | reconnects |
 | A read failed, a message past the cap included | `1011 Internal Error` | reconnects |
 | `#[on_connect]` panicked | `1011 Internal Error` | reconnects |
 

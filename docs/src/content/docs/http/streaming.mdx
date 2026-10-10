@@ -111,21 +111,12 @@ It bounds **emission**: the deadline is evaluated whenever the response body is
 polled, so no event is produced past the ceiling at any rate the client reads
 at. Reconnecting re-runs the guard chain, which is the window that matters.
 
-**What it does not bound is the socket**, and that is reported rather than
-quietly closed. A peer that stops reading parks the write, hyper stops polling
-the body, and the connection — its task, its buffers, everything the stream
-holds — outlives the ceiling until that peer reads again. Two attempts to close
-it inside the framework were both wrong, in opposite directions, and both looked
-right: the only thing still polled while a write is parked is the *socket*, and
-a socket does not know which response its bytes belong to. Bounding it there
-truncated unrelated traffic — a full-speed client downloading 4 MB over a
-connection that had carried a stream received 1.4 MB under a declared
-`content-length` — and HTTP/2 multiplexes an origin's whole traffic onto that
-one socket.
-
-Bound idle sockets at the server or the reverse proxy until the transport can
-express "this response is stalled": that is the shape enforceable without
-knowing whose bytes are queued.
+**A peer that stops reading is cut by the transport**, not the ceiling: once it
+has taken nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s by default), its
+connection is dropped — on HTTP/2 its stream is reset, and the connection serves
+its other streams on — and the task and buffers the stream held go with it. The
+deadline runs only while a write waits, so a slow reader that keeps taking bytes
+is never cut. See [Connection deadlines](/http/configuration/#connection-deadlines).
 
 **At shutdown a stream ends at the signal.** A stream never finishes on its
 own, so holding it open would only spend the whole shutdown window
@@ -135,8 +126,8 @@ cleanly, its last chunk written, so the client's `EventSource` reads an end and
 reconnects, to a replica still in the load balancer. Its `http.request` line
 carries the head's `status`, the `bytes` written, and `outcome="cancelled"`: the
 transport ended it, not the stream. A peer that stopped reading parks the write,
-so its stream ends with the window instead, like every connection still open
-then. See [Shutdown](/http/configuration/#shutdown).
+so its stream ends at the send deadline or with the window, whichever comes
+first. See [Shutdown](/http/configuration/#shutdown).
 
 `#[sse]` marks its response as having no end of its own. A handler that streams
 events some other way marks its own, so it ends at the signal too:

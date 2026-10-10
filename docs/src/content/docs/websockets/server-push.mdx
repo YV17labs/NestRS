@@ -5,8 +5,6 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 A `WsClient` exists only inside a `#[subscribe_message]` (or a
 lifecycle hook). Anything that fires *without* a client message — a
 cron job, a queue processor, an HTTP route, a service reacting to a
@@ -142,21 +140,16 @@ The gateway handler is two lines; the service owns the side effect.
 
 ## Backpressure
 
-Each connection has a writer task draining an `unbounded_channel` into
-the `Sink`. A slow client backs up its own outbox; the read/dispatch
-loop on every other connection stays unaffected. Frames sent to a
-closed outbox are dropped silently — the registry returns the count of
-outboxes that accepted the frame, so a `broadcast(...)` to `N`
-connections may legitimately report `< N` while you race a slow
-disconnect.
-
-<Aside type="note">
-"Unbounded" here means the in-process channel is unbounded. Backpressure
-policy is yours to set, on purpose: the right answer differs per traffic
-shape — disconnect on outbox depth, drop on TTL, coalesce successive
-frames. The registry hands back the accepted-frame count, and
-`WsServer::connection_count` gives you the other half of the signal.
-</Aside>
+Each connection has a writer task draining a bounded outbox — 256 frames — into
+the socket, so a slow client backs up its own outbox and the read loop on every
+other connection stays unaffected. A push to a full outbox is shed, with a
+`warn` on `nest_rs::ws`: the registry returns the count of outboxes that
+accepted the frame, so a `broadcast(...)` to `N` connections may report `< N`
+while a slow client lags or a disconnect races it. A reply to a message that
+finds the outbox full closes the socket `1008`, and a client that takes nothing
+at all is dropped at the transport's send deadline,
+`<PREFIX>_HTTP__SEND_TIMEOUT_SECS` — see
+[When the server closes a socket](/websockets/#when-the-server-closes-a-socket).
 
 ## Reference
 

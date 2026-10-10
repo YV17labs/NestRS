@@ -105,10 +105,9 @@ impl Drop for EphemeralDatabase {
                 return;
             };
             rt.block_on(async move {
-                let Ok(options) = options(&admin_url) else {
-                    return;
-                };
-                if let Ok(admin) = Database::connect(options).await {
+                if let Ok(options) = options(&admin_url)
+                    && let Ok(admin) = Database::connect(options).await
+                {
                     let _ = admin
                         .execute_unprepared(&format!(
                             "DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"

@@ -154,18 +154,17 @@ impl SeaOrmConfig {
     /// `require`, `verify-ca`), is refused, naming the variable and never the
     /// URL, which carries the password.
     fn tls_mode(&self) -> Result<PgSslMode> {
-        let refuse = |message: String| ConfigError::parse(self.url_variable(), message);
         let named = self.query(&["sslmode", "ssl-mode"]).is_some();
         #[expect(
             clippy::map_err_ignore,
             reason = "sqlx's parse error can quote the URL, which carries the password"
         )]
         let parsed = PgConnectOptions::from_str(&self.url)
-            .map_err(|_| refuse("is not a Postgres URL".to_owned()))?;
+            .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
         match parsed.get_ssl_mode() {
             PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
             mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
-            unverified => Err(refuse(format!(
+            unverified => Err(Self::refuse_url(format!(
                 "asks Postgres for TLS without verifying its certificate (sslmode={}): write \
                  sslmode=verify-full, with sslrootcert naming the authority that signed the \
                  server's certificate, or sslmode=disable for a server without TLS",
@@ -179,9 +178,10 @@ impl SeaOrmConfig {
         }
     }
 
-    /// `<PREFIX>_SEAORM__URL`, the variable every refusal of the URL names.
-    fn url_variable(&self) -> String {
-        nest_rs_config::var_name(Self::NAMESPACE, "URL")
+    /// A refusal of the URL, naming `<PREFIX>_SEAORM__URL` and never the
+    /// value, which carries the password.
+    fn refuse_url(message: impl Into<String>) -> ConfigError {
+        ConfigError::parse(nest_rs_config::var_name(Self::NAMESPACE, "URL"), message)
     }
 
     /// Whether the pool trusts the system's authorities: when the URL names no
@@ -214,13 +214,10 @@ impl SeaOrmConfig {
     /// carries the password.
     pub fn connect_options(&self) -> Result<ConnectOptions> {
         if self.url.is_empty() {
-            return Err(ConfigError::parse(
-                self.url_variable(),
-                format!(
-                    "must be set, inline or through {}",
-                    nest_rs_config::var_name(Self::NAMESPACE, "URL_FILE")
-                ),
-            ));
+            return Err(Self::refuse_url(format!(
+                "must be set, inline or through {}",
+                nest_rs_config::var_name(Self::NAMESPACE, "URL_FILE")
+            )));
         }
         let mode = self.tls_mode()?;
         let budget = match self.connect_timeout_secs {

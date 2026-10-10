@@ -59,8 +59,8 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // `pipe_error`, not `gql_err`: a stringified `PipeError` names no field.
     let validate_input: TokenStream2 = quote! {
         {
-            use ::nest_rs_graphql::MaybeValidateFallback as _;
-            ::nest_rs_graphql::ValidateProbe(&input)
+            use ::nest_rs_graphql::__private::MaybeValidateFallback as _;
+            ::nest_rs_graphql::__private::ValidateProbe(&input)
                 .maybe_validate()
                 .map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
         }

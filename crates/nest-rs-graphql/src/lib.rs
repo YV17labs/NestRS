@@ -60,13 +60,13 @@ pub mod __private {
     pub use crate::subscription::{compose_schema, keep_masked_item};
 
     pub use inventory;
+    // For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
+    pub use nest_rs_pipes::__private::{MaybeValidateFallback, ValidateProbe};
 }
 
 pub use async_graphql;
 pub use async_graphql_poem;
 pub use async_trait::async_trait;
-// For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
-pub use nest_rs_pipes::{MaybeValidateFallback, ValidateProbe};
 
 /// Generate a resolver's standard CRUD operations on its impl block, in place
 /// of [`operations`]; each one delegates to the entity's `CrudService` and

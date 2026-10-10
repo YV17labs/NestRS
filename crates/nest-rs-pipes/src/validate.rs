@@ -7,7 +7,7 @@
 //! `T: Validate`, and is a compile-time no-op for any other type.
 //!
 //! Bring the fallback trait into scope at the call site for the resolution to
-//! work: `use nest_rs_pipes::MaybeValidateFallback as _;`.
+//! work: `use nest_rs_pipes::__private::MaybeValidateFallback as _;`.
 
 use validator::{Validate, ValidationErrors};
 

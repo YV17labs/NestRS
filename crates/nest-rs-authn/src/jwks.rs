@@ -26,8 +26,10 @@ use reqwest::header::{ACCEPT, AGE, CACHE_CONTROL, HeaderMap, HeaderName, RETRY_A
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::AuthnTls;
-use crate::config::{jwks_uri_setting, tls_ca_cert_setting};
+use nest_rs_config::{ClientTls, ConfigService, Namespaced};
+
+use crate::AuthnConfig;
+use crate::config::{jwks_uri_setting, tls_setting};
 use crate::error::AuthError;
 use crate::jwk_set::{JwkSet, Selection};
 use crate::service::one_of;
@@ -105,13 +107,14 @@ struct Joined {
 
 impl Jwks {
     /// The set published at `uri`, its endpoint's certificate chained to the
-    /// authorities `tls` names or the system's. Nothing is fetched yet.
+    /// authorities `tls` names or the system's, and `tls`'s certificate
+    /// presented when one is set. Nothing is fetched yet.
     ///
-    /// Refuses a URI that does not parse or is not `https`, and an authority
-    /// file holding no certificate, naming the setting.
+    /// Refuses a URI that does not parse or is not `https`, and TLS material no
+    /// handshake could use, naming the setting.
     pub(crate) fn new(
         uri: &str,
-        tls: &AuthnTls,
+        tls: &ClientTls,
         algorithms: &[Algorithm],
     ) -> Result<Self, AuthError> {
         let url = reqwest::Url::parse(uri.trim()).map_err(|error| {
@@ -124,38 +127,40 @@ impl Jwks {
                 jwks_uri_setting()
             )));
         }
-        let roots = match &tls.ca_cert {
-            Some(pem) => reqwest::Certificate::from_pem_bundle(pem)
-                .ok()
-                .filter(|found| !found.is_empty())
-                .ok_or_else(|| {
-                    AuthError::Failed(format!(
-                        "{}, holds no PEM CERTIFICATE block, so it would trust no certificate",
-                        tls_ca_cert_setting(),
-                    ))
-                })?,
-            None => reqwest::Certificate::from_pem_bundle(nest_rs_config::system_authorities())
-                .map_err(|error| {
-                    AuthError::Failed(format!(
-                        "the system's certificate store does not read as PEM: {}",
-                        nest_rs_core::error_message(&error)
-                    ))
-                })?,
-        };
-        let client = reqwest::Client::builder()
+        tls.check(&names())
+            .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+        let roots =
+            reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
+                AuthError::Failed(format!(
+                    "the authorities the JWK Set endpoint's certificate chains to do not read as \
+                 PEM: {}",
+                    nest_rs_core::error_message(&error)
+                ))
+            })?;
+        let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .user_agent("nestrs")
             .connect_timeout(JWKS_CONNECT_TIMEOUT)
             .timeout(JWKS_FETCH_TIMEOUT)
-            .tls_certs_only(roots)
-            .build()
-            .map_err(|error| {
+            .tls_certs_only(roots);
+        if let Some((cert, key)) = tls.identity_pem() {
+            let pem = [cert, b"\n", key].concat();
+            let identity = reqwest::Identity::from_pem(&pem).map_err(|error| {
                 AuthError::Failed(format!(
-                    "the JWK Set client could not be built: {}",
+                    "{} could not be presented: {}",
+                    tls_setting(),
                     nest_rs_core::error_message(&error)
                 ))
             })?;
+            builder = builder.identity(identity);
+        }
+        let client = builder.build().map_err(|error| {
+            AuthError::Failed(format!(
+                "the JWK Set client could not be built: {}",
+                nest_rs_core::error_message(&error)
+            ))
+        })?;
         let endpoint = format!(
             "the JWK Set at {}{}",
             url.origin().ascii_serialization(),
@@ -220,6 +225,11 @@ impl Jwks {
             .lock()
             .answer(&inner.endpoint, Instant::now(), kid, algorithm)
     }
+}
+
+/// The reader whose namespace the JWK Set's TLS sentences name.
+fn names() -> ConfigService {
+    ConfigService::for_namespace(AuthnConfig::NAMESPACE)
 }
 
 /// Wait for the fetch `fetch` follows to settle: its sender is dropped once it
@@ -339,6 +349,13 @@ impl Inner {
             format!(
                 "{} did not answer within {JWKS_FETCH_TIMEOUT:?}",
                 self.endpoint
+            )
+        } else if ClientTls::negotiation_failed(&error) {
+            format!(
+                "{} could not be fetched: {} ({})",
+                self.endpoint,
+                ClientTls::remedy(&names(), "the JWK Set endpoint", "JWKS_URI", &error),
+                nest_rs_core::error_message(&error.without_url())
             )
         } else {
             format!(
@@ -621,7 +638,7 @@ mod tests {
             ("ftp://issuer.example/jwks", "must be an https URL"),
         ] {
             let Err(AuthError::Failed(refused)) =
-                Jwks::new(uri, &AuthnTls::default(), &[Algorithm::EdDSA])
+                Jwks::new(uri, &ClientTls::default(), &[Algorithm::EdDSA])
             else {
                 panic!("{uri} must be refused");
             };
@@ -638,9 +655,13 @@ mod tests {
         for pem in [&b""[..], b"not a certificate"] {
             let Err(AuthError::Failed(refused)) = Jwks::new(
                 "https://issuer.example/jwks",
-                &AuthnTls {
-                    ca_cert: Some(pem.to_vec()),
-                },
+                &ClientTls::new(
+                    Some(nest_rs_config::Material {
+                        bytes: pem.to_vec(),
+                        path: None,
+                    }),
+                    None,
+                ),
                 &[Algorithm::EdDSA],
             ) else {
                 panic!("an authority file with no certificate must be refused");
@@ -655,7 +676,7 @@ mod tests {
     fn the_endpoint_is_named_without_its_query() {
         let jwks = Jwks::new(
             "https://issuer.example/keys?api_key=never-quoted",
-            &AuthnTls::default(),
+            &ClientTls::default(),
             &[Algorithm::EdDSA],
         )
         .expect("an https URI");

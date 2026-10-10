@@ -3,11 +3,13 @@
 use std::time::Duration;
 
 use jsonwebtoken::Algorithm;
-use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, config};
+use nest_rs_config::{
+    Bound, ClientTls, Config, ConfigService, DurationBounds, Floor, Namespaced, config,
+};
 
 use crate::error::AuthError;
 use crate::service::{FAMILIES, algorithms_of, one_of};
-use crate::{AuthnTls, JwtKey, JwtOptions};
+use crate::{JwtKey, JwtOptions};
 
 /// The token lifetime's range, the variable that sets it, and why.
 pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
@@ -69,9 +71,11 @@ pub struct AuthnConfig {
     /// takes exactly one.
     pub algorithms: Option<Vec<Algorithm>>,
     /// What the JWK Set endpoint's certificate must chain to — the system's
-    /// authorities unless `<PREFIX>_AUTHN__TLS_CA_CERT` names one. Refused
-    /// without `jwks_uri`, which is the only connection it could serve.
-    pub tls: AuthnTls,
+    /// authorities unless `<PREFIX>_AUTHN__TLS_CA_CERT` names others — and the
+    /// certificate presented to an issuer that requires one
+    /// (`<PREFIX>_AUTHN__TLS_CERT` and `TLS_KEY`). Refused without `jwks_uri`,
+    /// which is the only connection it could serve.
+    pub tls: ClientTls,
     /// Clock skew leeway in seconds (key `LEEWAY_SECS`, default 30), at most
     /// 300 — RFC 7519 §4.1.4's "a few minutes".
     pub leeway_secs: Option<u64>,
@@ -111,7 +115,7 @@ impl Config for AuthnConfig {
             public_key: pem_text(env, "PUBLIC_KEY")?.or(base.public_key),
             jwks_uri: env.get("JWKS_URI")?.or(base.jwks_uri),
             algorithms: algorithms(env)?.or(base.algorithms),
-            tls: AuthnTls::from_env(env, base.tls)?,
+            tls: ClientTls::from_env(env, base.tls)?,
             leeway_secs: seconds(LEEWAY.read_optional(env, base.leeway_secs.map(secs))?),
             audience: env.get("AUDIENCE")?.or(base.audience),
             issuer: env.get("ISSUER")?.or(base.issuer),
@@ -211,9 +215,14 @@ pub(crate) fn algorithms_setting() -> String {
     spellings("ALGORITHMS", "algorithms")
 }
 
-/// The JWK Set endpoint's authority setting, `_FILE` spelling included.
-pub(crate) fn tls_ca_cert_setting() -> String {
-    spellings("TLS_CA_CERT", "tls.ca_cert")
+/// The JWK Set endpoint's TLS settings, every way they can be given.
+pub(crate) fn tls_setting() -> String {
+    format!(
+        "{}, {} and {}, or `tls` in an AuthnConfig or JwtOptions built in code",
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_CA_CERT"),
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_CERT"),
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_KEY"),
+    )
 }
 
 /// The key a secret, a private key and a public key make, or why they make
@@ -302,11 +311,11 @@ impl AuthnConfig {
                 JwtKey::Jwks { uri, tls: self.tls }
             }
             None => {
-                if self.tls.ca_cert.is_some() {
+                if !self.tls.is_empty() {
                     return Err(AuthError::Failed(format!(
-                        "{}, is set without {}: it names the authority a JWK Set endpoint's \
-                         certificate chains to, and no JWK Set is fetched",
-                        tls_ca_cert_setting(),
+                        "TLS material — {} — is set without {}: it is what the JWK Set \
+                         endpoint's connection trusts and presents, and no JWK Set is fetched",
+                        tls_setting(),
                         jwks_uri_setting(),
                     )));
                 }

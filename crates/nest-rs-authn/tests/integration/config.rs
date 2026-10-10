@@ -552,9 +552,13 @@ fn an_authority_without_a_jwk_set_is_refused() {
 
     let refused = AuthnConfig {
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
-        tls: nest_rs_authn::AuthnTls {
-            ca_cert: Some(b"-----BEGIN CERTIFICATE-----".to_vec()),
-        },
+        tls: nest_rs_config::ClientTls::new(
+            Some(nest_rs_config::Material {
+                bytes: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                path: None,
+            }),
+            None,
+        ),
         ..Default::default()
     }
     .into_options();
@@ -611,7 +615,7 @@ fn the_jwk_set_and_its_authority_are_read_from_the_environment() {
         panic!("a JWK Set URI alone makes a JWK Set key")
     };
     assert_eq!(uri, JWKS_URI);
-    assert_eq!(tls.ca_cert.as_deref(), Some(pem.as_bytes()));
+    assert_eq!(tls.authorities_pem(), pem.as_bytes());
     JwtService::new(options).expect("the authority holds a certificate");
 }
 

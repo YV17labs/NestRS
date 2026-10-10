@@ -19,7 +19,9 @@ nest-rs-core.workspace = true
 # `NESTRS_AUTHN__*`. The `#[config]` derive routes through
 # `nest_rs_config::__private::validator`, so this crate declares no `validator`
 # of its own.
-nest-rs-config.workspace = true
+# `tls` is `ClientTls`, what the JWK Set endpoint's certificate chains to
+# and the certificate presented to it.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # `Strategy` reads the `poem::Request`; `AuthnGuard` implements the `Guard` trait
 # re-exported by the HTTP surface.
 nest-rs-http.workspace = true

@@ -11,7 +11,9 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::AuthError;
 use crate::jwks::Jwks;
-use crate::{AuthnConfig, AuthnTls};
+use nest_rs_config::ClientTls;
+
+use crate::AuthnConfig;
 
 /// Prove an EdDSA private key and public key are one pair: a signature the
 /// private key makes has to verify under the public key.
@@ -138,8 +140,8 @@ pub enum JwtKey {
         /// Where the set is fetched; `https` only.
         uri: String,
         /// What the endpoint's certificate must chain to — the system's
-        /// authorities by default.
-        tls: AuthnTls,
+        /// authorities by default — and the certificate presented to it.
+        tls: ClientTls,
     },
 }
 
@@ -241,7 +243,7 @@ impl JwtOptions {
     pub fn jwks(uri: impl Into<String>) -> Self {
         Self::with_key(JwtKey::Jwks {
             uri: uri.into(),
-            tls: AuthnTls::default(),
+            tls: ClientTls::default(),
         })
     }
 }

@@ -40,7 +40,6 @@ pub mod scope;
 mod service;
 mod strategies;
 mod strategy;
-mod tls;
 
 pub use config::AuthnConfig;
 pub use credentials::{basic_credentials, bearer_token};
@@ -56,7 +55,6 @@ pub use principal::PrincipalIdentity;
 pub use service::{JwtKey, JwtOptions, JwtService};
 pub use strategies::JwtStrategy;
 pub use strategy::{AUTHENTICATE_TIMEOUT, Strategy};
-pub use tls::AuthnTls;
 
 /// Re-exported so apps configure [`JwtOptions`] without a direct `jsonwebtoken` dependency.
 pub use jsonwebtoken::Algorithm;

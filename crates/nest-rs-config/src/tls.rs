@@ -471,27 +471,25 @@ fn half_an_identity(env: &ConfigService, given: &Setting<Material>, missing: &st
 fn negotiation_error<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a rustls::Error> {
     let mut next = Some(error);
     while let Some(current) = next {
-        // A library may keep the error it wraps behind an `Arc` (`redis` does),
-        // whose own `source` skips it: look through the `Arc` first.
-        let current = current
-            .downcast_ref::<Arc<dyn Error + Send + Sync>>()
-            .map_or(current, |shared| &**shared as &(dyn Error + 'static));
         if let Some(refused) = current.downcast_ref::<rustls::Error>() {
             return Some(refused);
         }
-        // An io error's `source` skips the error it wraps, which is where
-        // rustls's travels: tokio-rustls hands a failed handshake back as an
-        // `InvalidData` io error around it.
-        if let Some(refused) = current
-            .downcast_ref::<io::Error>()
-            .and_then(io::Error::get_ref)
-            .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-        {
-            return Some(refused);
-        }
-        next = current.source();
+        next = held(current).or_else(|| current.source());
     }
     None
+}
+
+/// The error `error` holds where its own `source` skips it: behind an `Arc`
+/// (`redis`), whose `source` is the held error's own, and inside an io error,
+/// which is how tokio-rustls hands a failed handshake back.
+fn held<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
+    if let Some(shared) = error.downcast_ref::<Arc<dyn Error + Send + Sync>>() {
+        return Some(&**shared);
+    }
+    error
+        .downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .map(|inner| inner as &(dyn Error + 'static))
 }
 
 #[cfg(test)]
@@ -841,10 +839,18 @@ mod tests {
         let shared: Arc<dyn Error + Send + Sync> = Arc::new(negotiation(
             rustls::Error::InvalidCertificate(rustls::CertificateError::Expired),
         ));
+
         assert!(ClientTls::negotiation_failed(&refused), "{refused}");
         assert!(
             ClientTls::negotiation_failed(&shared),
             "behind an Arc: {shared}"
+        );
+        let rewrapped = io::Error::other(negotiation(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::UnknownIssuer,
+        )));
+        assert!(
+            ClientTls::negotiation_failed(&rewrapped),
+            "an io error around one, as reqwest hands it back: {rewrapped}"
         );
         assert!(!ClientTls::negotiation_failed(&internal), "{internal}");
         assert!(!ClientTls::negotiation_failed(&dropped), "{dropped}");

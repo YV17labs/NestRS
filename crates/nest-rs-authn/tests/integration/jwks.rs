@@ -18,7 +18,7 @@ use jsonwebtoken::jwk::{
 };
 use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
 use nest_rs_authn::{
-    AuthError, AuthnConfig, AuthnGuard, AuthnModule, AuthnTls, JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR,
+    AuthError, AuthnConfig, AuthnGuard, AuthnModule, JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR,
     JWKS_STALE_CEILING, JwtService, JwtStrategy, PrincipalIdentity,
 };
 use nest_rs_core::module;
@@ -167,11 +167,17 @@ struct Issuer {
 
 impl Issuer {
     async fn serving(answer: Answer) -> Self {
+        Self::serving_to(answer, None).await
+    }
+
+    /// An issuer asking every client for a certificate `clients` issued, when
+    /// it names one.
+    async fn serving_to(answer: Answer, clients: Option<&TestAuthority>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
         let addr = listener.local_addr().expect("its address");
         let answer = Arc::new(Mutex::new(answer));
         let fetches = Arc::new(AtomicUsize::new(0));
-        let acceptor = CERTIFICATE.acceptor(None);
+        let acceptor = CERTIFICATE.acceptor(clients);
         let (served, counted) = (Arc::clone(&answer), Arc::clone(&fetches));
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -231,9 +237,13 @@ impl Issuer {
 fn config(jwks_uri: String) -> AuthnConfig {
     AuthnConfig {
         jwks_uri: Some(jwks_uri),
-        tls: AuthnTls {
-            ca_cert: Some(AUTHORITY.pem().as_bytes().to_vec()),
-        },
+        tls: nest_rs_config::ClientTls::new(
+            Some(nest_rs_config::Material {
+                bytes: AUTHORITY.pem().as_bytes().to_vec(),
+                path: None,
+            }),
+            None,
+        ),
         ..AuthnConfig::default()
     }
 }
@@ -260,6 +270,68 @@ async fn elapse(by: Duration) {
     tokio::time::pause();
     tokio::time::advance(by).await;
     tokio::time::resume();
+}
+
+/// An issuer requiring a client certificate is handed the one the deployment
+/// sets under `<PREFIX>_AUTHN__TLS_CERT` and `TLS_KEY`; without one, its set
+/// cannot be had.
+#[tokio::test]
+async fn an_issuer_requiring_a_client_certificate_is_handed_the_configured_one() {
+    use nest_rs_config::{Config, ConfigService, Namespaced};
+
+    let clients = TestAuthority::new();
+    let issued = clients.client("nestrs-test-client");
+    let issuer = Issuer::serving_to(
+        Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")]),
+        Some(&clients),
+    )
+    .await;
+    let signed = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    let presenting = AuthnConfig::from_env(
+        &ConfigService::with_vars(
+            AuthnConfig::NAMESPACE,
+            [
+                ("TLS_CERT", issued.cert.as_str()),
+                ("TLS_KEY", issued.key.as_str()),
+            ],
+        ),
+        config(issuer.uri()),
+    )
+    .expect("the deployment's certificate over the trusted authority");
+    verifier_with(presenting)
+        .verify::<Claims>(&signed)
+        .await
+        .expect("the set fetched presenting the certificate verifies the token");
+
+    let refused = verifier(&issuer).verify::<Claims>(&signed).await;
+    assert!(
+        matches!(refused, Err(AuthError::Unavailable { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A certificate the client does not accept is an outage said with the
+/// setting that fixes it, as every TLS client of the framework says it.
+#[tokio::test]
+async fn an_issuer_certificate_the_client_does_not_accept_names_the_setting_that_fixes_it() {
+    use nest_rs_config::{Namespaced, var_name};
+
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
+    let trusting_the_system = verifier_with(AuthnConfig {
+        jwks_uri: Some(issuer.uri()),
+        ..AuthnConfig::default()
+    });
+    let Err(AuthError::Unavailable { detail, .. }) = trusting_the_system
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+    else {
+        panic!("a certificate no trusted authority signed must not be fetched from");
+    };
+    assert!(
+        detail.contains("does not chain to an authority")
+            && detail.contains(&var_name(AuthnConfig::NAMESPACE, "TLS_CA_CERT")),
+        "{detail}"
+    );
 }
 
 #[tokio::test]

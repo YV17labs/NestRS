@@ -9,11 +9,8 @@
 use crate::config::Namespaced;
 use crate::error::ConfigError;
 
-/// One `#[config]` namespace linked into the binary.
-///
-/// **Internal ABI** — submitted by the `#[config]` expansion, lockstep with
-/// this crate; do not hand-construct.
-#[doc(hidden)]
+/// One `#[config]` namespace linked into the binary, submitted by the
+/// `#[config]` expansion.
 pub struct ConfigNamespace {
     namespace: &'static str,
     declaration: &'static str,
@@ -22,9 +19,7 @@ pub struct ConfigNamespace {
 impl ConfigNamespace {
     /// The entry for `namespace`, exactly as `#[config(namespace = "…")]`
     /// declares it, on the struct `declaration` names — its module path and
-    /// ident, the same string [`Namespaced::DECLARATION`](crate::Namespaced)
-    /// carries.
-    #[doc(hidden)]
+    /// ident, the same string `Namespaced::__DECLARATION` carries.
     pub const fn new(namespace: &'static str, declaration: &'static str) -> Self {
         Self {
             namespace,
@@ -44,10 +39,10 @@ pub(crate) fn sole_declaration<C: Namespaced>() -> Result<(), ConfigError> {
         .filter(|entry| entry.namespace == C::NAMESPACE)
         .map(|entry| entry.declaration)
         .collect();
-    let own = if C::DECLARATION.is_empty() {
+    let own = if C::__DECLARATION.is_empty() {
         std::any::type_name::<C>()
     } else {
-        C::DECLARATION
+        C::__DECLARATION
     };
     declarations.push(own);
     declarations.sort_unstable();

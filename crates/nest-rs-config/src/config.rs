@@ -17,11 +17,11 @@ pub trait Namespaced {
     const NAMESPACE: &'static str;
 
     /// The struct that declares the namespace — its module path and ident, as
-    /// the decorator writes it. **Internal ABI**, compared against the link-time
-    /// registry so a namespace two types declare is refused; empty on a
-    /// hand-written impl, which then answers by its type name.
+    /// the decorator writes it — compared against the link-time registry so a
+    /// namespace two types declare is refused; empty on a hand-written impl,
+    /// which then answers by its type name. Not API: may change in any release.
     #[doc(hidden)]
-    const DECLARATION: &'static str = "";
+    const __DECLARATION: &'static str = "";
 }
 
 /// Read `C`'s namespace over `base`, recording which variables it claimed.

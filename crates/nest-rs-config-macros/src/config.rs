@@ -22,8 +22,8 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     // would have to depend on.
     let derive = (!manual_validate).then(|| {
         quote! {
-            #[derive(::nest_rs_config::validator::Validate)]
-            #[validate(crate = ::nest_rs_config::validator)]
+            #[derive(::nest_rs_config::__private::validator::Validate)]
+            #[validate(crate = ::nest_rs_config::__private::validator)]
         }
     });
 
@@ -37,11 +37,11 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #impl_generics ::nest_rs_config::Namespaced for #name #ty_generics #where_clause {
             const NAMESPACE: &'static str = #namespace_lit;
-            const DECLARATION: &'static str = #declaration;
+            const __DECLARATION: &'static str = #declaration;
         }
 
-        ::nest_rs_config::inventory::submit! {
-            ::nest_rs_config::ConfigNamespace::new(#namespace_lit, #declaration)
+        ::nest_rs_config::__private::inventory::submit! {
+            ::nest_rs_config::__private::ConfigNamespace::new(#namespace_lit, #declaration)
         }
     }
     .into()

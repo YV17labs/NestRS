@@ -42,8 +42,6 @@ pub use environment::Environment;
 pub use error::{ConfigError, Result};
 pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
-#[doc(hidden)]
-pub use namespace::ConfigNamespace;
 pub use service::{ConfigService, spellings, var_name};
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
@@ -69,10 +67,13 @@ pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 /// ```
 pub use nest_rs_config_macros::config;
 
-// `#[config]`'s `Validate` derive resolves through this path.
 #[doc(hidden)]
-pub use validator;
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
 
-// `#[config]` files its namespace with the link-time registry through this path.
-#[doc(hidden)]
-pub use nest_rs_core::inventory;
+    pub use crate::namespace::ConfigNamespace;
+
+    pub use nest_rs_core::inventory;
+    pub use validator;
+}

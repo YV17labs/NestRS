@@ -73,8 +73,8 @@ fn a_hand_written_namespace_is_refused_beside_a_declared_one() {
         const NAMESPACE: &'static str = "declared_once";
     }
 
-    impl nest_rs_config::validator::Validate for Manual {
-        fn validate(&self) -> std::result::Result<(), nest_rs_config::validator::ValidationErrors> {
+    impl validator::Validate for Manual {
+        fn validate(&self) -> std::result::Result<(), validator::ValidationErrors> {
             Ok(())
         }
     }

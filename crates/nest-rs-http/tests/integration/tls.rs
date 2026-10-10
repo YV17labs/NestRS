@@ -1,16 +1,21 @@
-//! TLS material is watched, and a renewal is swapped into the running
-//! listener — observed through real handshakes on two leaves differing only in
-//! their name.
+//! The TLS listener: what it negotiates, and the material it watches, a
+//! renewal swapped into the running listener — observed through real
+//! handshakes on two leaves differing only in their name.
 
 use std::net::TcpListener as StdTcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{HttpTls, HttpTransport, controller, routes};
 use nest_rs_testing::{TestAuthority, TestCertificate};
 use poem::Result;
+use rustls::pki_types::ServerName;
+use rustls::pki_types::pem::PemObject;
+use tokio::io::AsyncWriteExt;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 use tokio_util::sync::CancellationToken;
 
 const HOST_A: &str = "a.nestrs.test";
@@ -301,8 +306,8 @@ async fn watching_off_keeps_serving_the_certificate_it_booted_with() {
     cancel.cancel();
 }
 
-/// poem does not validate a *stream* of `RustlsConfig` (`into_stream` is
-/// `Ok(self)`), so the transport must refuse material that cannot serve.
+/// The listener's certificate resolver hands out any `CertifiedKey` unchecked,
+/// so the transport must refuse a pair that cannot serve before it binds.
 #[tokio::test]
 async fn material_that_cannot_serve_fails_the_boot_rather_than_binding() {
     let material = Material::new("boot-refused");
@@ -391,4 +396,139 @@ fn from_files_reports_the_path_it_could_not_read() {
         msg.contains("/nonexistent/cert.pem"),
         "the diagnostic names the path: {msg}",
     );
+}
+
+/// A client trusting only the test authority, offering `alpn` in that order,
+/// and built on a provider of its own so it installs no process default.
+fn connector(alpn: &[&[u8]]) -> TlsConnector {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_parsable_certificates(
+        rustls::pki_types::CertificateDer::pem_slice_iter(PKI.authority.pem().as_bytes())
+            .filter_map(std::result::Result::ok),
+    );
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("the provider speaks the default versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    config.alpn_protocols = alpn.iter().map(|protocol| protocol.to_vec()).collect();
+    TlsConnector::from(Arc::new(config))
+}
+
+/// A TLS session with the transport on `port`, under leaf A's name, offering `alpn`.
+async fn handshake(port: u16, alpn: &[&[u8]]) -> TlsStream<tokio::net::TcpStream> {
+    connector(alpn)
+        .connect(
+            ServerName::try_from(HOST_A).expect("a DNS name"),
+            crate::transport::connect(port).await,
+        )
+        .await
+        .expect("the handshake completes")
+}
+
+/// The listener prefers HTTP/2 and still speaks HTTP/1.1.
+#[tokio::test]
+async fn the_listener_offers_h2_then_http1() {
+    let material = Material::new("alpn");
+    let port = free_port();
+    let cancel = serve(port, &material, 0).await;
+
+    let either = handshake(port, &[b"http/1.1", b"h2"]).await;
+    assert_eq!(
+        either.get_ref().1.alpn_protocol(),
+        Some(&b"h2"[..]),
+        "offered both, the server's own order chooses",
+    );
+    let only_http1 = handshake(port, &[b"http/1.1"]).await;
+    assert_eq!(
+        only_http1.get_ref().1.alpn_protocol(),
+        Some(&b"http/1.1"[..])
+    );
+
+    cancel.cancel();
+}
+
+/// An HTTP/2 client over TLS is told how many streams it may open at once.
+#[tokio::test]
+async fn an_h2_client_over_tls_reads_the_stream_cap() {
+    let material = Material::new("h2");
+    let port = free_port();
+    let cancel = serve(port, &material, 0).await;
+
+    let (client, mut connection) = h2::client::handshake(handshake(port, &[b"h2"]).await)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    let mut client = client.ready().await.expect("a stream can open");
+    let request = poem::http::Request::get(format!("https://{HOST_A}:{port}/ping"))
+        .body(())
+        .expect("a request");
+    let (response, _) = client.send_request(request, true).expect("sent");
+    let response = tokio::select! {
+        response = response => response.expect("answered"),
+        ended = &mut connection => panic!("the connection ended first: {ended:?}"),
+    };
+    assert_eq!(response.status(), 200);
+    assert_eq!(connection.max_concurrent_send_streams(), 200);
+
+    cancel.cancel();
+}
+
+/// The head cap holds behind TLS as it does in plaintext.
+#[tokio::test]
+async fn an_http1_head_past_64_kib_answers_431_over_tls() {
+    let material = Material::new("head-cap");
+    let port = free_port();
+    let cancel = serve(port, &material, 0).await;
+
+    let mut stream = handshake(port, &[b"http/1.1"]).await;
+    let filler = "a".repeat(70 * 1024);
+    // The server answers before it has read it all, so the tail may meet a reset.
+    let _ = stream
+        .write_all(
+            format!("GET /ping HTTP/1.1\r\nHost: {HOST_A}\r\nX-Filler: {filler}\r\n\r\n")
+                .as_bytes(),
+        )
+        .await;
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = tokio::io::AsyncReadExt::read(&mut stream, &mut byte)
+            .await
+            .expect("the head is readable");
+        assert!(read > 0, "the connection ended inside the head");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).expect("the head is text");
+    assert!(head.starts_with("HTTP/1.1 431"), "{head}");
+
+    cancel.cancel();
+}
+
+/// Serving TLS installs aws-lc-rs as the process provider when the app chose
+/// none, so a client built later from the default finds one. nextest runs each
+/// test in a process of its own.
+#[tokio::test]
+async fn the_tls_listener_installs_the_default_crypto_provider_when_none_is() {
+    assert!(
+        rustls::crypto::CryptoProvider::get_default().is_none(),
+        "nothing installed a provider before the transport served",
+    );
+    let material = Material::new("provider");
+    let port = free_port();
+    let cancel = serve(port, &material, 0).await;
+    drop(crate::transport::connect(port).await);
+
+    let installed =
+        rustls::crypto::CryptoProvider::get_default().expect("the listener installed one");
+    assert_eq!(
+        format!("{:?}", installed.key_provider),
+        format!(
+            "{:?}",
+            rustls::crypto::aws_lc_rs::default_provider().key_provider
+        ),
+    );
+
+    cancel.cancel();
 }

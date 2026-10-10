@@ -186,11 +186,11 @@ nextest rejects a filterset naming a binary the workspace does not have.
        Compiling blog v0.1.0
         Running `target/debug/blog`
    INFO nest_rs::routes: mounted route controller="BlogController" method="GET" path="/" handler="hello"
-   DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+   INFO nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
    ```
 
-   The route table prints on every boot, and the `DEBUG` line shows the port
-   from your `module.rs`.
+   The route table prints on every boot, and `transport listening` shows the
+   port from your `module.rs`.
 
 2. In another terminal:
 

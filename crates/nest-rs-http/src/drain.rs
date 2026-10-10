@@ -2,8 +2,8 @@
 //! shutdown is asked for, the instant the window closes, and what is still open
 //! at the second.
 //!
-//! poem keeps its connection count private and drops an upgraded socket from
-//! it, so the transport counts every accepted socket itself.
+//! Every accepted socket is counted until it drops, an upgraded one included:
+//! it outlives the HTTP connection that upgraded it.
 
 use std::io::IoSlice;
 use std::pin::Pin;
@@ -12,10 +12,8 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use poem::http::uri::Scheme;
-use poem::listener::{Acceptor, Listener};
-use poem::web::{LocalAddr, RemoteAddr};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, Result as IoResult};
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
@@ -32,18 +30,25 @@ pub(crate) struct Drain {
 }
 
 impl Drain {
-    /// `listener`, with every socket it accepts counted by this drain.
-    pub(crate) fn track<L: Listener>(self: &Arc<Self>, listener: L) -> DrainListener<L> {
-        DrainListener {
-            inner: listener,
+    /// `io`, counted open until it drops, and holding `place` — its place under
+    /// the connection cap — as long.
+    pub(crate) fn socket<Io>(
+        self: &Arc<Self>,
+        io: Io,
+        place: OwnedSemaphorePermit,
+    ) -> DrainSocket<Io> {
+        self.opened();
+        DrainSocket {
+            inner: io,
             drain: Arc::clone(self),
+            _place: place,
         }
     }
 
     /// Shutdown was asked for: the window starts now.
     ///
-    /// Called from the signal future poem awaits, before poem starts its own
-    /// clock, so every socket poem closes at the bound drops after this instant.
+    /// Called before the accept loop stops, so every socket it cuts at the
+    /// bound drops after this instant.
     pub(crate) fn begin(&self, window: Duration) {
         #[expect(
             clippy::let_underscore_must_use,
@@ -104,57 +109,12 @@ impl Drain {
     }
 }
 
-/// A poem [`Listener`] whose acceptor counts every socket it hands out.
-pub(crate) struct DrainListener<L> {
-    inner: L,
-    drain: Arc<Drain>,
-}
-
-impl<L: Listener> Listener for DrainListener<L> {
-    type Acceptor = DrainAcceptor<L::Acceptor>;
-
-    async fn into_acceptor(self) -> IoResult<Self::Acceptor> {
-        Ok(DrainAcceptor {
-            inner: self.inner.into_acceptor().await?,
-            drain: self.drain,
-        })
-    }
-}
-
-/// The acceptor of a [`DrainListener`].
-pub(crate) struct DrainAcceptor<A> {
-    inner: A,
-    drain: Arc<Drain>,
-}
-
-impl<A: Acceptor> Acceptor for DrainAcceptor<A> {
-    type Io = DrainSocket<A::Io>;
-
-    fn local_addr(&self) -> Vec<LocalAddr> {
-        self.inner.local_addr()
-    }
-
-    async fn accept(&mut self) -> IoResult<(Self::Io, LocalAddr, RemoteAddr, Scheme)> {
-        let (io, local, remote, scheme) = self.inner.accept().await?;
-        Ok((DrainSocket::new(io, &self.drain), local, remote, scheme))
-    }
-}
-
 /// One accepted socket, counted open until it is dropped. Vectored writes are
 /// forwarded too: hyper uses them when the socket offers them.
 pub(crate) struct DrainSocket<Io> {
     inner: Io,
     drain: Arc<Drain>,
-}
-
-impl<Io> DrainSocket<Io> {
-    fn new(inner: Io, drain: &Arc<Drain>) -> Self {
-        drain.opened();
-        Self {
-            inner,
-            drain: Arc::clone(drain),
-        }
-    }
+    _place: OwnedSemaphorePermit,
 }
 
 impl<Io> Drop for DrainSocket<Io> {
@@ -208,7 +168,9 @@ mod tests {
     use super::*;
 
     fn socket(drain: &Arc<Drain>) -> DrainSocket<tokio::io::DuplexStream> {
-        DrainSocket::new(tokio::io::duplex(8).0, drain)
+        let places = Arc::new(tokio::sync::Semaphore::new(1));
+        let place = places.try_acquire_owned().expect("a free place");
+        drain.socket(tokio::io::duplex(8).0, place)
     }
 
     #[tokio::test(start_paused = true)]
@@ -232,6 +194,21 @@ mod tests {
         assert_eq!(drain.open.load(Ordering::Acquire), 1);
         drop(kept);
         assert_eq!(drain.open.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_socket_holds_its_place_under_the_cap_until_it_drops() {
+        let places = Arc::new(tokio::sync::Semaphore::new(1));
+        let drain = Arc::new(Drain::default());
+        let held = drain.socket(
+            tokio::io::duplex(8).0,
+            Arc::clone(&places)
+                .try_acquire_owned()
+                .expect("a free place"),
+        );
+        assert_eq!(places.available_permits(), 0);
+        drop(held);
+        assert_eq!(places.available_permits(), 1);
     }
 
     #[tokio::test]

@@ -170,8 +170,8 @@ pub(crate) struct SubscriptionEndpoint<E> {
     executor: E,
     bridge: Arc<OperationBridge>,
     max_connection: Option<Duration>,
-    /// Every socket this mount serves: poem stops tracking a connection at its
-    /// upgrade, so the shutdown window waits on this instead.
+    /// Every socket this mount serves: an upgraded socket outlives the HTTP
+    /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
 }
 

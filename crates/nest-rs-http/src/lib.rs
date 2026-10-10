@@ -1,4 +1,5 @@
-//! HTTP transport for nestrs — a [`nest_rs_core::Transport`] backed by poem.
+//! HTTP transport for nestrs — a [`nest_rs_core::Transport`] routed by poem and
+//! served by its own accept loop on hyper.
 //!
 //! [`HttpTransport`] mounts every `#[routes]` controller, every self-mounting
 //! endpoint another surface declares (a GraphQL schema, an MCP service — each
@@ -47,6 +48,7 @@ mod response;
 mod response_body;
 mod scope;
 mod security_headers;
+mod server;
 mod shaper;
 mod sse;
 pub mod target;

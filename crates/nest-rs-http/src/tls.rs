@@ -1,14 +1,19 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use futures_util::stream::{self, BoxStream, StreamExt};
 use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting};
-use poem::listener::{RustlsCertificate, RustlsConfig};
+use rustls::ServerConfig;
 use rustls::crypto::aws_lc_rs::sign::any_supported_type;
+use rustls::crypto::{CryptoProvider, aws_lc_rs};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
+use tokio_rustls::TlsAcceptor;
 
 /// How often a file-sourced certificate is re-read; `0` turns watching off.
 const DEFAULT_RELOAD_SECS: u64 = 60;
@@ -166,13 +171,13 @@ impl HttpTls {
         }
     }
 
-    /// The stream poem's `rustls` listener consumes: the material as loaded,
-    /// then one item per observed renewal.
+    /// The listener's side of the material: the handshake every accepted
+    /// socket runs, and the watch that renews its certificate when the pair
+    /// came from files.
     ///
-    /// poem validates a `RustlsConfig` but not a stream of them (the blanket
-    /// `IntoTlsConfigStream::into_stream` is `Ok(self)`), so the pair is checked here.
-    pub(crate) fn into_rustls_stream(self) -> Result<BoxStream<'static, RustlsConfig>> {
-        validate_pair(&self.cert, &self.key)?;
+    /// The pair is refused here when it cannot serve, before the port is bound.
+    pub(crate) fn into_listener(self) -> Result<ListenerTls> {
+        let current = certified_key(&self.cert, &self.key)?;
         // A pair built in code reaches here without a config read.
         if self.reload_secs > 0 {
             RELOAD.check(
@@ -181,48 +186,88 @@ impl HttpTls {
                 Duration::from_secs(self.reload_secs),
             )?;
         }
-        let HttpTls {
-            cert,
-            key,
-            source,
-            reload_secs,
-        } = self;
-        let initial = rustls_config(cert.clone(), key.clone());
-        let head = stream::once(async move { initial });
-        let TlsSource::Files {
-            cert: cert_path,
-            key: key_path,
-        } = source
-        else {
-            return Ok(head.boxed());
+        let resolver = Arc::new(ReloadingResolver {
+            current: RwLock::new(Arc::new(current)),
+        });
+        let mut config = ServerConfig::builder_with_provider(crypto_provider())
+            .with_safe_default_protocol_versions()
+            .context("the crypto provider speaks no TLS version rustls serves")?
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::clone(&resolver) as Arc<dyn ResolvesServerCert>);
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let renewal = match self.source {
+            TlsSource::Files { cert, key } if self.reload_secs > 0 => {
+                let watcher = Watcher {
+                    cert_path: cert,
+                    key_path: key,
+                    cert: self.cert,
+                    key: self.key,
+                    interval: Duration::from_secs(self.reload_secs),
+                };
+                Some(Box::pin(watcher.renew(resolver)) as Renewal)
+            }
+            _ => None,
         };
-        if reload_secs == 0 {
-            return Ok(head.boxed());
-        }
-        let watcher = Watcher {
-            cert_path,
-            key_path,
-            cert,
-            key,
-            interval: Duration::from_secs(reload_secs),
-        };
-        Ok(head
-            .chain(stream::unfold(watcher, |mut watcher| async move {
-                let next = watcher.next_renewal().await;
-                Some((next, watcher))
-            }))
-            .boxed())
+        Ok(ListenerTls {
+            acceptor: TlsAcceptor::from(Arc::new(config)),
+            renewal,
+        })
     }
 }
 
-/// The one place a `RustlsConfig` is built from a PEM pair, at boot and on renewal.
-fn rustls_config(cert: Vec<u8>, key: Vec<u8>) -> RustlsConfig {
-    RustlsConfig::new().fallback(RustlsCertificate::new().cert(cert).key(key))
+/// The watch that swaps a renewed certificate into the listener; it never ends.
+pub(crate) type Renewal = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// The TLS half of the listener: the handshake, and the renewal to run beside it.
+pub(crate) struct ListenerTls {
+    pub(crate) acceptor: TlsAcceptor,
+    pub(crate) renewal: Option<Renewal>,
 }
 
-/// Everything poem's parser would refuse, plus what it cannot see: an empty
-/// chain and a pair whose halves do not correspond, which install through
-/// `with_cert_resolver` and fail every handshake.
+/// The certificate every handshake presents, replaced whole by a renewal, so a
+/// connection already open keeps the session it handshook.
+#[derive(Debug)]
+struct ReloadingResolver {
+    current: RwLock<Arc<CertifiedKey>>,
+}
+
+impl ReloadingResolver {
+    fn replace(&self, renewed: CertifiedKey) {
+        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(renewed);
+    }
+}
+
+impl ResolvesServerCert for ReloadingResolver {
+    fn resolve(&self, _hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(Arc::clone(
+            &self.current.read().unwrap_or_else(PoisonError::into_inner),
+        ))
+    }
+}
+
+/// The process-wide crypto provider the listener builds with, aws-lc-rs
+/// installed first when the app has not chosen one: a client built later from
+/// the default — `redis`'s — then finds one, rather than panicking when two
+/// providers are compiled in.
+fn crypto_provider() -> Arc<CryptoProvider> {
+    if let Some(installed) = CryptoProvider::get_default() {
+        return Arc::clone(installed);
+    }
+    // Losing a race to another installer leaves theirs in place, and theirs is
+    // the one handed back.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "losing the race leaves the other installer's provider, which is read back below"
+    )]
+    let _ = aws_lc_rs::default_provider().install_default();
+    CryptoProvider::get_default()
+        .map_or_else(|| Arc::new(aws_lc_rs::default_provider()), Arc::clone)
+}
+
+/// The one place a certificate is built from a PEM pair, at boot and on
+/// renewal, refusing what cannot serve: a pair that does not parse, an empty
+/// chain, and a pair whose halves do not correspond, which would install and
+/// fail every handshake.
 ///
 /// A parse failure is described, never quoted: the parser's error carries the
 /// line it choked on, which may hold the whole private key.
@@ -230,7 +275,7 @@ fn rustls_config(cert: Vec<u8>, key: Vec<u8>) -> RustlsConfig {
     clippy::map_err_ignore,
     reason = "the PEM parser's error quotes the line it choked on, which may hold the private key"
 )]
-fn validate_pair(cert: &[u8], key: &[u8]) -> Result<()> {
+fn certified_key(cert: &[u8], key: &[u8]) -> Result<CertifiedKey> {
     let chain = CertificateDer::pem_slice_iter(cert)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| anyhow::anyhow!("the certificate is not valid PEM: {PEM_SHAPE}"))?;
@@ -246,21 +291,20 @@ fn validate_pair(cert: &[u8], key: &[u8]) -> Result<()> {
         ),
         _ => anyhow::anyhow!("the private key is not valid PEM: {PEM_SHAPE}"),
     })?;
-    // poem loads the listener's key with aws-lc-rs whatever provider the app
-    // installed, and an aws-lc-rs key exposes its public half for `keys_match`.
+    // Loaded with aws-lc-rs whatever provider the app installed: its keys
+    // expose their public half, which `keys_match` needs.
     let signing = any_supported_type(&key)
         .context("the private key is not a type this build of rustls can sign with")?;
-    CertifiedKey::new(chain, signing)
-        .keys_match()
-        .map_err(|error| match error {
-            rustls::Error::InconsistentKeys(_) => anyhow::anyhow!(
-                "the certificate and the private key do not correspond — the chain has to start \
-                 with this key's own certificate, and a renewal that writes the two as separate \
-                 operations is observable half-done; installing that pair fails every handshake"
-            ),
-            other => anyhow::anyhow!("the certificate cannot be read as X.509: {other}"),
-        })?;
-    Ok(())
+    let certified = CertifiedKey::new(chain, signing);
+    certified.keys_match().map_err(|error| match error {
+        rustls::Error::InconsistentKeys(_) => anyhow::anyhow!(
+            "the certificate and the private key do not correspond — the chain has to start \
+             with this key's own certificate, and a renewal that writes the two as separate \
+             operations is observable half-done; installing that pair fails every handshake"
+        ),
+        other => anyhow::anyhow!("the certificate cannot be read as X.509: {other}"),
+    })?;
+    Ok(certified)
 }
 
 /// What a PEM value has to look like, said instead of quoting one that does not.
@@ -286,8 +330,7 @@ impl Watcher {
         let mut pending: Option<(Vec<u8>, Vec<u8>)> = None;
         loop {
             tokio::time::sleep(self.interval).await;
-            let (Some(cert), Some(key)) = (self.read(&self.cert_path), self.read(&self.key_path))
-            else {
+            let (Some(cert), Some(key)) = self.read_pair().await else {
                 pending = None;
                 continue;
             };
@@ -310,34 +353,62 @@ impl Watcher {
         }
     }
 
-    /// The next settled pair that can serve ([`validate_pair`]); one that
+    /// Swap every renewal into `resolver`, for as long as the listener runs.
+    async fn renew(mut self, resolver: Arc<ReloadingResolver>) {
+        loop {
+            resolver.replace(self.next_renewal().await);
+        }
+    }
+
+    /// The next settled pair that can serve ([`certified_key`]); one that
     /// cannot is refused with a `warn` and the working certificate keeps serving.
-    async fn next_renewal(&mut self) -> RustlsConfig {
+    async fn next_renewal(&mut self) -> CertifiedKey {
         loop {
             let (cert, key) = self.next_settled().await;
-            if let Err(error) = validate_pair(&cert, &key) {
-                tracing::warn!(
-                    target: crate::target::HTTP,
-                    cert = %self.cert_path.display(),
-                    key = %self.key_path.display(),
-                    error = format!("{error:#}"),
-                    "renewed tls material was refused; keeping the certificate in use",
-                );
-                continue;
-            }
+            let renewed = match certified_key(&cert, &key) {
+                Ok(renewed) => renewed,
+                Err(error) => {
+                    tracing::warn!(
+                        target: crate::target::HTTP,
+                        cert = %self.cert_path.display(),
+                        key = %self.key_path.display(),
+                        error = format!("{error:#}"),
+                        "renewed tls material was refused; keeping the certificate in use",
+                    );
+                    continue;
+                }
+            };
             tracing::info!(
                 target: crate::target::HTTP,
                 cert = %self.cert_path.display(),
                 key = %self.key_path.display(),
                 "tls certificate renewed on disk",
             );
-            return rustls_config(cert, key);
+            return renewed;
+        }
+    }
+
+    /// Both halves, read off the async task: a file read blocks its thread.
+    async fn read_pair(&self) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        let (cert, key) = (self.cert_path.clone(), self.key_path.clone());
+        match tokio::task::spawn_blocking(move || (Self::read(&cert), Self::read(&key))).await {
+            Ok(pair) => pair,
+            Err(error) => {
+                tracing::warn!(
+                    target: crate::target::HTTP,
+                    cert = %self.cert_path.display(),
+                    key = %self.key_path.display(),
+                    error = %nest_rs_core::error_message(&error),
+                    "tls material could not be re-read; keeping the certificate in use",
+                );
+                (None, None)
+            }
         }
     }
 
     /// A read failure is reported and skipped, never fatal: a renewal tool that
     /// unlinks before it writes would otherwise take the listener down.
-    fn read(&self, path: &Path) -> Option<Vec<u8>> {
+    fn read(path: &Path) -> Option<Vec<u8>> {
         // Refuses a FIFO, which would stall the watcher.
         match nest_rs_config::read_material(path) {
             Ok(bytes) => Some(bytes),
@@ -455,11 +526,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_watcher_skips_a_fifo_without_blocking() {
-        let (dir, fifo) = fifo("watcher");
+        let (_dir, fifo) = fifo("watcher");
         let (tx, rx) = std::sync::mpsc::channel();
-        let watch = watcher(&dir);
         std::thread::spawn(move || {
-            let _ = tx.send(watch.read(&fifo).is_none());
+            let _ = tx.send(Watcher::read(&fifo).is_none());
         });
         let skipped = rx
             .recv_timeout(Duration::from_secs(5))
@@ -508,7 +578,7 @@ mod tests {
         let watcher = watcher(&dir);
 
         assert!(
-            watcher.read(&watcher.cert_path).is_none(),
+            Watcher::read(&watcher.cert_path).is_none(),
             "a path with nothing at it reads as nothing, not as empty material",
         );
 
@@ -873,7 +943,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(", ");
         for collapsed in [key_a.replace('\n', " "), key_a.replace('\n', "\\n")] {
-            let refused = validate_pair(cert_a, collapsed.as_bytes())
+            let refused = certified_key(cert_a, collapsed.as_bytes())
                 .expect_err("a key on one line does not parse");
             for shown in [format!("{refused:#}"), format!("{refused:?}")] {
                 assert!(
@@ -889,12 +959,10 @@ mod tests {
         }
     }
 
-    /// poem loads the listener's key with aws-lc-rs, so a provider whose keys
+    /// The listener loads its key with aws-lc-rs, so a provider whose keys
     /// hide their public half cannot let a mismatched pair through the check.
     #[test]
     fn a_mismatched_pair_is_refused_whatever_provider_the_app_installed() {
-        use std::sync::Arc;
-
         #[derive(Debug)]
         struct Opaque(Arc<dyn rustls::sign::SigningKey>);
         impl rustls::sign::SigningKey for Opaque {
@@ -930,19 +998,17 @@ mod tests {
 
         let cert_a = cert_a();
         let key_b = key_b();
-        let refused = validate_pair(cert_a, key_b).expect_err("a mismatched pair is refused");
+        let refused = certified_key(cert_a, key_b).expect_err("a mismatched pair is refused");
         assert!(
             format!("{refused:#}").contains("do not correspond"),
             "{refused:#}"
         );
     }
 
-    /// And a key the installed provider cannot load at all is still one poem
-    /// serves, so the check does not refuse it either.
+    /// And a key the installed provider cannot load at all is still one the
+    /// listener serves, so the check does not refuse it either.
     #[test]
-    fn a_pair_poem_serves_is_accepted_whatever_provider_the_app_installed() {
-        use std::sync::Arc;
-
+    fn a_pair_the_listener_serves_is_accepted_whatever_provider_the_app_installed() {
         #[derive(Debug)]
         struct NoKeys;
         impl rustls::crypto::KeyProvider for NoKeys {
@@ -964,7 +1030,7 @@ mod tests {
 
         let cert_a = cert_a();
         let key_a = key_a();
-        validate_pair(cert_a, key_a).expect("a pair poem serves is not refused");
+        certified_key(cert_a, key_a).expect("a pair the listener serves is not refused");
     }
 
     /// A key file holding no private key — empty, or a certificate in its
@@ -974,7 +1040,7 @@ mod tests {
         let cert_a = cert_a();
         for (label, key) in [("empty", &b""[..]), ("a certificate", cert_a)] {
             let refused =
-                validate_pair(cert_a, key).expect_err("a file with no key in it is refused");
+                certified_key(cert_a, key).expect_err("a file with no key in it is refused");
             assert!(
                 format!("{refused:#}").contains("no PRIVATE KEY block"),
                 "{label}: {refused:#}"
@@ -988,22 +1054,22 @@ mod tests {
         let key_a = key_a();
         let key_b = key_b();
 
-        validate_pair(cert_a, key_a).expect("the fixture pair corresponds");
+        certified_key(cert_a, key_a).expect("the fixture pair corresponds");
 
-        let mismatched = validate_pair(cert_a, key_b).expect_err("a mismatched pair is refused");
+        let mismatched = certified_key(cert_a, key_b).expect_err("a mismatched pair is refused");
         assert!(
             format!("{mismatched:#}").contains("do not correspond"),
             "the refusal names what is wrong: {mismatched:#}",
         );
 
-        let empty = validate_pair(b"", key_a).expect_err("an empty certificate is refused");
+        let empty = certified_key(b"", key_a).expect_err("an empty certificate is refused");
         assert!(
             format!("{empty:#}").contains("no CERTIFICATE block"),
             "the refusal names what is wrong: {empty:#}",
         );
 
         assert!(
-            validate_pair(b"-----BEGIN CERTIFICATE-----\nnot base64\n", key_a).is_err(),
+            certified_key(b"-----BEGIN CERTIFICATE-----\nnot base64\n", key_a).is_err(),
             "and material that does not parse is still refused",
         );
     }

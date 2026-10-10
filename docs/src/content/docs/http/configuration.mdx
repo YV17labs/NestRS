@@ -36,8 +36,8 @@ pub struct ApiModule;
 
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
 no framework `Server` header, a `2 MiB` request-body cap, a `30`-second
-request timeout, a `20`-second shutdown window, fail-secure boot on, and the
-default security headers on.
+request timeout, at most `10 000` open connections, a `20`-second shutdown
+window, fail-secure boot on, and the default security headers on.
 
 ## `HttpConfig` fields
 
@@ -61,6 +61,7 @@ Real env always wins over the `.env` cascade.
 | `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
 | `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
+| `max_concurrent_connections` | `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` (`1`–`1048576`) | `10 000` | `HttpConfig { max_concurrent_connections: 50_000, ..Default::default() }` |
 | `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
 | `fail_secure_strict` | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
 | `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
@@ -71,8 +72,8 @@ See [Compression](/http/compression/) for what the flag negotiates and when to l
 ## Serve HTTPS
 
 Setting **both** `<PREFIX>_HTTP__TLS_CERT[_FILE]` and `<PREFIX>_HTTP__TLS_KEY[_FILE]`
-makes the transport serve over [rustls](https://docs.rs/rustls) (through
-poem's listener) instead of plain HTTP. Setting only one of the pair fails
+makes the transport serve over [rustls](https://docs.rs/rustls) instead of plain
+HTTP, offering HTTP/2 then HTTP/1.1 to each client. Setting only one of the pair fails
 the boot — a half-configured TLS is a deployment mistake, not a silent
 fall back to plaintext. Setting both spellings of one half — `TLS_CERT` and
 `TLS_CERT_FILE` — in the same tier fails the boot too, naming both, since
@@ -265,6 +266,41 @@ client SDK or a load balancer that retries a `504` on another node is acting
 on "that node's upstream is flaky", and re-runs a handler that will overrun
 again. §15.6.4 is the origin's own sentence — explicitly temporary, and
 paired with `Retry-After`.
+
+## Connections
+
+The transport accepts its connections itself, on [hyper](https://docs.rs/hyper),
+and holds at most `max_concurrent_connections` open at once — `10 000` by
+default. Past it, a new connection waits in the kernel's listen backlog until one
+closes: its client sees latency, then the kernel's own refusal once the backlog
+is full, never a reset of a connection it already holds. A socket upgraded to a
+WebSocket counts until it closes. The first connection held back files one
+`warn` on `nest_rs::http` naming the variable, and an `info` follows once a place
+is free again:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__MAX_CONCURRENT_CONNECTIONS=50000
+```
+
+Whole numbers from `1` to `1048576`, Linux's default ceiling on the files one
+process opens; anything outside fails the boot naming the variable, set in the
+environment or pinned. A cap above the process's own file limit (`ulimit -n`) is
+met by the kernel first, so raise the two together.
+
+**Behind a proxy that caps** its connections to each upstream — nginx's
+`max_conns`, Envoy's circuit breakers — keep this cap at or above the proxy's,
+or the replica holds back connections the proxy believes it may open.
+
+What one connection may do is fixed:
+
+- an HTTP/2 connection runs at most `200` streams at once, the limit it
+  advertises in `SETTINGS_MAX_CONCURRENT_STREAMS` (RFC 9113 §5.1.2), and a
+  client resetting streams faster than they are answered is sent `GOAWAY`
+  ([CVE-2023-44487](https://nvd.nist.gov/vuln/detail/CVE-2023-44487));
+- an HTTP/1 request head larger than `64 KiB` is answered
+  `431 Request Header Fields Too Large` (RFC 6585 §5) rather than buffered;
+- a client speaking HTTP/2 from its first byte is served in plaintext too, and
+  every socket is written without Nagle's delay (`TCP_NODELAY`).
 
 ## Shutdown
 

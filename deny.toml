@@ -15,7 +15,6 @@ unsound = "all"
 unused-ignored-advisory = "deny"
 ignore = [
     { id = "RUSTSEC-2026-0253", reason = "async-graphql 7.2.1 reaches LruCache::pop only through its dataloader cache factory and persisted-queries store, which nestrs never builds; fixed in async-graphql 8, still a release candidate" },
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is unmaintained, not vulnerable; poem's TLS listener parses PEM through it and no poem release drops it" },
 ]
 
 [licenses]

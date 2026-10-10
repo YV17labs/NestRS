@@ -252,7 +252,7 @@ pub(crate) fn unusable_material() -> String {
 ///
 /// `redis` builds from that default, which rustls picks on its own only when
 /// exactly one provider is compiled in; with both, the first handshake panics.
-/// aws-lc-rs is the one poem's TLS listener installs too.
+/// aws-lc-rs is the one the HTTP transport's TLS listener installs too.
 pub(crate) fn crypto_provider() -> Arc<CryptoProvider> {
     if let Some(installed) = CryptoProvider::get_default() {
         return Arc::clone(installed);

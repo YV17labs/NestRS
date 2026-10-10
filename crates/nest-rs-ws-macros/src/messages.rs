@@ -469,8 +469,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                // poem stops tracking a socket at the upgrade: the `DetachedWork` lets
-                // the transport tell each socket at shutdown and bound its window.
+                // An upgraded socket outlives its HTTP connection: the `DetachedWork`
+                // lets the transport tell each socket at shutdown and bound its window.
                 let __sockets = ::nest_rs_ws::nest_rs_http::DetachedWork::new();
                 let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(

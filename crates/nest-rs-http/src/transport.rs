@@ -7,9 +7,8 @@ use async_trait::async_trait;
 use nest_rs_core::{Container, Discovery, Transport};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderName, HeaderValue, SERVER};
-use poem::listener::{Listener, TcpListener};
 use poem::middleware::{Compression, Cors};
-use poem::{EndpointExt, IntoEndpoint, Response, Route, Server};
+use poem::{EndpointExt, IntoEndpoint, Response, Route};
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
@@ -19,6 +18,7 @@ use crate::drain::Drain;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::interceptor::HttpEndpointWrap;
+use crate::server::Server;
 use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
 
@@ -87,9 +87,9 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
     true
 }
 
-/// HTTP [`Transport`] backed by poem: every discovered controller and
-/// self-mounted endpoint, then each [`mount`](Self::mount), under the
-/// discovered transport-level wraps.
+/// HTTP [`Transport`]: every discovered controller and self-mounted endpoint,
+/// then each [`mount`](Self::mount), under the discovered transport-level
+/// wraps, routed by poem and served by the transport's own accept loop.
 pub struct HttpTransport {
     bind: String,
     mounts: Vec<NamedMount>,
@@ -100,6 +100,7 @@ pub struct HttpTransport {
     max_body_bytes: Option<usize>,
     request_timeout: Option<Duration>,
     shutdown_timeout: Duration,
+    max_concurrent_connections: usize,
     fail_secure_strict: bool,
     security_headers: crate::HttpSecurityHeaders,
     compression: bool,
@@ -248,6 +249,7 @@ impl HttpTransport {
             max_body_bytes: None,
             request_timeout: None,
             shutdown_timeout: crate::config::DEFAULT_SHUTDOWN_TIMEOUT,
+            max_concurrent_connections: crate::config::DEFAULT_MAX_CONCURRENT_CONNECTIONS,
             fail_secure_strict: true,
             security_headers: crate::HttpSecurityHeaders::default(),
             compression: false,
@@ -282,6 +284,7 @@ impl HttpTransport {
             http = http.request_timeout(timeout);
         }
         http = http.shutdown_timeout(cfg.shutdown_timeout);
+        http.max_concurrent_connections = cfg.connection_cap()?;
         http = http.fail_secure_strict(cfg.fail_secure_strict);
         http = http.security_headers(cfg.security_headers.clone());
         http = http.compression(cfg.compression);
@@ -366,7 +369,7 @@ impl HttpTransport {
         self
     }
 
-    /// Serve HTTPS directly from [`HttpTls`] (poem's `rustls` listener)
+    /// Serve HTTPS from [`HttpTls`] — HTTP/2 or HTTP/1.1 by ALPN, on rustls —
     /// instead of plain HTTP. Without this call the transport stays plaintext.
     pub fn tls(mut self, tls: HttpTls) -> Self {
         self.tls = Some(tls);
@@ -793,29 +796,34 @@ impl Transport for HttpTransport {
         let endpoint = self
             .endpoint
             .expect("HttpTransport::configure must run before serve");
-        let bind = self.bind;
         let window = self.shutdown_timeout;
-        // poem keeps its connection count private and stops tracking a socket at
-        // its upgrade, so the transport counts what it accepts.
         let drain = self.drain;
-        let listener = match self.tls {
-            Some(tls) => {
-                // Checked here: poem's blanket impl on a config stream would accept
-                // unusable material, boot healthy and drop every connection.
-                let stream = tls
-                    .into_rustls_stream()
-                    .context("the configured TLS material cannot serve")?;
-                tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = true, "transport listening");
-                drain.track(TcpListener::bind(bind)).rustls(stream).boxed()
-            }
-            None => {
-                tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = false, "transport listening");
-                drain.track(TcpListener::bind(bind)).boxed()
-            }
-        };
+        // Checked before the bind: material that cannot serve fails the boot
+        // with the port never taken.
+        let tls = self
+            .tls
+            .map(HttpTls::into_listener)
+            .transpose()
+            .context("the configured TLS material cannot serve")?;
+        let listener = tokio::net::TcpListener::bind(&self.bind)
+            .await
+            .with_context(|| format!("the HTTP transport cannot listen on {}", self.bind))?;
+        tracing::info!(
+            target: crate::target::HTTP,
+            addr = %self.bind,
+            tls = tls.is_some(),
+            "transport listening",
+        );
+        let server = Server::new(
+            listener,
+            endpoint,
+            Arc::clone(&drain),
+            self.max_concurrent_connections,
+            tls,
+        )?;
         let detached = self.detached;
-        // poem enforces the window; `begin` runs before poem starts that clock, so
-        // every socket poem closes at the bound is counted as closed by it.
+        // `begin` runs before the loop stops accepting, so every socket the
+        // window cuts drops after the instant it records.
         let signal = {
             let drain = Arc::clone(&drain);
             let leaving: Vec<DetachedWork> =
@@ -828,15 +836,10 @@ impl Transport for HttpTransport {
                 }
             }
         };
-        let served = Server::new(listener)
-            .run_with_graceful_shutdown(endpoint, signal, Some(window))
-            .await;
+        server.run(signal).await;
         // Last, so nothing a connection carried still runs when the shutdown hooks start.
         DetachedWork::stop_at(&detached, drain.bound()).await;
-        if served.is_ok() {
-            drain.report(window);
-        }
-        served?;
+        drain.report(window);
         Ok(())
     }
 
@@ -930,6 +933,37 @@ mod tests {
             crate::HttpConfig::default().shutdown_timeout,
             "a transport built by hand gets the window a configured one defaults to",
         );
+    }
+
+    #[test]
+    fn a_built_config_takes_its_connection_cap_and_is_held_to_its_range() {
+        let capped = HttpTransport::from_config(&crate::HttpConfig {
+            max_concurrent_connections: 64,
+            ..Default::default()
+        })
+        .expect("a cap inside the range");
+        assert_eq!(capped.max_concurrent_connections, 64);
+        assert_eq!(
+            HttpTransport::new().max_concurrent_connections,
+            crate::HttpConfig::default().max_concurrent_connections,
+            "a transport built by hand gets the cap a configured one defaults to",
+        );
+        for cap in [0, 1_048_577] {
+            let refused = HttpTransport::from_config(&crate::HttpConfig {
+                max_concurrent_connections: cap,
+                ..Default::default()
+            })
+            .err()
+            .expect("a cap outside the range never reaches the loop")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name(
+                    "http",
+                    "MAX_CONCURRENT_CONNECTIONS"
+                )),
+                "{cap}: {refused}"
+            );
+        }
     }
 
     #[test]

@@ -2826,6 +2826,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "hyper-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http-macros",
@@ -2837,6 +2838,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tracing",
  "validator",
@@ -3761,7 +3763,6 @@ dependencies = [
  "poem-derive",
  "regex",
  "rfc7239",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -3770,7 +3771,6 @@ dependencies = [
  "sync_wrapper",
  "thiserror 2.0.21",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite 0.27.0",
  "tokio-util",
@@ -4367,15 +4367,6 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]

@@ -174,10 +174,9 @@ in the service.
 ```bash frame="terminal"
 $ nestrs run dev blog
 INFO nest_rs::orm: connecting to database max_connections=None
-DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+INFO nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
 ```
 
-Those lines come from `.env.development`, which sets `<PREFIX>_LOG=debug`.
 `connecting to database` is the only ORM boot line — the pool is lazy, so
 there is no "connected" confirmation to wait for; the first query is what
 proves the credentials.

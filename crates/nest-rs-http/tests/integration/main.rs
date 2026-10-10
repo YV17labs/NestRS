@@ -25,6 +25,7 @@ mod problem;
 mod response_body;
 mod route_decorators;
 mod security_headers;
+mod server;
 mod sse;
 mod tls;
 mod trace_context;

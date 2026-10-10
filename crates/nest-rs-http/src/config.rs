@@ -86,6 +86,22 @@ const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
+pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
+
+/// The key of [`HttpConfig::max_concurrent_connections`].
+const MAX_CONCURRENT_CONNECTIONS: &str = "MAX_CONCURRENT_CONNECTIONS";
+
+const CONNECTIONS_FLOOR: Bound = Bound {
+    count: 1,
+    why: "a cap of none binds the port and never accepts a connection",
+};
+
+const CONNECTIONS_CEILING: Bound = Bound {
+    count: 1 << 20,
+    why: "a process holds no more open files than Linux's `fs.nr_open` allows, 1048576 by \
+          default, so the kernel refuses a socket past it before the cap is reached",
+};
+
 const SSE_MAX_CONNECTION: DurationBounds = DurationBounds::secs(
     "SSE_MAX_CONNECTION_SECS",
     "HttpConfig::sse_max_connection",
@@ -197,8 +213,8 @@ pub struct HttpConfig {
     /// signal; what is still open then is closed, and one `warn` on
     /// `nest_rs::http` counts it. An `#[sse]` or MCP `GET` stream ends at the
     /// signal; a WebSocket or graphql-ws socket closes `1001 Going Away` after
-    /// what it is answering. A socket a hand-built endpoint upgraded is out of
-    /// poem's sight: it ends with its handler or the process, counted as
+    /// what it is answering. A socket a hand-built endpoint upgraded is never
+    /// waited for: it ends with its handler or the process, counted as
     /// `upgraded_open`.
     ///
     /// Read from `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
@@ -206,6 +222,16 @@ pub struct HttpConfig {
     /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
     /// 8.5 seconds (`serve`'s unwind, the shutdown hooks and the telemetry flush).
     pub shutdown_timeout: Duration,
+    /// How many connections the transport holds open at once, an upgraded
+    /// socket counted until it closes. Past it a new connection waits in the
+    /// kernel's listen backlog — it sees latency, then the kernel's own refusal
+    /// once the backlog is full, never a reset of a connection it holds — and
+    /// one `warn` on `nest_rs::http` names the variable.
+    ///
+    /// Read from `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, from 1 to
+    /// 1 048 576 — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 10 000.
+    pub max_concurrent_connections: usize,
 }
 
 impl Default for HttpConfig {
@@ -230,6 +256,7 @@ impl Default for HttpConfig {
             sse_max_connection: Some(Duration::from_secs(DEFAULT_SSE_MAX_CONNECTION_SECS)),
             sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
         }
     }
 }
@@ -242,6 +269,19 @@ impl HttpConfig {
         let header = HeaderName::from_bytes(self.version_header.as_bytes()).ok()?;
         let selector = VersionSelector::new(self.versioning, header, self.default_version.clone());
         selector.rewrites().then_some(selector)
+    }
+
+    /// [`max_concurrent_connections`](Self::max_concurrent_connections), held to
+    /// the range the variable is, for a config that never met the environment.
+    pub(crate) fn connection_cap(&self) -> Result<usize> {
+        check_connection_cap(
+            nest_rs_config::var_name(
+                <Self as nest_rs_config::Namespaced>::NAMESPACE,
+                MAX_CONCURRENT_CONNECTIONS,
+            ),
+            self.max_concurrent_connections,
+            "",
+        )
     }
 
     /// Pin the global prefix in code; empty or `"/"` collapse to `None`.
@@ -302,7 +342,59 @@ impl Config for HttpConfig {
             ),
             sse_keep_alive: optional(SSE_KEEP_ALIVE.read_optional(env, base.sse_keep_alive)?),
             shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?.value,
+            max_concurrent_connections: max_concurrent_connections(
+                env,
+                base.max_concurrent_connections,
+            )?,
         })
+    }
+}
+
+/// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` over `base`, refused outside its
+/// range from either side, never clamped.
+fn max_concurrent_connections(env: &ConfigService, base: usize) -> Result<usize> {
+    let Some(setting) = env.setting(MAX_CONCURRENT_CONNECTIONS)? else {
+        return check_connection_cap(
+            env.var_name(MAX_CONCURRENT_CONNECTIONS),
+            base,
+            "is not set, and ",
+        );
+    };
+    let count: usize = setting.parse()?;
+    match outside_connection_range(count) {
+        None => Ok(count),
+        Some((_, must, bound)) => Err(setting.refuse(format_args!(
+            "must be {must} {} — {}",
+            bound.count, bound.why
+        ))),
+    }
+}
+
+/// `count`, set in code, refused under `var` when it is outside the range;
+/// `lead` opens the sentence with what is known of the variable.
+fn check_connection_cap(var: String, count: usize, lead: &str) -> Result<usize> {
+    match outside_connection_range(count) {
+        None => Ok(count),
+        Some((side, must, bound)) => Err(nest_rs_config::ConfigError::parse(
+            var,
+            format!(
+                "{lead}`HttpConfig::max_concurrent_connections` set in code is {count}, {side} \
+                 the {} it must be {must} — {}",
+                bound.count, bound.why,
+            ),
+        )),
+    }
+}
+
+/// Which end of the range `count` falls past, if either.
+fn outside_connection_range(count: usize) -> Option<(&'static str, &'static str, Bound)> {
+    let count = u64::try_from(count).unwrap_or(u64::MAX);
+    if count < CONNECTIONS_FLOOR.count {
+        Some(("below", "at least", CONNECTIONS_FLOOR))
+    } else if count > CONNECTIONS_CEILING.count {
+        Some(("above", "at most", CONNECTIONS_CEILING))
+    } else {
+        None
     }
 }
 
@@ -395,6 +487,7 @@ mod tests {
             ("CORS_MAX_AGE", SECRET.to_owned()),
             ("HSTS", format!("{SECRET}\u{7}")),
             ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
+            ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
         ] {
             figment::Jail::expect_with(|jail| {
                 jail.create_file("value", &content)?;
@@ -732,6 +825,93 @@ mod tests {
         )
         .expect("the variable overrides the pin");
         assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn the_connection_cap_defaults_to_ten_thousand_and_reads_over_a_pinned_base() {
+        assert_eq!(HttpConfig::default().max_concurrent_connections, 10_000);
+        let pinned = HttpConfig {
+            max_concurrent_connections: 64,
+            ..Default::default()
+        };
+        assert_eq!(
+            HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                .expect("the overlay resolves")
+                .max_concurrent_connections,
+            64,
+            "nothing in the env ⇒ the pin is the answer",
+        );
+        assert_eq!(
+            HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", "512")]),
+                pinned,
+            )
+            .expect("the overlay resolves")
+            .max_concurrent_connections,
+            512,
+        );
+    }
+
+    /// `0` is no off switch here: a cap of none would bind and accept nothing.
+    #[test]
+    fn a_connection_cap_outside_its_range_is_refused_naming_the_variable() {
+        let var = nest_rs_config::var_name("http", "MAX_CONCURRENT_CONNECTIONS");
+        for (value, reason) in [
+            ("0", "must be at least 1"),
+            ("1048577", "must be at most 1048576"),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", value)]),
+                HttpConfig::default(),
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{value}: {refused}");
+            assert!(refused.contains(reason), "{value}: {refused}");
+            assert!(
+                !refused.contains(&format!(" {value}")),
+                "{value}: the value read is never quoted: {refused}"
+            );
+        }
+        for (value, count) in [("1", 1), ("1048576", 1_048_576)] {
+            let cfg = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", value)]),
+                HttpConfig::default(),
+            )
+            .expect("an edge of the range is inside it");
+            assert_eq!(cfg.max_concurrent_connections, count);
+        }
+    }
+
+    /// Refused only while the variable is silent: a set variable overrides the pin.
+    #[test]
+    fn a_pinned_connection_cap_outside_its_range_is_refused_naming_the_field() {
+        let var = nest_rs_config::var_name("http", "MAX_CONCURRENT_CONNECTIONS");
+        for pinned in [0, 1_048_577] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", []),
+                HttpConfig {
+                    max_concurrent_connections: pinned,
+                    ..Default::default()
+                },
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{pinned}: {refused}");
+            assert!(
+                refused.contains("HttpConfig::max_concurrent_connections"),
+                "{pinned}: {refused}"
+            );
+        }
+        let cfg = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("MAX_CONCURRENT_CONNECTIONS", "5")]),
+            HttpConfig {
+                max_concurrent_connections: 0,
+                ..Default::default()
+            },
+        )
+        .expect("the variable overrides the pin");
+        assert_eq!(cfg.max_concurrent_connections, 5);
     }
 
     #[test]

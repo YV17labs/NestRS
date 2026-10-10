@@ -7,9 +7,8 @@
 //! bounds stale privileges.
 //!
 //! The ceiling bounds *emission*, not the socket: a peer that stops reading
-//! parks the write and keeps the connection alive, and poem 3.1 / hyper 1 offer
-//! no per-response write deadline. Bound idle sockets at the server
-//! (`Server::idle_timeout`) or the proxy.
+//! parks the write and keeps the connection alive, and the transport sets no
+//! write deadline yet. Bound idle sockets at the proxy.
 
 use std::fmt;
 use std::sync::Arc;

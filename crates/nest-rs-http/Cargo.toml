@@ -51,17 +51,18 @@ http-body-util.workspace = true
 # The vocabulary's head, status, method and headers are the `http` crate's own,
 # re-exported as their one path.
 http.workspace = true
-# hyper puts an upgrade request's `OnUpgrade` in its extensions; the poem bridge
-# clones it by type so both sides of a crossing can take the upgraded socket.
-hyper.workspace = true
 thiserror.workspace = true
-# TLS material is handed to poem's listener as a *stream* of configs, so a
-# renewed certificate swaps in without rebuilding the listener; `stream::unfold`
-# + `chain` is what turns the watched PEM pair into one.
 futures-util.workspace = true
-# A renewed pair is checked before it is published: poem's own parser is private
-# and its `with_cert_resolver` never verifies that the two halves correspond, so
-# a mismatched or empty pair would install cleanly and fail every handshake.
+# The accept loop is the transport's own: hyper serves each connection, and
+# hyper-util's `auto` builder tells HTTP/1 from HTTP/2 and drives both on tokio.
+# hyper also puts an upgrade request's `OnUpgrade` in its extensions; the poem
+# bridge clones it by type so both sides of a crossing can take the upgraded
+# socket.
+hyper.workspace = true
+hyper-util.workspace = true
+# The TLS listener: a handshake per accepted socket, the certificate read from a
+# resolver a renewal swaps without rebuilding the listener.
+tokio-rustls.workspace = true
 rustls.workspace = true
 
 [dev-dependencies]
@@ -82,7 +83,7 @@ nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `tests/global_prefix.rs` drives an in-process server through poem's
 # `TestClient`, gated behind poem's `test` feature. `websocket` lets
 # `tests/integration/transport.rs` hold a real WebSocket open across a shutdown —
-# an upgraded connection is the one poem's shutdown window neither waits for nor
+# an upgraded connection is the one the shutdown window neither waits for nor
 # closes, and the transport's report has to say so.
 poem = { workspace = true, features = ["test", "websocket"] }
 # `test-util` (not part of tokio's `full`) pauses time, so the shutdown window is
@@ -109,9 +110,9 @@ reqwest.workspace = true
 # against the composition that defeated it rather than against a hand-set header.
 flate2.workspace = true
 futures-util.workspace = true
-# The upgrade tests serve one HTTP/1.1 connection over an in-memory pipe, so the
-# request carries hyper's real `OnUpgrade`.
-hyper-util.workspace = true
+# An HTTP/2 client that reads the server's SETTINGS frame, which no higher-level
+# client exposes.
+h2.workspace = true
 
 [lints]
 workspace = true

@@ -6,9 +6,10 @@ sidebar:
   order: 1
 ---
 
-NestRS's HTTP layer is built on [poem](https://docs.rs/poem) — listener,
-extractors, middleware. NestRS wraps it so a controller is a struct, routes
-come from `#[routes]`, and the transport activates by importing
+NestRS's HTTP layer routes with [poem](https://docs.rs/poem) — its router,
+extractors and middleware — and accepts connections itself, on
+[hyper](https://docs.rs/hyper). A controller is a struct, routes come from
+`#[routes]`, and the transport activates by importing
 [`HttpModule::for_root(...)`](/http/configuration/) in `AppModule.imports`
 — `main` never holds a transport.
 

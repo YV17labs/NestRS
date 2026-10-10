@@ -21,7 +21,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
 nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm", "testing"] }
-poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls"] }
+poem = { version = "3.1", features = ["tower-compat", "anyhow"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
 sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio"] }
 

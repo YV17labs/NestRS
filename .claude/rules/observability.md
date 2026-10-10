@@ -159,9 +159,9 @@ shutdown window, with its worker — and `outcome = panic` for one that unwound.
 No handler's return carries either, so the line is held by a guard dropped with
 the unit's future (code that must notice a stop can miss it), and a panic is
 contained where the unit is dispatched, unless the edge's transport takes the
-connection down with it, as HTTP's does. Where a client waits, the unwind is
-answered: an MCP internal error, a WS error frame with the socket kept, `1011` on
-a socket whose connect hook or subscription unwound.
+connection (an HTTP/2 stream) down with it, as HTTP's does. Where a client
+waits, the unwind is answered: an MCP internal error, a WS error frame with the
+socket kept, `1011` on a socket whose connect hook or subscription unwound.
 
 - **`panic` names the unit that unwound, never one torn down by it.** A guard may
   read an unwind in progress (`std::thread::panicking()`) only where nothing but

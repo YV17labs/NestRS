@@ -29,7 +29,7 @@ const CUT: &str = "connections still open as the shutdown window closes are cut;
 const SLOW: Duration = Duration::from_secs(2);
 
 /// Real-time patience for a socket the transport has already answered or closed.
-const PATIENCE: Duration = Duration::from_secs(5);
+pub(crate) const PATIENCE: Duration = Duration::from_secs(5);
 
 /// Told when the slow route has started, so shutdown is asked for while it runs.
 static STARTED: Notify = Notify::const_new();
@@ -98,8 +98,8 @@ impl ShutdownController {
 #[module(providers = [ShutdownController])]
 struct ShutdownModule;
 
-/// A WebSocket that echoes text until its peer goes; poem stops tracking it at
-/// the upgrade.
+/// A WebSocket that echoes text until its peer goes, outliving the HTTP
+/// connection that upgraded it.
 #[handler]
 fn echo(ws: WebSocket) -> impl IntoResponse {
     ws.on_upgrade(|mut socket| async move {
@@ -183,14 +183,14 @@ fn operation_line(logs: &LogCapture, path: &str) -> nest_rs_testing::CapturedEve
     lines.remove(0)
 }
 
-fn free_port() -> u16 {
+pub(crate) fn free_port() -> u16 {
     let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral port");
     listener.local_addr().expect("the bound port").port()
 }
 
 /// Loopback, retrying while the listener comes up — `serve` binds on its own
 /// task, so the first connect can lose the race.
-async fn connect(port: u16) -> TcpStream {
+pub(crate) async fn connect(port: u16) -> TcpStream {
     for _ in 0..100 {
         if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)).await {
             return stream;
@@ -201,7 +201,7 @@ async fn connect(port: u16) -> TcpStream {
 }
 
 /// Send `GET path` on a fresh connection.
-async fn request(port: u16, path: &str) -> TcpStream {
+pub(crate) async fn request(port: u16, path: &str) -> TcpStream {
     let mut stream = connect(port).await;
     stream
         .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
@@ -211,7 +211,7 @@ async fn request(port: u16, path: &str) -> TcpStream {
 }
 
 /// Read a response head, byte by byte, up to the blank line that ends it.
-async fn read_head(stream: &mut TcpStream) -> String {
+pub(crate) async fn read_head(stream: &mut TcpStream) -> String {
     let mut head = Vec::new();
     let mut byte = [0_u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -227,7 +227,7 @@ async fn read_head(stream: &mut TcpStream) -> String {
 }
 
 /// Everything left on the socket, up to the server's close.
-async fn read_to_end(stream: &mut TcpStream) -> String {
+pub(crate) async fn read_to_end(stream: &mut TcpStream) -> String {
     let mut rest = Vec::new();
     match tokio::time::timeout(PATIENCE, stream.read_to_end(&mut rest)).await {
         Ok(Ok(_)) => {}

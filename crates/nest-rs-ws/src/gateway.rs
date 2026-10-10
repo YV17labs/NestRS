@@ -91,8 +91,8 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     guards: Arc<EventLayerTable>,
     ctx: Option<Arc<dyn SocketContext>>,
     data_pipe: Option<Arc<WsDataFold>>,
-    /// Every socket this gateway serves: poem stops tracking a connection at its
-    /// upgrade, so the shutdown window waits on this instead.
+    /// Every socket this gateway serves: an upgraded socket outlives the HTTP
+    /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
 }
 

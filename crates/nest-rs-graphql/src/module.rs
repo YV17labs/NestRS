@@ -136,8 +136,8 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             _ => Ok(()),
         },
     ));
-    // Every graphql-ws socket (untracked by poem past the upgrade) and DataLoader
-    // batch (on its own task), so the transport stops them at shutdown.
+    // Every graphql-ws socket (outliving the HTTP connection that upgraded it) and
+    // DataLoader batch (on its own task), so the transport stops them at shutdown.
     let carried = DetachedWork::new();
     let mounted = carried.clone();
     builder.provide_meta(

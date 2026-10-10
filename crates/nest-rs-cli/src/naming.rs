@@ -450,6 +450,16 @@ fn singularize(pascal: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn one_adapter_generator_per_framework_edge() {
+        let generated: Vec<&str> = Transport::ALL.iter().map(|t| t.folder()).collect();
+        let edges: Vec<&str> = nest_rs_core::Edge::ALL
+            .iter()
+            .map(|edge| edge.as_str())
+            .collect();
+        assert_eq!(generated, edges);
+    }
+
     /// A failed scrape is silent — every reserved word accepted — so each
     /// category is asserted.
     #[test]

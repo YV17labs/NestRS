@@ -369,20 +369,16 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
     );
 }
 
-/// Every edge the CLI generates an adapter for, by its folder. `Transport` is
-/// crate-private; `naming`'s unit suite joins the two.
-const EDGES: [&str; 7] = [
-    "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
-];
-
-/// `nestrs g <edge> <feature>` for every edge in [`EDGES`] but `skip`, each run
+/// `nestrs g <edge> <feature>` for every framework edge but `skip`, each run
 /// **from inside the scaffolded app** (`-p apps/hello`), so the generator also
-/// edits the app's `module.rs` and manifest.
+/// edits the app's `module.rs` and manifest. The kernel's vocabulary, so an
+/// edge it gains fails here until its generator ships.
 fn every_edge<'a>(feature: &'a str, skip: &[&str]) -> Vec<Vec<&'a str>> {
-    EDGES
+    nest_rs_core::Edge::ALL
         .iter()
+        .map(|edge| edge.as_str())
         .filter(|edge| !skip.contains(edge))
-        .map(|&edge| vec!["g", edge, feature, "-p", "apps/hello"])
+        .map(|edge| vec!["g", edge, feature, "-p", "apps/hello"])
         .collect()
 }
 

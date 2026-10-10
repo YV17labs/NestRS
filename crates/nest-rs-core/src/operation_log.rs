@@ -42,14 +42,56 @@ impl Kind {
     }
 }
 
-/// The closed edge vocabulary: the only namespaces a [`Unit`] may be declared
-/// under.
-pub const EDGES: [&str; 7] = [
-    "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
-];
+/// A framework edge: the closed vocabulary a [`Unit`] is declared under, the
+/// folder an edge adapter lives in, and the first segment of its unit's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Edge {
+    /// An HTTP route, self-mount or fallback.
+    Http,
+    /// A GraphQL root field or subscription.
+    Graphql,
+    /// A WebSocket gateway's socket and its messages.
+    Ws,
+    /// A queue job attempt.
+    Queue,
+    /// A scheduled tick.
+    Schedule,
+    /// An MCP operation.
+    Mcp,
+    /// An in-process event listener.
+    Events,
+}
+
+impl Edge {
+    /// Every framework edge, in the vocabulary's order.
+    pub const ALL: &'static [Edge] = &[
+        Self::Http,
+        Self::Graphql,
+        Self::Ws,
+        Self::Queue,
+        Self::Schedule,
+        Self::Mcp,
+        Self::Events,
+    ];
+
+    /// The word a unit name, a span target and a config namespace spell this
+    /// edge with (`"http"`, `"graphql"`, …).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Graphql => "graphql",
+            Self::Ws => "ws",
+            Self::Queue => "queue",
+            Self::Schedule => "schedule",
+            Self::Mcp => "mcp",
+            Self::Events => "events",
+        }
+    }
+}
 
 /// One unit of work an edge opens: its canonical `<edge>.<unit>` name, the
-/// target its span is emitted on, and its [`Kind`].
+/// target its span is emitted on, its [`Kind`] and its [`Edge`].
 ///
 /// Declared only through [`unit!`](crate::unit); the accessors are `const` so
 /// the reading macros can put them in `tracing`'s static callsite metadata.
@@ -58,6 +100,7 @@ pub struct Unit {
     name: &'static str,
     target: &'static str,
     kind: Kind,
+    edge: Option<Edge>,
 }
 
 impl Unit {
@@ -76,12 +119,19 @@ impl Unit {
     pub const fn kind(&self) -> Kind {
         self.kind
     }
+
+    /// The framework edge that dispatches this unit, read off its name when
+    /// [`unit!`](crate::unit) declared it; `None` for a unit no edge
+    /// dispatches.
+    pub const fn edge(&self) -> Option<Edge> {
+        self.edge
+    }
 }
 
 /// `operation_log` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
-    use super::{EDGES, Kind, Unit, eq_bytes, is_edge_root};
+    use super::{Edge, Kind, Unit, eq_bytes, is_edge_root};
 
     /// Evaluated in a `const` by [`unit!`](crate::unit), which passes the
     /// declaring crate as `owner`.
@@ -113,16 +163,19 @@ pub(crate) mod __private {
         if dots != 1 || dot == 0 || dot == bytes.len() - 1 {
             panic!("a unit name is `<edge>.<unit>`: one dot, a word on each side");
         }
-        let mut known = false;
+        let mut known = None;
         let mut e = 0;
-        while e < EDGES.len() {
-            known |= EDGES[e].len() == dot && eq_bytes(EDGES[e].as_bytes(), 0, bytes, 0, dot);
+        while e < Edge::ALL.len() {
+            let word = Edge::ALL[e].as_str();
+            if word.len() == dot && eq_bytes(word.as_bytes(), 0, bytes, 0, dot) {
+                known = Some(Edge::ALL[e]);
+            }
             e += 1;
         }
-        if !known {
+        if known.is_none() {
             panic!(
                 "a unit's edge is one of the closed edge vocabulary in \
-                 `nest_rs_core::operation_log::EDGES`"
+                 `nest_rs_core::Edge::ALL`"
             );
         }
         if !is_edge_root(target, "nest_rs::", name) {
@@ -131,7 +184,12 @@ pub(crate) mod __private {
         if !is_edge_root(owner, "nest-rs-", name) {
             panic!("a unit is declared by the crate that owns its edge, `nest-rs-<edge>`");
         }
-        Unit { name, target, kind }
+        Unit {
+            name,
+            target,
+            kind,
+            edge: known,
+        }
     }
 
     /// Whether `krate`, the crate a reading macro expands in, declared `unit`.
@@ -222,7 +280,7 @@ pub fn duration_ms(start: Instant) -> f64 {
 /// example.
 ///
 /// Refused at compile time: a name that is not lowercase `<edge>.<unit>`, an
-/// edge outside [`EDGES`], a target other than `nest_rs::<edge>`, and a
+/// edge outside [`Edge::ALL`], a target other than `nest_rs::<edge>`, and a
 /// declaring crate (`CARGO_PKG_NAME`) other than `nest-rs-<edge>`.
 #[macro_export]
 macro_rules! unit {
@@ -309,7 +367,7 @@ mod tests {
 
     #[test]
     fn every_edge_declares_a_unit_from_its_own_crate_on_its_own_target() {
-        for edge in EDGES {
+        for edge in Edge::ALL.iter().map(|edge| edge.as_str()) {
             let owner = format!("nest-rs-{edge}");
             let target: &'static str = format!("nest_rs::{edge}").leak();
             let name: &'static str = format!("{edge}.some_unit").leak();
@@ -321,6 +379,28 @@ mod tests {
             assert!(__private::unit_opened_by(&unit, &owner));
             assert!(!__private::unit_opened_by(&unit, "nest-rs-redis"));
             assert!(!__private::unit_opened_by(&unit, &format!("{owner}-tests")));
+        }
+    }
+
+    #[test]
+    fn every_edge_spells_the_vocabulary_in_order() {
+        let spelled: Vec<&str> = Edge::ALL.iter().map(|edge| edge.as_str()).collect();
+        assert_eq!(
+            spelled,
+            [
+                "http", "graphql", "ws", "queue", "schedule", "mcp", "events"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_declared_unit_knows_its_edge() {
+        for &edge in Edge::ALL {
+            let owner = format!("nest-rs-{}", edge.as_str());
+            let target: &'static str = format!("nest_rs::{}", edge.as_str()).leak();
+            let name: &'static str = format!("{}.some_unit", edge.as_str()).leak();
+            let unit = declare(&owner, target, name).expect("a well-formed unit");
+            assert_eq!(unit.edge(), Some(edge), "{name}");
         }
     }
 

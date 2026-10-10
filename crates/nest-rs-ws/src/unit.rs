@@ -10,3 +10,17 @@ pub const DISCONNECT: Unit =
     nest_rs_core::unit!("ws.disconnect", target: crate::TARGET, kind: Server);
 /// One WS message.
 pub const MESSAGE: Unit = nest_rs_core::unit!("ws.message", target: crate::TARGET, kind: Server);
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::Edge;
+
+    use super::*;
+
+    #[test]
+    fn every_unit_names_its_edge() {
+        for unit in [CONNECT, DISCONNECT, MESSAGE] {
+            assert_eq!(unit.edge(), Some(Edge::Ws), "{}", unit.name());
+        }
+    }
+}

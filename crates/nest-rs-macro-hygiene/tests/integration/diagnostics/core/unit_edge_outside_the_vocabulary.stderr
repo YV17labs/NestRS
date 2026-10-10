@@ -1,4 +1,4 @@
-error[E0080]: evaluation panicked: a unit's edge is one of the closed edge vocabulary in `nest_rs_core::operation_log::EDGES`
+error[E0080]: evaluation panicked: a unit's edge is one of the closed edge vocabulary in `nest_rs_core::Edge::ALL`
  --> tests/integration/diagnostics/core/unit_edge_outside_the_vocabulary.rs:3:20
   |
 3 | const CALL: Unit = nest_rs::core::unit!("grpc.call", target: "nest_rs::grpc", kind: Server);
@@ -14,7 +14,7 @@ note: inside `nest_rs::nest_rs_core::__private::declare_unit`
   |
   | /             panic!(
   | |                 "a unit's edge is one of the closed edge vocabulary in \
-  | |                  `nest_rs_core::operation_log::EDGES`"
+  | |                  `nest_rs_core::Edge::ALL`"
   | |             );
   | |_____________- in this macro invocation
 

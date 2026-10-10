@@ -15,3 +15,17 @@ pub const OPERATION: Unit =
 /// One GraphQL subscription; the connection is the unit of work.
 pub const SUBSCRIPTION: Unit =
     nest_rs_core::unit!("graphql.subscription", target: crate::TARGET, kind: Server);
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::Edge;
+
+    use super::*;
+
+    #[test]
+    fn every_unit_names_its_edge() {
+        for unit in [OPERATION, SUBSCRIPTION] {
+            assert_eq!(unit.edge(), Some(Edge::Graphql), "{}", unit.name());
+        }
+    }
+}

@@ -72,6 +72,7 @@ pub mod env_flag;
 pub mod env_prefix;
 pub mod error;
 pub mod error_message;
+mod handler;
 mod identifier;
 pub mod layer;
 pub mod layer_chain;
@@ -88,6 +89,7 @@ pub mod target;
 pub mod trace_context;
 pub mod transport;
 mod type_name;
+mod unit_context;
 mod way_down;
 
 pub use access::{Composition, ProviderOrder, ReachableProviders};
@@ -108,6 +110,7 @@ pub use error::{
     UnresolvedFactoryError,
 };
 pub use error_message::{boxed_error, error_message};
+pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
@@ -115,6 +118,7 @@ pub use lifecycle::{LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIME
 pub use module::{Collecting, DynamicModule, Module, Registering};
 pub use net::Net;
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
+pub use operation_log::Edge;
 pub use panic::panic_message;
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
@@ -124,6 +128,7 @@ pub use trace_context::{
     current_span_id, current_trace_id, current_traceparent, current_tracestate,
 };
 pub use transport::Transport;
+pub use unit_context::{Peer, UnitContext, UnitView};
 
 #[doc(hidden)]
 pub mod __private {
@@ -135,6 +140,7 @@ pub mod __private {
     pub use crate::container::__private::{
         collect_dynamic_import, enter_import, leave_import, register_dynamic_import,
     };
+    pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler};
     pub use crate::layer_chain::__private::{
         ResolvedLayer, check_specs_resolvable, compose_chain, dedup_bucket, resolve_global_layers,
     };
@@ -147,6 +153,7 @@ pub mod __private {
     };
     pub use crate::transport::__private::TransportContribution;
     pub use crate::type_name::short_type_name;
+    pub use crate::unit_context::new_unit_context;
     pub use crate::way_down::main;
 
     pub use schemars;

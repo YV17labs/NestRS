@@ -38,3 +38,41 @@ release, in a nestrs major. With no poem release by 2027-01-31 the server moves.
 public API on `http` types and nestrs's own), then axum as the adapter. Not in
 7.0: 7.0 ships the queue on Redis Streams before Rust 1.100 (2026-11-12) breaks
 apalis-redis 0.7 for every queue user, and a server change would delay it.
+
+## 2026-10-09 — the decouple moves into 7.0, and the accept loop is nestrs's
+
+The owner moved the 8.0 direction into 7.0 on 2026-10-09, which supersedes "Not
+in 7.0" above. The public API speaks the `http` crate's types and nestrs's own —
+`Request`, `Response`, `Body`, `HttpError`, an `Endpoint` trait — and names no
+poem type: the `poem` re-exports go, no generated manifest declares it, and a
+`disallowed-types` lint lifted in the one adapter file holds it. The server is
+an internal adapter, so a later move to axum and tower is a minor.
+
+poem stays the request engine — its router, CORS, compression and the query,
+form and multipart decoders — behind that crate-private adapter file, until the
+condition above. With poem internal, 4.0 is taken at its release in a nestrs
+minor, not a major, and the 2027-01-31 condition moves the adapter file, not the
+API; the move to axum stays dated by it.
+
+The accept loop becomes nestrs's, on hyper-util's `auto` connection builder and
+tokio-rustls, because poem's server cannot bound what a server must: it offers
+no hook for hyper's timer (the connection phases), a connection cap, accept
+errors, which it drops, or a TLS handshake deadline, and it re-raises a
+handler's panic in the connection task. It leaves the HTTP/2 stream cap unset
+too; a setter exists, and the loop sets the cap since it changes anyway. A
+fork is refused (`manifests-ci.md`: no fork, no vendoring, no `[patch]`). The
+loop installs the process crypto provider when none is, as poem's TLS listener
+does, so no later client finds another default.
+
+tower stays out of the 7.0 public API: tower-layer's last release (0.3.3,
+2024-08-01) is past the freshness bar, and nothing first-party needs tower once
+rmcp is mounted through its own `handle`. A public server-adapter trait waits
+for a second adapter.
+
+The first paragraph's `#[handler]` sentence was already stale: `#[routes]`
+writes its endpoint by hand, mirroring that expansion.
+
+Lands with `feat/accept-loop` (the loop) and `feat/http-vocabulary` (the
+types), then the branches that move the transport, the routes and each edge
+onto them; `refactor/retire-replaced-contracts-and-poem` takes poem off the
+public surface.

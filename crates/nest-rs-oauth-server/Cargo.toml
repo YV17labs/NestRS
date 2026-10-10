@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "OAuth 2.0 authorization-server vocabulary for NestRS: RFC 6749 §5.2's token-endpoint error set, and §2.3.1 client authentication against a static registry in constant time."
+description = "OAuth 2.0 authorization-server vocabulary for NestRS: RFC 6749 §5.1's access token response, §5.2's token-endpoint error set, and §2.3.1 client authentication against a static registry in constant time."
 keywords = ["framework", "nestrs", "oauth", "rfc6749", "authorization-server"]
 categories = ["authentication", "web-programming"]
 

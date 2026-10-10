@@ -3,6 +3,8 @@
 //!
 //! - [`TokenError`] — §5.2's closed set of six wire codes, with the JSON envelope
 //!   and the §5.1 cache directives the token endpoint owes.
+//! - [`AccessTokenResponse`] — §5.1's success body, returned bare from a
+//!   handler, which renders with the same directives.
 //! - [`authenticate_against_registry`] — §2.3.1 client authentication against a
 //!   static registry, in constant time.
 

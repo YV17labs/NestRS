@@ -171,10 +171,11 @@ authn = ["dep:nest-rs-authn", "http"]
 # authorization server. Its transaction cookie is `JwtService`-signed, hence
 # `authn`.
 oauth-client = ["dep:nest-rs-oauth-client", "authn"]
-# The OAuth 2.0 *authorization server* role: RFC 6749 §5.2's token-endpoint
-# error set and §2.3.1 client authentication. `TokenError` renders itself as a
-# poem response and marks it `NoBearerChallenge`, so the capability closes over
-# `http` (which brings `guards`) the way every other request-shaped row does.
+# The OAuth 2.0 *authorization server* role: RFC 6749 §5.1's access token
+# response, §5.2's token-endpoint error set and §2.3.1 client authentication.
+# Both bodies render themselves as poem responses, and `TokenError` marks its
+# own `NoBearerChallenge`, so the capability closes over `http` (which brings
+# `guards`) the way every other request-shaped row does.
 oauth-server = ["dep:nest-rs-oauth-server", "http"]
 # RFC 9728 discovery. Mounts a controller and an interceptor, so `http`; the
 # boot check reads `AuthnConfig`, so `authn`.

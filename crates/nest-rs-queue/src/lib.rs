@@ -3,9 +3,10 @@
 //! `nest-rs-queue` defines **what every queue backend must agree on**: a
 //! queue's identity ([`Queue`], [`QueueName`]) and the payload bound ([`Job`]);
 //! the `#[processor]` inventory ([`ProcessMethod`]) and the worker running each
-//! attempt at a job ([`QueueWorker`]); the push surface ([`JobProducerExt`]) over the seam a backend
-//! enqueues and removes jobs through ([`JobProducer`]); and the capability model a
-//! backend declares what it honours with ([`QueueBackend`], [`Capability`]).
+//! attempt at a job ([`QueueWorker`]); the push surface ([`JobProducerExt`])
+//! over the seam a backend enqueues and removes jobs through ([`JobProducer`]);
+//! and the capability model a backend declares what it honours with
+//! ([`QueueBackend`], [`Capability`]).
 //!
 //! An application reaches all of it through the umbrella — `nest_rs::queue` —
 //! and a backend's own types through that backend's module: `nest_rs::redis` for

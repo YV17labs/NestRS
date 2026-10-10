@@ -18,8 +18,8 @@ use crate::error::{
 
 pub(crate) use self::__private::ModuleDescriptor;
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `access` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
 

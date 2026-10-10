@@ -1,7 +1,7 @@
 //! What a job attempt *is*, written once for every backend and run by the
 //! port's [`QueueWorker`](crate::QueueWorker): discovery of the `#[process]`
-//! inventory, and [`attempt`], from the envelope to the
-//! `nest_rs::operation` line.
+//! inventory, and [`attempt`], from the envelope to the `nest_rs::operation`
+//! line.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

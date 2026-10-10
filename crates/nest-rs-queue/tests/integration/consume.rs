@@ -15,8 +15,8 @@ use nest_rs_core::Container;
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::__private::{HandlerContext, nest_rs_worker};
 use nest_rs_queue::{
-    JobError, JobId, ProcessMethod, ProcessOptions, QueueBackend, QueueName, Throttle,
-    WIRE_FORMAT_VERSION, processor, queue,
+    JobError, JobId, NEWER_RELEASE_PATIENCE, NEWER_RELEASE_WAIT, ProcessMethod, ProcessOptions,
+    QueueBackend, QueueName, Throttle, WIRE_FORMAT_VERSION, processor, queue,
 };
 use serde_json::json;
 
@@ -1072,7 +1072,7 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience(
         let AttemptOutcome::Defer { after } = outcome else {
             panic!("a job this release cannot read is handed back: {outcome:?}");
         };
-        assert_eq!(after, nest_rs_queue::NEWER_RELEASE_WAIT);
+        assert_eq!(after, NEWER_RELEASE_WAIT);
     }
     assert_eq!(FLAKY_RUNS.load(Ordering::SeqCst), runs, "nothing ran");
     assert_eq!(delivery.attempt(), 1, "no attempt is spent");
@@ -1099,11 +1099,7 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience(
     assert_eq!(warned.field("waited_ms").as_deref(), Some("3600000"));
     assert_eq!(
         warned.field("patience_ms"),
-        Some(
-            nest_rs_queue::NEWER_RELEASE_PATIENCE
-                .as_millis()
-                .to_string()
-        )
+        Some(NEWER_RELEASE_PATIENCE.as_millis().to_string())
     );
     assert_eq!(
         warned.trace_id.as_deref(),
@@ -1124,7 +1120,7 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
         QueueName::new("transcode").expect("a valid name"),
         sealed_by_a_newer_release(&fresh_job_id()),
     )
-    .with_deferred_for(nest_rs_queue::NEWER_RELEASE_PATIENCE);
+    .with_deferred_for(NEWER_RELEASE_PATIENCE);
 
     let runs = FLAKY_RUNS.load(Ordering::SeqCst);
     let outcome = attempt_newer(&mut delivery).await;
@@ -1151,11 +1147,7 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
     assert_eq!(said.field("version"), Some(newer));
     assert_eq!(
         said.field("waited_ms"),
-        Some(
-            nest_rs_queue::NEWER_RELEASE_PATIENCE
-                .as_millis()
-                .to_string()
-        )
+        Some(NEWER_RELEASE_PATIENCE.as_millis().to_string())
     );
     assert_eq!(
         said.trace_id.as_deref(),

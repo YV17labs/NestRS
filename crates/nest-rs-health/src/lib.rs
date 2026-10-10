@@ -46,6 +46,7 @@ pub mod __private {
 
     pub use nest_rs_core::unresolved_host;
 }
+
 /// Orchestrator on a provider's `impl` block: each `#[liveness]`,
 /// `#[readiness]` or `#[startup]` method in it is a [`HealthIndicator`] that
 /// probe runs.

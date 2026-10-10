@@ -33,8 +33,8 @@ pub trait CheckpointStore: Send + Sync + 'static {
     async fn save(&self, state: Value) -> Result<(), QueueError>;
 }
 
-/// One delivery's checkpoint: the backend's store, and the latest state read or
-/// saved through it, between a delivery and the decorator-emitted handler.
+/// One delivery's checkpoint, handed to the decorator-emitted handler: the
+/// backend's store, and the latest state read or saved through it.
 pub struct CheckpointCell {
     store: Arc<dyn CheckpointStore>,
     /// The job's queue, which a store silent past the net is reported on.

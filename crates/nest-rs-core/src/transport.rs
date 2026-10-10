@@ -32,8 +32,8 @@ pub trait Transport: Send + Sync + 'static {
 
 pub(crate) use self::__private::TransportContribution;
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `transport` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use anyhow::Result;
 

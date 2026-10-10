@@ -1094,8 +1094,8 @@ impl ContainerBuilder {
     }
 }
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `container` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
 
@@ -1409,16 +1409,13 @@ mod tests {
 
     #[test]
     fn a_dynamic_import_site_with_no_parked_value_is_refused_naming_it() {
-        let mut builder = __private::register_dynamic_import(
-            __private::enter_import(
-                Container::builder(),
-                "AppModule",
-                0,
-                "SomeModule::for_root(..)",
-            ),
-            TypeId::of::<Host>(),
+        let builder = __private::enter_import(
+            Container::builder(),
+            "AppModule",
             0,
+            "SomeModule::for_root(..)",
         );
+        let mut builder = __private::register_dynamic_import(builder, TypeId::of::<Host>(), 0);
         let refused = builder.take_refusal().expect("a refusal");
         assert!(
             refused

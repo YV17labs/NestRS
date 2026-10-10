@@ -16,10 +16,10 @@ use crate::registry::{InterceptorSpec, InterceptorSpecs};
 ///
 /// The example on [`interceptor`](fn@crate::interceptor) registers through it.
 /// The first listed is outermost, [`Layer::priority`](nest_rs_core::Layer::priority)
-/// breaking ties. The chain wraps the whole routing tree at the transport edge (the
-/// global interceptors' band), so it sees denials, 404s and self-mounts, and runs
-/// *before* authentication: for
-/// actor-aware work, declare the interceptor at controller or method scope.
+/// breaking ties. The chain wraps the whole routing tree at the transport edge
+/// (the global interceptors' band), so it sees denials, 404s and self-mounts,
+/// and runs *before* authentication: for actor-aware work, declare the
+/// interceptor at controller or method scope.
 pub trait AppBuilderInterceptorsExt: Sized {
     /// Register `specs` as the global interceptor chain — the transport-edge
     /// pool that runs before authentication, deduped by type against

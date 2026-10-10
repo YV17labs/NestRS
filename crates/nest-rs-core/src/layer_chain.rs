@@ -54,8 +54,8 @@ pub trait GlobalSpecs: Any + Send + Sync {
     fn specs(&self) -> &[LayerSpec<Self::Layer>];
 }
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `layer_chain` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
     use std::sync::Arc;

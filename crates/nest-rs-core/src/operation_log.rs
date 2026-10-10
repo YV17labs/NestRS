@@ -78,8 +78,8 @@ impl Unit {
     }
 }
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `operation_log` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{EDGES, Kind, Unit, eq_bytes, is_edge_root};
 

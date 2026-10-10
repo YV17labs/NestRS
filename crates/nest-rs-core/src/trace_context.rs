@@ -517,8 +517,8 @@ fn set_actor(shared: &Shared, actor_id: &str) {
     let _ = shared.actor.set(Arc::from(actor_id));
 }
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `trace_context` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use std::sync::OnceLock;
     use std::sync::atomic::Ordering;

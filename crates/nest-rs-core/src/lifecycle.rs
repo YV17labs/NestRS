@@ -61,8 +61,8 @@ type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '
 
 pub(crate) use self::__private::LifecycleHook;
 
-/// This module is public: its tier-2 items live here, reachable only through
-/// the crate's `__private`.
+/// `lifecycle` is public: its tier-2 items live here, reached only
+/// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
 
@@ -77,7 +77,8 @@ pub(crate) mod __private {
         pub provider: &'static str,
         /// The hook method's name, the run order's tiebreaker.
         pub method: &'static str,
-        /// `module_path!()` at the `#[hooks]` site, read by [`is_framework_owned`](crate::is_framework_owned).
+        /// `module_path!()` at the `#[hooks]` site, read by
+        /// [`is_framework_owned`](crate::is_framework_owned).
         pub origin: &'static str,
         /// The host provider's type, read by [`inert_host`](crate::inert_host).
         pub provider_type_id: fn() -> TypeId,

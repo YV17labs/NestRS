@@ -102,13 +102,14 @@ rustdoc, then every test against real Postgres, Valkey and S3 — never a mock �
 each on one server, the dev container's: a backend's other shapes run by hand
 (`decisions/one-server-per-backend.md`).
 `demo.yml` runs the demo's own recipes — `just lint` with the tree's `nestrs
-lint`, and every suite — on a change to its tree or to the framework it builds
-on by path. `docs.yml` builds the site on a change to `docs/` and deploys it
-from `main` alone. The benchmarks are a developer's, on their host: no workflow
-lints, audits or runs them. **A workflow skips only what no build or test
-reads**: a file under a crate's `src/` is compiled whatever its extension, and
-a docs page a test reads is listed in `framework.yml`'s paths. The cargo cache
-is saved by `main` and `release/**` alone.
+lint`, and every suite — on a change to what its build or its services read:
+its tree, the framework it builds on by path, the dev container files the
+services start from. `docs.yml` builds the site on a change to `docs/` and
+deploys it from `main` alone. The benchmarks are a developer's, on their host:
+no workflow lints, audits or runs them. **A workflow skips only what no build
+or test reads**: a file under a crate's `src/` is compiled whatever its
+extension, and a docs page a test reads is listed in `framework.yml`'s paths.
+The cargo cache is saved by `main` and `release/**` alone.
 
 **A workflow is named for the tree a change to it triggers** (`Framework`,
 `Demo`, `Docs`), **otherwise for what it does** (`Audit`, `Publish`); a job for

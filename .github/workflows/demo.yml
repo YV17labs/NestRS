@@ -1,7 +1,8 @@
 # The demo's checks — its lint, its suites in process and against Postgres,
-# Valkey and S3 — against the framework it builds on by path, on every change
-# either side could break them with. The demo is its own workspace with its own
-# commands; this runs them.
+# Valkey and S3 — on every change to what its build or its services read: its
+# tree, the framework it builds on by path, the dev container files the
+# services start from. The demo is its own workspace with its own commands;
+# this runs them.
 
 name: Demo
 
@@ -12,11 +13,15 @@ on:
       - 'demo/**'
       - 'crates/**'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'clippy.toml'
       - '.cargo/**'
       - '.github/actions/**'
       - '.github/workflows/demo.yml'
+      - '.devcontainer/compose/**'
+      - '.devcontainer/config/**'
+      - '.devcontainer/scripts/**'
       - '!**.md'
       - 'demo/**/src/**'
       - 'crates/**/src/**'

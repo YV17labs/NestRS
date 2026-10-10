@@ -238,7 +238,8 @@ a hook abandoned while it waited on a `spawn_blocking` (a synchronous client
 wrapped the usual way, a `tokio::fs` call) held the exit for as long as that
 call lasted, after the process had said its last line. `#[nest_rs::main]` gives
 the teardown what the hooks and the flush left of their budget and then exits,
-abandoning what still runs — said at `warn` when it waited out a bound. A
+abandoning what still runs — said at `warn` when it waited out a bound — whether
+`main` returned or panicked; a panic then goes on out with its exit status. A
 `main` that runs no app, such as a migration tool, spent none of the budget, so
 work it left behind gets all five seconds. The app's manifest needs no `tokio`
 line for it.

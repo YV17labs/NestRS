@@ -8,9 +8,11 @@
 //!
 //! Dropping a tokio runtime waits for every blocking task still running, so
 //! [`main`] tears it down within what the shutdown hooks left of
-//! [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT).
+//! [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT), whether `main`
+//! returns or panics.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -256,7 +258,9 @@ pub fn main<T, F: Future<Output = T>>(main: F) -> T {
         .unwrap_or_else(|error| {
             panic!("#[nest_rs::main] could not build the tokio runtime `main` runs on: {error}")
         });
-    let output = runtime.block_on(main);
+    // Caught so a panicking `main` gets the same bounded teardown: unwinding
+    // past it would drop the runtime, which waits on blocking work unbounded.
+    let ran = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(main)));
     let budget = teardown_budget();
     let started = std::time::Instant::now();
     runtime.shutdown_timeout(budget);
@@ -270,7 +274,7 @@ pub fn main<T, F: Future<Output = T>>(main: F) -> T {
              waits for it",
         );
     }
-    output
+    ran.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
 #[cfg(test)]
@@ -316,6 +320,35 @@ mod tests {
             .and_then(|ms| ms.parse().ok())
             .expect("the budget it was given");
         assert!(budget_ms <= left.as_millis(), "{abandoned:#?}");
+    }
+
+    #[test]
+    fn a_main_that_panics_is_torn_down_within_what_the_hooks_left_and_keeps_its_panic() {
+        let logs = LogCapture::install();
+        let left = Duration::from_millis(300);
+        hooks_deadline(left);
+        let started = Instant::now();
+
+        let unwound = std::panic::catch_unwind(|| {
+            main::<(), _>(async {
+                leave_blocking_work_behind().await;
+                panic!("main gave up");
+            })
+        })
+        .expect_err("the panic goes on out of `main`");
+
+        let took = started.elapsed();
+        assert!(
+            took < left + Duration::from_secs(1),
+            "the teardown waited out what the hooks left, not the work ({BLOCKS_FOR:?}): took \
+             {took:?}",
+        );
+        assert_eq!(crate::panic_message(unwound.as_ref()), "main gave up");
+        logs.expect_one(crate::target::APP, ABANDONED);
+        logs.expect_one(
+            crate::target::APP,
+            "panicked where no unit of work contains it",
+        );
     }
 
     #[test]

@@ -85,6 +85,7 @@ mod net;
 mod opaque;
 pub mod operation_log;
 pub mod panic;
+pub mod problem;
 mod process_start;
 pub mod request_scope;
 pub mod target;
@@ -119,9 +120,10 @@ pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT};
 pub use module::{Collecting, DynamicModule, Module, Registering};
 pub use net::Net;
-pub use opaque::OPAQUE_CLIENT_MESSAGE;
+pub use opaque::{OPAQUE_CLIENT_MESSAGE, UNAVAILABLE_CLIENT_MESSAGE};
 pub use operation_log::Edge;
 pub use panic::panic_message;
+pub use problem::{Code, Problem, ToProblem};
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
 };

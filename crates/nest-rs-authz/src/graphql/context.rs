@@ -12,7 +12,7 @@ use crate::Ability;
 
 // `owner_type_id: None`: the ambient ability is framework-level. App principal
 // types go through `forward_principal!`, module-gated by the app's auth guard.
-nest_rs_graphql::inventory::submit! {
+nest_rs_core::inventory::submit! {
     GraphqlContextSeed {
         owner_type_id: || None,
         // The ability is the caller's, so it lives as long as the connection.

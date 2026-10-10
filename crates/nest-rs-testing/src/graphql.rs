@@ -100,7 +100,7 @@ impl GraphqlSocketBuilder {
             .get::<GraphqlConfig>()
             .map(|config| (*config).clone())
             .unwrap_or_default();
-        let executor = nest_rs_graphql::compose_schema(self.container, &config);
+        let executor = nest_rs_graphql::__private::compose_schema(self.container, &config);
         let (to_server, rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let client = tokio_stream_from(rx);
         let from_server = async_graphql::http::WebSocket::new(

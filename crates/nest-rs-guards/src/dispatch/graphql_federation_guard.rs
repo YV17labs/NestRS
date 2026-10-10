@@ -21,7 +21,7 @@ pub struct GlobalPoolFederationGuard {
 
 impl GlobalPoolFederationGuard {
     /// The factory `use_guards_global` seeds as
-    /// [`FederationGate`](nest_rs_graphql::FederationGate).
+    /// [`FederationGate`](nest_rs_graphql::__private::FederationGate).
     pub fn factory(container: &Container) -> Arc<dyn GraphqlFederationGuard> {
         Arc::new(Self {
             pool: GlobalPoolChain::resolve(container, "POST /graphql (federation)"),

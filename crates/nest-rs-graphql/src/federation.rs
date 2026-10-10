@@ -45,9 +45,6 @@ pub trait GraphqlFederationGuard: Send + Sync + 'static {
 
 /// Factory slot for the [`GraphqlFederationGuard`], seeded by `nest-rs-guards`'
 /// `use_guards_global` and invoked at mount.
-///
-/// **Internal ABI** — wired by the framework crates in lockstep.
-#[doc(hidden)]
 pub struct FederationGate(pub fn(&Container) -> Arc<dyn GraphqlFederationGuard>);
 
 /// Installs [`FederationExtension`] on the served schema.

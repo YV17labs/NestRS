@@ -130,8 +130,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     // A generic resolver has no single `TypeId`, so it cannot be a `providers` entry.
     let descriptor = if item.generics.params.is_empty() {
         quote! {
-            ::nest_rs_graphql::inventory::submit! {
-                ::nest_rs_graphql::ResolverDescriptor {
+            ::nest_rs_graphql::__private::inventory::submit! {
+                ::nest_rs_graphql::__private::ResolverDescriptor {
                     resolver: || ::core::any::TypeId::of::<#name>(),
                     name: #name_str,
                 }
@@ -581,7 +581,7 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
             syn::ReturnType::Default => sig.ident.span(),
         };
         let probe = quote_spanned! {span=>
-            ::nest_rs_graphql::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
+            ::nest_rs_graphql::__private::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
         };
         return quote! {{
             use ::nest_rs_core::__private::AnswerFallback as _;
@@ -1040,7 +1040,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                     ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
                                         __stream,
                                         move |__item| ::core::future::ready(
-                                            ::nest_rs_graphql::keep_masked_item(
+                                            ::nest_rs_graphql::__private::keep_masked_item(
                                                 #route_label_lit,
                                                 ::nest_rs_authz::graphql::masked_item_for::<
                                                     #action, #entity, _,
@@ -1105,7 +1105,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     #entity_attr
                     #gsig {
                         let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(#gctx);
-                        ::nest_rs_graphql::run_operation(
+                        ::nest_rs_graphql::__private::run_operation(
                             #role_lit,
                             __operation.name(),
                             #succeeded,
@@ -1337,7 +1337,7 @@ fn field_method(
             #(, #gql_args)*
         ) #output #where_clause {
             let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(__ctx);
-            ::nest_rs_graphql::run_operation(
+            ::nest_rs_graphql::__private::run_operation(
                 #role_lit,
                 __operation.name(),
                 #succeeded,
@@ -1539,14 +1539,14 @@ fn root_object(
             #(#methods)*
         }
 
-        ::nest_rs_graphql::inventory::submit! {
-            ::nest_rs_graphql::GraphqlResolverRegistration {
-                kind: ::nest_rs_graphql::GraphqlResolverKind::#variant,
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlResolverRegistration {
+                kind: ::nest_rs_graphql::__private::GraphqlResolverKind::#variant,
                 resolver_name: #resolver_name,
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 entities: || ::std::vec![#(#entity_claims),*],
                 type_info: |__r| __r.#fake_type::<#obj>(),
-                build: |__c| ::nest_rs_graphql::GraphqlRootMember::#member(
+                build: |__c| ::nest_rs_graphql::__private::GraphqlRootMember::#member(
                     ::std::boxed::Box::new(
                         #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))
                     ),

@@ -1,6 +1,6 @@
 //! GraphQL support, mirroring HTTP's `#[controller]`/`#[routes]` model.
 //! `#[resolver]` builds from the container and registers `#[query]` /
-//! `#[mutation]` / `#[subscription]` in a link-time [`inventory`]; the schema
+//! `#[mutation]` / `#[subscription]` in a link-time registry; the schema
 //! composes itself at boot. Import [`GraphqlModule`] to serve it over HTTP,
 //! subscriptions included: the same path carries `POST` and the graphql-ws socket.
 //!
@@ -34,34 +34,37 @@ mod subscription;
 pub mod unit;
 
 pub use config::GraphqlConfig;
-pub use context::{BoxFuture, FallbackOperationGuard, GraphqlOperationGuard, GraphqlVariablePipe};
+pub use context::{BoxFuture, GraphqlOperationGuard};
 pub use context::{GraphqlContextSeed, SeedLifetime};
 pub use error::{FIELD_ERRORS_EXTENSION, pipe_error};
-pub use federation::{FederationGate, GraphqlFederationGuard};
+pub use federation::GraphqlFederationGuard;
 pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
-pub use loader::{GraphqlLoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use opaque::Opaque;
 pub use operation::GraphqlOperationContext;
-#[doc(hidden)]
-pub use operation::run_operation;
-#[doc(hidden)]
-pub use operation::{IsStreamReturn, answers_a_stream};
-pub use resolver::{
-    GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
-    GraphqlSubscriptionObject, ResolverDescriptor,
-};
 pub use scope::Scoped;
+
 #[doc(hidden)]
-pub use subscription::compose_schema;
-#[doc(hidden)]
-pub use subscription::keep_masked_item;
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::context::{FallbackOperationGuard, GraphqlVariablePipe};
+    pub use crate::federation::FederationGate;
+    pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
+    pub use crate::operation::{IsStreamReturn, answers_a_stream, run_operation};
+    pub use crate::resolver::{
+        GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
+        GraphqlSubscriptionObject, ResolverDescriptor,
+    };
+    pub use crate::subscription::{compose_schema, keep_masked_item};
+
+    pub use inventory;
+}
 
 pub use async_graphql;
 pub use async_graphql_poem;
 pub use async_trait::async_trait;
-#[doc(hidden)]
-pub use inventory;
 // For `#[crud]`-generated ops, so the consumer needs no nest-rs-pipes dependency.
 pub use nest_rs_pipes::{MaybeValidateFallback, ValidateProbe};
 

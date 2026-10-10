@@ -42,8 +42,7 @@ impl<'a> GraphqlOperationContext<'a> {
     }
 
     /// The operation a federation root field is about to run.
-    #[doc(hidden)]
-    pub fn federation(ctx: &'a ExtensionContext<'a>, field: &'static str) -> Self {
+    pub(crate) fn federation(ctx: &'a ExtensionContext<'a>, field: &'static str) -> Self {
         Self {
             site: Site::Federation { ctx, field },
         }
@@ -102,7 +101,6 @@ impl<'a> GraphqlOperationContext<'a> {
 /// The line files `ok` or `error` on return, `cancelled` when dropped first, and
 /// `panic` when it unwinds — caught only to be named, then resumed. A sibling
 /// torn down by that unwind files `cancelled`: one panic is one `panic` line.
-#[doc(hidden)]
 pub async fn run_operation<T, F>(
     role: &'static str,
     operation: &str,
@@ -202,7 +200,6 @@ impl Drop for OperationLine<'_> {
 /// A `#[subscription]`'s answer, accepted only when it is a value — a stream.
 /// async-graphql's subscription derive reads a fallible return by its spelling,
 /// so a `Result` under another name is refused here.
-#[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "a `#[subscription]` answers a stream, and this one returns a `Result` spelled \
                another way",
@@ -215,5 +212,4 @@ pub trait IsStreamReturn {}
 impl IsStreamReturn for nest_rs_core::__private::ValueAnswer {}
 
 /// Accept a `#[subscription]`'s answer — see [`IsStreamReturn`].
-#[doc(hidden)]
 pub fn answers_a_stream<K: IsStreamReturn>(_: K) {}

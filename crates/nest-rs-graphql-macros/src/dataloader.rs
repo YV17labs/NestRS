@@ -121,8 +121,8 @@ fn dataloader_for_method(
         }
 
         #(#cfgs)*
-        ::nest_rs_graphql::inventory::submit! {
-            ::nest_rs_graphql::GraphqlLoaderRegistration {
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlLoaderRegistration {
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 seed: |__container, __batches, __request| {
                     let __loader = <#loader_name>::from_container(__container);
@@ -131,7 +131,7 @@ fn dataloader_for_method(
                     __request.data(
                         ::nest_rs_graphql::async_graphql::dataloader::DataLoader::new(
                             __loader,
-                            ::nest_rs_graphql::batch_spawner(__container, __batches),
+                            ::nest_rs_graphql::__private::batch_spawner(__container, __batches),
                         ),
                     )
                 },

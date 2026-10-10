@@ -79,17 +79,11 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
 /// Factory slot for the fallback [`GraphqlOperationGuard`], seeded by
 /// `nest-rs-guards`' `use_guards_global` so a missing authz bridge still leaves
 /// operations gated by the global pool.
-///
-/// **Internal ABI** — wired by the framework crates in lockstep.
-#[doc(hidden)]
 pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperationGuard>);
 
 /// Bridge slot for global pipes on GraphQL operation **variables**, seeded by
 /// `nest-rs-guards`' `use_pipes_global` with a fold of every
 /// [`GlobalPipe::transform_graphql_variables`](nest_rs_pipes::GlobalPipe).
-///
-/// **Internal ABI** — wired by the framework crates in lockstep.
-#[doc(hidden)]
 pub struct GraphqlVariablePipe(
     pub fn(&Container, &mut serde_json::Value) -> Result<(), nest_rs_pipes::PipeError>,
 );
@@ -480,7 +474,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 #[macro_export]
 macro_rules! forward_principal {
     ($ty:ty) => {
-        $crate::inventory::submit! {
+        $crate::__private::inventory::submit! {
             $crate::GraphqlContextSeed {
                 owner_type_id: || ::core::option::Option::None,
                 lifetime: $crate::SeedLifetime::Connection,

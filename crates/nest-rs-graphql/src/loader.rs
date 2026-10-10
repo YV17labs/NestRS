@@ -21,9 +21,10 @@ use nest_rs_http::DetachedWork;
 
 /// One DataLoader registration, module-gated by its owner's reachability:
 /// `container.get::<Owner>()` would panic at request time otherwise.
-#[doc(hidden)]
 pub struct GraphqlLoaderRegistration {
+    /// The `#[dataloader]` owner's type, read against the reachable providers.
     pub owner_type_id: fn() -> TypeId,
+    /// Attach the owner's loaders to the request's data.
     pub seed: fn(&Container, &DetachedWork, Request) -> Request,
 }
 
@@ -50,7 +51,8 @@ pub trait GraphqlBatchContext: Send + Sync + 'static {
     fn spawner(&self) -> GraphqlBatchSpawner;
 }
 
-#[doc(hidden)]
+/// The spawner a request's DataLoader batches run through: the bound
+/// [`GraphqlBatchContext`]'s, else a bare `tokio::spawn`, filed under `batches`.
 pub fn batch_spawner(container: &Container, batches: &DetachedWork) -> GraphqlBatchSpawner {
     let inner = match container.get_dyn::<dyn GraphqlBatchContext>() {
         Some(ctx) => ctx.spawner(),

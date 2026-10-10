@@ -31,7 +31,7 @@ impl HttpGuard for TagGuard {}
 #[resolver]
 struct TagResolver;
 
-nest_rs_graphql::inventory::submit! {
+nest_rs_core::inventory::submit! {
     GraphqlContextSeed {
         lifetime: SeedLifetime::Connection,
         owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),

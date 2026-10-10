@@ -32,11 +32,13 @@ use nest_rs_core::{Container, ReachableProviders};
 use crate::config::GraphqlConfig;
 
 /// Which root a resolver's methods contribute to.
-#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GraphqlResolverKind {
+    /// The `Query` root.
     Query,
+    /// The `Mutation` root.
     Mutation,
+    /// The `Subscription` root.
     Subscription,
 }
 
@@ -52,8 +54,8 @@ impl GraphqlResolverKind {
 
 /// Object-safe view of a code-first resolver (`ContainerType` is not), blanket
 /// implemented for every `#[Object]` type.
-#[doc(hidden)]
 pub trait GraphqlResolverObject: Send + Sync {
+    /// Resolve one field of this root, as `ContainerType::resolve_field` does.
     fn resolve_field<'a>(
         &'a self,
         ctx: &'a Context<'a>,
@@ -89,8 +91,9 @@ impl<T: ContainerType + Send + Sync> GraphqlResolverObject for T {
 /// Object-safe view of a code-first **subscription** resolver
 /// ([`SubscriptionType`], answering with a stream), blanket implemented for
 /// every `#[Subscription]` type.
-#[doc(hidden)]
 pub trait GraphqlSubscriptionObject: Send + Sync {
+    /// The stream one subscription field answers, as
+    /// `SubscriptionType::create_field_stream` does.
     fn create_field_stream<'a>(
         &'a self,
         ctx: &'a Context<'_>,
@@ -107,7 +110,6 @@ impl<T: SubscriptionType> GraphqlSubscriptionObject for T {
 }
 
 /// What a registration builds: the two root shapes async-graphql distinguishes.
-#[doc(hidden)]
 pub enum GraphqlRootMember {
     /// A `#[query]` / `#[mutation]` root object.
     Object(Box<dyn GraphqlResolverObject>),
@@ -116,11 +118,8 @@ pub enum GraphqlRootMember {
 }
 
 /// One `#[resolver]` struct linked into the binary, submitted by the struct
-/// half of the pair, so [`unreachable_resolvers`] sees even one carrying no
-/// operations.
-///
-/// **Internal ABI** — macro-constructed, lockstep with this crate.
-#[doc(hidden)]
+/// half of the pair, so the unreachable-resolver boot warning sees even one
+/// carrying no operations.
 pub struct ResolverDescriptor {
     /// `TypeId` of the `#[resolver]` struct, matched against reachable modules'
     /// `providers = [...]` to decide whether the resolver is under the contract.
@@ -145,12 +144,13 @@ pub(crate) fn unreachable_resolvers(container: &Container) -> Vec<&'static str> 
 
 /// One generated resolver object, submitted by `#[operations]` and
 /// module-gated by `resolver_type_id`.
-#[doc(hidden)]
 pub struct GraphqlResolverRegistration {
+    /// The root this object contributes to.
     pub kind: GraphqlResolverKind,
     /// The resolver struct name (`UsersResolver`), logged beside each mounted
     /// operation at boot.
     pub resolver_name: &'static str,
+    /// The resolver struct's type, read against the reachable providers.
     pub resolver_type_id: fn() -> TypeId,
     /// One `(method, resolved GraphQL type name)` per `#[entity]` this
     /// registration declares — empty for a root that declares none.
@@ -158,7 +158,9 @@ pub struct GraphqlResolverRegistration {
     /// Read back at boot against what the registry keyed: `Registry::add_keys`
     /// returns silently when the type is neither an object nor an interface.
     pub entities: fn() -> Vec<(&'static str, String)>,
+    /// Register the object's type, as async-graphql's `OutputType` does.
     pub type_info: fn(&mut Registry) -> MetaType,
+    /// Build the root object from the assembled container.
     pub build: fn(&Container) -> GraphqlRootMember,
 }
 

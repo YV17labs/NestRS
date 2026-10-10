@@ -4,9 +4,9 @@ error[E0277]: a `#[subscription]` answers a stream, and this one returns a `Resu
 19 |     async fn ticks(&self) -> Fallible<BoxStream<'static, i32>> {
    |                              ^^^^^^^^ a `Result` under another name
    |
-   = help: the trait `nest_rs::nest_rs_graphql::IsStreamReturn` is not implemented for `nest_rs::nest_rs_core::__private::ResultAnswer`
+   = help: the trait `nest_rs::nest_rs_graphql::__private::IsStreamReturn` is not implemented for `nest_rs::nest_rs_core::__private::ResultAnswer`
    = note: write it `Result<impl Stream<Item = T>, E>`: async-graphql reads a fallible return by its spelling — `Result` or `FieldResult` — and takes any other for the stream itself
-note: required by a bound in `nest_rs::nest_rs_graphql::answers_a_stream`
+note: required by a bound in `nest_rs::nest_rs_graphql::__private::answers_a_stream`
   --> $WORKSPACE/crates/nest-rs-graphql/src/operation.rs
    |
    | pub fn answers_a_stream<K: IsStreamReturn>(_: K) {}

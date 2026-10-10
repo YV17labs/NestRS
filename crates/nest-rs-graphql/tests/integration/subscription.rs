@@ -184,13 +184,14 @@ async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
 fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
     let logs = LogCapture::install();
 
-    let kept = nest_rs_graphql::keep_masked_item("subscription ticks", Ok(Some(7)));
+    let kept = nest_rs_graphql::__private::keep_masked_item("subscription ticks", Ok(Some(7)));
     assert_eq!(kept, Some(7), "a granted item is pushed unchanged");
 
-    let refused: Option<i32> = nest_rs_graphql::keep_masked_item("subscription ticks", Ok(None));
+    let refused: Option<i32> =
+        nest_rs_graphql::__private::keep_masked_item("subscription ticks", Ok(None));
     assert!(refused.is_none(), "an item outside the grant is dropped");
 
-    let failed: Option<i32> = nest_rs_graphql::keep_masked_item(
+    let failed: Option<i32> = nest_rs_graphql::__private::keep_masked_item(
         "subscription ticks",
         Err(async_graphql::Error::new("value did not reconcile")),
     );

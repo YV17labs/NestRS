@@ -20,7 +20,7 @@ use crate::dispatch::deny_http;
 use crate::dispatch::{GlobalPoolFederationGuard, GlobalPoolOperationGuard};
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
-use nest_rs_graphql::{FallbackOperationGuard, FederationGate, GraphqlVariablePipe};
+use nest_rs_graphql::__private::{FallbackOperationGuard, FederationGate, GraphqlVariablePipe};
 #[cfg(feature = "mcp")]
 use nest_rs_mcp::FallbackMcpGuard;
 #[cfg(feature = "ws")]

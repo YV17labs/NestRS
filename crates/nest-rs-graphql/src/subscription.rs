@@ -32,7 +32,6 @@ use crate::context::OperationBridge;
 /// The composed schema as a bare [`Executor`], as the mount serves it: a
 /// graphql-ws driver ([`async_graphql::http::WebSocket`]) takes an executor,
 /// not a URL, so a test subscriber needs this.
-#[doc(hidden)]
 pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Executor + 'static {
     crate::redact::Redacted(crate::resolver::build_schema(
         container,
@@ -44,7 +43,6 @@ pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Exec
 /// Keep or drop one masked subscription item, called per item by the
 /// `#[subscription]` expansion: a refused row is dropped at `debug`; a mask
 /// failure is dropped at `warn`, since an item has no error channel.
-#[doc(hidden)]
 pub fn keep_masked_item<T>(
     operation: &'static str,
     masked: Result<Option<T>, async_graphql::Error>,

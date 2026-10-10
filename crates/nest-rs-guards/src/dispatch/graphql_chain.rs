@@ -8,8 +8,9 @@
 //! The cell, the sources and the composition live in [`chain`](super::chain).
 
 use nest_rs_core::Container;
+use nest_rs_graphql::__private::FederationGate;
+use nest_rs_graphql::GraphqlOperationContext;
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
-use nest_rs_graphql::{FederationGate, GraphqlOperationContext};
 
 use crate::dispatch::chain::{GlobalBucket, SiteChainCell, SiteChainSources};
 use crate::dispatch::denial_convert::denial_to_graphql_error;

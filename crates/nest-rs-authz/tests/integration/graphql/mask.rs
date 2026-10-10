@@ -432,7 +432,7 @@ fn ids(items: &[serde_json::Value]) -> Vec<i64> {
 #[tokio::test]
 async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     let app = boot().await;
-    let schema = nest_rs_graphql::compose_schema(
+    let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
     );
@@ -493,7 +493,7 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
 #[tokio::test]
 async fn a_caller_with_no_grant_is_refused_at_subscribe() {
     let app = boot().await;
-    let schema = nest_rs_graphql::compose_schema(
+    let schema = nest_rs_graphql::__private::compose_schema(
         app.container().clone(),
         &nest_rs_graphql::GraphqlConfig::default(),
     );

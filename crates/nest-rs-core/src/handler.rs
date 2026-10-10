@@ -16,38 +16,32 @@ use crate::operation_log::Unit;
 /// host in one value — and reads its metadata through
 /// [`reflector`](Self::reflector).
 pub struct Handler {
-    unit: Unit,
-    host: TypeId,
-    host_name: &'static str,
-    method: &'static str,
-    address: &'static str,
-    posture: Posture,
-    meta: fn() -> MetaLevels,
+    declared: HandlerDeclaration,
     levels: OnceLock<MetaLevels>,
 }
 
 impl Handler {
     /// The unit of work this site runs as.
     pub fn unit(&self) -> Unit {
-        self.unit
+        self.declared.unit
     }
 
     /// The host provider's type: a controller, resolver, gateway, MCP host,
     /// processor, scheduled or listener host, or the mounting module's type
     /// for a self-mount.
     pub fn host(&self) -> TypeId {
-        self.host
+        self.declared.host
     }
 
     /// The host's type name, as its decorator wrote it.
     pub fn host_name(&self) -> &'static str {
-        self.host_name
+        self.declared.host_name
     }
 
     /// The Rust method dispatched to; empty for a framework endpoint (a
     /// self-mount, the fallback).
     pub fn method(&self) -> &'static str {
-        self.method
+        self.declared.method
     }
 
     /// What the decorator declared a client addresses: the route template as
@@ -55,12 +49,12 @@ impl Handler {
     /// WS event, the MCP tool or prompt, the queue, the job, the event type,
     /// the mount path.
     pub fn address(&self) -> &'static str {
-        self.address
+        self.declared.address
     }
 
     /// Who the site's declaration says may call it.
     pub fn posture(&self) -> Posture {
-        self.posture
+        self.declared.posture
     }
 
     /// Reads what was declared on this site.
@@ -71,18 +65,19 @@ impl Handler {
     /// The site's metadata, built by its declaration on the first read and
     /// kept for the process.
     fn levels(&self) -> &MetaLevels {
-        self.levels.get_or_init(self.meta)
+        self.levels.get_or_init(self.declared.meta)
     }
 }
 
 impl fmt::Debug for Handler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let declared = &self.declared;
         f.debug_struct("Handler")
-            .field("unit", &self.unit.name())
-            .field("host", &self.host_name)
-            .field("method", &self.method)
-            .field("address", &self.address)
-            .field("posture", &self.posture)
+            .field("unit", &declared.unit.name())
+            .field("host", &declared.host_name)
+            .field("method", &declared.method)
+            .field("address", &declared.address)
+            .field("posture", &declared.posture)
             .finish_non_exhaustive()
     }
 }
@@ -133,7 +128,7 @@ impl<'a> Reflector<'a> {
 
     /// The site's [`Posture`].
     pub fn posture(&self) -> Posture {
-        self.handler.posture
+        self.handler.posture()
     }
 
     /// Whether the site is `#[public]`.
@@ -172,24 +167,9 @@ pub struct HandlerDeclaration {
 }
 
 /// The [`Handler`] a declaration describes, in a `static`.
-pub const fn declare_handler(declaration: HandlerDeclaration) -> Handler {
-    let HandlerDeclaration {
-        unit,
-        host,
-        host_name,
-        method,
-        address,
-        posture,
-        meta,
-    } = declaration;
+pub const fn declare_handler(declared: HandlerDeclaration) -> Handler {
     Handler {
-        unit,
-        host,
-        host_name,
-        method,
-        address,
-        posture,
-        meta,
+        declared,
         levels: OnceLock::new(),
     }
 }

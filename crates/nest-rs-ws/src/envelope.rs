@@ -89,9 +89,9 @@ impl WsError {
     /// The frame a [`PipeError`] answers: its message, and its field-level
     /// detail under `errors` when it has some.
     fn from_pipe(rejection: &PipeError) -> Self {
-        match rejection.details() {
-            Some(details) => Self::with_details(rejection.message(), details.clone()),
-            None => Self::new(rejection.message()),
+        Self {
+            error: rejection.message().to_owned(),
+            errors: rejection.details().cloned(),
         }
     }
 }

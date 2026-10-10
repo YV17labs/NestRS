@@ -328,14 +328,7 @@ impl DecodeError {
     /// assert_eq!(report.to_string(), "invalid type: a string, expected u64 at line 1 column 16");
     /// ```
     pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
-        let mut link = Some(error);
-        while let Some(current) = link {
-            if let Some(report) = Self::of(current) {
-                return Some(report);
-            }
-            link = current.source();
-        }
-        None
+        std::iter::successors(Some(error), |&link| link.source()).find_map(Self::of)
     }
 
     /// `link` as the report it is, when it is a decode failure — serde_json's

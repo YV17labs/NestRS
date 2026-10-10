@@ -133,7 +133,7 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
     let required = (!scopes.is_empty()).then(|| scopes.to_vec());
     let retry_after = denial.retry_after_secs();
     GraphqlError::new(client_message(&denial)).extend_with(move |_, e| {
-        e.set("code", code);
+        e.set(nest_rs_graphql::CODE_EXTENSION, code);
         if let Some(required) = required {
             e.set("requiredScopes", required);
         }

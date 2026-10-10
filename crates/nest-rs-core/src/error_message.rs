@@ -96,14 +96,8 @@ pub(crate) mod __private {
     pub fn find_in_chain<'e, T: Error + 'static>(
         error: &'e (dyn Error + 'static),
     ) -> Option<&'e T> {
-        let mut link = Some(error);
-        while let Some(current) = link {
-            if let Some(found) = current.downcast_ref::<T>() {
-                return Some(found);
-            }
-            link = current.source();
-        }
-        None
+        std::iter::successors(Some(error), |&link| link.source())
+            .find_map(|link| link.downcast_ref::<T>())
     }
 }
 

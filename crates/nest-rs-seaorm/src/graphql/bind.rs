@@ -1,6 +1,8 @@
 use nest_rs_authz::ActionMarker;
-use nest_rs_core::Container;
-use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
+use nest_rs_core::problem::code;
+use nest_rs_core::{Container, Problem};
+use nest_rs_graphql::async_graphql::{Context, Error, Result};
+use nest_rs_graphql::problem_error;
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
@@ -16,12 +18,9 @@ use crate::{Access, Authorized, CrudService};
 )]
 pub fn parse_v7(id: &str) -> Result<Uuid> {
     let invalid = || {
-        Error::new(nest_rs_core::UUID_V7_REQUIRED).extend_with(|_, e| {
-            e.set(
-                nest_rs_graphql::CODE_EXTENSION,
-                nest_rs_core::problem::code::INVALID_ARGUMENT.as_str(),
-            );
-        })
+        problem_error(
+            &Problem::new(400, code::INVALID_ARGUMENT).with_detail(nest_rs_core::UUID_V7_REQUIRED),
+        )
     };
     let parsed = Uuid::parse_str(id).map_err(|_| invalid())?;
     if parsed.get_version_num() != 7 {
@@ -38,12 +37,7 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
         error = %nest_rs_core::error_message(err),
         "by-id access load failed",
     );
-    Error::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE).extend_with(|_, e| {
-        e.set(
-            nest_rs_graphql::CODE_EXTENSION,
-            nest_rs_core::problem::code::INTERNAL.as_str(),
-        );
-    })
+    problem_error(&Problem::new(500, code::INTERNAL))
 }
 
 /// Turn a by-id argument into the loaded, authorized entity (the resolver
@@ -112,9 +106,6 @@ fn not_found_to_err<A: ActionMarker, E: EntityTrait>(
 ) -> Result<Authorized<A, E>> {
     match model {
         Some(model) => Ok(Authorized::new(model)),
-        None => Err(nest_rs_graphql::problem_error(&nest_rs_core::Problem::new(
-            404,
-            nest_rs_core::problem::code::NOT_FOUND,
-        ))),
+        None => Err(problem_error(&Problem::new(404, code::NOT_FOUND))),
     }
 }

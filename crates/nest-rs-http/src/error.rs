@@ -391,7 +391,9 @@ impl HttpError {
         let chain: Option<&(dyn Error + 'static)> = match &self.0.cause {
             Cause::Anyhow(error) => Some(error.as_ref()),
             Cause::Error(error) => Some(&**error),
-            _ => None,
+            Cause::Status | Cause::Response(_) | Cause::Typed { .. } | Cause::Wrapped { .. } => {
+                None
+            }
         };
         let Some(chain) = chain else {
             return self.into_response();

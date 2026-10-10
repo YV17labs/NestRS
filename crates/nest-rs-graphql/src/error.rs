@@ -14,12 +14,14 @@
 //!
 //! An error that is none of these — a `Display` type that is no
 //! `std::error::Error` — does not compile.
+//!
+//! [`OPAQUE_CLIENT_MESSAGE`]: nest_rs_core::OPAQUE_CLIENT_MESSAGE
 
 use std::error::Error as StdError;
 
 use async_graphql::{Error, ErrorExtensions};
 use nest_rs_core::problem::code;
-use nest_rs_core::{DecodeError, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
+use nest_rs_core::{DecodeError, Problem, ToProblem};
 use nest_rs_pipes::PipeError;
 
 /// The extension member carrying field-level validation errors — the name
@@ -91,8 +93,7 @@ pub(crate) fn opaque_error(error: &(dyn StdError + 'static)) -> Error {
         "graphql operation failed",
     );
     // The `INTERNAL` code an internal denial carries, so the two are indistinguishable.
-    Error::new(OPAQUE_CLIENT_MESSAGE)
-        .extend_with(|_, e| e.set(CODE_EXTENSION, code::INTERNAL.as_str()))
+    rendered(&Problem::new(500, code::INTERNAL))
 }
 
 /// Tiers 3 and 4: the framework vocabulary `error`'s chain carries, else the
@@ -107,8 +108,9 @@ fn chain_error(error: &(dyn StdError + 'static)) -> Error {
         return pipe_error(rejection);
     }
     if let Some(report) = DecodeError::in_chain(error) {
-        return Error::new(report.to_string())
-            .extend_with(|_, e| e.set(CODE_EXTENSION, code::INVALID_ARGUMENT.as_str()));
+        return rendered(
+            &Problem::new(400, code::INVALID_ARGUMENT).with_detail(report.to_string()),
+        );
     }
     opaque_error(error)
 }
@@ -155,6 +157,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
+
     use super::*;
 
     fn extensions(err: &Error) -> serde_json::Value {

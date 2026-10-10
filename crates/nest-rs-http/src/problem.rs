@@ -346,9 +346,9 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
     let problem = source
         .and_then(nest_rs_core::__private::find_in_chain::<Problem>)
         .cloned();
-    let withheld = (problem.is_none() && err.status().is_server_error())
-        .then(|| source.map(nest_rs_core::error_message))
-        .flatten();
+    let withheld = source
+        .filter(|_| problem.is_none() && err.status().is_server_error())
+        .map(nest_rs_core::error_message);
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
     if let Some(query) = err.downcast_ref::<ParseQueryError>() {
@@ -360,14 +360,12 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         let body = resp.take_body();
         if !body.is_empty() {
             let (parts, _) = resp.into_parts();
-            let mut answer = match (problem, withheld) {
-                (Some(problem), _) => {
-                    crate::poem_bridge::response_to_poem(problem_response(&problem))
-                }
-                (None, chain) => {
+            let mut answer = match problem {
+                Some(problem) => crate::poem_bridge::response_to_poem(problem_response(&problem)),
+                None => {
                     tracing::error!(
                         target: crate::target::HTTP,
-                        error = %chain.unwrap_or_default(),
+                        error = %withheld.unwrap_or_default(),
                         "request failed",
                     );
                     replacing(ProblemDetails::from_status(parts.status), &parts.headers)

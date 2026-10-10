@@ -262,11 +262,13 @@ impl Problem {
     /// assert_eq!(failed.client_message(), OPAQUE_CLIENT_MESSAGE);
     /// ```
     pub fn client_message(&self) -> Cow<'static, str> {
-        match (self.status, self.detail()) {
-            (503, _) => Cow::Borrowed(UNAVAILABLE_CLIENT_MESSAGE),
-            (500..=599, _) => Cow::Borrowed(OPAQUE_CLIENT_MESSAGE),
-            (_, Some(detail)) => Cow::Owned(detail.to_owned()),
-            (_, None) => Cow::Owned(self.code.in_words()),
+        match self.status {
+            503 => Cow::Borrowed(UNAVAILABLE_CLIENT_MESSAGE),
+            500..=599 => Cow::Borrowed(OPAQUE_CLIENT_MESSAGE),
+            _ => self
+                .detail
+                .clone()
+                .unwrap_or_else(|| Cow::Owned(self.code.in_words())),
         }
     }
 }

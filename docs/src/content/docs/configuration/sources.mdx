@@ -123,13 +123,14 @@ resolves the real process environment first, then falls back to the `.env`
 cascade parsed into a map *inside the crate* — `std::env::set_var` is unsound
 against a concurrent `getenv` on another thread, so no read path may write.
 
-One function publishes the cascade into the process environment:
-`Environment::init()`, which every scaffolded `main` calls on its first line.
-It exists for the consumers that only know `std::env::var` and never see a
+One step publishes the cascade into the process environment:
+`#[nest_rs::main]` runs it before your `main`, before the runtime exists. It
+exists for the consumers that only know `std::env::var` and never see a
 `ConfigService` — the framework's own `<PREFIX>_LOG*` setup,
 `OpenTelemetry::init`, your `migrate`/`seed` binaries. It writes set-if-absent
-(the real env still wins) and belongs at the top of `main` precisely because
-being single-threaded there is what makes the write sound.
+(the real env still wins), and it runs before the runtime precisely because a
+process with one thread is what makes the write sound. A binary without
+`#[nest_rs::main]` calls `load_cascade` itself, first thing.
 
 What this means in practice:
 
@@ -138,7 +139,7 @@ What this means in practice:
   `for_root`'s collect registers the active `Environment` and stops there.
 - **`TestApp::builder()` *does* publish the cascade.** The e2e harness reads
   backend URLs through `std::env` before any `ConfigService` exists, so it calls
-  `load_cascade` (the explicit form of what `Environment::init` does) once per
+  `load_cascade` (the explicit form of what `#[nest_rs::main]` does) once per
   process. The merge is bounded — set-if-absent, real env still wins, and
   `.env.local` is skipped under `<PREFIX>_ENV=test` — and a `for_root` pin still
   outranks every cascade value. Reach for `with_source` (or `.provide(cfg)`)

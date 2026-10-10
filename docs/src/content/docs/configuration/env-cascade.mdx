@@ -95,37 +95,29 @@ prod behavior, for instance), the cascade follows that.
 
 ## When the load happens
 
-Exactly once per process, on the first call that needs it:
+Exactly once per process, before your `main` runs:
 
-- **The default `EnvSource`** parses it on its first `get` — so the first
-  config read of the boot, in the factory phase. A
+- **`#[nest_rs::main]`** parses it **and merges it into `std::env`**
+  (set-if-absent, so the real environment still wins) before it builds the
+  runtime, while the process still has one thread. Everything `main` does
+  therefore sees the cascade, including the many consumers that only know
+  `std::env::var`: `<PREFIX>_LOG` / `<PREFIX>_LOG_FORMAT` /
+  `<PREFIX>_LOG_SOURCE_LOCATION` in `.env.development` reach the logging setup,
+  which reads the process environment long before a `ConfigService` exists, and
+  `OTEL_*` reaches the OpenTelemetry SDK. Your `main` writes no line for it.
+- **The default `EnvSource`** reads that same parse. A
   [custom `ConfigSource`](/configuration/sources/) never does; it supplies its
   own values.
 - **`ConfigModule::for_root()`** does *not* parse it. Its collect reads
   `<PREFIX>_ENV` from the real environment and registers the resulting
-  `Arc<Environment>`, which is what decides *which* files a later parse
-  reads.
-- **`Environment::init()`** parses it **and merges it into `std::env`**
-  (set-if-absent, so the real environment still wins). Everything the
-  scaffolded `main` does afterwards therefore sees the cascade, including the
-  many consumers that only know `std::env::var`.
-
-That last one is why the scaffold calls it on line one of `main`:
-
-```rust title="apps/blog/src/main.rs"
-let _environment = Environment::init();
-```
-
-Without it, `<PREFIX>_LOG` / `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION`
-in `.env.development` would be inert — the logging setup reads the process
-environment directly, long before a `ConfigService` exists. The same goes for
-any binary of yours that reads `std::env::var` at startup.
+  `Arc<Environment>`, which is what decides *which* files the parse read.
 
 <Aside type="caution">
-`Environment::init()` writes to the process environment, and `std::env::set_var`
-is unsound if it races a read on another thread. Call it at the top of `main`,
-before the runtime spawns anything — never from a task. A tool that only needs a
-database connection can skip it entirely and use
+A binary that does not run on `#[nest_rs::main]` calls
+`nest_rs::config::load_cascade(dir, environment)` itself, as its first line:
+`std::env::set_var` is unsound if it races a read on another thread, so it
+belongs before any runtime or thread exists — never in a task. A tool that only
+needs a database connection can skip it and use
 [`nest_rs::seaorm::connect_from_env()`](/database/migrations/#run-them), which
 routes through `ConfigService` and writes nothing.
 </Aside>

@@ -14,8 +14,9 @@ use crate::environment::Environment;
 /// [`provide_feature`](Self::provide_feature) is the primitive both route
 /// through.
 ///
-/// Config reads see the `.env` cascade without any import; [`Environment::init`]
-/// at the top of `main` also publishes it into `std::env` for non-config readers.
+/// Config reads see the `.env` cascade without any import; `#[nest_rs::main]`
+/// also publishes it into `std::env`, before the runtime exists, for readers
+/// that know only the process environment.
 pub struct ConfigModule;
 
 impl ConfigModule {

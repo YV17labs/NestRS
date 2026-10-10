@@ -146,15 +146,12 @@ crates, no collision — the app only ever names the `…HttpModule` edge.
 
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
-use nest_rs::config::Environment;
 use nest_rs::core::App;
 
 use blog::BlogModule;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
-
     App::builder()
         .module::<BlogModule>()
         .build()

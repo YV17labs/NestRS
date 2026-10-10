@@ -18,6 +18,7 @@ mod lifecycle;
 mod module;
 mod net;
 mod panic;
+mod process_start;
 mod way_down;
 
 use std::io::{BufRead, BufReader, Read};

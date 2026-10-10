@@ -311,8 +311,8 @@ pub struct AppModule;
   profile, read from `<PREFIX>_ENV` — so a provider can inject it and branch. It
   writes nothing to the process environment, and its position among the imports
   carries no meaning: every module's `collect` runs before any config factory.
-  What makes the `.env` cascade readable is `Environment::init()` at the top of
-  `main`, which `nestrs new` scaffolds; see
+  What puts the `.env` cascade in the process environment is
+  `#[nest_rs::main]`, before your `main` runs; see
   [alternative sources](/configuration/sources/#what-fails-if-you-get-it-wrong--hermeticity-and-the-cascade).
 - **`ConfigModule::for_feature::<C>()`** queues a factory in the boot's
   factory phase. The factory calls `C::load()` (= `from_env` over

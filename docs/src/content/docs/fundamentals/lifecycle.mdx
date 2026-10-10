@@ -227,8 +227,12 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-It builds the same runtime `#[tokio::main]` does — tokio's multi-threaded one,
-sized by `TOKIO_WORKER_THREADS` — and tears it down differently. Dropping a
+Before it builds anything it installs the
+[panic hook](/opentelemetry/logs/#a-panic-is-said-once-without-its-value) and
+publishes the [`.env` cascade](/configuration/env-cascade/#when-the-load-happens)
+while the process has one thread. It builds the same runtime `#[tokio::main]`
+does — tokio's multi-threaded one, sized by `TOKIO_WORKER_THREADS` — and tears
+it down differently. Dropping a
 runtime waits for every blocking task still running, so under `#[tokio::main]`
 a hook abandoned while it waited on a `spawn_blocking` (a synchronous client
 wrapped the usual way, a `tokio::fs` call) held the exit for as long as that

@@ -171,3 +171,74 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
         Ok(())
     });
 }
+
+/// What `main`'s first line finds: the kernel published the cascade before the
+/// runtime existed, so a binary calls nothing for it. A child process, since
+/// the cascade is read once per process, from where it runs.
+mod published_before_main {
+    use std::process::Command;
+
+    const CHILD_ROLE: &str = "NEST_RS_CONFIG_CASCADE_CHILD";
+
+    const CHILD_TEST: &str = "dotenv::published_before_main::cascade_child_process";
+
+    #[nest_rs_core::main]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "what `std::env` holds on `main`'s first line is the assertion"
+    )]
+    async fn print_what_main_finds() {
+        for name in ["CASCADE_PROBE", "CASCADE_DEPLOYED"] {
+            println!("{name}={}", std::env::var(name).unwrap_or_default());
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the parent test hands the child its role through the environment"
+    )]
+    fn cascade_child_process() {
+        if std::env::var(CHILD_ROLE).is_ok() {
+            print_what_main_finds();
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn main_reads_the_cascade_on_its_first_line_and_the_deployment_still_wins() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "CASCADE_PROBE=1\nCASCADE_DEPLOYED=from_file\n")?;
+
+            let child = Command::new(std::env::current_exe().expect("the test binary"))
+                .args(["--exact", CHILD_TEST, "--nocapture"])
+                .current_dir(jail.directory())
+                .env(CHILD_ROLE, "1")
+                .env("CASCADE_DEPLOYED", "from_deployment")
+                .env_remove("CASCADE_PROBE")
+                .output()
+                .expect("the child runs");
+
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            assert!(child.status.success(), "{stdout}");
+            assert!(
+                stdout.lines().any(|line| line == "CASCADE_PROBE=1"),
+                "{stdout}"
+            );
+            assert!(
+                stdout
+                    .lines()
+                    .any(|line| line == "CASCADE_DEPLOYED=from_deployment"),
+                "the deployment's value wins over the file's: {stdout}",
+            );
+            Ok(())
+        });
+    }
+}

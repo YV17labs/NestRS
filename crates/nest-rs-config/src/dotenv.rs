@@ -8,8 +8,10 @@
 //!
 //! The cascade is parsed once into an in-crate map that `env_var` consults under
 //! the real process env, so resolving config **never mutates the process
-//! environment** (`set_var` is unsound against a concurrent `getenv`). The one
-//! writer is `load_cascade`, called single-threaded at startup only.
+//! environment** (`set_var` is unsound against a concurrent `getenv`). Two
+//! callers write it, each while the process has one thread: the step
+//! `#[nest_rs::main]` runs before the runtime exists, and `load_cascade`, for a
+//! binary without it.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -139,15 +141,36 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
 /// Merge the `.env` cascade rooted at `dir` into the **process environment**
 /// (set-if-absent — real env wins), for consumers reading raw `std::env::var`.
 ///
+/// `#[nest_rs::main]` already does this before the runtime exists; a binary
+/// without it calls this first thing.
+///
 /// Call it only single-threaded, before any task reads the environment: it
 /// runs `std::env::set_var`.
+///
+/// ```no_run
+/// use nest_rs_config::{Environment, load_cascade};
+///
+/// fn main() {
+///     load_cascade(std::path::Path::new("."), Environment::from_env());
+///     // Only now start a runtime, or any other thread.
+/// }
+/// ```
 pub fn load_cascade(dir: &Path, env: Environment) {
     publish(&cascade_map(dir, env));
 }
 
 /// Publish the cascade already parsed into the in-crate map.
-pub(crate) fn publish_dotenv_values() {
+fn publish_dotenv_values() {
     publish(dotenv_values());
+}
+
+// Runs from `#[nest_rs::main]` before the runtime is built, which is the
+// precondition `publish`'s `set_var` rests on.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::ProcessStart {
+        name: "nest_rs::config::cascade",
+        run: publish_dotenv_values,
+    }
 }
 
 /// Names this process wrote into `std::env` **from a cascade file** — the real
@@ -183,8 +206,9 @@ fn publish(values: &HashMap<String, String>) {
             published.insert(key.clone());
         }
         // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`.
-        // Config resolution never reaches here, and every caller of
-        // `load_cascade` runs single-threaded before any task reads the env.
+        // Config resolution never reaches here. The process step runs from
+        // `#[nest_rs::main]` before the runtime is built, so no other thread
+        // exists in a binary; `load_cascade`'s caller promises the same.
         #[expect(
             unsafe_code,
             reason = "set_var before any thread reads the environment, per the SAFETY note above"

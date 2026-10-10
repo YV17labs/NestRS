@@ -89,15 +89,12 @@ pub use module::{{module}};
 "#;
 
 pub(crate) const APP_MAIN: &str = r#"use anyhow::Result;
-use nest_rs::config::Environment;
 use nest_rs::core::App;
 
 use {{snake}}::{{module}};
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
-
     App::builder()
         .module::<{{module}}>()
         .build()

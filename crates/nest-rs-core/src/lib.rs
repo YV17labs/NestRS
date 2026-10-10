@@ -84,6 +84,7 @@ mod net;
 mod opaque;
 pub mod operation_log;
 pub mod panic;
+mod process_start;
 pub mod request_scope;
 pub mod target;
 pub mod trace_context;
@@ -148,6 +149,7 @@ pub mod __private {
     pub use crate::module::__private::{dynamic_import_module, module_registered};
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
     pub use crate::panic::__private::{Unwound, unwound};
+    pub use crate::process_start::ProcessStart;
     pub use crate::trace_context::__private::{
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,

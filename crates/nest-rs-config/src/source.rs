@@ -75,7 +75,7 @@ fn real_env_var_from(name: &str, read: Result<String, env::VarError>) -> Option<
 }
 
 /// Read `name` from the **deployment** — the real process environment minus
-/// anything `Environment::init` merged in from a cascade file, which would
+/// anything the kernel merged in from a cascade file before `main`, which would
 /// otherwise outrank a `for_root` pin.
 pub(crate) fn deployment_env_var(name: &str) -> Option<String> {
     if crate::dotenv::published_from_cascade(name) {
@@ -122,14 +122,13 @@ impl ConfigSource for EnvSource {
         env_var(var)
     }
 
-    /// The real process environment only, minus what `Environment::init` merged
-    /// in from the cascade.
+    /// The real process environment only, minus what the cascade merged in.
     fn get_from_deployment(&self, var: &str) -> Option<String> {
         deployment_env_var(var)
     }
 
     /// Present in the real process environment, empty included, and not merged
-    /// there from the cascade by `Environment::init`.
+    /// there from the cascade.
     #[expect(
         clippy::disallowed_methods,
         reason = "the config loader is the one reader of the process environment"

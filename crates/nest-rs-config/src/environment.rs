@@ -24,24 +24,6 @@ pub enum Environment {
 }
 
 impl Environment {
-    /// Parse the `.env` cascade and merge it into the **process environment**
-    /// (set-if-absent), for every consumer that reads `std::env::var` —
-    /// `<PREFIX>_LOG*`, `OpenTelemetry::init`, a `migrate` binary,
-    /// [`Environment::declared`]. Call it at the top of `main`; calling it twice
-    /// is harmless.
-    ///
-    /// # Threading
-    ///
-    /// The merge writes through `std::env::set_var`, which is unsound only when
-    /// it races a concurrent `getenv` on another thread. Calling this at the top
-    /// of `main` — before the runtime spawns anything — discharges that
-    /// obligation; calling it from a spawned task does not.
-    pub fn init() -> Self {
-        let env = Self::from_env();
-        crate::dotenv::publish_dotenv_values();
-        env
-    }
-
     /// Read the active environment from `<PREFIX>_ENV` (real process env only).
     #[expect(
         clippy::print_stderr,
@@ -154,40 +136,6 @@ mod tests {
         assert_eq!(declare(Some("dev")), Some(Environment::Development));
         assert_eq!(declare(Some("test")), Some(Environment::Test));
         assert_eq!(declare(Some("production")), Some(Environment::Production));
-    }
-
-    #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the test asserts what init wrote into the process environment"
-    )]
-    fn init_publishes_the_cascade_into_the_process_env() {
-        figment::Jail::expect_with(|jail| {
-            jail.create_file(".env", "CASCADE_INIT_A=base\nCASCADE_INIT_B=base")?;
-            jail.create_file(".env.development", "CASCADE_INIT_B=dev")?;
-            jail.set_env(Environment::var_name(), "development");
-            jail.set_env("CASCADE_INIT_C", "from_real_env");
-            jail.create_file(".env.development.local", "CASCADE_INIT_C=from_file")?;
-
-            assert_eq!(Environment::init(), Environment::Development);
-
-            assert_eq!(std::env::var("CASCADE_INIT_A").unwrap(), "base");
-            assert_eq!(
-                std::env::var("CASCADE_INIT_B").unwrap(),
-                "dev",
-                "the cascade's precedence carries into the process env",
-            );
-            assert_eq!(
-                std::env::var("CASCADE_INIT_C").unwrap(),
-                "from_real_env",
-                "set-if-absent: the real environment still wins",
-            );
-            Ok(())
-        });
     }
 
     #[test]

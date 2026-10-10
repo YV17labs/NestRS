@@ -113,6 +113,21 @@ mod tests {
         );
     }
 
+    /// `#[nest_rs::main]` publishes the `.env` cascade before the runtime
+    /// exists, so a scaffolded `main` writes no line for it.
+    #[test]
+    fn no_scaffolded_main_publishes_the_cascade_itself() {
+        let calls: Vec<String> = sources()
+            .into_iter()
+            .filter(|(_, src)| src.contains("Environment::init"))
+            .map(|(file, _)| file)
+            .collect();
+        assert!(
+            calls.is_empty(),
+            "`Environment::init` is gone — the kernel publishes the cascade: {calls:?}",
+        );
+    }
+
     /// `CLAUDE.md`: a log line carries at least one field.
     ///
     /// Matches the macro-call shape (`tracing::<level>!(target: …`), so prose

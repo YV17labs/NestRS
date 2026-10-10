@@ -21,7 +21,7 @@ whether you type it, not how the compiler resolves it.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[module]` | struct | Composes a binary: lists `providers` it owns and `imports` it depends on | [Modules](/fundamentals/modules/) |
-| `#[nest_rs::main]` | `main` function | Builds the runtime and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Lifecycle](/fundamentals/lifecycle/#the-way-down) |
+| `#[nest_rs::main]` | `main` function | Installs the panic hook and publishes the `.env` cascade before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Lifecycle](/fundamentals/lifecycle/#the-way-down) |
 | `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/) |
 | `#[inject]` | field | Resolves the field from the container at construction | [Providers](/fundamentals/providers/) |
 | `#[hooks]` | impl block | Orchestrates lifecycle methods on a provider | [Lifecycle](/fundamentals/lifecycle/) |

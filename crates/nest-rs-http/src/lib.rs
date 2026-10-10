@@ -4,11 +4,16 @@
 //! endpoint another surface declares (a GraphQL schema, an MCP service — each
 //! via [`HttpEndpointMeta`]), and any extra endpoint registered with
 //! [`HttpTransport::mount`].
+//!
+//! Its vocabulary names no server library: the `http` crate's head types,
+//! re-exported here as their one path, and nestrs's own [`Request`],
+//! [`Response`], [`Body`], [`HttpError`] and [`Endpoint`].
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod access_log;
 mod allow;
+mod body;
 mod boot_check;
 pub mod challenge;
 mod client_ip;
@@ -23,7 +28,7 @@ mod edge;
 mod endpoint;
 mod error;
 mod fallback;
-mod header;
+mod headers;
 mod interceptor;
 mod link;
 mod location;
@@ -33,22 +38,143 @@ mod module;
 mod multipart;
 mod opaque;
 mod pipe;
+mod poem_bridge;
 mod problem;
 mod raw_body;
 mod reflector;
+mod request;
+mod response;
 mod response_body;
 mod scope;
 mod security_headers;
 mod shaper;
 mod sse;
 pub mod target;
+#[cfg(test)]
+mod testing;
 mod tls;
 mod trace_context;
 mod transport;
 pub mod unit;
 mod versioning;
 
+/// A cheaply cloned, shared slice of bytes.
+///
+/// ```
+/// use nest_rs_http::Bytes;
+///
+/// assert_eq!(Bytes::from_static(b"abc").slice(1..), "bc");
+/// ```
+pub use bytes::Bytes;
+/// Typed values riding with a request, a response or an error.
+///
+/// ```
+/// use nest_rs_http::Extensions;
+///
+/// let mut extensions = Extensions::new();
+/// extensions.insert(5_u8);
+/// assert_eq!(extensions.get::<u8>(), Some(&5));
+/// ```
+pub use http::Extensions;
+/// A multimap of header names to values.
+///
+/// ```
+/// use nest_rs_http::{HeaderMap, HeaderValue, header};
+///
+/// let mut headers = HeaderMap::new();
+/// headers.append(header::VARY, HeaderValue::from_static("origin"));
+/// assert_eq!(headers[header::VARY], "origin");
+/// ```
+pub use http::HeaderMap;
+/// A header name, lowercase.
+///
+/// ```
+/// use nest_rs_http::HeaderName;
+///
+/// assert_eq!(HeaderName::from_static("x-request-id").as_str(), "x-request-id");
+/// ```
+pub use http::HeaderName;
+/// A header value: bytes a header may carry, not necessarily text.
+///
+/// ```
+/// use nest_rs_http::HeaderValue;
+///
+/// assert_eq!(HeaderValue::from_static("no-store"), "no-store");
+/// assert!(HeaderValue::from_bytes(b"caf\xe9").is_ok());
+/// ```
+pub use http::HeaderValue;
+/// A request method (RFC 9110 §9).
+///
+/// ```
+/// use nest_rs_http::Method;
+///
+/// assert!(Method::GET.is_safe());
+/// ```
+pub use http::Method;
+/// A response status (RFC 9110 §15).
+///
+/// ```
+/// use nest_rs_http::StatusCode;
+///
+/// assert!(StatusCode::NOT_FOUND.is_client_error());
+/// ```
+pub use http::StatusCode;
+/// A request target: path and query, or an absolute URI.
+///
+/// ```
+/// use nest_rs_http::Uri;
+///
+/// assert_eq!(Uri::from_static("/users?page=2").query(), Some("page=2"));
+/// ```
+pub use http::Uri;
+/// An HTTP protocol version.
+///
+/// ```
+/// use nest_rs_http::Version;
+///
+/// assert_ne!(Version::HTTP_11, Version::HTTP_2);
+/// ```
+pub use http::Version;
+/// The `http` crate's header module: every standard header name as a constant.
+///
+/// ```
+/// use nest_rs_http::header;
+///
+/// assert_eq!(header::CONTENT_TYPE.as_str(), "content-type");
+/// ```
+pub use http::header;
+/// A request's head as the `http` crate holds it, which
+/// [`Request::head`] exposes.
+///
+/// ```
+/// use nest_rs_http::{Method, Request, RequestParts};
+///
+/// let request = Request::builder().finish();
+/// let head: &RequestParts = request.head();
+/// assert_eq!(head.method, Method::GET);
+/// ```
+pub use http::request::Parts as RequestParts;
+/// A response's head as the `http` crate holds it, which
+/// [`Response::into_parts`] hands back.
+///
+/// ```
+/// use nest_rs_http::{Response, ResponseParts, StatusCode};
+///
+/// let (head, _): (ResponseParts, _) = Response::builder().finish().into_parts();
+/// assert_eq!(head.status, StatusCode::OK);
+/// ```
+pub use http::response::Parts as ResponseParts;
+/// A URI scheme: what a request arrived over.
+///
+/// ```
+/// use nest_rs_http::Scheme;
+///
+/// assert_eq!(Scheme::HTTPS.as_str(), "https");
+/// ```
+pub use http::uri::Scheme;
+
 pub use allow::{AllowedMethods, MethodTable};
+pub use body::Body;
 pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
@@ -62,9 +188,10 @@ pub use deprecation::DeprecationMeta;
 #[doc(hidden)]
 pub use deprecation::deprecated_route;
 pub use detached::DetachedWork;
-pub use endpoint::{EdgePosture, HttpEndpointMeta};
+pub use endpoint::{BoxEndpoint, EdgePosture, Endpoint, HttpEndpointMeta, endpoint_fn};
+pub use error::{BodyError, HttpError, ResponseError, Result};
 pub use fallback::HttpFallbackMeta;
-pub use header::Header;
+pub use headers::Header;
 pub use link::set_next_link;
 pub use location::{caller_path, set_created_location};
 pub use matched::{Matched, matched};
@@ -78,6 +205,8 @@ pub use pipe::{IntoInner, Piped, Valid};
 pub use problem::{ProblemDetails, normalize_error_response};
 pub use raw_body::{RawBody, current_body_limit};
 pub use reflector::Reflector;
+pub use request::{FromRequest, Request, RequestBody, RequestBuilder};
+pub use response::{IntoResponse, Response, ResponseBuilder};
 pub use response_body::OpenEndedBody;
 pub use scope::Scoped;
 pub use security_headers::HttpSecurityHeaders;
@@ -101,9 +230,25 @@ pub use controller::{SchemaFn, schema_of};
 #[doc(hidden)]
 pub use endpoint::SelfMountGuardWrap;
 #[doc(hidden)]
+pub use endpoint::with_data;
+#[doc(hidden)]
 pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 #[doc(hidden)]
+pub use response::IntoResult;
+#[doc(hidden)]
 pub use shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+
+/// Converts between this crate's HTTP vocabulary and poem's, losing nothing
+/// either way, while the transport moves onto the vocabulary. Called by this
+/// framework's crates while poem is still on the public surface; not API, and
+/// removed with it.
+#[doc(hidden)]
+pub mod __poem_bridge {
+    pub use crate::poem_bridge::{
+        body_from_poem, body_to_poem, error_from_poem, error_to_poem, from_poem, request_from_poem,
+        request_from_poem_at, request_to_poem, response_from_poem, response_to_poem, to_poem,
+    };
+}
 
 pub use poem;
 // The stream vocabulary an `#[sse]` route is built from.

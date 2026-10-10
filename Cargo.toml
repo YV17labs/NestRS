@@ -57,6 +57,8 @@ http = "1.5"
 
 http-body = "1.1"
 http-body-util = "0.1"
+hyper = { version = "1.12", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 
 bytes = "1.12"
 futures-util = "0.3"

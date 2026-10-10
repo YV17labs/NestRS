@@ -17,7 +17,7 @@ mod exclusive_paths;
 mod fail_secure;
 mod fallback;
 mod global_prefix;
-mod header;
+mod headers;
 mod input;
 mod opaque;
 mod pipe;

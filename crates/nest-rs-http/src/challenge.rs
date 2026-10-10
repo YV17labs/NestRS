@@ -3,8 +3,7 @@
 use poem::Response;
 use poem::http::{HeaderValue, header};
 
-/// The scheme name, matched case-insensitively per RFC 7235 §2.1.
-pub const BEARER: &str = "Bearer";
+pub use crate::problem::BEARER;
 
 /// RFC 6750 §3.1's `invalid_request` — the request is malformed as a
 /// credential-bearing request (a repeated parameter, more than one method used

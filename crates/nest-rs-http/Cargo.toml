@@ -48,6 +48,13 @@ bytes.workspace = true
 # public `From<Body>` / `From<BoxBody>` impls convert through.
 http-body.workspace = true
 http-body-util.workspace = true
+# The vocabulary's head, status, method and headers are the `http` crate's own,
+# re-exported as their one path.
+http.workspace = true
+# hyper puts an upgrade request's `OnUpgrade` in its extensions; the poem bridge
+# clones it by type so both sides of a crossing can take the upgraded socket.
+hyper.workspace = true
+thiserror.workspace = true
 # TLS material is handed to poem's listener as a *stream* of configs, so a
 # renewed certificate swaps in without rebuilding the listener; `stream::unfold`
 # + `chain` is what turns the watched PEM pair into one.
@@ -102,6 +109,9 @@ reqwest.workspace = true
 # against the composition that defeated it rather than against a hand-set header.
 flate2.workspace = true
 futures-util.workspace = true
+# The upgrade tests serve one HTTP/1.1 connection over an in-memory pipe, so the
+# request carries hyper's real `OnUpgrade`.
+hyper-util.workspace = true
 
 [lints]
 workspace = true

@@ -1,12 +1,163 @@
+//! [`Endpoint`], what answers a request, and the metadata a surface mounts
+//! one with.
+
+use std::any::Any;
 use std::borrow::Cow;
+use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
 use nest_rs_core::Container;
-use poem::Response;
 use poem::Route;
-use poem::endpoint::BoxEndpoint;
 
 use crate::detached::DetachedWork;
+use crate::error::Result;
+use crate::request::Request;
+use crate::response::Response;
+
+/// Anything that answers a request: a route, a self-mounted surface, a layer
+/// around another endpoint.
+///
+/// ```
+/// use nest_rs_http::{Endpoint, Request, Response, Result};
+///
+/// struct Hello;
+///
+/// impl Endpoint for Hello {
+///     async fn call(&self, _req: Request) -> Result<Response> {
+///         Ok(Response::builder().body("hello"))
+///     }
+/// }
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+///
+/// let response = Hello.call(Request::builder().finish()).await?;
+/// assert_eq!(response.into_body().into_string().await?, "hello");
+/// # Ok(())
+/// # }
+/// ```
+pub trait Endpoint: Send + Sync + 'static {
+    /// Answers `req`.
+    fn call(&self, req: Request) -> impl Future<Output = Result<Response>> + Send;
+}
+
+/// The object-safe twin [`BoxEndpoint`] erases through.
+trait DynEndpoint: Send + Sync + 'static {
+    fn call_boxed(&self, req: Request) -> BoxFuture<'_, Result<Response>>;
+}
+
+impl<E: Endpoint> DynEndpoint for E {
+    fn call_boxed(&self, req: Request) -> BoxFuture<'_, Result<Response>> {
+        Box::pin(self.call(req))
+    }
+}
+
+/// A type-erased endpoint, cloned by one `Arc` count: what a table and a wrap
+/// hold.
+///
+/// ```
+/// use nest_rs_http::{BoxEndpoint, Endpoint, Request, Response, endpoint_fn};
+///
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let endpoints = [
+///     BoxEndpoint::new(endpoint_fn(|_req| async { Ok(Response::builder().body("a")) })),
+///     BoxEndpoint::new(endpoint_fn(|_req| async { Ok(Response::builder().body("b")) })),
+/// ];
+/// let second = endpoints[1].clone().call(Request::builder().finish()).await?;
+/// assert_eq!(second.into_body().into_string().await?, "b");
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct BoxEndpoint(Arc<dyn DynEndpoint>);
+
+impl BoxEndpoint {
+    /// `endpoint`, erased; one already boxed is kept as it is.
+    ///
+    /// ```
+    /// use nest_rs_http::{BoxEndpoint, Response, endpoint_fn};
+    ///
+    /// let boxed = BoxEndpoint::new(endpoint_fn(|_req| async { Ok(Response::default()) }));
+    /// let again = BoxEndpoint::new(boxed);
+    /// ```
+    pub fn new(endpoint: impl Endpoint) -> Self {
+        if let Some(boxed) = (&endpoint as &dyn Any).downcast_ref::<Self>() {
+            return boxed.clone();
+        }
+        Self(Arc::new(endpoint))
+    }
+}
+
+impl Endpoint for BoxEndpoint {
+    fn call(&self, req: Request) -> impl Future<Output = Result<Response>> + Send {
+        self.0.call_boxed(req)
+    }
+}
+
+impl fmt::Debug for BoxEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxEndpoint").finish_non_exhaustive()
+    }
+}
+
+/// An endpoint from an async function, as tower's and hyper's `service_fn`.
+///
+/// ```
+/// use nest_rs_http::{Endpoint, Request, Response, StatusCode, endpoint_fn};
+///
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let gone = endpoint_fn(|_req: Request| async {
+///     Ok(Response::builder().status(StatusCode::GONE).finish())
+/// });
+/// assert_eq!(gone.call(Request::builder().finish()).await?.status(), StatusCode::GONE);
+/// # Ok(())
+/// # }
+/// ```
+pub fn endpoint_fn<F, Fut>(f: F) -> impl Endpoint
+where
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Response>> + Send + 'static,
+{
+    EndpointFn(f)
+}
+
+struct EndpointFn<F>(F);
+
+impl<F, Fut> Endpoint for EndpointFn<F>
+where
+    F: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Response>> + Send + 'static,
+{
+    fn call(&self, req: Request) -> impl Future<Output = Result<Response>> + Send {
+        (self.0)(req)
+    }
+}
+
+/// `endpoint`, with `value` in every request's extensions: the per-route data
+/// `#[meta]` and `#[public]` attach.
+#[doc(hidden)]
+pub fn with_data<E, T>(endpoint: E, value: T) -> impl Endpoint
+where
+    E: Endpoint,
+    T: Clone + Send + Sync + 'static,
+{
+    WithData { endpoint, value }
+}
+
+struct WithData<E, T> {
+    endpoint: E,
+    value: T,
+}
+
+impl<E: Endpoint, T: Clone + Send + Sync + 'static> Endpoint for WithData<E, T> {
+    fn call(&self, mut req: Request) -> impl Future<Output = Result<Response>> + Send {
+        req.extensions_mut().insert(self.value.clone());
+        self.endpoint.call(req)
+    }
+}
 
 type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 
@@ -165,9 +316,9 @@ impl HttpEndpointMeta {
     }
 }
 
-type GuardWrapFn = dyn Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndpoint<'static, Response>
-    + Send
-    + Sync;
+type PoemBoxEndpoint = poem::endpoint::BoxEndpoint<'static, poem::Response>;
+
+type GuardWrapFn = dyn Fn(&Container, PoemBoxEndpoint) -> PoemBoxEndpoint + Send + Sync;
 
 /// Discovery metadata that wraps a single [`EdgePosture::Guarded`] self-mount
 /// with the global guard chain, provided by `nest-rs-guards`'
@@ -178,21 +329,14 @@ impl SelfMountGuardWrap {
     /// Wrap a guarded self-mount's endpoint in the global guard chain.
     pub fn new<F>(wrap: F) -> Self
     where
-        F: Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndpoint<'static, Response>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&Container, PoemBoxEndpoint) -> PoemBoxEndpoint + Send + Sync + 'static,
     {
         Self(Arc::new(wrap))
     }
 
     /// Wrap `endpoint` with the global guard chain — a denial rejects the
     /// request at this self-mount's edge.
-    pub fn apply(
-        &self,
-        container: &Container,
-        endpoint: BoxEndpoint<'static, Response>,
-    ) -> BoxEndpoint<'static, Response> {
+    pub fn apply(&self, container: &Container, endpoint: PoemBoxEndpoint) -> PoemBoxEndpoint {
         (self.0)(container, endpoint)
     }
 }
@@ -200,6 +344,44 @@ impl SelfMountGuardWrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct Public;
+
+    #[tokio::test]
+    async fn with_data_hands_the_value_to_every_request() {
+        let seen = endpoint_fn(|req: Request| async move {
+            let marked = req.extensions().get::<Public>().is_some();
+            Ok(Response::builder().body(if marked { "public" } else { "unmarked" }))
+        });
+        let endpoint = with_data(seen, Public);
+        for _ in 0..2 {
+            let response = endpoint.call(Request::builder().finish()).await.unwrap();
+            assert_eq!(response.into_body().into_string().await.unwrap(), "public");
+        }
+    }
+
+    #[test]
+    fn a_boxed_endpoint_is_kept_as_it_is() {
+        let boxed = BoxEndpoint::new(endpoint_fn(|_req| async { Ok(Response::default()) }));
+        let again = BoxEndpoint::new(boxed.clone());
+        assert!(
+            Arc::ptr_eq(&boxed.0, &again.0),
+            "no second box around the first"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_endpoints_error_reaches_the_caller() {
+        let refusing = BoxEndpoint::new(endpoint_fn(|_req| async {
+            Err(crate::HttpError::from_status(http::StatusCode::FORBIDDEN))
+        }));
+        let refused = refusing
+            .call(Request::builder().finish())
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status(), http::StatusCode::FORBIDDEN);
+    }
 
     fn meta() -> HttpEndpointMeta {
         HttpEndpointMeta::new("/ws", "ws", |_c, r| r)

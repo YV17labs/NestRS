@@ -5,11 +5,16 @@
 //! [`normalize_error_response`] lifts any leftover plain-text transport error (an
 //! unmounted-route 404, a 413) onto the same `application/problem+json` envelope.
 
+use http::{HeaderValue, StatusCode, header};
 use nest_rs_core::DecodeError;
 use poem::error::{ParseQueryError, ResponseError};
-use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 use serde::Serialize;
+
+// Defined beside the 401 that carries it, so `ProblemDetails` reaches no
+// poem-typed file; `challenge` re-exports it as RFC 6750's grammar.
+/// The scheme name, matched case-insensitively per RFC 7235 §2.1.
+pub const BEARER: &str = "Bearer";
 
 /// Body of an `application/problem+json` response. `type` is the only field a
 /// client may key on, so the constructors' URIs are stable across releases.
@@ -59,6 +64,24 @@ impl ProblemDetails {
             detail: Some(DecodeError::redact(&err.to_string(), Some(err)).into_owned()),
             instance: None,
             extensions: serde_json::Map::new(),
+        }
+    }
+
+    /// The problem an error answers with `status`: the status's own problem,
+    /// whose `detail` on a `4xx` is `error`'s sentence said without any value
+    /// it quotes ([`DecodeError::redact`]), and which a `5xx` answers without
+    /// one, so a driver's message never reaches the wire.
+    pub(crate) fn answering(status: StatusCode, error: &(dyn std::error::Error + 'static)) -> Self {
+        let problem = Self::from_status(status);
+        if !status.is_client_error() {
+            return problem;
+        }
+        let sentence = error.to_string();
+        let said = DecodeError::redact(sentence.trim(), Some(error));
+        if said.is_empty() {
+            problem
+        } else {
+            problem.with_detail(said.into_owned())
         }
     }
 
@@ -257,11 +280,16 @@ fn is_raw_text(resp: &Response) -> bool {
 }
 
 /// An `Err` as the response it renders: poem's own rendering, except that a raw
-/// text body says each decode failure in the error's chain without its value.
+/// text body says each decode failure in the error's chain without its value,
+/// and an [`HttpError`](crate::HttpError) answers as it renders itself.
 ///
 /// `Query<T>`'s rejection is transparent over its serde error, so that one is
 /// read off the type.
 pub(crate) fn render_error(err: poem::Error) -> Response {
+    let err = match crate::poem_bridge::render_carried(err) {
+        Ok(rendered) => return rendered,
+        Err(err) => err,
+    };
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
     if let Some(query) = err.downcast_ref::<ParseQueryError>() {
@@ -312,21 +340,37 @@ impl ResponseError for ProblemDetails {
     }
 
     fn as_response(&self) -> Response {
-        let body = serde_json::to_vec(self).unwrap_or_else(|_| b"{}".to_vec());
-        let mut builder = Response::builder()
-            .status(self.status)
-            .header(header::CONTENT_TYPE, "application/problem+json");
-        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge.
-        if self.status == StatusCode::UNAUTHORIZED {
-            builder = builder.header(header::WWW_AUTHENTICATE, "Bearer");
-        }
-        builder.body(body)
+        crate::poem_bridge::response_to_poem(crate::ResponseError::as_response(self))
     }
 }
 
 impl IntoResponse for ProblemDetails {
     fn into_response(self) -> Response {
         self.as_response()
+    }
+}
+
+impl crate::ResponseError for ProblemDetails {
+    fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    fn as_response(&self) -> crate::Response {
+        let body = serde_json::to_vec(self).unwrap_or_else(|_| b"{}".to_vec());
+        let mut builder = crate::Response::builder()
+            .status(self.status)
+            .content_type(HeaderValue::from_static("application/problem+json"));
+        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge.
+        if self.status == StatusCode::UNAUTHORIZED {
+            builder = builder.header(header::WWW_AUTHENTICATE, HeaderValue::from_static(BEARER));
+        }
+        builder.body(body)
+    }
+}
+
+impl crate::IntoResponse for ProblemDetails {
+    fn into_response(self) -> crate::Response {
+        crate::ResponseError::as_response(&self)
     }
 }
 

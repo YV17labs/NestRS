@@ -33,7 +33,7 @@ The reference entity lives at `crates/features/src/posts/entity.rs`.
 Copy it before inventing a second shape.
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -172,7 +172,7 @@ An exposed column whose type is your own enum passes through to the wire
 `async_graphql::Enum`, plus the `Clone`/`Copy`/`Eq` shape those require:
 
 ```rust title="crates/features/src/posts/entities/post.rs"
-use nest_rs::resource::{expose, wire_enum};
+use nest_rs::seaorm::{expose, wire_enum};
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -189,7 +189,7 @@ pub enum PostStatus {
 Each of those derives expands against the **call site's** prelude, so
 hand-writing them put `schemars` and `async-graphql` in your manifest for
 code you never wrote. The decorator routes them back through
-`nest-rs-resource` with a `crate = ` override, so your manifest names
+`nest-rs-seaorm` with a `crate = ` override, so your manifest names
 neither.
 
 It deliberately emits **nothing from SeaORM**: `EnumIter`,

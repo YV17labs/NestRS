@@ -21,7 +21,7 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
             // The route answers `200 []`, which reads as a business bug: the
             // event is the only place the cause shows.
             tracing::warn!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),
                 ?action,
                 scope = ?scope,
@@ -57,7 +57,7 @@ impl<E: EntityTrait> Repo<E> {
                  `LoaderScope as dyn GraphqlBatchContext`, and worker/cron jobs through \
                  SeaOrmDatabaseModule's JobContext — none of those is bound on this path";
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),
                 hint = HINT,
                 "no ambient database executor",
@@ -131,7 +131,7 @@ impl<E: EntityTrait> Repo<E> {
         E::Model: IntoActiveModel<E::ActiveModel>,
     {
         tracing::trace!(
-            target: crate::TARGET,
+            target: crate::target::ORM,
             entity = E::default().table_name(),
             "insert unscoped",
         );
@@ -279,7 +279,7 @@ mod tests {
             "the dataloader binding is one of the ones named: {detail}",
         );
 
-        let event = logs.expect_one(crate::TARGET, "no ambient database executor");
+        let event = logs.expect_one(crate::target::ORM, "no ambient database executor");
         assert_eq!(event.level, "error");
         assert!(
             event.field("entity").is_some_and(|e| e.contains("widget")),
@@ -341,7 +341,7 @@ mod tests {
         .await;
 
         let event = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "no ambient Ability outside a worker job — denying all rows",
         );
         assert_eq!(event.level, "warn");
@@ -361,7 +361,7 @@ mod tests {
         })
         .await;
         logs.expect_none(
-            crate::TARGET,
+            crate::target::ORM,
             "no ambient Ability outside a worker job — denying all rows",
         );
     }

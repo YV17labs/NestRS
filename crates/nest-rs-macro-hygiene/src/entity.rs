@@ -5,8 +5,7 @@
 //! satisfies — no `sea-orm` line.
 
 use nest_rs::core::__private::serde::{Deserialize, Serialize};
-use nest_rs::resource::expose;
-use nest_rs::seaorm::sea_orm;
+use nest_rs::seaorm::{expose, sea_orm};
 use sea_orm::entity::prelude::*;
 
 #[cfg_attr(

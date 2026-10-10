@@ -52,7 +52,7 @@ async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
 
     // The `500` is opaque: the event alone names the cause.
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "executor escaped into a spawned task",
     );
     assert_eq!(event.level, "error");
@@ -165,7 +165,7 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
     );
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "a statement failed inside this transaction but the boundary reported success; \
          nothing it wrote could be committed",
     );
@@ -259,7 +259,7 @@ async fn a_commit_the_database_refuses_fails_the_response_it_had_already_built()
         .expect("read the count");
     assert_eq!(landed, 0, "and nothing was written");
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "transaction commit failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction commit failed");
     assert_eq!(event.level, "error");
     assert!(
         event
@@ -303,7 +303,7 @@ async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assume
          could not be issued does not change what the request answered",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "transaction rollback failed");
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction rollback failed");
     assert_eq!(event.level, "error");
     assert!(
         event.field("error").is_some(),
@@ -338,7 +338,7 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
     );
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "poisoned transaction rollback failed",
     );
     assert_eq!(event.level, "error");
@@ -348,7 +348,7 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
         event.fields,
     );
     assert!(
-        logs.find(nest_rs_seaorm::TARGET, "transaction rollback failed")
+        logs.find(nest_rs_seaorm::target::ORM, "transaction rollback failed")
             .is_empty(),
         "and it is *this* line, not the failing-handler one: {:#?}",
         logs.events(),
@@ -451,7 +451,10 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         "SERIALIZABLE lets one through and refuses the other, got {left} and {right}",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "serialization conflict at commit");
+    let event = logs.expect_one(
+        nest_rs_seaorm::target::ORM,
+        "serialization conflict at commit",
+    );
     assert_eq!(
         event.level, "warn",
         "a conflict is the isolation level working, not an incident — filed at \
@@ -466,7 +469,7 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         event.fields,
     );
     assert!(
-        logs.find(nest_rs_seaorm::TARGET, "transaction commit failed")
+        logs.find(nest_rs_seaorm::target::ORM, "transaction commit failed")
             .is_empty(),
         "and it is not also filed as a plain commit failure: {:#?}",
         logs.events(),

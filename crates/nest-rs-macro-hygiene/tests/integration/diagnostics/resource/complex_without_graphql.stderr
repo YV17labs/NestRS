@@ -1,5 +1,0 @@
-error: `#[expose(complex)]` requires `graphql` — the wire DTO has no GraphQL object shape
-  --> tests/integration/diagnostics/resource/complex_without_graphql.rs:11:12
-   |
-11 | pub struct Model {
-   |            ^^^^^

@@ -129,7 +129,7 @@ impl LazyTransaction {
         if let Some(work) = refused {
             drop(work);
             tracing::warn!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 transport = self.transport,
                 outcome = "discarded",
                 "after-commit work registered on a boundary that has already settled; \
@@ -260,7 +260,7 @@ impl LazyTransaction {
                 let opened = escaped.is_opened();
                 drop(escaped);
                 tracing::error!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     transport,
                     opened,
                     outcome = escaped_outcome,
@@ -275,7 +275,7 @@ impl LazyTransaction {
             // A swallowed failed `BEGIN` is not "nothing to settle".
             if let Some(retryable) = poisoned {
                 tracing::error!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     transport,
                     outcome = "fail",
                     retryable,
@@ -291,7 +291,7 @@ impl LazyTransaction {
             Err(escaped) => {
                 drop(escaped);
                 tracing::error!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     transport,
                     opened = true,
                     outcome = escaped_outcome,
@@ -305,14 +305,14 @@ impl LazyTransaction {
         if let Some(retryable) = poisoned {
             if let Err(err) = txn.rollback().await {
                 tracing::error!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     transport,
                     error = %nest_rs_core::error_message(&err),
                     "poisoned transaction rollback failed"
                 );
             }
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 transport,
                 outcome = "rollback_and_fail",
                 retryable,
@@ -329,7 +329,7 @@ impl LazyTransaction {
         } else {
             if let Err(err) = txn.rollback().await {
                 tracing::error!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     transport,
                     error = %nest_rs_core::error_message(&err),
                     "transaction rollback failed"
@@ -371,7 +371,7 @@ async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, commi
     for work in held {
         if let Err(payload) = nest_rs_core::panic::contain(work).await {
             nest_rs_core::contained_panic!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 payload.as_ref(),
                 "after-commit work panicked; the transaction had already committed",
                 transport,
@@ -384,7 +384,7 @@ async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, commi
 fn report_discarded(transport: &'static str, discarded: usize) {
     if discarded > 0 {
         tracing::debug!(
-            target: crate::TARGET,
+            target: crate::target::ORM,
             transport,
             discarded,
             "after-commit work discarded: the boundary committed nothing",
@@ -409,7 +409,7 @@ impl Drop for AbandonedDuringSettle {
 
 fn report_abandoned(transport: &'static str) {
     tracing::warn!(
-        target: crate::TARGET,
+        target: crate::target::ORM,
         transport,
         outcome = "abandoned",
         "transaction abandoned without settling; its locks are held until the \
@@ -548,7 +548,7 @@ pub fn current_executor() -> Option<Executor> {
         Some(executor) => Some(executor.clone()),
         None => {
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 reason = "executor_downcast_miss",
                 "ambient executor is not a SeaORM Executor"
             );
@@ -741,7 +741,10 @@ mod ambient_tests {
         })
         .await;
 
-        let event = logs.expect_one(crate::TARGET, "ambient executor is not a SeaORM Executor");
+        let event = logs.expect_one(
+            crate::target::ORM,
+            "ambient executor is not a SeaORM Executor",
+        );
         assert_eq!(event.level, "error");
         assert_eq!(
             event.field("reason").as_deref(),
@@ -843,7 +846,7 @@ mod after_commit_tests {
 
         assert!(!ran.load(Ordering::SeqCst));
         let line = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "after-commit work discarded: the boundary committed nothing",
         );
         assert_eq!(line.level, "debug");
@@ -872,7 +875,7 @@ mod after_commit_tests {
         assert!(!before.load(Ordering::SeqCst));
         assert!(!after.load(Ordering::SeqCst));
         let refused = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "after-commit work registered on a boundary that has already settled; it will not run",
         );
         assert_eq!(refused.level, "warn");
@@ -898,7 +901,7 @@ mod after_commit_tests {
         assert!(matches!(outcome, FinalizeOutcome::NoTransaction));
         assert!(ran.load(Ordering::SeqCst), "the work after the panic ran");
         let line = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "after-commit work panicked; the transaction had already committed",
         );
         assert_eq!(line.level, "error");
@@ -922,7 +925,7 @@ mod after_commit_tests {
 
         assert!(!ran.load(Ordering::SeqCst));
         let line = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "after-commit work discarded: the boundary committed nothing",
         );
         assert_eq!(line.field("discarded").as_deref(), Some("1"));

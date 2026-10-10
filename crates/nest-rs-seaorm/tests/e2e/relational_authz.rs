@@ -215,7 +215,7 @@ async fn access_distinguishes_found_denied_and_missing() {
             );
             // `Denied` and `Missing` are the same 404 to the client: the event
             // alone tells them apart.
-            let denial = logs.expect_one(nest_rs_seaorm::TARGET, "access denied");
+            let denial = logs.expect_one(nest_rs_seaorm::target::ORM, "access denied");
             assert_eq!(denial.level, "warn");
             assert_eq!(denial.field("entity").as_deref(), Some("rel_item"));
             assert_eq!(denial.field("id"), Some(item_b.to_string()));
@@ -395,7 +395,7 @@ async fn a_list_that_hits_the_hard_cap_says_so() {
     );
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "list result truncated at the hard cap",
     );
     assert_eq!(event.level, "warn");

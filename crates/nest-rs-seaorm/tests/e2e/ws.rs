@@ -124,7 +124,7 @@ async fn an_ability_less_read_over_websockets_denies_loudly() {
     .await;
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "no ambient Ability outside a worker job — denying all rows",
     );
     assert_eq!(event.level, "warn");
@@ -298,7 +298,10 @@ async fn a_message_whose_commit_the_database_refuses_is_not_replied_to_as_a_succ
         "and nothing was written",
     );
 
-    let event = logs.expect_one(nest_rs_seaorm::TARGET, "dispatch transaction commit failed");
+    let event = logs.expect_one(
+        nest_rs_seaorm::target::ORM,
+        "dispatch transaction commit failed",
+    );
     assert_eq!(event.level, "error");
     assert_eq!(
         event.field("transport").as_deref(),

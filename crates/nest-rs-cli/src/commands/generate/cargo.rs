@@ -41,8 +41,8 @@ impl Dep {
 }
 
 pub(super) const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
-// `#[expose]` and `#[wire_enum]` ride `seaorm`: the `nest-rs-resource` and
-// `nest-rs-seaorm` expansions name each other's crate, so they are one feature.
+// `#[expose]` and `#[wire_enum]` are `nest_rs::seaorm`'s own decorators: an
+// entity needs `seaorm` alone, and no `http` until a controller serves it.
 pub(super) const RESOURCE: Dep = nest_rs(&["seaorm"]);
 pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
@@ -157,8 +157,8 @@ pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
 }
 
 /// What exposing an entity over GraphQL needs: `#[expose(graphql)]` derives the
-/// async-graphql object through `nest_rs_resource::graphql`, which that crate
-/// only compiles under its own `graphql` feature.
+/// async-graphql object through `nest_rs::seaorm`, which compiles that half
+/// only under the umbrella's `graphql` feature.
 pub(super) fn graphql_port_deps() -> Vec<&'static Dep> {
     vec![&RESOURCE, &GRAPHQL]
 }

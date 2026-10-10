@@ -1,5 +1,6 @@
-//! `nest-rs-seaorm`'s suite, against the dev container's Postgres: every test
-//! here needs the database, so the crate has no in-process suite.
+//! `nest-rs-seaorm`'s suite against the dev container's Postgres: every test
+//! here needs the database. What the decorators emit runs in process, in
+//! `tests/integration`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

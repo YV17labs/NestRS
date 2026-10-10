@@ -106,9 +106,6 @@ pub use nest_rs_filters as filters;
 #[cfg(feature = "exception-filters")]
 pub use nest_rs_exception_filters as exception_filters;
 
-#[cfg(feature = "seaorm")]
-pub use nest_rs_resource as resource;
-
 #[cfg(feature = "storage")]
 pub use nest_rs_storage as storage;
 
@@ -164,7 +161,7 @@ pub mod prelude {
     pub use nest_rs_queue::{processor, queue};
 
     #[cfg(feature = "seaorm")]
-    pub use nest_rs_resource::{expose, wire_enum};
+    pub use nest_rs_seaorm::{expose, wire_enum};
 
     #[cfg(feature = "schedule")]
     pub use nest_rs_schedule::scheduled;

@@ -194,7 +194,7 @@ A target is dotted, lowercase, and rooted at the crate that emits it:
 
 **Every string the framework interprets is a constant.** A literal target is a
 typo away from an event no filter selects. **The crate that owns the concern
-declares it** (`nest_rs_events::TARGET`, `nest_rs_seaorm::TARGET`): a central
+declares it** (`nest_rs_events::TARGET`, `nest_rs_seaorm::target::ORM`): a central
 table in the kernel would have `nest-rs-core` naming concerns it does not know
 exist. **Owns, not emits** — a concern several crates emit on is declared once
 by the crate the others already depend on and read from there. A crate owning

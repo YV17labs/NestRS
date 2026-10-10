@@ -6,7 +6,7 @@
 //! compiles at `entity.rs` or in `entities/`; its columns match what
 //! `nestrs g migration create_<name>` scaffolds.
 
-pub(crate) const ENTITY: &str = r#"use nest_rs::resource::expose;
+pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 

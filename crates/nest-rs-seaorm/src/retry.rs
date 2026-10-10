@@ -124,7 +124,7 @@ where
                 attempt += 1;
                 if attempt >= attempts {
                     tracing::warn!(
-                        target: crate::TARGET,
+                        target: crate::target::ORM,
                         attempt,
                         attempts,
                         error = %nest_rs_core::error_message(&err),
@@ -133,7 +133,7 @@ where
                     return Err(err);
                 }
                 tracing::warn!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     attempt,
                     attempts,
                     error = %nest_rs_core::error_message(&err),
@@ -355,13 +355,13 @@ mod tests {
         assert!(matches!(result, Err(DbErr::Exec(_))));
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
-        let retried = logs.expect_one(crate::TARGET, "transaction conflict — retrying");
+        let retried = logs.expect_one(crate::target::ORM, "transaction conflict — retrying");
         assert_eq!(retried.level, "warn");
         assert_eq!(retried.field("attempt").as_deref(), Some("1"));
         assert_eq!(retried.field("attempts").as_deref(), Some("2"));
 
         let exhausted = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "transaction conflict — retry budget exhausted",
         );
         assert_eq!(exhausted.level, "warn");

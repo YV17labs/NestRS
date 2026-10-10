@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn ensure_expose_graphql_flags_the_entity_not_its_fields() {
-        let src = "use nest_rs_resource::expose;\n\n#[expose(name = \"Post\", service = super::service::PostsService)]\n#[sea_orm::model]\npub struct Model {\n    #[expose(input(create, update))]\n    pub name: String,\n}\n";
+        let src = "use nest_rs::seaorm::expose;\n\n#[expose(name = \"Post\", service = super::service::PostsService)]\n#[sea_orm::model]\npub struct Model {\n    #[expose(input(create, update))]\n    pub name: String,\n}\n";
         let out = ensure_expose_graphql()(src).expect("flags the entity");
         assert!(
             out.contains("#[expose(graphql, name = \"Post\""),

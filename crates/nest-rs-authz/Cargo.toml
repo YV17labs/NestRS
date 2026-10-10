@@ -142,8 +142,9 @@ nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `::nest_rs_ws::` paths at the call site.
 nest-rs-ws = { path = "../nest-rs-ws" }
 # The `ws` module's example writes `#[expose]`, whose expansion implements this
-# crate's `WireModelDefaults`; path-only, since that crate's tests depend back here.
-nest-rs-resource = { path = "../nest-rs-resource" }
+# crate's `WireModelDefaults`. Path-only: seaorm depends on this crate, and only
+# a versionless dev-edge keeps that from being a cycle a publish cannot order.
+nest-rs-seaorm = { path = "../nest-rs-seaorm" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.

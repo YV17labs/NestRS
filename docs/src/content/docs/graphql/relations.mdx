@@ -20,7 +20,7 @@ relation cannot leak across orgs.
 ## The declaration
 
 ```rust title="crates/features/src/users/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 
 #[expose(name = "User", service = super::service::UsersService, graphql)]
@@ -301,7 +301,7 @@ bidirectional or multi-hop relations.
 Bidirectional and multi-hop graphs (`org ↔ membership ↔ user`) are resolved
 explicitly rather than guessed. Composite primary keys are refused at compile
 time (not a cryptic `E0119`). See
-`crates/nest-rs-resource-macros/src/relations.rs` for the diagnostics.
+`crates/nest-rs-seaorm-macros/src/relations.rs` for the diagnostics.
 
 ## Going further
 

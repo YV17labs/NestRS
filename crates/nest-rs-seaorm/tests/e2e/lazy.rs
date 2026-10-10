@@ -152,7 +152,7 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     }
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "a statement failed before this boundary could open its transaction, but the \
          boundary reported success; nothing it meant to write was written",
     );
@@ -258,7 +258,7 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     drop(lazy);
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "transaction abandoned without settling; its locks are held until the abandoned \
          statement drains",
     );

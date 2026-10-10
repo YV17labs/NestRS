@@ -6,8 +6,7 @@ paths:
   - "crates/nest-rs-seaorm/**/*.rs"
   - "crates/nest-rs-database/**/*.rs"
   - "crates/nest-rs-events/**/*.rs"
-  - "crates/nest-rs-resource/**/*.rs"
-  - "crates/nest-rs-resource-macros/**/*.rs"
+  - "crates/nest-rs-seaorm-macros/**/*.rs"
   - "demo/crates/migrations/**/*.rs"
 ---
 

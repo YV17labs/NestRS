@@ -164,7 +164,7 @@ mod http {
             _ => return,
         };
         tracing::error!(
-            target: crate::TARGET,
+            target: crate::target::ORM,
             kind,
             detail = %detail,
             "service error surfaced as 500",
@@ -189,7 +189,7 @@ mod http {
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 kind = "db",
                 detail = %err,
                 "crud operation failed",
@@ -222,7 +222,7 @@ mod http {
             ))
             .as_response();
 
-            let event = logs.expect_one(crate::TARGET, "service error surfaced as 500");
+            let event = logs.expect_one(crate::target::ORM, "service error surfaced as 500");
             assert_eq!(event.level, "error");
             assert_eq!(event.field("kind").as_deref(), Some("db"));
             assert!(
@@ -242,7 +242,7 @@ mod http {
             let unexpected = crud_error(sea_orm::DbErr::Custom("deadlock detected".into()));
             assert_eq!(unexpected.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-            let event = logs.expect_one(crate::TARGET, "crud operation failed");
+            let event = logs.expect_one(crate::target::ORM, "crud operation failed");
             assert_eq!(event.level, "error");
             assert_eq!(event.field("kind").as_deref(), Some("db"));
             assert!(
@@ -259,7 +259,7 @@ mod http {
             let logs = nest_rs_testing::LogCapture::install();
             let _ = ServiceError::not_found("no such widget").as_response();
             assert!(
-                logs.find(crate::TARGET, "service error surfaced as 500")
+                logs.find(crate::target::ORM, "service error surfaced as 500")
                     .is_empty(),
                 "a 404 is not an incident: {:#?}",
                 logs.events(),

@@ -22,7 +22,7 @@ pub use service::{{service}};
 pub use http::{{http_module}};
 "#;
 
-pub(crate) const ENTITY: &str = r#"use nest_rs::resource::expose;
+pub(crate) const ENTITY: &str = r#"use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 

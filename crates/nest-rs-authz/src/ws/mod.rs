@@ -11,7 +11,7 @@
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read, with_ability};
 //! # use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
 //! # mod users {
-//! #     use nest_rs_resource::expose;
+//! #     use nest_rs_seaorm::expose;
 //! #     use sea_orm::entity::prelude::*;
 //! #     #[expose(name = "User")]
 //! #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]

@@ -1623,7 +1623,6 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-resource",
  "poem",
  "sea-orm",
  "serde",
@@ -1808,32 +1807,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nest-rs-resource"
-version = "7.0.0"
-dependencies = [
- "async-trait",
- "chrono",
- "nest-rs-resource-macros",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "nest-rs-resource-macros"
-version = "7.0.0"
-dependencies = [
- "nest-rs-codegen",
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
-
-[[package]]
 name = "nest-rs-seaorm"
 version = "7.0.0"
 dependencies = [
@@ -1848,7 +1821,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-pipes",
- "nest-rs-resource",
+ "nest-rs-seaorm-macros",
  "nest-rs-worker",
  "poem",
  "schemars",
@@ -1861,6 +1834,16 @@ dependencies = [
  "tracing",
  "uuid",
  "validator",
+]
+
+[[package]]
+name = "nest-rs-seaorm-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

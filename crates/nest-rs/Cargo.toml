@@ -73,22 +73,22 @@ http = [
 ]
 config = ["dep:nest-rs-config"]
 database = ["dep:nest-rs-database"]
-# `#[expose]` is the entity-side twin of `#[crud]`; a seaorm app always has one.
+# `#[expose]` and `#[wire_enum]` are seaorm's own decorators.
 # `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
 # a real schema needs it, and "which extra feature turns the fixture on" is not
 # a question the app should have to answer.
 # `authz` is not optional here even though `#[authorize]` is: `#[crud]` emits
 # `::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, _>` and an
-# `::nest_rs_authz::Action` on *every* operation it generates, whether or not the
-# developer writes a posture attribute. `nest-rs-seaorm` already depends on the
-# crate, so it was compiled and only the umbrella's `pub use` was gated out —
+# `::nest_rs_authz::Action` on *every* operation it generates, and `#[expose]`
+# implements `::nest_rs_authz::WireModelDefaults` on every entity, whether or
+# not the developer writes a posture attribute. `nest-rs-seaorm` already depends
+# on the crate, so it was compiled and only the umbrella's `pub use` was gated out —
 # `cargo add nest-rs --features http,seaorm` + `#[crud]` was
 # `E0433: cannot find `authz` in `nest_rs``, blamed on the attribute. That is the
 # defect this matrix exists to prevent, so the feature carries what the
 # expansion names.
 seaorm = [
     "dep:nest-rs-seaorm",
-    "dep:nest-rs-resource",
     "database",
     "authz",
     "nest-rs-testing?/orm",
@@ -109,7 +109,6 @@ graphql = [
     "nest-rs-testing?/graphql",
     "nest-rs-seaorm?/graphql",
     "nest-rs-authz?/graphql",
-    "nest-rs-resource?/graphql",
     "nest-rs-throttler?/graphql",
 ]
 # `#[messages]` names `GuardAsWsMessageCheck` and the per-message chain runner,
@@ -200,7 +199,7 @@ static-files = ["dep:nest-rs-static-files", "http"]
 testing = ["dep:nest-rs-testing"]
 # Layer-System extension-point crates. Writing a custom `Guard` (the mandated
 # authz posture), `Pipe`, `Interceptor`, `Filter` or `ExceptionFilter` — or a
-# `#[resource]`/worker provider — should not force a direct per-crate dep.
+# worker provider — should not force a direct per-crate dep.
 # Capability features above depend on these by name, which is what makes a bare
 # `features = ["http"]` sufficient.
 guards = ["dep:nest-rs-guards"]
@@ -243,7 +242,6 @@ nest-rs-pipes = { workspace = true, optional = true }
 nest-rs-interceptors = { workspace = true, optional = true }
 nest-rs-filters = { workspace = true, optional = true }
 nest-rs-exception-filters = { workspace = true, optional = true }
-nest-rs-resource = { workspace = true, optional = true }
 nest-rs-worker = { workspace = true, optional = true }
 nest-rs-storage = { workspace = true, optional = true }
 

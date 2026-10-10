@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers). Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
+description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
 
@@ -20,17 +20,24 @@ all-features = true
 [features]
 default = []
 # HTTP transport extractor: `Bind<S, A>` (poem extractor that loads + authorizes
-# through `CrudService::access`). Poem is already in the base deps; `uuid` is
-# pulled here because `Bind` validates UUID v7 path ids. `nest-rs-authz/http`
-# is forwarded because `src/http/shape.rs` uses `nest_rs_authz::http`; without
-# it, building this feature in isolation (or via `full`) fails to resolve that
-# module (it otherwise only compiles under workspace feature unification).
-http = ["dep:uuid", "dep:nest-rs-resource", "nest-rs-authz/http"]
+# through `CrudService::access`). Poem is already in the base deps.
+# `nest-rs-authz/http` is forwarded because `src/http/shape.rs` uses
+# `nest_rs_authz::http`; without it, building this feature in isolation (or via
+# `full`) fails to resolve that module (it otherwise only compiles under
+# workspace feature unification).
+http = ["nest-rs-authz/http"]
 # GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
 # (the `BatchContext` that re-installs the request executor + ability around
-# each `#[dataloader]` batch). `nest-rs-authz/graphql` is forwarded because
-# `src/graphql/bind.rs` refuses through `nest_rs_authz::graphql::forbidden`.
-graphql = ["dep:nest-rs-graphql", "dep:uuid", "nest-rs-authz/graphql", "nest-rs-resource?/graphql"]
+# each `#[dataloader]` batch), and what `#[expose(…, graphql)]` emits: the
+# object derives, the relation bridges and their dataloaders.
+# `nest-rs-authz/graphql` is forwarded because `src/graphql/bind.rs` refuses
+# through `nest_rs_authz::graphql::forbidden`.
+graphql = [
+    "dep:nest-rs-graphql",
+    "dep:async-graphql",
+    "nest-rs-authz/graphql",
+    "nest-rs-seaorm-macros/graphql",
+]
 # WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
 # re-installs the request executor + ability around each gateway message).
 ws = ["dep:nest-rs-ws"]
@@ -47,6 +54,8 @@ full = ["http", "graphql", "ws", "mcp", "health"]
 
 [dependencies]
 nest-rs-core.workspace = true
+# `#[expose]` and `#[wire_enum]`, re-exported at the root.
+nest-rs-seaorm-macros.workspace = true
 # `WorkerDbContext` bridges the framework's worker seam (`JobContext`) to install
 # the job executor around every scheduler tick / queue job. The trait lives in
 # `nest-rs-worker` so neither scheduler nor queue has to depend on the other.
@@ -89,14 +98,21 @@ async-trait.workspace = true
 # `#[expose(..., soft_delete)]` submits its entity/service pair here at link
 # time, so `SoftDeleteAudit` can refuse boot on a half-wired tombstone.
 inventory.workspace = true
+# `Bind` validates UUID v7 path ids, and an exposed entity's write DTO mints
+# its `Uuid` primary key.
+uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.
 tokio.workspace = true
 
 # Optional deps for transport-binding features.
-uuid = { workspace = true, optional = true }
-nest-rs-resource = { workspace = true, optional = true }
+# `uuid` / `chrono`: `#[expose(…, graphql)]` re-emits the column's own type into
+# the generated `InputObject`, and renders `DateTime*` columns on the output
+# object — and an entity's columns are `Uuid` and `DateTime*` by construction.
+# Those scalars' `InputType`/`OutputType` impls are therefore a requirement
+# this crate's macro creates, declared here rather than left to the consumer.
+async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }

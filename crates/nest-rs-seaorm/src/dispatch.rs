@@ -42,7 +42,7 @@ pub(crate) async fn with_data_context<T>(
 ) -> T {
     let Some(snapshot) = captured.downcast_ref::<RequestSnapshot>() else {
         tracing::error!(
-            target: crate::TARGET,
+            target: crate::target::ORM,
             transport = transport,
             reason = "data_context_downcast_miss",
             "unexpected captured data context",
@@ -74,7 +74,7 @@ pub(crate) async fn with_data_context<T>(
         FinalizeOutcome::Poisoned { .. } => internal_error(),
         FinalizeOutcome::CommitFailed(err) => {
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 transport = transport,
                 error = %nest_rs_core::error_message(&err),
                 "dispatch transaction commit failed"
@@ -109,7 +109,7 @@ mod tests {
             "the operation runs, and it runs with nothing installed",
         );
 
-        let event = logs.expect_one(crate::TARGET, "unexpected captured data context");
+        let event = logs.expect_one(crate::target::ORM, "unexpected captured data context");
         assert_eq!(event.level, "error");
         assert_eq!(
             event.field("transport").as_deref(),

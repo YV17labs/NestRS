@@ -171,12 +171,11 @@ nest-rs-exception-filters = { version = "=7.0.0", path = "crates/nest-rs-excepti
 nest-rs-openapi = { version = "=7.0.0", path = "crates/nest-rs-openapi" }
 nest-rs-database = { version = "=7.0.0", path = "crates/nest-rs-database" }
 nest-rs-seaorm = { version = "=7.0.0", path = "crates/nest-rs-seaorm" }
+nest-rs-seaorm-macros = { version = "=7.0.0", path = "crates/nest-rs-seaorm-macros" }
 nest-rs-pipes = { version = "=7.0.0", path = "crates/nest-rs-pipes" }
 nest-rs-queue = { version = "=7.0.0", path = "crates/nest-rs-queue" }
 nest-rs-queue-macros = { version = "=7.0.0", path = "crates/nest-rs-queue-macros" }
 nest-rs-redis = { version = "=7.0.0", path = "crates/nest-rs-redis" }
-nest-rs-resource = { version = "=7.0.0", path = "crates/nest-rs-resource" }
-nest-rs-resource-macros = { version = "=7.0.0", path = "crates/nest-rs-resource-macros" }
 nest-rs-schedule = { version = "=7.0.0", path = "crates/nest-rs-schedule" }
 nest-rs-schedule-macros = { version = "=7.0.0", path = "crates/nest-rs-schedule-macros" }
 nest-rs-server-timing = { version = "=7.0.0", path = "crates/nest-rs-server-timing" }

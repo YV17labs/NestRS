@@ -21,11 +21,10 @@ just wires the endpoints.
 cargo add nest-rs --features seaorm
 ```
 
-`#[expose]` lives in `nest-rs-resource`, and `seaorm` supplies the model it
-decorates, so one feature activates both crates. Neither half stands alone:
-`#[expose]` expands to `nest_rs::seaorm` paths and `#[crud]` expands to
-`nest_rs::resource` ones, so a feature per crate would have to imply the
-other — and Cargo rejects that as a cycle. `#[wire_enum]` rides the same feature for the same reason.
+`#[expose]` and `#[wire_enum]` are SeaORM's own decorators, so they come with
+the model they decorate: `nest_rs::seaorm`, one feature. `#[crud]` belongs to
+the edge it serves — `nest_rs::http::crud`, on by default, or
+`nest_rs::graphql::crud`.
 
 ## A full REST CRUD, 22 lines
 
@@ -443,8 +442,8 @@ migration it tells you to generate next.
 - `crates/nest-rs-http-macros/src/crud.rs` — the REST expansion.
 - `crates/nest-rs-graphql-macros/src/crud.rs` — the GraphQL expansion.
 - `crates/nest-rs-seaorm/` — `CrudService`, `Access`, `Repo`.
-- `crates/nest-rs-resource/` — `#[expose]` for the entity, pagination
-  envelopes.
+- `crates/nest-rs-seaorm-macros/` — `#[expose]`, the entity's wire DTO and
+  inputs.
 
 ## Going further
 

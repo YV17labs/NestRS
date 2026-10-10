@@ -10,7 +10,7 @@
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AuthzAbility` reads it to build the caller's rules.
 pub(crate) const AUTHN_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
-use nest_rs::resource::wire_enum;
+use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

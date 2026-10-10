@@ -32,7 +32,7 @@ pub fn parse_v7(id: &str) -> Result<Uuid> {
 /// Logged here: GraphQL's error path has no `ResponseError` that would log it.
 fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
     tracing::error!(
-        target: crate::TARGET,
+        target: crate::target::ORM,
         service,
         error = %nest_rs_core::error_message(err),
         "by-id access load failed",

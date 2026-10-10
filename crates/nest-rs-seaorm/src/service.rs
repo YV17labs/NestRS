@@ -86,7 +86,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # use nest_rs_http::{HttpControllerMeta, HttpVerb};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
-/// #     use nest_rs_resource::expose;
+/// #     use nest_rs_seaorm::expose;
 /// #     use sea_orm::entity::prelude::*;
 /// #     #[expose(name = "User")]
 /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
@@ -169,7 +169,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// # use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable};
 /// # use nest_rs_testing::TestApp;
 /// # mod users {
-/// #     use nest_rs_resource::expose;
+/// #     use nest_rs_seaorm::expose;
 /// #     use sea_orm::entity::prelude::*;
 /// #     #[expose(name = "User", graphql)]
 /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
@@ -279,7 +279,7 @@ where
     /// Collections that may exceed it paginate with [`page`](CrudService::page).
     async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
         use sea_orm::QuerySelect;
-        tracing::debug!(target: crate::TARGET, entity = Self::entity_name(), "listing rows");
+        tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), "listing rows");
         let conn = Repo::<Self::Entity>::conn()?;
         let rows = Repo::<Self::Entity>::scoped(Action::Read)
             .filter(Self::live_read_filter())
@@ -289,7 +289,7 @@ where
         let (rows, capped) = crate::page::split_overfetched(rows, crate::LIST_CAP);
         if capped {
             tracing::warn!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity = Self::entity_name(),
                 cap = crate::LIST_CAP,
                 "list result truncated at the hard cap"
@@ -308,7 +308,7 @@ where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
         <Self::Entity as EntityTrait>::Model: Send + Sync,
     {
-        tracing::debug!(target: crate::TARGET, entity = Self::entity_name(), first, ?after, "paging rows");
+        tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), first, ?after, "paging rows");
         Repo::<Self::Entity>::page(first, after, Self::live_read_filter()).await
     }
 
@@ -332,7 +332,7 @@ where
             .one(&conn)
             .await?
         {
-            tracing::debug!(target: crate::TARGET, entity, %id, ?action, "access granted");
+            tracing::debug!(target: crate::target::ORM, entity, %id, ?action, "access granted");
             return Ok(Access::Found(model));
         }
         let exists = Repo::<Self::Entity>::unscoped_by_id(id)
@@ -341,7 +341,7 @@ where
             .await?
             .is_some();
         if exists {
-            tracing::warn!(target: crate::TARGET, entity, %id, ?action, "access denied");
+            tracing::warn!(target: crate::target::ORM, entity, %id, ?action, "access denied");
             Ok(Access::Denied)
         } else {
             Ok(Access::Missing)
@@ -391,7 +391,7 @@ pub trait Creatable: CrudService {
             Err(err) => {
                 if let Err(rollback_err) = local.rollback().await {
                     tracing::error!(
-                        target: crate::TARGET,
+                        target: crate::target::ORM,
                         entity,
                         error = %nest_rs_core::error_message(&rollback_err),
                         "rollback of the create SAVEPOINT/transaction failed",
@@ -424,7 +424,7 @@ where
         .is_some();
     if !in_scope {
         tracing::warn!(
-            target: crate::TARGET,
+            target: crate::target::ORM,
             entity,
             id = ?model_pk::<E>(&model),
             action = ?Action::Create,
@@ -432,7 +432,7 @@ where
         );
         return Err(DbErr::RecordNotInserted);
     }
-    tracing::debug!(target: crate::TARGET, entity, id = ?model_pk::<E>(&model), "row created");
+    tracing::debug!(target: crate::target::ORM, entity, id = ?model_pk::<E>(&model), "row created");
     Ok(model)
 }
 
@@ -456,12 +456,12 @@ pub trait Updatable: CrudService {
         let active = input.apply_to(model.into_active_model());
         match Repo::<Self::Entity>::update(active).await {
             Ok(updated) => {
-                tracing::debug!(target: crate::TARGET, entity, ?id, "row updated");
+                tracing::debug!(target: crate::target::ORM, entity, ?id, "row updated");
                 Ok(updated)
             }
             Err(DbErr::RecordNotUpdated) => {
                 tracing::warn!(
-                    target: crate::TARGET,
+                    target: crate::target::ORM,
                     entity,
                     ?id,
                     action = ?Action::Update,
@@ -492,12 +492,12 @@ pub trait Deletable: CrudService {
         match Self::soft_delete_column() {
             Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
                 Ok(()) => {
-                    tracing::debug!(target: crate::TARGET, entity, ?id, "row soft-deleted");
+                    tracing::debug!(target: crate::target::ORM, entity, ?id, "row soft-deleted");
                     Ok(())
                 }
                 Err(DbErr::RecordNotUpdated) => {
                     tracing::warn!(
-                        target: crate::TARGET,
+                        target: crate::target::ORM,
                         entity,
                         ?id,
                         action = ?Action::Delete,
@@ -511,7 +511,7 @@ pub trait Deletable: CrudService {
                 let result = Repo::<Self::Entity>::delete(model).await?;
                 if result.rows_affected == 0 {
                     tracing::warn!(
-                        target: crate::TARGET,
+                        target: crate::target::ORM,
                         entity,
                         ?id,
                         action = ?Action::Delete,
@@ -519,7 +519,7 @@ pub trait Deletable: CrudService {
                     );
                     return Err(out_of_scope());
                 }
-                tracing::debug!(target: crate::TARGET, entity, ?id, "row deleted");
+                tracing::debug!(target: crate::target::ORM, entity, ?id, "row deleted");
                 Ok(())
             }
         }

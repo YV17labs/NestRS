@@ -167,7 +167,7 @@ pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
 /// credentials, so it is never logged.
 async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> {
     tracing::info!(
-        target: crate::TARGET,
+        target: crate::target::ORM,
         max_connections = ?options.get_max_connections(),
         "connecting to database"
     );

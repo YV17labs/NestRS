@@ -1,10 +1,8 @@
 //! The boot audit refusing a `soft_delete` entity no service tombstones. Its own
 //! binary: the half-wired entity sits in the link-time registry every app audits.
 
-use nest_rs_resource::expose;
-use nest_rs_seaorm::audit_soft_delete_bindings;
 use nest_rs_seaorm::sea_orm::entity::prelude::*;
-use nest_rs_seaorm::{CrudService, Deletable};
+use nest_rs_seaorm::{CrudService, Deletable, audit_soft_delete_bindings, expose};
 
 /// Both halves declared — the shape `nestrs g resource` scaffolds.
 mod bound {

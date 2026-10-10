@@ -169,7 +169,7 @@ where
         let Some(pk) = E::PrimaryKey::iter().next() else {
             let entity = std::any::type_name::<E>();
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity,
                 "entity has no primary-key column — keyset pagination requires one",
             );
@@ -379,7 +379,7 @@ mod tests {
         );
 
         let event = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "entity has no primary-key column — keyset pagination requires one",
         );
         assert_eq!(event.level, "error");

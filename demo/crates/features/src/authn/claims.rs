@@ -1,4 +1,4 @@
-use nest_rs::resource::wire_enum;
+use nest_rs::seaorm::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

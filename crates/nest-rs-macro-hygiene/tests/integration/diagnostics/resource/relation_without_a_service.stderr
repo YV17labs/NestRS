@@ -1,5 +1,0 @@
-error: this entity declares an exposed relation but `#[expose(... service = …)]` is missing — add the service path so the macro can emit its PK dataloader and PkLoadable impl
-  --> tests/integration/diagnostics/resource/relation_without_a_service.rs:11:12
-   |
-11 | pub struct Model {
-   |            ^^^^^

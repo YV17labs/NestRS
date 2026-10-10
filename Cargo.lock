@@ -2535,7 +2535,6 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
- "nest-rs-resource",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -2587,7 +2586,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-mcp",
- "nest-rs-resource",
+ "nest-rs-seaorm",
  "nest-rs-testing",
  "nest-rs-ws",
  "poem",
@@ -3112,37 +3111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nest-rs-resource"
-version = "7.0.0"
-dependencies = [
- "async-graphql",
- "async-trait",
- "chrono",
- "nest-rs-authz",
- "nest-rs-core",
- "nest-rs-graphql",
- "nest-rs-resource-macros",
- "nest-rs-seaorm",
- "schemars",
- "sea-orm",
- "serde",
- "serde_json",
- "tracing",
- "uuid",
- "validator",
-]
-
-[[package]]
-name = "nest-rs-resource-macros"
-version = "7.0.0"
-dependencies = [
- "nest-rs-codegen",
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
-
-[[package]]
 name = "nest-rs-schedule"
 version = "7.0.0"
 dependencies = [
@@ -3181,6 +3149,7 @@ name = "nest-rs-seaorm"
 version = "7.0.0"
 dependencies = [
  "anyhow",
+ "async-graphql",
  "async-trait",
  "chrono",
  "inventory",
@@ -3196,8 +3165,8 @@ dependencies = [
  "nest-rs-interceptors",
  "nest-rs-mcp",
  "nest-rs-pipes",
- "nest-rs-resource",
  "nest-rs-seaorm",
+ "nest-rs-seaorm-macros",
  "nest-rs-testing",
  "nest-rs-worker",
  "nest-rs-ws",
@@ -3212,6 +3181,16 @@ dependencies = [
  "tracing",
  "uuid",
  "validator",
+]
+
+[[package]]
+name = "nest-rs-seaorm-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]

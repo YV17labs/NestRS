@@ -21,6 +21,7 @@ request.
 | MCP operations | `nest_rs::mcp` | `info` |
 | Route / endpoint mounting (boot) | `nest_rs::routes` | `info` |
 | ORM queries | `nest_rs::orm` | `trace` |
+| Relation dataloaders (`#[expose(…, graphql)]` batches) | `nest_rs::loader` | `debug` |
 | Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, denials, **routes with no guard and no `#[public]` when no global pool is active**) |
 | Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
 | OAuth client | `nest_rs::oauth::client` | `info` (callback refusals `warn`) |

@@ -15,10 +15,9 @@ fn every_decorator_refuses_in_the_words_pinned() {
     t.compile_fail("tests/integration/diagnostics/http/*.rs");
     t.compile_fail("tests/integration/diagnostics/mcp/*.rs");
     t.compile_fail("tests/integration/diagnostics/queue/*.rs");
+    t.compile_fail("tests/integration/diagnostics/schedule/*.rs");
     // `#[expose(…, graphql)]` without the `graphql` feature is not pinned: every
     // build that runs this suite has the feature on.
-    t.compile_fail("tests/integration/diagnostics/resource/*.rs");
-    t.compile_fail("tests/integration/diagnostics/schedule/*.rs");
     t.compile_fail("tests/integration/diagnostics/seaorm/*.rs");
     t.compile_fail("tests/integration/diagnostics/ws/*.rs");
 }

@@ -25,9 +25,9 @@ thiserror.workspace = true
 nest-rs-core-macros.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-# `catch_unwind` on a future, behind `panic::contain`: how every unit of work
-# catches its own unwind.
-futures-util.workspace = true
+# `panic::contain`'s future marks only its unit's polls, so it projects the
+# pin to the unit it wraps; `unsafe_code` is denied.
+pin-project-lite.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

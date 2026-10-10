@@ -38,7 +38,21 @@ async fn run_child(role: String) -> anyhow::Result<()> {
             unwrap_a_secret();
             Ok(())
         }
+        "inside_the_subscriber" => {
+            let _app = App::new::<Bare>()?;
+            tracing::info!(target: TARGET, value = %Unwritable, "never written");
+            Ok(())
+        }
         other => anyhow::bail!("no child role `{other}`"),
+    }
+}
+
+/// A value whose text panics as the subscriber writes it.
+struct Unwritable;
+
+impl std::fmt::Display for Unwritable {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        panic!("the field's text panicked")
     }
 }
 
@@ -107,6 +121,42 @@ fn a_panic_no_unit_contains_is_one_redacted_error_on_the_app_target() {
     );
 }
 
+/// The production shape: the console subscriber is the global one, which the
+/// hook files through while it is still writing the line that panicked.
+#[test]
+fn a_panic_inside_the_subscriber_s_own_dispatch_is_one_event_of_the_hook() {
+    let mut child = ChildProcess::spawn_with(
+        CHILD_TEST,
+        "inside_the_subscriber",
+        &[
+            (
+                EnvPrefix::var(nest_rs_core::logging::var::FORMAT),
+                "json".to_owned(),
+            ),
+            (
+                EnvPrefix::var(nest_rs_core::logging::var::FILTER),
+                "info".to_owned(),
+            ),
+        ],
+    );
+
+    let (code, stdout) = child.exit_within(Duration::from_secs(10));
+
+    assert_eq!(code, Some(101), "a panic's status: {stdout:#?}");
+    let errors: Vec<serde_json::Value> = stdout
+        .iter()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| event["level"] == "ERROR")
+        .collect();
+    assert_eq!(errors.len(), 1, "one error, the hook's: {stdout:#?}");
+    assert_eq!(errors[0]["fields"]["message"], NO_UNIT, "{}", errors[0]);
+    assert_eq!(
+        errors[0]["fields"][FIELD], "the field's text panicked",
+        "{}",
+        errors[0]
+    );
+}
+
 #[test]
 fn a_panic_before_any_subscriber_is_one_redacted_line_on_stderr() {
     let mut child = ChildProcess::spawn(CHILD_TEST, "unsubscribed");
@@ -144,6 +194,7 @@ fn a_panic_inside_contain_is_filed_once_by_its_unit_saying_where() {
     let logs = LogCapture::install();
 
     contain_a_panic();
+    crate::rust_panic_hook();
 
     let events = logs.events();
     assert_eq!(events.len(), 1, "the unit's line alone: {events:#?}");
@@ -158,4 +209,89 @@ fn a_panic_inside_contain_is_filed_once_by_its_unit_saying_where() {
         location.contains("tests/integration/panic.rs:"),
         "where it panicked: {line:#?}"
     );
+}
+
+/// A value whose drop panics, as a unit's guard can.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("dropped mid-flight");
+    }
+}
+
+#[nest_rs_core::main]
+async fn cancel_a_unit_whose_guard_panics_as_it_drops() {
+    let unit = contain(async {
+        let _guard = PanicsOnDrop;
+        std::future::pending::<()>().await;
+    });
+    tokio::select! {
+        biased;
+        _ = unit => {}
+        () = std::future::ready(()) => {}
+    }
+}
+
+#[test]
+fn a_panic_raised_as_a_cancelled_unit_is_dropped_is_filed_by_the_hook() {
+    let logs = LogCapture::install();
+
+    let unwound = std::panic::catch_unwind(cancel_a_unit_whose_guard_panics_as_it_drops);
+    crate::rust_panic_hook();
+
+    let unwound = unwound.expect_err("the drop's panic unwinds out of `main`");
+
+    assert_eq!(
+        nest_rs_core::panic_message(unwound.as_ref()),
+        "dropped mid-flight"
+    );
+
+    let events = logs.events();
+    assert_eq!(events.len(), 1, "the hook's event alone: {events:#?}");
+    let event = &events[0];
+    assert_eq!(
+        (event.target.as_str(), event.message.as_str()),
+        (nest_rs_core::target::APP, NO_UNIT)
+    );
+    assert_eq!(event.field(FIELD).as_deref(), Some("dropped mid-flight"));
+}
+
+#[nest_rs_core::main]
+async fn two_units_panic_alike_and_a_third_panic_comes_between() -> Vec<String> {
+    let first_at = format!("{}:{}:", file!(), line!() + 1);
+    let first = contain(async { panic!("deliberate panic") }).await;
+    let second_at = format!("{}:{}:", file!(), line!() + 1);
+    let second = contain(async { panic!("deliberate panic") }).await;
+    let uncontained = tokio::spawn(async { panic!("deliberate panic") }).await;
+    assert!(uncontained.is_err(), "the third panicked outside any unit");
+
+    contained_panic!(
+        target: TARGET,
+        first.expect_err("the first unit panicked").as_ref(),
+        "first unit panicked",
+    );
+    contained_panic!(
+        target: TARGET,
+        second.expect_err("the second unit panicked").as_ref(),
+        "second unit panicked",
+    );
+    vec![first_at, second_at]
+}
+
+#[test]
+fn each_contained_panic_says_where_it_happened_and_not_where_another_did() {
+    let logs = LogCapture::install();
+
+    let at = two_units_panic_alike_and_a_third_panic_comes_between();
+    crate::rust_panic_hook();
+
+    for (message, at) in ["first unit panicked", "second unit panicked"]
+        .into_iter()
+        .zip(at)
+    {
+        let line = logs.expect_one(TARGET, message);
+        let location = line.field(LOCATION_FIELD).unwrap_or_default();
+        assert!(location.starts_with(&at), "{at}: {line:#?}");
+    }
 }

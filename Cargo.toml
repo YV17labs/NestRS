@@ -63,6 +63,7 @@ h2 = "0.4"
 
 bytes = "1.12"
 futures-util = "0.3"
+pin-project-lite = "0.2"
 
 tokio-tungstenite = "0.30"
 

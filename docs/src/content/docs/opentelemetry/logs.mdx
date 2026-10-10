@@ -192,17 +192,20 @@ panicked, beside its `outcome="panic"` line; the payload goes under `panic`,
 with serde's quoted values cut, and where it happened under `panic_location`
 (`file:line:col`).
 
-A panic no unit catches — a task your code spawned, `main` itself — is one
-`error` on `nest_rs::app`, written by the hook:
+A panic no unit catches — a task your code spawned, a value a cancelled unit
+drops, `main` itself — is one `error` on `nest_rs::app`, written by the hook:
 
 ```text frame="terminal"
-ERROR nest_rs::app: panicked where no unit of work contains it thread="tokio-runtime-worker" panic="called `Result::unwrap()` on an `Err` value: Error(\"invalid type: a string, expected u64\", line: 1, column: 24)" panic_location="src/billing/service.rs:42:61"
+ERROR nest_rs::app: panicked where no unit of work contains it thread="tokio-rt-worker" panic=called `Result::unwrap()` on an `Err` value: Error("invalid type: a string, expected u64", line: 1, column: 24) panic_location=src/billing/service.rs:42:61
 ```
 
 It also carries `backtrace` when `RUST_BACKTRACE` asks for one. Before any
 subscriber exists — while the `.env` cascade loads, say — the hook writes one
 line to stderr instead, `nestrs: panicked at <file:line:col>: <message>`, with
-the same message, so no panic goes unsaid.
+the same message, so no panic goes unsaid. The hook files through the
+subscriber in place, even when the panic came from inside it — a field whose
+`Display` panics: the subscribers nestrs installs take that, and a layer of
+your own must not hold a lock while it records an event's fields.
 
 The unit's span says the same thing to a tracing backend: every span whose unit
 did not end `ok` carries OpenTelemetry's `error.type` — the same word as the

@@ -4,13 +4,14 @@
 
 use std::any::Any;
 use std::backtrace::{Backtrace, BacktraceStatus};
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
+use std::pin::Pin;
 use std::sync::{Mutex, PoisonError};
-
-use futures_util::FutureExt as _;
+use std::task::{Context, Poll};
 
 use crate::line_safe::LineSafe;
 
@@ -33,7 +34,8 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
 }
 
 /// Run `fut`, catching its unwind; the process hook stays quiet for a panic
-/// inside it, since the unit that called this reports it.
+/// raised while it runs, since the unit that called this reports it. One
+/// raised as it is dropped unfinished is the hook's to file.
 ///
 /// ```
 /// # #[nest_rs_core::main]
@@ -50,13 +52,48 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
 pub fn contain<F: Future>(fut: F) -> impl Future<Output = Result<F::Output, Box<dyn Any + Send>>> {
     // Not an `async fn`: its state keeps the argument beside the future built
     // from it, so every contained unit would weigh twice its size.
-    CONTAINED.scope((), AssertUnwindSafe(fut).catch_unwind())
+    Contained { unit: fut }
+}
+
+pin_project_lite::pin_project! {
+    /// What [`contain`] returns. The unit is marked only while it is polled: a
+    /// panic raised as it is dropped mid-flight — cancelled by a timeout or a
+    /// `select!` — unwinds past no catch of its own, so the hook files it.
+    struct Contained<F> {
+        #[pin]
+        unit: F,
+    }
+}
+
+impl<F: Future> Future for Contained<F> {
+    type Output = Result<F::Output, Box<dyn Any + Send>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let unit = self.project().unit;
+        CONTAINED.sync_scope(Cell::new(None), || {
+            match std::panic::catch_unwind(AssertUnwindSafe(|| unit.poll(cx))) {
+                Ok(polled) => polled.map(Ok),
+                Err(payload) => {
+                    if let Some(seen) = CONTAINED.with(Cell::take) {
+                        remember(payload.as_ref(), seen);
+                    }
+                    Poll::Ready(Err(payload))
+                }
+            }
+        })
+    }
 }
 
 tokio::task_local! {
-    /// Set while a [`contain`]ed future is polled: a task-local, so a task it
-    /// spawns is outside it.
-    static CONTAINED: ();
+    /// Set while a [`contain`]ed unit is polled, holding what the hook saw of a
+    /// panic raised there: a task-local, so a task the unit spawns is outside it.
+    static CONTAINED: Cell<Option<Seen>>;
+}
+
+/// A contained panic, as the hook saw it.
+struct Seen {
+    message: String,
+    location: String,
 }
 
 /// Log a contained panic: at `error`, on `target`, with the payload rendered by
@@ -92,17 +129,24 @@ macro_rules! contained_panic {
     }};
 }
 
-/// The panic hook `#[nest_rs::main]` installs: a panic inside a [`contain`]ed
-/// unit is that unit's to file, and any other is one `error` on
-/// [`APP`](crate::target::APP) — or one line on stderr while no subscriber
-/// can take it. Never the payload unredacted.
+/// The panic hook `#[nest_rs::main]` installs: a panic raised while a
+/// [`contain`]ed unit is polled is that unit's to file, and any other is one
+/// `error` on [`APP`](crate::target::APP) — or one line on stderr while no
+/// subscriber can take it. Never the payload unredacted.
 pub(crate) fn hook(info: &PanicHookInfo<'_>) {
     let message = panic_message(info.payload());
     let location = info
         .location()
         .map_or_else(|| "<unknown>".to_owned(), ToString::to_string);
-    remember(&message, &location);
-    match report(CONTAINED.try_with(|()| ()).is_ok(), subscribed()) {
+    let contained = CONTAINED
+        .try_with(|seen| {
+            seen.set(Some(Seen {
+                message: message.clone(),
+                location: location.clone(),
+            }));
+        })
+        .is_ok();
+    match report(contained, subscribed()) {
         Report::ByTheUnit => {}
         Report::Event => {
             let thread = std::thread::current();
@@ -154,36 +198,49 @@ fn subscribed() -> bool {
     !tracing::dispatcher::get_default(|dispatch| dispatch.is::<tracing::subscriber::NoSubscriber>())
 }
 
-/// How many recent panics keep where they happened; one a line never asks
-/// about (a unit that resumed the unwind) is forgotten past it.
+/// How many contained panics keep where they happened; one a line never asks
+/// about is forgotten past it.
 const RECENT_PANICS: usize = 16;
 
-/// Where recent panics happened, newest last, for the line that contains one
-/// to say. Process-wide: a unit may file its line on another thread than the
-/// one it panicked on, past an `.await` or across a task.
+/// Where recent contained panics happened, newest last, by their payload, for
+/// the line that files one to say. Process-wide: a unit may file its line on
+/// another thread than the one it panicked on, past an `.await` or across a
+/// task, and a resumed payload keeps its box.
 static RECENT: Mutex<VecDeque<Recent>> = Mutex::new(VecDeque::new());
 
 struct Recent {
-    message: String,
-    location: String,
+    payload: usize,
+    seen: Seen,
 }
 
-fn remember(message: &str, location: &str) {
+/// The address of `payload`'s box: two live panics never share one, so two
+/// saying the same thing are told apart.
+fn address(payload: &(dyn Any + Send)) -> usize {
+    std::ptr::from_ref(payload).cast::<()>().addr()
+}
+
+fn remember(payload: &(dyn Any + Send), seen: Seen) {
+    // A zero-sized payload's box has no address of its own.
+    if size_of_val(payload) == 0 {
+        return;
+    }
+    let payload = address(payload);
     let mut recent = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
+    recent.retain(|panic| panic.payload != payload);
     if recent.len() == RECENT_PANICS {
         recent.pop_front();
     }
-    recent.push_back(Recent {
-        message: message.to_owned(),
-        location: location.to_owned(),
-    });
+    recent.push_back(Recent { payload, seen });
 }
 
-/// Where the newest panic saying `message` happened, forgotten once read.
-fn recall(message: &str) -> Option<String> {
+/// Where the contained panic `payload` carries happened, forgotten once read.
+fn recall(payload: &(dyn Any + Send), message: &str) -> Option<String> {
+    let payload = address(payload);
     let mut recent = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
-    let at = recent.iter().rposition(|panic| panic.message == message)?;
-    recent.remove(at).map(|panic| panic.location)
+    let at = recent
+        .iter()
+        .rposition(|panic| panic.payload == payload && panic.seen.message == message)?;
+    recent.remove(at).map(|panic| panic.seen.location)
 }
 
 pub(crate) mod __private {
@@ -200,7 +257,7 @@ pub(crate) mod __private {
     /// What [`contained_panic!`](crate::contained_panic) files for `payload`.
     pub fn unwound(payload: &(dyn Any + Send)) -> Unwound {
         let message = super::panic_message(payload);
-        let location = super::recall(&message);
+        let location = super::recall(payload, &message);
         Unwound { message, location }
     }
 }
@@ -275,24 +332,60 @@ mod tests {
         assert_eq!(LineSafe("déjà vu").to_string(), "déjà vu");
     }
 
-    #[test]
-    fn a_location_is_recalled_by_the_panic_that_says_the_same_and_only_once() {
-        remember("unrelated", "src/a.rs:1:1");
-        remember("deliberate", "src/b.rs:2:2");
-        remember("deliberate", "src/c.rs:3:3");
+    fn payload(message: &str) -> Box<dyn Any + Send> {
+        Box::new(message.to_owned())
+    }
 
-        assert_eq!(recall("deliberate").as_deref(), Some("src/c.rs:3:3"));
-        assert_eq!(recall("deliberate").as_deref(), Some("src/b.rs:2:2"));
-        assert_eq!(recall("deliberate"), None);
-        assert_eq!(recall("unrelated").as_deref(), Some("src/a.rs:1:1"));
+    fn seen(message: &str, location: &str) -> Seen {
+        Seen {
+            message: message.to_owned(),
+            location: location.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_location_is_recalled_by_its_own_payload_and_only_once() {
+        let first = payload("deliberate");
+        let second = payload("deliberate");
+        remember(first.as_ref(), seen("deliberate", "src/b.rs:2:2"));
+        remember(second.as_ref(), seen("deliberate", "src/c.rs:3:3"));
+
+        assert_eq!(
+            recall(first.as_ref(), "deliberate").as_deref(),
+            Some("src/b.rs:2:2")
+        );
+        assert_eq!(recall(first.as_ref(), "deliberate"), None);
+        assert_eq!(
+            recall(second.as_ref(), "deliberate").as_deref(),
+            Some("src/c.rs:3:3")
+        );
+    }
+
+    #[test]
+    fn a_payload_that_says_something_else_recalls_nothing() {
+        let unit = payload("deliberate");
+        remember(unit.as_ref(), seen("deliberate", "src/b.rs:2:2"));
+        assert_eq!(recall(unit.as_ref(), "another panic"), None);
+    }
+
+    #[test]
+    fn a_zero_sized_payload_keeps_no_location() {
+        let unit: Box<dyn Any + Send> = Box::new(());
+        remember(
+            unit.as_ref(),
+            seen("<non-string panic payload>", "src/b.rs:2:2"),
+        );
+        assert_eq!(recall(unit.as_ref(), "<non-string panic payload>"), None);
     }
 
     #[test]
     fn only_the_most_recent_panics_keep_where_they_happened() {
-        remember("oldest", "src/old.rs:1:1");
-        for _ in 0..RECENT_PANICS {
-            remember("newer", "src/new.rs:1:1");
+        let oldest = payload("oldest");
+        remember(oldest.as_ref(), seen("oldest", "src/old.rs:1:1"));
+        let newer: Vec<_> = (0..RECENT_PANICS).map(|_| payload("newer")).collect();
+        for unit in &newer {
+            remember(unit.as_ref(), seen("newer", "src/new.rs:1:1"));
         }
-        assert_eq!(recall("oldest"), None);
+        assert_eq!(recall(oldest.as_ref(), "oldest"), None);
     }
 }

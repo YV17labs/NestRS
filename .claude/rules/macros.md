@@ -30,8 +30,16 @@ path — `::anyhow`, `::tracing`, `::uuid` resolve against the consumer's extern
 prelude and break every app that lacks that direct dependency. Routing through
 the umbrella is also what dissolves the cycles: `nest-rs-guards`,
 `nest-rs-authz` and `nest-rs-seaorm` sit above the transports, and only
-`::nest_rs::` sits above all of them. Seams that are not public API stay
-`#[doc(hidden)]` where they live.
+`::nest_rs::` sits above all of them.
+
+**A seam that is not public API lives in its crate's `__private`** — one inline
+`#[doc(hidden)] pub mod __private` of `pub use` in `lib.rs` — reached as
+`::nest_rs_<x>::__private::…`. What Rust cannot place in a module (a trait item,
+an exported macro) takes a `__` prefix and stays hidden; a hidden method becomes
+a free function in the type's own file; an item in a public module sits in that
+file's `pub(crate) mod __private`, so no other path reaches it. Everything else
+is API or `pub(crate)` (`decisions/visibility-tiers.md`); held by review, the
+hygiene build and rustdoc's `-D warnings`.
 
 "The use site owns that crate by definition" is not an admissible reason;
 owning a capability means enabling its feature.
@@ -113,8 +121,9 @@ with a trybuild snapshot per decorator:
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave
 as the literal does. Behaviour is decided through a type probe —
-`nest_rs_core::Answer` at `#[routes]` and `#[operations]`,
-`nest_rs_mcp::OperationAnswer` at `#[tools]`, `ReplyValue` at `#[messages]`.
+`nest_rs_core::__private::Answer` at `#[routes]` and `#[operations]`,
+`nest_rs_mcp::__private::OperationAnswer` at `#[tools]`, `ReplyValue` at
+`#[messages]`.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
 reads by name, the shape a masked MCP or WS operation unwraps, and what an

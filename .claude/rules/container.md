@@ -60,8 +60,8 @@ and no inherent `pub fn` on a module type besides `for_root`.
 `ConfigModule` is the one carve-out — its `for_root` / `for_feature` /
 `provide_feature` / `setup` are the primitives every other seam is built from,
 and `provide_feature` is public for third-party drivers. A seam one framework
-crate needs from another is `#[doc(hidden)]`; one only its own crate needs stays
-private.
+crate needs from another lives in its crate's `__private` (`macros.md`); one
+only its own crate needs stays private.
 
 `x` has two shapes and only two:
 

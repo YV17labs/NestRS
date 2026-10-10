@@ -44,8 +44,8 @@ paths:
   pin; never bump one casually.
 - **The framework requires itself in lockstep**: every `nest-rs-*` entry of
   the root `[workspace.dependencies]` is `=` the release, and a framework crate
-  links a sibling only through `{ workspace = true }` — macro expansions call
-  `#[doc(hidden)]` seams semver does not cover. Bump them with
+  links a sibling only through `{ workspace = true }` — macro expansions and
+  sibling crates call `__private`, which semver does not cover. Bump them with
   `[workspace.package] version`.
 - **Intra-workspace dev-dependencies are path-only** (`{ path = "../nest-rs-x" }`),
   so publishing drags no test-only cycle; cargo strips them.

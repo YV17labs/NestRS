@@ -450,29 +450,30 @@ fn emit_belongs_to_method(
 
     let key_expr = wire_key_expr(&fk_field.ty, fk);
     let complexity = complexity_attr(&field.complexity, None);
+    let root = graphql_root();
 
     Ok(quote! {
         #complexity
         async fn #name(
             &self,
-            __ctx: &::nest_rs_seaorm::__private::async_graphql::Context<'_>,
-        ) -> ::nest_rs_seaorm::__private::async_graphql::Result<
+            __ctx: &#root::Context<'_>,
+        ) -> #root::Result<
             ::core::option::Option<<#target as ::nest_rs_seaorm::graphql::PkLoadable>::Wire>,
         > {
             // Never `data_unchecked`: a loader whose owner module this app does
             // not import would panic at request time.
             let __loader = __ctx
                 .data_opt::<
-                    ::nest_rs_seaorm::__private::async_graphql::dataloader::DataLoader<
+                    #root::dataloader::DataLoader<
                         <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader,
                     >,
                 >()
                 .ok_or_else(|| {
-                    ::nest_rs_seaorm::__private::async_graphql::Error::new(::std::format!(
+                    #root::Error::new(::std::format!(
                         "relation `{}` is exposed but its dataloader `{}` is not seeded — the module providing it is not imported by (or reachable from) this app",
                         ::core::stringify!(#name),
                         ::core::any::type_name::<
-                            ::nest_rs_seaorm::__private::async_graphql::dataloader::DataLoader<
+                            #root::dataloader::DataLoader<
                                 <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader,
                             >,
                         >(),
@@ -497,16 +498,17 @@ fn emit_has_many_method(
     let key_expr = wire_key_expr(&pk.ty, &pk.ident);
     let complexity = complexity_attr(&field.complexity, Some(DEFAULT_HAS_MANY_COMPLEXITY));
     let related = related_to_path(target, via)?;
+    let root = graphql_root();
 
     Ok(quote! {
         #complexity
         async fn #name(
             &self,
-            __ctx: &::nest_rs_seaorm::__private::async_graphql::Context<'_>,
+            __ctx: &#root::Context<'_>,
             first: ::core::option::Option<u64>,
             after: ::core::option::Option<::std::string::String>,
-        ) -> ::nest_rs_seaorm::__private::async_graphql::Result<
-            ::nest_rs_seaorm::__private::async_graphql::connection::Connection<
+        ) -> #root::Result<
+            #root::connection::Connection<
                 ::std::string::String,
                 <#target as #related>::Wire,
             >,
@@ -515,16 +517,16 @@ fn emit_has_many_method(
             // not import would panic at request time.
             let __loader = __ctx
                 .data_opt::<
-                    ::nest_rs_seaorm::__private::async_graphql::dataloader::DataLoader<
+                    #root::dataloader::DataLoader<
                         <#target as #related>::Loader,
                     >,
                 >()
                 .ok_or_else(|| {
-                    ::nest_rs_seaorm::__private::async_graphql::Error::new(::std::format!(
+                    #root::Error::new(::std::format!(
                         "relation `{}` is exposed but its dataloader `{}` is not seeded — the module providing it is not imported by (or reachable from) this app",
                         ::core::stringify!(#name),
                         ::core::any::type_name::<
-                            ::nest_rs_seaorm::__private::async_graphql::dataloader::DataLoader<
+                            #root::dataloader::DataLoader<
                                 <#target as #related>::Loader,
                             >,
                         >(),
@@ -563,9 +565,10 @@ fn emit_has_many_method(
 /// is a `String` on the wire, so it is parsed back.
 fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
     if is_uuid(ty) {
+        let root = graphql_root();
         quote! {
             ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(&self.#ident)
-                .map_err(|__e| ::nest_rs_seaorm::__private::async_graphql::Error::new(__e.to_string()))?
+                .map_err(|__e| #root::Error::new(__e.to_string()))?
         }
     } else {
         quote! { ::core::clone::Clone::clone(&self.#ident) }

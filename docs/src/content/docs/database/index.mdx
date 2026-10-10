@@ -35,9 +35,8 @@ an entity crate declares none of them. `nestrs g resource` writes the file.
 ## The entity
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::seaorm::expose;
-use nest_rs::seaorm::sea_orm;
-use nest_rs::seaorm::sea_orm::entity::prelude::*;
+use nest_rs::seaorm::{expose, sea_orm};
+use sea_orm::entity::prelude::*;
 
 #[expose(name = "Post", service = super::service::PostsService)]
 #[sea_orm::model]

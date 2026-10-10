@@ -1,8 +1,8 @@
 //! Cross-entity bridges that let one `#[expose]` macro emit a field resolver
 //! pointing at another entity's loader **without knowing its service name**.
 
-use async_graphql::OutputType;
-use async_graphql::connection::{Connection, Edge};
+use nest_rs_graphql::async_graphql::OutputType;
+use nest_rs_graphql::async_graphql::connection::{Connection, Edge};
 
 /// The dataloader key for **one parent's page** of an auto-resolved `has_many`.
 ///
@@ -59,9 +59,9 @@ impl<T: OutputType> RelationPage<T> {
 /// automatically by `#[expose]` on every entity that declares a `service = …`.
 pub trait PkLoadable {
     /// The `#[dataloader]`-generated primary-key loader (`<Service>ById`).
-    type Loader: ::core::marker::Send + ::core::marker::Sync + 'static;
+    type Loader: Send + Sync + 'static;
     /// The GraphQL output type `#[expose(name = "…")]` emits for this entity.
-    type Wire: OutputType + ::core::marker::Send + ::core::marker::Sync + 'static;
+    type Wire: OutputType + Send + Sync + 'static;
 }
 
 /// The `Via` a `HasMany` takes when it names no column: "the one foreign key
@@ -85,7 +85,7 @@ pub struct SoleForeignKey;
 )]
 pub trait RelatedTo<Parent: ?Sized, Via: ?Sized = SoleForeignKey> {
     /// The FK loader that batches this child by its foreign-key column.
-    type Loader: ::core::marker::Send + ::core::marker::Sync + 'static;
+    type Loader: Send + Sync + 'static;
     /// The GraphQL output type for this child entity.
-    type Wire: OutputType + ::core::marker::Send + ::core::marker::Sync + 'static;
+    type Wire: OutputType + Send + Sync + 'static;
 }

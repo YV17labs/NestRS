@@ -107,11 +107,8 @@ tracing.workspace = true
 tokio.workspace = true
 
 # Optional deps for transport-binding features.
-# `uuid` / `chrono`: `#[expose(…, graphql)]` re-emits the column's own type into
-# the generated `InputObject`, and renders `DateTime*` columns on the output
-# object — and an entity's columns are `Uuid` and `DateTime*` by construction.
-# Those scalars' `InputType`/`OutputType` impls are therefore a requirement
-# this crate's macro creates, declared here rather than left to the consumer.
+# `uuid` / `chrono`: `#[expose(…, graphql)]` puts `Uuid` and `DateTime*` columns
+# on GraphQL objects, so their scalar impls are this crate's requirement.
 async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }

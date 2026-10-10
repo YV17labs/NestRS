@@ -105,12 +105,10 @@ pub mod __private {
 
     // What `#[expose]` and `#[wire_enum]` emit, so an entity crate declares
     // none of these; each derive carries a `crate = ` override pointing here.
-    #[cfg(feature = "graphql")]
-    pub use async_graphql;
     pub use async_trait::async_trait;
     pub use chrono;
     #[cfg(feature = "graphql")]
-    pub use nest_rs_graphql::dataloader;
+    pub use nest_rs_graphql::{async_graphql, dataloader};
     pub use schemars;
     pub use serde;
     pub use serde_json;

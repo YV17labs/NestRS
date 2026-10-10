@@ -40,7 +40,7 @@ where
     A: ActionMarker,
 {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
-        nest_rs_http::MaskProbe::mark();
+        nest_rs_http::__private::MaskProbe::mark();
         let Path(id) = Path::<Uuid>::from_request(req, body).await?;
         if id.get_version_num() != 7 {
             return Err(Error::from_string(

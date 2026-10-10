@@ -138,7 +138,6 @@ where
 
 /// `endpoint`, with `value` in every request's extensions: the per-route data
 /// `#[meta]` and `#[public]` attach.
-#[doc(hidden)]
 pub fn with_data<E, T>(endpoint: E, value: T) -> impl Endpoint
 where
     E: Endpoint,

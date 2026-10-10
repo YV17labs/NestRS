@@ -621,13 +621,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             (Some(ty), _) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Multipart(
                     ::core::option::Option::Some(
-                        ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
+                        ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn,
                     ),
                 ))
             },
             (None, Some(ty)) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Json(
-                    ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
+                    ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn,
                 ))
             },
             (None, None) if takes_multipart(&inputs) => quote! {
@@ -638,7 +638,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             (None, None) => match &form_body {
                 Some(ty) => quote! {
                     ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Form(
-                        ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
+                        ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn,
                     ))
                 },
                 None => quote! { ::core::option::Option::None },
@@ -651,7 +651,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .or_else(|| response_payload(&method.sig.output))
         {
             Some(ty) => quote! {
-                ::core::option::Option::Some(::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn)
+                ::core::option::Option::Some(::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn)
             },
             None => quote! { ::core::option::Option::None },
         };
@@ -674,7 +674,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             None => quote! { ::core::option::Option::None },
         };
         let error_responses = api.errors.iter().map(|(status, ty)| {
-            quote! { (#status, ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn) }
+            quote! { (#status, ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::__private::SchemaFn) }
         });
         let error_responses = quote! { &[#(#error_responses),*] };
         let response_content_type = match &api.response_content_type {
@@ -690,19 +690,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let path_params = if path_param_tys.is_empty() {
             quote! { &[] }
         } else {
-            quote! { &[#(::nest_rs_http::schema_of::<#path_param_tys> as ::nest_rs_http::SchemaFn),*] }
+            quote! { &[#(::nest_rs_http::__private::schema_of::<#path_param_tys> as ::nest_rs_http::__private::SchemaFn),*] }
         };
         let query_param_tys = extractor_payloads(&inputs, "Query");
         let query_params = if query_param_tys.is_empty() {
             quote! { &[] }
         } else {
-            quote! { &[#(::nest_rs_http::schema_of::<#query_param_tys> as ::nest_rs_http::SchemaFn),*] }
+            quote! { &[#(::nest_rs_http::__private::schema_of::<#query_param_tys> as ::nest_rs_http::__private::SchemaFn),*] }
         };
         let header_param_tys = extractor_payloads(&inputs, "Header");
         let header_params = if header_param_tys.is_empty() {
             quote! { &[] }
         } else {
-            quote! { &[#(::nest_rs_http::schema_of::<#header_param_tys> as ::nest_rs_http::SchemaFn),*] }
+            quote! { &[#(::nest_rs_http::__private::schema_of::<#header_param_tys> as ::nest_rs_http::__private::SchemaFn),*] }
         };
 
         let route_versions = quote! { &[#(#method_versions),*] };
@@ -1083,14 +1083,14 @@ fn param_types(inputs: &[FnArg]) -> Vec<Type> {
 /// aliased import arms too.
 fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
     if param_types.is_empty() {
-        return quote! { ::core::option::Option::<::nest_rs_http::CaptureFn>::None };
+        return quote! { ::core::option::Option::<::nest_rs_http::__private::CaptureFn>::None };
     }
     quote! {{
-        let mut __nestrs_shaper: ::core::option::Option<::nest_rs_http::CaptureFn> =
+        let mut __nestrs_shaper: ::core::option::Option<::nest_rs_http::__private::CaptureFn> =
             ::core::option::Option::None;
         #(
             if __nestrs_shaper.is_none() {
-                __nestrs_shaper = ::nest_rs_http::shaper_of!(#param_types);
+                __nestrs_shaper = ::nest_rs_http::__shaper_of!(#param_types);
             }
         )*
         __nestrs_shaper
@@ -1175,7 +1175,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     let mut expr = quote! {
         {
             #named_shaper_assert
-            ::nest_rs_http::shaped(#wrapper_expr, #shaper_selection, #probe)
+            ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection, #probe)
         }
     };
     let method_exception_filter_specs = scoped_specs(
@@ -1230,7 +1230,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         expr = quote! { ::nest_rs_http::poem::EndpointExt::data(#expr, #m) };
     }
     if let Some(header) = deprecation_header {
-        expr = quote! { ::nest_rs_http::deprecated_route(#expr, #header) };
+        expr = quote! { ::nest_rs_http::__private::deprecated_route(#expr, #header) };
     }
 
     // Guards read the marker via `Reflector::is_public()`.

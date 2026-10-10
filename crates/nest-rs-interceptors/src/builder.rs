@@ -5,7 +5,8 @@ use nest_rs_core::__private::{
     ResolvedLayer, check_specs_resolvable, compose_chain, resolve_global_layers,
 };
 use nest_rs_core::{AppBuilder, Container};
-use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
+use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
+use nest_rs_http::HttpBootCheck;
 use poem::EndpointExt;
 
 use crate::interceptor::{Interceptor, InterceptorChain};
@@ -15,9 +16,9 @@ use crate::registry::{InterceptorSpec, InterceptorSpecs};
 ///
 /// The example on [`interceptor`](fn@crate::interceptor) registers through it.
 /// The first listed is outermost, [`Layer::priority`](nest_rs_core::Layer::priority)
-/// breaking ties. The chain wraps the whole routing tree at the transport edge (band
-/// [`POOL_INTERCEPTORS`](nest_rs_http::endpoint_wrap_priority::POOL_INTERCEPTORS)),
-/// so it sees denials, 404s and self-mounts, and runs *before* authentication: for
+/// breaking ties. The chain wraps the whole routing tree at the transport edge (the
+/// global interceptors' band), so it sees denials, 404s and self-mounts, and runs
+/// *before* authentication: for
 /// actor-aware work, declare the interceptor at controller or method scope.
 pub trait AppBuilderInterceptorsExt: Sized {
     /// Register `specs` as the global interceptor chain — the transport-edge

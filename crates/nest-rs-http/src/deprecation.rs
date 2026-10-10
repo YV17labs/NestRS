@@ -20,7 +20,6 @@ pub struct DeprecationMeta {
 /// Stamp `Deprecation` onto every response the route answers, a guard's
 /// refusal included; a handler's `Err` is rendered past the route and carries
 /// none.
-#[doc(hidden)]
 pub fn deprecated_route<E: Endpoint + 'static>(
     endpoint: E,
     header: &'static str,

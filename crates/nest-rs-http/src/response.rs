@@ -408,7 +408,6 @@ impl<T: IntoResponse> IntoResponse for (StatusCode, T) {
 
 /// What a handler wrapper turns a handler's return value into: a value is
 /// `Ok`, a `Result`'s error becomes an [`HttpError`].
-#[doc(hidden)]
 pub trait IntoResult<T: IntoResponse> {
     /// The value as a result.
     fn into_result(self) -> Result<T>;

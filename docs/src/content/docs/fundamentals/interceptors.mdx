@@ -120,8 +120,8 @@ second's.
 
 Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor` declared
 globally and redeclared on the controller or method runs **exactly
-once** per request — the transport-level `HttpEndpointWrap` wrap
-carries the single execution, the inner wraps are skipped at mount
+once** per request — the transport-level wrap carries the single
+execution, the inner wraps are skipped at mount
 time. The full rationale and the cross-transport wiring details live
 on the guards page; the same rules apply here.
 

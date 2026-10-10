@@ -728,7 +728,7 @@ impl Transport for HttpTransport {
             // The router answers 404/405 with an `Err`, which would short-circuit an
             // interceptor's `next.run(req).await?`; rendering at `ERROR_RESOLVE` lets them see it.
             let split = metas
-                .partition_point(|m| m.priority() < crate::endpoint_wrap_priority::ERROR_RESOLVE);
+                .partition_point(|m| m.priority() < crate::interceptor::priority::ERROR_RESOLVE);
             let (below, above) = metas.split_at(split);
             let mut endpoint: BoxEndpoint<'static, Response> = if below.is_empty() {
                 crate::problem::ResolvedErrors(route).boxed()

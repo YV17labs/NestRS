@@ -263,9 +263,8 @@ into a single chain endpoint per route (`ExceptionFiltersEndpoint` for
 the typed catches, `FilterChain` for the untyped ones). The per-scope
 wraps do not nest; there is one wrap holding a deduped list.
 
-A global `Filter` additionally attaches a transport-edge
-`HttpEndpointWrap`, which is what lets it map errors from paths no route
-matched. A global `ExceptionFilter` has no such wrap — see the scope note
+A global `Filter` additionally wraps the transport edge, which is what
+lets it map errors from paths no route matched. A global `ExceptionFilter` has no such wrap — see the scope note
 above.
 
 The same defense-in-depth rationale as

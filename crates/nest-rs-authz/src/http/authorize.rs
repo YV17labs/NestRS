@@ -108,7 +108,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// `#[routes]` desugars that to this extractor as the handler's first
 /// parameter; written by hand it works, but is not a posture declaration. An
 /// extractor reached indirectly (nested, or run by a hand-rolled `FromRequest`)
-/// is backstopped by `nest_rs_http::MaskProbe`, which fails the route closed.
+/// is backstopped by `nest_rs_http::__private::MaskProbe`, which fails the route closed.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>
@@ -117,7 +117,7 @@ where
     S: Subject,
 {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        nest_rs_http::MaskProbe::mark();
+        nest_rs_http::__private::MaskProbe::mark();
         let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
             // A wiring bug, and the response body is an opaque problem+json: log
             // it or the developer sees a 500 with nothing to grep for.

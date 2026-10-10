@@ -185,8 +185,6 @@ pub use context::{Ctx, RejectedCredential};
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
 pub use cors::HttpCors;
 pub use deprecation::DeprecationMeta;
-#[doc(hidden)]
-pub use deprecation::deprecated_route;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, EdgePosture, Endpoint, HttpEndpointMeta, endpoint_fn};
 pub use error::{BodyError, HttpError, ResponseError, Result};
@@ -224,41 +222,37 @@ pub use versioning::{
     ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, VersionSelector, declared_versions,
 };
 
-// Not public API: sibling crates and macro output name them.
 #[doc(hidden)]
-pub use controller::{SchemaFn, schema_of};
-#[doc(hidden)]
-pub use endpoint::SelfMountGuardWrap;
-#[doc(hidden)]
-pub use endpoint::with_data;
-#[doc(hidden)]
-pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
-#[doc(hidden)]
-pub use response::IntoResult;
-#[doc(hidden)]
-pub use shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
 
-/// Converts between this crate's HTTP vocabulary and poem's, losing nothing
-/// either way, while the transport moves onto the vocabulary. Called by this
-/// framework's crates while poem is still on the public surface; not API, and
-/// removed with it.
-#[doc(hidden)]
-pub mod __poem_bridge {
-    pub use crate::poem_bridge::{
-        body_from_poem, body_to_poem, error_from_poem, error_to_poem, from_poem, request_from_poem,
-        request_from_poem_at, request_to_poem, response_from_poem, response_to_poem, to_poem,
-    };
+    pub use crate::controller::{SchemaFn, schema_of};
+    pub use crate::deprecation::deprecated_route;
+    pub use crate::endpoint::{SelfMountGuardWrap, with_data};
+    pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
+    pub use crate::response::IntoResult;
+    pub use crate::shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+
+    pub use serde;
+    pub use validator;
+
+    /// Converts between this crate's HTTP vocabulary and poem's, losing nothing
+    /// either way, while the transport moves onto the vocabulary; removed once
+    /// poem leaves the public surface.
+    pub mod poem_bridge {
+        pub use crate::poem_bridge::{
+            body_from_poem, body_to_poem, error_from_poem, error_to_poem, from_poem,
+            request_from_poem, request_from_poem_at, request_to_poem, response_from_poem,
+            response_to_poem, to_poem,
+        };
+    }
 }
 
 pub use poem;
 // The stream vocabulary an `#[sse]` route is built from.
 pub use futures_util;
 pub use schemars;
-// `#[input]`'s derives resolve through here, so an app's manifest never names them.
-#[doc(hidden)]
-pub use serde;
-#[doc(hidden)]
-pub use validator;
 
 pub use async_trait::async_trait;
 

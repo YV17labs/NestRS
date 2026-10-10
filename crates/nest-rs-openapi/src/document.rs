@@ -546,7 +546,7 @@ fn operation_object(
 /// every segment has one: a `Bind<_, _>` leaves fewer and would misalign.
 fn typed_path_parameters(
     path: &str,
-    path_params: &[nest_rs_http::SchemaFn],
+    path_params: &[nest_rs_http::__private::SchemaFn],
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {
     let names = path_parameter_names(path);
@@ -570,7 +570,7 @@ fn typed_path_parameters(
 /// Expand each payload struct into one parameter per property of its object
 /// schema, filed under `location` (`query` or `header`).
 fn expand_object_params(
-    params: &[nest_rs_http::SchemaFn],
+    params: &[nest_rs_http::__private::SchemaFn],
     location: &str,
     generator: &mut SchemaGenerator,
 ) -> Vec<Value> {

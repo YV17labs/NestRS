@@ -5,7 +5,8 @@ use nest_rs_core::__private::{
     ResolvedLayer, check_specs_resolvable, compose_chain, resolve_global_layers,
 };
 use nest_rs_core::{AppBuilder, Container};
-use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
+use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
+use nest_rs_http::HttpBootCheck;
 use poem::EndpointExt;
 
 use crate::filter::{Filter, FilterChain};
@@ -15,10 +16,9 @@ use crate::registry::{FilterSpec, FilterSpecs};
 ///
 /// The example on [`filter`](fn@crate::filter) registers through it.
 ///
-/// The chain wraps the whole routing tree at the transport edge (band
-/// [`FILTERS`](nest_rs_http::endpoint_wrap_priority::FILTERS)), mapping every error
-/// escaping routing; it sits outside the ambient DB context, so a failed
-/// transaction has already rolled back when it maps.
+/// The chain wraps the whole routing tree at the transport edge (the filters'
+/// band), mapping every error escaping routing; it sits outside the ambient DB
+/// context, so a failed transaction has already rolled back when it maps.
 pub trait AppBuilderFiltersExt: Sized {
     /// Register `specs` as the global filter chain — the transport-edge pool
     /// that maps every error escaping routing, deduped by type against

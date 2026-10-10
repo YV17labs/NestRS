@@ -1,7 +1,7 @@
 //! A **renamed** `Authorize` alias (`use Authorize as Az`) arms the response
 //! shaper exactly like the canonical spelling.
 //!
-//! `#[routes]` hands each parameter type to `nest_rs_http::ShaperProbe`, so a
+//! `#[routes]` hands each parameter type to `nest_rs_http::__private::ShaperProbe`, so a
 //! rename changes the spelling, not the type.
 
 use std::sync::Arc;

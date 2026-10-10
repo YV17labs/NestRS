@@ -8,7 +8,8 @@
 
 use nest_rs_core::__private::{ResolvedLayer, check_specs_resolvable};
 use nest_rs_core::AppBuilder;
-use nest_rs_http::{GlobalGuardsActive, HttpBootCheck, SelfMountGuardWrap};
+use nest_rs_http::__private::SelfMountGuardWrap;
+use nest_rs_http::{GlobalGuardsActive, HttpBootCheck};
 use poem::EndpointExt;
 use poem::endpoint::BoxEndpoint;
 

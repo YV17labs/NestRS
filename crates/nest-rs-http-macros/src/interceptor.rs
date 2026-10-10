@@ -1,5 +1,5 @@
 //! `#[interceptor]` — mark a struct as a **global** HTTP interceptor, mounted
-//! as an `nest_rs_http::HttpEndpointWrap` rather than provided.
+//! as an `nest_rs_http::__private::HttpEndpointWrap` rather than provided.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -16,7 +16,7 @@ const INTERCEPTOR: nest_rs_codegen::Grammar =
 
 fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     if args.is_empty() {
-        return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
+        return Ok(quote! { ::nest_rs_http::__private::endpoint_wrap_priority::INTERCEPTORS });
     }
     let mut priority: Option<syn::Expr> = None;
     INTERCEPTOR.parse2(TokenStream2::from(args), |arg| {
@@ -24,7 +24,7 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
         Ok(())
     })?;
     let Some(written) = priority else {
-        return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
+        return Ok(quote! { ::nest_rs_http::__private::endpoint_wrap_priority::INTERCEPTORS });
     };
     let priority = priority_value(&written)?;
     Ok(quote! { #priority })
@@ -123,8 +123,8 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
                 let __value = Self::from_container(&__snapshot);
                 let __arc: ::std::sync::Arc<dyn ::nest_rs_interceptors::Interceptor> =
                     ::std::sync::Arc::new(__value);
-                builder.attach_meta::<Self, ::nest_rs_http::HttpEndpointWrap>(
-                    ::nest_rs_http::HttpEndpointWrap::with_priority(
+                builder.attach_meta::<Self, ::nest_rs_http::__private::HttpEndpointWrap>(
+                    ::nest_rs_http::__private::HttpEndpointWrap::with_priority(
                         #priority,
                         move |_container, __endpoint| {
                         ::nest_rs_http::poem::EndpointExt::boxed(::nest_rs_http::poem::EndpointExt::map_to_response(

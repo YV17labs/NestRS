@@ -49,7 +49,7 @@ pub type CaptureFn = fn(&Request) -> Option<Box<dyn ResponseShaping>>;
 ///
 /// Both arms below answer `select()`; the inherent one is reachable only when
 /// its bound holds, and inherent methods win over trait methods at the same
-/// autoref step. So [`shaper_of`](crate::shaper_of) answers `Some` exactly when
+/// autoref step. So [`__shaper_of`](crate::__shaper_of) answers `Some` exactly when
 /// `T: RouteResponseShaper`, decided after name resolution.
 pub struct ShaperProbe<T>(PhantomData<fn() -> T>);
 
@@ -93,18 +93,18 @@ impl<T> UnshapedProbe for &ShaperProbe<T> {
 /// `needless_borrow` "fix" that would quietly disarm the fallback.
 #[doc(hidden)]
 #[macro_export]
-macro_rules! shaper_of {
+macro_rules! __shaper_of {
     ($ty:ty) => {{
         #[allow(
             unused_imports,
             reason = "the trait is in scope for autoref specialisation, which no lint sees"
         )]
-        use $crate::UnshapedProbe as _;
+        use $crate::__private::UnshapedProbe as _;
         #[allow(
             clippy::needless_borrow,
             reason = "the extra borrow is what orders the two probe arms"
         )]
-        let __nestrs_probe = &$crate::ShaperProbe::<$ty>::new();
+        let __nestrs_probe = &$crate::__private::ShaperProbe::<$ty>::new();
         __nestrs_probe.select()
     }};
 }
@@ -279,21 +279,21 @@ mod tests {
     #[tokio::test]
     async fn the_probe_selects_a_shaper_by_type_and_nothing_else() {
         assert!(
-            shaper_of!(Shout).is_some(),
+            __shaper_of!(Shout).is_some(),
             "a RouteResponseShaper arms the route",
         );
         assert!(
-            shaper_of!(NotAShaper).is_none(),
+            __shaper_of!(NotAShaper).is_none(),
             "any other parameter type leaves it unarmed",
         );
         // An alias, as a renamed import would be.
         type Renamed = Shout;
-        assert!(shaper_of!(Renamed).is_some());
+        assert!(__shaper_of!(Renamed).is_some());
     }
 
     #[tokio::test]
     async fn an_armed_shaper_wraps_the_handler_and_rewrites_the_body() {
-        let ep = shaped(plain, shaper_of!(Shout), None);
+        let ep = shaped(plain, __shaper_of!(Shout), None);
         let resp = TestClient::new(ep)
             .get("/")
             .header("x-tag", "seen")
@@ -305,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_capture_that_declines_leaves_the_response_untouched() {
-        let ep = shaped(plain, shaper_of!(Shout), None);
+        let ep = shaped(plain, __shaper_of!(Shout), None);
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status_is_ok();
         resp.assert_text("ok").await;
@@ -323,7 +323,7 @@ mod tests {
             "ok"
         }
 
-        let ep = shaped(marks, shaper_of!(Shout), Some("GET /armed"));
+        let ep = shaped(marks, __shaper_of!(Shout), Some("GET /armed"));
         let resp = TestClient::new(ep)
             .get("/")
             .header("x-tag", "seen")
@@ -337,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn the_first_shaping_parameter_wins() {
         let mut selected: Option<CaptureFn> = None;
-        for candidate in [shaper_of!(NotAShaper), shaper_of!(Shout)] {
+        for candidate in [__shaper_of!(NotAShaper), __shaper_of!(Shout)] {
             if selected.is_none() {
                 selected = candidate;
             }

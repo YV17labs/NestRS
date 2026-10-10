@@ -218,11 +218,18 @@ pub struct Container {
     metadata: Arc<HashMap<TypeId, Vec<MetaEntry>>>,
     scoped: Arc<HashMap<TypeId, ScopedFactory>>,
     transient: Arc<HashMap<TypeId, TransientFactory>>,
-    /// The first refusal of a site a transport composed against this
-    /// container — a mount has no `Result` to return it through.
-    refusal: Arc<Mutex<Option<anyhow::Error>>>,
-    /// What this container's sites composed, dropped with it.
-    site_chains: Arc<SiteChains>,
+    /// One `Arc`, not one per field: a request scope clones the container.
+    sites: Arc<ComposedSites>,
+}
+
+/// What the sites a transport composes against a container leave on it.
+#[derive(Default)]
+struct ComposedSites {
+    /// The first refusal of a site — a mount has no `Result` to return it
+    /// through.
+    refusal: Mutex<Option<anyhow::Error>>,
+    /// What the sites composed, dropped with the container.
+    chains: SiteChains,
 }
 
 impl Default for Container {
@@ -233,8 +240,7 @@ impl Default for Container {
             metadata: Arc::default(),
             scoped: Arc::default(),
             transient: Arc::default(),
-            refusal: Arc::default(),
-            site_chains: Arc::default(),
+            sites: Arc::default(),
         }
     }
 }
@@ -1114,8 +1120,7 @@ impl ContainerBuilder {
             metadata: Arc::new(self.metadata),
             scoped: Arc::new(self.scoped),
             transient: Arc::new(self.transient),
-            refusal: Arc::default(),
-            site_chains: Arc::default(),
+            sites: Arc::default(),
         }
     }
 
@@ -1130,8 +1135,7 @@ impl ContainerBuilder {
             metadata: Arc::new(self.metadata.clone()),
             scoped: Arc::new(self.scoped.clone()),
             transient: Arc::new(self.transient.clone()),
-            refusal: Arc::default(),
-            site_chains: Arc::default(),
+            sites: Arc::default(),
         }
     }
 }
@@ -1153,6 +1157,7 @@ pub(crate) mod __private {
     /// configured. The first refusal is the one kept.
     pub fn refuse_site(container: &Container, error: anyhow::Error) {
         let mut slot = container
+            .sites
             .refusal
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
@@ -1164,13 +1169,14 @@ pub(crate) mod __private {
     /// The chains `container`'s sites composed, which it holds for its life —
     /// see [`SiteChains`].
     pub fn site_chains(container: &Container) -> &SiteChains {
-        &container.site_chains
+        &container.sites.chains
     }
 
     /// The refusal a site filed against `container` ([`refuse_site`]), taken by
     /// whatever configured its transports, to end the boot with.
     pub fn take_site_refusal(container: &Container) -> Option<anyhow::Error> {
         container
+            .sites
             .refusal
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

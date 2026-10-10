@@ -17,15 +17,25 @@ namespace are read off its path, as every config's are: `oauth/config.rs` is
 ```rust title="crates/features/src/oauth/config.rs (from the demo)"
 use nest_rs::config::{Config, ConfigService, config};
 use nest_rs::oauth::server::RegisteredClient;
+use serde::Deserialize;
 use uuid::Uuid;
-use validator::{Validate, ValidationError, ValidationErrors};
+use validator::{Validate, ValidationError, ValidationErrors, ValidationErrorsKind};
+
+use crate::Role;
+use crate::authz::constants;
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientPayload {
+    pub org_id: Uuid,
+    pub roles: Vec<Role>,
+}
 
 #[config(namespace = "oauth", validate = "manual")]
 #[derive(Clone)]
 pub struct OAuthConfig {
-    pub clients: Vec<RegisteredClient<Uuid>>,
+    pub clients: Vec<RegisteredClient<ClientPayload>>,
     pub default_org_id: Uuid,
 }
 
@@ -43,6 +53,18 @@ impl Validate for OAuthConfig {
         let mut errors = ValidationErrors::new();
         if self.clients.is_empty() {
             errors.add("clients", ValidationError::new("at_least_one_client"));
+        }
+        for client in &self.clients {
+            if client
+                .scopes
+                .iter()
+                .any(|scope| !constants::ALL.contains(&scope.as_str()))
+            {
+                errors.errors_mut().insert(
+                    format!("clients[{}].scopes", client.client_id).into(),
+                    ValidationErrorsKind::Field(vec![ValidationError::new("unknown_scope")]),
+                );
+            }
         }
         if errors.is_empty() {
             Ok(())
@@ -75,13 +97,18 @@ impl Config for OAuthConfig {
   found and the type expected — never the value, since a mistyped list of
   clients holds their secrets. Decoding it with `serde_json` in the `from_env`
   would quote it back. The element type is the framework's
-  `RegisteredClient<P>` (from `nest-rs-authn`); the app fills the generic
-  `payload` — here `Uuid`, the org each client acts as — so the framework
-  owns the credential shape and the app owns only what it authorizes on.
-- **"At least one client" is a struct-level rule**, so `impl Validate`
-  is written by hand, building the same `ValidationErrors` the derive
-  would. It runs after the load and aborts boot exactly like a derived
-  rule. Per-field rules stay on the derive, as in the lead example.
+  `RegisteredClient<P>` (`nest_rs::oauth::server`); the app fills the generic
+  `payload` — here `ClientPayload`, the org each client acts as and its
+  roles — so the framework owns the credential shape and the app owns only
+  what it authorizes on. A client's `scopes` are not roles: they are the
+  most it may be delegated, and the token endpoint grants the scopes a
+  request names within them, or all of them when it names none.
+- **"At least one client" and "every registered scope is one the app
+  gates on" are struct-level rules**, so `impl Validate` is written by hand,
+  building the same `ValidationErrors` the derive would. They run after the
+  load and abort boot exactly like a derived rule. The second names the
+  refusal by the client's id, never by the scope it registered or its
+  secret. Per-field rules stay on the derive, as in the lead example.
 
 Wiring and consumption do not change — the same `for_feature` import,
 the same `Arc<OAuthConfig>` injection:
@@ -139,10 +166,9 @@ impl OAuthService {
 ### Run it
 
 ```bash frame="terminal"
-$ NESTRS_OAUTH__CLIENTS='[{"client_id":"web","client_secret":"...","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]' \
+$ NESTRS_OAUTH__CLIENTS='[{"client_id":"web","client_secret":"...","payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]},"scopes":["posts:read"]}]' \
   nestrs run dev auth
-2026-06-03T10:42:11Z INFO nest_rs::config: loaded oauth (2 fields)
-2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="TokenController" method="POST" path="/oauth/token" handler="token"
+2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="OAuthController" method="POST" path="/token" handler="token"
 ```
 
 A bad value fails the boot before any port opens:
@@ -159,6 +185,18 @@ $ nestrs run dev auth   # no clients configured
 Error: configuration validation failed for 'oauth'
   - clients: at_least_one_client
 ```
+
+```bash frame="terminal"
+$ NESTRS_OAUTH__CLIENTS='[{"client_id":"web",…,"scopes":["admin"]}]' nestrs run dev auth
+Error: configuration validation failed for 'oauth'
+  - clients[web].scopes: unknown_scope
+```
+
+A refusal line says the field and the rule's code, never the rule's
+parameters, so it names the client and not the accepted set. That set is
+`authz::constants::ALL` — `posts:read`, `posts:write` and
+`audio:transcode`, the scopes the app's rules gate on — and the demo's
+`.env` lists it beside the variable.
 
 
 ## A profile-dependent baseline

@@ -23,7 +23,9 @@ skipped, so a developer's personal secrets cannot leak in.
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
 seed wins and the factory never runs.
 
-```rust title="apps/api/tests/e2e/token.rs"
+```rust title="apps/auth/tests/e2e/token.rs"
+use auth::{AuthModule, ClientPayload, OAuthConfig, RegisteredClient};
+use features::Role;
 use nest_rs::testing::TestApp;
 use uuid::Uuid;
 
@@ -35,8 +37,11 @@ async fn issues_a_token_for_a_registered_client() {
             clients: vec![RegisteredClient {
                 client_id: "test-client".into(),
                 client_secret: "secret".into(),
-                scopes: vec!["read".into()],
-                payload: Uuid::nil(),
+                scopes: vec!["posts:read".into()],
+                payload: ClientPayload {
+                    org_id: Uuid::nil(),
+                    roles: vec![Role::User],
+                },
             }],
             default_org_id: Uuid::nil(),
         })
@@ -44,8 +49,10 @@ async fn issues_a_token_for_a_registered_client() {
         .await
         .unwrap();
 
-    let response = app.http().post("/oauth/token")
-        .body(r#"{"client_id":"test-client","client_secret":"secret"}"#)
+    let response = app.http().post("/token")
+        .header("authorization", basic_auth("test-client", "secret"))
+        .content_type("application/x-www-form-urlencoded")
+        .body("grant_type=client_credentials")
         .send()
         .await;
     response.assert_status_is_ok();
@@ -171,12 +178,14 @@ mod tests {
             "oauth",
             [(
                 "CLIENTS",
-                r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["user"],"payload":"00000000-0000-0000-0000-000000000000"}]"#,
+                r#"[{"client_id":"web","client_secret":"s3cr3t","scopes":["posts:read"],"payload":{"org_id":"00000000-0000-0000-0000-000000000000","roles":["user"]}}]"#,
             )],
         );
         let cfg = OAuthConfig::from_env(&env, OAuthConfig::defaults()).expect("the clients parse");
         assert_eq!(cfg.clients.len(), 1);
         assert_eq!(cfg.clients[0].client_id, "web");
+        assert_eq!(cfg.clients[0].scopes, [constants::POSTS_READ]);
+        assert_eq!(cfg.clients[0].payload.roles, [Role::User]);
         cfg.validate().expect("valid");
     }
 }

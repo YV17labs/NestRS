@@ -9,11 +9,11 @@ mod strategies;
 
 pub mod http;
 
-pub use config::OAuthConfig;
+pub use config::{ClientPayload, OAuthConfig};
 pub use dtos::LoginDto;
 pub use module::OAuthModule;
 pub use nest_rs::oauth::server::RegisteredClient;
-pub use scope::{role_from_db, roles_for_scope};
+pub use scope::role_from_db;
 pub use service::{AuthenticatedClient, Caller, OAuthService};
 pub use strategies::{ClientAuthnGuard, OAuthGuard};
 

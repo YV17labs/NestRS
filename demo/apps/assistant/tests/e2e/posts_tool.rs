@@ -81,7 +81,7 @@ async fn a_prompt_is_row_filtered_like_a_tool() {
 }
 
 #[tokio::test]
-async fn a_resource_read_cannot_reach_another_orgs_row() {
+async fn a_resource_read_of_another_orgs_row_or_a_malformed_uri_is_not_found_quoting_neither() {
     let (db, app) = boot().await;
     let conn = db.connection();
     let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
@@ -112,20 +112,24 @@ async fn a_resource_read_cannot_reach_another_orgs_row() {
 
     let globex_bearer = bearer_for(&globex.to_string());
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&globex_bearer)).await;
-    let denied = call_method(
-        app.http(),
-        POSTS_ENDPOINT,
-        &session,
-        Some(&globex_bearer),
-        "resources/read",
-        json!({ "uri": uri }),
-    )
-    .await;
+    for asked in [uri.as_str(), "post://not-a-uuid"] {
+        let denied = call_method(
+            app.http(),
+            POSTS_ENDPOINT,
+            &session,
+            Some(&globex_bearer),
+            "resources/read",
+            json!({ "uri": asked }),
+        )
+        .await;
 
-    assert!(
-        !denied.contains("seeded") && denied.contains("error"),
-        "`resources/read` must fail closed on another org's row — the handler \
-         writes no org check, `CrudService::access` and the ambient ability do. \
-         Body: {denied}",
-    );
+        assert!(
+            !denied.contains("seeded")
+                && denied.contains("-32002")
+                && denied.contains(r#""message":"unknown resource""#),
+            "`resources/read` must fail closed on another org's row and on a malformed \
+             uri alike. Body: {denied}",
+        );
+        assert!(!denied.contains(asked), "{denied}");
+    }
 }

@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::posts::PostsService;
 
 const POST_URI_PREFIX: &str = "post://";
+const UNKNOWN_RESOURCE: &str = "unknown resource";
 
 #[mcp(
     path = "/mcp/posts",
@@ -113,9 +114,7 @@ impl ServerHandler for PostsTool {
             .uri
             .strip_prefix(POST_URI_PREFIX)
             .and_then(|raw| Uuid::parse_str(raw).ok())
-            .ok_or_else(|| {
-                McpError::resource_not_found(format!("unknown resource `{}`", request.uri), None)
-            })?;
+            .ok_or_else(|| McpError::resource_not_found(UNKNOWN_RESOURCE, None))?;
 
         let post = match CrudService::access(&*self.svc, Action::Read, id)
             .await
@@ -123,10 +122,7 @@ impl ServerHandler for PostsTool {
         {
             Access::Found(post) => post,
             Access::Denied | Access::Missing => {
-                return Err(McpError::resource_not_found(
-                    format!("unknown resource `{}`", request.uri),
-                    None,
-                ));
+                return Err(McpError::resource_not_found(UNKNOWN_RESOURCE, None));
             }
         };
 

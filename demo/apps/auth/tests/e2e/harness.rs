@@ -1,5 +1,7 @@
-use auth::{AuthModule, OAuthConfig, RegisteredClient};
+use auth::{AuthModule, ClientPayload, OAuthConfig, RegisteredClient};
 use base64::Engine as _;
+use features::Role;
+use features::authz::constants;
 use nest_rs::authn::{AuthnConfig, JwtOptions, JwtService, hash_password};
 use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
@@ -13,6 +15,8 @@ pub(crate) const LOGIN_EMAIL: &str = "alice@example.com";
 pub(crate) const LOGIN_PASSWORD: &str = "correct-horse";
 pub(crate) const CLIENT_ID: &str = "demo-service";
 pub(crate) const CLIENT_SECRET: &str = "demo-service-secret";
+pub(crate) const READER_ID: &str = "reader-service";
+pub(crate) const READER_SECRET: &str = "reader-secret";
 
 pub(crate) fn basic_auth(client_id: &str, client_secret: &str) -> String {
     let raw = format!("{client_id}:{client_secret}");
@@ -52,14 +56,14 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
                 RegisteredClient {
                     client_id: CLIENT_ID.into(),
                     client_secret: CLIENT_SECRET.into(),
-                    payload: ORG_ID.parse().expect("a valid org uuid"),
-                    scopes: vec!["admin".into(), "user".into()],
+                    payload: payload(Role::Admin),
+                    scopes: constants::all(),
                 },
                 RegisteredClient {
-                    client_id: "limited-service".into(),
-                    client_secret: "limited-secret".into(),
-                    payload: ORG_ID.parse().expect("a valid org uuid"),
-                    scopes: vec!["user".into()],
+                    client_id: READER_ID.into(),
+                    client_secret: READER_SECRET.into(),
+                    payload: payload(Role::User),
+                    scopes: vec![constants::POSTS_READ.into()],
                 },
             ],
             default_org_id: ORG_ID.parse().expect("a valid org uuid"),
@@ -68,6 +72,13 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         .await
         .expect("the auth app boots");
     (db, app)
+}
+
+fn payload(role: Role) -> ClientPayload {
+    ClientPayload {
+        org_id: ORG_ID.parse().expect("a valid org uuid"),
+        roles: vec![role],
+    }
 }
 
 pub(crate) fn resource_server_verifier() -> JwtService {

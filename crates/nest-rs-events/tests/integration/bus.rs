@@ -68,7 +68,6 @@ struct EventsTestModule;
 #[tokio::test]
 async fn a_producer_emits_and_the_discovered_listener_runs() {
     let app = App::new::<EventsTestModule>().expect("boots");
-    app.init().await.expect("bootstrap wiring succeeds");
 
     let awarder = app
         .container()
@@ -85,7 +84,6 @@ async fn a_producer_emits_and_the_discovered_listener_runs() {
 #[tokio::test]
 async fn several_on_event_methods_share_the_providers_deps() {
     let app = App::new::<EventsTestModule>().expect("boots");
-    app.init().await.expect("bootstrap wiring succeeds");
 
     let awarder = app
         .container()
@@ -106,7 +104,6 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
     struct Unobserved;
 
     let app = App::new::<EventsTestModule>().expect("boots");
-    app.init().await.expect("bootstrap wiring succeeds");
 
     let bus = app
         .container()
@@ -151,7 +148,6 @@ impl OpenTransaction {
 
 async fn booted() -> (App, Arc<Awarder>, Arc<Ledger>) {
     let app = App::new::<EventsTestModule>().expect("boots");
-    app.init().await.expect("bootstrap wiring succeeds");
     let awarder = app
         .container()
         .get::<Awarder>()
@@ -307,7 +303,6 @@ struct ShapedModule;
 #[tokio::test]
 async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_served() {
     let app = App::new::<ShapedModule>().expect("boots");
-    app.init().await.expect("bootstrap wiring succeeds");
     let bus = app
         .container()
         .get::<EventBus>()

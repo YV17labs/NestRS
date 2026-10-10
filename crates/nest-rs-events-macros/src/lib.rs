@@ -7,10 +7,11 @@ use proc_macro::TokenStream;
 mod listeners;
 
 /// Walks the methods; for each one
-/// tagged with `#[on_event]`, subscribes a closure to the
-/// [`EventBus`](../nest_rs_events/struct.EventBus.html) at bootstrap and
-/// submits a `ListenerMethod` to the link-time inventory the
-/// [`EventsModule`](../nest_rs_events/struct.EventsModule.html) drains.
+/// tagged with `#[on_event]`, submits a `ListenerMethod` to the link-time
+/// inventory the [`EventsModule`](../nest_rs_events/struct.EventsModule.html)
+/// drains at the boot's wiring step, before the first lifecycle hook, where it
+/// subscribes a closure to the
+/// [`EventBus`](../nest_rs_events/struct.EventBus.html).
 ///
 /// The struct itself must be a regular `#[injectable]`; its `#[on_event]`
 /// methods share the provider's `#[inject]` dependencies.

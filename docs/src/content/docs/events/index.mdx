@@ -7,8 +7,10 @@ import { Aside } from '@astrojs/starlight/components';
 
 An event listener is **a method** on any `#[injectable]` provider, tagged
 with `#[on_event]` inside a `#[listeners]` impl block. Importing
-`EventsModule` in the app's `AppModule` wires every discovered listener
-from the fully-assembled container at bootstrap.
+`EventsModule` in the app's `AppModule` subscribes every discovered listener
+from the fully-assembled container as the boot ends, before the first
+lifecycle hook — so an event an `#[on_module_init]` hook emits reaches its
+listeners.
 
 An event is any `Clone + Send + 'static` type. Dispatch is in-process and
 awaited: `bus.emit(event)` clones the event for each listener registered
@@ -231,7 +233,7 @@ pub struct ApiModule;
 
 ## Run it
 
-At bootstrap each wired listener logs one line at `debug`, target
+As the boot ends, each wired listener logs one line at `debug`, target
 `nest_rs::events`:
 
 ```text frame="terminal"
@@ -257,8 +259,11 @@ the bus omits the module.
 ## The shape of dispatch
 
 `bus.emit(event)` reads the listener list once (under an uncontended
-`RwLock` — read-only after bootstrap), then awaits each listener in turn
-with its own clone of the event. Three consequences worth naming:
+`RwLock` — read-only once the boot has wired it), then awaits each listener in
+turn with its own clone of the event. Only a task a factory or a constructor
+spawned can emit before that: its event reaches no listener, and one `warn`
+on `nest_rs::events` names the event type, `event emitted before the
+listeners were wired: dropped`. Three consequences worth naming:
 
 - **Order is deterministic** — registration order is preservation order;
   listeners are registered in the order their providers appear in

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_core::tracing::Instrument;
 use parking_lot::RwLock;
@@ -18,22 +19,36 @@ struct Listener {
     run: ListenerFn,
 }
 
-/// The typed in-process event bus; listeners are filled in once at bootstrap,
-/// so the `RwLock` is uncontended on the emit path.
+/// The typed in-process event bus; listeners are subscribed once, by
+/// [`EventsModule`](crate::EventsModule)'s wiring step, so the `RwLock` is
+/// uncontended on the emit path.
 #[derive(Default)]
 pub struct EventBus {
     listeners: RwLock<HashMap<TypeId, Vec<Listener>>>,
+    /// Set once the wiring step subscribed the app's listeners; an emit before
+    /// it would reach none, and says so rather than dropping in silence.
+    wired: AtomicBool,
 }
 
 impl EventBus {
-    /// An empty bus with no listeners registered yet.
+    /// An empty bus, which drops every event until the wiring step has
+    /// subscribed the app's listeners.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Open the bus: every listener the app will ever have is subscribed.
+    pub(crate) fn mark_wired(&self) {
+        self.wired.store(true, Ordering::Relaxed);
     }
 
     /// Runs each listener in registration order, awaited in turn — once the
     /// emitter's transaction has committed, when it emits inside one. No-op when
     /// nothing is registered for `E`.
+    ///
+    /// Before the wiring step has subscribed the app's listeners — a task a
+    /// factory or a constructor spawned can get there first — the event is
+    /// dropped with a `warn` on `nest_rs::events` naming its type.
     ///
     /// Inside a unit of work holding a transaction, the dispatch waits for it
     /// through [`nest_rs_database::after_commit`]: it runs on commit, outside
@@ -44,6 +59,14 @@ impl EventBus {
     /// not block belongs on the queue. A panicking listener is caught, logged at
     /// `error` on `nest_rs::events`, and the chain continues.
     pub async fn emit<E: Clone + Send + 'static>(&self, event: E) {
+        if !self.wired.load(Ordering::Relaxed) {
+            tracing::warn!(
+                target: crate::TARGET,
+                event = std::any::type_name::<E>(),
+                "event emitted before the listeners were wired: dropped",
+            );
+            return;
+        }
         // Released before awaiting.
         let listeners = self.listeners.read().get(&TypeId::of::<E>()).cloned();
         let Some(listeners) = listeners else { return };
@@ -180,7 +203,8 @@ mod tests {
 
     use super::*;
 
-    /// A listener with no declared name, as a hand-built bus files it.
+    /// A listener with no declared name on a bus opened by hand, as no
+    /// wiring step runs here.
     pub(super) fn subscribe<E, H, Fut>(bus: &EventBus, listener: H)
     where
         E: Any + Send + 'static,
@@ -188,6 +212,7 @@ mod tests {
         Fut: Future<Output = ()> + Send + 'static,
     {
         subscribe_named(bus, "<anonymous>", listener);
+        bus.mark_wired();
     }
 
     #[derive(Clone)]
@@ -201,7 +226,50 @@ mod tests {
     #[tokio::test]
     async fn emit_is_a_noop_for_an_unsubscribed_event() {
         let bus = EventBus::new();
+        bus.mark_wired();
         bus.emit(OrderPlaced { id: 1 }).await;
+    }
+
+    #[tokio::test]
+    async fn an_emit_before_the_wiring_reaches_no_listener_and_says_so_once() {
+        let bus = EventBus::new();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let seen2 = seen.clone();
+        subscribe_named(&bus, "Orders::on_placed", move |evt: OrderPlaced| {
+            let seen = seen2.clone();
+            async move {
+                seen.fetch_add(evt.id as usize, Ordering::SeqCst);
+            }
+        });
+        let logs = nest_rs_testing::LogCapture::install();
+
+        bus.emit(OrderPlaced { id: 7 }).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 0, "the bus is not open yet");
+        let event = logs.expect_one(
+            crate::TARGET,
+            "event emitted before the listeners were wired: dropped",
+        );
+        assert_eq!(event.level, "warn");
+        assert!(
+            event
+                .field("event")
+                .is_some_and(|name| name.ends_with("OrderPlaced")),
+            "the line names the event type, got {:?}",
+            event.fields,
+        );
+
+        bus.mark_wired();
+        bus.emit(OrderPlaced { id: 7 }).await;
+        assert_eq!(seen.load(Ordering::SeqCst), 7, "the wired bus dispatches");
+        assert_eq!(
+            logs.find(
+                crate::TARGET,
+                "event emitted before the listeners were wired: dropped"
+            )
+            .len(),
+            1,
+            "the wired bus warns no more",
+        );
     }
 
     #[tokio::test]
@@ -380,6 +448,7 @@ mod panic_containment {
     #[tokio::test]
     async fn a_healthy_dispatch_files_its_unit_and_no_containment_event() {
         let bus = EventBus::new();
+        bus.mark_wired();
         subscribe_named(
             &bus,
             "Notifier::on_notify_requested",
@@ -416,6 +485,7 @@ mod panic_containment {
     #[tokio::test]
     async fn two_listeners_file_two_units_inside_one_trace() {
         let bus = EventBus::new();
+        bus.mark_wired();
         subscribe_named(
             &bus,
             "Notifier::first",
@@ -468,6 +538,7 @@ mod panic_containment {
     #[tokio::test]
     async fn a_panicking_listener_files_its_unit_as_a_panic() {
         let bus = EventBus::new();
+        bus.mark_wired();
         subscribe_named(
             &bus,
             "Notifier::boom",
@@ -495,6 +566,7 @@ mod panic_containment {
     #[tokio::test]
     async fn a_listener_dropped_with_its_emitter_files_its_unit_cancelled() {
         let bus = EventBus::new();
+        bus.mark_wired();
         subscribe_named(
             &bus,
             "Notifier::waits",

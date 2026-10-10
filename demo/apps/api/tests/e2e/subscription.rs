@@ -140,10 +140,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .build_headless()
         .await
         .expect("ApiModule boots against the throwaway database");
-    served
-        .init()
-        .await
-        .expect("the init phases register the event listeners");
+    served.init().await.expect("the init hooks run");
     let transport = served
         .spawn_transport(HttpTransport::new().bind(BIND))
         .await

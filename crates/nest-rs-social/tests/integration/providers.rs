@@ -25,8 +25,7 @@ async fn a_linked_provider_with_no_credentials_is_reported_inert_with_its_env_na
     let logs = nest_rs_testing::LogCapture::install();
     // No `<PREFIX>_SOCIAL__*` credentials in the test environment, so both
     // first-party providers build to `None`.
-    let app = nest_rs_core::App::new::<nest_rs_social::SocialModule>().expect("the module boots");
-    app.init().await.expect("the bootstrap phase drains");
+    let _app = nest_rs_core::App::new::<nest_rs_social::SocialModule>().expect("the module boots");
 
     let inert = logs.find(
         "nest_rs::social",

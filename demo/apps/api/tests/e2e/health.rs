@@ -13,9 +13,6 @@ async fn health_live_probe_is_ok() {
 #[tokio::test]
 async fn health_ready_probe_reports_db_indicator_up() {
     let (_db, app) = boot().await;
-    app.init()
-        .await
-        .expect("lifecycle init wires the indicator registry");
     let resp = app.http().get("/health/ready").send().await;
     resp.assert_status_is_ok();
     let body = resp.json().await;

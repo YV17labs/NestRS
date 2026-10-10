@@ -1,44 +1,38 @@
 //! [`SocialModule`] — the module that owns the social provider registry, and
-//! the only import a social login needs. It provides [`SocialRegistry`]; at
-//! bootstrap the registry activates every linked provider whose credentials
-//! are configured.
+//! the only import a social login needs. It provides [`SocialRegistry`]; the
+//! boot's wiring step, before the first lifecycle hook, activates every linked
+//! provider whose credentials are configured.
 //!
 //! It takes no configuration: each provider reads its own namespace, and a
 //! hermetic test seeds that config on the builder.
 
-use std::future::Future;
-use std::pin::Pin;
-
-use nest_rs_core::__private::LifecycleHook;
-use nest_rs_core::{Container, LifecyclePhase, module};
+use nest_rs_core::{Container, ContainerBuilder, Module, Registering, module};
 
 use crate::registry::SocialRegistry;
 
 /// Provides the [`SocialRegistry`]. Import it once so every linked, configured
 /// social provider is discovered and validated at boot.
-#[module(providers = [SocialRegistry])]
+#[module(imports = [SocialWiring], providers = [SocialRegistry])]
 pub struct SocialModule;
 
-// Self-gates on the registry being present, hence `present: |_| true`.
-nest_rs_core::inventory::submit! {
-    LifecycleHook {
-        phase: LifecyclePhase::OnApplicationBootstrap,
-        provider: "SocialModule",
-        method: "install",
-        origin: module_path!(),
-        provider_type_id: std::any::TypeId::of::<SocialModule>,
-        present: |_| true,
-        run: install,
+/// The registry [`SocialModule`]'s wiring fills, as a boot failure names it.
+const PROVIDERS: &str = "nest_rs::social::providers";
+
+/// Attaches the provider wiring: `#[module]` takes only imports and providers,
+/// so this hand-written module carries the step for [`SocialModule`].
+struct SocialWiring;
+
+impl Module for SocialWiring {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_wiring(PROVIDERS, install)
     }
 }
 
-fn install(container: &Container) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
-    Box::pin(async move {
-        match container.get::<SocialRegistry>() {
-            Some(providers) => providers.install(container),
-            None => Ok(()),
-        }
-    })
+fn install(container: &Container) -> anyhow::Result<()> {
+    match container.get::<SocialRegistry>() {
+        Some(providers) => providers.install(container),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -49,8 +43,8 @@ mod tests {
     use crate::providers::github::GithubSocialConfig;
 
     /// Importing `SocialModule` discovers both entries: the seeded GitHub
-    /// activates, the unconfigured Google stays inert. Drives `install` directly,
-    /// as `App::build` stops before the lifecycle phases.
+    /// activates, the unconfigured Google stays inert — by the time the boot
+    /// returns.
     #[tokio::test]
     async fn discovery_configures_each_provider_from_its_own_config() {
         let app = App::builder()
@@ -63,11 +57,7 @@ mod tests {
             })
             .build()
             .await
-            .expect("a bare SocialModule boots");
-
-        install(app.container())
-            .await
-            .expect("both entries resolve: one configured, one inert");
+            .expect("a bare SocialModule boots: one entry configured, one inert");
 
         let registry = app
             .container()

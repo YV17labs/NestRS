@@ -152,7 +152,7 @@ async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
         .build_headless()
         .await
         .expect("the publishing app boots against the throwaway database and Redis");
-    app.init().await.expect("the event listeners are wired");
+    app.init().await.expect("the init hooks run");
     let svc = app
         .container()
         .get::<PostsService>()

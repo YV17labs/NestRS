@@ -91,7 +91,7 @@ order:
 
 | Phase | Attribute | When |
 |-------|-----------|------|
-| **Module init** | `#[on_module_init]` | After the container is built and transports configured, before serving. |
+| **Module init** | `#[on_module_init]` | After the container is built, its registries wired and transports configured, before serving. |
 | **Application bootstrap** | `#[on_application_bootstrap]` | After every module-init hook has run, still before serving. |
 | **Module destroy** | `#[on_module_destroy]` | After the transports stop. |
 | **Before shutdown** | `#[before_application_shutdown]` | After every module-destroy hook has run. |
@@ -168,6 +168,7 @@ Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migra
 
 ```
 build container
+→ wire registries           — events, health, social: filled before any hook
 → attach + configure transports
 → on_module_init            ┐ strict — first error or panic aborts boot
 → on_application_bootstrap  ┘

@@ -3,8 +3,9 @@
 //! An event is any `Clone + Send + 'static`. Listeners live as methods on a
 //! regular `#[injectable]` provider, grouped under `#[listeners]` on the
 //! `impl` block, each tagged `#[on_event]`. Listing the provider in
-//! `#[module(providers = [...])]` (with `EventsModule` imported) wires every
-//! listener from the fully-assembled container at bootstrap.
+//! `#[module(providers = [...])]` (with `EventsModule` imported) subscribes
+//! every listener from the fully-assembled container as the boot ends, before
+//! the first lifecycle hook, so an event an init hook emits reaches them.
 //!
 //! Dispatch is in-process and awaited: every listener registered for the
 //! event type runs in registration order, each with its own clone — once the
@@ -77,7 +78,6 @@ pub mod __private {
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
 /// # let app = App::new::<AppModule>()?;
-/// # app.init().await?;
 /// # let bus = app.container().get::<EventBus>().context("EventsModule provides the bus")?;
 /// # let ledger = app.container().get::<Ledger>().context("Ledger is provided")?;
 ///

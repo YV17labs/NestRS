@@ -74,7 +74,6 @@ pub mod __private {
 /// # #[nest_rs_core::main]
 /// # async fn main() -> anyhow::Result<()> {
 /// # let app = App::builder().module::<AppModule>().build().await?;
-/// # app.init().await?;
 /// # let health = app.container().get::<HealthService>().context("HealthModule provides it")?;
 ///
 /// let ready = health.probe(ProbeKind::Readiness).await;

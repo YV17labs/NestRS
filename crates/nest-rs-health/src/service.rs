@@ -24,7 +24,7 @@ const REASON_DEADLINE: &str = "probe deadline exceeded";
 #[injectable]
 #[derive(Default)]
 pub struct HealthService {
-    /// Set once at bootstrap by `HealthModule`.
+    /// Set once by `HealthModule`'s wiring step, before the first hook.
     container: OnceLock<Container>,
     /// Absent without `ConfigModule` (a hand-built container): the defaults
     /// stand, so a probe never runs unbounded.
@@ -37,20 +37,21 @@ impl HealthService {
             if let Some(config) = container.get::<HealthConfig>() {
                 #[expect(
                     clippy::let_underscore_must_use,
-                    reason = "guarded by the container's once-set above; a re-run keeps the first config"
+                    reason = "guarded by the container's once-set above; a second install keeps the first config"
                 )]
                 let _ = self.config.set(config);
             }
             report_unreachable_indicators(&container);
-            // Inside the once-guard: `init()` is re-runnable.
+            // Inside the once-guard: a service two apps share reports once.
             crate::controller::report_prefixed_probe_paths(&container);
         }
     }
 
     /// Run every reachable indicator for `kind` **concurrently** and aggregate
     /// their results into a [`ProbeReport`], under the per-indicator ceiling and
-    /// the probe deadline of [`HealthConfig`]. Reports `up` if called before
-    /// bootstrap wires the container, so a probe racing startup does not flap.
+    /// the probe deadline of [`HealthConfig`]. The boot's wiring step hands it
+    /// the container before any hook runs; a service no boot wired (a
+    /// hand-built container) reports `up` with no indicator run.
     pub async fn probe(&self, kind: ProbeKind) -> ProbeReport {
         let Some(container) = self.container.get() else {
             return ProbeReport::empty_up();

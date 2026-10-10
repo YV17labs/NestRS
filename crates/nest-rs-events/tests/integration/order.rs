@@ -73,7 +73,6 @@ struct OrderTestModule;
 
 async fn dispatch_order() -> Vec<&'static str> {
     let app = App::new::<OrderTestModule>().expect("boots");
-    app.init().await.expect("bootstrap wiring succeeds");
     let bus = app.container().get::<EventBus>().expect("bus");
     bus.emit(Ping).await;
     app.container().get::<Trace>().expect("trace").seen()

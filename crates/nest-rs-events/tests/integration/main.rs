@@ -8,4 +8,5 @@
 )]
 
 mod bus;
+mod module;
 mod order;

@@ -166,7 +166,11 @@ construction**, since `register` runs only for an imported module's provider;
 never bolt a `ReachableProviders` filter onto it for symmetry. **Being buildable
 is not discovery**: a discovered entry's own config decides its fate — complete
 is active, absent is inert with a boot `warn`, partial or invalid fails the boot
-naming it.
+naming it. **A registry the app's code reads is filled by `provide_wiring`,
+before any hook — never by a lifecycle hook**: the kernel runs every wiring
+once, in registration order, on the sealed container, and a hook that ran first
+would read the registry empty. A wiring is synchronous, so no I/O slows the
+boot there; one that fails ends it with `WiringFailedError` naming the registry.
 
 **An inert host is reported at the level its cause earns**, and the boot reads
 the cause (`InertHost`, from the module descriptors and the app's

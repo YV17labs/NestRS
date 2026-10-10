@@ -2,8 +2,8 @@
 //! `nest-rs-health`'s `HealthIndicator`.
 //!
 //! Each provider `provider.rs` submits one [`SocialProviderEntry`] to a
-//! link-time `inventory` registry. [`SocialRegistry`] drains it at bootstrap
-//! and asks each entry to build itself ([`resolve_provider`] is the standard
+//! link-time `inventory` registry. [`SocialRegistry`] drains it at the boot's
+//! wiring step, before the first lifecycle hook, and asks each entry to build itself ([`resolve_provider`] is the standard
 //! implementation), then validates the result — a duplicate key or a key that
 //! disagrees with the provider's own [`SocialProvider::key`] **fails boot**.
 
@@ -80,7 +80,8 @@ where
 ::nest_rs_core::inventory::collect!(SocialProviderEntry);
 
 /// The resolved set of active social providers, keyed by [`SocialProvider::key`],
-/// populated at `OnApplicationBootstrap` by [`SocialModule`](crate::SocialModule).
+/// filled by [`SocialModule`](crate::SocialModule)'s wiring step before the
+/// first lifecycle hook runs.
 #[injectable]
 #[derive(Default)]
 pub struct SocialRegistry {
@@ -124,10 +125,10 @@ impl SocialRegistry {
             "registered social providers",
         );
 
-        // A second install (re-boot in one process) keeps the first map.
+        // A second install — a registry two apps share — keeps the first map.
         #[expect(
             clippy::let_underscore_must_use,
-            reason = "a second install in one process keeps the first registry, as documented above"
+            reason = "a second install keeps the first registry, as documented above"
         )]
         let _ = self.resolved.set(map);
         Ok(())
@@ -139,7 +140,8 @@ impl SocialRegistry {
         self.resolved.get()?.get(key).cloned()
     }
 
-    /// The registered provider keys, sorted. Empty before bootstrap.
+    /// The registered provider keys, sorted. Empty only on a container no boot
+    /// wired (built by hand).
     pub fn keys(&self) -> Vec<&'static str> {
         self.resolved.get().map(sorted_keys).unwrap_or_default()
     }

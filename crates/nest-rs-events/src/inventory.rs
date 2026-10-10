@@ -6,7 +6,7 @@ use crate::EventBus;
 
 /// Link-time inventory entry submitted by `#[listeners]` for each
 /// `#[on_event]`-tagged method; a method on a provider the app's module tree
-/// does not reach is warned and skipped at bootstrap.
+/// does not reach is warned and skipped when the boot wires the listeners.
 pub struct ListenerMethod {
     /// `module_path!()` of the crate that declared it.
     pub origin: &'static str,

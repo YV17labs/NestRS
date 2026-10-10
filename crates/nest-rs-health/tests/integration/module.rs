@@ -48,3 +48,75 @@ mod for_root {
             .assert_status_is_ok();
     }
 }
+
+/// The probe an init hook runs: the wiring step filled the registry before the
+/// first hook, so the hook's probe runs the app's indicators.
+mod probed_from_an_init_hook {
+    use std::sync::{Arc, Mutex};
+
+    use nest_rs_core::{App, hooks, injectable, module};
+    use nest_rs_health::{HealthModule, HealthService, ProbeKind, indicators};
+
+    #[injectable]
+    #[derive(Default)]
+    struct Warmup;
+
+    #[indicators]
+    impl Warmup {
+        #[readiness]
+        async fn cache_warm(&self) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+    }
+
+    /// What the hook saw: the indicator names its probe ran.
+    #[injectable]
+    #[derive(Default)]
+    struct ProbedAtInit {
+        ran: Mutex<Vec<&'static str>>,
+    }
+
+    #[injectable]
+    struct ReadinessGate {
+        #[inject]
+        svc: Arc<HealthService>,
+        #[inject]
+        seen: Arc<ProbedAtInit>,
+    }
+
+    #[hooks]
+    impl ReadinessGate {
+        #[on_module_init]
+        async fn wait_until_ready(&self) {
+            let report = self.svc.probe(ProbeKind::Readiness).await;
+            *self.seen.ran.lock().expect("only this hook writes it") =
+                report.details.keys().copied().collect();
+        }
+    }
+
+    #[module(
+        imports = [HealthModule],
+        providers = [Warmup, ProbedAtInit, ReadinessGate],
+    )]
+    struct GatedModule;
+
+    #[tokio::test]
+    async fn a_probe_from_an_init_hook_runs_the_reachable_indicators() {
+        let app = App::builder()
+            .module::<GatedModule>()
+            .build()
+            .await
+            .expect("boots");
+        app.init().await.expect("the init hooks run");
+
+        let seen = app
+            .container()
+            .get::<ProbedAtInit>()
+            .expect("ProbedAtInit is provided");
+        assert_eq!(
+            *seen.ran.lock().expect("the hook is done"),
+            ["cache_warm"],
+            "the probe ran the app's indicator rather than answering an empty `up`",
+        );
+    }
+}

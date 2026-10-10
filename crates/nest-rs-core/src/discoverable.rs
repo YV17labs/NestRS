@@ -296,7 +296,7 @@ fn classify(
 /// answers at boot.
 ///
 /// A `*-macros` crate reaches this through its own surface crate's re-export
-/// (`::nest_rs_health::unresolved_host`), never across to a sibling.
+/// (`::nest_rs_health::__private::unresolved_host`), never across to a sibling.
 pub fn unresolved_host(host: &str) -> anyhow::Error {
     anyhow::Error::msg(format!(
         "host `{host}` could not be resolved: {INERT_HOST_HINT}"

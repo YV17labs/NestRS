@@ -31,9 +31,6 @@ mod module;
 mod service;
 
 pub use config::HealthConfig;
-/// The kernel's, re-exported for `#[indicators]`' expansion.
-#[doc(hidden)]
-pub use nest_rs_core::unresolved_host;
 // `IndicatorFuture` and `IndicatorRun` name the type of the public field
 // `HealthIndicator::run`.
 pub use indicator::{
@@ -41,6 +38,14 @@ pub use indicator::{
     ProbeReport,
 };
 pub use module::{HealthModule, HealthSetup};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use nest_rs_core::unresolved_host;
+}
 /// Orchestrator on a provider's `impl` block: each `#[liveness]`,
 /// `#[readiness]` or `#[startup]` method in it is a [`HealthIndicator`] that
 /// probe runs.

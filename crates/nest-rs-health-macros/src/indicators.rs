@@ -114,7 +114,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             ::std::option::Option::Some(__host) => __host,
                             ::std::option::Option::None => {
                                 return ::std::result::Result::Err(
-                                    ::nest_rs_health::unresolved_host(#provider_name),
+                                    ::nest_rs_health::__private::unresolved_host(#provider_name),
                                 );
                             }
                         };

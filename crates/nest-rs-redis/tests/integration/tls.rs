@@ -3,7 +3,8 @@
 
 use std::time::Instant;
 
-use nest_rs_redis::{RedisConnection, RedisError, RedisTls};
+use nest_rs_config::ClientTls;
+use nest_rs_redis::{RedisConnection, RedisError};
 
 use crate::harness::AT_ONCE;
 use crate::harness::tls::{TlsProxy, config, trusting_the_test_authority};
@@ -18,7 +19,7 @@ async fn a_certificate_the_client_does_not_accept_fails_the_boot_at_once() {
         (
             "signed by an authority the client does not trust",
             untrusted.url_on(0),
-            RedisTls::default(),
+            ClientTls::default(),
             "TLS_CA_CERT",
             "does not chain to an authority",
         ),

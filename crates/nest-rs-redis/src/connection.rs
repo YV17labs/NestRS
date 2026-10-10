@@ -702,10 +702,12 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RedisTlsIdentity;
     use crate::testing::{
-        AUTHORITY, CLIENT, SERVER, answer, config, silent_listener, tls_listener,
+        CLIENT, SERVER, answer, config, dropping_then_refusing_listener, inline,
+        mutual_tls_listener, presenting, sentinel_listener, silent_listener, tls_listener,
+        trusting_the_authority,
     };
+    use nest_rs_config::ClientTls;
 
     #[test]
     fn only_an_answer_naming_the_deployments_settings_refuses_the_boot() {
@@ -889,7 +891,7 @@ mod tests {
             "redis-cluster://127.0.0.1:9",
         ] {
             let mut pinned = config(url, Duration::from_secs(5));
-            pinned.tls.ca_cert = Some(AUTHORITY.pem().as_bytes().to_vec());
+            pinned.tls = trusting_the_authority();
             let Err(error) = RedisConnection::connect(&pinned).await else {
                 panic!("{url} must not connect in plaintext beside TLS material")
             };
@@ -908,12 +910,9 @@ mod tests {
             "rediss-cluster://127.0.0.1:9",
         ] {
             let mut trusting_nothing = config(url, Duration::from_secs(5));
-            trusting_nothing.tls.ca_cert = Some(b"no certificate in here".to_vec());
+            trusting_nothing.tls = ClientTls::new(Some(inline("no certificate in here")), None);
             let mut mismatched = config(url, Duration::from_secs(5));
-            mismatched.tls.identity = Some(RedisTlsIdentity {
-                cert: CLIENT.cert.as_bytes().to_vec(),
-                key: SERVER.key.as_bytes().to_vec(),
-            });
+            mismatched.tls = presenting(&CLIENT.cert, &SERVER.key);
 
             for (pinned, variable) in [(trusting_nothing, "TLS_CA_CERT"), (mismatched, "TLS_KEY")] {
                 let started = Instant::now();
@@ -968,6 +967,122 @@ mod tests {
             );
         }
         serving.abort();
+    }
+
+    /// TLS 1.3 settles a client certificate after the client's side of the
+    /// handshake, so the refusal lands around the first command a link sends —
+    /// its `HELLO` — on whichever side of it the race puts it: every topology
+    /// hears it as the refusal it is. The tests after this one land it before
+    /// that command on every run.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_client_certificate_refused_after_the_handshake_fails_the_boot_on_every_topology() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let (refusing, serving) = mutual_tls_listener().await;
+        let (sentinel, naming) = sentinel_listener(refusing).await;
+        for (case, url) in [
+            ("one server", format!("rediss://{refusing}/")),
+            (
+                "a sentinel",
+                format!("rediss-sentinel://{refusing}?sentinelServiceName=nestrs"),
+            ),
+            (
+                "the primary a sentinel names",
+                format!("rediss-sentinel://{sentinel}?sentinelServiceName=nestrs"),
+            ),
+            ("a Cluster's seed", format!("rediss-cluster://{refusing}")),
+        ] {
+            let mut pinned = config(&url, Duration::from_secs(5));
+            pinned.tls = trusting_the_authority();
+            let started = Instant::now();
+            let Err(error) = RedisConnection::connect(&pinned).await else {
+                panic!("{case}: a client presenting no certificate must be refused")
+            };
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "{case}: a refused certificate spends none of the budget, took {:?}",
+                started.elapsed(),
+            );
+            assert!(
+                matches!(error, RedisError::TlsRefused { .. }),
+                "{case}: {error}"
+            );
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains("requires a client certificate")
+                    && rendered.contains(&nest_rs_config::var_name("redis", "TLS_CERT")),
+                "{case}: the refusal sends the operator to the certificate: {rendered}",
+            );
+        }
+        serving.abort();
+        naming.abort();
+        logs.expect_none(
+            crate::TARGET,
+            "redis unreachable — retrying within the connect budget",
+        );
+    }
+
+    /// The boot of the link `url` names — from the refusing server's address
+    /// and that of a sentinel naming it — whose first `HELLO` meets the drop a
+    /// refusal landed before it turns into: refused at once, sending the
+    /// operator to the certificate, and no attempt retried.
+    async fn a_refusal_landed_before_the_first_hello_fails_the_boot(
+        url: impl FnOnce(std::net::SocketAddr, std::net::SocketAddr) -> String,
+    ) {
+        let logs = nest_rs_testing::LogCapture::install();
+        let (refusing, serving) = dropping_then_refusing_listener().await;
+        let (sentinel, naming) = sentinel_listener(refusing).await;
+        let mut pinned = config(&url(refusing, sentinel), Duration::from_secs(5));
+        pinned.tls = trusting_the_authority();
+        let outcome = RedisConnection::connect(&pinned).await;
+        serving.abort();
+        naming.abort();
+
+        let Err(error) = outcome else {
+            panic!("a client presenting no certificate must be refused")
+        };
+        assert!(matches!(error, RedisError::TlsRefused { .. }), "{error}");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("requires a client certificate")
+                && rendered.contains(&nest_rs_config::var_name("redis", "TLS_CERT")),
+            "the refusal sends the operator to the certificate: {rendered}",
+        );
+        logs.expect_none(
+            crate::TARGET,
+            "redis unreachable — retrying within the connect budget",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refusal_landed_before_one_servers_first_hello_fails_the_boot() {
+        a_refusal_landed_before_the_first_hello_fails_the_boot(|refusing, _| {
+            format!("rediss://{refusing}/")
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refusal_landed_before_a_sentinels_first_hello_fails_the_boot() {
+        a_refusal_landed_before_the_first_hello_fails_the_boot(|refusing, _| {
+            format!("rediss-sentinel://{refusing}?sentinelServiceName=nestrs")
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refusal_landed_before_the_named_primarys_first_hello_fails_the_boot() {
+        a_refusal_landed_before_the_first_hello_fails_the_boot(|_, sentinel| {
+            format!("rediss-sentinel://{sentinel}?sentinelServiceName=nestrs")
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_refusal_landed_before_a_cluster_seeds_first_hello_fails_the_boot() {
+        a_refusal_landed_before_the_first_hello_fails_the_boot(|refusing, _| {
+            format!("rediss-cluster://{refusing}")
+        })
+        .await;
     }
 
     #[tokio::test]

@@ -4,11 +4,9 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor, Namespaced,
-    Result, config,
+    Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
+    Namespaced, Result, config,
 };
-
-use crate::RedisTls;
 
 const DEFAULT_URL: &str = "redis://127.0.0.1/";
 
@@ -59,9 +57,12 @@ pub struct RedisConfig {
     /// in, by the queue port's `lease_fits_renewal`.
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
-    /// system's authorities and presents no certificate. Read from `<PREFIX>_REDIS__TLS_*` — see
-    /// [`RedisTls`].
-    pub tls: RedisTls,
+    /// system's authorities and presents no certificate. Read from
+    /// `<PREFIX>_REDIS__TLS_CA_CERT`, `<PREFIX>_REDIS__TLS_CERT` and
+    /// `<PREFIX>_REDIS__TLS_KEY`, each with its `_FILE` spelling — see
+    /// [`ClientTls`]. A certificate is presented to a Redis that requires one,
+    /// its default once TLS is on (`tls-auth-clients yes`).
+    pub tls: ClientTls,
 }
 
 impl std::fmt::Debug for RedisConfig {
@@ -79,7 +80,7 @@ impl Default for RedisConfig {
         Self {
             url: DEFAULT_URL.to_string(),
             connect_timeout: Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
-            tls: RedisTls::default(),
+            tls: ClientTls::default(),
         }
     }
 }
@@ -107,7 +108,7 @@ impl Config for RedisConfig {
         Ok(Self {
             url: resolve_url(env.get("URL")?.or(Some(base.url)), Environment::from_env())?,
             connect_timeout,
-            tls: RedisTls::from_env(env, base.tls)?,
+            tls: ClientTls::from_env(env, base.tls)?,
         })
     }
 }

@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use nest_rs_redis::{RedisConfig, RedisTls};
+use nest_rs_config::{ClientTls, Material};
+use nest_rs_redis::RedisConfig;
 use nest_rs_testing::{TestAuthority, TestCertificate, system_connector, url_at, url_on};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,10 +34,15 @@ static ACCEPTOR: LazyLock<TlsAcceptor> = LazyLock::new(|| DOUBLE.acceptor(None))
 
 /// The test authority alone: what a client trusts to reach a double, and the
 /// development services' certificate one it does not.
-pub(crate) fn trusting_the_test_authority() -> RedisTls {
-    RedisTls {
-        ca_cert: Some(AUTHORITY.pem().as_bytes().to_vec()),
-        identity: None,
+pub(crate) fn trusting_the_test_authority() -> ClientTls {
+    ClientTls::new(Some(inline(AUTHORITY.pem())), None)
+}
+
+/// `pem` as a value given inline.
+fn inline(pem: &str) -> Material {
+    Material {
+        bytes: pem.as_bytes().to_vec(),
+        path: None,
     }
 }
 
@@ -158,7 +164,7 @@ async fn close_gracefully(mut refused: TcpStream) {
     .await;
 }
 
-pub(crate) fn config(url: String, tls: RedisTls) -> RedisConfig {
+pub(crate) fn config(url: String, tls: ClientTls) -> RedisConfig {
     RedisConfig {
         url,
         tls,

@@ -4,7 +4,7 @@
 //! (`<PREFIX>_REDIS__*`) over the [`RedisTopology`] the URL's scheme declares —
 //! one server (`rediss://`), the primary Sentinel names (`rediss-sentinel://`),
 //! or a Cluster (`rediss-cluster://`), every connection encrypted and verified
-//! against what [`RedisTls`] trusts. That is the crate without a feature. Each
+//! against what [`RedisConfig::tls`] trusts. That is the crate without a feature. Each
 //! binding is a feature of its own, named for the port it binds, and sits beside
 //! the connection in the composition root, sharing it on every topology:
 //!
@@ -69,5 +69,4 @@ pub use queue::{RedisQueueConfig, RedisQueueModule, RedisQueueProducer, RedisQue
 pub use schedule::{RedisOccurrenceLock, RedisScheduleModule};
 #[cfg(feature = "throttler")]
 pub use throttler::{RedisThrottler, RedisThrottlerModule};
-pub use tls::{RedisTls, RedisTlsIdentity};
 pub use topology::RedisTopology;

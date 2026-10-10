@@ -23,8 +23,9 @@ nest-rs-core.workspace = true
 # `JobProducer` and `JobConsumer` seams, the capabilities a backend declares.
 nest-rs-queue = { workspace = true, optional = true }
 # `RedisModule` owns `RedisConfig` (namespace `redis`, `<PREFIX>_REDIS__*`) and
-# `RedisQueueModule` owns `RedisQueueConfig` (namespace `redis__queue`).
-nest-rs-config.workspace = true
+# `RedisQueueModule` owns `RedisQueueConfig` (namespace `redis__queue`); `tls`
+# is `ClientTls`, what every `rediss://` connection trusts and presents.
+nest-rs-config = { workspace = true, features = ["tls"] }
 async-trait.workspace = true
 anyhow.workspace = true
 # Typed `RedisError` for the Redis backend (the producer surface speaks
@@ -59,10 +60,8 @@ uuid = { workspace = true, optional = true }
 # A Sentinel or Cluster URL names several hosts in its query, which only an
 # RFC 3986 parser reads apart; `redis` parses with the same crate.
 url.workspace = true
-# `rediss://`: the process-default crypto provider `redis` builds its client
-# with, installed when the app chose none; the client-certificate check run
-# before anything is dialled; and the `rustls::Error` a refused handshake
-# carries, which is not an outage and must not be retried as one.
+# `rediss://`: a host no certificate can name is refused as the handshake
+# parses it, before anything is dialled.
 rustls.workspace = true
 
 [features]

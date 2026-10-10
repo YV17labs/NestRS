@@ -11,9 +11,8 @@ use nest_rs_queue::{JobProducerExt, QueueModule, processor, queue};
 use nest_rs_redis::{RedisModule, RedisQueueModule};
 use serde::{Deserialize, Serialize};
 
-use nest_rs_redis::{
-    RedisConfig, RedisConnection, RedisError, RedisThrottler, RedisTls, RedisTlsIdentity,
-};
+use nest_rs_config::{ClientTls, ConfigService};
+use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisThrottler};
 use nest_rs_testing::TestAuthority;
 use nest_rs_throttler::{Throttle, ThrottlerStore};
 
@@ -231,13 +230,17 @@ mod standalone {
         let clients = TestAuthority::new();
         let proxy = TlsProxy::start(Some(crate::redis_url()), Some(&clients)).await;
         let issued = clients.client("nestrs-test-client");
-        let presenting = RedisTls {
-            identity: Some(RedisTlsIdentity {
-                cert: issued.cert.into_bytes(),
-                key: issued.key.into_bytes(),
-            }),
-            ..trusting_the_test_authority()
-        };
+        let presenting = ClientTls::from_env(
+            &ConfigService::with_vars(
+                "redis",
+                [
+                    ("TLS_CERT", issued.cert.as_str()),
+                    ("TLS_KEY", issued.key.as_str()),
+                ],
+            ),
+            trusting_the_test_authority(),
+        )
+        .expect("the deployment's certificate over the trusted authority");
         let conn = RedisConnection::connect(&config(proxy.url_on(0), presenting))
             .await
             .expect("connect presenting the client certificate");

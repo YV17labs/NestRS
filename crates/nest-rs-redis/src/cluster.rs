@@ -11,6 +11,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use nest_rs_config::ClientTls;
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster::{ClusterClient, ClusterClientBuilder};
 use redis::cluster_async::{ClusterConnection, Connect};
@@ -29,9 +30,8 @@ use crate::connection::{
 };
 use crate::error::RedisError;
 use crate::script::RedisScript;
-use crate::topology::Hello;
 use crate::url::{ClusterUrl, NodeAddr, listed};
-use crate::{RedisTls, RedisTopology, tls};
+use crate::{RedisTopology, tls};
 
 /// The link to a Cluster's nodes.
 pub(crate) struct ClusterLink {
@@ -56,7 +56,7 @@ impl ClusterLink {
     /// `PING`.
     pub(crate) async fn connect(
         url: ClusterUrl,
-        tls: &RedisTls,
+        tls: &ClientTls,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
         let listed = listed(&url.seeds);
@@ -242,7 +242,7 @@ impl Plan {
             .map_err(Attempt::Refused)?;
             let proof = async {
                 let mut node = dial(&client, self.budget).await?;
-                Hello::ask(&mut node).await
+                tls::hello(&client, &mut node, self.budget).await
             };
             match answered(self.budget, proof).await {
                 Ok(hello) if hello.serves == RedisTopology::Cluster => return Ok(()),

@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant};
 
+use nest_rs_config::ClientTls;
 use redis::aio::MultiplexedConnection;
 use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Value};
 use tokio::sync::Notify;
@@ -25,9 +26,8 @@ use crate::connection::{
     dial, node_client, spent, within_budget,
 };
 use crate::error::{RedisError, SentinelMiss};
-use crate::topology::Hello;
 use crate::url::{NodeAddr, SentinelUrl, listed};
-use crate::{RedisTls, RedisTopology, tls};
+use crate::{RedisTopology, tls};
 
 /// The link to the primary the sentinels name.
 pub(crate) struct SentinelLink {
@@ -71,7 +71,7 @@ impl SentinelLink {
     /// within `budget`.
     pub(crate) async fn connect(
         url: SentinelUrl,
-        tls: &RedisTls,
+        tls: &ClientTls,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
         let listed = listed(&url.sentinels);
@@ -336,7 +336,7 @@ impl Sentinels {
         let opened = dial(client, self.budget).await;
         tls::observe_refusal(endpoint, &opened);
         let mut sentinel = opened?;
-        let hello = Hello::ask(&mut sentinel).await?;
+        let hello = tls::hello(client, &mut sentinel, self.budget).await?;
         if hello.serves != RedisTopology::Sentinel {
             return Ok(Answer::Serves(hello.serves));
         }
@@ -381,7 +381,7 @@ impl Sentinels {
         tls::observe_refusal(&endpoint, &opened);
         let mut connection = opened.map_err(failed)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let hello = answered(remaining, Hello::ask(&mut connection))
+        let hello = answered(remaining, tls::hello(&client, &mut connection, self.budget))
             .await
             .map_err(failed)?;
         if !hello.primary {

@@ -41,7 +41,6 @@ fn retries_within(budget: Duration) -> RetryConfig {
 
 /// Bytes buffered before a multipart part is shipped: S3 requires every part
 /// but the last to be at least 5 MiB.
-#[doc(hidden)]
 pub const MULTIPART_PART_SIZE: usize = 5 * 1024 * 1024;
 
 /// Thin, injectable S3-compatible object-store client built lazily from

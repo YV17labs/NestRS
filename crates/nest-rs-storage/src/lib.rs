@@ -74,10 +74,17 @@ mod module;
 mod tls;
 mod transfer;
 
-#[doc(hidden)]
-pub use client::MULTIPART_PART_SIZE;
 pub use client::{ObjectEntry, ObjectMetadata, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
 pub use module::{StorageModule, StorageSetup};
 pub use tls::StorageTls;
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    // An integration suite is a crate of its own: it cannot see `pub(crate)`.
+    pub use crate::client::MULTIPART_PART_SIZE;
+}

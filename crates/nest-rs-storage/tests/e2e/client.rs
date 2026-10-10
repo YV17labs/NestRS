@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use futures_util::StreamExt;
-use nest_rs_storage::{MULTIPART_PART_SIZE, StorageConfig, StorageError, TARGET};
+use nest_rs_storage::__private::MULTIPART_PART_SIZE;
+use nest_rs_storage::{StorageConfig, StorageError, TARGET};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;

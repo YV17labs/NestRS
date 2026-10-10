@@ -86,6 +86,67 @@ const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
     },
 );
 
+/// hyper's own head default, and Kestrel's `RequestHeadersTimeout`.
+pub(crate) const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// nginx's `keepalive_timeout`, above the 60 s idle of AWS's load balancer and
+/// of nginx's upstream connections, so the balancer closes first.
+pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
+
+/// nginx's `send_timeout`, counted between two writes.
+pub(crate) const DEFAULT_SEND_TIMEOUT: Duration = Duration::from_secs(60);
+
+const HEADER_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "HEADER_READ_TIMEOUT_SECS",
+    "HttpConfig::header_read_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter deadline cuts a client on a slow network before its request is out, and \
+              `0` is no off switch: a head without a deadline is how a client that sends nothing \
+              holds a connection",
+    }),
+    Bound {
+        count: 300,
+        why: "a head is a few hundred bytes, so a client taking five minutes over one is holding \
+              the connection rather than sending it, and a deadline that long no longer bounds \
+              what a slow head holds",
+    },
+);
+
+const IDLE_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "IDLE_TIMEOUT_SECS",
+    "HttpConfig::idle_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter deadline closes a kept-alive connection between two requests of one \
+              client, which then pays a new handshake for each, and `0` is no off switch: an idle \
+              connection holds its place under the connection cap",
+    }),
+    Bound {
+        count: 3600,
+        why: "a connection idle for an hour is one its client forgot, holding a place under the \
+              connection cap, and a deadline that long is a unit slip more often than a choice \
+              (`75000` meant as milliseconds is twenty hours)",
+    },
+);
+
+const SEND_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "SEND_TIMEOUT_SECS",
+    "HttpConfig::send_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter deadline cuts a reader on a slow network mid-body, and `0` is no off \
+              switch: a peer that stops reading would hold the write, its buffers and its place \
+              under the connection cap forever",
+    }),
+    Bound {
+        count: 3600,
+        why: "a peer that has taken no byte for an hour has stopped reading, and a deadline that \
+              long is a unit slip more often than a choice (`60000` meant as milliseconds is \
+              seventeen hours)",
+    },
+);
+
 pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
 
 /// The key of [`HttpConfig::max_concurrent_connections`].
@@ -198,9 +259,8 @@ pub struct HttpConfig {
     pub trusted_proxies: Vec<IpAddr>,
     /// Maximum lifetime of a single `#[sse]` stream: when it elapses the stream
     /// ends, so the client's `EventSource` reconnects through the guard chain.
-    /// It bounds **emission** only: a peer that stops reading keeps its socket
-    /// past it (see [`SseSettings`](crate::SseSettings)), so bound idle sockets
-    /// at the server or proxy.
+    /// A peer that stops reading is cut sooner, at
+    /// [`send_timeout`](Self::send_timeout).
     ///
     /// A security control: 4 hours by default, one second to a day
     /// ([`MAX_CONNECTION_CEILING`]), `0` ⇒ unlimited. Read from
@@ -234,6 +294,35 @@ pub struct HttpConfig {
     /// 1 048 576 — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 10 000.
     pub max_concurrent_connections: usize,
+    /// How long a connection has to deliver its first request head, counted
+    /// from accept with the TLS handshake and HTTP/2's preface inside it, and on
+    /// HTTP/1 how long a later head has from its first byte. Past it the
+    /// connection is closed, so a client sending nothing, or a head a byte at a
+    /// time, frees its place under the connection cap.
+    ///
+    /// Read from `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS`, whole seconds from 1
+    /// to 300 — refused outside, from the environment and from the pinned struct
+    /// alike; defaults to 30 seconds.
+    pub header_read_timeout: Duration,
+    /// How long a kept-alive connection waits for its next request once its last
+    /// answer has ended: then an HTTP/1 connection is closed and an HTTP/2 one
+    /// is sent `GOAWAY`. A load balancer keeping its connections to this server
+    /// open longer reuses one as it closes and answers that request `502`: set
+    /// it above the balancer's own idle timeout.
+    ///
+    /// Read from `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS`, whole seconds from 1 to 3600
+    /// — refused outside, from the environment and from the pinned struct alike;
+    /// defaults to 75 seconds.
+    pub idle_timeout: Duration,
+    /// How long a write waits on a peer that takes nothing: past it the
+    /// connection is dropped — a response body, an event stream or a WebSocket
+    /// alike. Counted between two writes, so a slow reader that keeps taking
+    /// bytes is never cut.
+    ///
+    /// Read from `<PREFIX>_HTTP__SEND_TIMEOUT_SECS`, whole seconds from 1 to 3600
+    /// — refused outside, from the environment and from the pinned struct alike;
+    /// defaults to 60 seconds.
+    pub send_timeout: Duration,
 }
 
 impl Default for HttpConfig {
@@ -259,6 +348,9 @@ impl Default for HttpConfig {
             sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             max_concurrent_connections: DEFAULT_MAX_CONCURRENT_CONNECTIONS,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            send_timeout: DEFAULT_SEND_TIMEOUT,
         }
     }
 }
@@ -281,6 +373,18 @@ impl HttpConfig {
             self.max_concurrent_connections,
             "",
         )
+    }
+
+    /// The three connection deadlines, each held to the range its variable is,
+    /// for a config that never met the environment.
+    pub(crate) fn deadlines(&self) -> Result<crate::server::Deadlines> {
+        let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
+        let check = |bounds: DurationBounds, value| bounds.check(namespace, bounds.field(), value);
+        Ok(crate::server::Deadlines {
+            header_read: check(HEADER_READ_TIMEOUT, self.header_read_timeout)?,
+            idle: check(IDLE_TIMEOUT, self.idle_timeout)?,
+            send: check(SEND_TIMEOUT, self.send_timeout)?,
+        })
     }
 
     /// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, as this process spells it.
@@ -353,6 +457,11 @@ impl Config for HttpConfig {
                 env,
                 base.max_concurrent_connections,
             )?,
+            header_read_timeout: HEADER_READ_TIMEOUT
+                .read(env, base.header_read_timeout)?
+                .value,
+            idle_timeout: IDLE_TIMEOUT.read(env, base.idle_timeout)?.value,
+            send_timeout: SEND_TIMEOUT.read(env, base.send_timeout)?.value,
         })
     }
 }
@@ -495,6 +604,9 @@ mod tests {
             ("HSTS", format!("{SECRET}\u{7}")),
             ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
             ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
+            ("HEADER_READ_TIMEOUT_SECS", SECRET.to_owned()),
+            ("IDLE_TIMEOUT_SECS", SECRET.to_owned()),
+            ("SEND_TIMEOUT_SECS", SECRET.to_owned()),
         ] {
             figment::Jail::expect_with(|jail| {
                 jail.create_file("value", &content)?;
@@ -919,6 +1031,116 @@ mod tests {
         )
         .expect("the variable overrides the pin");
         assert_eq!(cfg.max_concurrent_connections, 5);
+    }
+
+    #[test]
+    fn the_connection_deadlines_default_to_30_75_and_60_seconds() {
+        let defaults = HttpConfig::default();
+        assert_eq!(defaults.header_read_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.idle_timeout, Duration::from_secs(75));
+        assert_eq!(defaults.send_timeout, Duration::from_secs(60));
+    }
+
+    /// Where a deadline sits in [`HttpConfig`].
+    type Slot = fn(&mut HttpConfig) -> &mut Duration;
+
+    /// Each deadline's key, the field pinning it, its ceiling in seconds, and
+    /// its slot.
+    const DEADLINES: [(&str, &str, u64, Slot); 3] = [
+        (
+            "HEADER_READ_TIMEOUT_SECS",
+            "HttpConfig::header_read_timeout",
+            300,
+            |config| &mut config.header_read_timeout,
+        ),
+        (
+            "IDLE_TIMEOUT_SECS",
+            "HttpConfig::idle_timeout",
+            3600,
+            |config| &mut config.idle_timeout,
+        ),
+        (
+            "SEND_TIMEOUT_SECS",
+            "HttpConfig::send_timeout",
+            3600,
+            |config| &mut config.send_timeout,
+        ),
+    ];
+
+    /// `HttpConfig::default()` with the deadline in `slot` pinned to `value`.
+    fn pinning(slot: Slot, value: Duration) -> HttpConfig {
+        let mut config = HttpConfig::default();
+        *slot(&mut config) = value;
+        config
+    }
+
+    /// `0` is no off switch for any of them: a phase without a deadline is the
+    /// hole they close.
+    #[test]
+    fn a_connection_deadline_outside_its_range_is_refused_naming_its_variable() {
+        for (key, _, ceiling, slot) in DEADLINES {
+            let var = nest_rs_config::var_name("http", key);
+            for (value, reason) in [
+                ("0".to_owned(), "must be at least 1".to_owned()),
+                (
+                    (ceiling + 1).to_string(),
+                    format!("must be at most {ceiling}"),
+                ),
+            ] {
+                let refused = HttpConfig::from_env(
+                    &ConfigService::with_vars("http", [(key, value.as_str())]),
+                    HttpConfig::default(),
+                )
+                .expect_err("refused")
+                .to_string();
+                assert!(refused.contains(&var), "{key}={value}: {refused}");
+                assert!(refused.contains(&reason), "{key}={value}: {refused}");
+            }
+            for secs in [1, ceiling] {
+                let mut read = HttpConfig::from_env(
+                    &ConfigService::with_vars("http", [(key, secs.to_string().as_str())]),
+                    pinning(slot, Duration::from_secs(7)),
+                )
+                .expect("an edge of the range is inside it");
+                assert_eq!(*slot(&mut read), Duration::from_secs(secs), "{key}");
+            }
+        }
+    }
+
+    /// Refused only while the variable is silent, and by the transport built
+    /// from a config that never met the environment.
+    #[test]
+    fn a_pinned_connection_deadline_outside_its_range_is_refused_naming_its_field() {
+        for (key, field, ceiling, slot) in DEADLINES {
+            let var = nest_rs_config::var_name("http", key);
+            for pinned in [
+                Duration::ZERO,
+                Duration::from_millis(999),
+                Duration::from_secs(ceiling + 1),
+            ] {
+                for refused in [
+                    HttpConfig::from_env(
+                        &ConfigService::with_vars("http", []),
+                        pinning(slot, pinned),
+                    )
+                    .expect_err("refused")
+                    .to_string(),
+                    pinning(slot, pinned)
+                        .deadlines()
+                        .expect_err("refused")
+                        .to_string(),
+                ] {
+                    assert!(refused.contains(&var), "{key} {pinned:?}: {refused}");
+                    assert!(refused.contains(field), "{key} {pinned:?}: {refused}");
+                }
+            }
+            let mut read = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [(key, "5")]),
+                pinning(slot, Duration::ZERO),
+            )
+            .expect("the variable overrides the pin");
+            assert_eq!(*slot(&mut read), Duration::from_secs(5), "{key}");
+        }
     }
 
     #[test]

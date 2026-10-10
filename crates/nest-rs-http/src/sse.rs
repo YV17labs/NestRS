@@ -6,9 +6,8 @@
 //! default, `0` ⇒ unlimited) — a stream authenticates once, so the ceiling
 //! bounds stale privileges.
 //!
-//! The ceiling bounds *emission*, not the socket: a peer that stops reading
-//! parks the write and keeps the connection alive, and the transport sets no
-//! write deadline yet. Bound idle sockets at the proxy.
+//! The ceiling bounds *emission*; a peer that stops reading is cut by the
+//! transport's send deadline, `<PREFIX>_HTTP__SEND_TIMEOUT_SECS`.
 
 use std::fmt;
 use std::sync::Arc;

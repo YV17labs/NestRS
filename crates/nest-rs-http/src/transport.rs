@@ -103,6 +103,7 @@ pub struct HttpTransport {
     request_timeout: Option<Duration>,
     shutdown_timeout: Duration,
     max_concurrent_connections: usize,
+    deadlines: crate::server::Deadlines,
     fail_secure_strict: bool,
     security_headers: crate::HttpSecurityHeaders,
     compression: bool,
@@ -293,6 +294,7 @@ impl HttpTransport {
             request_timeout: None,
             shutdown_timeout: crate::config::DEFAULT_SHUTDOWN_TIMEOUT,
             max_concurrent_connections: crate::config::DEFAULT_MAX_CONCURRENT_CONNECTIONS,
+            deadlines: crate::server::Deadlines::default(),
             fail_secure_strict: true,
             security_headers: crate::HttpSecurityHeaders::default(),
             compression: false,
@@ -328,6 +330,7 @@ impl HttpTransport {
         }
         http = http.shutdown_timeout(cfg.shutdown_timeout);
         http.max_concurrent_connections = cfg.connection_cap()?;
+        http.deadlines = cfg.deadlines()?;
         http = http.fail_secure_strict(cfg.fail_secure_strict);
         http = http.security_headers(cfg.security_headers.clone());
         http = http.compression(cfg.compression);
@@ -864,6 +867,7 @@ impl Transport for HttpTransport {
             target: crate::target::HTTP,
             addr = %self.bind,
             tls = tls.is_some(),
+            idle_timeout_secs = self.deadlines.idle.as_secs(),
             "transport listening",
         );
         let server = Server::new(
@@ -871,6 +875,7 @@ impl Transport for HttpTransport {
             endpoint,
             Arc::clone(&drain),
             self.max_concurrent_connections,
+            self.deadlines,
             tls,
         )?;
         let detached = self.detached;

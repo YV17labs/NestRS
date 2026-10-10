@@ -14,7 +14,7 @@ use nest_rs_testing::LogCapture;
 use poem::web::websocket::{Message as Frame, WebSocket};
 use poem::{Body, IntoResponse, Route, handler};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -201,13 +201,33 @@ pub(crate) async fn connect(port: u16) -> TcpStream {
     panic!("the transport never came up on port {port}");
 }
 
-/// Send `GET path` on a fresh connection.
-pub(crate) async fn request(port: u16, path: &str) -> TcpStream {
-    let mut stream = connect(port).await;
+/// [`connect`] on a socket whose receive buffer is 4 KiB.
+pub(crate) async fn small_window(port: u16) -> TcpStream {
+    for _ in 0..100 {
+        let socket = TcpSocket::new_v4().expect("a socket");
+        socket
+            .set_recv_buffer_size(4 * 1024)
+            .expect("a small receive buffer");
+        if let Ok(stream) = socket.connect(([127, 0, 0, 1], port).into()).await {
+            return stream;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the transport never came up on port {port}");
+}
+
+/// Send `GET path` on a connection already open.
+pub(crate) async fn ask(stream: &mut TcpStream, path: &str) {
     stream
         .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
         .await
         .expect("the request is sent");
+}
+
+/// Send `GET path` on a fresh connection.
+pub(crate) async fn request(port: u16, path: &str) -> TcpStream {
+    let mut stream = connect(port).await;
+    ask(&mut stream, path).await;
     stream
 }
 
@@ -225,6 +245,24 @@ pub(crate) async fn read_head(stream: &mut (impl AsyncRead + Unpin)) -> String {
         head.push(byte[0]);
     }
     String::from_utf8(head).expect("the head is text")
+}
+
+/// Let `span` pass on the paused clock — every deadline the server armed
+/// inside it fires — then hand the clock back. The socket is then read on the
+/// real clock: a loopback byte can land after the paused one has moved on.
+pub(crate) async fn after(span: Duration) {
+    tokio::time::pause();
+    tokio::time::sleep(span).await;
+    tokio::time::resume();
+}
+
+/// Whether the server still holds `stream` open: no end is read within a
+/// tenth of a second.
+pub(crate) async fn still_open(stream: &mut TcpStream) -> bool {
+    let mut byte = [0_u8; 1];
+    tokio::time::timeout(Duration::from_millis(100), stream.read(&mut byte))
+        .await
+        .is_err()
 }
 
 /// Everything left on the socket, up to the server's close.

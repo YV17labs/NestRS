@@ -1,6 +1,7 @@
 //! The transport's accept loop: a place under the connection cap taken before
 //! each `accept()`, accept failures backed off, TLS on tokio-rustls, and each
-//! connection served by hyper on a task of its own, a panic contained there.
+//! connection served by hyper on a task of its own, a panic contained there and
+//! each of its phases held to a deadline ([`Phases`]).
 //!
 //! poem stays the request engine behind [`BoxEndpoint`]; its `Server` exposes no
 //! hook for the cap, the accept errors or hyper's timer, so the loop is ours
@@ -13,6 +14,7 @@ use std::net::SocketAddr;
 use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -22,6 +24,7 @@ use hyper::body::Incoming;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use poem::endpoint::BoxEndpoint;
+use poem::http::Version;
 use poem::http::uri::Scheme;
 use poem::web::{LocalAddr, RemoteAddr};
 use poem::{Addr, Endpoint, Response};
@@ -29,12 +32,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::drain::Drain;
+use crate::phase::{PhasedBody, PhasedIo, Phases};
 use crate::tls::ListenerTls;
+use crate::window::{self, Window};
 
 /// What one HTTP/2 connection runs at once (RFC 9113 §5.1.2), hyper's own default.
 const MAX_CONCURRENT_STREAMS: u32 = 200;
@@ -54,8 +60,35 @@ const MAX_HTTP1_BUFFER: usize = 64 * 1024;
 /// How often an idle HTTP/2 connection is pinged, and how long the ping waits.
 const HTTP2_KEEP_ALIVE: Duration = Duration::from_secs(20);
 
+/// How long a connection whose phase ran out has to close once asked: hyper
+/// closes an idle HTTP/1 connection at once, an HTTP/2 peer needs a moment to
+/// read `GOAWAY`, and a head half read is waited on — then it is dropped.
+const PHASE_GRACE: Duration = Duration::from_secs(1);
+
 /// What a response body is once it leaves poem.
 type ResponseBody = BoxBody<Bytes, io::Error>;
+
+/// What each connection's phases and writes are held to: the three
+/// [`HttpConfig`](crate::HttpConfig) deadlines.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Deadlines {
+    /// The first head from accept, and on HTTP/1 a later head from its first byte.
+    pub(crate) header_read: Duration,
+    /// A kept-alive connection waiting for its next request.
+    pub(crate) idle: Duration,
+    /// A write waiting on a peer that takes nothing.
+    pub(crate) send: Duration,
+}
+
+impl Default for Deadlines {
+    fn default() -> Self {
+        Self {
+            header_read: crate::config::DEFAULT_HEADER_READ_TIMEOUT,
+            idle: crate::config::DEFAULT_IDLE_TIMEOUT,
+            send: crate::config::DEFAULT_SEND_TIMEOUT,
+        }
+    }
+}
 
 /// The accept loop over one bound listener.
 pub(crate) struct Server {
@@ -65,6 +98,7 @@ pub(crate) struct Server {
     endpoint: Arc<BoxEndpoint<'static, Response>>,
     drain: Arc<Drain>,
     admission: Admission,
+    deadlines: Deadlines,
 }
 
 impl Server {
@@ -74,6 +108,7 @@ impl Server {
         endpoint: BoxEndpoint<'static, Response>,
         drain: Arc<Drain>,
         max_concurrent_connections: usize,
+        deadlines: Deadlines,
         tls: Option<ListenerTls>,
     ) -> io::Result<Self> {
         Ok(Self {
@@ -83,6 +118,7 @@ impl Server {
             endpoint: Arc::new(endpoint),
             drain,
             admission: Admission::new(max_concurrent_connections),
+            deadlines,
         })
     }
 
@@ -99,22 +135,51 @@ impl Server {
             ),
             None => (None, None),
         };
-        let builder = Arc::new(builder());
+        let builder = Arc::new(builder(self.deadlines.send));
         let shutdown = CancellationToken::new();
         let mut connections = JoinSet::new();
         let mut backoff = AcceptBackoff::default();
         loop {
-            let place = tokio::select! {
-                () = &mut signal => break,
-                place = self.admission.place() => match place {
-                    Some(place) => place,
-                    None => break,
+            let (place, waited) = match self.admission.free() {
+                Some(place) => (place, None),
+                None => tokio::select! {
+                    biased;
+                    () = &mut signal => break,
+                    place = self.admission.freed() => match place {
+                        Some(place) => (place, None),
+                        None => break,
+                    },
+                    accepted = backoff.accept(|| self.listener.accept()) => {
+                        // Held unserved until a place frees, as the backlog holds the rest.
+                        self.admission.held_back();
+                        tokio::select! {
+                            () = &mut signal => break,
+                            place = self.admission.freed() => match place {
+                                Some(place) => (place, Some(accepted)),
+                                None => break,
+                            },
+                        }
+                    }
                 },
             };
-            let (stream, peer) = tokio::select! {
-                () = &mut signal => break,
-                accepted = backoff.accept(|| self.listener.accept()) => accepted,
+            let (stream, peer) = match waited {
+                Some(accepted) => accepted,
+                None => {
+                    let mut accepting = pin!(backoff.accept(|| self.listener.accept()));
+                    match futures_util::poll!(accepting.as_mut()) {
+                        Poll::Ready(accepted) => accepted,
+                        Poll::Pending => {
+                            // A place in hand and an empty backlog: nothing waits on the cap.
+                            self.admission.nothing_waits();
+                            tokio::select! {
+                                () = &mut signal => break,
+                                accepted = accepting => accepted,
+                            }
+                        }
+                    }
+                }
             };
+            let accepted = Instant::now();
             if let Err(error) = stream.set_nodelay(true) {
                 tracing::warn!(
                     target: crate::target::HTTP,
@@ -125,11 +190,13 @@ impl Server {
             let connection = Connection {
                 peer,
                 local: self.local,
+                accepted,
+                deadlines: self.deadlines,
                 endpoint: Arc::clone(&self.endpoint),
                 builder: Arc::clone(&builder),
                 shutdown: shutdown.clone(),
             };
-            let socket = self.drain.socket(stream, place);
+            let socket = self.drain.socket(stream, place, self.deadlines.send);
             connections.spawn(contained(connection.serve(socket, acceptor.clone())));
             while connections.try_join_next().is_some() {}
         }
@@ -152,9 +219,11 @@ async fn join_all(connections: &mut JoinSet<()>) {
 }
 
 /// The settings every connection is served with: hyper's timer, the HTTP/2
-/// limits, the HTTP/1 buffer. No head deadline is armed here.
-fn builder() -> auto::Builder<Contained> {
-    let mut builder = auto::Builder::new(Contained);
+/// limits, the HTTP/1 buffer, and each HTTP/2 stream held to `send_timeout`.
+/// hyper's head deadline is off: [`Phases`] holds the head, the idle spell and
+/// the version sniff before both.
+fn builder(send_timeout: Duration) -> auto::Builder<Contained> {
+    let mut builder = auto::Builder::new(Contained { send_timeout });
     builder
         .http1()
         .timer(TokioTimer::new())
@@ -176,6 +245,8 @@ fn builder() -> auto::Builder<Contained> {
 struct Connection {
     peer: SocketAddr,
     local: SocketAddr,
+    accepted: Instant,
+    deadlines: Deadlines,
     endpoint: Arc<BoxEndpoint<'static, Response>>,
     builder: Arc<auto::Builder<Contained>>,
     shutdown: CancellationToken,
@@ -186,37 +257,56 @@ impl Connection {
     where
         Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
+        let phases = Phases::new(
+            self.accepted,
+            self.deadlines.header_read,
+            self.deadlines.idle,
+        );
         let Some(acceptor) = tls else {
-            return self.http(socket, Scheme::HTTP).await;
+            return self.http(socket, Scheme::HTTP, phases).await;
         };
         let handshake = tokio::select! {
             () = self.shutdown.cancelled() => return,
-            handshake = acceptor.accept(socket) => handshake,
+            handshake = tokio::time::timeout_at(phases.first_head_due(), acceptor.accept(socket)) => {
+                handshake
+            }
         };
         match handshake {
-            Ok(stream) => self.http(stream, Scheme::HTTPS).await,
-            Err(error) => tracing::debug!(
+            Ok(Ok(stream)) => self.http(stream, Scheme::HTTPS, phases).await,
+            Ok(Err(error)) => tracing::debug!(
                 target: crate::target::HTTP,
                 error = %nest_rs_core::error_message(&error),
                 "tls handshake failed; the connection is dropped",
             ),
+            Err(_) => tracing::debug!(
+                target: crate::target::HTTP,
+                header_read_timeout_ms = millis(self.deadlines.header_read),
+                "tls handshake unfinished at the head deadline; the connection is dropped",
+            ),
         }
     }
 
-    /// HTTP/1 or HTTP/2, told apart by the first bytes, until the peer goes or
-    /// shutdown asks the connection to finish what it is answering.
-    async fn http<Io>(self, io: Io, scheme: Scheme)
+    /// HTTP/1 or HTTP/2, told apart by the first bytes, until the peer goes,
+    /// shutdown asks the connection to finish what it is answering, or one of
+    /// its phases outlives its deadline.
+    async fn http<Io>(self, io: Io, scheme: Scheme, phases: Arc<Phases>)
     where
         Io: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         let Self {
             peer,
             local,
+            deadlines,
             endpoint,
             builder,
             shutdown,
+            ..
         } = self;
+        let requests = Arc::clone(&phases);
         let service = hyper::service::service_fn(move |request: poem::http::Request<Incoming>| {
+            // Taken here, so a handler dropped before it answers ends it too.
+            let in_flight = requests.request();
+            let http2 = request.version() == Version::HTTP_2;
             let endpoint = Arc::clone(&endpoint);
             let request = poem::Request::from((
                 request,
@@ -225,28 +315,64 @@ impl Connection {
                 scheme.clone(),
             ));
             async move {
-                Ok::<_, Infallible>(poem::http::Response::<ResponseBody>::from(
+                let response = poem::http::Response::<ResponseBody>::from(
                     endpoint.get_response(request).await,
-                ))
+                );
+                // Read on the stream's own task, where hyper polls this future.
+                let window = if http2 { Window::current() } else { None };
+                Ok::<_, Infallible>(response.map(|body| PhasedBody::new(body, in_flight, window)))
             }
         });
-        let mut connection =
-            pin!(builder.serve_connection_with_upgrades(TokioIo::new(io), service));
+        let io = TokioIo::new(PhasedIo::new(io, Arc::clone(&phases)));
+        let mut connection = pin!(builder.serve_connection_with_upgrades(io, service));
         let ended = tokio::select! {
             ended = connection.as_mut() => ended,
             () = shutdown.cancelled() => {
                 connection.as_mut().graceful_shutdown();
                 connection.await
             }
+            phase = phases.expired() => {
+                tracing::debug!(
+                    target: crate::target::HTTP,
+                    phase = phase.name(),
+                    "a connection outlived its phase deadline; it is closed",
+                );
+                connection.as_mut().graceful_shutdown();
+                match tokio::time::timeout(PHASE_GRACE, connection.as_mut()).await {
+                    Ok(ended) => ended,
+                    Err(_) => return,
+                }
+            }
         };
-        if let Err(error) = ended {
-            tracing::debug!(
+        match ended {
+            Ok(()) => {}
+            Err(error) if send_stalled(&*error) => tracing::warn!(
+                target: crate::target::HTTP,
+                send_timeout_ms = millis(deadlines.send),
+                error = %nest_rs_core::error_message(&*error),
+                "the peer took nothing within the send deadline; it is cut off",
+            ),
+            Err(error) => tracing::debug!(
                 target: crate::target::HTTP,
                 error = %nest_rs_core::error_message(&*error),
                 "connection ended on an error",
-            );
+            ),
         }
     }
+}
+
+/// Whether `error` ended a connection on a write the peer took nothing of.
+fn send_stalled(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source()).any(|error| {
+        error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
+    })
+}
+
+/// `duration` in whole milliseconds, for a log field.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A connection's `future`, with a panic filed and kept from the task that
@@ -263,10 +389,13 @@ async fn contained(future: impl Future<Output = ()>) {
 }
 
 /// hyper's executor for the tasks it spawns — an HTTP/2 connection's streams —
-/// each contained on its own: a panic resets its stream, and the connection
+/// each contained on its own: a panic resets its stream, as does a frame the
+/// peer's window has not taken within the send deadline, and the connection
 /// keeps serving the others.
 #[derive(Clone, Copy)]
-struct Contained;
+struct Contained {
+    send_timeout: Duration,
+}
 
 impl<F> hyper::rt::Executor<F> for Contained
 where
@@ -274,25 +403,37 @@ where
     F::Output: Send + 'static,
 {
     fn execute(&self, future: F) {
+        let send_timeout = self.send_timeout;
         tokio::spawn(async move {
-            if let Err(payload) = AssertUnwindSafe(future).catch_unwind().await {
-                nest_rs_core::contained_panic!(
+            match AssertUnwindSafe(window::within(future, send_timeout))
+                .catch_unwind()
+                .await
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => tracing::warn!(
+                    target: crate::target::HTTP,
+                    send_timeout_ms = millis(send_timeout),
+                    "the peer took nothing within the send deadline; it is cut off",
+                ),
+                Err(payload) => nest_rs_core::contained_panic!(
                     target: crate::target::HTTP,
                     payload.as_ref(),
                     "an HTTP/2 stream task panicked",
-                );
+                ),
             }
         });
     }
 }
 
-/// Each connection's place under the cap, taken before `accept()`, so a
-/// connection past it waits in the kernel's listen backlog (Go's
-/// `netutil.LimitListener`), never accepted to be reset.
+/// Each connection's place under the cap, taken before `accept()`, so past
+/// it one connection is accepted and held unserved and the rest wait in the
+/// kernel's listen backlog (Go's `netutil.LimitListener`), never accepted to
+/// be reset.
 struct Admission {
     places: Arc<Semaphore>,
     max_concurrent_connections: usize,
-    /// The cap is reached and has not had a place free since.
+    /// A connection waited on the full cap, and the backlog has not been found
+    /// empty since.
     reached: bool,
 }
 
@@ -305,16 +446,21 @@ impl Admission {
         }
     }
 
-    /// The next free place, waiting for one past the cap; one `warn` when the
-    /// cap is reached, one `info` once a place is free again. `None` only if the
-    /// places were closed, which nothing does.
-    async fn place(&mut self) -> Option<OwnedSemaphorePermit> {
-        if let Ok(place) = Arc::clone(&self.places).try_acquire_owned() {
-            self.freed();
-            return Some(place);
-        }
-        if !self.reached {
-            self.reached = true;
+    /// A free place, if the cap is not full.
+    fn free(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.places).try_acquire_owned().ok()
+    }
+
+    /// The next place to free. `None` only if the places were closed, which
+    /// nothing does.
+    async fn freed(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.places).acquire_owned().await.ok()
+    }
+
+    /// A connection was accepted with the cap full, and waits for a place:
+    /// said once, until nothing waits.
+    fn held_back(&mut self) {
+        if !std::mem::replace(&mut self.reached, true) {
             tracing::warn!(
                 target: crate::target::HTTP,
                 max_concurrent_connections = self.max_concurrent_connections,
@@ -322,14 +468,12 @@ impl Admission {
                 "connection cap reached; new connections wait in the listen backlog",
             );
         }
-        let place = Arc::clone(&self.places).acquire_owned().await.ok()?;
-        if self.places.available_permits() > 0 {
-            self.freed();
-        }
-        Some(place)
     }
 
-    fn freed(&mut self) {
+    /// With a place in hand, the backlog was found empty: whatever waited on
+    /// the cap has been accepted, said once. Under steady load a connection
+    /// always waits, so a busy spell files one pair, not one per connection.
+    fn nothing_waits(&mut self) {
         if std::mem::take(&mut self.reached) {
             tracing::info!(
                 target: crate::target::HTTP,
@@ -398,7 +542,7 @@ impl AcceptBackoff {
                 tracing::warn!(
                     target: crate::target::HTTP,
                     error = %nest_rs_core::error_message(error),
-                    retry_ms = u64::try_from(Self::FIRST.as_millis()).unwrap_or(u64::MAX),
+                    retry_ms = millis(Self::FIRST),
                     "accept failed; backing off",
                 );
                 Self::FIRST
@@ -504,35 +648,26 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn the_cap_is_said_once_when_reached_and_once_when_a_place_frees() {
+    #[test]
+    fn the_cap_is_said_once_when_a_connection_waits_and_once_when_none_does() {
+        const REACHED: &str = "connection cap reached; new connections wait in the listen backlog";
+        const LEFT: &str = "connection cap no longer reached; accepting again";
         let logs = LogCapture::install();
         let mut admission = Admission::new(1);
-        let first = admission.place().await.expect("a free place");
-        let waiting = tokio::spawn(async move {
-            let second = admission.place().await.expect("a place once one frees");
-            (admission, second)
-        });
-        tokio::task::yield_now().await;
-        logs.expect_one(
-            crate::target::HTTP,
-            "connection cap reached; new connections wait in the listen backlog",
-        );
-        drop(first);
-        let (mut admission, second) = waiting.await.expect("the wait ends with a place");
-        logs.expect_none(
-            crate::target::HTTP,
-            "connection cap no longer reached; accepting again",
-        );
-        drop(second);
-        drop(admission.place().await);
-        logs.expect_one(
-            crate::target::HTTP,
-            "connection cap no longer reached; accepting again",
-        );
-        logs.expect_one(
-            crate::target::HTTP,
-            "connection cap reached; new connections wait in the listen backlog",
+        admission.nothing_waits();
+        logs.expect_none(crate::target::HTTP, LEFT);
+
+        admission.held_back();
+        admission.held_back();
+        logs.expect_one(crate::target::HTTP, REACHED);
+        admission.nothing_waits();
+        admission.nothing_waits();
+        logs.expect_one(crate::target::HTTP, LEFT);
+        admission.held_back();
+        assert_eq!(
+            logs.find(crate::target::HTTP, REACHED).len(),
+            2,
+            "the next busy spell opens with its own warn",
         );
     }
 }

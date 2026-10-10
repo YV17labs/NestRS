@@ -1455,6 +1455,9 @@ async fn a_frame_returned_through_anyhow_is_sent_whole() {
 
 static SLOW_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static STUCK_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// Told once the flood is queued: from there the writer has more to send than
+/// any socket buffer holds, so it parks on the first frame the kernel refuses.
+static FLOODED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 #[gateway(path = "/leaving")]
 pub(crate) struct LeavingGateway;
@@ -1502,6 +1505,7 @@ impl LeavingGateway {
         for _ in 0..256 {
             let _ = client.emit("chunk", &chunk);
         }
+        FLOODED.notify_one();
     }
 }
 
@@ -1806,7 +1810,9 @@ async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
     let app = leaving_app().await;
     let mut socket = app.socket("/leaving").connect().await;
     socket.send("flood", serde_json::Value::Null).await;
-    // Paused time moves only once the writer is parked on the full kernel buffers.
+    // The paused clock moves as soon as the runtime idles, which a frame still
+    // crossing loopback does not prevent: wait for the handler first.
+    FLOODED.notified().await;
     tokio::time::pause();
     tokio::time::sleep(Duration::from_millis(500)).await;
     app.shutdown().await.expect("the transport stops cleanly");
@@ -1823,6 +1829,74 @@ async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
         "no socket outlived the transport: {cut:#?}",
     );
     assert_eq!(cut.field("cut").as_deref(), Some("1"), "{cut:#?}");
+    drop(socket);
+}
+
+/// The send deadline of [`StallingModule`]'s transport.
+const SEND_DEADLINE: Duration = Duration::from_secs(2);
+
+#[module(
+    imports = [
+        WsModule,
+        nest_rs_ws::nest_rs_http::HttpModule::for_root(nest_rs_ws::nest_rs_http::HttpConfig {
+            send_timeout: SEND_DEADLINE,
+            ..Default::default()
+        }),
+    ],
+    providers = [LeavingGateway],
+)]
+struct StallingModule;
+
+/// A socket whose client stops reading while the gateway pushes goes at the
+/// send deadline, on its own: the read loop ends with the writer, the
+/// disconnect hook runs, and no shutdown is needed to free it.
+#[tokio::test]
+async fn a_socket_whose_client_stops_reading_is_closed_at_the_send_deadline() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<StallingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("flood", serde_json::Value::Null).await;
+    FLOODED.notified().await;
+
+    tokio::time::pause();
+    tokio::time::sleep(3 * SEND_DEADLINE).await;
+    tokio::time::resume();
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        !logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_ws::unit::DISCONNECT.name(),
+            )
+            .is_empty()
+    })
+    .await;
+
+    let stalled = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "the peer took nothing within the send deadline; it is cut off",
+    );
+    assert_eq!(stalled.level, "warn");
+    assert!(stalled.field("conn_id").is_some(), "{stalled:#?}");
+    assert!(stalled.field("error").is_some(), "{stalled:#?}");
+    let left = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::DISCONNECT.name(),
+    );
+    assert_eq!(
+        left.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the disconnect hook ran: {left:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+    logs.expect_none(
+        nest_rs_ws::nest_rs_http::target::HTTP,
+        "connections still open as the shutdown window closes are cut; a request still \
+         running is dropped unanswered and a stream ends mid-flow",
+    );
     drop(socket);
 }
 

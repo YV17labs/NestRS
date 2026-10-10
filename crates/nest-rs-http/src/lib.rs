@@ -38,6 +38,7 @@ mod metadata;
 mod module;
 mod multipart;
 mod opaque;
+mod phase;
 mod pipe;
 mod poem_bridge;
 mod problem;
@@ -60,6 +61,7 @@ mod trace_context;
 mod transport;
 pub mod unit;
 mod versioning;
+mod window;
 
 /// A cheaply cloned, shared slice of bytes.
 ///

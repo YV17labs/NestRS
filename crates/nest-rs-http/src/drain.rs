@@ -3,9 +3,12 @@
 //! at the second.
 //!
 //! Every accepted socket is counted until it drops, an upgraded one included:
-//! it outlives the HTTP connection that upgraded it.
+//! it outlives the HTTP connection that upgraded it. Below TLS, its writes are
+//! all the connection's — the handshake's, a body's, a WebSocket's frames — so
+//! the send deadline is held here.
 
-use std::io::IoSlice;
+use std::future::Future;
+use std::io::{Error as IoError, ErrorKind, IoSlice};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -14,7 +17,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, Result as IoResult};
 use tokio::sync::OwnedSemaphorePermit;
-use tokio::time::Instant;
+use tokio::time::{Instant, Sleep};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 /// The sockets a transport has accepted and not yet dropped, how many of them
@@ -36,12 +39,16 @@ impl Drain {
         self: &Arc<Self>,
         io: Io,
         place: OwnedSemaphorePermit,
+        send_timeout: Duration,
     ) -> DrainSocket<Io> {
         self.opened();
         DrainSocket {
             inner: io,
             drain: Arc::clone(self),
             _place: place,
+            send_timeout,
+            stall: None,
+            stalled: false,
         }
     }
 
@@ -109,12 +116,52 @@ impl Drain {
     }
 }
 
-/// One accepted socket, counted open until it is dropped. Vectored writes are
-/// forwarded too: hyper uses them when the socket offers them.
+/// One accepted socket, counted open until it is dropped, whose write fails
+/// `TimedOut` once the peer has taken nothing for `send_timeout`. Vectored
+/// writes are forwarded too: hyper uses them when the socket offers them.
 pub(crate) struct DrainSocket<Io> {
     inner: Io,
     drain: Arc<Drain>,
     _place: OwnedSemaphorePermit,
+    send_timeout: Duration,
+    /// Allocated the first time a write waits, and kept for the next.
+    stall: Option<Pin<Box<Sleep>>>,
+    /// A write is waiting, and `stall` holds its deadline.
+    stalled: bool,
+}
+
+impl<Io> DrainSocket<Io> {
+    /// A write came back `polled`: one that went through clears the stall.
+    fn written<T>(&mut self, cx: &mut Context<'_>, polled: Poll<IoResult<T>>) -> Poll<IoResult<T>> {
+        if polled.is_ready() {
+            self.stalled = false;
+            return polled;
+        }
+        self.stall(cx)
+    }
+
+    /// A write or flush waits: the stall is armed — once, so it counts from
+    /// the first wait — and the wait fails past it.
+    fn stall<T>(&mut self, cx: &mut Context<'_>) -> Poll<IoResult<T>> {
+        let stall = match &mut self.stall {
+            Some(stall) if self.stalled => stall,
+            Some(stall) => {
+                stall.as_mut().reset(Instant::now() + self.send_timeout);
+                stall
+            }
+            None => self
+                .stall
+                .insert(Box::pin(tokio::time::sleep(self.send_timeout))),
+        };
+        self.stalled = true;
+        match stall.as_mut().poll(cx) {
+            Poll::Ready(()) => Poll::Ready(Err(IoError::new(
+                ErrorKind::TimedOut,
+                "the peer took nothing within the send deadline",
+            ))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl<Io> Drop for DrainSocket<Io> {
@@ -139,7 +186,8 @@ impl<Io: AsyncWrite + Unpin> AsyncWrite for DrainSocket<Io> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<IoResult<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, buf)
+        let polled = Pin::new(&mut self.inner).poll_write(cx, buf);
+        self.written(cx, polled)
     }
 
     fn poll_write_vectored(
@@ -147,7 +195,8 @@ impl<Io: AsyncWrite + Unpin> AsyncWrite for DrainSocket<Io> {
         cx: &mut Context<'_>,
         bufs: &[IoSlice<'_>],
     ) -> Poll<IoResult<usize>> {
-        Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+        let polled = Pin::new(&mut self.inner).poll_write_vectored(cx, bufs);
+        self.written(cx, polled)
     }
 
     fn is_write_vectored(&self) -> bool {
@@ -155,7 +204,11 @@ impl<Io: AsyncWrite + Unpin> AsyncWrite for DrainSocket<Io> {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        // A flush that completes is no progress of its own: TCP's always does.
+        match Pin::new(&mut self.inner).poll_flush(cx) {
+            Poll::Pending => self.stall(cx),
+            flushed => flushed,
+        }
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
@@ -167,10 +220,12 @@ impl<Io: AsyncWrite + Unpin> AsyncWrite for DrainSocket<Io> {
 mod tests {
     use super::*;
 
+    const SEND: Duration = Duration::from_secs(60);
+
     fn socket(drain: &Arc<Drain>) -> DrainSocket<tokio::io::DuplexStream> {
         let places = Arc::new(tokio::sync::Semaphore::new(1));
         let place = places.try_acquire_owned().expect("a free place");
-        drain.socket(tokio::io::duplex(8).0, place)
+        drain.socket(tokio::io::duplex(8).0, place, SEND)
     }
 
     #[tokio::test(start_paused = true)]
@@ -205,10 +260,93 @@ mod tests {
             Arc::clone(&places)
                 .try_acquire_owned()
                 .expect("a free place"),
+            SEND,
         );
         assert_eq!(places.available_permits(), 0);
         drop(held);
         assert_eq!(places.available_permits(), 1);
+    }
+
+    /// A socket over a pipe holding 8 bytes, its far end for the test to read.
+    fn piped(
+        drain: &Arc<Drain>,
+    ) -> (
+        DrainSocket<tokio::io::DuplexStream>,
+        tokio::io::DuplexStream,
+    ) {
+        let (near, far) = tokio::io::duplex(8);
+        let places = Arc::new(tokio::sync::Semaphore::new(1));
+        let place = places.try_acquire_owned().expect("a free place");
+        (drain.socket(near, place, SEND), far)
+    }
+
+    /// One write, polled once.
+    fn write_once(
+        socket: &mut DrainSocket<tokio::io::DuplexStream>,
+        bytes: &[u8],
+    ) -> Poll<IoResult<usize>> {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        Pin::new(socket).poll_write(&mut cx, bytes)
+    }
+
+    /// A completed flush is no progress: a pipe, like TCP, always completes one.
+    #[tokio::test(start_paused = true)]
+    async fn a_write_the_peer_takes_nothing_of_fails_timed_out_at_the_send_deadline() {
+        let drain = Arc::new(Drain::default());
+        let (mut socket, _far) = piped(&drain);
+        assert!(matches!(
+            write_once(&mut socket, &[0; 8]),
+            Poll::Ready(Ok(8))
+        ));
+        assert!(
+            write_once(&mut socket, b"x").is_pending(),
+            "the pipe is full"
+        );
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(Pin::new(&mut socket).poll_flush(&mut cx).is_ready());
+        assert!(write_once(&mut socket, b"x").is_pending());
+        tokio::time::advance(SEND - Duration::from_secs(1) - Duration::from_millis(1)).await;
+        assert!(
+            write_once(&mut socket, b"x").is_pending(),
+            "inside the deadline"
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        match write_once(&mut socket, b"x") {
+            Poll::Ready(Err(error)) => assert_eq!(error.kind(), std::io::ErrorKind::TimedOut),
+            other => panic!("the stalled write fails at its deadline, got {other:?}"),
+        }
+    }
+
+    /// A write that goes through clears the stall: the deadline runs from the
+    /// next write that waits, never from the first.
+    #[tokio::test(start_paused = true)]
+    async fn progress_restarts_the_send_deadline() {
+        use tokio::io::AsyncReadExt;
+        let drain = Arc::new(Drain::default());
+        let (mut socket, mut far) = piped(&drain);
+        assert!(matches!(
+            write_once(&mut socket, &[0; 8]),
+            Poll::Ready(Ok(8))
+        ));
+        assert!(write_once(&mut socket, b"x").is_pending());
+
+        tokio::time::advance(SEND - Duration::from_secs(1)).await;
+        let mut taken = [0_u8; 1];
+        far.read_exact(&mut taken)
+            .await
+            .expect("the peer takes a byte");
+        assert!(matches!(write_once(&mut socket, b"x"), Poll::Ready(Ok(1))));
+        assert!(write_once(&mut socket, b"x").is_pending(), "full again");
+
+        tokio::time::advance(SEND - Duration::from_millis(1)).await;
+        assert!(
+            write_once(&mut socket, b"x").is_pending(),
+            "the deadline restarted at the write that waited next",
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(matches!(write_once(&mut socket, b"x"), Poll::Ready(Err(_))));
     }
 
     #[tokio::test]

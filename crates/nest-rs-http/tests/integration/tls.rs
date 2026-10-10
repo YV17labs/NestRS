@@ -18,7 +18,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::transport::{connect, free_port, read_head};
+use crate::transport::{after, connect, free_port, read_head, read_to_end, still_open};
 
 const HOST_A: &str = "a.nestrs.test";
 const HOST_B: &str = "b.nestrs.test";
@@ -516,6 +516,31 @@ async fn the_tls_listener_installs_the_default_crypto_provider_when_none_is() {
             rustls::crypto::aws_lc_rs::default_provider().key_provider
         ),
     );
+
+    cancel.cancel();
+}
+
+/// A client that opens a TCP connection and never starts the handshake is
+/// dropped at the head deadline — 30 s by default — counted from accept: the
+/// handshake is part of the first head's time.
+#[tokio::test]
+async fn a_tls_client_that_never_sends_a_client_hello_is_dropped_at_the_head_deadline() {
+    let material = Material::new("silent");
+    let port = free_port();
+    let cancel = serve(port, &material, 0).await;
+    let mut silent = connect(port).await;
+    // Answered over a handshake of its own: the silent socket was accepted first.
+    assert_eq!(
+        ping_until_ok(HOST_A, port, Duration::from_secs(5))
+            .await
+            .as_deref(),
+        Some("pong"),
+    );
+
+    after(Duration::from_secs(29)).await;
+    assert!(still_open(&mut silent).await, "inside the head deadline");
+    after(Duration::from_secs(2)).await;
+    assert_eq!(read_to_end(&mut silent).await, "", "dropped without a byte");
 
     cancel.cancel();
 }

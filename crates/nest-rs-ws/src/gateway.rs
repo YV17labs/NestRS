@@ -207,19 +207,23 @@ async fn serve_connection<G: Gateway, N: 'static>(
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut rx) =
         tokio::sync::mpsc::channel::<crate::server::Frame>(crate::server::OUTBOX_CAPACITY);
+    let conn_id = server.connect(outbox.clone());
 
     // The `Sink` comes back when the outbox closes, so the Close frame is written
-    // after every reply already queued.
+    // after every reply already queued. A frame that cannot be written ends the
+    // socket: a peer that stops reading sends nothing either.
+    let (writer_ends, mut writer_stopped) = tokio::sync::oneshot::channel::<()>();
     let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
         while let Some(frame) = rx.recv().await {
-            if sink.send(Message::Text(frame.to_string())).await.is_err() {
+            if let Err(error) = sink.send(Message::Text(frame.to_string())).await {
+                stopped_writing(conn_id, &error);
                 break;
             }
         }
+        drop(writer_ends);
         sink
     })));
 
-    let conn_id = server.connect(outbox.clone());
     let registry_guard = RegistryGuard {
         server: Arc::clone(&server),
         conn_id,
@@ -281,6 +285,8 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 );
                 break Closure::Server(CloseCode::Away, LIFETIME_REACHED);
             }
+            // Dropped as the writer ends: nothing more reaches the peer.
+            _ = &mut writer_stopped => break Closure::WriterStopped,
             message = stream.next() => {
                 let Some(message) = message else { break Closure::PeerGone };
                 match message {
@@ -402,6 +408,25 @@ fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: 
 /// The write half of a connection's socket.
 type WsSink = futures_util::stream::SplitSink<poem::web::websocket::WebSocketStream, Message>;
 
+/// The writer could not put a frame on the wire, and the socket ends with it.
+fn stopped_writing(conn_id: ConnId, error: &std::io::Error) {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        tracing::warn!(
+            target: crate::TARGET,
+            conn_id,
+            error = %nest_rs_core::error_message(error),
+            "the peer took nothing within the send deadline; it is cut off",
+        );
+    } else {
+        tracing::debug!(
+            target: crate::TARGET,
+            conn_id,
+            error = %nest_rs_core::error_message(error),
+            "closing socket: a frame could not be written",
+        );
+    }
+}
+
 /// Close a socket whose peer stopped draining its full outbox.
 fn stalled_outbox(conn_id: u64) -> Closure {
     tracing::warn!(
@@ -423,6 +448,10 @@ enum Closure {
     /// The stream ended without a Close frame: the peer is gone, and 1006 is
     /// §7.4.1's code for exactly this.
     PeerGone,
+    /// The writer stopped on a frame it could not write — past the send
+    /// deadline, most often — so a Close frame would not get through either:
+    /// the peer reads 1006.
+    WriterStopped,
     /// The server ended it, under the code §7.4.1 defines for the cause.
     Server(CloseCode, &'static str),
 }
@@ -449,6 +478,9 @@ const READ_FAILED: &str = "the connection could not be read";
 /// Put the Close frame on the wire, then flush — the flush also drives out the
 /// echo queued for [`Closure::Echo`]. Best-effort: a gone peer is logged at `debug`.
 async fn close_socket(mut sink: WsSink, closure: Closure, conn_id: ConnId) {
+    if let Closure::WriterStopped = closure {
+        return;
+    }
     if let Closure::Server(code, reason) = closure
         && let Err(err) = sink
             .send(Message::Close(Some((code, reason.to_string()))))

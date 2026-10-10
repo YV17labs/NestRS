@@ -147,8 +147,11 @@ toggle for it — `nest_rs::operation=off` is the family's one switch, and HTTP'
 line rather than a subsystem (`.claude/decisions/operation-target.md`).
 
 **A unit has one name, `<edge>.<unit>`, typed.** The crate that owns the edge
-declares it with `unit!` in its `src/unit.rs` — the kernel holds none, since it
-does not know which edges exist — from the closed edge vocabulary. The span
+declares it with `unit!` in its `src/unit.rs`, from the closed edge vocabulary
+(`Edge`) — the kernel holds that vocabulary and no unit, and `unit!` refuses any
+crate but `nest-rs-<edge>` — and the unit keeps the edge it was declared under
+(`Unit::edge()`), so code that branches on the edge asks the unit, never parses
+its name. The span
 (`operation_span!`), the line's `name:` (exported as `event.name` by an OTLP log
 bridge) and its message all read that one constant through `operation_line!`,
 which files the line and records the outcome; a literal does not compile.

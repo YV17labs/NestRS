@@ -153,9 +153,10 @@ carries.** It is declared once, by the crate that owns the edge, as
 `nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, and so on. It is
 then read three times: by the span, by the log record's event name (what an
 OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
-`nest_rs_core::operation_log`'s; the names are not, for the same reason a span
-target is not — a unit name says which edge did the work, and the kernel does
-not know the edges exist. There used to be
+`nest_rs_core::operation_log`'s, and so is the closed list of edges; the names
+are not, for the same reason a span target is not — a unit name says which edge
+did the work, and only the crate that owns that edge declares it: `unit!`
+refuses any other. There used to be
 two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.

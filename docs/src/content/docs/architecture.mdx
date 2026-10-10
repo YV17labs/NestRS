@@ -129,6 +129,7 @@ The file is named for the role, never for the type.
 | Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |
 | Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |
 | Module config | `config.rs` |
+| An edge's view of its unit | `view.rs`, at the edge crate's root |
 | Domain error / Constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at the
@@ -142,6 +143,11 @@ a module applies to itself whatever the edge sits flat at the module root — an
 a crate whose whole subject *is* one layer keeps it at the crate root, since
 there is no second adapter for a folder to separate it from.
 
+The view is the one row no module holds: it belongs to an edge crate. That
+crate's view of the unit it dispatches, what a layer reads of it, is
+`<Edge>View` in `view.rs` at its root — the crate's subject and the file, read
+together.
+
 Shared test doubles are the one file that sits at a crate's root rather than in
 a module: `testing.rs`, behind `#[cfg(test)]`, doubles and nothing else.
 
@@ -153,7 +159,7 @@ never renames a service.
 
 ## The name everything else takes
 
-The table above covers what the framework dispatches to. Everything else — a
+The table above covers the files named for a role. Everything else — a
 custom provider, an enum, a value object, a set of constants — is named by one
 rule:
 

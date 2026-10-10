@@ -3218,6 +3218,8 @@ name = "nest-rs-server-timing"
 version = "7.0.0"
 dependencies = [
  "async-trait",
+ "figment",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
@@ -3226,6 +3228,7 @@ dependencies = [
  "parking_lot",
  "poem",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

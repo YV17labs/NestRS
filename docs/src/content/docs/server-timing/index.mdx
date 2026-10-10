@@ -1,15 +1,17 @@
 ---
 title: Server-Timing
-description: Surface server-side latency in the browser's Network panel — one module import, optional sub-step records from any handler.
+description: Surface server-side latency in the browser's Network panel during development — one module import, optional sub-step records from any handler.
 ---
 
 [`Server-Timing`](https://www.w3.org/TR/server-timing/) is a W3C header
 browsers render in their Network panel (DevTools → Network → Timing
 tab) — a per-request breakdown of where the time went. It rides on the
 [HTTP transport](/http/) as an interceptor: importing
-`ServerTimingModule` attaches one that always appends a final
-`total;dur=<ms>`; handlers add their own sub-steps by recording into a
-per-request `Timings` accumulator pulled from the request extensions.
+`ServerTimingModule` attaches one that appends a final `total;dur=<ms>` to
+every answer but a refusal; handlers add their own sub-steps by recording into
+a per-request `Timings` accumulator pulled from the request extensions.
+It is a development surface: on in the development and test profiles, off
+elsewhere until the deployment turns it on.
 
 This is observability for the frontend developer's browser, not a
 replacement for proper tracing — for cross-service spans and
@@ -33,8 +35,8 @@ pub struct ApiModule;
 
 ## Run it
 
-Every response now carries a `Server-Timing` header. The minimum,
-unstructured form is one entry:
+In the development and test profiles, every response now carries a
+`Server-Timing` header. The minimum, unstructured form is one entry:
 
 ```bash frame="terminal"
 $ curl -i http://localhost:3002/posts -H "Authorization: Bearer $TOKEN" | grep -i server-timing
@@ -43,6 +45,11 @@ server-timing: total;dur=12.34
 
 That alone shows up in DevTools next to the request — round-trip vs.
 server time becomes a glance.
+
+A refusal on the status line never carries it. A `401`, `403`, `407` or `429`
+goes out without timings in every profile, so the caller an authentication or
+rate check turned away cannot read how long that check worked. A refusal
+answered inside a `200` is the one exception, under [Limits](#limits).
 
 ## Record sub-steps
 
@@ -101,10 +108,55 @@ server-timing: db;dur=7.82, covers;dur=0.41;desc="object-store lookup", total;du
   in DevTools; any string is allowed, the formatter quotes/escapes for
   you.
 
+Where the header is off, the request carries no `Timings`, and
+`unwrap_or_default()` hands the handler an accumulator nobody reads: the same
+handler runs in every profile.
+
+## Turn it on in production
+
+The header hands every client the time each backend took, so outside the
+development and test profiles the module stamps nothing until the deployment
+says so — the posture the [OpenAPI documentation](/openapi/configuration/) has.
+The profile is `<PREFIX>_ENV` ([the env cascade](/configuration/env-cascade/)),
+and one variable opens the header:
+
+```bash frame="terminal"
+$ NESTRS_ENV=staging NESTRS_SERVER_TIMING__ENABLED=true nestrs run start api
+```
+
+The boot then logs one `warn` on `nest_rs::server_timing`, with the
+`environment` it runs in, so the opening shows wherever the logs go. A staging
+dashboard that reads the header needs that line in its deployment.
+
+The same switch can be pinned in code, as `ServerTimingConfig`'s one field:
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::server_timing::{ServerTimingConfig, ServerTimingModule};
+
+#[module(imports = [ServerTimingModule::for_root(ServerTimingConfig { enabled: true })])]
+pub struct ApiModule;
+```
+
+The variable still outranks the pin, field by field, so
+`<PREFIX>_SERVER_TIMING__ENABLED=false` closes a pinned header in one
+deployment.
+A pin over `ServerTimingConfig::default()` stamps nothing in any profile: the
+struct's default is the production one.
+
+## Limits
+
+The interceptor reads the status line, so a refusal answered inside a `200`
+keeps its timing. That is how `/graphql` refuses an operation — `200 OK` with an
+`UNAUTHENTICATED`, `FORBIDDEN` or `RATE_LIMITED` error — and how `/mcp` refuses
+a tool or prompt call, with a JSON-RPC error. In development that timing is the
+diagnostic you came for; a deployment serving GraphQL or MCP to callers it does
+not trust leaves the header off, which is already its default.
+
 ## Reference
 
-- `crates/nest-rs-server-timing/` — `ServerTimingModule`, `Timings`,
-  `Entry`.
+- `crates/nest-rs-server-timing/` — `ServerTimingModule`,
+  `ServerTimingConfig`, `Timings`, `Entry`.
 
 ## Going further
 

@@ -3138,11 +3138,13 @@ name = "nest-rs-server-timing"
 version = "7.0.0"
 dependencies = [
  "async-trait",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http",
  "nest-rs-interceptors",
  "parking_lot",
  "poem",
+ "tracing",
 ]
 
 [[package]]

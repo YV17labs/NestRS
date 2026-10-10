@@ -434,7 +434,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         syn::ReturnType::Type(_, ty) => ty.span(),
         syn::ReturnType::Default => sig.ident.span(),
     };
-    let refused = quote_spanned! {span=> ::nest_rs_mcp::refused(__nestrs_refusal) };
+    let refused = quote_spanned! {span=> ::nest_rs_mcp::__private::refused(__nestrs_refusal) };
     Ok(quote! {
         #role_attr
         #wire_sig {
@@ -755,7 +755,7 @@ fn wrapper_role_attr(
             let span = method.sig.ident.span();
             Some(quote_spanned! {span=>
                 const _: () = ::core::assert!(
-                    !::nest_rs_mcp::description_is_blank(#expr),
+                    !::nest_rs_mcp::__private::description_is_blank(#expr),
                     #NEEDS_A_DESCRIPTION,
                 );
             })

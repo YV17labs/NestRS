@@ -102,7 +102,6 @@ pub fn unresolvable_chain(label: &'static str) -> McpError {
 
 /// What an MCP operation answers: a `Result` whose error takes an [`McpError`],
 /// whatever the type is called.
-#[doc(hidden)]
 #[diagnostic::on_unimplemented(
     message = "an MCP operation returns `Result<_, McpError>`, and `{Self}` is not one",
     label = "not a `Result` an `McpError` converts into",
@@ -122,7 +121,6 @@ impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
 
 /// A refusal from the wrapper's chain, gate or pipes, as the operation's own
 /// answer — see [`OperationAnswer`].
-#[doc(hidden)]
 pub fn refused<R: OperationAnswer>(error: McpError) -> R {
     R::refused(error)
 }

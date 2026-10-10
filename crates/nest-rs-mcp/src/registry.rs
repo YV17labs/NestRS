@@ -73,10 +73,6 @@ impl McpHostMeta {
 
 /// Empty fallback so `#[mcp]` can ask **any** host for its declared tools: an
 /// inherent `tool_router()` wins over this trait's.
-///
-/// **Internal ABI** — named by the `#[mcp]` expansion, lockstep with this
-/// crate; never implemented by hand.
-#[doc(hidden)]
 pub trait DefaultToolRouter: Sized + Send + Sync + 'static {
     /// No router of its own.
     fn tool_router() -> rmcp::handler::server::router::tool::ToolRouter<Self> {
@@ -89,10 +85,6 @@ impl<T: Send + Sync + 'static> DefaultToolRouter for T {}
 /// Empty fallback so the struct-level `#[mcp]` can ask **any** host which layers
 /// its operations declared; the `#[tools]` impl's inherent function wins. One
 /// tuple, so keys and names stay index-aligned.
-///
-/// **Internal ABI** — named by the `#[mcp]` expansion, lockstep with this
-/// crate; never implemented by hand.
-#[doc(hidden)]
 pub trait DefaultOperationLayers: Sized + 'static {
     /// No decorated operations, so no per-operation layers.
     fn __nestrs_mcp_operation_layers() -> (Vec<std::any::TypeId>, Vec<&'static str>) {
@@ -104,10 +96,6 @@ impl<T: 'static> DefaultOperationLayers for T {}
 
 /// Record `P` as a host of the MCP endpoint at `path`, and — for the first host
 /// to claim that path — attach the endpoint itself plus its boot check.
-///
-/// **Internal ABI** — called by the `#[mcp]` expansion, lockstep with this
-/// crate.
-#[doc(hidden)]
 pub fn register_host<P: 'static>(
     builder: ContainerBuilder,
     path: &'static str,

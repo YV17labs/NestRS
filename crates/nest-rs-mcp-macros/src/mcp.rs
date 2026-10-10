@@ -104,14 +104,14 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
                 // An inherent associated fn shadows the trait fallback, which
                 // answers empty for a host that writes rmcp by hand.
-                use ::nest_rs_mcp::DefaultOperationLayers as _;
+                use ::nest_rs_mcp::__private::DefaultOperationLayers as _;
                 let mut __keys: ::std::vec::Vec<::core::any::TypeId> = #injected_keys;
                 __keys.extend(<Self>::__nestrs_mcp_operation_layers().0);
                 __keys
             }
 
             fn injected_names() -> ::std::vec::Vec<&'static str> {
-                use ::nest_rs_mcp::DefaultOperationLayers as _;
+                use ::nest_rs_mcp::__private::DefaultOperationLayers as _;
                 let mut __names: ::std::vec::Vec<&'static str> = #injected_names;
                 __names.extend(<Self>::__nestrs_mcp_operation_layers().1);
                 __names
@@ -120,11 +120,11 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                ::nest_rs_mcp::register_host::<Self>(
+                ::nest_rs_mcp::__private::register_host::<Self>(
                     builder,
                     #path,
                     #host_name,
-                    ::nest_rs_mcp::McpIdentity::declared(#identity_name, #identity_title),
+                    ::nest_rs_mcp::__private::declared_identity(#identity_name, #identity_title),
                     |__c| -> ::std::sync::Arc<dyn ::nest_rs_mcp::McpHost> {
                         ::std::sync::Arc::new(<Self>::from_container(__c))
                     },
@@ -132,7 +132,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                         // An inherent `tool_router` (the impl half's `pub(crate)` one,
                         // or rmcp's) shadows the empty fallback; the duplicate-tool
                         // boot check reads this list.
-                        use ::nest_rs_mcp::DefaultToolRouter as _;
+                        use ::nest_rs_mcp::__private::DefaultToolRouter as _;
                         <Self>::tool_router().list_all()
                     },
                 )
@@ -180,7 +180,7 @@ fn refused_beside(err: syn::Error, mut item: ItemStruct) -> TokenStream {
 }
 
 /// Everything `#[mcp(..)]` accepts. The identity arguments stay expressions
-/// (`name = env!("CARGO_PKG_NAME")`); `McpIdentity::declared`'s `Option<&str>`
+/// (`name = env!("CARGO_PKG_NAME")`); `declared_identity`'s `Option<&str>`
 /// parameters type-check them.
 #[derive(Default)]
 struct McpArgs {
@@ -215,7 +215,7 @@ fn check_path(path: &LitStr) -> syn::Result<()> {
 }
 
 /// An optional identity argument as the `Option<&str>` tokens
-/// `McpIdentity::declared` takes.
+/// `declared_identity` takes.
 fn opt_str(expr: Option<&Expr>) -> TokenStream2 {
     match expr {
         Some(value) => quote! { ::core::option::Option::Some(#value) },

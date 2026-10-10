@@ -47,7 +47,7 @@
 //!
 //! The endpoint guard is, in the order [`resolve_operation_guard`] mounts: the
 //! app's registered [`McpOperationGuard`], else the global guard pool through
-//! [`FallbackMcpGuard`], else **deny-all**. Without a registered
+//! its fallback slot, else **deny-all**. Without a registered
 //! [`McpToolContext`] a `Repo`-backed body fails closed (`Repo::conn` errors;
 //! `scope_for` denies every row).
 #![warn(missing_docs)]
@@ -78,23 +78,29 @@ pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
 pub use error::{Opaque, pipe_error, unresolvable_chain};
-#[doc(hidden)]
-pub use error::{OperationAnswer, refused};
-pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
+pub use guard::{BoxFuture, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
-#[doc(hidden)]
-pub use operation::description_is_blank;
 pub use operation::{McpOperationContext, McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
-#[doc(hidden)]
-pub use registry::{DefaultOperationLayers, DefaultToolRouter, register_host};
 /// Per-operation accessor for `#[injectable(scope = request)]` providers inside
 /// an MCP tool method — the MCP mirror of `nest_rs_http::Scoped<T>`.
 pub use scope::Scoped;
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::error::{OperationAnswer, refused};
+    pub use crate::guard::FallbackMcpGuard;
+    pub use crate::identity::declared_identity;
+    pub use crate::operation::description_is_blank;
+    pub use crate::registry::{DefaultOperationLayers, DefaultToolRouter, register_host};
+}
 
 pub use rmcp::model::ProtocolVersion;
 /// What a host reports about itself and advertises.

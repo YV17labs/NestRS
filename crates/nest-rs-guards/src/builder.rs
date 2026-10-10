@@ -23,7 +23,7 @@ use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::__private::{FallbackOperationGuard, FederationGate, GraphqlVariablePipe};
 #[cfg(feature = "mcp")]
-use nest_rs_mcp::FallbackMcpGuard;
+use nest_rs_mcp::__private::FallbackMcpGuard;
 #[cfg(feature = "ws")]
 use nest_rs_ws::WsDataPipe;
 

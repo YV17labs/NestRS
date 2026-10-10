@@ -67,17 +67,6 @@ impl McpIdentity {
         self
     }
 
-    /// What the `#[mcp]` attribute declares; the version arrives from the app
-    /// alone, through [`new`](Self::new).
-    #[doc(hidden)]
-    pub fn declared(name: Option<&str>, title: Option<&str>) -> Self {
-        Self {
-            name: name.map(Into::into),
-            title: title.map(Into::into),
-            ..Self::default()
-        }
-    }
-
     /// Whether this declaration states anything at all; an argumentless `#[mcp]`
     /// host is no claimant on its path.
     pub fn is_empty(&self) -> bool {
@@ -170,6 +159,16 @@ impl IdentityError {
     }
 }
 
+/// What the `#[mcp]` attribute declares; the version arrives from the app
+/// alone, through [`McpIdentity::new`].
+pub fn declared_identity(name: Option<&str>, title: Option<&str>) -> McpIdentity {
+    McpIdentity {
+        name: name.map(Into::into),
+        title: title.map(Into::into),
+        ..McpIdentity::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +195,7 @@ mod tests {
 
     #[test]
     fn a_host_overrides_per_field_and_inherits_the_rest() {
-        let host = McpIdentity::declared(Some("assistant-posts"), None);
+        let host = declared_identity(Some("assistant-posts"), None);
         let resolved = resolve(Some(&host), Some(&app())).expect("no error");
         let info = resolved.implementation().expect("named");
 
@@ -217,7 +216,7 @@ mod tests {
 
     #[test]
     fn a_host_declaring_both_of_its_fields_still_inherits_the_version() {
-        let host = McpIdentity::declared(Some("assistant-posts"), Some("Posts"));
+        let host = declared_identity(Some("assistant-posts"), Some("Posts"));
         let resolved = resolve(Some(&host), Some(&app())).expect("no error");
         let info = resolved.implementation().expect("named");
 
@@ -255,7 +254,7 @@ mod tests {
 
     #[test]
     fn a_name_no_version_backs_is_a_boot_error_naming_the_remedy() {
-        let host = McpIdentity::declared(Some("orphan"), None);
+        let host = declared_identity(Some("orphan"), None);
         let err = resolve(Some(&host), None).expect_err("rejected");
         let message = err.report("/mcp/posts", "PostsTool");
 
@@ -274,7 +273,7 @@ mod tests {
 
     #[test]
     fn an_argumentless_mcp_host_declares_nothing() {
-        assert!(McpIdentity::declared(None, None).is_empty());
+        assert!(declared_identity(None, None).is_empty());
         assert!(!McpIdentity::new("a", "1").is_empty());
     }
 

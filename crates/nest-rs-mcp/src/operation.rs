@@ -100,7 +100,6 @@ impl fmt::Debug for McpOperationContext<'_> {
 /// Whether an operation's description holds no prose — `str::trim` leaves
 /// nothing of it. `const` so `#[tools]` can assert a non-literal description
 /// (`include_str!`, a constant) at build time, which `str::trim` cannot.
-#[doc(hidden)]
 pub const fn description_is_blank(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut at = 0;

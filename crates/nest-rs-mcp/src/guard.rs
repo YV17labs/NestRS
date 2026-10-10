@@ -45,5 +45,4 @@ pub trait McpOperationGuard: Send + Sync + 'static {
 
 /// Factory slot for the fallback [`McpOperationGuard`], running the global guard
 /// pool in band; a fn pointer, as `use_guards_global` seeds it before the container exists.
-#[doc(hidden)]
 pub struct FallbackMcpGuard(pub fn(&Container) -> Arc<dyn McpOperationGuard>);

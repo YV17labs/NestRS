@@ -4,14 +4,14 @@ error[E0277]: an MCP operation returns `Result<_, McpError>`, and `std::string::
 17 |     async fn ping(&self) -> String {
    |                             ^^^^^^ not a `Result` an `McpError` converts into
    |
-   = help: the trait `nest_rs::nest_rs_mcp::OperationAnswer` is not implemented for `std::string::String`
+   = help: the trait `nest_rs::nest_rs_mcp::__private::OperationAnswer` is not implemented for `std::string::String`
    = note: its guard chain, its access posture and its pipes refuse by returning, and an operation that cannot fail has nowhere to report a denial
-help: the trait `nest_rs::nest_rs_mcp::OperationAnswer` is implemented for `Result<T, E>`
+help: the trait `nest_rs::nest_rs_mcp::__private::OperationAnswer` is implemented for `Result<T, E>`
   --> $WORKSPACE/crates/nest-rs-mcp/src/error.rs
    |
    | impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required by a bound in `nest_rs::nest_rs_mcp::refused`
+note: required by a bound in `nest_rs::nest_rs_mcp::__private::refused`
   --> $WORKSPACE/crates/nest-rs-mcp/src/error.rs
    |
    | pub fn refused<R: OperationAnswer>(error: McpError) -> R {

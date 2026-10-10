@@ -24,7 +24,7 @@ mod mcp_impl;
 /// # Expands to
 ///
 /// The struct unchanged, a `from_container` constructor, and an `impl
-/// Discoverable` whose `register` hands the host to `nest_rs_mcp::register_host`
+/// Discoverable` whose `register` hands the host to `nest_rs_mcp::__private::register_host`
 /// — which resolves the path (the default when the host declared none), records
 /// the contribution, and (for the first host on a path) attaches the exempt
 /// `HttpEndpointMeta` that nests the rmcp endpoint behind the MCP operation

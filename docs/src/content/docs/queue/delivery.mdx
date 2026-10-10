@@ -325,7 +325,7 @@ A value out of its bounds fails the boot, whether the environment set it or
 
 ## Reference
 
-- `crates/nest-rs-redis/src/layout.rs` — every key of a queue.
+- `crates/nest-rs-redis/src/queue/layout.rs` — every key of a queue.
 - `crates/nest-rs-redis/src/queue/scripts.rs` — every transition, fenced.
 - `crates/nest-rs-redis/src/queue/producer.rs` — the push, the unique claim and
   the cancel.
@@ -333,7 +333,7 @@ A value out of its bounds fails the boot, whether the environment set it or
   renewal, the outcome and the upkeep.
 - `crates/nest-rs-redis/tests/e2e/queue/consumer.rs` — the behaviour kit every
   queue backend runs, and what only Redis decides beside it.
-- `crates/nest-rs-redis/tests/e2e/layout.rs` — the rules above, held exact.
+- `crates/nest-rs-redis/tests/e2e/queue/layout.rs` — the rules above, held exact.
 
 ## Going further
 

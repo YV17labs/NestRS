@@ -48,9 +48,10 @@ pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
 pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);
 pub(super) const EVENTS: Dep = nest_rs(&["events"]);
-// `redis` implies `queue`: the abstractions and the Redis bindings
-// (`RedisModule`, `RedisQueueModule`) arrive together.
-pub(super) const REDIS: Dep = nest_rs(&["redis"]);
+// `redis-queue` implies `redis` and `queue`: the connection (`RedisModule`),
+// the queue's binding over it (`RedisQueueModule`) and the port arrive
+// together; `redis` alone is the connection.
+pub(super) const REDIS_QUEUE: Dep = nest_rs(&["redis-queue"]);
 pub(super) const MCP: Dep = nest_rs(&["mcp"]);
 pub(super) const AUTHN: Dep = nest_rs(&["authn"]);
 pub(super) const AUTHZ: Dep = nest_rs(&["authz", "http"]);
@@ -136,7 +137,7 @@ pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         Transport::Ws => vec![&WS, &TRACING],
         // `SERDE`: the payload carries plain derives, not `#[input]`, whose
         // `deny_unknown_fields` would dead-letter a newer producer's jobs.
-        Transport::Queue => vec![&REDIS, &ANYHOW, &SERDE],
+        Transport::Queue => vec![&REDIS_QUEUE, &ANYHOW, &SERDE],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
         Transport::Mcp => vec![&MCP],
         Transport::Events => vec![&EVENTS],
@@ -149,7 +150,7 @@ pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http | Transport::Ws | Transport::Mcp => vec![],
         Transport::Graphql => vec![&GRAPHQL],
-        Transport::Queue => vec![&REDIS],
+        Transport::Queue => vec![&REDIS_QUEUE],
         Transport::Schedule => vec![&SCHEDULE],
         Transport::Events => vec![&EVENTS],
     }

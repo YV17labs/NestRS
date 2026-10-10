@@ -50,7 +50,8 @@ default = ["http", "config"]
 # under `full` and does not find it is meeting a decision, not a hole.
 full = [
     "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
-    "redis", "redis-throttler", "redis-schedule", "schedule", "events", "authn", "authz",
+    "redis", "redis-queue", "redis-throttler", "redis-schedule",
+    "schedule", "events", "authn", "authz",
     "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
     "interceptors", "filters", "exception-filters", "worker",
@@ -140,24 +141,22 @@ mcp = [
 # `#[processor]` folds pipes over the job payload and reaches the worker-context
 # seam; neither is a crate a `#[process]` method names.
 queue = ["dep:nest-rs-queue", "worker", "pipes"]
-redis = ["dep:nest-rs-redis", "queue"]
-# The cross-process rate-limit store. A capability the umbrella could not reach:
-# `nest-rs-redis` gated `RedisThrottler` behind its own `throttler` feature and
-# nothing here forwarded to it, so `nest_rs::redis::RedisThrottlerModule` existed
-# in no umbrella build — `demo/` enables all 28 features and still could not name
-# the type. The only way in was a second `nest-rs-redis` manifest line, which is
-# the thing *The umbrella is the front door* forbids: "A capability that cannot
-# hold 'one dependency' is reported, never absorbed into prose."
+# The one Redis connection (`RedisModule`, `RedisConnection`) and nothing else:
+# an app that sends its own commands, or a health check, compiles no port.
+redis = ["dep:nest-rs-redis"]
+# `redis-<port>`: one feature per binding of `nest-rs-redis`, read off its
+# folder, each closing over the port it binds — the binding is imported beside
+# that port's module, which the developer's own code names. Never a feature
+# named for a use (`redis-cache`). A binding the umbrella does not forward
+# exists in no umbrella build, short of the second manifest line the umbrella
+# forbids.
 #
-# Its own feature rather than a widening of `redis`, because the two Redis uses
-# are independent: a producer/consumer app that never rate-limits should not
-# compile `nest-rs-throttler`, which is the split `nest-rs-redis` already made.
+# The job queue on Redis Streams (`RedisQueueModule`).
+redis-queue = ["redis", "queue", "nest-rs-redis/queue"]
+# The cross-process rate-limit store (`RedisThrottlerModule`).
 redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
 # The occurrence lock a `replicas = "one"` job claims through
-# (`nest_rs::redis::RedisScheduleModule`). Its own feature for the throttler's
-# reason: an app that schedules nothing once should not compile it. It closes
-# over `schedule` because the binding is imported beside `ScheduleModule` and
-# the `#[scheduled]` host it serves — both named by the developer's own code.
+# (`RedisScheduleModule`).
 redis-schedule = ["redis", "schedule", "nest-rs-redis/schedule"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]

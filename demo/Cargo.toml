@@ -14,7 +14,7 @@ repository = "https://github.com/YV17labs/NestRS"
 homepage = "https://nestrs.dev"
 
 [workspace.dependencies]
-nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "redis-throttler", "redis-schedule", "schedule", "events", "authn", "authz", "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "worker", "storage"] }
+nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis-queue", "redis-throttler", "redis-schedule", "schedule", "events", "authn", "authz", "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "worker", "storage"] }
 
 tokio = { version = "1.53", features = ["full"] }
 tracing = "0.1"

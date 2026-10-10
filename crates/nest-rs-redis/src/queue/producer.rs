@@ -3,7 +3,7 @@
 //! `Arc<dyn JobProducer>` to push without naming the backend.
 //!
 //! What is stored is the sealed envelope as the port handed it, keyed by the
-//! port's id ([`crate::layout`]).
+//! port's id ([`super::layout`]).
 //!
 //! **A push is one script**: it refuses a unique key another job holds before
 //! anything is filed, then files every job — on the stream, or held back until
@@ -18,19 +18,25 @@ use std::time::SystemTime;
 
 use async_trait::async_trait;
 use nest_rs_queue::{
-    Envelope, JobId, JobProducer, PushOptions, QueueBackend, QueueError, QueueName,
+    Delay, Envelope, JobId, JobProducer, PushOptions, QueueBackend, QueueError, QueueName,
 };
 
+use super::backend::BACKEND;
+use super::error::UnexpectedReply;
+use super::layout::{GROUP, QueueKeys};
 use super::scripts::SCRIPTS;
 use crate::RedisConnection;
-use crate::backend::BACKEND;
-use crate::error::UnexpectedReply;
-use crate::layout::{GROUP, QueueKeys, millis};
+use crate::millis::{LONGEST, millis};
 
 /// The most queues whose keys a producer keeps spelled: a name pushed to past
 /// them — the raw push takes any — has its keys spelled at each call instead,
 /// so names read from input cannot grow the producer without bound.
 const KEYS_KEPT: usize = 1024;
+
+const _: () = assert!(
+    LONGEST.as_millis() >= Delay::LATEST_DUE.as_millis(),
+    "a delay to the latest instant a job may be due at reaches Redis whole",
+);
 
 /// The producer a feature pushes through. Bound by
 /// [`RedisQueueModule`](crate::RedisQueueModule) under both its own name and

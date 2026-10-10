@@ -106,8 +106,12 @@ promises more; this is how the Redis backend keeps it, on Redis Streams
 over the topology the URL's scheme declares — one server, Sentinel, Cluster —
 and shared by every binding, each of which declares it runs after the
 connection's factory. Every binding runs on all three
-(`.claude/decisions/valkey-topologies.md`). `throttler` and `schedule` are crate
-features because each pulls a port crate an app may not need.
+(`.claude/decisions/valkey-topologies.md`). **Every binding is a crate feature,
+and the crate root holds the connection alone**: a binding pulls a port crate an
+app using Redis for another port need not compile, and the umbrella forwards
+each as `redis-<port>`, read off its folder. Held by `just lint`'s per-feature
+build, over `redis` alone and `nest-rs-macro-hygiene`'s `redis-<port>`
+witnesses, and by review.
 
 - **The boot proves the connection with a `PING`**, and what fails the same way
   every time fails at once — a budget out of range, an unparsable URL, unusable
@@ -178,9 +182,9 @@ derivation: crate, span target, `<PREFIX>_<CONCERN>__*`, key.
   developer's variables; a key is the framework's machinery, and deployments
   sharing a Redis are separated by the logical database in the URL.
 
-Held by a unit test over the key constants; a chart, a script or a page that
-spells a key follows the constant by review. The table of keys is
-`layout.rs`'s `//!`.
+Held by each binding's unit test over its key constants; a chart, a script or a
+page that spells a key follows the constant by review. The table of a queue's
+keys is `queue/layout.rs`'s `//!`.
 
 ## The schedule
 

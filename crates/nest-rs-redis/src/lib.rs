@@ -4,43 +4,47 @@
 //! (`<PREFIX>_REDIS__*`) over the [`RedisTopology`] the URL's scheme declares —
 //! one server (`rediss://`), the primary Sentinel names (`rediss-sentinel://`),
 //! or a Cluster (`rediss-cluster://`), every connection encrypted and verified
-//! against what [`RedisTls`] trusts; the bindings sit beside it in the
-//! composition root and share it, on every topology:
+//! against what [`RedisTls`] trusts. That is the crate without a feature. Each
+//! binding is a feature of its own, named for the port it binds, and sits beside
+//! the connection in the composition root, sharing it on every topology:
 //!
 //! - **queue** — [`RedisQueueModule`] binds the queue port over it, on Redis
 //!   Streams: the portable `dyn JobProducer` a feature injects to
 //!   `.push(AudioQueue, job, None).await?`, and the consumer the port's
 //!   `QueueWorker` runs every `#[process]` method through in an app that also
 //!   imports `QueueModule`.
-//! - **throttler** (feature) — [`RedisThrottlerModule`] binds the
-//!   cross-process `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
-//! - **schedule** (feature) — [`RedisScheduleModule`] binds the
-//!   `dyn OccurrenceLock` a scheduled job declared `replicas = "one"` claims
-//!   each occurrence through, so one replica of the deployment fires it.
+//! - **throttler** — [`RedisThrottlerModule`] binds the cross-process
+//!   `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
+//! - **schedule** — [`RedisScheduleModule`] binds the `dyn OccurrenceLock` a
+//!   scheduled job declared `replicas = "one"` claims each occurrence through,
+//!   so one replica of the deployment fires it.
 //!
-//! The queue contract lives in [`nest-rs-queue`](::nest_rs_queue) (the
-//! [`Job`] marker, the [`ProcessMethod`] inventory, the [`JobProducer`] seam and
-//! the capabilities a backend declares); this crate is Redis's binding of it,
-//! written on the `redis` client directly.
-//!
-//! [`Job`]: ::nest_rs_queue::Job
-//! [`ProcessMethod`]: ::nest_rs_queue::ProcessMethod
-//! [`JobProducer`]: ::nest_rs_queue::JobProducer
+//! A binding pulls its port's crate, which an app using Redis for another port
+//! does not compile.
 
 #![warn(missing_docs)]
+#![cfg_attr(
+    not(feature = "queue"),
+    expect(
+        dead_code,
+        reason = "the connection carries what its bindings send through it, and the queue's \
+                  dedicated connection for a blocking read is one: a build without a binding \
+                  leaves its part unused"
+    )
+)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — the shared connection's own events; the queue's
 /// and the throttler's stay on their ports' targets.
 pub const TARGET: &str = "nest_rs::redis";
 
-mod backend;
 mod cluster;
 mod config;
 mod connection;
 mod error;
-mod layout;
+mod millis;
 mod module;
+#[cfg(feature = "queue")]
 mod queue;
 #[cfg(feature = "schedule")]
 mod schedule;
@@ -59,6 +63,7 @@ pub use config::RedisConfig;
 pub use connection::RedisConnection;
 pub use error::RedisError;
 pub use module::{RedisModule, RedisSetup};
+#[cfg(feature = "queue")]
 pub use queue::{RedisQueueConfig, RedisQueueModule, RedisQueueProducer, RedisQueueSetup};
 #[cfg(feature = "schedule")]
 pub use schedule::{RedisOccurrenceLock, RedisScheduleModule};

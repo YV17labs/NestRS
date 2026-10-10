@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use nest_rs_schedule::{Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError};
 
 use crate::RedisConnection;
-use crate::layout::millis;
+use crate::millis::millis;
 
 /// Every key this binding writes: `nestrs:schedule:claims:<token>`, one per
 /// occurrence a `replicas = "one"` job has claimed, `<token>` being the port's
@@ -96,6 +96,11 @@ fn holder() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_key_is_a_level_of_the_schedule() {
+        crate::testing::assert_keys_of(nest_rs_schedule::TARGET, &[CLAIMS]);
+    }
 
     /// The port's token follows the structure verbatim, its own levels
     /// included.

@@ -1,6 +1,5 @@
-//! Typed errors for the Redis substrate. The queue producer speaks
-//! [`QueueError`](::nest_rs_queue::QueueError) instead, wrapping a Redis failure
-//! as its opaque `Backend` source.
+//! Typed errors for the Redis connection, and for binding a port over it. A
+//! binding speaks its port's error once bound, a Redis failure as its source.
 
 use thiserror::Error;
 
@@ -48,7 +47,8 @@ pub enum RedisError {
     Budget(nest_rs_config::ConfigError),
 
     /// A queue lease the connect budget leaves no renewal room in: a renewal
-    /// sent a third in may wait out the whole budget.
+    /// sent a third in may wait out the whole budget. Feature `queue`.
+    #[cfg(feature = "queue")]
     #[error(
         "the Redis queue lease ({lease:?}) must be more than one and a half times the Redis \
          budget ({budget:?}): a renewal is sent a third into the lease and may wait out the \
@@ -248,36 +248,6 @@ pub enum RedisError {
         source: Option<redis::RedisError>,
     },
 }
-
-/// A reply the queue's scripts and commands never send — a Redis that is not
-/// the one the scripts ran on, or a defect here. Names the call and the shape it
-/// expected, never what came back, which may carry a record.
-#[derive(Debug, Error)]
-#[error("Redis answered {call} in a shape it never sends: expected {expected}")]
-pub(crate) struct UnexpectedReply {
-    pub(crate) call: &'static str,
-    pub(crate) expected: &'static str,
-}
-
-/// A checkpoint written by a delivery this worker no longer holds: its lease
-/// lapsed and another delivery of the job holds it, so its state is that
-/// delivery's to write.
-#[derive(Debug, Error)]
-#[error("the delivery writing this checkpoint no longer holds its job; another delivery does")]
-pub(crate) struct CheckpointFenced;
-
-/// A disposition the port added after this backend was written: the port
-/// sends one only to a backend declaring the capability that names it, so
-/// meeting one is a defect of the port or of this declaration.
-#[derive(Debug, Error)]
-#[error("the queue port ended a delivery in a way the Redis backend does not declare")]
-pub(crate) struct UnknownDisposition;
-
-/// A consumer prepared a second time: each worker builds its own, so a second
-/// `prepare` is two workers sharing one consumer name in every group.
-#[derive(Debug, Error)]
-#[error("the Redis queue consumer was prepared twice; each queue worker binds its own")]
-pub(crate) struct PreparedTwice;
 
 /// Why one round of asking the sentinels found no primary to keep — each may
 /// clear, so the next round follows within the budget.

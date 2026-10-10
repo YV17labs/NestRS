@@ -41,6 +41,12 @@ pub mod never;
 pub mod prelude;
 #[cfg(feature = "queue")]
 pub mod processor;
+#[cfg(feature = "redis-queue")]
+pub mod redis_queue;
+#[cfg(feature = "redis-schedule")]
+pub mod redis_schedule;
+#[cfg(feature = "redis-throttler")]
+pub mod redis_throttler;
 #[cfg(feature = "graphql")]
 pub mod resolver;
 #[cfg(feature = "schedule")]

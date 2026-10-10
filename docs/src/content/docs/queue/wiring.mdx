@@ -21,6 +21,14 @@ graph from each app's root.
 | `RedisQueueModule` | Binds the queue port over that connection: the producer, `Arc<dyn JobProducer>`, the portable handle a feature injects to enqueue, and the consumer the worker runs jobs through. A bare import reads `<PREFIX>_REDIS__QUEUE__*`; `for_root(RedisQueueConfig { lease })` pins the base — see [Delivery on Redis](/queue/delivery/#configuration). | Every app that enqueues or runs jobs. |
 | `QueueModule::for_root(cfg)` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`. | Worker apps only. |
 
+The `redis-queue` feature compiles all three. Each Redis binding is a feature of
+its own — `redis-queue`, `redis-throttler`, `redis-schedule` — and `redis` is the
+connection alone, so an app that rate-limits on Redis compiles no queue. Import
+`RedisQueueModule` without `redis-queue` and the build fails on the import, with
+rustc's note naming the `queue` feature of `nest-rs-redis`: `redis-queue` is the
+umbrella feature that turns it on, where the umbrella's own `queue` is the port
+alone.
+
 The server is **Valkey**, in its latest release: the connection speaks the
 Redis protocol — hence `redis://`, `rediss://` and `nest_rs::redis` — and Valkey
 is the server it is supported and tested on, never Redis itself; see

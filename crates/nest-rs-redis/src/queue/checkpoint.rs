@@ -7,10 +7,10 @@ use nest_rs_queue::{CheckpointStore, QueueError};
 use serde_json::Value;
 
 use super::consumer::Lease;
+use super::error::CheckpointFenced;
+use super::layout::{GROUP, QueueKeys};
 use super::scripts::SCRIPTS;
 use crate::RedisConnection;
-use crate::error::CheckpointFenced;
-use crate::layout::{GROUP, QueueKeys};
 
 /// The checkpoint of the job one delivery runs, fenced on that delivery: a
 /// worker whose lease lapsed under it writes nothing over the progress of the

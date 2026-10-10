@@ -86,7 +86,7 @@ impl ThrottlerStore for RedisThrottler {
     async fn hit(&self, key: &str, limit: Throttle) -> Decision {
         // Redis refuses an expiry whose instant overflows its `i64` milliseconds,
         // which `Throttle::new` lets a window reach.
-        let window_ms = crate::layout::millis(limit.window());
+        let window_ms = crate::millis::millis(limit.window());
         match self.run(key, window_ms).await {
             Ok((count, ttl_ms)) => {
                 // Denied when the count has passed the limit — identical rule to
@@ -124,6 +124,11 @@ impl ThrottlerStore for RedisThrottler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_key_is_a_level_of_the_throttler() {
+        crate::testing::assert_keys_of(nest_rs_throttler::TARGET, &[BUCKETS]);
+    }
 
     /// The port's subject — a pseudonym — follows the structure verbatim.
     #[test]

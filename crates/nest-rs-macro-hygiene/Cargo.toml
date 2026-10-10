@@ -25,6 +25,14 @@ health = ["nest-rs/health"]
 http = ["nest-rs/http"]
 mcp = ["nest-rs/mcp"]
 queue = ["nest-rs/queue"]
+# `redis-<port>` owns no decorator: each is the witness that its binding is
+# reached through that feature alone, since `redis` is the connection and
+# compiles no binding. Off by default, where it would link the Redis client into
+# the suite's fixtures, whose snapshots list a trait's implementors across every
+# crate linked.
+redis-queue = ["nest-rs/redis-queue"]
+redis-schedule = ["nest-rs/redis-schedule"]
+redis-throttler = ["nest-rs/redis-throttler"]
 schedule = ["nest-rs/schedule"]
 # `#[expose]`, `#[wire_enum]` and the entity every `#[authorize(Action, Entity)]`
 # witness names. `#[crud]` rides `http` and `seaorm` together.

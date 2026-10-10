@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for nest-rs: one shared connection (RedisModule) to one Valkey server, Sentinel or a Cluster, and one binding per port over it — the job queue on Redis Streams (RedisQueueModule), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`)."
+description = "Redis for nest-rs: one shared connection (RedisModule) to one Valkey server, Sentinel or a Cluster, and one binding per port over it, each a feature — the job queue on Redis Streams (RedisQueueModule, feature `queue`), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`)."
 keywords = ["framework", "nestrs", "redis", "queue", "streams"]
 categories = ["asynchronous", "database"]
 
@@ -19,12 +19,9 @@ all-features = true
 
 [dependencies]
 nest-rs-core.workspace = true
-# The abstractions: `Job`, `ProcessMethod`, the `JobProducer` seam, the
-# capabilities a backend declares, and (re-exported through it) the
-# `#[processor]` macro. Application
-# code reaches both this crate's Redis types AND the abstractions through
-# the same import root by depending on `nest-rs-queue` + `nest-rs-redis`.
-nest-rs-queue.workspace = true
+# `queue` feature only: the port the queue binding implements — `Job`, the
+# `JobProducer` and `JobConsumer` seams, the capabilities a backend declares.
+nest-rs-queue = { workspace = true, optional = true }
 # `RedisModule` owns `RedisConfig` (namespace `redis`, `<PREFIX>_REDIS__*`) and
 # `RedisQueueModule` owns `RedisQueueConfig` (namespace `redis__queue`).
 nest-rs-config.workspace = true
@@ -34,7 +31,8 @@ anyhow.workspace = true
 # `nest_rs_queue::QueueError`); framework crates surface `thiserror`, not `anyhow`.
 thiserror.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# `queue` feature only: a job's envelope and a checkpoint, as stored.
+serde_json = { workspace = true, optional = true }
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
@@ -51,12 +49,13 @@ nest-rs-schedule = { workspace = true, optional = true }
 # (`redis::RedisError`, the `aio::ConnectionLike` `RedisConnection` implements,
 # the command API a caller runs on it).
 redis = { workspace = true }
-# The scripts a producer or a worker caches at boot, loaded together: on a
-# Cluster each load reaches every primary. `redis` already builds on it.
-futures-util.workspace = true
-# Each worker's consumer name in a queue's group: UUID v7, so a name also says
-# when its worker started.
-uuid.workspace = true
+# `queue` feature only: the scripts a producer or a worker caches at boot,
+# loaded together — on a Cluster each load reaches every primary. `redis`
+# already builds on it.
+futures-util = { workspace = true, optional = true }
+# `queue` feature only: each worker's consumer name in a queue's group, UUID v7,
+# so a name also says when its worker started.
+uuid = { workspace = true, optional = true }
 # A Sentinel or Cluster URL names several hosts in its query, which only an
 # RFC 3986 parser reads apart; `redis` parses with the same crate.
 url.workspace = true
@@ -67,12 +66,16 @@ url.workspace = true
 rustls.workspace = true
 
 [features]
-# A second Redis use — a cross-process rate-limit store — as a feature on this
-# one integration home, per the crate's future-expansion note. Off by default:
-# producer/consumer apps that never rate-limit don't pull `nest-rs-throttler`.
+# One feature per binding, named for the port it binds and read off its folder
+# (`queue/`, `throttler/`, `schedule/`): each pulls a port crate an app using
+# Redis for another port need not compile. None is on by default — the crate
+# without one is the connection.
+#
+# The job queue on Redis Streams.
+queue = ["dep:nest-rs-queue", "dep:futures-util", "dep:serde_json", "dep:uuid"]
+# The cross-process rate-limit store.
 throttler = ["dep:nest-rs-throttler"]
-# The occurrence lock for scheduled jobs that fire once across replicas. Off by
-# default for the same reason: an app with no such job pulls no scheduler.
+# The occurrence lock for scheduled jobs that fire once across replicas.
 schedule = ["dep:nest-rs-schedule"]
 
 [dev-dependencies]
@@ -80,8 +83,8 @@ schedule = ["dep:nest-rs-schedule"]
 # `LogCapture` covers the event half of the worker's contract; `queue` is the
 # behaviour kit every queue backend runs.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["queue", "tls"] }
-# Self dev-dependency: the suite runs with `throttler` and `schedule` on.
-nest-rs-redis = { path = ".", features = ["throttler", "schedule"] }
+# Self dev-dependency: the suite runs with every binding on.
+nest-rs-redis = { path = ".", features = ["queue", "throttler", "schedule"] }
 nest-rs-core = { path = "../nest-rs-core" }
 # The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
 # implements `JobContext` directly.

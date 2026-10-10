@@ -5,8 +5,8 @@ use nest_rs_queue::{Capabilities, Capability, QueueBackend};
 
 /// The Redis backend, as the queue port reads it: `redis` is its
 /// `messaging.system`, and it declares every optional capability the port
-/// names, each kept by the scripts of [`crate::queue`] in the keys
-/// [`crate::layout`] tabulates.
+/// names, each kept by the scripts of [`super::scripts`] in the keys
+/// [`super::layout`] tabulates.
 ///
 /// - **Delayed delivery.** A job held back waits in the queue's `due` set,
 ///   due at an instant on Redis's clock, and a worker draining the queue files

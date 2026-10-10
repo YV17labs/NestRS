@@ -367,10 +367,11 @@ fn generate_queue_adapter_module_imports_the_port() {
     assert!(!features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// The generator wires `RedisModule` + `RedisQueueModule` and the crate, as
-/// `/queue/producing-jobs/` documents.
+/// The generator wires `RedisModule` + `RedisQueueModule` and the feature
+/// that compiles the queue binding, `redis-queue` — `redis` alone is the
+/// connection, as `/queue/` documents.
 #[test]
-fn generate_queue_adapter_brings_the_connection_crate() {
+fn generate_queue_adapter_brings_the_queue_binding_feature() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let root = dir.path().to_str().unwrap();
@@ -379,9 +380,12 @@ fn generate_queue_adapter_brings_the_connection_crate() {
     run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
 
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(root_cargo.contains("\"redis\""), "{root_cargo}");
+    assert!(root_cargo.contains("\"redis-queue\""), "{root_cargo}");
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("\"redis\""), "{features_cargo}");
+    assert!(
+        features_cargo.contains("\"redis-queue\""),
+        "{features_cargo}"
+    );
 }
 
 /// The `mcp` feature seeds the fallback operation guard, without which a

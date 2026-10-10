@@ -126,35 +126,13 @@ impl QueueKeys {
     }
 }
 
-/// `duration` in whole milliseconds, at least one — Redis refuses a zero `PX` —
-/// and at most [`Delay::LATEST_DUE`](nest_rs_queue::Delay::LATEST_DUE): a
-/// duration a declaration may carry — a throttle window of `u64::MAX` ms — would
-/// overflow the instant Redis computes from it.
-pub(crate) fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.min(nest_rs_queue::Delay::LATEST_DUE).as_millis())
-        .unwrap_or(u64::MAX)
-        .max(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn a_duration_redis_would_refuse_is_kept_for_the_longest_it_accepts() {
-        let longest =
-            u64::try_from(nest_rs_queue::Delay::LATEST_DUE.as_millis()).expect("the bound fits");
-        assert_eq!(millis(Duration::MAX), longest);
-        assert_eq!(millis(Duration::from_millis(u64::MAX)), longest);
-        assert!(longest < 1 << 53, "a Lua number holds it exactly");
-        assert_eq!(millis(Duration::from_micros(500)), 1, "never zero");
-    }
-
-    /// Every key this crate writes, beside the span target of the crate that
-    /// owns its concern — the queue's, the scheduler's, the rate limiter's,
-    /// never `redis`.
-    fn every_key() -> Vec<(&'static str, &'static str)> {
-        let queue = [
+    fn every_key_is_a_level_of_the_queue_named_first_in_its_hash_tag() {
+        let keys = [
             JOBS,
             ENTRIES,
             DUE,
@@ -166,41 +144,11 @@ mod tests {
             THROTTLE,
             DEAD,
         ];
-        let mut keys: Vec<_> = queue.map(|key| (key, nest_rs_queue::TARGET)).into();
-        #[cfg(feature = "schedule")]
-        keys.push((crate::schedule::CLAIMS, nest_rs_schedule::TARGET));
-        #[cfg(feature = "throttler")]
-        keys.push((crate::throttler::BUCKETS, nest_rs_throttler::TARGET));
-        keys
-    }
-
-    #[test]
-    fn every_key_is_a_level_of_the_concern_its_owner_emits_on() {
-        let keys = every_key();
-        for (at, &(key, target)) in keys.iter().enumerate() {
-            let concern = target
-                .strip_prefix("nest_rs::")
-                .expect("a framework target")
-                .replace("::", ":");
+        crate::testing::assert_keys_of(nest_rs_queue::TARGET, &keys);
+        for key in keys {
             let levels: Vec<_> = key.split(':').collect();
-            assert!(
-                key.starts_with(&format!("nestrs:{concern}:")) && levels.len() >= 3,
-                "{key} is `nestrs:{concern}:<structure>`",
-            );
-            if target == nest_rs_queue::TARGET {
-                assert_eq!(levels.len(), 4, "{key} is `nestrs:queue:{{}}:<structure>`");
-                assert_eq!(levels[2], HASH_TAG, "{key} names its queue first");
-            }
-            for (other_at, &(other, _)) in keys.iter().enumerate() {
-                if other_at != at
-                    && let Some(rest) = other.strip_prefix(key)
-                {
-                    assert!(
-                        rest.starts_with(':'),
-                        "{key} prefixes {other} inside a level"
-                    );
-                }
-            }
+            assert_eq!(levels.len(), 4, "{key} is `nestrs:queue:{{}}:<structure>`");
+            assert_eq!(levels[2], HASH_TAG, "{key} names its queue first");
         }
     }
 

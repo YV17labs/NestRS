@@ -30,18 +30,19 @@ macro, what one attempt at a job is, and the `QueueWorker` that runs them —
 ships in **`nest-rs-queue`**. The first-class storage, **Redis**, ships in
 **`nest-rs-redis`**, written on Redis Streams: `RedisQueueModule` binds its
 `RedisQueueProducer` and the consumer the worker runs jobs through. Both are
-compilation units, not lines you write: the `redis` feature below pulls them
-together, and an app's manifest names neither.
+compilation units, not lines you write: the `redis-queue` feature below pulls
+them together, and an app's manifest names neither.
 
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --features redis
+cargo add nest-rs --features redis-queue
 ```
 
-One line in the feature crate's manifest: `redis` implies `queue` — the
-Redis-bound types, the macros, the worker-context seam and the pipe fold
-`#[process]` expands to, together.
+One line in the feature crate's manifest: `redis-queue` implies `queue` and
+`redis` — the Redis connection and the queue's binding over it, the macros, the
+worker-context seam and the pipe fold `#[process]` expands to, together. `redis`
+alone is the connection, and compiles no queue.
 
 A job payload declares `serde` itself; `anyhow` and `tracing` come through
 `nest_rs::core::anyhow` and `nest_rs::core::tracing`.

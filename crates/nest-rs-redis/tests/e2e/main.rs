@@ -2,10 +2,10 @@
 //! is in `integration`, and the doubles both use in `harness`. One module per
 //! concern in `src/`: [`connection`] for the shared connection's boot, bound and
 //! recovery, [`tls`] for `rediss://`, [`throttler`] for the cross-process
-//! rate-limit store, [`layout`] for where a queue lives — run by users confined
-//! to the framework's keys as the docs prescribe them — [`queue`] for the queue
-//! binding, its producer and its consumer under the port's worker, the
-//! behaviour kit every queue backend runs included, [`correlation`] for the
+//! rate-limit store, [`queue`] for the queue binding — where a queue lives, run
+//! by users confined to the framework's keys as the docs prescribe them, its
+//! producer and its consumer under the port's worker, the behaviour kit every
+//! queue backend runs included — [`correlation`] for the
 //! trace context that crosses the producer/consumer boundary, and [`schedule`]
 //! for the occurrence lock a job firing once across replicas claims through.
 //!
@@ -30,7 +30,6 @@ mod connection;
 mod correlation;
 #[path = "../harness/mod.rs"]
 mod harness;
-mod layout;
 mod queue;
 mod schedule;
 mod sentinel;

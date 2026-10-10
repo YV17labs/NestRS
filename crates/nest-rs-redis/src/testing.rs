@@ -111,3 +111,31 @@ pub(crate) fn answer(line: &str) -> redis::RedisError {
     };
     error.into()
 }
+
+/// Asserts every key of `keys` is a level of the concern `target` emits on —
+/// `nestrs:<concern>:<structure>[:…]`, `<concern>` the target's tail, never
+/// `redis` — and that none prefixes another inside a level, which a `SCAN`
+/// matching by glob would read as one.
+pub(crate) fn assert_keys_of(target: &str, keys: &[&str]) {
+    let concern = target
+        .strip_prefix("nest_rs::")
+        .expect("a framework target")
+        .replace("::", ":");
+    let level = format!("nestrs:{concern}:");
+    for (at, key) in keys.iter().enumerate() {
+        assert!(
+            key.starts_with(&level),
+            "{key} is `nestrs:{concern}:<structure>`"
+        );
+        for (other_at, other) in keys.iter().enumerate() {
+            if other_at != at
+                && let Some(rest) = other.strip_prefix(key)
+            {
+                assert!(
+                    rest.starts_with(':'),
+                    "{key} prefixes {other} inside a level"
+                );
+            }
+        }
+    }
+}

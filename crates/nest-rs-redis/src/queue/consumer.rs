@@ -25,12 +25,13 @@ use nest_rs_queue::{
 use redis::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
+use super::backend::BACKEND;
 use super::checkpoint::RedisCheckpoint;
+use super::error::{PreparedTwice, UnexpectedReply, UnknownDisposition};
+use super::layout::{DEAD_KEPT, DEAD_MOST, GROUP, QueueKeys};
 use super::scripts::SCRIPTS;
 use crate::RedisConnection;
-use crate::backend::BACKEND;
-use crate::error::{PreparedTwice, UnexpectedReply, UnknownDisposition};
-use crate::layout::{DEAD_KEPT, DEAD_MOST, GROUP, QueueKeys, millis};
+use crate::millis::millis;
 
 /// The most held-back jobs one upkeep files: each is a write a script holds
 /// Redis for, so a backlog falling due at once is filed in steps.

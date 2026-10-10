@@ -55,8 +55,8 @@ pub struct RedisConfig {
     /// to 10s. The boot refuses a budget at or past a net waiting on the
     /// connection — each binding declares its port's, as does the
     /// authentication guard when its strategy injects the connection — and the
-    /// queue binding a lease the port's renewal cannot fit in
-    /// ([`lease_fits_renewal`](nest_rs_queue::lease_fits_renewal)).
+    /// queue binding (feature `queue`) a lease the port's renewal cannot fit
+    /// in, by the queue port's `lease_fits_renewal`.
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
     /// system's authorities and presents no certificate. Read from `<PREFIX>_REDIS__TLS_*` — see

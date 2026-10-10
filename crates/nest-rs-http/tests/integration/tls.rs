@@ -18,6 +18,8 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::transport::{connect, free_port, read_head};
+
 const HOST_A: &str = "a.nestrs.test";
 const HOST_B: &str = "b.nestrs.test";
 
@@ -119,12 +121,6 @@ fn client(host: &str, port: u16) -> reqwest::Client {
         .resolve(host, ([127, 0, 0, 1], port).into())
         .build()
         .expect("client builds")
-}
-
-/// An OS-assigned free port, bound and released for the transport to take.
-fn free_port() -> u16 {
-    let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral port");
-    listener.local_addr().expect("local addr").port()
 }
 
 /// A request on `client`'s own connection pool, reusing its connection.
@@ -422,7 +418,7 @@ async fn handshake(port: u16, alpn: &[&[u8]]) -> TlsStream<tokio::net::TcpStream
     connector(alpn)
         .connect(
             ServerName::try_from(HOST_A).expect("a DNS name"),
-            crate::transport::connect(port).await,
+            connect(port).await,
         )
         .await
         .expect("the handshake completes")
@@ -491,16 +487,7 @@ async fn an_http1_head_past_64_kib_answers_431_over_tls() {
                 .as_bytes(),
         )
         .await;
-    let mut head = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        let read = tokio::io::AsyncReadExt::read(&mut stream, &mut byte)
-            .await
-            .expect("the head is readable");
-        assert!(read > 0, "the connection ended inside the head");
-        head.push(byte[0]);
-    }
-    let head = String::from_utf8(head).expect("the head is text");
+    let head = read_head(&mut stream).await;
     assert!(head.starts_with("HTTP/1.1 431"), "{head}");
 
     cancel.cancel();
@@ -518,7 +505,7 @@ async fn the_tls_listener_installs_the_default_crypto_provider_when_none_is() {
     let material = Material::new("provider");
     let port = free_port();
     let cancel = serve(port, &material, 0).await;
-    drop(crate::transport::connect(port).await);
+    drop(connect(port).await);
 
     let installed =
         rustls::crypto::CryptoProvider::get_default().expect("the listener installed one");

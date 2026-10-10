@@ -4,16 +4,13 @@
 
 use std::time::Duration;
 
-use futures_util::StreamExt;
-use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpConfig, HttpTransport, controller, routes};
+use nest_rs_core::module;
+use nest_rs_http::{HttpConfig, controller, routes};
 use nest_rs_testing::LogCapture;
-use poem::web::websocket::WebSocket;
-use poem::{IntoResponse, handler};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::transport::{PATIENCE, connect, free_port, read_head, read_to_end, request};
+use crate::transport::{PATIENCE, Serving, connect, read_head, read_to_end, request, serve_module};
 
 /// The line the loop files when the cap holds a connection back.
 const CAP_REACHED: &str = "connection cap reached; new connections wait in the listen backlog";
@@ -43,37 +40,9 @@ impl ServerController {
 #[module(providers = [ServerController])]
 struct ServerModule;
 
-/// A WebSocket that stays open until its peer goes.
-#[handler]
-fn hold(ws: WebSocket) -> impl IntoResponse {
-    ws.on_upgrade(|mut socket| async move { while let Some(Ok(_)) = socket.next().await {} })
-}
-
-/// [`ServerModule`] and the held socket at `/socket`, served on a local port
-/// from `config` as `HttpModule` builds it; cancelling the token stops it.
+/// [`ServerModule`] and the echo socket at `/socket`, served from `config`.
 async fn serve(config: HttpConfig) -> (u16, CancellationToken) {
-    let app = App::builder()
-        .module::<ServerModule>()
-        .build()
-        .await
-        .expect("module boots");
-    let port = free_port();
-    let mut transport = HttpTransport::from_config(&HttpConfig {
-        host: "127.0.0.1".into(),
-        port,
-        ..config
-    })
-    .expect("the config builds a transport")
-    .mount("/socket", |_| poem::get(hold));
-    transport
-        .configure(app.container())
-        .await
-        .expect("transport configures");
-    let cancel = CancellationToken::new();
-    tokio::spawn({
-        let cancel = cancel.clone();
-        async move { Box::new(transport).serve(cancel).await }
-    });
+    let Serving { port, cancel, .. } = serve_module::<ServerModule>(config).await;
     (port, cancel)
 }
 

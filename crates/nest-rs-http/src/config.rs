@@ -275,12 +275,17 @@ impl HttpConfig {
     /// the range the variable is, for a config that never met the environment.
     pub(crate) fn connection_cap(&self) -> Result<usize> {
         check_connection_cap(
-            nest_rs_config::var_name(
-                <Self as nest_rs_config::Namespaced>::NAMESPACE,
-                MAX_CONCURRENT_CONNECTIONS,
-            ),
+            Self::connection_cap_variable(),
             self.max_concurrent_connections,
             "",
+        )
+    }
+
+    /// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, as this process spells it.
+    pub(crate) fn connection_cap_variable() -> String {
+        nest_rs_config::var_name(
+            <Self as nest_rs_config::Namespaced>::NAMESPACE,
+            MAX_CONCURRENT_CONNECTIONS,
         )
     }
 

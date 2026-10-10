@@ -103,36 +103,18 @@ impl Server {
         let shutdown = CancellationToken::new();
         let mut connections = JoinSet::new();
         let mut backoff = AcceptBackoff::default();
-        let mut held = None;
         loop {
-            let place = match held.take() {
-                Some(place) => place,
-                None => tokio::select! {
-                    () = &mut signal => break,
-                    place = self.admission.place() => match place {
-                        Some(place) => place,
-                        None => break,
-                    },
+            let place = tokio::select! {
+                () = &mut signal => break,
+                place = self.admission.place() => match place {
+                    Some(place) => place,
+                    None => break,
                 },
             };
-            let accepted = tokio::select! {
+            let (stream, peer) = tokio::select! {
                 () = &mut signal => break,
-                accepted = self.listener.accept() => accepted,
+                accepted = backoff.accept(|| self.listener.accept()) => accepted,
             };
-            let (stream, peer) = match accepted {
-                Ok(accepted) => accepted,
-                Err(error) => {
-                    held = Some(place);
-                    if let Some(delay) = backoff.failed(&error) {
-                        tokio::select! {
-                            () = &mut signal => break,
-                            () = tokio::time::sleep(delay) => {}
-                        }
-                    }
-                    continue;
-                }
-            };
-            backoff.succeeded();
             if let Err(error) = stream.set_nodelay(true) {
                 tracing::warn!(
                     target: crate::target::HTTP,
@@ -153,20 +135,15 @@ impl Server {
         }
         drop(self.listener);
         shutdown.cancel();
-        let ended = match self.drain.bound() {
-            Some(bound) => tokio::time::timeout_at(bound, join_all(&mut connections))
+        if let Some(bound) = self.drain.bound()
+            && tokio::time::timeout_at(bound, join_all(&mut connections))
                 .await
-                .is_ok(),
-            None => {
-                join_all(&mut connections).await;
-                true
-            }
-        };
-        if !ended {
+                .is_err()
+        {
             // Each socket drops past the bound, so the drain counts it as cut.
             connections.abort_all();
-            join_all(&mut connections).await;
         }
+        join_all(&mut connections).await;
     }
 }
 
@@ -256,12 +233,8 @@ impl Connection {
         let mut connection =
             pin!(builder.serve_connection_with_upgrades(TokioIo::new(io), service));
         let ended = tokio::select! {
-            ended = connection.as_mut() => Some(ended),
-            () = shutdown.cancelled() => None,
-        };
-        let ended = match ended {
-            Some(ended) => ended,
-            None => {
+            ended = connection.as_mut() => ended,
+            () = shutdown.cancelled() => {
                 connection.as_mut().graceful_shutdown();
                 connection.await
             }
@@ -345,10 +318,7 @@ impl Admission {
             tracing::warn!(
                 target: crate::target::HTTP,
                 max_concurrent_connections = self.max_concurrent_connections,
-                variable = nest_rs_config::var_name(
-                    <crate::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
-                    "MAX_CONCURRENT_CONNECTIONS",
-                ),
+                variable = crate::HttpConfig::connection_cap_variable(),
                 "connection cap reached; new connections wait in the listen backlog",
             );
         }
@@ -383,6 +353,28 @@ struct AcceptBackoff {
 impl AcceptBackoff {
     const FIRST: Duration = Duration::from_millis(5);
     const MOST: Duration = Duration::from_secs(1);
+
+    /// The next connection `accept` yields, each failure before it waited out.
+    /// Dropped at the signal mid-wait: the listener's accept and the sleep are
+    /// both cancel-safe.
+    async fn accept<T, A>(&mut self, mut accept: impl FnMut() -> A) -> T
+    where
+        A: Future<Output = io::Result<T>>,
+    {
+        loop {
+            match accept().await {
+                Ok(accepted) => {
+                    self.succeeded();
+                    return accepted;
+                }
+                Err(error) => {
+                    if let Some(delay) = self.failed(&error) {
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        }
+    }
 
     /// How long to wait before accepting again, if at all; one `warn` opens an
     /// episode.
@@ -459,22 +451,56 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_connection_the_peer_gave_up_on_is_skipped_at_once() {
+    /// An accept failing with each of `errors` in turn, then succeeding.
+    fn failing<const N: usize>(
+        errors: [io::Error; N],
+    ) -> impl FnMut() -> std::future::Ready<io::Result<()>> {
+        let mut errors = errors.into_iter();
+        move || std::future::ready(errors.next().map_or(Ok(()), Err))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_accept_is_waited_out_before_the_next_one() {
         let logs = LogCapture::install();
         let mut backoff = AcceptBackoff::default();
-        for kind in [
-            io::ErrorKind::ConnectionAborted,
-            io::ErrorKind::ConnectionReset,
-            io::ErrorKind::Interrupted,
-        ] {
-            assert_eq!(backoff.failed(&io::Error::from(kind)), None, "{kind:?}");
-        }
+        let start = tokio::time::Instant::now();
+        backoff
+            .accept(failing([EMFILE; 3].map(io::Error::from_raw_os_error)))
+            .await;
+        assert_eq!(start.elapsed(), Duration::from_millis(5 + 10 + 20));
+        logs.expect_one(crate::target::HTTP, "accept failed; backing off");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_the_peer_gave_up_on_is_skipped_at_once() {
+        let logs = LogCapture::install();
+        let mut backoff = AcceptBackoff::default();
+        let gone = || {
+            [
+                io::ErrorKind::ConnectionAborted,
+                io::ErrorKind::ConnectionReset,
+                io::ErrorKind::Interrupted,
+            ]
+            .map(io::Error::from)
+        };
+        let start = tokio::time::Instant::now();
+        backoff.accept(failing(gone())).await;
+        assert_eq!(start.elapsed(), Duration::ZERO, "retried with no wait");
         logs.expect_none(crate::target::HTTP, "accept failed; backing off");
+
+        let [aborted, reset, interrupted] = gone();
+        backoff
+            .accept(failing([
+                aborted,
+                reset,
+                interrupted,
+                io::Error::from_raw_os_error(EMFILE),
+            ]))
+            .await;
         assert_eq!(
-            backoff.failed(&io::Error::from_raw_os_error(EMFILE)),
-            Some(AcceptBackoff::FIRST),
-            "and none of them started an episode",
+            start.elapsed(),
+            AcceptBackoff::FIRST,
+            "and none of them opened an episode",
         );
     }
 

@@ -13,7 +13,7 @@ use nest_rs_http::{
 use nest_rs_testing::LogCapture;
 use poem::web::websocket::{Message as Frame, WebSocket};
 use poem::{Body, IntoResponse, Route, handler};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -113,20 +113,21 @@ fn echo(ws: WebSocket) -> impl IntoResponse {
     })
 }
 
-/// A transport serving [`ShutdownModule`] and the echo socket on a local port,
-/// built from the default [`HttpConfig`] as `HttpModule` builds it.
-struct Serving {
-    port: u16,
-    cancel: CancellationToken,
+/// A transport serving a module and the echo socket on a local port, built
+/// from an [`HttpConfig`] as `HttpModule` builds it.
+pub(crate) struct Serving {
+    pub(crate) port: u16,
+    pub(crate) cancel: CancellationToken,
     task: JoinHandle<anyhow::Result<()>>,
 }
 
+/// [`ShutdownModule`] from the default config.
 async fn serve() -> Serving {
-    serve_module::<ShutdownModule>().await
+    serve_module::<ShutdownModule>(HttpConfig::default()).await
 }
 
-/// [`serve`] for any module — the same transport, the same echo socket.
-async fn serve_module<M: nest_rs_core::Module + 'static>() -> Serving {
+/// [`serve`] for any module and config — the same transport, the same echo socket.
+pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: HttpConfig) -> Serving {
     let app = App::builder()
         .module::<M>()
         .build()
@@ -136,9 +137,9 @@ async fn serve_module<M: nest_rs_core::Module + 'static>() -> Serving {
     let mut transport = HttpTransport::from_config(&HttpConfig {
         host: "127.0.0.1".into(),
         port,
-        ..HttpConfig::default()
+        ..config
     })
-    .expect("the default config builds a transport")
+    .expect("the config builds a transport")
     .mount("/socket", |_| poem::get(echo));
     transport
         .configure(app.container())
@@ -211,7 +212,7 @@ pub(crate) async fn request(port: u16, path: &str) -> TcpStream {
 }
 
 /// Read a response head, byte by byte, up to the blank line that ends it.
-pub(crate) async fn read_head(stream: &mut TcpStream) -> String {
+pub(crate) async fn read_head(stream: &mut (impl AsyncRead + Unpin)) -> String {
     let mut head = Vec::new();
     let mut byte = [0_u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -540,7 +541,7 @@ struct SettleModule;
 #[tokio::test]
 async fn work_stopped_on_several_mounts_is_waited_for_once() {
     let logs = LogCapture::install();
-    let serving = serve_module::<SettleModule>().await;
+    let serving = serve_module::<SettleModule>(HttpConfig::default()).await;
     for path in ["/settle-a", "/settle-b"] {
         let mut client = request(serving.port, path).await;
         let head = read_head(&mut client).await;

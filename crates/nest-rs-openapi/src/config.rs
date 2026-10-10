@@ -16,9 +16,11 @@ use crate::license::OpenApiLicense;
 pub struct OpenApiConfig {
     /// Master switch for the documentation endpoints.
     ///
-    /// Both endpoints are **public**, unauthenticated, so the unpinned default is
-    /// off outside a dev/test profile; enabling them there is honoured and logged
-    /// at `warn`.
+    /// Both endpoints are **public**, unauthenticated, so `Default` keeps them
+    /// off — a config pinned over `..Default::default()` serves them in no
+    /// profile — and only a development or test profile's
+    /// [`Config::defaults`] turns them on. Enabling them outside such a
+    /// profile is honoured and logged at `warn`.
     pub enabled: bool,
     /// The API title shown in the document `info` block and Swagger UI.
     pub title: String,
@@ -45,7 +47,7 @@ pub struct OpenApiConfig {
 impl Default for OpenApiConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             title: "nestrs API".into(),
             version: "0.1.0".into(),
             summary: None,
@@ -161,12 +163,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_non_empty_strings() {
+    fn the_struct_default_serves_nothing_and_names_the_api() {
         let d = OpenApiConfig::default();
-        assert!(d.enabled, "docs are on by default for dev ergonomics");
+        assert!(
+            !d.enabled,
+            "public documentation is opened by the profile or in sight"
+        );
         assert!(!d.title.is_empty());
         assert!(!d.version.is_empty());
         assert!(d.description.is_none());
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_pin_over_the_struct_default_keeps_the_docs_closed_in_production() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            let cfg = OpenApiConfig::from_env(
+                &ConfigService::with_vars("openapi", []),
+                OpenApiConfig {
+                    title: "x".into(),
+                    ..OpenApiConfig::default()
+                },
+            )
+            .expect("ok");
+            assert!(!cfg.enabled, "a pin opens the docs only by saying so");
+            Ok(())
+        });
     }
 
     #[test]

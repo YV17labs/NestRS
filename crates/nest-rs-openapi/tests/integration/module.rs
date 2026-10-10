@@ -1,5 +1,6 @@
 //! Covers `src/module.rs` — the composition contract `OpenApiModule` publishes.
 
+use nest_rs_config::Config;
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::poem::web::Multipart;
@@ -89,6 +90,37 @@ struct DocumentedApp;
 
 #[module(imports = [openapi(false)], providers = [WidgetsController])]
 struct UndocumentedApp;
+
+#[module(imports = [OpenApiModule::for_root(None)], providers = [WidgetsController])]
+struct UnpinnedApp;
+
+/// Pinned over the profile's defaults, as the docs teach a pin that keeps the
+/// documentation a development surface.
+fn pinned_over_the_profile() -> OpenApiSetup {
+    OpenApiModule::for_root(OpenApiConfig {
+        title: "Profile API".into(),
+        ..OpenApiConfig::defaults()
+    })
+}
+
+#[module(imports = [pinned_over_the_profile()], providers = [WidgetsController])]
+struct PinnedOverTheProfileApp;
+
+#[tokio::test]
+async fn the_test_profile_serves_the_documentation_unpinned_or_pinned_over_its_defaults() {
+    let unpinned = TestApp::for_module::<UnpinnedApp>().await.expect("boots");
+    for path in ["/api-json", "/api"] {
+        unpinned.http().get(path).send().await.assert_status_is_ok();
+    }
+
+    let pinned = TestApp::for_module::<PinnedOverTheProfileApp>()
+        .await
+        .expect("boots");
+    let resp = pinned.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+    let document: Value = resp.json().await.value().deserialize();
+    assert_eq!(document["info"]["title"], "Profile API");
+}
 
 #[tokio::test]
 async fn the_documented_import_serves_a_document_describing_the_app() {
@@ -435,6 +467,7 @@ async fn a_form_encoded_body_is_described_as_one() {
 #[module(
     imports = [
         OpenApiModule::for_root(OpenApiConfig {
+            enabled: true,
             emit_document: true,
             document_path: unwritable_document_path(),
             ..OpenApiConfig::default()

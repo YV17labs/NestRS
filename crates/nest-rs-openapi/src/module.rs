@@ -23,11 +23,11 @@ const VERSIONED_SPEC_PATTERN: &str = "/api-json/*version";
 
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
 /// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with
-/// `OpenApiModule::for_root()`; configuration loads from `<PREFIX>_OPENAPI__*`.
+/// `OpenApiModule::for_root(None)`; configuration loads from `<PREFIX>_OPENAPI__*`.
 ///
-/// Both endpoints are public; set `<PREFIX>_OPENAPI__ENABLED=false` (or pin
-/// `OpenApiConfig { enabled: false, .. }`) to mount neither — see
-/// [`OpenApiConfig`].
+/// Both endpoints are public, so they are served in a development or test
+/// profile alone until `<PREFIX>_OPENAPI__ENABLED=true` (or a pinned
+/// `OpenApiConfig { enabled: true, .. }`) opens them — see [`OpenApiConfig`].
 pub struct OpenApiModule;
 
 impl OpenApiModule {

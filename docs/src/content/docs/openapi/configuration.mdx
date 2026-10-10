@@ -35,6 +35,7 @@ $ NESTRS_OPENAPI__TITLE="Publish API" \
 Pass an `OpenApiConfig` at the import site instead of reading the environment:
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::config::Config;
 use nest_rs::openapi::{OpenApiConfig, OpenApiLicense, OpenApiModule};
 
 OpenApiModule::for_root(OpenApiConfig {
@@ -45,13 +46,19 @@ OpenApiModule::for_root(OpenApiConfig {
         identifier: Some("Apache-2.0".into()),
         url: None,
     }),
-    ..OpenApiConfig::default()
+    ..OpenApiConfig::defaults()
 })
 ```
 
 The pinned struct is the *base* `<PREFIX>_OPENAPI__*` overlays, field by field —
 so the deployment can still override any one of them, a single contact or
 license key included. See the [precedence chain](/configuration/#the-dual-path-rule).
+
+`OpenApiConfig::defaults()` is the profile's base, so the documentation stays
+a development surface: served in development and test, closed elsewhere. Over
+`..Default::default()` it is closed in every profile, until `enabled: true` in
+the pin or `<PREFIX>_OPENAPI__ENABLED=true` in the deployment opens it — a
+visible line, logged at `warn` outside a development or test profile.
 
 ## The committed document
 

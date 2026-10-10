@@ -88,12 +88,11 @@ impl OAuthController {
     // would fail on the missing principal instead.
     #[get("/callback")]
     #[use_guards(OAuthGuard)]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenResponse>> {
-        Ok(Json(self.issuer.issue(
-            Some(caller.user_id),
-            caller.org_id,
-            caller.roles.clone(),
-        )?))
+    #[api(response = AccessTokenResponse)]
+    async fn callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+        Ok(self
+            .issuer
+            .issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?)
     }
 }
 ```
@@ -105,6 +104,12 @@ opposite — `code` and `state` *are* the credential, and `OAuthGuard` (your app
 tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
 forged-callback `401` into a failure on the missing principal — invisible to any
 alert, WAF rule or rate limit keyed on `401`.
+
+`/callback` returns `AccessTokenResponse` bare. The type renders its own JSON
+with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749 §5.1 requires
+on a token, so the browser that followed the redirect keeps no copy of it in a
+back-forward cache; `#[api(response = AccessTokenResponse)]` names the body for
+the OpenAPI document, which reads it off a `Json<T>` return otherwise.
 
 ## Configuration
 

@@ -19,6 +19,8 @@ async fn login_issues_a_token_the_public_key_verifies() {
         .send()
         .await;
     resp.assert_status_is_ok();
+    resp.assert_header("cache-control", "no-store");
+    resp.assert_header("pragma", "no-cache");
 
     let json = resp.json().await;
     let token = json

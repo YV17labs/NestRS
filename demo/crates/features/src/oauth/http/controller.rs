@@ -25,18 +25,20 @@ impl OAuthController {
     #[post("/token")]
     #[use_guards(ThrottlerGuard, ClientAuthnGuard)]
     #[meta(Throttle::per_minute(10))]
-    #[api(summary = "OAuth2 token endpoint (client_credentials)", tags("OAuth2"))]
+    #[api(
+        summary = "OAuth2 token endpoint (client_credentials)",
+        tags("OAuth2"),
+        response = AccessTokenResponse
+    )]
     async fn token(
         &self,
         client: Ctx<AuthenticatedClient>,
         body: Form<AccessTokenRequest>,
-    ) -> Result<Json<AccessTokenResponse>> {
+    ) -> Result<AccessTokenResponse> {
         let AccessTokenRequest { grant_type, scope } = body.0;
-        Ok(Json(self.svc.grant_client_credentials(
-            &grant_type,
-            scope.as_deref(),
-            &client,
-        )?))
+        Ok(self
+            .svc
+            .grant_client_credentials(&grant_type, scope.as_deref(), &client)?)
     }
 
     #[get("/social/:provider/authorize")]
@@ -72,28 +74,30 @@ impl OAuthController {
     #[meta(Throttle::per_minute(10))]
     #[api(
         summary = "Social login redirect URI — issues this app's token",
-        tags("OAuth2")
+        tags("OAuth2"),
+        response = AccessTokenResponse
     )]
-    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenResponse>> {
-        Ok(Json(self.svc.issue(
-            Some(caller.user_id),
-            caller.org_id,
-            caller.roles.clone(),
-        )?))
+    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+        Ok(self
+            .svc
+            .issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?)
     }
 
     #[post("/login")]
     #[public]
     #[use_guards(ThrottlerGuard)]
     #[meta(Throttle::per_minute(10))]
-    #[api(summary = "Sign in with email and password", tags("Auth"))]
-    async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenResponse>> {
+    #[api(
+        summary = "Sign in with email and password",
+        tags("Auth"),
+        response = AccessTokenResponse
+    )]
+    async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
         let input = body.into_inner();
-        Ok(Json(
-            self.svc
-                .grant_password(&input.email, &input.password)
-                .await?,
-        ))
+        Ok(self
+            .svc
+            .grant_password(&input.email, &input.password)
+            .await?)
     }
 }
 

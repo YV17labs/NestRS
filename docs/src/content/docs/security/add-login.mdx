@@ -52,16 +52,26 @@ The handler validates the body, delegates to the service, returns the token:
 #[public]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
-// … #[api(…)]
-async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<Json<AccessTokenResponse>> {
+#[api(
+    summary = "Sign in with email and password",
+    tags("Auth"),
+    response = AccessTokenResponse
+)]
+async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse> {
     let input = body.into_inner();
-    Ok(Json(
-        self.svc
-            .grant_password(&input.email, &input.password)
-            .await?,
-    ))
+    Ok(self
+        .svc
+        .grant_password(&input.email, &input.password)
+        .await?)
 }
 ```
+
+The token goes back bare, not in a `Json`: `AccessTokenResponse` renders its
+own JSON with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749
+§5.1 requires on anything carrying a token, so no shared or back-forward
+cache keeps it. `Json<AccessTokenResponse>` would still compile and drop both
+headers. The OpenAPI document reads a body's type off a `Json<T>` return, which
+is why `#[api(response = AccessTokenResponse)]` names it here.
 
 `grant_password` authenticates the email/password pair and signs the
 claims — invalid credentials come back as one opaque error (no
@@ -73,7 +83,7 @@ For signing to work the app needs a key. The simplest single-app setup is
 a symmetric secret (32 bytes minimum):
 
 ```bash
-export NESTRS_AUTHN__SECRET="an-actual-random-32-byte-minimum-secret"
+export NESTRS_AUTHN__SECRET="$(openssl rand -hex 32)"
 ```
 
 <Aside type="tip">

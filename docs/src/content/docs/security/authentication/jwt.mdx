@@ -54,7 +54,7 @@ One env var makes it work end to end — a shared HS256 secret (32 bytes
 minimum; anything shorter fails the boot):
 
 ```bash frame="terminal"
-export NESTRS_AUTHN__SECRET='a-32-byte-minimum-development-secret!!'
+export NESTRS_AUTHN__SECRET="$(openssl rand -hex 32)"
 ```
 
 With that set, `JwtService` signs and verifies against the same

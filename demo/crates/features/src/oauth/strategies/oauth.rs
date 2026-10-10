@@ -12,7 +12,7 @@ use super::super::service::{Caller, OAuthService};
 
 pub type OAuthGuard = nest_rs::authn::AuthnGuard<OAuthStrategy>;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 struct CallbackQuery {
     code: Option<String>,
     state: Option<String>,

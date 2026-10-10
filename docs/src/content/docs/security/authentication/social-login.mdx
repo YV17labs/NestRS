@@ -135,13 +135,11 @@ impl OAuthController {
 
     #[get("/social/:provider/callback")]
     #[use_guards(ThrottlerGuard, OAuthGuard)]
-    // … #[meta(…)], #[api(…)]
-    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenResponse>> {
-        Ok(Json(self.svc.issue(
-            Some(caller.user_id),
-            caller.org_id,
-            caller.roles.clone(),
-        )?))
+    // … #[meta(…)], #[api(…, response = AccessTokenResponse)]
+    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<AccessTokenResponse> {
+        Ok(self
+            .svc
+            .issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?)
     }
     // …
 }

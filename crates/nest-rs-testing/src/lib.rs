@@ -67,3 +67,15 @@ pub use url::{url_as, url_at, url_on};
 pub use wait::{wait_for, wait_until};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    /// What `queue_kit!` expands to: the cases and the runner each one goes through.
+    #[cfg(feature = "queue")]
+    pub mod queue {
+        pub use crate::queue::kit::{cases, run};
+    }
+}

@@ -92,7 +92,7 @@ macro_rules! queue_kit {
         $(
             #[test]
             fn $case() {
-                $crate::queue::run(|| $backend, $crate::queue::cases::$case);
+                $crate::__private::queue::run(|| $backend, $crate::__private::queue::cases::$case);
             }
         )+
     };

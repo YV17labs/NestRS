@@ -7,17 +7,32 @@ use nest_rs_testing::TestApp;
 
 #[test]
 fn the_response_carries_exactly_the_members_5_1_marks_required() {
-    let body = serde_json::to_value(AccessTokenResponse {
-        access_token: "t".into(),
-        token_type: "Bearer".into(),
-        expires_in: 3600,
-    })
+    let body = serde_json::to_value(AccessTokenResponse::bearer("t", 3600)).expect("serializes");
+
+    assert_eq!(
+        body,
+        serde_json::json!({ "access_token": "t", "token_type": "Bearer", "expires_in": 3600 })
+    );
+}
+
+/// §5.1 and §3.3: an issuer that narrows or defaults the grant says so.
+#[test]
+fn a_granted_scope_is_written_as_the_scope_member() {
+    let body =
+        serde_json::to_value(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"]))
+            .expect("serializes");
+
+    assert_eq!(body["scope"], "posts:read");
+}
+
+#[test]
+fn several_granted_scopes_are_written_space_delimited() {
+    let body = serde_json::to_value(
+        AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read", "posts:write"]),
+    )
     .expect("serializes");
 
-    let object = body.as_object().expect("a JSON object");
-    let mut members: Vec<&str> = object.keys().map(String::as_str).collect();
-    members.sort_unstable();
-    assert_eq!(members, ["access_token", "expires_in", "token_type"]);
+    assert_eq!(body["scope"], "posts:read posts:write");
 }
 
 #[test]
@@ -51,11 +66,7 @@ impl IssuerController {
     #[public]
     #[api(response = AccessTokenResponse)]
     async fn token(&self) -> poem::Result<AccessTokenResponse> {
-        Ok(AccessTokenResponse {
-            access_token: "t".into(),
-            token_type: "Bearer".into(),
-            expires_in: 3600,
-        })
+        Ok(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"]))
     }
 }
 
@@ -78,6 +89,7 @@ async fn a_token_route_answers_no_store_through_the_transport() {
             "access_token": "t",
             "token_type": "Bearer",
             "expires_in": 3600,
+            "scope": "posts:read",
         }))
         .await;
 }
@@ -113,5 +125,8 @@ async fn the_route_documents_the_access_token_response_it_returns() {
         .map(String::as_str)
         .collect();
     members.sort_unstable();
-    assert_eq!(members, ["access_token", "expires_in", "token_type"]);
+    assert_eq!(
+        members,
+        ["access_token", "expires_in", "scope", "token_type"]
+    );
 }

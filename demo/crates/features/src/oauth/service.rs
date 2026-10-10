@@ -163,11 +163,10 @@ pub(crate) fn issue_with_jwt(
         roles = ?claims.roles,
         "issued access token"
     );
-    Ok(AccessTokenResponse {
+    Ok(AccessTokenResponse::bearer(
         access_token,
-        token_type: "Bearer".into(),
-        expires_in: jwt_svc.ttl_secs(),
-    })
+        jwt_svc.ttl_secs(),
+    ))
 }
 
 pub(crate) fn grant_client_credentials_with_jwt(

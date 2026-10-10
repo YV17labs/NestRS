@@ -20,6 +20,7 @@ mod net;
 mod panic;
 mod process_start;
 mod way_down;
+mod wiring;
 
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};

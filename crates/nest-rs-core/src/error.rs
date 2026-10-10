@@ -268,6 +268,19 @@ pub struct KeyedDependencyError {
     pub key: &'static str,
 }
 
+/// A wiring a module attaches at the kernel's wiring step failed: the boot ends
+/// before any transport is built or any lifecycle hook runs, its cause the
+/// wiring's own error.
+#[derive(Debug, Error)]
+#[error("the `{registry}` wiring failed")]
+pub struct WiringFailedError {
+    /// The registry the wiring fills, as its module names it.
+    pub registry: &'static str,
+    /// What the wiring failed with.
+    #[source]
+    pub source: anyhow::Error,
+}
+
 /// A payload that did not decode, as every edge reports it: the category of the
 /// failure, the line and column when the payload was text, the kind of value
 /// found and the type expected — never the value.

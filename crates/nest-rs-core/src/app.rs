@@ -100,8 +100,10 @@ impl App {
     /// [`MissingDependencyError`](crate::MissingDependencyError),
     /// [`DuplicateProviderError`],
     /// [`ProviderCycleError`](crate::ProviderCycleError),
-    /// [`UnresolvedFactoryError`] for a module that queued an async factory, and
-    /// a module's own refusal ([`ContainerBuilder::refuse`]).
+    /// [`UnresolvedFactoryError`] for a module that queued an async factory, a
+    /// module's own refusal ([`ContainerBuilder::refuse`]), and
+    /// [`WiringFailedError`](crate::WiringFailedError) for a module's wiring that
+    /// failed ([`ContainerBuilder::provide_wiring`]).
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
@@ -136,9 +138,9 @@ impl App {
             &global,
             &HashSet::new(),
         )?;
-        Ok(Self {
-            container: builder.build(),
-        })
+        let container = builder.build();
+        crate::wiring::wire(&container)?;
+        Ok(Self { container })
     }
 
     /// Start an [`AppBuilder`] for apps that must seed runtime values or build
@@ -314,6 +316,10 @@ struct ModuleHooks {
 ///    its providers last, injecting seeds and factory outputs. A module that
 ///    cannot build what it must [`refuse`](ContainerBuilder::refuse)s, and the
 ///    boot fails with its error once the phase ends.
+///
+/// The container sealed, each wiring a module attached
+/// ([`ContainerBuilder::provide_wiring`]) fills its registry, in registration
+/// order, before the app is returned.
 pub struct AppBuilder {
     builder: ContainerBuilder,
     modules: Vec<ModuleHooks>,
@@ -369,6 +375,18 @@ impl AppBuilder {
     /// at the app root), for global builder extensions such as `use_guards_global`.
     pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {
         self.builder = self.builder.provide_meta(meta);
+        self
+    }
+
+    /// Attach a wiring at the app root ([`ContainerBuilder::provide_wiring`]),
+    /// for a global builder extension whose registry or check reads the
+    /// assembled container; it runs before every module's.
+    pub fn provide_wiring(
+        mut self,
+        name: &'static str,
+        wire: fn(&Container) -> Result<()>,
+    ) -> Self {
+        self.builder = self.builder.provide_wiring(name, wire);
         self
     }
 
@@ -454,8 +472,9 @@ impl AppBuilder {
         self
     }
 
-    /// Run the four phases and return the assembled [`App`]. Propagates the
-    /// first factory error.
+    /// Run the four phases, then the wiring step, and return the assembled
+    /// [`App`]. Propagates the first factory error, and the first wiring's
+    /// ([`WiringFailedError`](crate::WiringFailedError)).
     pub async fn build(self) -> Result<App> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
@@ -521,9 +540,9 @@ impl AppBuilder {
         }
 
         let builder = seal(builder, &descriptors, &roots, &global, &global_keyed)?;
-        Ok(App {
-            container: builder.build(),
-        })
+        let container = builder.build();
+        crate::wiring::wire(&container)?;
+        Ok(App { container })
     }
 }
 

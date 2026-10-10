@@ -591,6 +591,36 @@ impl ContainerBuilder {
         self
     }
 
+    /// Fill the registry `name` from the assembled container once, through
+    /// `wire`, after the seal and before any transport is built or any lifecycle
+    /// hook runs — so a hook already reads it full.
+    ///
+    /// `name` is the registry as a boot failure names it
+    /// (`"nest_rs::events::listeners"`); the first `wire` that fails ends the
+    /// boot with [`WiringFailedError`](crate::WiringFailedError). Wirings run in
+    /// registration order, and `wire` is synchronous, so none waits on I/O.
+    ///
+    /// ```
+    /// use nest_rs_core::{App, ContainerBuilder, Module, Registering};
+    ///
+    /// struct RecipesModule;
+    ///
+    /// impl Module for RecipesModule {
+    ///     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+    ///         builder.provide_wiring("acme::recipes::catalog", |_container| Ok(()))
+    ///     }
+    /// }
+    ///
+    /// assert!(App::new::<RecipesModule>().is_ok());
+    /// ```
+    pub fn provide_wiring(
+        self,
+        name: &'static str,
+        wire: fn(&Container) -> anyhow::Result<()>,
+    ) -> Self {
+        self.provide_meta(crate::wiring::WiringContribution::new(name, wire))
+    }
+
     /// Refuse the boot from a `register`, which has no `Result` to return: the
     /// boot fails with `error` once the register phase ends. The first refusal
     /// is the one reported.

@@ -28,7 +28,9 @@
 //! `#[injectable(scope = transient)]` rebuilds on every resolution. Lifecycle
 //! hooks (`#[on_module_init]`, `#[on_application_bootstrap]`,
 //! `#[on_module_destroy]`, …) run per phase as [`App::run`] drains them —
-//! init failure aborts boot, shutdown is best-effort.
+//! init failure aborts boot, shutdown is best-effort. A registry a module fills
+//! from the assembled container is filled before the first hook, by the wiring
+//! step it attaches with [`ContainerBuilder::provide_wiring`].
 //!
 //! A hook host — like a scheduled method, a listener, an indicator and a
 //! processor — is resolved outside any request, so it must be a **singleton
@@ -94,6 +96,7 @@ pub mod transport;
 mod type_name;
 mod unit_context;
 mod way_down;
+mod wiring;
 
 pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use app::{App, AppBuilder};
@@ -110,7 +113,7 @@ pub use error::{
     AccessGraphError, BudgetPastNetError, ContestedDeclarationError, DecodeError,
     DuplicateProviderError, FactoryCycleError, KeyedDependencyError, LateFactoryError,
     MissingDependencyError, ProviderCycleError, ScopeViolationError, UnregisteredModuleError,
-    UnresolvedFactoryError,
+    UnresolvedFactoryError, WiringFailedError,
 };
 pub use error_message::{boxed_error, error_message};
 pub use handler::{Handler, Posture, Reflector};
@@ -133,6 +136,7 @@ pub use trace_context::{
 };
 pub use transport::Transport;
 pub use unit_context::{Peer, UnitContext, UnitView};
+pub use wiring::WiringContribution;
 
 #[doc(hidden)]
 pub mod __private {

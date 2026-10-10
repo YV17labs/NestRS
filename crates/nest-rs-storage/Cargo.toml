@@ -62,6 +62,9 @@ async-trait.workspace = true
 # default operation budget sits below.
 nest-rs-authn = { path = "../nest-rs-authn" }
 nest-rs-http = { path = "../nest-rs-http" }
+# `figment::Jail` declares a profile for the one config branch that reads the
+# process environment rather than a `ConfigService`: `Config::defaults`.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use nest_rs_storage::{Storage, StorageConfig};
 
-use crate::{Carry, Then, Until, ensure_bucket, proxied, proxy, storage, unique};
+use crate::{Carry, Then, Until, config, ensure_bucket, proxied, proxy, storage, unique};
 
 /// A megabyte no two offsets of which share a byte pattern for long, stored
 /// under a key of its own.
@@ -28,7 +28,7 @@ async fn stored(label: &str) -> (Storage, String, Vec<u8>) {
 fn reading_within(read_timeout: Duration) -> StorageConfig {
     StorageConfig {
         read_timeout,
-        ..StorageConfig::default()
+        ..config()
     }
 }
 
@@ -155,7 +155,7 @@ async fn a_download_broken_past_the_retries_is_resumed_and_says_so() {
         proxy,
         StorageConfig {
             operation_timeout: budget,
-            ..StorageConfig::default()
+            ..config()
         },
     );
     let logs = nest_rs_testing::LogCapture::install();

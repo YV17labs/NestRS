@@ -109,11 +109,14 @@ mod tests {
             .expect("the default budget sits under every net");
     }
 
-    /// Pinned bucket for the test below, as a real import site.
+    /// Pinned bucket for the test below, as a real import site — the pair
+    /// with it, since a pin reads no `.env` and the struct default holds none.
     fn pinned_storage() -> StorageSetup {
         StorageModule::for_root(StorageConfig {
             bucket: "pinned-bucket".into(),
             region: "eu-west-3".into(),
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
             ..StorageConfig::default()
         })
     }

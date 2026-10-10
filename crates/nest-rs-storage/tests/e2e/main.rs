@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use nest_rs_config::Config;
 use nest_rs_storage::{Storage, StorageConfig, StorageTls};
 use nest_rs_testing::{TestAuthority, TestCertificate, system_connector};
 use rustls::pki_types::ServerName;
@@ -29,20 +30,22 @@ static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
 static PROXY: LazyLock<TestCertificate> =
     LazyLock::new(|| AUTHORITY.server(&["127.0.0.1", "localhost"]));
 
+/// The suite's store as an app resolves it: `<PREFIX>_STORAGE__*` over the
+/// test profile's defaults — the dev container's RustFS and the pair it
+/// accepts, unless the environment names others.
+fn config() -> StorageConfig {
+    nest_rs_testing::load_project_env();
+    StorageConfig::load().expect("the suite's storage config resolves")
+}
+
 /// The store's endpoint: the documented `<PREFIX>_STORAGE__ENDPOINT` override, or
 /// the dev container's RustFS when it is unset.
 fn endpoint() -> String {
-    nest_rs_config::ConfigService::for_namespace("storage")
-        .get("ENDPOINT")
-        .expect("a readable storage endpoint")
-        .unwrap_or_else(|| StorageConfig::default().endpoint)
+    config().endpoint
 }
 
 fn storage() -> Storage {
-    Storage::new(Arc::new(StorageConfig {
-        endpoint: endpoint(),
-        ..StorageConfig::default()
-    }))
+    Storage::new(Arc::new(config()))
 }
 
 /// A client reaching the store through the proxy at `proxy`, with `config`'s

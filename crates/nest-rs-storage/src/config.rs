@@ -13,6 +13,11 @@ const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
 /// object_store waits for a request by default.
 const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
 
+/// The pair the dev container's RustFS accepts: the base of a development or
+/// test profile's [`Config::defaults`], never of `Default`.
+const DEV_ACCESS_KEY: &str = "nestrs";
+const DEV_SECRET_KEY: &str = "nestrs";
+
 /// The operation budget's range, the variable that sets it, and why.
 pub(crate) const OPERATION_TIMEOUT: DurationBounds = DurationBounds::secs(
     "OPERATION_TIMEOUT_SECS",
@@ -39,8 +44,12 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// S3-compatible object storage configuration, read from the
 /// framework-namespaced `<PREFIX>_STORAGE__*` keys.
 ///
-/// The defaults target a local S3-compatible server over plain HTTP in
-/// path-style addressing. For real AWS S3, leave [`endpoint`](Self::endpoint) empty and
+/// `Default` is the production-safe value: an `https://` endpoint in
+/// path-style addressing, plain HTTP refused and no credential. A development
+/// or test profile's [`Config::defaults`] adds the dev container's pair and
+/// allows plain HTTP; a config pinned over `..Default::default()` gets neither
+/// in any profile, and one pinned over `..StorageConfig::defaults()` gets the
+/// profile's. For real AWS S3, leave [`endpoint`](Self::endpoint) empty and
 /// set [`force_path_style`](Self::force_path_style) to `false`.
 #[config(namespace = "storage")]
 #[derive(Clone)]
@@ -62,7 +71,8 @@ pub struct StorageConfig {
     /// (`bucket.endpoint/key`), the AWS default.
     pub force_path_style: bool,
     /// Allow reaching the endpoint over plain `http://`
-    /// (`<PREFIX>_STORAGE__ALLOW_HTTP`): `true` by default only in dev/test.
+    /// (`<PREFIX>_STORAGE__ALLOW_HTTP`): `false` by default, and `true` only in
+    /// a development or test profile's [`Config::defaults`].
     pub allow_http: bool,
     /// The most a call waits for S3's answer, every retry included; a
     /// download's body is held by [`read_timeout`](Self::read_timeout) instead.
@@ -104,11 +114,11 @@ impl Default for StorageConfig {
         Self {
             endpoint: "https://rustfs:9000".into(),
             region: "us-east-1".into(),
-            access_key: "nestrs".into(),
-            secret_key: "nestrs".into(),
+            access_key: String::new(),
+            secret_key: String::new(),
             bucket: "nestrs".into(),
             force_path_style: true,
-            allow_http: true,
+            allow_http: false,
             operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
             read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
             tls: StorageTls::default(),
@@ -117,18 +127,19 @@ impl Default for StorageConfig {
 }
 
 impl Config for StorageConfig {
-    /// Outside dev/test, drops the dev sentinel credentials and plain HTTP.
-    /// Here rather than in `from_env`, so it never rewrites a pinned struct.
+    /// In a development or test profile, the dev container's pair and plain
+    /// HTTP over `Default`. Here rather than in `from_env`, so it never
+    /// rewrites a pinned struct.
     fn defaults() -> Self {
-        let d = Self::default();
-        if dev_profile() {
-            return d;
+        let safe = Self::default();
+        if !dev_profile() {
+            return safe;
         }
         Self {
-            access_key: String::new(),
-            secret_key: String::new(),
-            allow_http: false,
-            ..d
+            access_key: DEV_ACCESS_KEY.into(),
+            secret_key: DEV_SECRET_KEY.into(),
+            allow_http: true,
+            ..safe
         }
     }
 
@@ -165,8 +176,9 @@ fn resolve_endpoint(
     let allow_http_var = env.var_name("ALLOW_HTTP");
     let reason = |endpoint: &dyn std::fmt::Display| {
         format!(
-            "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false \
-             (the staging/production default) — credentials and presigned URLs would travel \
+            "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false (its \
+             value in `StorageConfig::default()`, and in `StorageConfig::defaults()` outside a \
+             development or test profile) — credentials and presigned URLs would travel \
              unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
         )
     };
@@ -190,10 +202,9 @@ fn refuse_half_a_credential(
     access_key: Option<&Setting>,
     secret_key: Option<&Setting>,
 ) -> nest_rs_config::Result<()> {
-    let built_in = StorageConfig::default();
     let (set, other, other_value, built_in_value) = match (access_key, secret_key) {
-        (Some(set), None) => (set, "SECRET_KEY", &base.secret_key, &built_in.secret_key),
-        (None, Some(set)) => (set, "ACCESS_KEY", &base.access_key, &built_in.access_key),
+        (Some(set), None) => (set, "SECRET_KEY", &base.secret_key, DEV_SECRET_KEY),
+        (None, Some(set)) => (set, "ACCESS_KEY", &base.access_key, DEV_ACCESS_KEY),
         _ => return Ok(()),
     };
     let (set_var, other_file_var) = (set.var(), env.var_name(&format!("{other}_FILE")));
@@ -222,7 +233,7 @@ pub(crate) fn is_plaintext(endpoint: &str) -> bool {
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
 }
 
-/// `true` in every profile but staging/production.
+/// `true` in a development or test profile.
 fn dev_profile() -> bool {
     !matches!(
         Environment::from_env(),
@@ -238,16 +249,18 @@ fn resolve_credential(
     setting: Option<Setting>,
     base: String,
 ) -> nest_rs_config::Result<String> {
-    const NO_FALLBACK: &str = "in staging/production (no dev-credential fallback outside dev/test)";
     match setting {
         Some(setting) if setting.value.trim().is_empty() => {
-            Err(setting.refuse(format_args!("is blank — it must be set {NO_FALLBACK}")))
+            Err(setting.refuse("is blank — it must hold the credential"))
         }
         Some(setting) => Ok(setting.value),
         None if base.trim().is_empty() => Err(ConfigError::parse(
             env.var_name(key),
             format!(
-                "must be set, inline or through {}, {NO_FALLBACK}",
+                "must be set, inline or through {} — `StorageConfig::defaults()` holds the \
+                 development pair in a development or test profile alone, \
+                 `StorageConfig::default()` never, and a config pinned in code reads the pair \
+                 from the deployment, not `.env`",
                 env.var_name(&format!("{key}_FILE"))
             ),
         )),
@@ -260,29 +273,143 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_allows_http_for_local_dev_servers() {
+    fn the_struct_default_opens_nothing_in_any_profile() {
+        let d = StorageConfig::default();
         assert!(
-            StorageConfig::default().allow_http,
-            "the dev default targets a plain-http RustFS/MinIO server",
+            !d.allow_http,
+            "plain HTTP is opened by the profile or in sight"
+        );
+        assert!(
+            d.access_key.is_empty() && d.secret_key.is_empty(),
+            "a pair anyone can read is no credential"
         );
     }
 
     #[test]
-    fn the_struct_default_keeps_the_dev_sentinel_credentials() {
-        // The profile floor lives in `Config::defaults`, not in `Default`.
-        let d = StorageConfig::default();
-        assert_eq!(d.access_key, "nestrs");
-        assert_eq!(d.secret_key, "nestrs");
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn the_development_pair_and_plain_http_come_with_a_development_profile_alone() {
+        figment::Jail::expect_with(|jail| {
+            for profile in ["development", "test"] {
+                jail.set_env(Environment::var_name(), profile);
+                let d = <StorageConfig as Config>::defaults();
+                assert_eq!(
+                    (d.access_key.as_str(), d.secret_key.as_str(), d.allow_http),
+                    (DEV_ACCESS_KEY, DEV_SECRET_KEY, true),
+                    "{profile}"
+                );
+            }
+            for profile in ["staging", "production"] {
+                jail.set_env(Environment::var_name(), profile);
+                let d = <StorageConfig as Config>::defaults();
+                assert!(
+                    d.access_key.is_empty() && d.secret_key.is_empty() && !d.allow_http,
+                    "{profile}"
+                );
+                assert_eq!(
+                    format!("{d:?}"),
+                    format!("{:?}", StorageConfig::default()),
+                    "{profile}"
+                );
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_pin_over_the_profiles_defaults_keeps_the_pair_in_development_alone() {
+        figment::Jail::expect_with(|jail| {
+            let pin = || StorageConfig {
+                bucket: "acme-media".into(),
+                ..StorageConfig::defaults()
+            };
+            jail.set_env(Environment::var_name(), "development");
+            let resolved =
+                StorageConfig::from_env(&unset(), pin()).expect("the pair is the profile's");
+            assert_eq!(
+                (resolved.bucket.as_str(), resolved.access_key.as_str()),
+                ("acme-media", DEV_ACCESS_KEY)
+            );
+            jail.set_env(Environment::var_name(), "production");
+            let refused = StorageConfig::from_env(&unset(), pin())
+                .expect_err("production has no pair to give")
+                .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY")),
+                "{refused}"
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn a_plain_http_endpoint_pinned_over_the_struct_default_is_refused_naming_the_opt_in() {
+        let refused = StorageConfig::from_env(
+            &unset(),
+            StorageConfig {
+                endpoint: "http://minio:9000".into(),
+                ..Default::default()
+            },
+        )
+        .expect_err("the struct default does not open plain HTTP")
+        .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP")),
+            "{refused}"
+        );
+        assert!(
+            refused.contains(
+                "its value in `StorageConfig::default()`, and in `StorageConfig::defaults()` \
+                 outside a development or test profile"
+            ),
+            "the sentence says where the false comes from, whatever the profile: {refused}"
+        );
+    }
+
+    #[test]
+    fn a_pin_over_the_struct_default_takes_its_pair_from_the_deployment() {
+        let refused = StorageConfig::from_env(
+            &unset(),
+            StorageConfig {
+                bucket: "media".into(),
+                ..Default::default()
+            },
+        )
+        .expect_err("the struct default holds no pair")
+        .to_string();
+        assert!(
+            refused.starts_with(&format!(
+                "invalid value for {}",
+                nest_rs_config::var_name("storage", "ACCESS_KEY")
+            )) && refused.contains("StorageConfig::defaults()"),
+            "{refused}"
+        );
     }
 
     fn unset() -> ConfigService {
         ConfigService::with_vars("storage", [])
     }
 
+    /// A base holding a pair of its own, for the reads that are about
+    /// something else.
+    fn paired() -> StorageConfig {
+        StorageConfig {
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
+            ..StorageConfig::default()
+        }
+    }
+
     #[test]
     fn credential_blank_aborts_naming_both_its_spellings() {
-        // Outside dev/test `Config::defaults` drops the sentinel, so an unset
-        // variable arrives here blank.
+        // The struct default holds no pair, so an unset variable over it
+        // arrives here blank.
         let err = resolve_credential(&unset(), "SECRET_KEY", None, String::new())
             .expect_err("must abort")
             .to_string();
@@ -416,18 +543,43 @@ mod tests {
     }
 
     #[test]
-    fn half_a_credential_beside_the_built_in_default_is_refused() {
+    fn half_a_credential_beside_the_development_pair_is_refused_saying_so() {
+        let development = StorageConfig {
+            access_key: DEV_ACCESS_KEY.into(),
+            secret_key: DEV_SECRET_KEY.into(),
+            ..StorageConfig::default()
+        };
+        for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
+            let err = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(set, "from-the-deployment")]),
+                development.clone(),
+            )
+            .expect_err("half a credential beside the development pair is refused")
+            .to_string();
+            assert!(
+                err.starts_with(&format!(
+                    "invalid value for {}",
+                    nest_rs_config::var_name("storage", missing)
+                )) && err.contains("the built-in development default"),
+                "names {missing}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn half_a_credential_beside_the_struct_default_is_refused_asking_for_both() {
         for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
             let err = StorageConfig::from_env(
                 &ConfigService::with_vars("storage", [(set, "from-the-deployment")]),
                 StorageConfig::default(),
             )
-            .expect_err("half a credential beside the dev default is refused");
+            .expect_err("half a credential beside no pair is refused")
+            .to_string();
             assert!(
-                err.to_string().starts_with(&format!(
+                err.starts_with(&format!(
                     "invalid value for {}",
                     nest_rs_config::var_name("storage", missing)
-                )),
+                )) && err.contains("set both"),
                 "names {missing}: {err}"
             );
         }
@@ -450,7 +602,7 @@ mod tests {
                 "storage",
                 [("OPERATION_TIMEOUT_SECS", "5"), ("READ_TIMEOUT_SECS", "7")],
             ),
-            StorageConfig::default(),
+            paired(),
         )
         .expect("both in range");
         assert_eq!(
@@ -463,11 +615,11 @@ mod tests {
     fn a_zero_timeout_is_refused_naming_its_variable_or_its_field() {
         let zero_operation = StorageConfig {
             operation_timeout: Duration::ZERO,
-            ..StorageConfig::default()
+            ..paired()
         };
         let zero_read = StorageConfig {
             read_timeout: Duration::ZERO,
-            ..StorageConfig::default()
+            ..paired()
         };
         for (key, field, pinned) in [
             (
@@ -483,7 +635,7 @@ mod tests {
         ] {
             let read = StorageConfig::from_env(
                 &ConfigService::with_vars("storage", [(key, "0")]),
-                StorageConfig::default(),
+                paired(),
             )
             .expect_err("zero is refused")
             .to_string();

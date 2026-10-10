@@ -831,6 +831,7 @@ mod tests {
         let budget = Duration::from_secs(1);
         let storage = Storage::new(Arc::new(StorageConfig {
             endpoint: format!("http://{closed}"),
+            allow_http: true,
             operation_timeout: budget,
             ..StorageConfig::default()
         }));

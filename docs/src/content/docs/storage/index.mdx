@@ -57,39 +57,48 @@ storage shape.
 
 Every field is settable via `<PREFIX>_STORAGE__*` env **or** a pinned
 `StorageConfig` — the framework-wide dual-path config rule. Pin it at the
-composition root; the environment still overlays it per field, so a bucket
-in the source does not freeze the credentials against the deployment:
+composition root; the deployment's variables still overlay it per field, so a
+bucket in the source does not freeze the credentials against the deployment:
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::config::Config;
+use nest_rs::storage::{StorageConfig, StorageModule};
+
 StorageModule::for_root(StorageConfig {
     bucket: "acme-media".into(),
-    ..Default::default()
+    ..StorageConfig::defaults()
 }),
 ```
+
+`StorageConfig::defaults()` is the profile's base, the one the bare import
+starts from. `..Default::default()` is the production-safe value in every
+profile — no credential, no plain HTTP — so the pair then comes from the
+deployment even in development: a pinned config reads the process environment,
+never `.env`.
 
 Importing the bare `StorageModule` — what a feature module does — leaves the
 whole config to the environment.
 
 Two defaults below are **profile-dependent**, and both differences are
-security ones: outside dev/test the sentinel credentials are dropped and
-plain HTTP is off, so an unset key fails boot by name instead of
-authenticating with a public default.
+security ones: only a development or test profile adds the dev container's
+credentials and allows plain HTTP, so an unset key elsewhere fails boot by name
+instead of authenticating with a public default.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `ENDPOINT` | `https://rustfs:9000` | S3 endpoint; empty ⇒ real AWS S3 |
 | `TLS_CA_CERT` | unset | the authorities the endpoint's certificate must chain to, replacing the system's (`TLS_CA_CERT_FILE` for a path) |
 | `REGION` | `us-east-1` | region |
-| `ACCESS_KEY` / `SECRET_KEY` | `nestrs`, **none outside dev/test** | static credentials |
+| `ACCESS_KEY` / `SECRET_KEY` | `nestrs` in dev/test, **none otherwise** | static credentials |
 | `BUCKET` | `nestrs` | target bucket |
 | `FORCE_PATH_STYLE` | `true` | `true` ⇒ `endpoint/bucket/key`; `false` ⇒ virtual-hosted |
-| `ALLOW_HTTP` | `true`, **`false` outside dev/test** | reach the endpoint over plain `http://` — see the caution below |
+| `ALLOW_HTTP` | `true` in dev/test, **`false` otherwise** | reach the endpoint over plain `http://` — see the caution below |
 | `OPERATION_TIMEOUT_SECS` | `15` | the most a call waits for S3's answer, retries included |
 | `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
 
 So a staging or production deployment poses three keys at minimum: an
-`https://` `ENDPOINT` (the default is plain HTTP and refused there),
-`ACCESS_KEY` and `SECRET_KEY`.
+`https://` `ENDPOINT` of its own (the default names the dev container's
+RustFS), `ACCESS_KEY` and `SECRET_KEY`.
 
 ### How long a call waits
 
@@ -229,12 +238,13 @@ Ok(Response::builder().body(Body::from_bytes_stream(stream)))
 ```
 
 <Aside type="caution">
-`ALLOW_HTTP=false` — the staging/production default — refuses a plain-`http://`
-endpoint **at boot**, naming `<PREFIX>_STORAGE__ENDPOINT`. It covers presigned
-URLs too: signing is a local computation, so a plaintext endpoint would
-otherwise hand clients a working URL carrying the SigV4 signature. Point it at
-an `https://` endpoint, or set `<PREFIX>_STORAGE__ALLOW_HTTP=true` to opt in
-deliberately.
+`ALLOW_HTTP=false` — its value outside a development or test profile, and in
+every profile for a config pinned over `..Default::default()` — refuses a
+plain-`http://` endpoint **at boot**, naming `<PREFIX>_STORAGE__ENDPOINT`. It
+covers presigned URLs too: signing is a local computation, so a plaintext
+endpoint would otherwise hand clients a working URL carrying the SigV4
+signature. Point it at an `https://` endpoint, or set
+`<PREFIX>_STORAGE__ALLOW_HTTP=true` to opt in deliberately.
 </Aside>
 
 ## Another backend

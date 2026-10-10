@@ -11,7 +11,7 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 
-use crate::{Carry, ensure_bucket, proxied, proxy, storage, unique};
+use crate::{Carry, config, ensure_bucket, proxied, proxy, storage, unique};
 
 /// What the client logs about an interrupted upload's parts, copied: exported,
 /// a wording change would break the API.
@@ -444,7 +444,7 @@ async fn an_upload_moving_slower_than_the_read_bound_completes() {
         proxy,
         StorageConfig {
             read_timeout: Duration::from_millis(200),
-            ..StorageConfig::default()
+            ..config()
         },
     );
 

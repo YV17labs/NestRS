@@ -147,10 +147,10 @@ survives a swap of the backend underneath.
 | `ENDPOINT` | S3 endpoint (empty ⇒ real AWS S3); an `https://` endpoint's certificate is verified against the system's authorities, or `TLS_CA_CERT`'s |
 | `TLS_CA_CERT` | PEM certificates of the authorities the endpoint's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
 | `REGION` | region |
-| `ACCESS_KEY` / `SECRET_KEY` | static credentials |
+| `ACCESS_KEY` / `SECRET_KEY` | static credentials — the dev container's pair in a development or test profile's defaults, none otherwise and none in `StorageConfig::default()`, so an unset pair fails the boot by name |
 | `BUCKET` | target bucket |
 | `FORCE_PATH_STYLE` | path-style vs virtual-hosted addressing |
-| `ALLOW_HTTP` | reach the endpoint over plain `http://` — default `true` in dev/test, `false` in staging/production so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
+| `ALLOW_HTTP` | reach the endpoint over plain `http://` — `true` in a development or test profile's defaults, `false` otherwise and in `StorageConfig::default()`, so credentials never travel unencrypted by omission. `false` + an `http://` `ENDPOINT` **fails boot**, naming the variable; the refusal covers presigned URLs, which are signed locally and would otherwise ship a working plaintext URL |
 | `OPERATION_TIMEOUT_SECS` | the most a call waits for S3's answer, every retry included — an upload's body is part of its request, and `put_stream` moves each 5 MiB part within it. Retries stop once half of it is spent, so a call whose attempts keep failing ends on S3's error and its cause; past it a call S3 never answered fails as its own error naming this variable. Defaults to `15`; whole seconds from `1` to `3600`, refused outside. An app whose authentication strategy injects `Storage` keeps it under the guard's 20 seconds: the boot refuses one at or past it |
 | `READ_TIMEOUT_SECS` | the most a download waits for its next bytes while it is read: one that stalls longer is cut and resumed from where it stopped, provided the object is still the version it started on, and fails naming this variable when the resumed body sends nothing within it; one that moves, or whose reader pauses, is never cut. Defaults to `30`; whole seconds from `1` to `3600`, refused outside |
 

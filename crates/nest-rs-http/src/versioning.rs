@@ -223,15 +223,15 @@ pub(crate) fn route_matches(path: &str, pattern: &str) -> bool {
     let mut segments = path.split('/');
     let mut expected = pattern.split('/');
     loop {
-        let (segment, pattern) = (segments.next(), expected.next());
-        match (segment, pattern) {
+        let pattern = expected.next().map(|pat| (pat, segment_parameter(pat)));
+        match (segments.next(), pattern) {
             (None, None) => return true,
             // A catch-all also answers an empty tail (`/cat/`).
-            (segment, Some(pat)) if let Some((at, true)) = segment_parameter(pat) => {
+            (segment, Some((pat, Some((at, true))))) => {
                 return at == 0 || segment.is_some_and(|s| strip_literal(s, &pat[..at]).is_some());
             }
-            (Some(segment), Some(pat)) => {
-                if !segment_matches(segment, pat) {
+            (Some(segment), Some((pat, parameter))) => {
+                if !segment_matches(segment, pat, parameter.map(|(at, _)| at)) {
                     return false;
                 }
             }
@@ -246,15 +246,13 @@ pub(crate) fn route_matches(path: &str, pattern: &str) -> bool {
     }
 }
 
-/// One path segment against one template segment. A `{name}` matches any
-/// non-empty text; a literal before it must still match, so `/@{handle}`
-/// accepts `@bob` and refuses `bob`.
-fn segment_matches(segment: &str, pattern: &str) -> bool {
-    match segment_parameter(pattern) {
+/// One path segment against one template segment whose `{name}` opens at
+/// `parameter`. A `{name}` matches any non-empty text; a literal before it
+/// must still match, so `/@{handle}` accepts `@bob` and refuses `bob`.
+fn segment_matches(segment: &str, pattern: &str, parameter: Option<usize>) -> bool {
+    match parameter {
         None => strip_literal(segment, pattern) == Some(""),
-        Some((at, _)) => {
-            strip_literal(segment, &pattern[..at]).is_some_and(|rest| !rest.is_empty())
-        }
+        Some(at) => strip_literal(segment, &pattern[..at]).is_some_and(|rest| !rest.is_empty()),
     }
 }
 

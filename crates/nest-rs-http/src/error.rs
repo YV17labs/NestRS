@@ -518,11 +518,6 @@ impl IntoResponse for HttpError {
     }
 }
 
-/// What a header a type refused in its own words is said not to be.
-const ACCEPTED: &str = "a value its type accepts";
-
-/// What a header binding can fail on. Each variant names the header; none
-/// carries its value.
 /// Why [`RouteTemplate::parse`](crate::RouteTemplate::parse) refuses a
 /// template: the template, then the reason — the sentence `#[routes]` prints
 /// after its site, word for word.
@@ -591,6 +586,11 @@ pub(crate) enum TemplateRefusal {
     NotLiteral,
 }
 
+/// What a header a type refused in its own words is said not to be.
+const ACCEPTED: &str = "a value its type accepts";
+
+/// What a header binding can fail on. Each variant names the header; none
+/// carries its value.
 #[derive(Debug)]
 pub(crate) enum HeaderError {
     /// A field without a default (i.e. not `Option<_>`) whose header is absent.

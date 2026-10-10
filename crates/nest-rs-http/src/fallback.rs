@@ -13,8 +13,8 @@ use nest_rs_core::Container;
 use poem::endpoint::BoxEndpoint;
 use poem::{Endpoint, Request, Response, Result, Route};
 
-use crate::route_template::unescape;
-use crate::transport::{is_pattern_segment, normalize_mount_path};
+use crate::route_template::{segment_parameter, unescape};
+use crate::transport::normalize_mount_path;
 use crate::versioning::route_matches;
 
 type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
@@ -176,7 +176,7 @@ pub(crate) fn is_under(path: &str, prefix: &str) -> bool {
 pub(crate) fn literal_prefix(pattern: &str) -> String {
     let literal: Vec<&str> = pattern
         .split('/')
-        .take_while(|segment| !is_pattern_segment(segment))
+        .take_while(|segment| segment_parameter(segment).is_none())
         .collect();
     normalize_mount_path(&unescape(&literal.join("/")))
 }

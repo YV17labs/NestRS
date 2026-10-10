@@ -58,18 +58,18 @@ impl RoutePath {
             Some(rest) if !rest.is_empty() => rest,
             _ => normalized.as_str(),
         };
-        let segments: Vec<&str> = address.split('/').skip(1).collect();
         let mut route = Self {
             identity: String::with_capacity(address.len()),
             template: String::with_capacity(address.len()),
             catch_all: false,
         };
-        for (index, text) in segments.iter().enumerate() {
-            let last = index + 1 == segments.len();
+        let mut segments = address.split('/').skip(1).peekable();
+        while let Some(text) = segments.next() {
+            let last = segments.peek().is_none();
             let (literal, parameter) = segment(text, last, written)?;
             for out in [&mut route.identity, &mut route.template] {
                 out.push('/');
-                out.push_str(&literal);
+                out.push_str(literal);
             }
             match parameter {
                 Some(Parameter::Named(name)) => {
@@ -130,29 +130,26 @@ fn segment<'a>(
     text: &'a str,
     last: bool,
     written: &str,
-) -> Result<(String, Option<Parameter<'a>>), String> {
-    let mut literal = String::with_capacity(text.len());
+) -> Result<(&'a str, Option<Parameter<'a>>), String> {
     let mut at = 0;
     while let Some(c) = text[at..].chars().next() {
         let next = text[at + c.len_utf8()..].chars().next();
         match c {
-            '{' | '}' if next == Some(c) => {
-                literal.push(c);
-                literal.push(c);
-                at += 2;
-            }
+            '{' | '}' if next == Some(c) => at += 2,
             '}' => return Err(UNOPENED.to_owned()),
-            '{' => return parameter(&text[at + 1..], last).map(|p| (literal, Some(p))),
+            '{' => return parameter(&text[at + 1..], last).map(|p| (&text[..at], Some(p))),
             ':' => {
                 let rest = &text[at + 1..];
                 let name = &rest[..rest.find(['<', '*']).unwrap_or(rest.len())];
-                return Err(match () {
-                    () if rest[name.len()..].starts_with('<') => PATTERN.to_owned(),
-                    () if name.is_empty() => UNNAMED_6X.to_owned(),
-                    () => format!(
+                return Err(if rest[name.len()..].starts_with('<') {
+                    PATTERN.to_owned()
+                } else if name.is_empty() {
+                    UNNAMED_6X.to_owned()
+                } else {
+                    format!(
                         "`:{name}` is the 6.x parameter syntax — write `{}`",
                         rewrite_6x(written)
-                    ),
+                    )
                 });
             }
             '*' => {
@@ -163,13 +160,10 @@ fn segment<'a>(
                 ));
             }
             '<' => return Err(PATTERN.to_owned()),
-            c => {
-                literal.push(c);
-                at += c.len_utf8();
-            }
+            c => at += c.len_utf8(),
         }
     }
-    Ok((literal, None))
+    Ok((text, None))
 }
 
 /// The parameter whose `{` came just before `body`, which runs to the end of

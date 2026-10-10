@@ -19,7 +19,7 @@ use crate::drain::Drain;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::interceptor::HttpEndpointWrap;
-use crate::route_template::{RouteTemplate, segment_parameter};
+use crate::route_template::RouteTemplate;
 use crate::server::Server;
 use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
@@ -148,12 +148,6 @@ pub fn literal_mount_path(raw: &str) -> Option<String> {
             && !segment.chars().any(|c| c.is_whitespace() || c.is_control())
     });
     (path == "/" || literal).then_some(path)
-}
-
-/// Whether a template's segment is anything but literal text: a parameter, or
-/// the catch-all.
-pub(crate) fn is_pattern_segment(segment: &str) -> bool {
-    segment_parameter(segment).is_some()
 }
 
 /// Claim the address `template` names for `owner`, or fail boot naming both
@@ -612,11 +606,11 @@ impl Transport for HttpTransport {
             let identity = templates[0].identity();
             // A self-mount nests its whole subtree, so a controller on that path
             // is the same poem panic.
-            if let Some(first) = prefix_owner.get(identity).cloned().or_else(|| {
-                route_owner
-                    .get(identity)
-                    .map(|claim| claim.controller.to_owned())
-            }) {
+            if let Some(first) = prefix_owner
+                .get(identity)
+                .map(String::as_str)
+                .or_else(|| route_owner.get(identity).map(|claim| claim.controller))
+            {
                 anyhow::bail!(
                     "duplicate mount path {:?}: controller {first} and {} endpoint {} both mount \
                      there — a mount path is its owner's exclusive namespace; give each one a \

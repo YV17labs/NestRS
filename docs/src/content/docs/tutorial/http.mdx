@@ -132,9 +132,12 @@ them once. Generate them:
 nestrs g auth
 ```
 
-That writes `crates/features/src/{identity,authn,authz}/`, adds the modules to
-the app, appends a development `<PREFIX>_AUTHN__SECRET` to `.env`, and gives you
-`POST /auth/dev-token` — the route the next page gets its bearer token from.
+That writes `crates/features/src/{authn,authz}/`, adds the modules to the app,
+draws two random `<PREFIX>_AUTHN__SECRET`s — yours into the git-ignored
+`.env.local`, the test suites' into `.env.test` — and gives you
+`POST /auth/dev-token`, the route the next page gets its bearer token from. The
+committed `.env`, which every environment reads, holds no secret: a deployment
+sets its own.
 Then grant the ability — the policy starts empty, so `Post` needs a rule:
 
 ```rust title="crates/features/src/authz/ability.rs" {2, 8}

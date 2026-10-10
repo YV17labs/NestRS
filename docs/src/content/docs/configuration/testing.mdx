@@ -209,9 +209,10 @@ loads the right files.
 - **Don't pin config in a `setup` shared between tests.** Each test
   should declare its inputs explicitly — that's what makes a failure
   reproducible from the test code alone.
-- **Don't ship `.env.test` with secrets.** The file is committed by
-  convention; treat it as documentation of test defaults, not as a
-  vault.
+- **Don't put a deployment's secret in `.env.test`.** The file is
+  committed: treat it as documentation of test defaults, not as a vault.
+  What it holds opens nothing outside a test run — the HS256 key
+  `nestrs g auth` draws into it signs only the tokens your suites send.
 
 ## Going further
 

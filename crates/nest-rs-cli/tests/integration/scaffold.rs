@@ -336,7 +336,13 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
                 "the Justfile must set the prefix for every process it starts",
             );
 
-            for file in [".env", ".env.development", ".env.example"] {
+            for file in [
+                ".env",
+                ".env.development",
+                ".env.example",
+                ".env.local",
+                ".env.test",
+            ] {
                 let body = read(workspace, file);
                 assert!(
                     !body.contains("NESTRS_"),
@@ -349,9 +355,15 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
             );
             assert!(read(workspace, ".env").contains("ACME_SEAORM__URL="));
             assert!(read(workspace, ".env.development").contains("ACME_LOG="));
+            for file in [".env.local", ".env.test"] {
+                assert!(
+                    read(workspace, file).contains("\nACME_AUTHN__SECRET="),
+                    "`g auth` must write {file}'s secret under the project's own prefix",
+                );
+            }
             assert!(
-                read(workspace, ".env").contains("ACME_AUTHN__SECRET="),
-                "`g auth` must append its dev secret under the project's own prefix",
+                !read(workspace, ".env").contains("\nACME_AUTHN__SECRET="),
+                "the committed `.env`, read in every environment, holds no secret",
             );
         },
     );

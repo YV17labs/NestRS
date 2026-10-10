@@ -98,6 +98,33 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
     fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
 }
 
+/// The one value of `var` that `file` assigns, read the way the cascade reads it.
+pub(crate) fn assigned(file: &Path, var: &str) -> Option<String> {
+    let body = fs::read_to_string(file).ok()?;
+    let mut values = body
+        .lines()
+        .filter_map(|line| line.strip_prefix(var)?.strip_prefix('='))
+        .map(str::to_owned);
+    let value = values.next();
+    assert!(
+        values.next().is_none(),
+        "{} assigns {var} twice",
+        file.display()
+    );
+    value
+}
+
+/// RFC 7518 §3.2: an HS256 key carries at least the hash's 256 bits.
+pub(crate) fn assert_256_bit_hex(secret: &str) {
+    assert!(
+        secret.len() == 64
+            && secret
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+        "a secret is 64 lowercase hex characters: {secret:?}",
+    );
+}
+
 /// The bootstrap variable that renames every other, as the CLI spells it.
 pub(crate) use nest_rs_cli::ENV_PREFIX_VAR;
 

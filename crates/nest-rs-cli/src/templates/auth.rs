@@ -116,7 +116,6 @@ pub struct DevTokenDto {
 }
 
 #[input]
-#[derive(Debug)]
 pub struct DevTokenResponseDto {
     pub access_token: String,
     pub token_type: String,
@@ -134,6 +133,8 @@ pub struct DevTokenController {
 impl DevTokenController {
     #[post("/dev-token")]
     #[public]
+    #[response_header("cache-control", "no-store")]
+    #[response_header("pragma", "no-cache")]
     #[api(summary = "Mint a development-only bearer token")]
     async fn dev_token(&self, body: Json<DevTokenDto>) -> Result<Json<DevTokenResponseDto>> {
         let DevTokenDto { sub, roles } = body.0;
@@ -405,17 +406,42 @@ use crate::authz::AuthzModule;
 pub struct AuthzMcpModule;
 "#;
 
-/// Appended to the committed `.env`. HS256 needs ≥ 32 bytes or the app refuses
-/// to boot; this placeholder is deliberately obvious so nobody ships it.
+/// Appended to the committed `.env`, which every environment reads: where the
+/// secret lives, never the secret.
 pub(crate) const ENV_AUTHN: &str = r#"
-# JWT verification (`nestrs g auth`). HS256 shared secret — a holder can also
-# MINT tokens, so this value is a local-development placeholder only: set a
-# real `{{env_prefix}}_AUTHN__SECRET` through the real environment in every deployed
-# environment, or switch to EdDSA: `{{env_prefix}}_AUTHN__PRIVATE_KEY` and
-# `{{env_prefix}}_AUTHN__PUBLIC_KEY` on the issuing app, `{{env_prefix}}_AUTHN__PUBLIC_KEY`
-# alone on the resource servers — each inline, or as a path in its `_FILE` form. A
-# secret beside either key fails the boot — this line beside keys the real
-# environment sets included — so switching to EdDSA means deleting this line.
-# (A config pinned in code stops this file being read for the namespace.)
-{{env_prefix}}_AUTHN__SECRET=dev-only-insecure-secret-change-me-32b
+# JWT verification (`nestrs g auth`). The HS256 secret is not in this file, which
+# every environment reads: `.env.local` (git-ignored) holds yours, and `.env.test`
+# the suites', read only under {{env_prefix}}_ENV=test. `nestrs g auth` drew each at
+# random; draw another with `openssl rand -hex 32`. A holder of the secret can
+# also MINT tokens, so every deployed environment sets its own
+# `{{env_prefix}}_AUTHN__SECRET` (or `_FILE`) through the real environment, or switches to
+# EdDSA: `{{env_prefix}}_AUTHN__PRIVATE_KEY` and `{{env_prefix}}_AUTHN__PUBLIC_KEY` on the issuing
+# app, `{{env_prefix}}_AUTHN__PUBLIC_KEY` alone on the resource servers — each inline, or as
+# a path in its `_FILE` form. A secret beside either key fails the boot, so
+# switching to EdDSA means deleting the secret from `.env.local` and `.env.test`.
+# (A config pinned in code stops these files being read for the namespace.)
+"#;
+
+/// Appended to the git-ignored `.env.local`: the developer's own key.
+pub(crate) const ENV_LOCAL_AUTHN: &str = r#"
+# HS256 secret of this machine's development runs (`nestrs g auth`), drawn at
+# random. Git-ignored: it never leaves this machine.
+{{env_prefix}}_AUTHN__SECRET={{secret}}
+"#;
+
+/// Appended to the committed `.env.test`: read only under a declared `test`, so
+/// the key mints only tokens a test process accepts.
+pub(crate) const ENV_TEST_AUTHN: &str = r#"
+# HS256 secret the test suites sign and verify with (`nestrs g auth`), drawn at
+# random. Committed: the cascade reads this file only under {{env_prefix}}_ENV=test, so
+# a teammate and CI run the suites with no copy step, and a token signed with
+# it passes nowhere else.
+{{env_prefix}}_AUTHN__SECRET={{secret}}
+"#;
+
+/// Appended to `.env.example`: what a teammate's `.env.local` needs.
+pub(crate) const ENV_EXAMPLE_AUTHN: &str = r#"
+# JWT verification (`nestrs g auth`): an HS256 secret of your own, drawn with
+# `openssl rand -hex 32`.
+# {{env_prefix}}_AUTHN__SECRET=
 "#;

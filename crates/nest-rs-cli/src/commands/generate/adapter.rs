@@ -91,10 +91,11 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if let Some(bridge) = bridge {
         bridge.queue(&mut s, &ws);
     }
+    let mut bootstrapped = None;
     if scaffolded_auth {
         // This run creates `authz/mod.rs`, so its index lines ride in its contents:
         // there is nothing on disk for an `edit` to resolve against.
-        auth::queue(&mut s, &ws, decls);
+        bootstrapped = Some(auth::queue(&mut s, &ws, decls)?);
     } else if bridge.is_some() {
         s.edit(ws.features_root().join("authz/mod.rs"), ensure_lines(decls));
     }
@@ -193,6 +194,9 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         wired_app.is_some(),
         bridge,
     );
+    if let Some(secrets) = &bootstrapped {
+        auth::print_bootstrapped(secrets);
+    }
     Ok(())
 }
 

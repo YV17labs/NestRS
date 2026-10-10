@@ -2,7 +2,7 @@
 //! obligations are per transport: the right template, the crates its expansion
 //! names, and the wiring into feature and app.
 
-use crate::harness::{run_ok, write_fake_app, write_fake_workspace};
+use crate::harness::{assigned, run_ok, scaffolded_var, write_fake_app, write_fake_workspace};
 use std::fs;
 use std::process::Command;
 
@@ -640,4 +640,41 @@ fn generate_ws_without_an_auth_adapter_writes_no_bridge() {
         !src.join("authz/ws").exists(),
         "no policy to bridge, so no bridge",
     );
+}
+
+/// Over a CRUD port with no auth adapter, `g graphql` bootstraps one as
+/// `g resource` does, and announces it the same way: secrets included.
+#[test]
+fn generate_graphql_over_a_crud_port_announces_the_auth_adapter_it_bootstraps() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    let service = dir.path().join("crates/features/src/posts/service.rs");
+    let crud = format!(
+        "{}\nimpl CrudService for PostsService {{}}\n",
+        fs::read_to_string(&service).unwrap()
+    );
+    fs::write(&service, crud).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert!(
+        dir.path()
+            .join("crates/features/src/authz/ability.rs")
+            .is_file()
+    );
+    assert!(
+        printed.contains("Also created the auth adapter"),
+        "{printed}"
+    );
+    let var = scaffolded_var("AUTHN", "SECRET");
+    for file in [".env.local", ".env.test"] {
+        let secret = assigned(&dir.path().join(file), &var).expect("a secret of its own");
+        assert!(!printed.contains(&secret), "{printed}");
+        assert!(
+            printed.contains(&format!("`{file}` holds")),
+            "the run says where the secret is:\n{printed}",
+        );
+    }
 }

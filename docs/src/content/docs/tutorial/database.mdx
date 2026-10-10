@@ -184,8 +184,8 @@ proves the credentials.
 
 Every route is behind the guards you bound on the previous page, so it needs a
 bearer token. `nestrs g auth` wrote one route that mints them — signed with the
-`<PREFIX>_AUTHN__SECRET` it put in `.env`, and refusing to boot anywhere but
-development and test:
+`<PREFIX>_AUTHN__SECRET` it drew into `.env.local`, and refusing to boot anywhere
+but development and test:
 
 ```bash frame="terminal"
 $ TOKEN=$(curl -s -X POST http://localhost:3005/auth/dev-token \

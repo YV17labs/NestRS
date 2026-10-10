@@ -27,6 +27,9 @@ enum Action {
     Edit {
         path: PathBuf,
         transform: Transform,
+        /// The edit writes a secret: the report shows each added assignment's
+        /// name, never its value.
+        secret: bool,
     },
 }
 
@@ -79,6 +82,22 @@ impl Scaffold {
         self.actions.push(Action::Edit {
             path: path.into(),
             transform,
+            secret: false,
+        });
+        self
+    }
+
+    /// Queue an idempotent edit that adds a secret: the report prints each added
+    /// `KEY=value` as `KEY=<redacted>`, so a terminal or a CI log never holds it.
+    pub(crate) fn edit_secret(
+        &mut self,
+        path: impl Into<PathBuf>,
+        transform: Transform,
+    ) -> &mut Self {
+        self.actions.push(Action::Edit {
+            path: path.into(),
+            transform,
+            secret: true,
         });
         self
     }
@@ -115,11 +134,18 @@ impl Scaffold {
                         planned.push(PlannedWrite { path, contents });
                     }
                 }
-                Action::Edit { path, transform } => {
+                Action::Edit {
+                    path,
+                    transform,
+                    secret,
+                } => {
                     let current = fs::read_to_string(&path).map_err(CliError::Io)?;
                     match transform(&current) {
                         Some(updated) => {
-                            let added = added_lines(&current, &updated);
+                            let mut added = added_lines(&current, &updated);
+                            if secret {
+                                added = added.into_iter().map(redact_assignment).collect();
+                            }
                             report.modified.push((path.clone(), added));
                             planned.push(PlannedWrite {
                                 path,
@@ -149,6 +175,14 @@ impl Scaffold {
 struct PlannedWrite {
     path: PathBuf,
     contents: String,
+}
+
+/// A `.env` assignment with its value withheld; a comment or any other line as is.
+fn redact_assignment(line: String) -> String {
+    match line.split_once('=') {
+        Some((name, _)) if !line.trim_start().starts_with('#') => format!("{name}=<redacted>"),
+        _ => line,
+    }
 }
 
 /// Lines present in `new` but not in `old` (used for the wiring diff).
@@ -254,6 +288,23 @@ mod tests {
         let report = s.apply(true).unwrap();
         assert_eq!(report.created.len(), 1);
         assert!(!dir.path().join("new.txt").exists());
+    }
+
+    #[test]
+    fn an_edit_holding_a_secret_reports_its_variable_and_never_its_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join(".env.local");
+        fs::write(&f, "APP_LOG=debug\n").unwrap();
+
+        let mut s = Scaffold::new();
+        s.edit_secret(
+            &f,
+            Box::new(|content: &str| Some(format!("{content}# a key\nAPP_KEY=s3cr3t\n"))),
+        );
+        let report = s.apply(true).unwrap();
+
+        let (_, added) = &report.modified[0];
+        assert_eq!(added, &["# a key", "APP_KEY=<redacted>"]);
     }
 
     #[test]

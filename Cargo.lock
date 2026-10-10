@@ -2608,6 +2608,7 @@ dependencies = [
  "chrono",
  "clap",
  "figment",
+ "getrandom 0.4.3",
  "nest-rs-config",
  "nest-rs-core",
  "syn 3.0.6",

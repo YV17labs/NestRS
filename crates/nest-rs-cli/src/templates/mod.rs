@@ -140,6 +140,49 @@ mod tests {
         );
     }
 
+    /// `CLAUDE.md` hard "no": a `Debug` over a credential is one `?field` away
+    /// from a log line, so no scaffolded struct derives it over one.
+    #[test]
+    fn no_scaffolded_struct_derives_debug_over_a_credential() {
+        const CREDENTIALS: [&str; 4] = ["token", "password", "secret", "credential"];
+
+        let scanned = sources();
+        let mut derives = 0;
+        let mut exposed = Vec::new();
+        for (file, src) in &scanned {
+            let mut debug = false;
+            let mut fields = false;
+            for line in src.lines().map(str::trim) {
+                if line.starts_with("#[derive(") {
+                    debug |= line.contains("Debug");
+                } else if fields {
+                    if line == "}" {
+                        fields = false;
+                    } else if let Some((name, _)) = line.trim_start_matches("pub ").split_once(':')
+                        && name.split('_').any(|word| CREDENTIALS.contains(&word))
+                    {
+                        exposed.push(format!("{file}: `{line}`"));
+                    }
+                } else if line.starts_with("pub struct ") || line.starts_with("struct ") {
+                    derives += usize::from(debug);
+                    fields = debug && line.ends_with('{');
+                    debug = false;
+                } else if !line.starts_with("#[") {
+                    debug = false;
+                }
+            }
+        }
+        assert!(
+            derives >= 2,
+            "the scan found {derives} scaffolded structs deriving `Debug` — it stopped matching",
+        );
+        assert!(
+            exposed.is_empty(),
+            "a scaffolded `Debug` prints these credentials:\n{}",
+            exposed.join("\n"),
+        );
+    }
+
     /// `CLAUDE.md`: a target is a constant its owner declares, never a literal at
     /// the call site — a feature's files log on `crate::<feature>::TARGET`.
     #[test]

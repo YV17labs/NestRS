@@ -240,7 +240,11 @@ nestrs g entity posts/comment     # → Comment
 
 # The app's authn/authz adapter — Claims, AuthnGuard, AuthzAbility, AuthzGuard.
 # Run it *before* the first `g resource`, or not at all: it refuses when
-# `crates/features/src/authz/` already exists.
+# `crates/features/src/authz/` already exists. It draws a random HS256 secret
+# into the git-ignored `.env.local` and another into `.env.test`, read only by
+# the test suites; the committed `.env` gets no secret. Neither is written where
+# a file of the same runs, `.env` included, already sets a `<PREFIX>_AUTHN__`
+# variable: a secret beside your own key would fail the boot.
 nestrs g auth
 
 # A SeaORM migration, registered in lib.rs and migrator.rs

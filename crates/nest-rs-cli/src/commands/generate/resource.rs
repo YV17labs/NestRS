@@ -41,10 +41,12 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     let mut s = Scaffold::new();
 
     // The guards the controller binds have to exist before it names them.
-    let scaffolded_auth = !auth::exists(&ws);
-    if scaffolded_auth {
-        auth::queue(&mut s, &ws, Vec::new());
-    }
+    let bootstrapped = if auth::exists(&ws) {
+        None
+    } else {
+        Some(auth::queue(&mut s, &ws, Vec::new())?)
+    };
+    let scaffolded_auth = bootstrapped.is_some();
 
     s.create(root.join("entity.rs"), r.render(resource::ENTITY));
     s.create(root.join("service.rs"), r.render(resource::SERVICE));
@@ -90,7 +92,7 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
         &ws.root,
         &format!("resource `{}`", names.snake),
     )?;
-    print_next_steps(&ctx, &names, wired_app, scaffolded_auth);
+    print_next_steps(&ctx, &names, wired_app, bootstrapped.as_ref());
     Ok(())
 }
 
@@ -98,7 +100,7 @@ fn print_next_steps(
     ctx: &Context,
     names: &Names,
     wired_app: Option<PathBuf>,
-    scaffolded_auth: bool,
+    bootstrapped: Option<&auth::Secrets>,
 ) {
     let snake = &names.snake;
     println!();
@@ -130,15 +132,7 @@ fn print_next_steps(
         );
     }
     println!("  4. Add transports:  nestrs g graphql|ws {}", names.kebab);
-    if scaffolded_auth {
-        println!();
-        println!("Also created the auth adapter (authn/, authz/) the guards need,");
-        println!("plus a development HS256 secret in `.env` — replace it before deploying.");
-        println!();
-        // `g resource` writes the token route as a side effect, so it is announced.
-        println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
-        println!("your guarded routes are callable at once. It refuses to boot outside");
-        println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
-        println!("or delete `crates/features/src/authn/http/` and write the real login route.");
+    if let Some(secrets) = bootstrapped {
+        auth::print_bootstrapped(secrets);
     }
 }

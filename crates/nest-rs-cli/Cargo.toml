@@ -24,6 +24,9 @@ anyhow.workspace = true
 # `g migration` stamps the migration filename with today's date.
 chrono.workspace = true
 clap.workspace = true
+# `g auth` draws each development signing secret from the OS's CSPRNG: one read,
+# no generator to seed.
+getrandom.workspace = true
 # `lint` pairs a file's stem against the types it declares, and reads them with
 # Rust's own parser: a `pub struct` inside a template string is what a text scan
 # counts and a parser does not, and this crate ships such a string.

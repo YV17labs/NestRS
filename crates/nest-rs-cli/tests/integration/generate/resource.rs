@@ -2,7 +2,8 @@
 //! it has to declare in lockstep with `g migration`.
 
 use crate::harness::{
-    run_ok, scaffolded_var, write_fake_app, write_fake_migrations_crate, write_fake_workspace,
+    assert_256_bit_hex, assigned, run_ok, scaffolded_var, write_fake_app,
+    write_fake_migrations_crate, write_fake_workspace,
 };
 use std::fs;
 
@@ -62,7 +63,7 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
 
-    run_ok(
+    let printed = run_ok(
         dir.path(),
         &["g", "resource", "posts", "-p", dir.path().to_str().unwrap()],
     );
@@ -90,11 +91,23 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     assert!(src.join("authz/guard.rs").is_file());
     assert!(src.join("authn/claims.rs").is_file());
 
-    let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     // Built through the CLI's own mirror: a literal would assert the default
     // prefix rather than the generator.
-    let secret = scaffolded_var("authn", "SECRET");
-    assert!(env.contains(&secret), "the .env must name {secret}: {env}");
+    let var = scaffolded_var("authn", "SECRET");
+    assert_eq!(
+        assigned(&dir.path().join(".env"), &var),
+        None,
+        "the committed `.env`, read in every environment, assigns no signing secret",
+    );
+    for file in [".env.local", ".env.test"] {
+        let secret = assigned(&dir.path().join(file), &var).expect("a secret of its own");
+        assert_256_bit_hex(&secret);
+        assert!(!printed.contains(&secret), "{printed}");
+        assert!(
+            printed.contains(&format!("`{file}` holds")),
+            "the run says where the secret is:\n{printed}",
+        );
+    }
 }
 
 // `g resource` bootstrapping the adapter owes the composition site the same

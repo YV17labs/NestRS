@@ -64,10 +64,13 @@ satisfy that module's boot guard, and it lives behind
 `TestApp::builder()` runs the same four-phase boot as `main`,
 including the access-graph check. The harness seeds the connection, and
 because the controller is guarded, it also mints the bearer every request
-carries — the same `JwtService` the app verifies with.
+carries — with the app's own `JwtService`, taken from its container, so the
+token is signed with exactly the key the app verifies with. `TestApp` runs
+under `<PREFIX>_ENV=test`, which reads the secret `nestrs g auth` drew into
+`.env.test`; the test never spells it.
 
 ```rust title="apps/blog/tests/e2e/main.rs"
-use nest_rs::authn::{JwtOptions, JwtService};
+use nest_rs::authn::JwtService;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use nest_rs::http::poem::http::StatusCode;
 use serde_json::json;
@@ -75,10 +78,8 @@ use serde_json::json;
 use blog::BlogModule;
 use features::authn::{Claims, Role};
 
-const SECRET: &str = "dev-only-insecure-secret-change-me-32b";
-
-fn bearer() -> String {
-    let jwt = JwtService::new(JwtOptions::new(SECRET)).expect("the dev secret is long enough");
+fn bearer(app: &TestApp) -> String {
+    let jwt = app.container().get::<JwtService>().expect("AuthnModule provides the JwtService");
     let token = jwt
         .sign(&Claims { sub: None, roles: vec![Role::User], exp: jwt.expiry() })
         .expect("sign the test token");
@@ -118,7 +119,7 @@ wiring chain for a bare CRUD feature.
 #[tokio::test]
 async fn posts_round_trip() {
     let (_db, app) = boot().await;
-    let auth = bearer();
+    let auth = bearer(&app);
 
     let created = app
         .http()
@@ -158,7 +159,7 @@ async fn create_with_empty_title_returns_400() {
     let (_db, app) = boot().await;
     app.http()
         .post("/posts")
-        .header("authorization", bearer())
+        .header("authorization", bearer(&app))
         .body_json(&json!({ "title": "", "body": "World" }))
         .send()
         .await

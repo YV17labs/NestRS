@@ -78,6 +78,7 @@ async-graphql-poem = "=7.2.1"
 inventory = "0.3"
 
 argon2 = "0.6"
+getrandom = "0.4"
 validator = { version = "0.21", features = ["derive"] }
 uuid = { version = "1.27", features = ["v4", "v7", "serde"] }
 url = "2.5"

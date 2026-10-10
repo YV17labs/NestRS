@@ -3,16 +3,18 @@
 //!
 //! GraphQL and MCP have no mount seam — neither the schema nor the MCP host can
 //! see [`Guard`] — so each site memoizes its chain in a [`SiteChainCell`] the
-//! decorator emits as a `static`: composed once per site, one atomic load per
-//! operation.
+//! decorator emits as a `static`: composed once per site, then one atomic load
+//! and one `Weak` upgrade per operation.
 //!
 //! The cell is keyed by [`ContainerId`]: a test process serves several apps, and
-//! one app's guard chain must never gate another's operations.
+//! one app's guard chain must never gate another's operations. The `static`
+//! keeps only `Weak` handles; the strong chain lives in the container's
+//! `SiteChains`, so the guards it holds go with their app.
 
 use std::any::TypeId;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, site_chains};
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, ContainerId, UnresolvedLayerError};
 
@@ -44,6 +46,9 @@ pub(crate) enum GlobalBucket {
     Skip,
 }
 
+/// One composed chain, as shared by every operation of its site.
+type Chain = Arc<[ResolvedLayer<dyn Guard>]>;
+
 /// One site's composed guard chain, memoized per [`ContainerId`].
 ///
 /// A decorator emits one as a `static` per guarded operation and hands it to
@@ -57,9 +62,10 @@ pub struct SiteChainCell {
     extra: OnceLock<Mutex<Vec<Cached>>>,
 }
 
+/// A chain the cell can reach while its container lives, and never keeps alive.
 struct Cached {
     container: ContainerId,
-    chain: Arc<[ResolvedLayer<dyn Guard>]>,
+    chain: Weak<[ResolvedLayer<dyn Guard>]>,
 }
 
 impl SiteChainCell {
@@ -84,49 +90,65 @@ impl SiteChainCell {
         route_label: &str,
         sources: &(dyn Fn() -> SiteChainSources + Sync),
         global: fn(&Container) -> GlobalBucket,
-    ) -> Result<Arc<[ResolvedLayer<dyn Guard>]>, UnresolvedLayerError> {
-        self.cached(container, route_label, sources, global)
+    ) -> Result<Chain, UnresolvedLayerError> {
+        let id = container.id();
+        if let Some(chain) = self
+            .primary
+            .get()
+            .filter(|primary| primary.container == id)
+            .and_then(|primary| primary.chain.upgrade())
+        {
+            return Ok(chain);
+        }
+        self.compose_for(container, route_label, sources, global)
             .inspect_err(report_unresolved)
     }
 
-    fn cached(
+    /// The miss: another app in the process, or this site's first operation.
+    /// An upgrade that fails here belongs to a container that is gone, which no
+    /// unit of a live app reaches.
+    #[cold]
+    fn compose_for(
         &self,
         container: &Container,
         route_label: &str,
         sources: &(dyn Fn() -> SiteChainSources + Sync),
         global: fn(&Container) -> GlobalBucket,
-    ) -> Result<Arc<[ResolvedLayer<dyn Guard>]>, UnresolvedLayerError> {
+    ) -> Result<Chain, UnresolvedLayerError> {
         let id = container.id();
-        let primary = match self.primary.get() {
-            Some(primary) => primary,
-            None => {
-                let chain = compose(container, route_label, sources(), global(container))?;
-                self.primary.get_or_init(|| Cached {
-                    container: id,
-                    chain,
-                })
-            }
-        };
-        if primary.container == id {
-            return Ok(Arc::clone(&primary.chain));
-        }
-
-        // Another app in the same process. A poisoned lock must not deny
-        // service — the vector holds only memoized values, so recovering it is
-        // safe (worst case a chain composes twice).
-        let mut slots = self
+        // A poisoned lock must not deny service — the vector holds only weak
+        // handles, so recovering it is safe (worst case a chain composes twice).
+        let mut extra = self
             .extra
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(hit) = slots.iter().find(|c| c.container == id) {
-            return Ok(Arc::clone(&hit.chain));
+            .unwrap_or_else(PoisonError::into_inner);
+        // Another operation of this site may have filled the slot meanwhile.
+        if let Some(chain) = self
+            .primary
+            .get()
+            .filter(|primary| primary.container == id)
+            .and_then(|primary| primary.chain.upgrade())
+        {
+            return Ok(chain);
+        }
+        if let Some(chain) = extra
+            .iter()
+            .find(|cached| cached.container == id)
+            .and_then(|cached| cached.chain.upgrade())
+        {
+            return Ok(chain);
         }
         let chain = compose(container, route_label, sources(), global(container))?;
-        slots.push(Cached {
+        site_chains(container).hold(Arc::clone(&chain));
+        let cached = Cached {
             container: id,
-            chain: Arc::clone(&chain),
-        });
+            chain: Arc::downgrade(&chain),
+        };
+        if let Err(cached) = self.primary.set(cached) {
+            extra.retain(|held| held.chain.strong_count() > 0);
+            extra.push(cached);
+        }
         Ok(chain)
     }
 }
@@ -146,7 +168,7 @@ fn compose(
     route_label: &str,
     sources: SiteChainSources,
     bucket: GlobalBucket,
-) -> Result<Arc<[ResolvedLayer<dyn Guard>]>, UnresolvedLayerError> {
+) -> Result<Chain, UnresolvedLayerError> {
     let global = dedup_bucket(resolve_global_guards(container));
     let provider = resolve_scoped(container, &sources.provider, LayerSite::Host, route_label)?;
     let method = resolve_scoped(container, &sources.method, LayerSite::Method, route_label)?;
@@ -158,4 +180,65 @@ fn compose(
     }
     log_effective_chain(route_label, "guards", &chain);
     Ok(chain.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn declares_nothing() -> SiteChainSources {
+        SiteChainSources {
+            provider: Vec::new(),
+            method: Vec::new(),
+            force: Vec::new(),
+        }
+    }
+
+    fn compose_on(cell: &SiteChainCell, container: &Container) -> Chain {
+        cell.chain(container, "Query.orders", &declares_nothing, |_| {
+            GlobalBucket::Fold
+        })
+        .unwrap_or_else(|unresolved| panic!("an empty chain composes: {unresolved}"))
+    }
+
+    #[test]
+    fn ten_containers_composing_one_site_leave_no_dead_entry_after_the_eleventh() {
+        let cell = SiteChainCell::new();
+        for _ in 0..10 {
+            let container = Container::builder().build();
+            compose_on(&cell, &container);
+        }
+        let eleventh = Container::builder().build();
+        let chain = compose_on(&cell, &eleventh);
+
+        let primary = cell
+            .primary
+            .get()
+            .unwrap_or_else(|| panic!("the first container took the primary slot"));
+        assert_eq!(
+            primary.chain.strong_count(),
+            0,
+            "the first container's chain went with it: the cell holds no strong handle",
+        );
+        let extra = cell
+            .extra
+            .get()
+            .unwrap_or_else(|| panic!("later containers reached the site"))
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let live: Vec<ContainerId> = extra.iter().map(|cached| cached.container).collect();
+        assert_eq!(
+            live,
+            [eleventh.id()],
+            "the dead entries were pruned on insert"
+        );
+        assert!(extra[0].chain.strong_count() > 0);
+        drop(extra);
+
+        let again = compose_on(&cell, &eleventh);
+        assert!(
+            Arc::ptr_eq(&chain, &again),
+            "a live container's site is composed once"
+        );
+    }
 }

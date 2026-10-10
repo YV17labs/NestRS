@@ -572,3 +572,93 @@ mod unresolvable {
         );
     }
 }
+
+/// A site's composed chain lives with its container: dropping the app drops the
+/// guards its operations ran.
+mod owned_chain {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nest_rs_core::{Layer, injectable, module};
+    use nest_rs_graphql::async_graphql::Result;
+    use nest_rs_graphql::{
+        GraphqlModule, GraphqlOperationContext, async_trait, operations, resolver,
+    };
+    use nest_rs_guards::{Denial, GraphqlGuard, Guard};
+    use nest_rs_testing::TestApp;
+    use poem::http::StatusCode;
+
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+    #[injectable]
+    #[derive(Default)]
+    struct CountsItsDrop;
+
+    impl Drop for CountsItsDrop {
+        fn drop(&mut self) {
+            DROPPED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Layer for CountsItsDrop {}
+
+    #[async_trait]
+    impl Guard for CountsItsDrop {
+        async fn check_graphql(
+            &self,
+            _op: &GraphqlOperationContext<'_>,
+        ) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GraphqlGuard for CountsItsDrop {}
+
+    #[resolver]
+    #[use_guards(CountsItsDrop)]
+    struct CountedResolver;
+
+    #[operations]
+    impl CountedResolver {
+        #[query]
+        #[public]
+        async fn counted(&self) -> Result<String> {
+            Ok("counted".into())
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [CountsItsDrop, CountedResolver],
+    )]
+    struct CountedModule;
+
+    #[tokio::test]
+    async fn dropping_the_app_drops_the_guards_its_operations_composed() {
+        let app = TestApp::for_module::<CountedModule>().await.expect("boots");
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ counted }" }))
+            .send()
+            .await;
+        resp.assert_status(StatusCode::OK);
+        assert!(
+            resp.0
+                .into_body()
+                .into_string()
+                .await
+                .expect("a body")
+                .contains("counted"),
+            "the guarded field resolved",
+        );
+        assert_eq!(DROPPED.load(Ordering::SeqCst), 0, "the app is alive");
+
+        drop(app);
+
+        assert_eq!(
+            DROPPED.load(Ordering::SeqCst),
+            1,
+            "no `static` keeps the composed chain, so the guard went with its app",
+        );
+    }
+}

@@ -499,3 +499,65 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
         event.fields,
     );
 }
+
+/// `static` counter: this test's alone, nextest running each in its own process.
+static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct CountsItsDrop;
+
+impl Drop for CountsItsDrop {
+    fn drop(&mut self) {
+        DROPPED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl Layer for CountsItsDrop {}
+
+#[async_trait]
+impl Guard for CountsItsDrop {
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl McpGuard for CountsItsDrop {}
+
+#[mcp(path = "/mcp/counted")]
+#[use_guards(CountsItsDrop)]
+#[derive(Clone, Default)]
+struct CountedTool;
+
+#[tools]
+impl CountedTool {
+    /// Answer with a constant.
+    #[tool]
+    #[public]
+    async fn count(&self) -> Result<String, McpError> {
+        Ok("counted".to_owned())
+    }
+}
+
+#[module(providers = [
+    CountedTool,
+    CountsItsDrop,
+    AllowAllMcpGuard as dyn McpOperationGuard,
+])]
+struct CountedModule;
+
+#[tokio::test]
+async fn dropping_the_app_drops_the_guards_its_operations_composed() {
+    let app = TestApp::for_module::<CountedModule>().await.expect("boots");
+    let body = call_tool(app.http(), "/mcp/counted", "count", None).await;
+    assert!(body.contains("counted"), "the guarded tool ran: {body}");
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 0, "the app is alive");
+
+    drop(app);
+
+    assert_eq!(
+        DROPPED.load(Ordering::SeqCst),
+        1,
+        "no `static` keeps the composed chain, so the guard went with its app",
+    );
+}

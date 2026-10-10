@@ -13,6 +13,7 @@ use anyhow::Result;
 
 use crate::RequestScope;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
+use crate::layer_chain::__private::SiteChains;
 use crate::module::{Collecting, Module, Registering};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
@@ -220,6 +221,8 @@ pub struct Container {
     /// The first refusal of a site a transport composed against this
     /// container — a mount has no `Result` to return it through.
     refusal: Arc<Mutex<Option<anyhow::Error>>>,
+    /// What this container's sites composed, dropped with it.
+    site_chains: Arc<SiteChains>,
 }
 
 impl Default for Container {
@@ -231,6 +234,7 @@ impl Default for Container {
             scoped: Arc::default(),
             transient: Arc::default(),
             refusal: Arc::default(),
+            site_chains: Arc::default(),
         }
     }
 }
@@ -1111,6 +1115,7 @@ impl ContainerBuilder {
             scoped: Arc::new(self.scoped),
             transient: Arc::new(self.transient),
             refusal: Arc::default(),
+            site_chains: Arc::default(),
         }
     }
 
@@ -1126,6 +1131,7 @@ impl ContainerBuilder {
             scoped: Arc::new(self.scoped.clone()),
             transient: Arc::new(self.transient.clone()),
             refusal: Arc::default(),
+            site_chains: Arc::default(),
         }
     }
 }
@@ -1137,6 +1143,7 @@ pub(crate) mod __private {
     use std::sync::PoisonError;
 
     use super::{Container, ContainerBuilder, ImportSite};
+    use crate::layer_chain::__private::SiteChains;
     use crate::module::{Collecting, DynamicModule, Registering};
 
     /// Refuse the boot from a site a transport composes at `configure` — a route,
@@ -1152,6 +1159,12 @@ pub(crate) mod __private {
         if slot.is_none() {
             *slot = Some(error);
         }
+    }
+
+    /// The chains `container`'s sites composed, which it holds for its life —
+    /// see [`SiteChains`].
+    pub fn site_chains(container: &Container) -> &SiteChains {
+        &container.site_chains
     }
 
     /// The refusal a site filed against `container` ([`refuse_site`]), taken by

@@ -57,8 +57,8 @@ pub trait GlobalSpecs: Any + Send + Sync {
 /// `layer_chain` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
-    use std::any::TypeId;
-    use std::sync::Arc;
+    use std::any::{Any, TypeId};
+    use std::sync::{Arc, Mutex, PoisonError};
 
     use super::{GlobalSpecs, LayerSpec};
     use crate::container::Container;
@@ -111,6 +111,24 @@ pub(crate) mod __private {
                  module that provides them; {consequence}",
                 missing.join(", "),
             ))
+        }
+    }
+
+    /// The chains a container's sites composed, held for as long as the
+    /// container lives: a per-site cache keeps only a `Weak` handle to what this
+    /// holds, so no `static` keeps a provider alive past its app.
+    #[derive(Default)]
+    pub struct SiteChains {
+        held: Mutex<Vec<Box<dyn Any + Send + Sync>>>,
+    }
+
+    impl SiteChains {
+        /// Hold `chain` until the container that owns this drops.
+        pub fn hold(&self, chain: impl Any + Send + Sync) {
+            self.held
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(Box::new(chain));
         }
     }
 

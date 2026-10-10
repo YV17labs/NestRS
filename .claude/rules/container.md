@@ -285,6 +285,10 @@ never a bound per hook (`k` stuck hooks would cost `k` bounds). A hook still
 waiting when it is spent is abandoned at `warn` naming its module; every later
 hook still starts and is polled once.
 
+**No `static` holds a provider**: a per-site cache keeps `Weak` handles and
+the container the strong ones (`SiteChains`), so what an app built goes with
+it.
+
 **A wait on the way down without a bound is a `SIGKILL` with nothing to say
 why.** So the way down is bounded end to end, and what still runs at a bound is
 abandoned with a line naming it, never awaited in silence. Its invariants — the

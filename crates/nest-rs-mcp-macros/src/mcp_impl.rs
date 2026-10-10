@@ -465,15 +465,15 @@ fn guard_chain(self_ty: &Type, op: &Operation, label: &LitStr) -> TokenStream2 {
     let name = LitStr::new(&op.name().to_string(), op.name().span());
     quote! {
         {
-            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::SiteChainCell =
-                ::nest_rs_guards::SiteChainCell::new();
+            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::__private::SiteChainCell =
+                ::nest_rs_guards::__private::SiteChainCell::new();
             ::nest_rs_guards::run_layered_mcp_chain(
                 &__NESTRS_GUARD_CHAIN,
                 #label,
                 ::core::any::type_name::<#self_ty>(),
                 #kind,
                 #name,
-                &|| ::nest_rs_guards::SiteChainSources {
+                &|| ::nest_rs_guards::__private::SiteChainSources {
                     provider: <#self_ty>::__nestrs_mcp_host_guard_specs(),
                     method: #method_specs,
                     force: #force,

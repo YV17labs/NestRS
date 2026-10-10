@@ -22,9 +22,6 @@ use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resol
 
 /// The scope-tagged guard declarations of one operation site, as the decorator
 /// knows them. Read once per site, on the cache miss that composes the chain.
-///
-/// Macro-emitted, not public API.
-#[doc(hidden)]
 pub struct SiteChainSources {
     /// `#[use_guards(...)]` on the provider — the resolver struct, the MCP host.
     pub provider: Vec<ScopedGuardSpec>,
@@ -49,9 +46,6 @@ pub(crate) enum GlobalBucket {
 ///
 /// A decorator emits one as a `static` per guarded operation and hands it to
 /// its transport's runner.
-///
-/// Macro-emitted, not public API.
-#[doc(hidden)]
 #[derive(Default)]
 pub struct SiteChainCell {
     /// The serving app's chain — the only entry a real process ever fills.

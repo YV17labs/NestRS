@@ -135,8 +135,6 @@ pub use dispatch::denial_to_ws_error;
 #[cfg(feature = "graphql")]
 pub use dispatch::{GraphqlSite, denial_to_graphql_error, run_layered_graphql_chain};
 pub use dispatch::{RouteShaper, denial_to_http_error, denial_to_http_response};
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-pub use dispatch::{SiteChainCell, SiteChainSources};
 #[cfg(feature = "mcp")]
 pub use dispatch::{denial_to_mcp_error, run_layered_mcp_chain};
 
@@ -144,6 +142,9 @@ pub use dispatch::{denial_to_mcp_error, run_layered_mcp_chain};
 pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
+
+    #[cfg(any(feature = "graphql", feature = "mcp"))]
+    pub use crate::dispatch::chain::{SiteChainCell, SiteChainSources};
 
     pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};
 }

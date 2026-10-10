@@ -21,7 +21,7 @@
 
 // The per-site chain the two in-band transports share.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
-mod chain;
+pub(crate) mod chain;
 mod denial_convert;
 #[cfg(feature = "graphql")]
 mod graphql_chain;
@@ -42,8 +42,6 @@ mod route_shaper;
 mod scoped_spec;
 mod validate;
 
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-pub use chain::{SiteChainCell, SiteChainSources};
 #[cfg(feature = "graphql")]
 pub use denial_convert::denial_to_graphql_error;
 #[cfg(feature = "mcp")]

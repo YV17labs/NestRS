@@ -537,15 +537,15 @@ fn layered_resolver_chain(
     let site = site.path();
     quote! {
         {
-            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::SiteChainCell =
-                ::nest_rs_guards::SiteChainCell::new();
+            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::__private::SiteChainCell =
+                ::nest_rs_guards::__private::SiteChainCell::new();
             let __container = #ctx.data_unchecked::<::nest_rs_core::Container>();
             ::nest_rs_guards::run_layered_graphql_chain(
                 #ctx,
                 __container,
                 &__NESTRS_GUARD_CHAIN,
                 #label_lit,
-                &|| ::nest_rs_guards::SiteChainSources {
+                &|| ::nest_rs_guards::__private::SiteChainSources {
                     provider: <#self_ty>::__nestrs_resolver_guard_specs(),
                     method: #method_specs,
                     force: #force_typeids,

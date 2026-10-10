@@ -1,6 +1,6 @@
 //! What a job attempt *is*, written once for every backend and run by the
 //! port's [`QueueWorker`](crate::QueueWorker): discovery of the `#[process]`
-//! inventory, and [`attempt`](crate::consume::attempt), from the envelope to the
+//! inventory, and [`attempt`], from the envelope to the
 //! `nest_rs::operation` line.
 
 use std::borrow::Cow;
@@ -53,8 +53,7 @@ pub(crate) fn unsupported_by<'a>(
     method: &'a ProcessMethod,
     backend: &'a QueueBackend,
 ) -> impl Iterator<Item = String> + 'a {
-    method
-        .required_capabilities()
+    crate::inventory::required_capabilities(method)
         .iter()
         .filter(|capability| !backend.capabilities().contains(*capability))
         .map(|capability| unsupported(capability, backend.name(), Some(method.name())))

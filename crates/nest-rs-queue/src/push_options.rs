@@ -115,8 +115,7 @@ impl PushOptions {
     }
 
     /// The optional capabilities these options need from a backend.
-    #[doc(hidden)]
-    pub fn required_capabilities(&self) -> Capabilities {
+    pub(crate) fn required_capabilities(&self) -> Capabilities {
         let mut required = Capabilities::NONE;
         if self.delay.is_some() {
             required = required.with(Capability::DelayedPush);

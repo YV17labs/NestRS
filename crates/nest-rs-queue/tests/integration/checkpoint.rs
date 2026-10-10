@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::Container;
-use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
+use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{
     Checkpoint, CheckpointStore, QueueError, QueueName, WIRE_FORMAT_VERSION, async_trait,
     processor, queue,

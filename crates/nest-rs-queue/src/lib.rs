@@ -2,8 +2,8 @@
 //!
 //! `nest-rs-queue` defines **what every queue backend must agree on**: a
 //! queue's identity ([`Queue`], [`QueueName`]) and the payload bound ([`Job`]);
-//! the `#[processor]` inventory ([`ProcessMethod`]) and what one attempt at a job
-//! is ([`consume`]); the push surface ([`JobProducerExt`]) over the seam a backend
+//! the `#[processor]` inventory ([`ProcessMethod`]) and the worker running each
+//! attempt at a job ([`QueueWorker`]); the push surface ([`JobProducerExt`]) over the seam a backend
 //! enqueues and removes jobs through ([`JobProducer`]); and the capability model a
 //! backend declares what it honours with ([`QueueBackend`], [`Capability`]).
 //!
@@ -73,10 +73,12 @@ mod backoff;
 mod capability;
 mod checkpoint;
 mod config;
+mod consume;
 mod consumer;
 mod delivery;
 mod destination;
 mod disposition;
+mod envelope;
 mod error;
 mod inventory;
 mod job;
@@ -91,12 +93,6 @@ mod queue_name;
 pub mod unit;
 mod worker;
 
-/// What one attempt at a job is, run by [`QueueWorker`]; public only so this
-/// crate's suite drives an attempt without a worker.
-#[doc(hidden)]
-pub mod consume;
-mod envelope;
-
 pub use backend::{BACKEND_REMEDY, BACKEND_TIMEOUT, QueueBackend};
 pub use capability::{Capabilities, Capability};
 pub use checkpoint::{Checkpoint, CheckpointStore};
@@ -104,16 +100,11 @@ pub use config::QueueConfig;
 pub use consume::{NEWER_RELEASE_PATIENCE, NEWER_RELEASE_WAIT, STALL_LIMIT};
 pub use consumer::{Ask, BoundConsumer, JobConsumer, LeaseHold, Prepared, Received};
 pub use delivery::Delivery;
-// The type of a `pub` field on `HandlerContext`, so it stays nameable.
-#[doc(hidden)]
-pub use checkpoint::CheckpointCell;
 pub use destination::Destination;
 pub use disposition::Disposition;
 pub use envelope::{Envelope, WIRE_FORMAT_VERSION};
 pub use error::{JobError, QueueError};
 pub use inventory::ProcessMethod;
-#[doc(hidden)]
-pub use inventory::{HandlerContext, JobHandler, decode};
 pub use job::Job;
 pub use job_id::JobId;
 pub use module::{QueueModule, QueueSetup};
@@ -125,16 +116,30 @@ pub use queue::Queue;
 pub use queue_name::QueueName;
 pub use worker::{QueueWorker, lease_fits_renewal};
 
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    /// What one attempt at a job is, run by [`QueueWorker`](crate::QueueWorker);
+    /// reached here so this crate's suite drives an attempt without a worker.
+    pub mod consume {
+        pub use crate::consume::{AttemptOutcome, Delivery, attempt, discover, refuse};
+    }
+
+    pub use crate::checkpoint::{CheckpointCell, open_checkpoint};
+    pub use crate::error::undecodable;
+    pub use crate::inventory::{
+        HandlerContext, JobHandler, decode, process_method, required_capabilities,
+    };
+    pub use crate::queue_name::is_valid_queue_name;
+
+    pub use nest_rs_worker;
+    pub use serde_json;
+}
+
 // Backends implement this crate's async traits without depending on it.
 pub use async_trait::async_trait;
-
-// `#[processor]` expansions name `::nest_rs_queue::serde_json`.
-#[doc(hidden)]
-pub use serde_json;
-
-// `#[processor]` expansions name `::nest_rs_queue::nest_rs_worker`.
-#[doc(hidden)]
-pub use nest_rs_worker;
 
 /// The wire-DTO shorthand, so a payload crossing this transport needs no `serde`
 /// of its own.

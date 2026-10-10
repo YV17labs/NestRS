@@ -185,18 +185,6 @@ impl JobError {
         }
     }
 
-    /// The failure of a payload that does not decode as the job type of the
-    /// queue it came from — deterministic, since the same bytes never decode on
-    /// a retry. Said by where and what kind ([`DecodeError`](nest_rs_core::DecodeError)),
-    /// never by the value.
-    #[doc(hidden)]
-    pub fn undecodable(queue: &str, error: &serde_json::Error) -> Self {
-        Self::abort(format!(
-            "failed to deserialize job for queue `{queue}`: {}",
-            nest_rs_core::DecodeError::new(error),
-        ))
-    }
-
     /// Attach structured detail to a failure — what a rejected pipe knows about
     /// *which* field failed.
     pub fn with_details(mut self, details: Option<serde_json::Value>) -> Self {
@@ -247,4 +235,15 @@ pub(crate) enum CallFailed {
     Erred(QueueError),
     #[error("no answer within the port's net of {0:?}")]
     Unanswered(std::time::Duration),
+}
+
+/// The failure of a payload that does not decode as the job type of the queue
+/// it came from — deterministic, since the same bytes never decode on a retry.
+/// Said by where and what kind ([`DecodeError`](nest_rs_core::DecodeError)),
+/// never by the value.
+pub fn undecodable(queue: &str, error: &serde_json::Error) -> JobError {
+    JobError::abort(format!(
+        "failed to deserialize job for queue `{queue}`: {}",
+        nest_rs_core::DecodeError::new(error),
+    ))
 }

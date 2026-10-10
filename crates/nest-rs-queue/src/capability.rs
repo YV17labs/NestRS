@@ -127,10 +127,10 @@ mod tests {
 
     use super::*;
     use crate::consume::unsupported_by;
-    use crate::inventory::{HandlerContext, JobHandler};
+    use crate::inventory::{HandlerContext, JobHandler, process_method};
     use crate::{
-        Envelope, JobError, JobId, JobProducer, JobProducerExt, ProcessMethod, ProcessOptions,
-        PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, Throttle,
+        Envelope, JobError, JobId, JobProducer, JobProducerExt, ProcessOptions, PushOptions,
+        PushReceipt, QueueBackend, QueueError, QueueName, Throttle,
     };
 
     /// A backend declaring no optional capability, so every declaration that
@@ -168,7 +168,7 @@ mod tests {
 
     /// The boot's refusals of a `#[process]` method declaring `options`.
     fn boot(options: ProcessOptions) -> String {
-        let method = ProcessMethod::new(
+        let method = process_method(
             module_path!(),
             METHOD,
             QUEUE,

@@ -12,10 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nest_rs_core::Container;
-use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
+use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+use nest_rs_queue::__private::{HandlerContext, nest_rs_worker};
 use nest_rs_queue::{
-    HandlerContext, JobError, JobId, ProcessMethod, ProcessOptions, QueueBackend, QueueName,
-    Throttle, WIRE_FORMAT_VERSION, nest_rs_worker, processor, queue,
+    JobError, JobId, ProcessMethod, ProcessOptions, QueueBackend, QueueName, Throttle,
+    WIRE_FORMAT_VERSION, processor, queue,
 };
 use serde_json::json;
 
@@ -1071,7 +1072,7 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience(
         let AttemptOutcome::Defer { after } = outcome else {
             panic!("a job this release cannot read is handed back: {outcome:?}");
         };
-        assert_eq!(after, consume::NEWER_RELEASE_WAIT);
+        assert_eq!(after, nest_rs_queue::NEWER_RELEASE_WAIT);
     }
     assert_eq!(FLAKY_RUNS.load(Ordering::SeqCst), runs, "nothing ran");
     assert_eq!(delivery.attempt(), 1, "no attempt is spent");
@@ -1098,7 +1099,11 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience(
     assert_eq!(warned.field("waited_ms").as_deref(), Some("3600000"));
     assert_eq!(
         warned.field("patience_ms"),
-        Some(consume::NEWER_RELEASE_PATIENCE.as_millis().to_string())
+        Some(
+            nest_rs_queue::NEWER_RELEASE_PATIENCE
+                .as_millis()
+                .to_string()
+        )
     );
     assert_eq!(
         warned.trace_id.as_deref(),
@@ -1119,7 +1124,7 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
         QueueName::new("transcode").expect("a valid name"),
         sealed_by_a_newer_release(&fresh_job_id()),
     )
-    .with_deferred_for(consume::NEWER_RELEASE_PATIENCE);
+    .with_deferred_for(nest_rs_queue::NEWER_RELEASE_PATIENCE);
 
     let runs = FLAKY_RUNS.load(Ordering::SeqCst);
     let outcome = attempt_newer(&mut delivery).await;
@@ -1146,7 +1151,11 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
     assert_eq!(said.field("version"), Some(newer));
     assert_eq!(
         said.field("waited_ms"),
-        Some(consume::NEWER_RELEASE_PATIENCE.as_millis().to_string())
+        Some(
+            nest_rs_queue::NEWER_RELEASE_PATIENCE
+                .as_millis()
+                .to_string()
+        )
     );
     assert_eq!(
         said.trace_id.as_deref(),
@@ -1232,7 +1241,7 @@ struct ZeroWindowHost;
 struct SubMillisecondWindowHost;
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "ThrottledHost::run", "throttled",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_secs(1))),
         TypeId::of::<ThrottledHost>, never_runs,
@@ -1240,7 +1249,7 @@ nest_rs_core::inventory::submit! {
 }
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "CheckpointHost::run", "resumable",
         ProcessOptions::DEFAULT.with_checkpoint(true),
         TypeId::of::<CheckpointHost>, never_runs,
@@ -1248,7 +1257,7 @@ nest_rs_core::inventory::submit! {
 }
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "FirstClaimant::drain", "contested",
         ProcessOptions::DEFAULT,
         TypeId::of::<FirstClaimant>, never_runs,
@@ -1256,7 +1265,7 @@ nest_rs_core::inventory::submit! {
 }
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "SecondClaimant::drain", "contested",
         ProcessOptions::DEFAULT.with_retries(9),
         TypeId::of::<SecondClaimant>, never_runs,
@@ -1264,7 +1273,7 @@ nest_rs_core::inventory::submit! {
 }
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "BadlyNamedHost::run", "nestrs:queue:dead",
         ProcessOptions::DEFAULT,
         TypeId::of::<BadlyNamedHost>, never_runs,
@@ -1272,7 +1281,7 @@ nest_rs_core::inventory::submit! {
 }
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "SubMillisecondWindowHost::run", "half-a-millisecond",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_micros(500))),
         TypeId::of::<SubMillisecondWindowHost>, never_runs,
@@ -1280,7 +1289,7 @@ nest_rs_core::inventory::submit! {
 }
 
 nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
+    nest_rs_queue::__private::process_method(
         module_path!(), "ZeroWindowHost::run", "unwindowed",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::ZERO)),
         TypeId::of::<ZeroWindowHost>, never_runs,

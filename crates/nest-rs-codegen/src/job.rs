@@ -350,8 +350,9 @@ pub fn timeout_value(member: JobDecorator, expr: &Expr) -> syn::Result<u64> {
     Ok(millis)
 }
 
-/// The deadline a parsed `timeout` sets, rooted at the surface crate the
-/// calling macro emits through; `None` is `nest_rs_worker::JOB_TIMEOUT`.
+/// The deadline a parsed `timeout` sets, rooted at the surface path re-exporting
+/// `nest_rs_worker` that the calling macro emits through; `None` is
+/// `nest_rs_worker::JOB_TIMEOUT`.
 pub fn job_timeout(millis: Option<u64>, surface: &TokenStream) -> TokenStream {
     match millis {
         Some(millis) => quote! { ::core::time::Duration::from_millis(#millis) },
@@ -399,7 +400,8 @@ pub fn job_returns_a_result(member: JobDecorator) -> String {
 }
 
 /// The `JobTransaction` variant a parsed value selects, rooted at the surface
-/// crate the calling macro emits through (`::nest_rs_queue`, `::nest_rs_schedule`).
+/// path re-exporting `nest_rs_worker` that the calling macro emits through
+/// (`::nest_rs_queue::__private`, `::nest_rs_schedule`).
 ///
 /// `None` — the key was not written — is `PerAttempt`, spelled out.
 pub fn job_transaction(value: Option<bool>, surface: &TokenStream) -> TokenStream {

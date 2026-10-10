@@ -205,7 +205,7 @@ so you don't have to think about them separately:
   `job dead-lettered: handler panicked` event carrying the panic message. The
   job dead-letters immediately (regardless of remaining retries), the worker
   stays up.
-- **Deserialization errors** — the macro-emitted `JobHandler` does the
+- **Deserialization errors** — the macro-emitted handler does the
   `serde_json::from_value`. A payload that doesn't match the method's
   job type returns `Err` before your method even runs. Retrying won't
   help: the payload shape is wrong, so it is classified **non-retryable**

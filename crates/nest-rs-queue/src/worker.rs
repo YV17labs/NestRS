@@ -686,7 +686,7 @@ impl<C: JobConsumer> MethodRun<C> {
         let message: Value = match serde_json::from_slice(&record) {
             Ok(message) => message,
             Err(error) => {
-                let refused = JobError::undecodable(self.queue.as_str(), &error);
+                let refused = crate::error::undecodable(self.queue.as_str(), &error);
                 self.refuse(token, &lease, backend_id.as_deref(), refused, &record)
                     .await;
                 return;

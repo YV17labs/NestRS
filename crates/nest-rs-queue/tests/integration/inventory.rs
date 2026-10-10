@@ -25,7 +25,7 @@ fn a_process_method_is_submitted_with_its_queue_and_its_options() {
     assert_eq!(options.throttle(), None);
     assert!(!options.checkpoint());
     assert_eq!(
-        transcode.required_capabilities(),
+        nest_rs_queue::__private::required_capabilities(transcode),
         Capabilities::NONE,
         "a plain method needs nothing a backend may lack",
     );
@@ -73,7 +73,7 @@ fn every_key_reaches_the_options_and_the_capabilities_it_needs() {
         "a `Checkpoint<_>` parameter is a declaration"
     );
 
-    let required = sync.required_capabilities();
+    let required = nest_rs_queue::__private::required_capabilities(sync);
     for capability in [Capability::Throttle, Capability::Checkpoint] {
         assert!(required.contains(capability), "{capability:?}");
     }

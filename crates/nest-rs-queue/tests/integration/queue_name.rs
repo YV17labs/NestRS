@@ -27,7 +27,7 @@ fn the_decorators_copy_of_the_rule_agrees_with_the_port() {
     for value in corpus {
         assert_eq!(
             nest_rs_codegen::is_valid_queue_name(value),
-            QueueName::is_valid(value),
+            nest_rs_queue::__private::is_valid_queue_name(value),
             "the two copies disagree on {value:?}",
         );
     }

@@ -34,9 +34,7 @@ pub trait CheckpointStore: Send + Sync + 'static {
 }
 
 /// One delivery's checkpoint: the backend's store, and the latest state read or
-/// saved through it. Internal ABI between a delivery and the decorator-emitted
-/// handler.
-#[doc(hidden)]
+/// saved through it, between a delivery and the decorator-emitted handler.
 pub struct CheckpointCell {
     store: Arc<dyn CheckpointStore>,
     /// The job's queue, which a store silent past the net is reported on.
@@ -129,37 +127,6 @@ impl<S> Checkpoint<S>
 where
     S: Serialize + DeserializeOwned + Send + Sync + 'static,
 {
-    /// Read the delivery's latest checkpoint for the handler — emitted by the
-    /// decorator, which runs it before the method.
-    ///
-    /// A backend that could not be read is retryable, like any transient fault;
-    /// a saved state that no longer decodes as `S` is not, since every attempt
-    /// would read the same bytes.
-    #[doc(hidden)]
-    pub async fn open(cell: Option<&Arc<CheckpointCell>>, queue: &str) -> Result<Self, JobError> {
-        let Some(cell) = cell else {
-            return Err(JobError::abort(format!(
-                "a job from queue `{queue}` reached a method taking a `Checkpoint`, and its \
-                 delivery carries no checkpoint store"
-            )));
-        };
-        let state = match cell.load().await {
-            // Said without the value: a checkpoint is the job's own data.
-            Ok(Some(saved)) => Some(serde_json::from_value(saved).map_err(|error| {
-                JobError::abort(format!(
-                    "the checkpoint saved for a job from queue `{queue}` does not decode: {}",
-                    nest_rs_core::DecodeError::new(&error),
-                ))
-            })?),
-            Ok(None) => None,
-            Err(error) => return Err(JobError::retry(error)),
-        };
-        Ok(Self {
-            cell: Arc::clone(cell),
-            state,
-        })
-    }
-
     /// The latest state saved for this job — by this attempt, an earlier one,
     /// or a replica that died holding it.
     pub fn get(&self) -> Option<&S> {
@@ -178,6 +145,42 @@ where
         self.state = Some(state);
         Ok(())
     }
+}
+
+/// Read the delivery's latest checkpoint for the handler — emitted by the
+/// decorator, which runs it before the method.
+///
+/// A backend that could not be read is retryable, like any transient fault; a
+/// saved state that no longer decodes as `S` is not, since every attempt would
+/// read the same bytes.
+pub async fn open_checkpoint<S>(
+    cell: Option<&Arc<CheckpointCell>>,
+    queue: &str,
+) -> Result<Checkpoint<S>, JobError>
+where
+    S: Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    let Some(cell) = cell else {
+        return Err(JobError::abort(format!(
+            "a job from queue `{queue}` reached a method taking a `Checkpoint`, and its \
+             delivery carries no checkpoint store"
+        )));
+    };
+    let state = match cell.load().await {
+        // Said without the value: a checkpoint is the job's own data.
+        Ok(Some(saved)) => Some(serde_json::from_value(saved).map_err(|error| {
+            JobError::abort(format!(
+                "the checkpoint saved for a job from queue `{queue}` does not decode: {}",
+                nest_rs_core::DecodeError::new(&error),
+            ))
+        })?),
+        Ok(None) => None,
+        Err(error) => return Err(JobError::retry(error)),
+    };
+    Ok(Checkpoint {
+        cell: Arc::clone(cell),
+        state,
+    })
 }
 
 #[cfg(test)]
@@ -224,13 +227,13 @@ mod tests {
         *store.saved.lock().expect("lock") = Some(json!({ "row": 1 }));
         let cell = Arc::new(CheckpointCell::new(store.clone(), imports()));
 
-        let mut first = Checkpoint::<Progress>::open(Some(&cell), "imports")
+        let mut first = open_checkpoint::<Progress>(Some(&cell), "imports")
             .await
             .expect("opens");
         assert_eq!(first.get(), Some(&Progress { row: 1 }));
         first.save(Progress { row: 7 }).await.expect("saves");
 
-        let second = Checkpoint::<Progress>::open(Some(&cell), "imports")
+        let second = open_checkpoint::<Progress>(Some(&cell), "imports")
             .await
             .expect("opens");
         assert_eq!(second.get(), Some(&Progress { row: 7 }));
@@ -247,7 +250,7 @@ mod tests {
         *store.saved.lock().expect("lock") = Some(json!("not a progress"));
         let cell = Arc::new(CheckpointCell::new(store, imports()));
 
-        let Err(error) = Checkpoint::<Progress>::open(Some(&cell), "imports").await else {
+        let Err(error) = open_checkpoint::<Progress>(Some(&cell), "imports").await else {
             panic!("a state that does not decode must not open");
         };
         assert!(!error.retryable, "every attempt would read the same bytes");
@@ -255,7 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_method_taking_a_checkpoint_without_a_store_is_refused_by_name() {
-        let Err(error) = Checkpoint::<Progress>::open(None, "imports").await else {
+        let Err(error) = open_checkpoint::<Progress>(None, "imports").await else {
             panic!("no store, no checkpoint");
         };
         assert!(!error.retryable);

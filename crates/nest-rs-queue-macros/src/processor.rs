@@ -241,14 +241,14 @@ fn emit_method(
     if checkpoint.is_some() {
         options = quote!(#options.with_checkpoint(true));
     }
-    let timeout = job_timeout(timeout, &quote!(::nest_rs_queue));
+    let timeout = job_timeout(timeout, &quote!(::nest_rs_queue::__private));
     options = quote!(#options.with_timeout(#timeout));
 
-    let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue));
+    let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue::__private));
     let checkpoint_open = checkpoint.as_ref().map(|checkpoint| {
         let state = &checkpoint.state;
         quote! {
-            let __checkpoint = ::nest_rs_queue::Checkpoint::<#state>::open(
+            let __checkpoint = ::nest_rs_queue::__private::open_checkpoint::<#state>(
                 __context.checkpoints.as_ref(),
                 #queue_str,
             )
@@ -280,8 +280,8 @@ fn emit_method(
         #[doc(hidden)]
         #[allow(non_snake_case)]
         fn #handler_ident(
-            __payload: ::std::borrow::Cow<'_, ::nest_rs_queue::serde_json::Value>,
-            __context: ::nest_rs_queue::HandlerContext,
+            __payload: ::std::borrow::Cow<'_, ::nest_rs_queue::__private::serde_json::Value>,
+            __context: ::nest_rs_queue::__private::HandlerContext,
         ) -> ::std::pin::Pin<
             ::std::boxed::Box<
                 dyn ::std::future::Future<
@@ -290,12 +290,12 @@ fn emit_method(
             >,
         > {
             ::std::boxed::Box::pin(async move {
-                let __deser: #deser_ty = match ::nest_rs_queue::decode(__payload) {
+                let __deser: #deser_ty = match ::nest_rs_queue::__private::decode(__payload) {
                     ::std::result::Result::Ok(j) => j,
                     ::std::result::Result::Err(e) => {
                         // Deterministic: the same bytes never deserialize on retry.
                         return ::std::result::Result::Err(
-                            ::nest_rs_queue::JobError::undecodable(#queue_str, &e),
+                            ::nest_rs_queue::__private::undecodable(#queue_str, &e),
                         );
                     }
                 };
@@ -319,13 +319,13 @@ fn emit_method(
                 };
                 #checkpoint_open
                 let __job_context = ::nest_rs_core::Container::get_dyn::<
-                    dyn ::nest_rs_queue::nest_rs_worker::JobContext,
+                    dyn ::nest_rs_queue::__private::nest_rs_worker::JobContext,
                 >(&__context.container);
                 // The user `#[process]` method's `Err` is a transient fault —
                 // retryable within the budget. Mapped *inside* the context so the
                 // settling seam reads one error type and can report a commit it
                 // could not honour in it.
-                ::nest_rs_queue::nest_rs_worker::run_in_job_context(
+                ::nest_rs_queue::__private::nest_rs_worker::run_in_job_context(
                     __job_context.as_ref(),
                     #transaction_tokens,
                     async move {
@@ -346,7 +346,7 @@ fn emit_method(
 
         #(#cfgs)*
         ::nest_rs_core::inventory::submit! {
-            ::nest_rs_queue::ProcessMethod::new(
+            ::nest_rs_queue::__private::process_method(
                 ::core::module_path!(),
                 #qualified_name,
                 #queue_str,

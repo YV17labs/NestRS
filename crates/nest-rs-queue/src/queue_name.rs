@@ -25,7 +25,7 @@ impl QueueName {
     /// a backend's record or from the raw push hatch.
     pub fn new(name: impl Into<Cow<'static, str>>) -> Result<Self, QueueError> {
         let name = name.into();
-        if Self::is_valid(&name) {
+        if is_valid_queue_name(&name) {
             return Ok(Self(name));
         }
         // Truncated before it reaches an error message a log line will carry: a
@@ -38,18 +38,16 @@ impl QueueName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
 
-    /// Whether `value` follows the rule a queue name follows.
-    ///
-    /// Public so the decorator's compile-time copy of the rule is pinned to it.
-    #[doc(hidden)]
-    pub fn is_valid(value: &str) -> bool {
-        !value.is_empty()
-            && value.len() <= QueueName::MAX_LEN
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
-    }
+/// Whether `value` follows the rule a queue name follows; public so the
+/// decorator's compile-time copy of the rule is pinned to it.
+pub fn is_valid_queue_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= QueueName::MAX_LEN
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
 impl fmt::Display for QueueName {

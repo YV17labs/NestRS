@@ -14,12 +14,10 @@ use crate::{Capabilities, Capability, JobError, ProcessOptions};
 
 /// The type-erased handler `#[processor]` emits for each `#[process]` method:
 /// deserializes the job payload ([`decode`]), resolves the provider, runs the
-/// method inside the ambient `JobContext`. Internal ABI between the decorator
-/// and the port's attempt.
+/// method inside the ambient `JobContext`.
 ///
 /// The payload is borrowed from the stored record while another attempt may
 /// follow, and handed over on the last.
-#[doc(hidden)]
 pub type JobHandler = fn(
     payload: Cow<'_, serde_json::Value>,
     context: HandlerContext,
@@ -27,8 +25,6 @@ pub type JobHandler = fn(
 
 /// The job a handler runs, out of `payload`: moved out of it when the attempt
 /// was handed the value, read from it when the value stays the record's.
-/// Internal ABI.
-#[doc(hidden)]
 pub fn decode<T: serde::de::DeserializeOwned>(
     payload: Cow<'_, serde_json::Value>,
 ) -> Result<T, serde_json::Error> {
@@ -38,8 +34,7 @@ pub fn decode<T: serde::de::DeserializeOwned>(
     }
 }
 
-/// What one attempt hands the handler besides the payload. Internal ABI.
-#[doc(hidden)]
+/// What one attempt hands the handler besides the payload.
 pub struct HandlerContext {
     /// The app's container, which the handler resolves its provider from.
     pub container: Container,
@@ -62,27 +57,6 @@ pub struct ProcessMethod {
 }
 
 impl ProcessMethod {
-    /// The entry `#[processor]` submits. Internal ABI: a hand-built entry is a
-    /// test's, never an app's.
-    #[doc(hidden)]
-    pub const fn new(
-        origin: &'static str,
-        name: &'static str,
-        queue: &'static str,
-        options: ProcessOptions,
-        provider_type_id: fn() -> TypeId,
-        handler: JobHandler,
-    ) -> Self {
-        Self {
-            origin,
-            name,
-            queue,
-            options,
-            provider_type_id,
-            handler,
-        }
-    }
-
     /// `module_path!()` of the crate that declared the method — read by
     /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick a
     /// report level, and emitted as a field so a skip line names a type the
@@ -106,20 +80,6 @@ impl ProcessMethod {
         &self.options
     }
 
-    /// The optional capabilities this method's declarations need from a
-    /// backend.
-    #[doc(hidden)]
-    pub fn required_capabilities(&self) -> Capabilities {
-        let mut required = Capabilities::NONE;
-        if self.options.throttle().is_some() {
-            required = required.with(Capability::Throttle);
-        }
-        if self.options.checkpoint() {
-            required = required.with(Capability::Checkpoint);
-        }
-        required
-    }
-
     pub(crate) fn provider_type_id(&self) -> TypeId {
         (self.provider_type_id)()
     }
@@ -127,6 +87,38 @@ impl ProcessMethod {
     pub(crate) fn handler(&self) -> JobHandler {
         self.handler
     }
+}
+
+/// The entry `#[processor]` submits for one `#[process]` method; a hand-built
+/// entry is a test's, never an app's.
+pub const fn process_method(
+    origin: &'static str,
+    name: &'static str,
+    queue: &'static str,
+    options: ProcessOptions,
+    provider_type_id: fn() -> TypeId,
+    handler: JobHandler,
+) -> ProcessMethod {
+    ProcessMethod {
+        origin,
+        name,
+        queue,
+        options,
+        provider_type_id,
+        handler,
+    }
+}
+
+/// The optional capabilities `method`'s declarations need from a backend.
+pub fn required_capabilities(method: &ProcessMethod) -> Capabilities {
+    let mut required = Capabilities::NONE;
+    if method.options.throttle().is_some() {
+        required = required.with(Capability::Throttle);
+    }
+    if method.options.checkpoint() {
+        required = required.with(Capability::Checkpoint);
+    }
+    required
 }
 
 impl std::fmt::Debug for ProcessMethod {

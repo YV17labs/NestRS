@@ -108,7 +108,7 @@ use crate::{Ability, ActionMarker, Subject};
 /// `#[routes]` desugars that to this extractor as the handler's first
 /// parameter; written by hand it works, but is not a posture declaration. An
 /// extractor reached indirectly (nested, or run by a hand-rolled `FromRequest`)
-/// is backstopped by `nest_rs_http::__private::MaskProbe`, which fails the route closed.
+/// is backstopped by the HTTP edge's masking probe, which fails the route closed.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>

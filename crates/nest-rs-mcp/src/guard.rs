@@ -16,9 +16,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Authenticates an MCP HTTP request before the streamable handler runs. Bind
 /// with `providers = [MyBridge as dyn McpOperationGuard]`.
 ///
-/// A registered guard replaces [`FallbackMcpGuard`] and owns the endpoint's
-/// chain. It gates the HTTP request, and never stands in for an operation's own
-/// `Guard::check_mcp` chain.
+/// A registered guard replaces the fallback that runs the global guard pool,
+/// and owns the endpoint's chain. It gates the HTTP request, and never stands
+/// in for an operation's own `Guard::check_mcp` chain.
 pub trait McpOperationGuard: Send + Sync + 'static {
     /// Gate the operation: inspect/mutate `req` and return `Err` to reject it
     /// before the handler runs.

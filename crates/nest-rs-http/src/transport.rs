@@ -89,7 +89,7 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 
 /// HTTP [`Transport`] backed by poem: every discovered controller and
 /// self-mounted endpoint, then each [`mount`](Self::mount), under the
-/// discovered [`HttpEndpointWrap`]s.
+/// discovered transport-level wraps.
 pub struct HttpTransport {
     bind: String,
     mounts: Vec<NamedMount>,

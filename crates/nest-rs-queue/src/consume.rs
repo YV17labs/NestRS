@@ -30,13 +30,15 @@ use crate::{
 const PROCESS: &str = "process";
 
 /// How long a job sealed by a newer release waits before it is delivered again,
-/// when a consumer of this release hands it back — [`AttemptOutcome::Defer`].
+/// when a consumer of this release hands it back —
+/// [`Disposition::Defer`](crate::Disposition::Defer).
 pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
 
 /// How long a job sealed by a newer release may go unread before a consumer of
 /// this release dead-letters it: a day, counted from the first time it was
-/// handed back unread ([`Delivery::with_deferred_for`]) — or from its push, on a
-/// backend that keeps no such record.
+/// handed back unread
+/// ([`Delivery::with_deferred_for`](crate::Delivery::with_deferred_for)) — or
+/// from its push, on a backend that keeps no such record.
 pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How many deliveries of one record may end without an answer before the

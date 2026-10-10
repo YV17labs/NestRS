@@ -171,8 +171,7 @@ impl App {
     /// Each transport bounds its own stop ([`Transport::stop_bound`]); the
     /// `way down bounded` boot line files the longest beside the hooks' budget.
     /// A signal received once the way down has begun exits at once (130 /
-    /// 143). Transports come only from imported modules
-    /// ([`TransportContribution`]).
+    /// 143). Transports come only from imported modules.
     pub async fn run(self) -> Result<()> {
         let App { container } = self;
 

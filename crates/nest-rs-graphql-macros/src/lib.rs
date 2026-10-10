@@ -68,8 +68,8 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Expands to
 ///
 /// `#[query]`/`#[mutation]` methods split into hidden
-/// `__<Base>Query` / `__<Base>Mutation` `#[Object]` roots (each submitting a
-/// `GraphqlResolverRegistration` to the link-time registry), `#[field_resolver]`
+/// `__<Base>Query` / `__<Base>Mutation` `#[Object]` roots (each registered with
+/// the link-time registry), `#[field_resolver]`
 /// methods merge into one `#[ComplexObject]` impl per parent type, plus an
 /// `impl Discoverable` (with a no-op `register`).
 ///
@@ -113,8 +113,8 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Each method `async fn name(&self, keys: &[K]) -> HashMap<K, V>` (or
 /// `Result<HashMap<K, V>, E>`) generates a hidden `Loader` named
-/// `<Owner><Name>` and submits a `GraphqlLoaderRegistration` to the link-time
-/// registry — no `#[module(providers = [...])]` entry. The loader is
+/// `<Owner><Name>` and registers it with the link-time registry — no
+/// `#[module(providers = [...])]` entry. The loader is
 /// **request-scoped**, seeded into the GraphQL context and read by a
 /// `#[field_resolver]` as `&DataLoader<…>`.
 ///
@@ -136,9 +136,8 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Expands to
 ///
 /// Per method, a `<Owner><Name>` newtype implementing async-graphql's
-/// `Loader<K>`, plus a `GraphqlLoaderRegistration` submitted to the link-time
-/// registry whose `seed` builds the request's `DataLoader` from the assembled
-/// container. The loader's `Error` is the method's `E`, or
+/// `Loader<K>`, plus a link-time registration that builds the request's
+/// `DataLoader` from the assembled container. The loader's `Error` is the method's `E`, or
 /// `std::convert::Infallible` when the method returns a bare `HashMap`.
 #[proc_macro_attribute]
 pub fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {

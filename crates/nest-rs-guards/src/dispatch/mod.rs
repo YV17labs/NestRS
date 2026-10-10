@@ -13,9 +13,9 @@
 //! ## GraphQL — inline chain call, composed once per site
 //!
 //! The `#[operations]` macro emits a call to `run_layered_graphql_chain` at
-//! the start of every handler method, beside a `static` `SiteChainCell`
-//! that memoizes the composed chain per container — GraphQL has no mount seam
-//! to bake a shaper into, so the site is its own. WS has no inline runner: the
+//! the start of every handler method, beside a `static` cell that memoizes the
+//! composed chain per container — GraphQL has no mount seam to bake a shaper
+//! into, so the site is its own. WS has no inline runner: the
 //! `#[messages]` macro composes its per-event guard table at gateway
 //! mount, wrapping each guard via `GuardAsWsMessageCheck`.
 

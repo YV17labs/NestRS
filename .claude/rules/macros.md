@@ -38,8 +38,11 @@ the umbrella is also what dissolves the cycles: `nest-rs-guards`,
 an exported macro) takes a `__` prefix and stays hidden; a hidden method becomes
 a free function in the type's own file; an item in a public module sits in that
 file's `pub(crate) mod __private`, so no other path reaches it. Everything else
-is API or `pub(crate)` (`decisions/visibility-tiers.md`); held by review, the
-hygiene build and rustdoc's `-D warnings`.
+is API or `pub(crate)` (`decisions/visibility-tiers.md`). A public doc names
+no `__private` item, linked or in code, and says what it does in words: rustdoc
+renders a link into a hidden module dead without a warning, so review holds
+that, the hygiene build an emitted path, and rustdoc's `-D warnings` a doc link
+that no longer resolves.
 
 "The use site owns that crate by definition" is not an admissible reason;
 owning a capability means enabling its feature.

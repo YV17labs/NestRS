@@ -30,8 +30,8 @@ impl GlobalPoolOperationGuard {
         }
     }
 
-    /// The factory `use_guards_global` seeds as
-    /// [`FallbackOperationGuard`](nest_rs_graphql::__private::FallbackOperationGuard).
+    /// The factory `use_guards_global` seeds as the GraphQL endpoint's fallback
+    /// operation guard.
     pub fn factory(container: &Container) -> Arc<dyn GraphqlOperationGuard> {
         Arc::new(Self::from_container(container))
     }

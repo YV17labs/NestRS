@@ -92,9 +92,8 @@
 //! entry is what gives TypeId-level dedup against the global chain. Guards
 //! have **no** transport-edge band: the pool executes in the shaper
 //! (post-routing, so it reads `#[public]`), at a `Guarded` self-mount's
-//! edge (`SelfMountGuardWrap`), or in-band on `/graphql` (the
-//! `GlobalPoolOperationGuard`
-//! fallback when no bridge is registered).
+//! edge, or in-band on `/graphql` (the `GlobalPoolOperationGuard` fallback
+//! when no bridge is registered).
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

@@ -19,7 +19,7 @@ use crate::propagate::PropagatingHandler;
 
 /// The operation guard an MCP mount runs, in preference order: the app's
 /// registered `dyn McpOperationGuard` (the authz bridge), else the global guard
-/// pool through the seeded [`FallbackMcpGuard`], else deny-all.
+/// pool through its fallback slot, else deny-all.
 pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGuard> {
     let (guard, mode) = match container.get_dyn::<dyn McpOperationGuard>() {
         Some(guard) => (guard, "operation_guard"),

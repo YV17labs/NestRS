@@ -31,13 +31,13 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Behaves like `#[injectable]` for construction and additionally emits a
-/// `Discoverable` impl attaching an `HttpEndpointWrap`, mounted at boot. An
+/// `Discoverable` impl attaching a transport-level wrap, mounted at boot. An
 /// optional `priority = <int>` orders the wrap among the endpoint wraps
 /// (defaults to the interceptor band).
 ///
 /// # Expands to
 ///
-/// Like `#[injectable]`, but `register` attaches an `HttpEndpointWrap` meta
+/// Like `#[injectable]`, but `register` attaches a transport-level wrap
 /// instead of providing the value: the type is mounted, not resolved as a
 /// provider.
 #[proc_macro_attribute]

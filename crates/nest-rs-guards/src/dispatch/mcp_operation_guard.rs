@@ -33,8 +33,8 @@ impl GlobalPoolMcpGuard {
         }
     }
 
-    /// The factory `use_guards_global` seeds as
-    /// [`FallbackMcpGuard`](nest_rs_mcp::__private::FallbackMcpGuard).
+    /// The factory `use_guards_global` seeds as the MCP endpoint's fallback
+    /// guard.
     pub fn factory(container: &Container) -> Arc<dyn McpOperationGuard> {
         Arc::new(Self::from_container(container))
     }

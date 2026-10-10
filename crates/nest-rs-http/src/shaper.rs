@@ -125,7 +125,7 @@ pub fn shaped<E>(
 }
 
 /// The route's shaping seam: applies the armed [`ResponseShaping`], or runs the
-/// [`MaskProbe`] cross-check when nothing armed.
+/// masking probe's cross-check when nothing armed.
 pub struct ShapedEndpoint<E> {
     inner: E,
     shaper: Option<CaptureFn>,

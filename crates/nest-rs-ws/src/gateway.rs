@@ -44,7 +44,7 @@ pub trait Gateway: Send + Sync + 'static {
 }
 
 /// A per-message data-pipe runner with the container already captured, built
-/// at mount by [`resolve_ws_data_pipe`].
+/// once when a gateway mounts.
 pub type WsDataFold = dyn Fn(&str, &mut serde_json::Value) -> Result<(), PipeError> + Send + Sync;
 
 /// Bridge slot for global pipes on a WS message's `data`, seeded by

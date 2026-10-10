@@ -39,4 +39,7 @@ covered only by the lockstep `=` pins. The rest is `pub(crate)`.
 A per-item test of hiddenness was refused: no test reads source. Review and a
 grep for a stray `#[doc(hidden)]` hold the tier; the hygiene build fails on an
 emitted path that no longer resolves, and rustdoc's `-D warnings` on a doc link
-that does.
+that does. Review alone holds that a public doc names no `__private` item:
+rustdoc resolves a link into a `#[doc(hidden)]` module without a warning, even
+under `-D warnings`, and renders it as plain text or a dead path, so a public
+doc says what such an item does in words.

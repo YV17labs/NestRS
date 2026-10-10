@@ -7,9 +7,8 @@
 
 use std::any::TypeId;
 
-use nest_rs_core::layer_chain::{
-    LayerSite, ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers,
-};
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers};
+use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Layer};
 use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
 use nest_rs_pipes::GlobalPipe;

@@ -246,7 +246,7 @@ impl Inner {
         };
         // The token that asked is the fetch's cause, so its lines carry the
         // token's trace — never its request scope, which ends without it.
-        let handle = match nest_rs_core::current_correlation() {
+        let handle = match nest_rs_core::__private::current_correlation() {
             Some(correlation) => {
                 tokio::spawn(nest_rs_core::with_request_scope(None, correlation, task))
             }

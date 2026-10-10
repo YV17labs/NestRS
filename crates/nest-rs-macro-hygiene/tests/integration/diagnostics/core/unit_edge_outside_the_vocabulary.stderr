@@ -4,7 +4,7 @@ error[E0080]: evaluation panicked: a unit's edge is one of the closed edge vocab
 3 | const CALL: Unit = nest_rs::core::unit!("grpc.call", target: "nest_rs::grpc", kind: Server);
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `CALL::__UNIT` failed inside this call
   |
-note: inside `nest_rs::nest_rs_core::operation_log::Unit::__declare`
+note: inside `nest_rs::nest_rs_core::__private::declare_unit`
  --> $RUST/core/src/panic.rs
   |
   |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));

@@ -382,12 +382,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { <#self_ty>::#method_name(&**#ctrl_var, #(#arg_idents),*) },
         );
         let (wrapper_return_type, wrapper_body) = if is_sse {
-            // A fallible open is told by type through `nest_rs_core::Answer`. The return
+            // A fallible open is told by type through `nest_rs_core::__private::Answer`. The return
             // type is inferred: no macro can name the handler's `impl Stream`.
             let wrapped = quote! {{
-                use ::nest_rs_core::AnswerFallback as _;
+                use ::nest_rs_core::__private::AnswerFallback as _;
                 let __nestrs_answer = #call_expr;
-                ::nest_rs_core::Answer(&__nestrs_answer)
+                ::nest_rs_core::__private::Answer(&__nestrs_answer)
                     .map::<::nest_rs_http::poem::Error, _, _>()(
                     __nestrs_answer,
                     |__nestrs_stream| {
@@ -1534,7 +1534,7 @@ fn check_media_type(lit: &LitStr) -> syn::Result<()> {
 
 /// `Some(T)` when `ty` is spelled `Result<T, _>`. A reading of the spelling,
 /// which an alias defeats: it decides only what the document infers, never what
-/// the route does (that goes through `nest_rs_core::Answer`).
+/// the route does (that goes through `nest_rs_core::__private::Answer`).
 pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
     nth_generic_type(ty, "Result", 0)
 }

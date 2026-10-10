@@ -1,8 +1,8 @@
 //! `OccurrenceLockError` carries a backend's failure as a link the scheduler's
 //! line can read, so a decode failure in it is said without its value.
 
-use nest_rs_core::serde::de::Error as _;
-use nest_rs_core::serde::de::value::Error as ValueError;
+use nest_rs_core::__private::serde::de::Error as _;
+use nest_rs_core::__private::serde::de::value::Error as ValueError;
 use nest_rs_schedule::OccurrenceLockError;
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";

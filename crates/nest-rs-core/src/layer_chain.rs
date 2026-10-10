@@ -1,15 +1,15 @@
 //! Layer chain composition — the dedup-by-`TypeId` logic shared by every
 //! execution site of the Layer System.
 //!
-//! [`ResolvedLayer`] tags each entry with its [`LayerSite`]; the chain keeps
-//! the broadest site for any duplicated [`TypeId`] and runs entries in
-//! declaration order, with [`Layer::priority`] as the tiebreaker within a site.
+//! Each resolved entry is tagged with its [`LayerSite`]; the chain keeps the
+//! broadest site for any duplicated [`TypeId`] and runs entries in declaration
+//! order, with [`Layer::priority`](crate::Layer::priority) as the tiebreaker
+//! within a site.
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 use crate::container::Container;
-use crate::layer::Layer;
 pub use crate::layer::LayerSite;
 
 /// A global-layer registration: the `TypeId` a chain dedups on, the type's
@@ -45,7 +45,7 @@ impl<L: ?Sized> LayerSpec<L> {
 }
 
 /// The container-registered global registry of one Layer-System family
-/// (`GuardSpecs`, `FilterSpecs`, …), read by [`resolve_global_layers`].
+/// (`GuardSpecs`, `FilterSpecs`, …), read when a chain is composed.
 pub trait GlobalSpecs: Any + Send + Sync {
     /// The erased layer trait this family's specs resolve to.
     type Layer: ?Sized;
@@ -54,188 +54,196 @@ pub trait GlobalSpecs: Any + Send + Sync {
     fn specs(&self) -> &[LayerSpec<Self::Layer>];
 }
 
-/// Resolve a family's global registry into [`LayerSite::Global`] entries.
-///
-/// A spec whose provider is not registered is skipped —
-/// [`check_specs_resolvable`] fails the boot on it; an unregistered family
-/// yields an empty chain.
-#[doc(hidden)]
-pub fn resolve_global_layers<S: GlobalSpecs>(
-    container: &Container,
-) -> Vec<ResolvedLayer<S::Layer>> {
-    let Some(registry) = container.get::<S>() else {
-        return Vec::new();
-    };
-    registry
-        .specs()
-        .iter()
-        .filter_map(|spec| {
-            spec.resolve(container).map(|layer| ResolvedLayer {
-                type_id: spec.type_id,
-                name: spec.name,
-                source: LayerSite::Global,
-                layer,
-            })
-        })
-        .collect()
-}
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::TypeId;
+    use std::sync::Arc;
 
-/// Fail-secure boot check: name the specs whose provider is not resolvable
-/// from `container`. `kind` is the family noun (`"guard"`, `"filter"`, …) and
-/// `consequence` the tail saying what a silent drop would cost.
-#[doc(hidden)]
-pub fn check_specs_resolvable<L: ?Sized>(
-    specs: &[LayerSpec<L>],
-    container: &Container,
-    kind: &str,
-    consequence: &str,
-) -> Result<(), String> {
-    let missing: Vec<&str> = specs
-        .iter()
-        .filter(|s| s.resolve(container).is_none())
-        .map(|s| s.name)
-        .collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "global {kind}(s) not resolvable from the container: {} — import the \
-             module that provides them; {consequence}",
-            missing.join(", "),
-        ))
-    }
-}
+    use super::{GlobalSpecs, LayerSpec};
+    use crate::container::Container;
+    use crate::layer::{Layer, LayerSite};
 
-/// A layer that survived dedup, paired with its origin site and its name.
-#[doc(hidden)]
-pub struct ResolvedLayer<L: ?Sized> {
-    /// The layer type's identity — the key dedup collapsed duplicates on.
-    pub type_id: TypeId,
-    /// The layer type's name, as logged when the shaper mounts it.
-    pub name: &'static str,
-    /// The site the surviving instance came from (global, host, method).
-    pub source: LayerSite,
-    /// The resolved layer instance to run.
-    pub layer: Arc<L>,
-}
-
-impl<L: ?Sized> Clone for ResolvedLayer<L> {
-    fn clone(&self) -> Self {
-        Self {
-            type_id: self.type_id,
-            name: self.name,
-            source: self.source,
-            layer: Arc::clone(&self.layer),
-        }
-    }
-}
-
-/// Compose a deduplicated chain from global + per-route entries.
-///
-/// 1. Dedup by `TypeId` — the broadest site wins.
-/// 2. A `TypeId` listed in `force` survives even when declared more broadly.
-/// 3. Stable sort by [`Layer::priority`]; declaration order breaks ties.
-///
-/// `chain` names the dispatch site (a route, a WS message, `transport`), not
-/// only a route.
-#[doc(hidden)]
-pub fn compose_chain<L>(
-    global: Vec<ResolvedLayer<L>>,
-    host: Vec<ResolvedLayer<L>>,
-    method: Vec<ResolvedLayer<L>>,
-    force: &[TypeId],
-    chain: &str,
-) -> Vec<ResolvedLayer<L>>
-where
-    L: Layer + ?Sized,
-{
-    let mut entries: Vec<ResolvedLayer<L>> = Vec::new();
-    let mut seen: Vec<(TypeId, LayerSite)> = Vec::new();
-
-    for source in [LayerSite::Global, LayerSite::Host, LayerSite::Method] {
-        let bucket = match source {
-            LayerSite::Global => &global,
-            LayerSite::Host => &host,
-            _ => &method,
+    /// Resolve a family's global registry into [`LayerSite::Global`] entries.
+    ///
+    /// A spec whose provider is not registered is skipped —
+    /// [`check_specs_resolvable`] fails the boot on it; an unregistered family
+    /// yields an empty chain.
+    pub fn resolve_global_layers<S: GlobalSpecs>(
+        container: &Container,
+    ) -> Vec<ResolvedLayer<S::Layer>> {
+        let Some(registry) = container.get::<S>() else {
+            return Vec::new();
         };
-        for entry in bucket {
-            let forced = force.contains(&entry.type_id);
-            if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
-                if !forced {
-                    report_redundant_site(entry.type_id, *existing, entry.source, entry.name);
-                    continue;
-                }
-                tracing::info!(
-                    target: crate::target::LAYERS,
-                    // Shortened as in `report_redundant_site`, so one grep finds both lines.
-                    layer = crate::type_name::shorten(entry.name),
-                    site = entry.source.label(),
-                    chain,
-                    "layer forced to re-run despite being declared at a broader site",
-                );
-            }
-            seen.push((entry.type_id, entry.source));
-            entries.push(entry.clone());
+        registry
+            .specs()
+            .iter()
+            .filter_map(|spec| {
+                spec.resolve(container).map(|layer| ResolvedLayer {
+                    type_id: spec.type_id,
+                    name: spec.name,
+                    source: LayerSite::Global,
+                    layer,
+                })
+            })
+            .collect()
+    }
+
+    /// Fail-secure boot check: name the specs whose provider is not resolvable
+    /// from `container`. `kind` is the family noun (`"guard"`, `"filter"`, …) and
+    /// `consequence` the tail saying what a silent drop would cost.
+    pub fn check_specs_resolvable<L: ?Sized>(
+        specs: &[LayerSpec<L>],
+        container: &Container,
+        kind: &str,
+        consequence: &str,
+    ) -> Result<(), String> {
+        let missing: Vec<&str> = specs
+            .iter()
+            .filter(|s| s.resolve(container).is_none())
+            .map(|s| s.name)
+            .collect();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "global {kind}(s) not resolvable from the container: {} — import the \
+                 module that provides them; {consequence}",
+                missing.join(", "),
+            ))
         }
     }
 
-    entries.sort_by_key(|e| e.layer.priority());
-
-    entries
-}
-
-/// Report a redundant multi-site declaration once per process, at `debug`:
-/// `compose_chain` runs per route, and the layer still runs exactly once.
-fn report_redundant_site(
-    type_id: TypeId,
-    existing: LayerSite,
-    skipped: LayerSite,
-    name: &'static str,
-) {
-    use std::collections::HashSet;
-    use std::sync::{LazyLock, Mutex};
-
-    static SEEN: LazyLock<Mutex<HashSet<(TypeId, LayerSite, LayerSite)>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
-
-    // On a poisoned lock, fall back to emitting — a duplicate diagnostic line
-    // is harmless; a swallowed one is not.
-    let first_time = SEEN
-        .lock()
-        .map(|mut seen| seen.insert((type_id, existing, skipped)))
-        .unwrap_or(true);
-    if first_time {
-        tracing::debug!(
-            target: crate::target::LAYERS,
-            layer = crate::type_name::shorten(name),
-            kept = existing.label(),
-            skipped = skipped.label(),
-            hint = "broadest site wins; use `#[force_*]` to re-run",
-            "redundant layer declaration deduped",
-        );
+    /// A layer that survived dedup, paired with its origin site and its name.
+    pub struct ResolvedLayer<L: ?Sized> {
+        /// The layer type's identity — the key dedup collapsed duplicates on.
+        pub type_id: TypeId,
+        /// The layer type's name, as logged when the shaper mounts it.
+        pub name: &'static str,
+        /// The site the surviving instance came from (global, host, method).
+        pub source: LayerSite,
+        /// The resolved layer instance to run.
+        pub layer: Arc<L>,
     }
-}
 
-/// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration,
-/// silently — the site executing the global sub-chain already reported them.
-#[doc(hidden)]
-pub fn dedup_bucket<L: ?Sized>(bucket: Vec<ResolvedLayer<L>>) -> Vec<ResolvedLayer<L>> {
-    let mut seen: Vec<TypeId> = Vec::new();
-    bucket
-        .into_iter()
-        .filter(|entry| {
-            if seen.contains(&entry.type_id) {
-                return false;
+    impl<L: ?Sized> Clone for ResolvedLayer<L> {
+        fn clone(&self) -> Self {
+            Self {
+                type_id: self.type_id,
+                name: self.name,
+                source: self.source,
+                layer: Arc::clone(&self.layer),
             }
-            seen.push(entry.type_id);
-            true
-        })
-        .collect()
+        }
+    }
+
+    /// Compose a deduplicated chain from global + per-route entries.
+    ///
+    /// 1. Dedup by `TypeId` — the broadest site wins.
+    /// 2. A `TypeId` listed in `force` survives even when declared more broadly.
+    /// 3. Stable sort by [`Layer::priority`]; declaration order breaks ties.
+    ///
+    /// `chain` names the dispatch site (a route, a WS message, `transport`), not
+    /// only a route.
+    pub fn compose_chain<L>(
+        global: Vec<ResolvedLayer<L>>,
+        host: Vec<ResolvedLayer<L>>,
+        method: Vec<ResolvedLayer<L>>,
+        force: &[TypeId],
+        chain: &str,
+    ) -> Vec<ResolvedLayer<L>>
+    where
+        L: Layer + ?Sized,
+    {
+        let mut entries: Vec<ResolvedLayer<L>> = Vec::new();
+        let mut seen: Vec<(TypeId, LayerSite)> = Vec::new();
+
+        for source in [LayerSite::Global, LayerSite::Host, LayerSite::Method] {
+            let bucket = match source {
+                LayerSite::Global => &global,
+                LayerSite::Host => &host,
+                _ => &method,
+            };
+            for entry in bucket {
+                let forced = force.contains(&entry.type_id);
+                if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
+                    if !forced {
+                        report_redundant_site(entry.type_id, *existing, entry.source, entry.name);
+                        continue;
+                    }
+                    tracing::info!(
+                        target: crate::target::LAYERS,
+                        // Shortened as in `report_redundant_site`, so one grep finds both lines.
+                        layer = crate::type_name::shorten(entry.name),
+                        site = entry.source.label(),
+                        chain,
+                        "layer forced to re-run despite being declared at a broader site",
+                    );
+                }
+                seen.push((entry.type_id, entry.source));
+                entries.push(entry.clone());
+            }
+        }
+
+        entries.sort_by_key(|e| e.layer.priority());
+
+        entries
+    }
+
+    /// Report a redundant multi-site declaration once per process, at `debug`:
+    /// `compose_chain` runs per route, and the layer still runs exactly once.
+    fn report_redundant_site(
+        type_id: TypeId,
+        existing: LayerSite,
+        skipped: LayerSite,
+        name: &'static str,
+    ) {
+        use std::collections::HashSet;
+        use std::sync::{LazyLock, Mutex};
+
+        static SEEN: LazyLock<Mutex<HashSet<(TypeId, LayerSite, LayerSite)>>> =
+            LazyLock::new(|| Mutex::new(HashSet::new()));
+
+        // On a poisoned lock, fall back to emitting — a duplicate diagnostic line
+        // is harmless; a swallowed one is not.
+        let first_time = SEEN
+            .lock()
+            .map(|mut seen| seen.insert((type_id, existing, skipped)))
+            .unwrap_or(true);
+        if first_time {
+            tracing::debug!(
+                target: crate::target::LAYERS,
+                layer = crate::type_name::shorten(name),
+                kept = existing.label(),
+                skipped = skipped.label(),
+                hint = "broadest site wins; use `#[force_*]` to re-run",
+                "redundant layer declaration deduped",
+            );
+        }
+    }
+
+    /// Drop intra-bucket duplicates by `TypeId`, keeping the first declaration,
+    /// silently — the site executing the global sub-chain already reported them.
+    pub fn dedup_bucket<L: ?Sized>(bucket: Vec<ResolvedLayer<L>>) -> Vec<ResolvedLayer<L>> {
+        let mut seen: Vec<TypeId> = Vec::new();
+        bucket
+            .into_iter()
+            .filter(|entry| {
+                if seen.contains(&entry.type_id) {
+                    return false;
+                }
+                seen.push(entry.type_id);
+                true
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::__private::{ResolvedLayer, compose_chain, dedup_bucket};
     use super::*;
+    use crate::layer::Layer;
 
     struct Authn;
     impl Layer for Authn {}

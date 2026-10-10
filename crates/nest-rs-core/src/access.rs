@@ -10,62 +10,64 @@
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 
-use crate::container::{KeyedDependency, ProviderKey};
+use crate::container::ProviderKey;
 use crate::error::{
     AccessError, AccessGraphError, KeyedDependencyError, MissingDependencyError,
     ScopeViolationError,
 };
 
-/// One provider declared in a module's `providers = [...]`, recorded by the
-/// `#[module]` macro for the access-graph check.
-///
-/// **Internal ABI** — macro-constructed, lockstep with `nest-rs-core`; do not
-/// hand-construct.
-#[doc(hidden)]
-pub struct ProviderDescriptor {
-    /// The provider type's name, for boot errors.
-    pub name: &'static str,
-    /// The container key this provider registers under:
-    /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
-    /// `TypeId::of::<Arc<dyn Trait>>()` for a `Foo as dyn Trait` binding.
-    pub provides: fn() -> TypeId,
-    /// The provider's own type, whichever key it registers under — what tells
-    /// a decorated host bound as `dyn Trait` from one no module lists.
-    pub provider: fn() -> TypeId,
-    /// Extra container keys this provider registers on its module's behalf,
-    /// each with its label ([`Discoverable::also_provides`](crate::Discoverable::also_provides)).
-    pub also_provides: fn() -> Vec<(TypeId, &'static str)>,
-    /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
-    /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
-    pub injects: fn() -> Vec<TypeId>,
-    /// Label for each [`injects`](Self::injects) entry, in the same order; may
-    /// be shorter than `injects`, never longer.
-    pub inject_names: fn() -> Vec<&'static str>,
-    /// `TypeId` of each `#[inject] Option<Arc<…>>` field: no boot check holds
-    /// it, but a [`Net`](crate::Net) around the provider follows it.
-    pub injects_optional: fn() -> Vec<TypeId>,
-    /// Each **keyed** `#[inject(key = "…")]` field, validated against the
-    /// global keyed set.
-    pub injects_keyed: fn() -> Vec<KeyedDependency>,
-}
+pub(crate) use self::__private::ModuleDescriptor;
 
-/// Per-module descriptor submitted to the link-time registry by `#[module]`.
-///
-/// **Internal ABI** — macro-constructed, lockstep with `nest-rs-core`; do not
-/// hand-construct.
-#[doc(hidden)]
-pub struct ModuleDescriptor {
-    /// `TypeId` of the `#[module]` struct, matched against other modules'
-    /// [`imports`](Self::imports).
-    pub module: fn() -> TypeId,
-    /// The module type's name, for boot errors.
-    pub name: &'static str,
-    /// Every import in declaration order: a module by its type, a dynamic
-    /// import (`for_root(...)`) by the module its value declares
-    /// ([`DynamicModule::module`](crate::DynamicModule::module)).
-    pub imports: &'static [fn() -> TypeId],
-    /// Every provider this module declares in its `providers = [...]`.
-    pub providers: &'static [ProviderDescriptor],
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::TypeId;
+
+    use crate::container::KeyedDependency;
+
+    /// One provider declared in a module's `providers = [...]`, recorded by the
+    /// `#[module]` macro for the access-graph check.
+    pub struct ProviderDescriptor {
+        /// The provider type's name, for boot errors.
+        pub name: &'static str,
+        /// The container key this provider registers under:
+        /// `TypeId::of::<Concrete>()` for an `#[injectable]`, or
+        /// `TypeId::of::<Arc<dyn Trait>>()` for a `Foo as dyn Trait` binding.
+        pub provides: fn() -> TypeId,
+        /// The provider's own type, whichever key it registers under — what tells
+        /// a decorated host bound as `dyn Trait` from one no module lists.
+        pub provider: fn() -> TypeId,
+        /// Extra container keys this provider registers on its module's behalf,
+        /// each with its label ([`Discoverable::also_provides`](crate::Discoverable::also_provides)).
+        pub also_provides: fn() -> Vec<(TypeId, &'static str)>,
+        /// `TypeId` of each bare `#[inject]` field plus each attribute-referenced
+        /// layer (`#[use_guards]` / `#[use_filters]` / `#[use_interceptors]`).
+        pub injects: fn() -> Vec<TypeId>,
+        /// Label for each [`injects`](Self::injects) entry, in the same order; may
+        /// be shorter than `injects`, never longer.
+        pub inject_names: fn() -> Vec<&'static str>,
+        /// `TypeId` of each `#[inject] Option<Arc<…>>` field: no boot check holds
+        /// it, but a [`Net`](crate::Net) around the provider follows it.
+        pub injects_optional: fn() -> Vec<TypeId>,
+        /// Each **keyed** `#[inject(key = "…")]` field, validated against the
+        /// global keyed set.
+        pub injects_keyed: fn() -> Vec<KeyedDependency>,
+    }
+
+    /// Per-module descriptor submitted to the link-time registry by `#[module]`.
+    pub struct ModuleDescriptor {
+        /// `TypeId` of the `#[module]` struct, matched against other modules'
+        /// [`imports`](Self::imports).
+        pub module: fn() -> TypeId,
+        /// The module type's name, for boot errors.
+        pub name: &'static str,
+        /// Every import in declaration order: a module by its type, a dynamic
+        /// import (`for_root(...)`) by the module its value declares
+        /// ([`DynamicModule::module`](crate::DynamicModule::module)).
+        pub imports: &'static [fn() -> TypeId],
+        /// Every provider this module declares in its `providers = [...]`.
+        pub providers: &'static [ProviderDescriptor],
+    }
 }
 
 inventory::collect!(ModuleDescriptor);
@@ -378,7 +380,9 @@ pub(crate) fn reachable_descriptors<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::__private::ProviderDescriptor;
     use super::*;
+    use crate::container::KeyedDependency;
 
     // Descriptors are hand-built so the global `inventory` registry is untouched.
     struct AppMod;

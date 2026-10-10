@@ -112,7 +112,7 @@ pub async fn run_operation<T, F>(
 where
     F: std::future::Future<Output = T>,
 {
-    let correlation = match nest_rs_core::current_correlation() {
+    let correlation = match nest_rs_core::__private::current_correlation() {
         Some(request) => request.child(),
         None => nest_rs_core::Correlation::minted(None),
     };
@@ -212,7 +212,7 @@ impl Drop for OperationLine<'_> {
 )]
 pub trait IsStreamReturn {}
 
-impl IsStreamReturn for nest_rs_core::ValueAnswer {}
+impl IsStreamReturn for nest_rs_core::__private::ValueAnswer {}
 
 /// Accept a `#[subscription]`'s answer — see [`IsStreamReturn`].
 #[doc(hidden)]

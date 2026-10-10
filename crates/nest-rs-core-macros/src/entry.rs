@@ -32,7 +32,7 @@ pub(crate) fn main(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let body = &item.block;
     let wrapped: Block = syn::parse_quote! {{
-        ::nest_rs_core::__main::<#output, _>(async move #body)
+        ::nest_rs_core::__private::main::<#output, _>(async move #body)
     }};
     *item.block = wrapped;
     quote! { #refused #item }.into()

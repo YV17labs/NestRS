@@ -4,7 +4,7 @@ error[E0080]: evaluation panicked: a unit name is lowercase ASCII words, `<edge>
 3 | const JOB: Unit = nest_rs::core::unit!("Queue.Job", target: "nest_rs::queue", kind: Consumer);
   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `JOB::__UNIT` failed inside this call
   |
-note: inside `nest_rs::nest_rs_core::operation_log::Unit::__declare`
+note: inside `nest_rs::nest_rs_core::__private::declare_unit`
  --> $RUST/core/src/panic.rs
   |
   |         $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));

@@ -2,14 +2,14 @@
 
 use nest_rs_core::anyhow::{self, Context};
 use nest_rs_core::module;
-use nest_rs_core::serde::de::Error as _;
-use nest_rs_core::serde::de::value::Error as ValueError;
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpError, McpOperationGuard, Opaque, Parameters, Piped, input, mcp, tools,
 };
 use nest_rs_pipes::{ParseArray, Pipe, PipeError};
 use nest_rs_testing::mcp::call_tool_with;
 use nest_rs_testing::{LogCapture, TestApp};
+use serde::de::Error as _;
+use serde::de::value::Error as ValueError;
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";
 

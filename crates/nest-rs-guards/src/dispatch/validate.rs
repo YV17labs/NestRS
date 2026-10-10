@@ -3,8 +3,9 @@
 //! chain whose declarations cannot line up fails boot with a named error
 //! instead of answering `500` on every request.
 
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket};
 use nest_rs_core::Container;
-use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::layer_chain::LayerSite;
 
 use crate::dispatch::scoped_spec::{ScopedGuardSpec, resolve_global_guards, resolve_specs};
 use crate::{Guard, GuardPhase};

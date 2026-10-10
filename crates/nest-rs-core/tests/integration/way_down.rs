@@ -7,9 +7,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::{
-    App, Container, ContainerBuilder, Module, Registering, Transport, TransportContribution, hooks,
-    injectable, module,
+    App, Container, ContainerBuilder, Module, Registering, Transport, hooks, injectable, module,
 };
 use tokio_util::sync::CancellationToken;
 

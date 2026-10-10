@@ -148,7 +148,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 if let Some(actor_id) = crate::PrincipalIdentity::actor_id(&principal) {
                     tracing::Span::current().record(field::ACTOR_ID, actor_id.as_str());
                     // …and into the ambient context for the layers below. Write-once.
-                    nest_rs_core::set_actor_id(&actor_id);
+                    nest_rs_core::__private::set_actor_id(&actor_id);
                 }
                 // No `actor_id` field: every line carries it off the ambient context.
                 tracing::debug!(target: crate::TARGET, strategy, "authenticated");

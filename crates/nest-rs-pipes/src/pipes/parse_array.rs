@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-use nest_rs_core::short_type_name;
+use nest_rs_core::__private::short_type_name;
 
 use crate::{PipeError, pipe::Pipe};
 

@@ -24,7 +24,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             // The collect phase built the value and parked it at this site, so the
             // expression is evaluated once.
             _ => quote! {
-                builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
+                builder = ::nest_rs_core::__private::register_dynamic_import(
                     builder,
                     ::std::any::TypeId::of::<#name>(),
                     #at,
@@ -32,9 +32,9 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             },
         };
         quote! {
-            builder = builder.enter_import(#name_str, #at, #label);
+            builder = ::nest_rs_core::__private::enter_import(builder, #name_str, #at, #label);
             #call
-            builder = builder.leave_import();
+            builder = ::nest_rs_core::__private::leave_import(builder);
         }
     });
 
@@ -47,7 +47,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
             }
             other => quote! {
-                builder = ::nest_rs_core::ContainerBuilder::collect_dynamic_import(
+                builder = ::nest_rs_core::__private::collect_dynamic_import(
                     builder,
                     ::std::any::TypeId::of::<#name>(),
                     #at,
@@ -56,9 +56,9 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             },
         };
         quote! {
-            builder = builder.enter_import(#name_str, #at, #label);
+            builder = ::nest_rs_core::__private::enter_import(builder, #name_str, #at, #label);
             #call
-            builder = builder.leave_import();
+            builder = ::nest_rs_core::__private::leave_import(builder);
         }
     });
 
@@ -68,13 +68,13 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             let path = &p.path;
             quote! { || ::std::any::TypeId::of::<#path>() }
         }
-        other => quote! { || ::nest_rs_core::__dynamic_import_module(|| #other) },
+        other => quote! { || ::nest_rs_core::__private::dynamic_import_module(|| #other) },
     });
     let provider_descriptors = args.providers.iter().map(|binding| match binding {
         ProviderBinding::Concrete(p) => {
             let name_lit = path_tail(p);
             quote! {
-                ::nest_rs_core::ProviderDescriptor {
+                ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<#p>(),
                     provider: || ::std::any::TypeId::of::<#p>(),
@@ -89,7 +89,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         ProviderBinding::Dyn { provider, trait_ty } => {
             let name_lit = format!("dyn {}", path_tail_of_type(trait_ty));
             quote! {
-                ::nest_rs_core::ProviderDescriptor {
+                ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>(),
                     provider: || ::std::any::TypeId::of::<#provider>(),
@@ -104,7 +104,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     });
     let descriptor_submission = quote! {
         ::nest_rs_core::inventory::submit! {
-            ::nest_rs_core::ModuleDescriptor {
+            ::nest_rs_core::__private::ModuleDescriptor {
                 module: || ::std::any::TypeId::of::<#name>(),
                 name: #name_str,
                 imports: &[ #(#import_type_ids),* ],
@@ -116,7 +116,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let body = if args.providers.is_empty() {
         quote! {
             #(#import_calls)*
-            ::nest_rs_core::__module_registered(#name_str);
+            ::nest_rs_core::__private::module_registered(#name_str);
             builder
         }
     } else {
@@ -246,7 +246,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     break;
                 }
             }
-            ::nest_rs_core::__module_registered(#name_str);
+            ::nest_rs_core::__private::module_registered(#name_str);
             builder
         }
     };

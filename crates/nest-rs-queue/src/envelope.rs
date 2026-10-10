@@ -138,7 +138,7 @@ impl Envelope {
 /// With no ambient context — a job enqueued from `main` — one is minted.
 pub(crate) fn seal(payload: Value, id: JobId, unique_key: Option<&str>) -> Envelope {
     let correlation =
-        nest_rs_core::current_correlation().unwrap_or_else(|| Correlation::minted(None));
+        nest_rs_core::__private::current_correlation().unwrap_or_else(|| Correlation::minted(None));
     let mut sealed = json!({
         VERSION: WIRE_FORMAT_VERSION,
         ID: id.to_string(),
@@ -692,7 +692,7 @@ mod tests {
     #[tokio::test]
     async fn the_actor_crosses_with_the_trace() {
         let sealed = under(Correlation::minted(None), async {
-            nest_rs_core::set_actor_id("alice-42");
+            nest_rs_core::__private::set_actor_id("alice-42");
             seal(json!({ "clip": 1 }), JobId::mint(), None)
         })
         .await;

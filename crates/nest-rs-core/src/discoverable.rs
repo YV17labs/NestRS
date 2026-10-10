@@ -425,7 +425,8 @@ mod tests {
         use std::any::TypeId;
 
         use super::super::{InertHost, classify};
-        use crate::access::{Composition, ModuleDescriptor, ProviderDescriptor};
+        use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
+        use crate::access::Composition;
         use crate::container::KeyedDependency;
 
         struct AppModule;

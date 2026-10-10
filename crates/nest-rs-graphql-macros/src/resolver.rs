@@ -384,7 +384,7 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
 ///
 /// Fallible when its last segment is exactly `Result` or `FieldResult` with a
 /// type argument, mirroring `async-graphql-derive`'s `OutputType::parse`. A
-/// renamed `Result` reads as a value and is split by `nest_rs_core::Answer`
+/// renamed `Result` reads as a value and is split by `nest_rs_core::__private::Answer`
 /// ([`call_as_result`]).
 enum Returned<'a> {
     Fallible(&'a Type),
@@ -564,7 +564,7 @@ fn wrapper_output(sig: &Signature) -> syn::ReturnType {
 }
 
 /// The developer's call as the wrapper's `async_graphql::Result<T>`. A value
-/// return goes through `nest_rs_core::Answer`, which knows a `Result` by its type;
+/// return goes through `nest_rs_core::__private::Answer`, which knows a `Result` by its type;
 /// a `#[subscription]`'s is refused there at compile time instead.
 fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenStream2 {
     if let Returned::Fallible(_) = returned(sig) {
@@ -581,19 +581,19 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
             syn::ReturnType::Default => sig.ident.span(),
         };
         let probe = quote_spanned! {span=>
-            ::nest_rs_graphql::answers_a_stream(::nest_rs_core::Answer(&__answer).kind());
+            ::nest_rs_graphql::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
         };
         return quote! {{
-            use ::nest_rs_core::AnswerFallback as _;
+            use ::nest_rs_core::__private::AnswerFallback as _;
             let __answer = #call;
             #probe
             ::core::result::Result::<_, ::nest_rs_graphql::async_graphql::Error>::Ok(__answer)
         }};
     }
     quote! {{
-        use ::nest_rs_core::AnswerFallback as _;
+        use ::nest_rs_core::__private::AnswerFallback as _;
         let __answer = #call;
-        ::nest_rs_core::Answer(&__answer).split::<::nest_rs_graphql::async_graphql::Error>()(
+        ::nest_rs_core::__private::Answer(&__answer).split::<::nest_rs_graphql::async_graphql::Error>()(
             __answer,
         )
     }}
@@ -1018,8 +1018,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         RootKind::Query | RootKind::Mutation => quote! {
                             match #call {
                                 ::core::result::Result::Ok(__out) => {
-                                    use ::nest_rs_core::AnswerFallback as _;
-                                    ::nest_rs_core::Answer(&__out).mapper()(
+                                    use ::nest_rs_core::__private::AnswerFallback as _;
+                                    ::nest_rs_core::__private::Answer(&__out).mapper()(
                                         __out,
                                         |__value| {
                                             ::nest_rs_authz::graphql::masked_value_for::<

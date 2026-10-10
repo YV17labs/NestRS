@@ -1,7 +1,6 @@
 //! Lifecycle hooks: `#[hooks]` submits methods to a link-time `inventory`
 //! registry that [`crate::App::run`] drains per phase, in `(provider, method)` order.
 
-use std::any::TypeId;
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -60,27 +59,34 @@ pub enum LifecyclePhase {
 
 type HookFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
-/// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
-///
-/// **Internal ABI** — macro-constructed, lockstep with `nest-rs-core`; do not
-/// hand-construct.
-#[doc(hidden)]
-pub struct LifecycleHook {
-    /// The phase this hook runs in.
-    pub phase: LifecyclePhase,
-    /// The host provider's name, the primary key of the run order.
-    pub provider: &'static str,
-    /// The hook method's name, the run order's tiebreaker.
-    pub method: &'static str,
-    /// `module_path!()` at the `#[hooks]` site, read by [`is_framework_owned`].
-    pub origin: &'static str,
-    /// The host provider's type, read by [`inert_host`](crate::inert_host).
-    pub provider_type_id: fn() -> TypeId,
-    /// Whether this hook's provider is resolvable in the assembled container;
-    /// a hook that self-gates inside `run` passes `|_| true`.
-    pub present: fn(&Container) -> bool,
-    /// Resolve the provider and invoke the hook method against the container.
-    pub run: for<'a> fn(&'a Container) -> HookFuture<'a>,
+pub(crate) use self::__private::LifecycleHook;
+
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::TypeId;
+
+    use super::{HookFuture, LifecyclePhase};
+    use crate::container::Container;
+
+    /// One lifecycle hook submitted to the link-time registry by `#[hooks]`.
+    pub struct LifecycleHook {
+        /// The phase this hook runs in.
+        pub phase: LifecyclePhase,
+        /// The host provider's name, the primary key of the run order.
+        pub provider: &'static str,
+        /// The hook method's name, the run order's tiebreaker.
+        pub method: &'static str,
+        /// `module_path!()` at the `#[hooks]` site, read by [`is_framework_owned`](crate::is_framework_owned).
+        pub origin: &'static str,
+        /// The host provider's type, read by [`inert_host`](crate::inert_host).
+        pub provider_type_id: fn() -> TypeId,
+        /// Whether this hook's provider is resolvable in the assembled container;
+        /// a hook that self-gates inside `run` passes `|_| true`.
+        pub present: fn(&Container) -> bool,
+        /// Resolve the provider and invoke the hook method against the container.
+        pub run: for<'a> fn(&'a Container) -> HookFuture<'a>,
+    }
 }
 
 inventory::collect!(LifecycleHook);
@@ -212,6 +218,7 @@ pub(crate) async fn run_phase_lenient(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::any::TypeId;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Probe {

@@ -123,7 +123,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
-                ::nest_rs_core::LifecycleHook {
+                ::nest_rs_core::__private::LifecycleHook {
                     phase: ::nest_rs_core::LifecyclePhase::#phase_variant,
                     provider: #provider_lit,
                     method: #method_lit,

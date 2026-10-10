@@ -6,8 +6,8 @@
 //! the fallback, and then this never runs. Either way it is only the request
 //! half; a pooled guard's operation check runs in the per-operation chain.
 
+use nest_rs_core::__private::ResolvedLayer;
 use nest_rs_core::Container;
-use nest_rs_core::layer_chain::ResolvedLayer;
 use poem::Request;
 
 use crate::Guard;

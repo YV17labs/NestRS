@@ -8,7 +8,8 @@ use nest_rs_filters::Filter;
 use nest_rs_interceptors::Interceptor;
 use nest_rs_pipes::GlobalPipe;
 
-use nest_rs_core::layer_chain::{LayerSite, LayerSpec, ResolvedLayer, resolve_global_layers};
+use nest_rs_core::__private::{ResolvedLayer, resolve_global_layers};
+use nest_rs_core::layer_chain::{LayerSite, LayerSpec};
 
 use crate::Guard;
 

@@ -18,14 +18,14 @@ pub(crate) struct AdoptFrameworkIds(RandomIdGenerator);
 
 impl IdGenerator for AdoptFrameworkIds {
     fn new_trace_id(&self) -> TraceId {
-        match nest_rs_core::trace_context::pending_ids() {
+        match nest_rs_core::__private::pending_ids() {
             Some((trace_id, _)) => TraceId::from_bytes(trace_id.to_bytes()),
             None => self.0.new_trace_id(),
         }
     }
 
     fn new_span_id(&self) -> SpanId {
-        match nest_rs_core::trace_context::pending_ids() {
+        match nest_rs_core::__private::pending_ids() {
             Some((_, span_id)) => SpanId::from_bytes(span_id.to_bytes()),
             None => self.0.new_span_id(),
         }
@@ -43,10 +43,9 @@ mod tests {
         let correlation = Correlation::minted(None);
         let generator = AdoptFrameworkIds::default();
 
-        let (trace_id, span_id) =
-            nest_rs_core::trace_context::with_pending_ids(&correlation, || {
-                (generator.new_trace_id(), generator.new_span_id())
-            });
+        let (trace_id, span_id) = nest_rs_core::__private::with_pending_ids(&correlation, || {
+            (generator.new_trace_id(), generator.new_span_id())
+        });
 
         assert_eq!(
             trace_id.to_string(),

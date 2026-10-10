@@ -257,7 +257,7 @@ layer kind: a global declaration and a per-scope redeclaration collapse
 to one execution.
 
 Both are composed the same way, so the dedup covers every pair of scopes
-— including controller + method with no global in play. `compose_chain`
+— including controller + method with no global in play. One composition
 resolves global + controller + method by `TypeId` and the survivors go
 into a single chain endpoint per route (`ExceptionFiltersEndpoint` for
 the typed catches, `FilterChain` for the untyped ones). The per-scope

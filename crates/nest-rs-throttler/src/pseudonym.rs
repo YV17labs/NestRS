@@ -57,7 +57,7 @@ impl PseudonymStore {
     fn pseudonym(&self, subject: &str) -> String {
         let tag = hmac::sign(&self.key, subject.as_bytes());
         let mut out = [0; PSEUDONYM_BYTES * 2];
-        nest_rs_core::trace_context::hex(&tag.as_ref()[..PSEUDONYM_BYTES], &mut out).to_owned()
+        nest_rs_core::__private::hex(&tag.as_ref()[..PSEUDONYM_BYTES], &mut out).to_owned()
     }
 }
 

@@ -139,3 +139,11 @@ pub use dispatch::{RouteShaper, denial_to_http_error, denial_to_http_response};
 pub use dispatch::{SiteChainCell, SiteChainSources};
 #[cfg(feature = "mcp")]
 pub use dispatch::{denial_to_mcp_error, run_layered_mcp_chain};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};
+}

@@ -103,9 +103,9 @@ impl GuardSpecs {
         &self,
         container: &Container,
         label: &str,
-    ) -> Vec<nest_rs_core::ResolvedLayer<dyn Guard>> {
-        let global = nest_rs_core::layer_chain::resolve_global_layers::<Self>(container);
-        nest_rs_core::compose_chain(global, Vec::new(), Vec::new(), &[], label)
+    ) -> Vec<nest_rs_core::__private::ResolvedLayer<dyn Guard>> {
+        let global = nest_rs_core::__private::resolve_global_layers::<Self>(container);
+        nest_rs_core::__private::compose_chain(global, Vec::new(), Vec::new(), &[], label)
     }
 }
 

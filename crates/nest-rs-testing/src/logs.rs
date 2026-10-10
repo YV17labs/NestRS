@@ -264,7 +264,7 @@ where
         let mut visitor = FieldVisitor::default();
         event.record(&mut visitor);
         let meta = event.metadata();
-        let correlation = nest_rs_core::current_correlation();
+        let correlation = nest_rs_core::__private::current_correlation();
         self.events
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

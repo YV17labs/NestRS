@@ -69,14 +69,14 @@ fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
     // override it emits `::serde::` and the DTO's crate must declare serde.
     quote! {
         #[derive(
-            ::nest_rs_core::serde::Serialize,
-            ::nest_rs_core::serde::Deserialize,
-            ::nest_rs_core::validator::Validate,
-            ::nest_rs_core::schemars::JsonSchema,
+            ::nest_rs_core::__private::serde::Serialize,
+            ::nest_rs_core::__private::serde::Deserialize,
+            ::nest_rs_core::__private::validator::Validate,
+            ::nest_rs_core::__private::schemars::JsonSchema,
         )]
-        #[serde(crate = "::nest_rs_core::serde", deny_unknown_fields)]
-        #[validate(crate = ::nest_rs_core::validator)]
-        #[schemars(crate = "::nest_rs_core::schemars")]
+        #[serde(crate = "::nest_rs_core::__private::serde", deny_unknown_fields)]
+        #[validate(crate = ::nest_rs_core::__private::validator)]
+        #[schemars(crate = "::nest_rs_core::__private::schemars")]
         #item
     }
 }

@@ -3,9 +3,8 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{
-    Collecting, ContainerBuilder, DynamicModule, Registering, TransportContribution,
-};
+use nest_rs_core::__private::TransportContribution;
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering};
 
 use crate::config::HttpConfig;
 use crate::transport::HttpTransport;

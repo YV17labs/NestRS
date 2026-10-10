@@ -1,6 +1,6 @@
 //! What this crate adds to a span the framework already opened — at **every**
 //! edge, not one: every edge opens its unit of work through `operation_span!`,
-//! which calls [`link_span`](nest_rs_core::trace_context::link_span).
+//! which calls [`link_span`](nest_rs_core::__private::link_span).
 //!
 //! A seeded function pointer, because both steps need the `tracing::Span`
 //! handle, which exists only inside the macro, in a crate that must not depend
@@ -18,7 +18,7 @@ use nest_rs_core::Correlation;
 /// Install [`enrich`] as the framework's span linker, before any module
 /// registers.
 pub(crate) fn install() {
-    nest_rs_core::trace_context::set_span_linker(enrich);
+    nest_rs_core::__private::set_span_linker(enrich);
 }
 
 /// Link the remote parent, then record what the sampler decided.
@@ -27,7 +27,7 @@ pub(crate) fn install() {
 /// verdict read before the link is the verdict for a trace this span is not in.
 fn enrich(span: &tracing::Span, correlation: &Correlation) {
     link_remote_parent(span, correlation);
-    correlation.set_sampled(is_sampled(span));
+    nest_rs_core::__private::set_sampled(correlation, is_sampled(span));
 }
 
 /// Tell the SDK this span continues one that ran elsewhere.

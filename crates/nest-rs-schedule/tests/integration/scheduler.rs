@@ -616,9 +616,9 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
 /// A reply a tick could not decode, behind a wrapper that hides it from
 /// `source()` — thiserror's `transparent` — and a context line over that.
 fn tick_decode_failure(_: &Container) -> RunFuture<'_> {
-    use nest_rs_core::serde::Deserialize;
-    use nest_rs_core::serde::de::IntoDeserializer;
-    use nest_rs_core::serde::de::value::Error as ValueError;
+    use nest_rs_core::__private::serde::Deserialize;
+    use nest_rs_core::__private::serde::de::IntoDeserializer;
+    use nest_rs_core::__private::serde::de::value::Error as ValueError;
 
     #[derive(Debug, thiserror::Error)]
     #[error(transparent)]

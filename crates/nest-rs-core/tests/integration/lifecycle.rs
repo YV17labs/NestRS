@@ -176,13 +176,14 @@ struct ShapedModule;
 
 #[tokio::test]
 async fn a_compiled_out_hook_is_skipped_and_the_spelled_out_shapes_run() {
-    let mut methods: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_core::LifecycleHook>()
-        .filter(|hook| hook.provider == "ShapedHost")
-        .map(|hook| hook.method)
-        .collect();
+    let mut methods: Vec<&str> =
+        nest_rs_core::inventory::iter::<nest_rs_core::__private::LifecycleHook>()
+            .filter(|hook| hook.provider == "ShapedHost")
+            .map(|hook| hook.method)
+            .collect();
     methods.sort_unstable();
     assert_eq!(methods, ["init", "through_its_arc", "type"]);
-    let raw_hosts = nest_rs_core::inventory::iter::<nest_rs_core::LifecycleHook>()
+    let raw_hosts = nest_rs_core::inventory::iter::<nest_rs_core::__private::LifecycleHook>()
         .filter(|hook| hook.provider == "async")
         .count();
     assert_eq!(raw_hosts, 1, "a raw host is labelled by its name");

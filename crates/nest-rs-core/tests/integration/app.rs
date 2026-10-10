@@ -4,10 +4,10 @@
 use std::time::Duration;
 
 use anyhow::anyhow;
+use nest_rs_core::__private::TransportContribution;
 use nest_rs_core::target;
 use nest_rs_core::{
     App, Container, ContainerBuilder, Module, Registering, SHUTDOWN_HOOKS_TIMEOUT, Transport,
-    TransportContribution,
 };
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;

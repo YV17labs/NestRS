@@ -437,7 +437,7 @@ struct Signup {
 #[derive(Debug, thiserror::Error)]
 enum SignupError {
     #[error("validation failed")]
-    Validation(#[from] nest_rs_core::validator::ValidationErrors),
+    Validation(#[from] nest_rs_core::__private::validator::ValidationErrors),
 }
 
 #[queue(name = "signups", job = String)]
@@ -453,7 +453,7 @@ impl nest_rs_core::ProviderResidency for SignupProcessor {
 impl SignupProcessor {
     #[process(queue = SignupsQueue, retries = 1)]
     async fn sign_up(&self, password: String) -> Result<(), SignupError> {
-        use nest_rs_core::validator::Validate;
+        use nest_rs_core::__private::validator::Validate;
         Signup { password }.validate()?;
         Ok(())
     }

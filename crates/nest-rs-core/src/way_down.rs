@@ -7,7 +7,7 @@
 //! operating system's default action no longer runs.
 //!
 //! Dropping a tokio runtime waits for every blocking task still running, so
-//! [`__main`] tears it down within what the shutdown hooks left of
+//! [`main`] tears it down within what the shutdown hooks left of
 //! [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT).
 
 use std::future::Future;
@@ -214,7 +214,7 @@ pub(crate) fn watch_signals(cancel: CancellationToken, way_down: std::sync::Arc<
 }
 
 /// When the shutdown hooks' budget runs out — the later, should a process run
-/// two apps. Read by [`__main`] once `main` has returned.
+/// two apps. Read by [`main`] once the app's body has returned.
 static HOOKS_DEADLINE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 /// Record that the shutdown hooks' budget runs out `left` from now — on the
@@ -241,10 +241,8 @@ fn teardown_budget() -> Duration {
 /// What `#[nest_rs::main]` expands to: build the runtime, run `main` on it, and
 /// tear it down within what remains of the shutdown hooks' budget.
 ///
-/// **Internal ABI** — write `#[nest_rs::main]` rather than calling it. The
-/// runtime is what `#[tokio::main]` builds; only its teardown is bounded.
-#[doc(hidden)]
-pub fn __main<T, F: Future<Output = T>>(main: F) -> T {
+/// The runtime is what `#[tokio::main]` builds; only its teardown is bounded.
+pub fn main<T, F: Future<Output = T>>(main: F) -> T {
     #[expect(
         clippy::panic,
         reason = "without a runtime `main` cannot start, and nothing above it can be told"
@@ -300,7 +298,7 @@ mod tests {
         hooks_deadline(left);
         let started = Instant::now();
 
-        __main(leave_blocking_work_behind());
+        main(leave_blocking_work_behind());
 
         let took = started.elapsed();
         assert!(
@@ -323,7 +321,7 @@ mod tests {
         hooks_deadline(Duration::ZERO);
         let started = Instant::now();
 
-        __main(leave_blocking_work_behind());
+        main(leave_blocking_work_behind());
 
         let took = started.elapsed();
         assert!(took < Duration::from_secs(1), "took {took:?}");
@@ -336,7 +334,7 @@ mod tests {
         let written = Arc::new(AtomicBool::new(false));
         let writes = Arc::clone(&written);
 
-        __main(async move {
+        main(async move {
             tokio::task::spawn_blocking(move || {
                 std::thread::sleep(Duration::from_millis(100));
                 writes.store(true, Ordering::SeqCst);

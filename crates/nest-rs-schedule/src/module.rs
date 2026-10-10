@@ -1,7 +1,8 @@
 //! The activation seam: import [`ScheduleModule`] and the framework attaches
 //! the [`Scheduler`] to the app at boot.
 
-use nest_rs_core::{ContainerBuilder, Module, Registering, TransportContribution};
+use nest_rs_core::__private::TransportContribution;
+use nest_rs_core::{ContainerBuilder, Module, Registering};
 
 use crate::Scheduler;
 

@@ -2,9 +2,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nest_rs_core::__private::LifecycleHook;
 use nest_rs_core::{
-    Container, ContainerBuilder, LifecycleHook, LifecyclePhase, Module, ProviderOrder,
-    ReachableProviders, Registering, inventory,
+    Container, ContainerBuilder, LifecyclePhase, Module, ProviderOrder, ReachableProviders,
+    Registering, inventory,
 };
 
 use crate::{EventBus, ListenerMethod};

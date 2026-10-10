@@ -699,7 +699,7 @@ mod tests {
     #[tokio::test]
     async fn a_socket_runs_under_the_upgrades_actor() {
         let captured = nest_rs_core::with_request_scope(None, Correlation::minted(None), async {
-            nest_rs_core::set_actor_id("alice-42");
+            nest_rs_core::__private::set_actor_id("alice-42");
             socket_correlation()
         })
         .await;

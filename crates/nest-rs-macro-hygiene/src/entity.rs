@@ -4,7 +4,7 @@
 //! sea-orm's derives emit a *relative* `sea_orm::`, which the `use` below
 //! satisfies — no `sea-orm` line.
 
-use nest_rs::core::serde::{Deserialize, Serialize};
+use nest_rs::core::__private::serde::{Deserialize, Serialize};
 use nest_rs::resource::expose;
 use nest_rs::seaorm::sea_orm;
 use sea_orm::entity::prelude::*;
@@ -23,7 +23,7 @@ use sea_orm::entity::prelude::*;
     table_name = "hygiene_note",
     model_attrs(
         derive(Serialize, Deserialize),
-        serde(crate = "::nest_rs::core::serde")
+        serde(crate = "::nest_rs::core::__private::serde")
     )
 )]
 pub struct Model {

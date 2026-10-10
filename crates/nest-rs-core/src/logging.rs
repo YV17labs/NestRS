@@ -660,9 +660,9 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
+    use crate::__private::set_actor_id;
     use crate::Correlation;
     use crate::request_scope::with_request_scope;
-    use crate::trace_context::set_actor_id;
 
     const ACTOR: &str = "01a0112ce24e75509be691162cbbab1f";
 

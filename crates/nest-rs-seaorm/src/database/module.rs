@@ -53,7 +53,7 @@ fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Res
     container.get::<T>().map(drop).ok_or_else(|| {
         anyhow::anyhow!(
             "SeaOrmDatabaseModule: no `{}` in the container — {SUBSTRATE_REMEDY}",
-            nest_rs_core::short_type_name::<T>()
+            nest_rs_core::__private::short_type_name::<T>()
         )
     })
 }

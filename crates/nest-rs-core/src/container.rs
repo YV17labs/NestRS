@@ -13,7 +13,7 @@ use anyhow::Result;
 
 use crate::RequestScope;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
-use crate::module::{Collecting, DynamicModule, Module, Registering};
+use crate::module::{Collecting, Module, Registering};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
@@ -647,41 +647,6 @@ impl ContainerBuilder {
         self
     }
 
-    /// Collect phase for one dynamic import: run its
-    /// [`DynamicModule::collect`], then park the value for
-    /// [`register_dynamic_import`](Self::register_dynamic_import).
-    ///
-    /// **Internal ABI** — emitted by `#[module]`, lockstep with
-    /// `nest-rs-core-macros`; do not call by hand.
-    #[doc(hidden)]
-    pub fn collect_dynamic_import<D>(mut self, module: TypeId, index: usize, value: D) -> Self
-    where
-        D: DynamicModule + Send + 'static,
-    {
-        self = value.collect(self, Collecting::new());
-        self.dynamic_registrars.insert(
-            (module, index),
-            Box::new(move |builder| value.register(builder, Registering::new())),
-        );
-        self
-    }
-
-    /// Register phase for one dynamic import: consume the value the collect
-    /// phase parked at this site; a site with none is refused naming it.
-    ///
-    /// **Internal ABI** — emitted by `#[module]`, lockstep with
-    /// `nest-rs-core-macros`; do not call by hand.
-    #[doc(hidden)]
-    pub fn register_dynamic_import(mut self, module: TypeId, index: usize) -> Self {
-        match self.dynamic_registrars.remove(&(module, index)) {
-            Some(registrar) => registrar(self),
-            None => {
-                let site = self.declaring_site();
-                self.refuse(crate::error::UncollectedImportError { site })
-            }
-        }
-    }
-
     /// Queue an async factory whose awaited output is stored as a provider
     /// (injectable as `Arc<T>`), drained before providers are built.
     pub fn provide_factory<T, F, Fut>(self, factory: F) -> Self
@@ -967,21 +932,6 @@ impl ContainerBuilder {
         }
     }
 
-    /// Enter the phase of the import `import` — written as it stands at `at` in
-    /// `importer`'s `imports = [..]` — so a declaration it makes can be named.
-    ///
-    /// **Internal ABI** — emitted by `#[module]` around each import, and called
-    /// by the app builder around each root; lockstep with `nest-rs-core-macros`,
-    /// do not call by hand.
-    #[doc(hidden)]
-    pub fn enter_import(mut self, importer: &'static str, at: usize, import: &'static str) -> Self {
-        self.import_sites.push(ImportSite {
-            importer: Some((importer, at)),
-            import,
-        });
-        self
-    }
-
     /// Enter the phase of the root module `root` the app is built from.
     pub(crate) fn enter_root(mut self, root: &'static str) -> Self {
         self.import_sites.push(ImportSite {
@@ -991,12 +941,8 @@ impl ContainerBuilder {
         self
     }
 
-    /// Leave the import [`enter_import`](Self::enter_import) (or a root) entered
-    /// last.
-    ///
-    /// **Internal ABI** — see [`enter_import`](Self::enter_import).
-    #[doc(hidden)]
-    pub fn leave_import(mut self) -> Self {
+    /// Leave the import (or root) entered last.
+    pub(crate) fn leave_import(mut self) -> Self {
         self.import_sites.pop();
         self
     }
@@ -1145,6 +1091,72 @@ impl ContainerBuilder {
             scoped: Arc::new(self.scoped.clone()),
             transient: Arc::new(self.transient.clone()),
         }
+    }
+}
+
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::TypeId;
+
+    use super::{ContainerBuilder, ImportSite};
+    use crate::module::{Collecting, DynamicModule, Registering};
+
+    /// Collect phase for one dynamic import: run its
+    /// [`DynamicModule::collect`], then park the value for
+    /// [`register_dynamic_import`].
+    pub fn collect_dynamic_import<D>(
+        mut builder: ContainerBuilder,
+        module: TypeId,
+        index: usize,
+        value: D,
+    ) -> ContainerBuilder
+    where
+        D: DynamicModule + Send + 'static,
+    {
+        builder = value.collect(builder, Collecting::new());
+        builder.dynamic_registrars.insert(
+            (module, index),
+            Box::new(move |builder| value.register(builder, Registering::new())),
+        );
+        builder
+    }
+
+    /// Register phase for one dynamic import: consume the value the collect
+    /// phase parked at this site; a site with none is refused naming it.
+    pub fn register_dynamic_import(
+        mut builder: ContainerBuilder,
+        module: TypeId,
+        index: usize,
+    ) -> ContainerBuilder {
+        match builder.dynamic_registrars.remove(&(module, index)) {
+            Some(registrar) => registrar(builder),
+            None => {
+                let site = builder.declaring_site();
+                builder.refuse(crate::error::UncollectedImportError { site })
+            }
+        }
+    }
+
+    /// Enter the phase of the import `import` — written as it stands at `at` in
+    /// `importer`'s `imports = [..]` — so a declaration it makes can be named.
+    /// `#[module]` emits it around each import.
+    pub fn enter_import(
+        mut builder: ContainerBuilder,
+        importer: &'static str,
+        at: usize,
+        import: &'static str,
+    ) -> ContainerBuilder {
+        builder.import_sites.push(ImportSite {
+            importer: Some((importer, at)),
+            import,
+        });
+        builder
+    }
+
+    /// Leave the import [`enter_import`] entered last.
+    pub fn leave_import(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.leave_import()
     }
 }
 
@@ -1397,9 +1409,16 @@ mod tests {
 
     #[test]
     fn a_dynamic_import_site_with_no_parked_value_is_refused_naming_it() {
-        let mut builder = Container::builder()
-            .enter_import("AppModule", 0, "SomeModule::for_root(..)")
-            .register_dynamic_import(TypeId::of::<Host>(), 0);
+        let mut builder = __private::register_dynamic_import(
+            __private::enter_import(
+                Container::builder(),
+                "AppModule",
+                0,
+                "SomeModule::for_root(..)",
+            ),
+            TypeId::of::<Host>(),
+            0,
+        );
         let refused = builder.take_refusal().expect("a refusal");
         assert!(
             refused

@@ -6,8 +6,8 @@
 //! - [`AppBuilderPipesExt::use_pipes_global`] — register
 //!   request-body pipes once, applied to every JSON HTTP handler.
 
-use nest_rs_core::layer_chain::ResolvedLayer;
-use nest_rs_core::{AppBuilder, check_specs_resolvable};
+use nest_rs_core::__private::{ResolvedLayer, check_specs_resolvable};
+use nest_rs_core::AppBuilder;
 use nest_rs_http::{GlobalGuardsActive, HttpBootCheck, SelfMountGuardWrap};
 use poem::EndpointExt;
 use poem::endpoint::BoxEndpoint;

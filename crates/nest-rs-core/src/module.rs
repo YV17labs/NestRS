@@ -25,24 +25,27 @@ impl<M: ?Sized> Registering<M> {
     }
 }
 
-/// Logs that the module `name` registered its providers; emitted by `#[module]`.
-#[doc(hidden)]
-pub fn __module_registered(name: &'static str) {
-    tracing::info!(
-        target: crate::target::MODULE,
-        module = name,
-        "module dependencies initialized",
-    );
-}
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::any::TypeId;
 
-/// The module a dynamic import declares it is, read off its expression's type
-/// without evaluating it.
-///
-/// **Internal ABI** — emitted by `#[module]`, lockstep with
-/// `nest-rs-core-macros`; do not call by hand.
-#[doc(hidden)]
-pub fn __dynamic_import_module<D: DynamicModule>(_import: impl FnOnce() -> D) -> TypeId {
-    D::module()
+    use super::DynamicModule;
+
+    /// Logs that the module `name` registered its providers; emitted by `#[module]`.
+    pub fn module_registered(name: &'static str) {
+        tracing::info!(
+            target: crate::target::MODULE,
+            module = name,
+            "module dependencies initialized",
+        );
+    }
+
+    /// The module a dynamic import declares it is, read off its expression's
+    /// type without evaluating it; emitted by `#[module]`.
+    pub fn dynamic_import_module<D: DynamicModule>(_import: impl FnOnce() -> D) -> TypeId {
+        D::module()
+    }
 }
 
 /// A module listed by type in `#[module(imports = [...])]`; each phase runs

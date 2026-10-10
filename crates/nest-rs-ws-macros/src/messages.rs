@@ -633,7 +633,7 @@ fn hook_override(hook: &str, method: &ImplItemFn, at: Span) -> syn::Result<Token
 fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
     let method_spec_entries = method_guards.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::layer_chain::ResolvedLayer {
+            ::nest_rs_guards::__private::ResolvedLayer {
                 type_id: ::core::any::TypeId::of::<#p>(),
                 name: ::core::any::type_name::<#p>(),
                 source: ::nest_rs_guards::layer_chain::LayerSite::Method,
@@ -650,10 +650,10 @@ fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) ->
     });
     quote! {
         let __global: ::std::vec::Vec<
-            ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
+            ::nest_rs_guards::__private::ResolvedLayer<dyn ::nest_rs_guards::Guard>
         > = __global_guards
             .iter()
-            .map(|(__tid, __name, __arc)| ::nest_rs_guards::layer_chain::ResolvedLayer {
+            .map(|(__tid, __name, __arc)| ::nest_rs_guards::__private::ResolvedLayer {
                 type_id: *__tid,
                 name: __name,
                 source: ::nest_rs_guards::layer_chain::LayerSite::Global,
@@ -661,7 +661,7 @@ fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) ->
             })
             .collect();
         let __method: ::std::vec::Vec<
-            ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
+            ::nest_rs_guards::__private::ResolvedLayer<dyn ::nest_rs_guards::Guard>
         > = ::std::vec![#(#method_spec_entries),*];
         let __force: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![#(#force_typeids),*];
         let __label = ::std::format!("ws {}", #event);
@@ -675,7 +675,7 @@ fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -
     quote! {
         {
             #specs
-            let __chain = ::nest_rs_guards::layer_chain::compose_chain::<dyn ::nest_rs_guards::Guard>(
+            let __chain = ::nest_rs_guards::__private::compose_chain::<dyn ::nest_rs_guards::Guard>(
                 __global,
                 ::std::vec![],
                 __method,

@@ -12,7 +12,8 @@
 use std::any::TypeId;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use nest_rs_core::layer_chain::{LayerSite, ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket};
+use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, ContainerId};
 
 use crate::Guard;

@@ -263,7 +263,7 @@ mod tests {
         let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone());
 
         with_request_scope(Some(scope), correlation, async {
-            crate::set_actor_id("alice-42");
+            crate::__private::set_actor_id("alice-42");
         })
         .await;
 

@@ -17,7 +17,7 @@ re-explaining it.
 
 Declaring a layer at any scope — **global** (`use_*_global`), **controller**
 (on the struct), or **handler** (beside the verb) — contributes to **one pool
-per family**, deduplicated by `TypeId` through a single `compose_chain`. The
+per family**, deduplicated by `TypeId` in a single composition. The
 layer executes **exactly once per request**. Broadest scope wins;
 `#[force_guards]` is the opt-in to re-run.
 

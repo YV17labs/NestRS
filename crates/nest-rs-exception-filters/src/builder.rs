@@ -1,7 +1,8 @@
 //! Adds [`AppBuilderExceptionFiltersExt::use_exception_filters_global`] to
 //! [`AppBuilder`].
 
-use nest_rs_core::{AppBuilder, check_specs_resolvable};
+use nest_rs_core::__private::check_specs_resolvable;
+use nest_rs_core::AppBuilder;
 use nest_rs_http::HttpBootCheck;
 
 use crate::registry::{ExceptionFilterSpec, ExceptionFilterSpecs};

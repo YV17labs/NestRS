@@ -51,10 +51,7 @@ impl Validators {
     /// An embedded file, tagged by the digest of its bytes.
     pub(crate) fn of_digest(sha256: [u8; 32], last_modified: Option<SystemTime>) -> Option<Self> {
         let mut digest = [0; 64];
-        let etag = format!(
-            "\"{}\"",
-            nest_rs_core::trace_context::hex(&sha256, &mut digest)
-        );
+        let etag = format!("\"{}\"", nest_rs_core::__private::hex(&sha256, &mut digest));
         Some(Self {
             etag: HeaderValue::try_from(etag).ok()?,
             last_modified: last_modified.and_then(with_header),

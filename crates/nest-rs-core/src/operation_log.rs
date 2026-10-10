@@ -61,19 +61,40 @@ pub struct Unit {
 }
 
 impl Unit {
+    /// The canonical `<edge>.<unit>` name: the span's name, the line's `name:`
+    /// and its `message`.
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// The edge's span target, `nest_rs::<edge>`.
+    pub const fn target(&self) -> &'static str {
+        self.target
+    }
+
+    /// OpenTelemetry's span kind for this unit.
+    pub const fn kind(&self) -> Kind {
+        self.kind
+    }
+}
+
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use super::{EDGES, Kind, Unit, eq_bytes, is_edge_root};
+
     /// Evaluated in a `const` by [`unit!`](crate::unit), which passes the
     /// declaring crate as `owner`.
-    #[doc(hidden)]
     #[expect(
         clippy::panic,
         reason = "only ever evaluated in a const, where a panic is the compile error naming the refused fact"
     )]
-    pub const fn __declare(
+    pub const fn declare_unit(
         owner: &str,
         target: &'static str,
         kind: Kind,
         name: &'static str,
-    ) -> Self {
+    ) -> Unit {
         let bytes = name.as_bytes();
         let mut i = 0;
         let mut dots = 0;
@@ -110,29 +131,12 @@ impl Unit {
         if !is_edge_root(owner, "nest-rs-", name) {
             panic!("a unit is declared by the crate that owns its edge, `nest-rs-<edge>`");
         }
-        Self { name, target, kind }
+        Unit { name, target, kind }
     }
 
-    /// Whether `krate`, the crate a reading macro expands in, declared this unit.
-    #[doc(hidden)]
-    pub const fn __opened_by(&self, krate: &str) -> bool {
-        is_edge_root(krate, "nest-rs-", self.name)
-    }
-
-    /// The canonical `<edge>.<unit>` name: the span's name, the line's `name:`
-    /// and its `message`.
-    pub const fn name(&self) -> &'static str {
-        self.name
-    }
-
-    /// The edge's span target, `nest_rs::<edge>`.
-    pub const fn target(&self) -> &'static str {
-        self.target
-    }
-
-    /// OpenTelemetry's span kind for this unit.
-    pub const fn kind(&self) -> Kind {
-        self.kind
+    /// Whether `krate`, the crate a reading macro expands in, declared `unit`.
+    pub const fn unit_opened_by(unit: &Unit, krate: &str) -> bool {
+        is_edge_root(krate, "nest-rs-", unit.name)
     }
 }
 
@@ -223,7 +227,7 @@ pub fn duration_ms(start: Instant) -> f64 {
 #[macro_export]
 macro_rules! unit {
     ($name:literal, target: $target:expr, kind: $kind:ident $(,)?) => {{
-        const __UNIT: $crate::operation_log::Unit = $crate::operation_log::Unit::__declare(
+        const __UNIT: $crate::operation_log::Unit = $crate::__private::declare_unit(
             ::core::env!("CARGO_PKG_NAME"),
             $target,
             $crate::operation_log::Kind::$kind,
@@ -247,7 +251,7 @@ macro_rules! unit {
 macro_rules! operation_line {
     ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
         const _: () = ::core::assert!(
-            $unit.__opened_by(::core::env!("CARGO_PKG_NAME")),
+            $crate::__private::unit_opened_by(&$unit, ::core::env!("CARGO_PKG_NAME")),
             "a unit's line is filed only by the crate that declares the unit",
         );
         let __outcome: ::core::option::Option<&'static str> = ::core::convert::Into::into($outcome);
@@ -299,7 +303,7 @@ mod tests {
     /// Run at run time so each refusal is asserted on its own; the compile-time
     /// refusal is `nest-rs-macro-hygiene`'s trybuild suite.
     fn declare(owner: &str, target: &'static str, name: &'static str) -> Result<Unit, String> {
-        std::panic::catch_unwind(|| Unit::__declare(owner, target, Kind::Server, name))
+        std::panic::catch_unwind(|| __private::declare_unit(owner, target, Kind::Server, name))
             .map_err(|payload| crate::panic_message(payload.as_ref()))
     }
 
@@ -314,9 +318,9 @@ mod tests {
                 (unit.name(), unit.target(), unit.kind()),
                 (name, target, Kind::Server)
             );
-            assert!(unit.__opened_by(&owner));
-            assert!(!unit.__opened_by("nest-rs-redis"));
-            assert!(!unit.__opened_by(&format!("{owner}-tests")));
+            assert!(__private::unit_opened_by(&unit, &owner));
+            assert!(!__private::unit_opened_by(&unit, "nest-rs-redis"));
+            assert!(!__private::unit_opened_by(&unit, &format!("{owner}-tests")));
         }
     }
 

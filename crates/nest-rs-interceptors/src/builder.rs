@@ -1,8 +1,10 @@
 //! Adds [`AppBuilderInterceptorsExt::use_interceptors_global`] to
 //! [`AppBuilder`].
 
-use nest_rs_core::layer_chain::{ResolvedLayer, compose_chain, resolve_global_layers};
-use nest_rs_core::{AppBuilder, Container, check_specs_resolvable};
+use nest_rs_core::__private::{
+    ResolvedLayer, check_specs_resolvable, compose_chain, resolve_global_layers,
+};
+use nest_rs_core::{AppBuilder, Container};
 use nest_rs_http::{HttpBootCheck, HttpEndpointWrap, endpoint_wrap_priority};
 use poem::EndpointExt;
 

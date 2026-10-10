@@ -90,11 +90,7 @@ pub mod transport;
 mod type_name;
 mod way_down;
 
-pub use access::{
-    Composition, ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders,
-};
-#[doc(hidden)]
-pub use answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
+pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use app::{App, AppBuilder};
 pub use budget::Budget;
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
@@ -115,9 +111,7 @@ pub use error_message::{boxed_error, error_message};
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
-pub use lifecycle::{
-    LifecycleHook, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT,
-};
+pub use lifecycle::{LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT};
 pub use module::{Collecting, DynamicModule, Module, Registering};
 pub use net::Net;
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
@@ -129,30 +123,42 @@ pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
     current_span_id, current_trace_id, current_traceparent, current_tracestate,
 };
-#[doc(hidden)]
-pub use trace_context::{current_correlation, set_actor_id};
-pub use transport::{Transport, TransportContribution};
-#[doc(hidden)]
-pub use type_name::short_type_name;
-#[doc(hidden)]
-pub use way_down::__main;
+pub use transport::Transport;
 
 #[doc(hidden)]
-pub use layer_chain::{ResolvedLayer, check_specs_resolvable, compose_chain};
-#[doc(hidden)]
-pub use module::{__dynamic_import_module, __module_registered};
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
+    pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
+    pub use crate::container::__private::{
+        collect_dynamic_import, enter_import, leave_import, register_dynamic_import,
+    };
+    pub use crate::layer_chain::__private::{
+        ResolvedLayer, check_specs_resolvable, compose_chain, dedup_bucket, resolve_global_layers,
+    };
+    pub use crate::lifecycle::__private::LifecycleHook;
+    pub use crate::module::__private::{dynamic_import_module, module_registered};
+    pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
+    pub use crate::trace_context::__private::{
+        current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
+        set_span_linker, with_pending_ids,
+    };
+    pub use crate::transport::__private::TransportContribution;
+    pub use crate::type_name::short_type_name;
+    pub use crate::way_down::main;
+
+    pub use schemars;
+    pub use serde;
+    pub use validator;
+}
 
 // Macro output resolves these through the framework, so an app needs no
 // direct dependency on them.
 pub use anyhow;
 pub use inventory;
-#[doc(hidden)]
-pub use schemars;
-#[doc(hidden)]
-pub use serde;
 pub use tracing;
-#[doc(hidden)]
-pub use validator;
 
 pub use async_trait::async_trait;
 

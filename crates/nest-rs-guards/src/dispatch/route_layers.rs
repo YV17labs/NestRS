@@ -26,10 +26,9 @@
 //!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 
+use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers};
 use nest_rs_core::Container;
-use nest_rs_core::layer_chain::{
-    LayerSite, ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers,
-};
+use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
 use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
 use nest_rs_http::MappedError;

@@ -374,7 +374,7 @@ fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
 /// skips the call.
 ///
 /// A failure keeps its own status: the overrides touch the success path only,
-/// and which answers are failures is read by type through `nest_rs_core::Answer`,
+/// and which answers are failures is read by type through `nest_rs_core::__private::Answer`,
 /// since a spelling-based check misses an aliased `Result`.
 pub(crate) fn apply_response_shapers(
     shapers: &ResponseShapers,
@@ -424,8 +424,8 @@ pub(crate) fn apply_response_shapers(
         {
             let #out = #call_expr;
             let mut #response: ::nest_rs_http::poem::Response = {
-                use ::nest_rs_core::AnswerFallback as _;
-                ::nest_rs_core::Answer(&#out).map::<::nest_rs_http::poem::Error, _, _>()(
+                use ::nest_rs_core::__private::AnswerFallback as _;
+                ::nest_rs_core::__private::Answer(&#out).map::<::nest_rs_http::poem::Error, _, _>()(
                     #out,
                     ::nest_rs_http::poem::IntoResponse::into_response,
                 )?

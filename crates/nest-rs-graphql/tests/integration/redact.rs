@@ -11,14 +11,18 @@ const SECRET: &str = "sk_live_51HsecretTOKEN";
 /// What the `own_*` resolvers decode: a number, sent a secret.
 const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
 
-#[derive(nest_rs_core::serde::Deserialize, nest_rs_core::serde::Serialize)]
-#[serde(crate = "nest_rs_core::serde")]
+#[derive(
+    nest_rs_core::__private::serde::Deserialize, nest_rs_core::__private::serde::Serialize,
+)]
+#[serde(crate = "nest_rs_core::__private::serde")]
 enum Kind {
     Visa,
 }
 
-#[derive(nest_rs_core::serde::Deserialize, nest_rs_core::serde::Serialize)]
-#[serde(crate = "nest_rs_core::serde")]
+#[derive(
+    nest_rs_core::__private::serde::Deserialize, nest_rs_core::__private::serde::Serialize,
+)]
+#[serde(crate = "nest_rs_core::__private::serde")]
 struct Card {
     kind: Kind,
 }

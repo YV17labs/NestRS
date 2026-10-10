@@ -5,8 +5,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use nest_rs_core::__private::ResolvedLayer;
 use nest_rs_core::Layer;
-use nest_rs_core::layer_chain::ResolvedLayer;
 use poem::http::{HeaderMap, Method, Uri};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 

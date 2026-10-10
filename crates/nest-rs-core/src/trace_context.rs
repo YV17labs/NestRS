@@ -105,7 +105,7 @@ impl SpanId {
 
 impl fmt::Display for SpanId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(hex(&self.0, &mut [0; 16]))
+        f.write_str(__private::hex(&self.0, &mut [0; 16]))
     }
 }
 
@@ -148,7 +148,7 @@ impl TraceFlags {
 
 impl fmt::Display for TraceFlags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(hex(&[self.0], &mut [0; 2]))
+        f.write_str(__private::hex(&[self.0], &mut [0; 2]))
     }
 }
 
@@ -384,7 +384,7 @@ impl Correlation {
     /// The unit of work this task is already serving, or a fresh trace where
     /// there is none.
     pub fn inherited() -> Self {
-        current_correlation().unwrap_or_else(|| Self::minted(None))
+        __private::current_correlation().unwrap_or_else(|| Self::minted(None))
     }
 
     /// A new unit of work inside the trace this one is already serving — a WS
@@ -449,18 +449,6 @@ impl Correlation {
     /// The current flags, reserved bits included.
     pub fn flags(&self) -> TraceFlags {
         TraceFlags(self.shared.flags.load(Ordering::Relaxed))
-    }
-
-    /// Record the sampling decision an installed sampler made, leaving the
-    /// reserved bits as they arrived.
-    #[doc(hidden)]
-    pub fn set_sampled(&self, sampled: bool) {
-        let mask = TraceFlags::SAMPLED;
-        if sampled {
-            self.shared.flags.fetch_or(mask, Ordering::Relaxed);
-        } else {
-            self.shared.flags.fetch_and(!mask, Ordering::Relaxed);
-        }
     }
 
     /// The vendor state to forward untouched.
@@ -529,82 +517,96 @@ fn set_actor(shared: &Shared, actor_id: &str) {
     let _ = shared.actor.set(Arc::from(actor_id));
 }
 
-/// Record who is calling, once — by the authentication guard, never by
-/// application code.
-///
-/// A second call is ignored, and an empty actor is refused.
-#[doc(hidden)]
-pub fn set_actor_id(actor_id: &str) {
-    current_request_ctx(|ctx| set_actor(&ctx.correlation.shared, actor_id));
-}
+/// This module is public: its tier-2 items live here, reachable only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::sync::OnceLock;
+    use std::sync::atomic::Ordering;
 
-/// The current unit of work's correlation, for an edge that has to carry it
-/// across a boundary the task-local cannot cross.
-#[doc(hidden)]
-pub fn current_correlation() -> Option<Correlation> {
-    current_request_ctx(|ctx| ctx.correlation.clone())
-}
+    use super::{Correlation, SpanId, TraceFlags, TraceId};
+    use crate::request_scope::current_request_ctx;
 
-tokio::task_local! {
-    /// The ids the span about to be created belongs to — see [`with_pending_ids`].
-    static PENDING_IDS: (TraceId, SpanId);
-}
-
-/// Publish this unit of work's ids for the duration of **creating** its span,
-/// so an SDK's `IdGenerator` adopts them instead of minting its own.
-///
-/// A scope of its own because the generator runs inside `info_span!`, before
-/// the edge installs the request context.
-#[doc(hidden)]
-pub fn with_pending_ids<T>(correlation: &Correlation, create: impl FnOnce() -> T) -> T {
-    PENDING_IDS.sync_scope((correlation.trace_id(), correlation.span_id()), create)
-}
-
-/// The ids the span being created belongs to, or `None` outside
-/// [`with_pending_ids`].
-#[doc(hidden)]
-pub fn pending_ids() -> Option<(TraceId, SpanId)> {
-    PENDING_IDS.try_with(|ids| *ids).ok()
-}
-
-/// What an observability stack does to a span the framework just opened.
-///
-/// It needs the `Span` handle: `tracing_opentelemetry::OtelData` is private, so
-/// `OpenTelemetrySpanExt::set_parent` is the only seam.
-type SpanLinker = fn(&crate::tracing::Span, &Correlation);
-
-static LINKER: OnceLock<SpanLinker> = OnceLock::new();
-
-/// Seed what runs on every span the framework opens. Called once, at boot, by
-/// the observability stack — never by an application.
-#[doc(hidden)]
-pub fn set_span_linker(linker: SpanLinker) {
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "seeded once at boot; a second install keeps the first linker"
-    )]
-    let _ = LINKER.set(linker);
-}
-
-/// Run the seeded linker, if any.
-#[doc(hidden)]
-pub fn link_span(span: &crate::tracing::Span, correlation: &Correlation) {
-    if let Some(linker) = LINKER.get() {
-        linker(span, correlation);
+    /// Record the sampling decision an installed sampler made, leaving the
+    /// reserved bits as they arrived.
+    pub fn set_sampled(correlation: &Correlation, sampled: bool) {
+        let mask = TraceFlags::SAMPLED;
+        if sampled {
+            correlation.shared.flags.fetch_or(mask, Ordering::Relaxed);
+        } else {
+            correlation.shared.flags.fetch_and(!mask, Ordering::Relaxed);
+        }
     }
-}
 
-/// Lower-case hex into a caller-owned buffer of exactly twice `bytes`' length,
-/// table-driven rather than `{:02x}` per byte: it runs several times per request.
-#[doc(hidden)]
-pub fn hex<'a>(bytes: &[u8], out: &'a mut [u8]) -> &'a str {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    for (byte, pair) in bytes.iter().zip(out.as_chunks_mut::<2>().0) {
-        pair[0] = DIGITS[usize::from(byte >> 4)];
-        pair[1] = DIGITS[usize::from(byte & 0x0f)];
+    /// Record who is calling, once — by the authentication guard, never by
+    /// application code.
+    ///
+    /// A second call is ignored, and an empty actor is refused.
+    pub fn set_actor_id(actor_id: &str) {
+        current_request_ctx(|ctx| super::set_actor(&ctx.correlation.shared, actor_id));
     }
-    // Every byte written came from `DIGITS`, which is ASCII.
-    str::from_utf8(out).unwrap_or_default()
+
+    /// The current unit of work's correlation, for an edge that has to carry it
+    /// across a boundary the task-local cannot cross.
+    pub fn current_correlation() -> Option<Correlation> {
+        current_request_ctx(|ctx| ctx.correlation.clone())
+    }
+
+    tokio::task_local! {
+        /// The ids the span about to be created belongs to — see [`with_pending_ids`].
+        static PENDING_IDS: (TraceId, SpanId);
+    }
+
+    /// Publish this unit of work's ids for the duration of **creating** its span,
+    /// so an SDK's `IdGenerator` adopts them instead of minting its own.
+    ///
+    /// A scope of its own because the generator runs inside `info_span!`, before
+    /// the edge installs the request context.
+    pub fn with_pending_ids<T>(correlation: &Correlation, create: impl FnOnce() -> T) -> T {
+        PENDING_IDS.sync_scope((correlation.trace_id(), correlation.span_id()), create)
+    }
+
+    /// The ids the span being created belongs to, or `None` outside
+    /// [`with_pending_ids`].
+    pub fn pending_ids() -> Option<(TraceId, SpanId)> {
+        PENDING_IDS.try_with(|ids| *ids).ok()
+    }
+
+    /// What an observability stack does to a span the framework just opened.
+    ///
+    /// It needs the `Span` handle: `tracing_opentelemetry::OtelData` is private, so
+    /// `OpenTelemetrySpanExt::set_parent` is the only seam.
+    type SpanLinker = fn(&crate::tracing::Span, &Correlation);
+
+    static LINKER: OnceLock<SpanLinker> = OnceLock::new();
+
+    /// Seed what runs on every span the framework opens. Called once, at boot, by
+    /// the observability stack — never by an application.
+    pub fn set_span_linker(linker: SpanLinker) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "seeded once at boot; a second install keeps the first linker"
+        )]
+        let _ = LINKER.set(linker);
+    }
+
+    /// Run the seeded linker, if any.
+    pub fn link_span(span: &crate::tracing::Span, correlation: &Correlation) {
+        if let Some(linker) = LINKER.get() {
+            linker(span, correlation);
+        }
+    }
+
+    /// Lower-case hex into a caller-owned buffer of exactly twice `bytes`' length,
+    /// table-driven rather than `{:02x}` per byte: it runs several times per request.
+    pub fn hex<'a>(bytes: &[u8], out: &'a mut [u8]) -> &'a str {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        for (byte, pair) in bytes.iter().zip(out.as_chunks_mut::<2>().0) {
+            pair[0] = DIGITS[usize::from(byte >> 4)];
+            pair[1] = DIGITS[usize::from(byte & 0x0f)];
+        }
+        // Every byte written came from `DIGITS`, which is ASCII.
+        str::from_utf8(out).unwrap_or_default()
+    }
 }
 
 /// Lower-case only: upper case would give one id two spellings no backend joins.
@@ -642,11 +644,11 @@ const fn unhex(byte: u8) -> Option<u8> {
 macro_rules! operation_span {
     ($unit:path, $correlation:expr $(, $($field:tt)*)?) => {{
         const _: () = ::core::assert!(
-            $unit.__opened_by(::core::env!("CARGO_PKG_NAME")),
+            $crate::__private::unit_opened_by(&$unit, ::core::env!("CARGO_PKG_NAME")),
             "a unit is opened only by the crate that declares it",
         );
         let __correlation = &$correlation;
-        let __span = $crate::trace_context::with_pending_ids(__correlation, || {
+        let __span = $crate::__private::with_pending_ids(__correlation, || {
             $crate::tracing::info_span!(
                 target: $unit.target(),
                 $unit.name(),
@@ -671,7 +673,7 @@ macro_rules! operation_span {
         if let Some(actor_id) = __correlation.actor_id() {
             __span.record($crate::trace_context::field::ACTOR_ID, actor_id);
         }
-        $crate::trace_context::link_span(&__span, __correlation);
+        $crate::__private::link_span(&__span, __correlation);
         __span
     }};
 }
@@ -835,11 +837,11 @@ mod tests {
             .expect("valid");
         let correlation = Correlation::continued(parent, TraceState::default(), None);
 
-        correlation.set_sampled(false);
+        __private::set_sampled(&correlation, false);
         assert!(!correlation.flags().is_sampled());
         assert_eq!(correlation.flags().bits(), 0xfc, "reserved bits untouched");
 
-        correlation.set_sampled(true);
+        __private::set_sampled(&correlation, true);
         assert_eq!(correlation.flags().bits(), 0xfd);
     }
 
@@ -913,14 +915,14 @@ mod tests {
     async fn an_empty_actor_is_refused_and_does_not_burn_the_write_once_slot() {
         let correlation = Correlation::minted(None);
         crate::request_scope::with_request_scope(None, correlation, async {
-            set_actor_id("");
+            __private::set_actor_id("");
             assert_eq!(
                 current_actor_id(),
                 None,
                 "an empty actor is absence, not an actor named `\"\"`",
             );
 
-            set_actor_id("alice");
+            __private::set_actor_id("alice");
             assert_eq!(
                 current_actor_id().as_deref(),
                 Some("alice"),

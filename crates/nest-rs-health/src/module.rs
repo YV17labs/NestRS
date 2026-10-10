@@ -4,7 +4,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Container, LifecycleHook, LifecyclePhase, module};
+use nest_rs_core::__private::LifecycleHook;
+use nest_rs_core::{Container, LifecyclePhase, module};
 
 use crate::config::HealthConfig;
 use crate::controller::HealthController;

@@ -3,7 +3,8 @@
 //! `#[process]` method over the queue backend a binding bound.
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, TransportContribution};
+use nest_rs_core::__private::TransportContribution;
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering};
 
 use crate::{QueueConfig, QueueWorker};
 

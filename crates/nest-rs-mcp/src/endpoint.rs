@@ -189,8 +189,8 @@ where
         // forwards the extensions into every operation's `RequestContext`.
         let scope = current_request_scope();
         // Read once: two reads would mint two ids for one operation.
-        let correlation =
-            nest_rs_core::current_correlation().unwrap_or_else(|| Correlation::minted(None));
+        let correlation = nest_rs_core::__private::current_correlation()
+            .unwrap_or_else(|| Correlation::minted(None));
         let captured = self.context.as_ref().map(|context| context.capture(&req));
         // Post-`before`, so the guard sees the ability its chain attached.
         let guard_captured = self.guard.capture(&req);

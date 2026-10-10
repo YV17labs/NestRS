@@ -7,15 +7,12 @@
 //! resolves to the fallback.
 
 /// A handler's answer, borrowed so the compiler can be asked what it is.
-#[doc(hidden)]
 pub struct Answer<'a, R>(pub &'a R);
 
 /// What [`Answer::kind`] says of a `Result`, whatever it is called.
-#[doc(hidden)]
 pub struct ResultAnswer;
 
 /// What [`AnswerFallback::kind`] says of anything else.
-#[doc(hidden)]
 pub struct ValueAnswer;
 
 /// A `Result` answer kept whole inside the edge's own `Result` — what a split
@@ -68,7 +65,6 @@ impl<T, E> Answer<'_, Result<T, E>> {
 }
 
 /// The answers for every type the inherent [`Answer`] methods do not take.
-#[doc(hidden)]
 pub trait AnswerFallback {
     /// The answer's own type.
     type Value;

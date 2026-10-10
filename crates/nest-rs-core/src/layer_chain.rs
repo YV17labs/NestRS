@@ -60,7 +60,7 @@ pub(crate) mod __private {
     use std::any::{Any, TypeId};
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use super::{GlobalSpecs, LayerSpec};
+    use super::GlobalSpecs;
     use crate::container::Container;
     use crate::layer::{Layer, LayerSite};
 
@@ -89,16 +89,20 @@ pub(crate) mod __private {
             .collect()
     }
 
-    /// Fail-secure boot check: name the specs whose provider is not resolvable
-    /// from `container`. `kind` is the family noun (`"guard"`, `"filter"`, …) and
+    /// Fail-secure boot check: name the specs of a family's global registry
+    /// whose provider is not resolvable from `container`; an unregistered family
+    /// passes. `kind` is the family noun (`"guard"`, `"filter"`, …) and
     /// `consequence` the tail saying what a silent drop would cost.
-    pub fn check_specs_resolvable<L: ?Sized>(
-        specs: &[LayerSpec<L>],
+    pub fn check_specs_resolvable<S: GlobalSpecs>(
         container: &Container,
         kind: &str,
         consequence: &str,
     ) -> Result<(), String> {
-        let missing: Vec<&str> = specs
+        let Some(registry) = container.get::<S>() else {
+            return Ok(());
+        };
+        let missing: Vec<&str> = registry
+            .specs()
             .iter()
             .filter(|s| s.resolve(container).is_none())
             .map(|s| s.name)

@@ -16,14 +16,11 @@ use crate::{EventBus, ListenerMethod};
 /// listeners.
 pub struct EventsModule;
 
-/// The registry [`EventsModule`]'s wiring fills, as a boot failure names it.
-const LISTENERS: &str = "nest_rs::events::listeners";
-
 impl Module for EventsModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
             .provide_arc(Arc::new(EventBus::new()))
-            .provide_wiring(LISTENERS, wire_listeners)
+            .provide_wiring("nest_rs::events::listeners", wire_listeners)
     }
 }
 

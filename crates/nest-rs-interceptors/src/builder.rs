@@ -35,7 +35,15 @@ impl AppBuilderInterceptorsExt for AppBuilder {
     {
         let collected: Vec<InterceptorSpec> = specs.into_iter().collect();
         self.provide(InterceptorSpecs(collected))
-            .provide_wiring(GLOBAL_POOL, check_global_pool)
+            .provide_wiring("nest_rs::interceptors::global", |container| {
+                // At the wiring step, so an app serving no HTTP refuses it too.
+                check_specs_resolvable::<InterceptorSpecs>(
+                    container,
+                    "interceptor",
+                    "an unresolvable global interceptor would silently drop",
+                )
+                .map_err(nest_rs_core::anyhow::Error::msg)
+            })
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::POOL_INTERCEPTORS,
                 |container, endpoint| {
@@ -47,24 +55,6 @@ impl AppBuilderInterceptorsExt for AppBuilder {
                 },
             ))
     }
-}
-
-/// The global interceptor pool, as a boot failure names its check.
-const GLOBAL_POOL: &str = "nest_rs::interceptors::global";
-
-/// Refuse a global interceptor no imported module provides, in every app — one
-/// that serves no HTTP included — before any hook runs.
-fn check_global_pool(container: &Container) -> nest_rs_core::anyhow::Result<()> {
-    let Some(specs) = container.get::<InterceptorSpecs>() else {
-        return Ok(());
-    };
-    check_specs_resolvable(
-        &specs.0,
-        container,
-        "interceptor",
-        "an unresolvable global interceptor would silently drop",
-    )
-    .map_err(nest_rs_core::anyhow::Error::msg)
 }
 
 /// Resolve `InterceptorSpecs` into the deduplicated, priority-ordered global

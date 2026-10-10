@@ -95,11 +95,7 @@ impl AppBuilderGuardsExt for AppBuilder {
             // resolve to `None` and silently drop — every route would lose
             // its fail-secure net. Fail boot instead, naming the guards.
             .provide_meta(HttpBootCheck::new(|container| {
-                let Some(specs) = container.get::<GuardSpecs>() else {
-                    return Ok(());
-                };
-                check_specs_resolvable(
-                    &specs.0,
+                check_specs_resolvable::<GuardSpecs>(
                     container,
                     "guard",
                     "an unresolvable global guard would silently drop and leave every route \
@@ -142,11 +138,7 @@ impl AppBuilderPipesExt for AppBuilder {
         #[cfg(feature = "ws")]
         let builder = builder.provide(WsDataPipe(run_ws_data_pipes));
         builder.provide_meta(HttpBootCheck::new(|container| {
-            let Some(specs) = container.get::<PipeSpecs>() else {
-                return Ok(());
-            };
-            check_specs_resolvable(
-                &specs.0,
+            check_specs_resolvable::<PipeSpecs>(
                 container,
                 "pipe",
                 "an unresolvable global pipe would silently drop its edge validation",

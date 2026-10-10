@@ -15,16 +15,13 @@ use crate::registry::SocialRegistry;
 #[module(imports = [SocialWiring], providers = [SocialRegistry])]
 pub struct SocialModule;
 
-/// The registry [`SocialModule`]'s wiring fills, as a boot failure names it.
-const PROVIDERS: &str = "nest_rs::social::providers";
-
 /// Attaches the provider wiring: `#[module]` takes only imports and providers,
 /// so this hand-written module carries the step for [`SocialModule`].
 struct SocialWiring;
 
 impl Module for SocialWiring {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_wiring(PROVIDERS, install)
+        builder.provide_wiring("nest_rs::social::providers", install)
     }
 }
 

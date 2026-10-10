@@ -34,7 +34,15 @@ impl AppBuilderFiltersExt for AppBuilder {
     {
         let collected: Vec<FilterSpec> = specs.into_iter().collect();
         self.provide(FilterSpecs(collected))
-            .provide_wiring(GLOBAL_POOL, check_global_pool)
+            .provide_wiring("nest_rs::filters::global", |container| {
+                // At the wiring step, so an app serving no HTTP refuses it too.
+                check_specs_resolvable::<FilterSpecs>(
+                    container,
+                    "filter",
+                    "an unresolvable global filter would silently drop its error mapping",
+                )
+                .map_err(nest_rs_core::anyhow::Error::msg)
+            })
             .provide_meta(HttpEndpointWrap::with_priority(
                 endpoint_wrap_priority::FILTERS,
                 |container, endpoint| {
@@ -46,24 +54,6 @@ impl AppBuilderFiltersExt for AppBuilder {
                 },
             ))
     }
-}
-
-/// The global filter pool, as a boot failure names its check.
-const GLOBAL_POOL: &str = "nest_rs::filters::global";
-
-/// Refuse a global filter no imported module provides, in every app — one that
-/// serves no HTTP included — before any hook runs.
-fn check_global_pool(container: &Container) -> nest_rs_core::anyhow::Result<()> {
-    let Some(specs) = container.get::<FilterSpecs>() else {
-        return Ok(());
-    };
-    check_specs_resolvable(
-        &specs.0,
-        container,
-        "filter",
-        "an unresolvable global filter would silently drop its error mapping",
-    )
-    .map_err(nest_rs_core::anyhow::Error::msg)
 }
 
 /// Resolve `FilterSpecs` into the deduplicated, priority-ordered global chain.

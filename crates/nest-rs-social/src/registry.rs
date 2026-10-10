@@ -3,9 +3,10 @@
 //!
 //! Each provider `provider.rs` submits one [`SocialProviderEntry`] to a
 //! link-time `inventory` registry. [`SocialRegistry`] drains it at the boot's
-//! wiring step, before the first lifecycle hook, and asks each entry to build itself ([`resolve_provider`] is the standard
-//! implementation), then validates the result — a duplicate key or a key that
-//! disagrees with the provider's own [`SocialProvider::key`] **fails boot**.
+//! wiring step, before the first lifecycle hook, and asks each entry to build
+//! itself ([`resolve_provider`] is the standard implementation), then validates
+//! the result — a duplicate key or a key that disagrees with the provider's own
+//! [`SocialProvider::key`] **fails boot**.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};

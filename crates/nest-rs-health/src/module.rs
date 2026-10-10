@@ -32,16 +32,13 @@ impl HealthModule {
 /// [`HealthModule::for_root`].
 pub type HealthSetup = ConfigSetup<HealthModule, HealthConfig>;
 
-/// The registry [`HealthModule`]'s wiring fills, as a boot failure names it.
-const INDICATORS: &str = "nest_rs::health::indicators";
-
 /// Attaches the indicator wiring: `#[module]` takes only imports and providers,
 /// so this hand-written module carries the step for [`HealthModule`].
 struct HealthWiring;
 
 impl Module for HealthWiring {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide_wiring(INDICATORS, wire_indicators)
+        builder.provide_wiring("nest_rs::health::indicators", wire_indicators)
     }
 }
 

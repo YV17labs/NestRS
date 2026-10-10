@@ -157,7 +157,9 @@ enum Ended {
     /// async-graphql closed it for a protocol fault — an unacknowledged
     /// connection, a malformed message, a repeated `connection_init`.
     Refused,
-    /// The server ended it: its subscriptions completed, then 1001.
+    /// The server ended it: its subscriptions completed, then 1001 — or it
+    /// dropped the socket, whose peer took nothing within the send deadline or
+    /// did not take its close within the grace.
     ByServer,
     /// A subscription unwound; the socket closed with 1011.
     Unwound(Box<dyn std::any::Any + Send>),
@@ -314,8 +316,8 @@ async fn serve_socket<E: Executor>(
                 if let Some(id) = completed_id(&text) {
                     lock(&started).remove(&id);
                 }
-                if sink.send(Message::Text(text)).await.is_err() {
-                    return Ended::ByPeer;
+                if let Err(error) = sink.send(Message::Text(text)).await {
+                    return stopped_writing(&error);
                 }
             }
             Some(WsMessage::Close(code, reason)) => {
@@ -340,6 +342,20 @@ async fn serve_socket<E: Executor>(
             Ended::ByPeer
         }
     }
+}
+
+/// A frame could not be written: past the transport's send deadline the
+/// server drops the socket; any other failure is the peer gone.
+fn stopped_writing(error: &std::io::Error) -> Ended {
+    if error.kind() != std::io::ErrorKind::TimedOut {
+        return Ended::ByPeer;
+    }
+    tracing::warn!(
+        target: crate::TARGET,
+        error = %nest_rs_core::error_message(error),
+        "the peer took nothing within the send deadline; it is cut off",
+    );
+    Ended::ByServer
 }
 
 /// The operations a peer started and nobody has finished, by id.

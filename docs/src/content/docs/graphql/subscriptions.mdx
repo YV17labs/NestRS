@@ -167,10 +167,13 @@ The server ends a socket the protocol's way, at the ceiling and at the
 shutdown signal alike: each subscription still running gets a `complete`, a
 query or a mutation sent over the socket is answered first, then the socket
 closes with RFC 6455's `1001 Going Away` and a reason saying what to do —
-re-upgrade, or reconnect to a replica still serving. A socket the server
-ended files its `graphql.subscription` line `cancelled`; one its client closed
-files `ok`, one the protocol refused `error`. A subscription whose stream
-panics closes the socket with `1011 Internal Error` and files `panic`.
+re-upgrade, or reconnect to a replica still serving. A client that takes
+nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) is dropped without a close,
+which no longer reaches it, and one `warn` on `nest_rs::graphql` says so. A
+socket the server ended files its `graphql.subscription` line `cancelled`; one
+its client closed files `ok`, one the protocol refused `error`. A subscription
+whose stream panics closes the socket with `1011 Internal Error` and files
+`panic`.
 
 Everything else is the GraphQL module's own configuration — see
 [Configuration](/graphql/configuration/).

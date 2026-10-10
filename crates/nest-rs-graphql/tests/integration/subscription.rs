@@ -604,3 +604,86 @@ async fn a_query_answering_at_the_signal_is_answered_before_the_close() {
     assert_eq!(answer["payload"]["data"]["slowAnswer"], 42, "{answer}");
     assert_eq!(code, CloseCode::Away);
 }
+
+#[resolver]
+struct FloodResolver;
+
+#[operations]
+impl FloodResolver {
+    #[query]
+    #[public]
+    async fn flood_size(&self) -> i32 {
+        64 * 1024
+    }
+
+    /// Emits as fast as it is written, more than any socket buffer holds.
+    #[subscription]
+    #[public]
+    async fn flood(&self) -> impl futures_stream::Stream<Item = String> {
+        futures_stream::repeat("x".repeat(64 * 1024))
+    }
+}
+
+/// The send deadline [`StallingApp`]'s transport is served under.
+const SEND_DEADLINE: Duration = Duration::from_secs(2);
+
+#[module(
+    imports = [
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            send_timeout: SEND_DEADLINE,
+            ..nest_rs_http::HttpConfig::default()
+        }),
+        GraphqlModule::for_root(None),
+    ],
+    providers = [FloodResolver],
+)]
+struct StallingApp;
+
+/// A socket whose client stops reading while a subscription pushes is dropped
+/// at the send deadline, by the server: its line files `cancelled`.
+#[tokio::test]
+async fn a_socket_whose_client_stops_reading_is_dropped_at_the_send_deadline() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<StallingApp>()
+        .build_ws()
+        .await
+        .expect("a schema carrying a subscription boots on a real port");
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { flood }").await;
+    assert_eq!(
+        next_message(&mut socket).await["type"],
+        "next",
+        "the flood started"
+    );
+
+    tokio::time::pause();
+    tokio::time::sleep(3 * SEND_DEADLINE).await;
+    tokio::time::resume();
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        !logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_graphql::unit::SUBSCRIPTION.name(),
+            )
+            .is_empty()
+    })
+    .await;
+
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the server dropped the socket, not its client",
+    );
+    let stalled = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "the peer took nothing within the send deadline; it is cut off",
+    );
+    assert_eq!(stalled.level, "warn");
+    app.shutdown().await.expect("the transport stops cleanly");
+    drop(socket);
+}

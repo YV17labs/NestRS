@@ -26,6 +26,7 @@ use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::env_prefix::EnvPrefix;
+use crate::line_safe::{LineSafe, forges};
 use crate::request_scope::current_request_ctx;
 use crate::trace_context::{Correlation, field};
 
@@ -174,51 +175,6 @@ impl Visit for FixedWidthDurations<'_> {
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         self.0.record_debug(field, &LineSafe(&value));
-    }
-}
-
-/// A value with every control, bidirectional override and invisible formatting
-/// character written as its Rust debug escape (CWE-117), applied to every field.
-///
-/// It guarantees one line per event, not unambiguous fields: a value can still
-/// read as `x trace_id=…`; JSON is the output a machine parses.
-struct LineSafe<'a, T: ?Sized>(&'a T);
-
-impl<T: fmt::Debug + ?Sized> fmt::Debug for LineSafe<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(LineSafeWriter(f), "{:?}", self.0)
-    }
-}
-
-impl<T: fmt::Display + ?Sized> fmt::Display for LineSafe<'_, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(LineSafeWriter(f), "{}", self.0)
-    }
-}
-
-fn forges(ch: char) -> bool {
-    ch.is_control()
-        || matches!(
-            ch,
-            '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
-        )
-}
-
-struct LineSafeWriter<'a, 'f>(&'a mut fmt::Formatter<'f>);
-
-impl fmt::Write for LineSafeWriter<'_, '_> {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        let mut run = 0;
-        for (at, ch) in text.char_indices() {
-            if forges(ch) {
-                self.0.write_str(&text[run..at])?;
-                for escaped in ch.escape_debug() {
-                    self.0.write_char(escaped)?;
-                }
-                run = at + ch.len_utf8();
-            }
-        }
-        self.0.write_str(&text[run..])
     }
 }
 

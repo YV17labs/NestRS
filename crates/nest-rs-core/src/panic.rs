@@ -12,6 +12,8 @@ use std::sync::{Mutex, PoisonError};
 
 use futures_util::FutureExt as _;
 
+use crate::line_safe::LineSafe;
+
 /// The field name a contained panic is logged under.
 pub const FIELD: &str = "panic";
 
@@ -45,10 +47,10 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
 /// );
 /// # }
 /// ```
-pub async fn contain<F: Future>(fut: F) -> Result<F::Output, Box<dyn Any + Send>> {
-    CONTAINED
-        .scope((), AssertUnwindSafe(fut).catch_unwind())
-        .await
+pub fn contain<F: Future>(fut: F) -> impl Future<Output = Result<F::Output, Box<dyn Any + Send>>> {
+    // Not an `async fn`: its state keeps the argument beside the future built
+    // from it, so every contained unit would weigh twice its size.
+    CONTAINED.scope((), AssertUnwindSafe(fut).catch_unwind())
 }
 
 tokio::task_local! {
@@ -117,7 +119,7 @@ pub(crate) fn hook(info: &PanicHookInfo<'_>) {
             );
         }
         Report::Stderr => {
-            let line = format!("nestrs: panicked at {location}: {}\n", one_line(&message));
+            let line = format!("nestrs: panicked at {location}: {}\n", LineSafe(&message));
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "stderr is the last channel: a write it refuses has nowhere left to be said"
@@ -150,19 +152,6 @@ fn report(contained: bool, subscribed: bool) -> Report {
 /// before one is installed, and inside a scoped one's own dispatch.
 fn subscribed() -> bool {
     !tracing::dispatcher::get_default(|dispatch| dispatch.is::<tracing::subscriber::NoSubscriber>())
-}
-
-/// `message` on one line, its control characters escaped.
-fn one_line(message: &str) -> String {
-    let mut line = String::with_capacity(message.len());
-    for c in message.chars() {
-        if c.is_control() {
-            line.extend(c.escape_default());
-        } else {
-            line.push(c);
-        }
-    }
-    line
 }
 
 /// How many recent panics keep where they happened; one a line never asks
@@ -248,6 +237,21 @@ mod tests {
     }
 
     #[test]
+    fn containing_a_unit_does_not_double_its_size() {
+        let unit = async {
+            let held = [0u8; 1024];
+            std::future::ready(()).await;
+            held.len()
+        };
+        let alone = std::mem::size_of_val(&unit);
+        let contained = std::mem::size_of_val(&contain(unit));
+        assert!(
+            contained < alone + 64,
+            "{contained} bytes to contain a {alone}-byte unit"
+        );
+    }
+
+    #[test]
     fn a_panic_is_said_by_its_unit_by_the_hook_or_on_stderr_when_nothing_listens() {
         assert_eq!(report(true, true), Report::ByTheUnit);
         assert_eq!(report(false, true), Report::Event);
@@ -264,8 +268,11 @@ mod tests {
 
     #[test]
     fn the_stderr_line_is_one_line() {
-        assert_eq!(one_line("first\nsecond\tthird"), "first\\nsecond\\tthird");
-        assert_eq!(one_line("déjà vu"), "déjà vu");
+        assert_eq!(
+            LineSafe("first\nsecond\tthird").to_string(),
+            "first\\nsecond\\tthird"
+        );
+        assert_eq!(LineSafe("déjà vu").to_string(), "déjà vu");
     }
 
     #[test]

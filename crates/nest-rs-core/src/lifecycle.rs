@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::container::Container;
+use crate::panic;
 use crate::way_down::WayDown;
 
 /// How long the shutdown hooks may run, all of them together, before what still
@@ -127,7 +128,7 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
             method = hook.method,
             "running lifecycle hook",
         );
-        match crate::panic::contain((hook.run)(container)).await {
+        match panic::contain((hook.run)(container)).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 return Err(err.context(format!(
@@ -173,8 +174,7 @@ pub(crate) async fn run_phase_lenient(
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
         // it still runs once.
-        match tokio::time::timeout_at(deadline, crate::panic::contain((hook.run)(container))).await
-        {
+        match tokio::time::timeout_at(deadline, panic::contain((hook.run)(container))).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,

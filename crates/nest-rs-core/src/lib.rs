@@ -77,6 +77,7 @@ mod identifier;
 pub mod layer;
 pub mod layer_chain;
 pub mod lifecycle;
+mod line_safe;
 #[cfg(feature = "logging")]
 pub mod logging;
 pub mod module;

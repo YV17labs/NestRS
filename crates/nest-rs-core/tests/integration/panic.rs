@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use nest_rs_core::panic::{FIELD, LOCATION_FIELD, contain};
-use nest_rs_core::{App, ContainerBuilder, EnvPrefix, Module, Registering, contained_panic};
+use nest_rs_core::{App, EnvPrefix, contained_panic, module};
 use nest_rs_testing::LogCapture;
 
 use crate::ChildProcess;
@@ -18,13 +18,8 @@ const TARGET: &str = "nest_rs::fixture";
 /// The hook's one sentence for a panic it files itself.
 const NO_UNIT: &str = "panicked where no unit of work contains it";
 
+#[module]
 struct Bare;
-
-impl Module for Bare {
-    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder
-    }
-}
 
 /// `.unwrap()` on a failed decode: the payload quotes the value.
 fn unwrap_a_secret() -> u64 {

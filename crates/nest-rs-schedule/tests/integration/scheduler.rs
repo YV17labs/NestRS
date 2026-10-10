@@ -2638,6 +2638,82 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
         .expect("serve returns Ok at shutdown");
 }
 
+const STOPPED: &str =
+    "scheduled job stopped: its schedule panicked, and the job will not run again";
+
+/// Serve the doomed schedule under the process hook until its loop's end is
+/// said, then shut down.
+#[nest_rs_core::main]
+async fn serve_until_the_schedule_panicked(logs: &LogCapture) {
+    struct DoomedHost;
+
+    let lock: Arc<dyn OccurrenceLock> = Arc::new(UnwritableLock);
+    let container = crate::hermetic()
+        .provide_dyn::<dyn OccurrenceLock>(lock)
+        .attach_meta::<DoomedHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "DoomedHost",
+            method: "once",
+            trigger: Trigger::Interval(Duration::from_millis(50)),
+            run: tick_behind_an_unwritable_lock,
+            timeout: JOB_TIMEOUT,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+            key: None,
+        })
+        .build();
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("configures with a lock bound");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    nest_rs_testing::wait_until(Duration::from_secs(10), || {
+        !logs.find(nest_rs_schedule::TARGET, STOPPED).is_empty()
+    })
+    .await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok at shutdown");
+}
+
+/// The process hook stays quiet for the loop's panic: the scheduler's line is
+/// its one record.
+#[test]
+fn a_schedule_whose_loop_panicked_is_said_once_by_the_scheduler() {
+    let logs = LogCapture::install_global();
+
+    serve_until_the_schedule_panicked(&logs);
+    // Rust's own hook back, so an assertion failing below prints.
+    drop(std::panic::take_hook());
+
+    let events = logs.events();
+    let errors: Vec<_> = events
+        .iter()
+        .filter(|event| event.level == "error")
+        .collect();
+    assert_eq!(errors.len(), 1, "the panic is said once: {errors:#?}");
+    let line = errors[0];
+    assert_eq!(
+        (line.target.as_str(), line.message.as_str()),
+        (nest_rs_schedule::TARGET, STOPPED)
+    );
+    assert_eq!(
+        line.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the lock error's text panicked")
+    );
+    let location = line
+        .field(nest_rs_core::panic::LOCATION_FIELD)
+        .unwrap_or_default();
+    assert!(
+        location.contains("tests/integration/scheduler.rs:"),
+        "where it panicked: {line:#?}"
+    );
+}
+
 /// A lock whose claims never answer — a backend holding every command, a
 /// network dropping them without a reset — and which says when one was sent.
 #[derive(Default)]

@@ -4,6 +4,8 @@
 use std::any::Any;
 use std::error::Error;
 
+use tokio::task::JoinError;
+
 use crate::error::{DecodeError, DecodeFailures};
 
 const NO_MESSAGE: &str = "an error with no message";
@@ -13,14 +15,19 @@ const NO_MESSAGE: &str = "an error with no message";
 /// saying nothing at all is said to be one.
 ///
 /// **A decode failure anywhere in the chain is said without its value**, as its
-/// [`DecodeError`]; every other link is passed through [`DecodeError::redact`].
-/// A wrapper wording the value its own way (`{0:?}`, a `format!` of the field)
-/// is not caught.
+/// [`DecodeError`], and a joined task's panic without its payload; every other
+/// link is passed through [`DecodeError::redact`]. A wrapper wording the value
+/// its own way (`{0:?}`, a `format!` of the field) is not caught.
 pub fn error_message(error: &(dyn Error + 'static)) -> String {
     let failures = DecodeFailures::of(Some(error));
-    let said = |link: &(dyn Error + 'static)| match DecodeError::of(link) {
-        Some(report) => report.to_string(),
-        None => failures.redact(&link.to_string()).into_owned(),
+    let said = |link: &(dyn Error + 'static)| {
+        if let Some(joined) = link.downcast_ref::<JoinError>() {
+            return joined_task(joined);
+        }
+        match DecodeError::of(link) {
+            Some(report) => report.to_string(),
+            None => failures.redact(&link.to_string()).into_owned(),
+        }
     };
     let mut sentence = said(error);
     if sentence.trim().is_empty() {
@@ -45,6 +52,16 @@ pub fn error_message(error: &(dyn Error + 'static)) -> String {
         return NO_MESSAGE.to_owned();
     }
     sentence
+}
+
+/// How a joined task ended, as tokio says it of a panic whose payload is no
+/// string: the panic was filed, redacted, where it was raised.
+fn joined_task(error: &JoinError) -> String {
+    if error.is_panic() {
+        format!("task {} panicked", error.id())
+    } else {
+        error.to_string()
+    }
 }
 
 /// `error` boxed as the framework carries a developer's failure — every link of
@@ -175,6 +192,33 @@ mod tests {
             cause: Some(io("failed")),
         };
         assert_eq!(error_message(&error), "the queue backend failed: failed");
+    }
+
+    #[tokio::test]
+    async fn a_joined_task_s_panic_is_said_without_its_payload() {
+        let joined =
+            tokio::spawn(async { serde_json::from_str::<u64>(r#""sk_live_secret""#).unwrap() })
+                .await
+                .expect_err("a secret is not a number");
+        let task = joined.id();
+        assert!(
+            joined.to_string().contains("sk_live"),
+            "tokio's own sentence"
+        );
+
+        let wrapped = Wrapped {
+            message: "the writer stopped",
+            cause: Some(Box::new(joined)),
+        };
+        assert_eq!(
+            error_message(&wrapped),
+            format!("the writer stopped: task {task} panicked")
+        );
+
+        let cancelled = tokio::spawn(std::future::pending::<()>());
+        cancelled.abort();
+        let cancelled = cancelled.await.expect_err("it was aborted");
+        assert_eq!(error_message(&cancelled), cancelled.to_string());
     }
 
     #[test]

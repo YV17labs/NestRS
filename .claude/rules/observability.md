@@ -174,7 +174,9 @@ socket kept, `1011` on a socket whose connect hook or subscription unwound.
   and resumes it, and a sibling dropped by it files `cancelled`.
 - **A unit contains its unwind through `nest_rs_core::panic::contain`**, the
   one way the process hook `#[nest_rs::main]` installs learns the unit files
-  the panic itself; any other panic the hook files once, on `nest_rs::app`.
+  the panic itself; any other panic the hook files once, on `nest_rs::app`. A
+  task the framework spawns and files the end of is contained at its spawn,
+  never read off its `JoinError`, whose `Display` quotes the payload.
 - **The panic field is written through `nest_rs_core::panic`'s helper**, keyed
   by `panic::FIELD` and its location by `panic::LOCATION_FIELD`, never a
   literal, and tests assert the constants.

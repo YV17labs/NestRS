@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -435,7 +436,11 @@ impl Transport for Scheduler {
         let mut spawned: HashMap<tokio::task::Id, JobId> = HashMap::new();
         for job in self.jobs {
             let id = job.id();
-            let handle = tasks.spawn(run_job(job, runner.clone(), cancel.clone()));
+            let handle = tasks.spawn(nest_rs_core::panic::contain(run_job(
+                job,
+                runner.clone(),
+                cancel.clone(),
+            )));
             spawned.insert(handle.id(), id);
         }
         loop {
@@ -463,40 +468,46 @@ impl Transport for Scheduler {
     }
 }
 
+/// A job's loop, contained: it returns at shutdown, or with what it panicked with.
+type Looped = std::result::Result<(), Box<dyn Any + Send>>;
+
 /// Account for a loop that ended, and name it unless it ended the ordinary way.
 ///
-/// A loop returns only at shutdown, so an earlier end is a panic that ended the
-/// job for good. A cancelled task is its runtime going down or, once `stopping`,
-/// a tick [`stop`] dropped at its bound.
+/// A loop returns only at shutdown, so a panic it returns ended the job for
+/// good. A cancelled task is its runtime going down or, once `stopping`, a tick
+/// [`stop`] dropped at its bound; a panic raised as it was dropped is the
+/// process hook's.
 fn loop_ended(
-    joined: std::result::Result<(tokio::task::Id, ()), tokio::task::JoinError>,
+    joined: std::result::Result<(tokio::task::Id, Looped), tokio::task::JoinError>,
     spawned: &mut HashMap<tokio::task::Id, JobId>,
     stopping: bool,
 ) {
-    let ended = match joined {
-        Ok((task, ())) => {
+    match joined {
+        Ok((task, Ok(()))) => {
             spawned.remove(&task);
-            return;
         }
-        Err(ended) => ended,
-    };
-    let id = spawned.remove(&ended.id());
-    match ended.try_into_panic() {
-        Ok(payload) => nest_rs_core::contained_panic!(
-            target: crate::TARGET,
-            &*payload,
-            "scheduled job stopped: its schedule panicked, and the job will not run again",
-            provider = id.map(|id| id.provider),
-            method = id.map(|id| id.method),
-        ),
-        Err(_) if stopping => {}
-        Err(cancelled) => tracing::debug!(
-            target: crate::TARGET,
-            provider = id.map(|id| id.provider),
-            method = id.map(|id| id.method),
-            error = %cancelled,
-            "scheduled job cancelled with its runtime",
-        ),
+        Ok((task, Err(payload))) => {
+            let id = spawned.remove(&task);
+            nest_rs_core::contained_panic!(
+                target: crate::TARGET,
+                payload.as_ref(),
+                "scheduled job stopped: its schedule panicked, and the job will not run again",
+                provider = id.map(|id| id.provider),
+                method = id.map(|id| id.method),
+            );
+        }
+        Err(cancelled) => {
+            let id = spawned.remove(&cancelled.id());
+            if !stopping {
+                tracing::debug!(
+                    target: crate::TARGET,
+                    provider = id.map(|id| id.provider),
+                    method = id.map(|id| id.method),
+                    error = %nest_rs_core::error_message(&cancelled),
+                    "scheduled job cancelled with its runtime",
+                );
+            }
+        }
     }
 }
 
@@ -507,7 +518,7 @@ fn loop_ended(
 /// [`SHUTDOWN_SETTLE_TIMEOUT`](nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT) to unwind.
 /// Bounded either way, so `serve` returns within the two.
 async fn stop(
-    mut tasks: JoinSet<()>,
+    mut tasks: JoinSet<Looped>,
     mut spawned: HashMap<tokio::task::Id, JobId>,
     bound: Duration,
 ) {
@@ -1447,10 +1458,10 @@ mod tests {
         let mut tasks = JoinSet::new();
         let mut spawned = HashMap::new();
         let (started, blocked) = std::sync::mpsc::channel();
-        let handle = tasks.spawn(async move {
+        let handle = tasks.spawn(nest_rs_core::panic::contain(async move {
             let _ = started.send(());
             std::thread::sleep(Duration::from_secs(1));
-        });
+        }));
         spawned.insert(
             handle.id(),
             JobId {

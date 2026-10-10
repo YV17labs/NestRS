@@ -49,6 +49,7 @@ impl DiskRoot {
     pub(crate) async fn find(&self, path: &RequestPath<'_>, fallback: bool) -> io::Result<Found> {
         let root = Arc::clone(&self.root);
         let candidate = root.join(path.relative());
+        // `?` takes tokio's conversion, which says a panic without its payload.
         tokio::task::spawn_blocking(move || match resolve(&root, &candidate)? {
             Found::Missing if fallback => Ok(match resolve(&root, &root)? {
                 Found::Asset(index) => Found::Fallback(index),
@@ -56,8 +57,7 @@ impl DiskRoot {
             }),
             found => Ok(found),
         })
-        .await
-        .map_err(io::Error::other)?
+        .await?
     }
 }
 

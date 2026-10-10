@@ -218,7 +218,9 @@ impl App {
         let mut serving: HashMap<tokio::task::Id, &'static str> = HashMap::new();
         for (name, transport) in transports {
             let token = cancel.clone();
-            let task = join.spawn(async move { transport.serve(token).await });
+            let task = join.spawn(crate::panic::contain(async move {
+                transport.serve(token).await
+            }));
             serving.insert(task.id(), name);
         }
         way_down.transports(still_serving(&serving));
@@ -229,21 +231,41 @@ impl App {
                 Ok((task, _)) => *task,
                 Err(join_err) => join_err.id(),
             };
-            serving.remove(&ended);
+            let transport = serving.remove(&ended).unwrap_or("<unknown>");
             way_down.transports(still_serving(&serving));
             match res.map(|(_, served)| served) {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => {
                     if first_err.is_none() {
                         tracing::error!(target: crate::target::APP, error = %crate::error_message(&*e), "transport failed; shutting down");
                         first_err = Some(e);
                         cancel.cancel();
                     }
                 }
+                // Said even after the first error: no one else files a contained panic.
+                Ok(Err(payload)) => {
+                    crate::contained_panic!(
+                        target: crate::target::APP,
+                        payload.as_ref(),
+                        "transport task panicked; shutting down",
+                        transport,
+                    );
+                    if first_err.is_none() {
+                        first_err = Some(anyhow!("transport `{transport}` panicked"));
+                        cancel.cancel();
+                    }
+                }
+                // Cancelled with its runtime; a panic raised as it was dropped is the hook's.
                 Err(join_err) => {
                     if first_err.is_none() {
-                        tracing::error!(target: crate::target::APP, error = %crate::error_message(&join_err), "transport task panicked; shutting down");
-                        first_err = Some(anyhow!(join_err));
+                        tracing::error!(
+                            target: crate::target::APP,
+                            transport,
+                            error = %crate::error_message(&join_err),
+                            "transport task ended before it returned; shutting down",
+                        );
+                        first_err =
+                            Some(anyhow!("transport `{transport}` ended before it returned"));
                         cancel.cancel();
                     }
                 }

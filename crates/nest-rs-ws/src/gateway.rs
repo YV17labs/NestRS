@@ -210,14 +210,14 @@ async fn serve_connection<G: Gateway, N: 'static>(
 
     // The `Sink` comes back when the outbox closes, so the Close frame is written
     // after every reply already queued.
-    let mut writer = Writer(tokio::spawn(async move {
+    let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
         while let Some(frame) = rx.recv().await {
             if sink.send(Message::Text(frame.to_string())).await.is_err() {
                 break;
             }
         }
         sink
-    }));
+    })));
 
     let conn_id = server.connect(outbox.clone());
     let registry_guard = RegistryGuard {
@@ -350,20 +350,10 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // Bounded: a peer that stopped reading parks the writer; past the grace
     // `Writer`'s `Drop` aborts it.
     let closed = tokio::time::timeout(DetachedWork::CLOSE_GRACE, async {
-        match (&mut writer.0).await {
-            Ok(sink) => close_socket(sink, closure, conn_id).await,
-            // The writer is aborted only after this wait, so a `JoinError` is a panic.
-            Err(err) => {
-                if err.is_panic() {
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        conn_id,
-                        error = %nest_rs_core::error_message(&err),
-                        "writer task failed",
-                    );
-                }
-                // The `Sink` went down with the task: the peer reads 1006 (RFC 6455 §7.4.1).
-            }
+        // Without the `Sink`, which went down with the task, the peer reads 1006
+        // (RFC 6455 §7.4.1).
+        if let Some(sink) = writer_ended((&mut writer.0).await, conn_id) {
+            close_socket(sink, closure, conn_id).await;
         }
     })
     .await;
@@ -379,11 +369,33 @@ async fn serve_connection<G: Gateway, N: 'static>(
 
 /// The task writing a connection's frames, aborted if the connection is
 /// dropped before it is joined: it owns the sink, so it would keep the socket open.
-struct Writer(tokio::task::JoinHandle<WsSink>);
+struct Writer(tokio::task::JoinHandle<Written<WsSink>>);
 
 impl Drop for Writer {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+/// What the writer ends with: the `Sink` back, or what it panicked with.
+type Written<S> = Result<S, Box<dyn std::any::Any + Send>>;
+
+/// The `Sink` the writer gave back, once its panic, if any, is said. The
+/// writer is aborted only after this wait, so a `JoinError` here is its
+/// runtime going down.
+fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: u64) -> Option<S> {
+    match joined {
+        Ok(Ok(sink)) => Some(sink),
+        Ok(Err(payload)) => {
+            nest_rs_core::contained_panic!(
+                target: crate::TARGET,
+                payload.as_ref(),
+                "writer task panicked",
+                conn_id,
+            );
+            None
+        }
+        Err(_) => None,
     }
 }
 
@@ -763,6 +775,25 @@ mod tests {
 
     use super::*;
     use crate::guard::WsMessageCheck;
+
+    #[tokio::test]
+    async fn a_writer_that_panicked_is_said_once_without_its_value() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let joined = tokio::spawn(nest_rs_core::panic::contain(async {
+            serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).unwrap()
+        }))
+        .await;
+
+        assert_eq!(writer_ended(joined, 7), None);
+        let line = logs.expect_one(crate::TARGET, "writer task panicked");
+        assert_eq!(line.level, "error");
+        assert_eq!(line.field("conn_id").as_deref(), Some("7"));
+        let said = line.field(nest_rs_core::panic::FIELD).unwrap_or_default();
+        assert!(
+            said.contains("invalid type: a string, expected u64") && !said.contains("sk_live"),
+            "{line:#?}"
+        );
+    }
 
     #[tokio::test]
     async fn a_connection_hook_runs_under_the_connections_identity() {

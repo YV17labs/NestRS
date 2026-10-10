@@ -125,7 +125,11 @@ async fn ask_the_oven() -> bool {
 fn a_handler_that_panics_is_filed_by_the_process_hook_beside_its_line() {
     let logs = LogCapture::install();
 
-    assert!(ask_the_oven(), "the panic reached the caller");
+    let unwound = ask_the_oven();
+    // Rust's own hook back, so an assertion failing below prints.
+    drop(std::panic::take_hook());
+
+    assert!(unwound, "the panic reached the caller");
 
     let hook = logs.expect_one(
         nest_rs_core::target::APP,

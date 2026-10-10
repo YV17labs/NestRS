@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use nest_rs_core::__private::TransportContribution;
+use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
 use nest_rs_core::target;
 use nest_rs_core::{
     App, Container, ContainerBuilder, Module, Registering, SHUTDOWN_HOOKS_TIMEOUT, Transport,
@@ -49,7 +50,8 @@ impl Transport for Panicking {
     }
 
     async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
-        panic!("the accept loop unwound");
+        let _: u64 = serde_json::from_str(r#""sk_live_51HsecretTOKEN""#).unwrap();
+        Ok(())
     }
 
     fn stop_bound(&self) -> Duration {
@@ -89,22 +91,55 @@ async fn a_transport_that_returns_an_error_is_named_before_the_shutdown() {
     );
 }
 
-#[tokio::test]
-async fn a_transport_task_that_panics_is_reported_as_a_panic_not_as_an_error() {
-    let logs = LogCapture::install();
-    let err = App::new::<PanickingModule>()
-        .expect("the module boots")
-        .run()
-        .await
-        .expect_err("a panicked transport still fails the app");
-    assert!(err.to_string().contains("panic"), "{err}");
+#[nest_rs_core::main]
+async fn serve_a_transport_that_panics() -> anyhow::Result<()> {
+    App::new::<PanickingModule>()?.run().await
+}
 
-    let event = logs.expect_one(target::APP, "transport task panicked; shutting down");
-    assert_eq!(event.level, "error");
+/// Under the process hook, so a second record of the panic would show.
+#[test]
+fn a_transport_that_panics_is_one_line_without_its_value_and_the_app_s_error_names_it() {
+    let logs = LogCapture::install_global();
+
+    let served = serve_a_transport_that_panics();
+    crate::rust_panic_hook();
+
+    let err = served.expect_err("a panicked transport fails the app");
+
+    assert_eq!(err.to_string(), "transport `Panicking` panicked");
+    assert!(!format!("{err:?}").contains("sk_live"), "{err:?}");
+    let events = logs.events();
+    for event in &events {
+        assert!(
+            event
+                .fields
+                .values()
+                .all(|value| !value.contains("sk_live")),
+            "the payload's value reached a line: {event:#?}"
+        );
+    }
+    let errors: Vec<_> = events
+        .iter()
+        .filter(|event| event.level == "error")
+        .collect();
+    assert_eq!(errors.len(), 1, "the panic is said once: {errors:#?}");
+    let line = errors[0];
+    assert_eq!(
+        (line.target.as_str(), line.message.as_str()),
+        (target::APP, "transport task panicked; shutting down")
+    );
+    assert_eq!(line.field("transport").as_deref(), Some("Panicking"));
+    assert_eq!(
+        line.field(FIELD).as_deref(),
+        Some(
+            "called `Result::unwrap()` on an `Err` value: Error(\"invalid type: a string, \
+             expected u64\", line: 1, column: 24)"
+        )
+    );
+    let location = line.field(LOCATION_FIELD).unwrap_or_default();
     assert!(
-        event.field("error").is_some(),
-        "the event carries the join error, got {:?}",
-        event.fields,
+        location.contains("tests/integration/app.rs:"),
+        "where it panicked: {line:#?}"
     );
 }
 

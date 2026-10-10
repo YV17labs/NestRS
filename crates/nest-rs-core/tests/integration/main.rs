@@ -26,6 +26,13 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+/// Rust's own panic hook back once a `#[nest_rs_core::main]` run has installed
+/// the framework's, so an assertion failing after it prints rather than
+/// becoming an event in the test's capture.
+pub(crate) fn rust_panic_hook() {
+    drop(std::panic::take_hook());
+}
+
 /// The variable a child reads its role from.
 pub(crate) const CHILD_ROLE: &str = "NEST_RS_CORE_CHILD_ROLE";
 

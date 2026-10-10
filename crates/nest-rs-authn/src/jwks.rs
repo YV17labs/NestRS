@@ -133,7 +133,7 @@ impl Jwks {
             reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
                 AuthError::Failed(format!(
                     "the authorities the JWK Set endpoint's certificate chains to do not read as \
-                 PEM: {}",
+                     PEM: {}",
                     nest_rs_core::error_message(&error)
                 ))
             })?;

@@ -220,7 +220,7 @@ impl TlsRefusals {
                     self.reported.store(false, Ordering::Relaxed);
                 }
             }
-            Err(error) if tls::negotiation_failed(error) => self.report(error),
+            Err(error) if ClientTls::negotiation_failed(error) => self.report(error),
             Err(error) if error.is_io_error() => self.diagnose(),
             Err(_) => {}
         }
@@ -305,7 +305,7 @@ async fn prove(
     loop {
         match redis::cmd("PING").query_async::<()>(&mut kept).await {
             Ok(()) => return Ok(kept),
-            Err(error) if refused(&error) || tls::negotiation_failed(&error) => {
+            Err(error) if refused(&error) || ClientTls::negotiation_failed(&error) => {
                 return Err(classified(error));
             }
             Err(_) => {

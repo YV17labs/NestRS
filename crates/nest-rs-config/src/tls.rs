@@ -37,7 +37,7 @@ use crate::{ConfigError, ConfigService, Material, Result, Setting, system_author
 /// assert!(tls.is_empty() && tls.identity_pem().is_none());
 /// # Ok::<(), nest_rs_config::ConfigError>(())
 /// ```
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ClientTls {
     authorities: Option<Material>,
     identity: Option<TlsIdentity>,
@@ -67,15 +67,6 @@ impl fmt::Debug for TlsIdentity {
     }
 }
 
-impl fmt::Debug for ClientTls {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ClientTls")
-            .field("authorities", &self.authorities)
-            .field("identity", &self.identity)
-            .finish()
-    }
-}
-
 impl ClientTls {
     /// The authorities a peer's certificate must chain to, **replacing** the
     /// system's — `None` trusts the system's — and the identity presented.
@@ -101,10 +92,7 @@ impl ClientTls {
             (Some(cert), None) => return Err(half_an_identity(env, &cert, "TLS_KEY")),
             (None, Some(key)) => return Err(half_an_identity(env, &key, "TLS_CERT")),
         };
-        Ok(Self {
-            authorities,
-            identity,
-        })
+        Ok(Self::new(authorities, identity))
     }
 
     /// Whether nothing is set: the system's authorities trusted, no certificate

@@ -35,15 +35,11 @@ static ACCEPTOR: LazyLock<TlsAcceptor> = LazyLock::new(|| DOUBLE.acceptor(None))
 /// The test authority alone: what a client trusts to reach a double, and the
 /// development services' certificate one it does not.
 pub(crate) fn trusting_the_test_authority() -> ClientTls {
-    ClientTls::new(Some(inline(AUTHORITY.pem())), None)
-}
-
-/// `pem` as a value given inline.
-fn inline(pem: &str) -> Material {
-    Material {
-        bytes: pem.as_bytes().to_vec(),
+    let authority = Material {
+        bytes: AUTHORITY.pem().as_bytes().to_vec(),
         path: None,
-    }
+    };
+    ClientTls::new(Some(authority), None)
 }
 
 /// Accept `client`'s handshake as a double, presenting the loopback's

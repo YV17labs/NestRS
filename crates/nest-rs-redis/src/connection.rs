@@ -14,7 +14,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nest_rs_config::Namespaced;
+use nest_rs_config::{ClientTls, Namespaced};
 use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster_routing::Slot;
@@ -515,7 +515,7 @@ pub(crate) fn classify(
     endpoint: &str,
     database: i64,
 ) -> Attempt<redis::RedisError> {
-    if tls::negotiation_failed(&source) {
+    if ClientTls::negotiation_failed(&source) {
         return Attempt::Refused(RedisError::TlsRefused {
             reason: tls::remedy(&source),
             endpoint: endpoint.to_owned(),
@@ -707,7 +707,6 @@ mod tests {
         mutual_tls_listener, presenting, sentinel_listener, silent_listener, tls_listener,
         trusting_the_authority,
     };
-    use nest_rs_config::ClientTls;
 
     #[test]
     fn only_an_answer_naming_the_deployments_settings_refuses_the_boot() {

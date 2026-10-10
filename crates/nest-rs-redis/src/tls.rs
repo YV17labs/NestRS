@@ -89,7 +89,7 @@ pub(crate) fn observe_refusal<T>(
         Ok(_) => {
             refusing.remove(endpoint);
         }
-        Err(error) if negotiation_failed(error) => {
+        Err(error) if ClientTls::negotiation_failed(error) => {
             if refusing.insert(endpoint.to_owned()) {
                 say_refused(endpoint, error);
             }
@@ -142,7 +142,7 @@ pub(crate) async fn refusal(client: &redis::Client, budget: Duration) -> Option<
         redis::cmd("PING").query::<()>(&mut connection)
     });
     match tokio::time::timeout(budget, heard).await {
-        Ok(Ok(Err(refused))) if negotiation_failed(&refused) => Some(refused),
+        Ok(Ok(Err(refused))) if ClientTls::negotiation_failed(&refused) => Some(refused),
         Ok(Err(failed)) if failed.is_panic() => std::panic::resume_unwind(failed.into_panic()),
         _ => None,
     }
@@ -159,11 +159,6 @@ pub(crate) fn unusable_material() -> String {
         names.spellings("TLS_CERT"),
         names.spellings("TLS_KEY"),
     )
-}
-
-/// Whether `error` is a TLS negotiation every attempt would fail the same way.
-pub(crate) fn negotiation_failed(error: &(dyn std::error::Error + 'static)) -> bool {
-    ClientTls::negotiation_failed(error)
 }
 
 /// What to change about a failed negotiation, naming the setting; rustls's own
@@ -239,13 +234,13 @@ mod tests {
             panic!("a Redis refusing the client's certificate answers nothing");
         };
         assert!(
-            met.is_connection_dropped() && !negotiation_failed(&met),
+            met.is_connection_dropped() && !ClientTls::negotiation_failed(&met),
             "the first command meets a dropped connection, not the refusal: {met}",
         );
         let Err(refused) = heard else {
             panic!("a Redis refusing the client's certificate answers nothing");
         };
-        assert!(negotiation_failed(&refused), "{refused}");
+        assert!(ClientTls::negotiation_failed(&refused), "{refused}");
         assert!(
             remedy(&refused).contains("requires a client certificate"),
             "{refused}"

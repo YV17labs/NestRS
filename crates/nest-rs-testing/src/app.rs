@@ -249,7 +249,7 @@ impl TestAppBuilder {
     /// Install console-only test OpenTelemetry once, which `OpenTelemetryModule`'s
     /// boot guard requires.
     pub fn with_test_telemetry(self) -> Self {
-        nest_rs_opentelemetry::OpenTelemetry::init_for_tests();
+        nest_rs_opentelemetry::__private::init_for_tests();
         self
     }
 }

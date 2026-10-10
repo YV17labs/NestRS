@@ -33,3 +33,11 @@ pub use init::{FLUSH_TIMEOUT, OpenTelemetry};
 #[cfg(feature = "otlp")]
 pub use meter::OpenTelemetryMeter;
 pub use module::OpenTelemetryModule;
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::init::init_for_tests;
+}

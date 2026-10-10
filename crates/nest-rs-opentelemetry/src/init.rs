@@ -41,36 +41,6 @@ impl OpenTelemetry {
         Self::init_with(OpenTelemetryConfig::from_env(service_name)?)
     }
 
-    /// Console-only init for tests. Idempotent; first call wins. No flush
-    /// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`; an
-    /// invalid directive falls through rather than failing a test run.
-    #[doc(hidden)]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the logging bootstrap runs before any config exists"
-    )]
-    pub fn init_for_tests() {
-        if initialized() {
-            return;
-        }
-        let filter = std::env::var(nest_rs_core::EnvPrefix::var(
-            nest_rs_core::logging::var::FILTER,
-        ))
-        .ok()
-        .and_then(|spec| EnvFilter::try_new(&spec).ok())
-        .or_else(|| EnvFilter::try_from_default_env().ok())
-        .unwrap_or_else(|| EnvFilter::new("warn"));
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "an Err is a subscriber already installed, which a test run keeps"
-        )]
-        let _ = Registry::default()
-            .with(filter)
-            .with(console_layer(LogFormat::Text, false))
-            .try_init();
-        mark_initialized();
-    }
-
     /// Install the subscriber from an explicit [`OpenTelemetryConfig`]. Returns the
     /// flush guard that must outlive `main`, or an error that aborts boot on an
     /// unparseable filter, a metric interval outside its range or a failed exporter
@@ -149,6 +119,35 @@ impl OpenTelemetry {
             Ok(OpenTelemetry {})
         }
     }
+}
+
+/// Console-only init for tests. Idempotent; first call wins. No flush
+/// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`; an
+/// invalid directive falls through rather than failing a test run.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the logging bootstrap runs before any config exists"
+)]
+pub fn init_for_tests() {
+    if initialized() {
+        return;
+    }
+    let filter = std::env::var(nest_rs_core::EnvPrefix::var(
+        nest_rs_core::logging::var::FILTER,
+    ))
+    .ok()
+    .and_then(|spec| EnvFilter::try_new(&spec).ok())
+    .or_else(|| EnvFilter::try_from_default_env().ok())
+    .unwrap_or_else(|| EnvFilter::new("warn"));
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "an Err is a subscriber already installed, which a test run keeps"
+    )]
+    let _ = Registry::default()
+        .with(filter)
+        .with(console_layer(LogFormat::Text, false))
+        .try_init();
+    mark_initialized();
 }
 
 /// Parse an `EnvFilter` directive string, mapping a rejection to a named,
@@ -318,9 +317,9 @@ mod tests {
     #[test]
     fn init_for_tests_is_idempotent() {
         let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        OpenTelemetry::init_for_tests();
+        init_for_tests();
         assert!(initialized(), "init_for_tests must flip the global flag");
-        OpenTelemetry::init_for_tests();
+        init_for_tests();
         assert!(initialized());
     }
 

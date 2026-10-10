@@ -83,10 +83,10 @@
 //!   value; anything else as
 //!   [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE).
 //!
-//! An answered error is filed at `warn` on `nest_rs::ws`, an opaque one at
-//! `error`. An error's `Display` never reaches the frame. [`Opaque`]'s
-//! `.opaque()?` says at the call site that a failure is none of the client's
-//! business, whatever its type.
+//! An answered error is filed at `warn` on `nest_rs::ws`; an opaque one, and the
+//! chain behind a `5xx` problem, at `error`. An error's `Display` never reaches
+//! the frame. [`Opaque`]'s `.opaque()?` says at the call site that a failure is
+//! none of the client's business, whatever its type.
 //!
 //! # Server→client push
 //!

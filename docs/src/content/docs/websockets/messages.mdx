@@ -213,8 +213,9 @@ too-short password never rides back out. `message` is `null` unless the
 say, so a client can branch on its presence. Every refused dispatch is filed
 alongside the frame — a pipe rejection, a payload that does not deserialize, an
 unknown event and a handler's answered `Err` at `warn` on `nest_rs::ws`, a
-guard's denial at `warn` on `nest_rs::layers`, an opaque failure at `error` —
-so a denied dispatch shows up in logs without extra instrumentation.
+guard's denial at `warn` on `nest_rs::layers`, an opaque failure at `error`, as
+is the chain behind a `5xx` problem — so a denied dispatch shows up in logs
+without extra instrumentation.
 
 A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =
 Result<T, MyError>` produces the identical error frame and the identical

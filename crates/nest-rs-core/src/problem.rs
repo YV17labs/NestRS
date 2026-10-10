@@ -205,7 +205,9 @@ impl Problem {
     }
 
     /// A sentence the client may read. A server error never carries one to
-    /// the wire: [`detail`](Self::detail) answers `None` on a `5xx`.
+    /// the wire, [`detail`](Self::detail) answering `None` on a `5xx`, nor to
+    /// a log line: what failed belongs in the error's chain, which an edge
+    /// files at `error` when its answer withholds it.
     pub fn with_detail(mut self, detail: impl Into<Cow<'static, str>>) -> Self {
         self.detail = Some(detail.into());
         self
@@ -291,8 +293,8 @@ impl Error for Problem {}
 /// `nest_rs_mcp::problem_error`. HTTP does not read it: a route answers a
 /// [`Problem`] its error is or carries, or the error's own `ResponseError`, so
 /// a domain error a route returns implements that too. `Some(problem)` answers
-/// that problem in the edge's standard form; `None` answers opaquely and logs
-/// the error's whole chain at `error`.
+/// that problem in the edge's standard form; `None` answers opaquely. Either
+/// way, what the answer withholds of the error's chain is logged at `error`.
 pub trait ToProblem: Error + Send + Sync + 'static {
     /// The problem to answer, or `None` to answer opaquely.
     fn to_problem(&self) -> Option<Problem>;
@@ -302,6 +304,21 @@ pub trait ToProblem: Error + Send + Sync + 'static {
 impl ToProblem for Problem {
     fn to_problem(&self) -> Option<Problem> {
         Some(self.clone())
+    }
+}
+
+/// Re-exported through the crate's `__private`.
+pub(crate) mod __private {
+    use std::error::Error;
+
+    use super::Problem;
+
+    /// What answering `problem` for `error` keeps from the client, for the
+    /// edge to file at `error` as it files an opaque failure: `error`'s whole
+    /// chain when the answer is a `5xx` and `error` is more than the bare
+    /// problem, else `None`.
+    pub fn withheld(problem: &Problem, error: &(dyn Error + 'static)) -> Option<String> {
+        (problem.is_server_error() && !error.is::<Problem>()).then(|| crate::error_message(error))
     }
 }
 
@@ -357,6 +374,21 @@ mod tests {
     fn a_problem_returned_as_an_error_answers_itself() {
         let problem = Problem::new(429, code::RATE_LIMITED).with_retry_after(30);
         assert_eq!(problem.to_problem(), Some(problem.clone()));
+    }
+
+    #[test]
+    fn a_server_answer_withholds_the_chain_behind_the_problem_and_nothing_else() {
+        use super::__private::withheld;
+
+        let unavailable = Problem::new(503, code::UNAVAILABLE);
+        let outage = std::io::Error::other("the index at 10.0.0.1 refused");
+        assert_eq!(
+            withheld(&unavailable, &outage).as_deref(),
+            Some("the index at 10.0.0.1 refused"),
+        );
+        assert_eq!(withheld(&unavailable, &unavailable), None, "a bare problem");
+        let conflict = Problem::new(409, code::CONFLICT);
+        assert_eq!(withheld(&conflict, &outage), None, "a client answer");
     }
 
     #[test]

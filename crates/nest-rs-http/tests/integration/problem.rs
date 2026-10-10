@@ -151,11 +151,41 @@ impl FailureController {
         ))
     }
 
+    /// A server `Problem` an anyhow chain carries, behind what the chain says
+    /// of the failure.
+    #[get("/outage")]
+    async fn outage(&self) -> anyhow::Result<String> {
+        Err(anyhow::Error::from(server_problem()).context("the search index at 10.0.0.1 refused"))
+    }
+
+    /// The same chain, crossed into poem as an `HttpError`.
+    #[get("/outage-carried")]
+    async fn outage_carried(&self) -> poem::Result<String> {
+        Err(nest_rs_http::__private::poem_bridge::error_to_poem(
+            nest_rs_http::HttpError::from(
+                anyhow::Error::from(server_problem())
+                    .context("the search index at 10.0.0.1 refused"),
+            ),
+        ))
+    }
+
+    /// A server `Problem` returned through the edge's own error.
+    #[get("/unavailable")]
+    async fn unavailable(&self) -> poem::Result<String> {
+        Err(nest_rs_http::__private::poem_bridge::error_to_poem(
+            nest_rs_http::HttpError::from(server_problem()),
+        ))
+    }
+
     /// A deliberate `500` with no cause: nothing withheld, nothing filed.
     #[get("/status")]
     async fn status(&self) -> poem::Result<String> {
         Err(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
     }
+}
+
+fn server_problem() -> nest_rs_core::Problem {
+    nest_rs_core::Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE).with_retry_after(30)
 }
 
 #[module(providers = [FailureController])]
@@ -384,6 +414,45 @@ async fn a_problem_answers_its_status_and_its_code_member() {
     let body = problem_json(taken).await;
     assert_eq!(body["code"], "CONFLICT", "{body}");
     assert_eq!(body["detail"], "the handle is taken", "{body}");
+}
+
+/// A server `Problem` answers its status, its code and its wait, never the
+/// chain behind it, which every path that renders it files once at `error`;
+/// a bare `Problem`, like a bare status, withholds nothing and files nothing,
+/// and so does a client one.
+#[tokio::test]
+async fn a_server_problem_answers_its_status_and_files_the_chain_it_withholds() {
+    for path in ["/failure/outage", "/failure/outage-carried"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        let client = crate::boot::<FailureModule>().await;
+        let resp = client.get(path).send().await;
+        resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        resp.assert_header(poem::http::header::RETRY_AFTER, "30");
+        let body = problem_json(resp).await;
+        assert_eq!(body["code"], "UNAVAILABLE", "{path}: {body}");
+        assert!(!body.to_string().contains("10.0.0.1"), "{path}: {body}");
+
+        let failed = logs.expect_one(nest_rs_http::target::HTTP, "request failed");
+        assert_eq!(failed.level, "error", "{path}");
+        assert!(
+            failed
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1") && e.contains("503 UNAVAILABLE")),
+            "{path}: {failed:#?}",
+        );
+    }
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let client = crate::boot::<FailureModule>().await;
+    let bare = client.get("/failure/unavailable").send().await;
+    bare.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    bare.assert_header(poem::http::header::RETRY_AFTER, "30");
+    assert_eq!(problem_json(bare).await["code"], "UNAVAILABLE");
+    for path in ["/failure/carried", "/failure/taken"] {
+        let resp = client.get(path).send().await;
+        assert!(resp.0.status().is_client_error(), "{path}");
+    }
+    logs.expect_none(nest_rs_http::target::HTTP, "request failed");
 }
 
 /// An `HttpError` whose chain the client is owed no word of answers opaquely

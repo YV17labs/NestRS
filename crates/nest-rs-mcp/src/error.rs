@@ -88,7 +88,8 @@ pub fn pipe_error(err: &PipeError) -> McpError {
 /// [`client_message`](nest_rs_core::Problem::client_message) as the message,
 /// and its code —
 /// with its wait as `retryAfterSeconds` — under `data`. An error that says none
-/// answers as [`Opaque`] does, its chain filed at `error`.
+/// answers as [`Opaque`] does, its chain filed at `error`, as is the chain
+/// behind a `5xx` problem.
 ///
 /// ```
 /// use nest_rs_core::Problem;
@@ -102,6 +103,9 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
     let Some(problem) = error.to_problem() else {
         return opaque_error(error);
     };
+    if let Some(said) = nest_rs_core::__private::withheld(&problem, error) {
+        failed(&said);
+    }
     let mut data = serde_json::Map::new();
     data.insert("code".to_owned(), problem.code().as_str().into());
     if let Some(seconds) = problem.retry_after() {
@@ -117,12 +121,17 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
 
 /// The opaque answer, with `error`'s whole chain on the operator's line.
 fn opaque_error(error: &(dyn std::error::Error + 'static)) -> McpError {
+    failed(&nest_rs_core::error_message(error));
+    McpError::internal_error(OPAQUE, None)
+}
+
+/// The operator's line for a failure the answer withholds: its whole chain.
+fn failed(said: &str) {
     tracing::error!(
         target: crate::TARGET,
-        error = %nest_rs_core::error_message(error),
+        error = %said,
         "mcp operation failed",
     );
-    McpError::internal_error(OPAQUE, None)
 }
 
 /// The failure a decorated operation reports when it declares guards and finds
@@ -283,6 +292,54 @@ mod tests {
             failed
                 .field("error")
                 .is_some_and(|e| e.contains("10.0.0.1"))
+        );
+    }
+
+    /// A server problem answers the sentence an opaque failure answers, so it
+    /// files the line an opaque failure files; a bare problem or a client one
+    /// withholds nothing and files none.
+    #[test]
+    fn a_server_problem_files_the_chain_its_answer_withholds() {
+        use nest_rs_core::problem::code;
+
+        #[derive(Debug)]
+        struct Outage;
+
+        impl std::fmt::Display for Outage {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the search index at 10.0.0.1 refused")
+            }
+        }
+
+        impl std::error::Error for Outage {}
+
+        impl ToProblem for Outage {
+            fn to_problem(&self) -> Option<Problem> {
+                Some(Problem::new(503, code::UNAVAILABLE))
+            }
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let error = problem_error(&Outage);
+        assert_eq!(error.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert!(!format!("{error:?}").contains("10.0.0.1"), "{error:?}");
+        let failed = logs.expect_one("nest_rs::mcp", "mcp operation failed");
+        assert_eq!(failed.level, "error");
+        assert!(
+            failed
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1")),
+            "{failed:#?}"
+        );
+
+        let bare = problem_error(&Problem::new(503, code::UNAVAILABLE));
+        assert_eq!(bare.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        let conflict = problem_error(&Problem::new(409, code::CONFLICT));
+        assert_eq!(conflict.message, "conflict");
+        assert_eq!(
+            logs.find("nest_rs::mcp", "mcp operation failed").len(),
+            1,
+            "a bare problem or a client one withholds nothing",
         );
     }
 

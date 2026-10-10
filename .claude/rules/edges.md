@@ -92,7 +92,8 @@ Review a new edge, or a change to one, against it:
     error, a `nest_rs_core::ToProblem` error where the edge reads one, nor
     framework vocabulary is answered opaquely on every edge
     (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`, the `INTERNAL` code), its chain
-    logged once at `error`. `Problem`, `Code` and `ToProblem` are the
+    logged once at `error`, as is the chain behind a `5xx` problem; a bare
+    `Problem` withholds nothing. `Problem`, `Code` and `ToProblem` are the
     one client-error contract: a `Problem` answers in the edge's standard
     form (a `code` member, `extensions.code`, `errors.code`, `data.code`),
     never with its detail on a `5xx`, a denial carries the same `code`

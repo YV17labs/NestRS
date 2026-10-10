@@ -138,8 +138,9 @@ async fn publish(&self, id: String) -> Result<Post, PublishError> {
 
 A problem without a detail says its code in words (`NOT_A_DRAFT` would read
 `not a draft`); a `5xx` never carries one — a `503` answers
-`"service unavailable"`, any other `"internal error"`. `None` is the opaque
-answer: `Index`'s chain is filed at `error`, the client reads the constant. A
+`"service unavailable"`, any other `"internal error"`, and the chain behind
+it is filed at `error` on `nest_rs::graphql`. `None` is the opaque answer:
+`Index`'s chain is filed at `error`, the client reads the constant. A
 `Code` declared in a `const` is checked when it compiles: `Code::new("conflict")`
 is refused, and so is a `Problem` whose status is not a `4xx` or a `5xx`.
 

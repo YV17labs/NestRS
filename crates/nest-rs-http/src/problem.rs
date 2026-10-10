@@ -331,9 +331,9 @@ fn is_raw_text(resp: &Response) -> bool {
 /// itself — a [`ResponseError`], a ready response, an
 /// [`HttpError`](crate::HttpError) — answers as it renders. Any other poem
 /// renders as its own sentence, so it is read instead: a [`Problem`] its chain
-/// carries answers its document, and a `5xx` answers opaquely, its chain filed
-/// once at `error`. A raw text body left says each decode failure in the
-/// error's chain without its value.
+/// carries answers its document, and a `5xx` answers opaquely; what either
+/// answer withholds of the chain is filed once at `error`. A raw text body left
+/// says each decode failure in the error's chain without its value.
 ///
 /// `Query<T>`'s rejection is transparent over its serde error, so that one is
 /// read off the type.
@@ -346,9 +346,13 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
     let problem = source
         .and_then(nest_rs_core::__private::find_in_chain::<Problem>)
         .cloned();
-    let withheld = source
-        .filter(|_| problem.is_none() && err.status().is_server_error())
-        .map(nest_rs_core::error_message);
+    let withheld = source.and_then(|chain| match &problem {
+        Some(problem) => nest_rs_core::__private::withheld(problem, chain),
+        None => err
+            .status()
+            .is_server_error()
+            .then(|| nest_rs_core::error_message(chain)),
+    });
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
     if let Some(query) = err.downcast_ref::<ParseQueryError>() {
@@ -360,16 +364,12 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
         let body = resp.take_body();
         if !body.is_empty() {
             let (parts, _) = resp.into_parts();
+            if let Some(withheld) = withheld {
+                crate::error::failed(&withheld);
+            }
             let mut answer = match problem {
                 Some(problem) => crate::poem_bridge::response_to_poem(problem_response(&problem)),
-                None => {
-                    tracing::error!(
-                        target: crate::target::HTTP,
-                        error = %withheld.unwrap_or_default(),
-                        "request failed",
-                    );
-                    replacing(ProblemDetails::from_status(parts.status), &parts.headers)
-                }
+                None => replacing(ProblemDetails::from_status(parts.status), &parts.headers),
             };
             answer.extensions_mut().extend(parts.extensions);
             return answer;

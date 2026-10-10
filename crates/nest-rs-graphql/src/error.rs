@@ -12,6 +12,9 @@
 //! 4. anything else: [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL` code, and
 //!    one `error` on `nest_rs::graphql` carrying the whole chain.
 //!
+//! A `5xx` problem answers the sentence an opaque failure answers, so the chain
+//! behind it is filed the same way; a bare `Problem` withholds nothing.
+//!
 //! An error that is none of these — a `Display` type that is no
 //! `std::error::Error` — does not compile.
 //!
@@ -53,7 +56,8 @@ pub fn pipe_error(err: &PipeError) -> Error {
 /// `async_graphql::Error`: the problem's
 /// [`client_message`](Problem::client_message), its code under
 /// `extensions.code` and its wait under `extensions.retryAfterSeconds`; or,
-/// when the error says none, the opaque answer, its chain filed at `error`.
+/// when the error says none, the opaque answer. Either way the chain an answer
+/// withholds — the opaque one's, a `5xx` problem's — is filed at `error`.
 ///
 /// A resolver returning the error answers through it already; a body mixing
 /// failures inside an `async_graphql::Result` converts with it.
@@ -67,9 +71,17 @@ pub fn pipe_error(err: &PipeError) -> Error {
 /// ```
 pub fn problem_error<E: ToProblem>(error: &E) -> Error {
     match error.to_problem() {
-        Some(problem) => rendered(&problem),
+        Some(problem) => answered(&problem, error),
         None => opaque_error(error),
     }
+}
+
+/// `problem` as the answer to `error`, filing what a `5xx` answer withholds.
+fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> Error {
+    if let Some(said) = nest_rs_core::__private::withheld(problem, error) {
+        failed(&said);
+    }
+    rendered(problem)
 }
 
 /// A problem in GraphQL's form.
@@ -87,13 +99,18 @@ fn rendered(problem: &Problem) -> Error {
 /// The opaque answer, with `error`'s whole chain on the operator's line: what
 /// a failure the client is owed no explanation for becomes.
 pub(crate) fn opaque_error(error: &(dyn StdError + 'static)) -> Error {
-    tracing::error!(
-        target: crate::TARGET,
-        error = %nest_rs_core::error_message(error),
-        "graphql operation failed",
-    );
+    failed(&nest_rs_core::error_message(error));
     // The `INTERNAL` code an internal denial carries, so the two are indistinguishable.
     rendered(&Problem::new(500, code::INTERNAL))
+}
+
+/// The operator's line for a failure the answer withholds: its whole chain.
+fn failed(said: &str) {
+    tracing::error!(
+        target: crate::TARGET,
+        error = %said,
+        "graphql operation failed",
+    );
 }
 
 /// Tiers 3 and 4: the framework vocabulary `error`'s chain carries, else the
@@ -102,7 +119,7 @@ fn chain_error(error: &(dyn StdError + 'static)) -> Error {
     use nest_rs_core::__private::find_in_chain;
 
     if let Some(problem) = find_in_chain::<Problem>(error) {
-        return rendered(problem);
+        return answered(problem, error);
     }
     if let Some(rejection) = find_in_chain::<PipeError>(error) {
         return pipe_error(rejection);
@@ -279,6 +296,72 @@ mod tests {
             event.field("error").is_some_and(|e| e.contains("10.0.0.1")),
             "{event:#?}"
         );
+    }
+
+    #[derive(Debug)]
+    struct Outage(Ledger);
+
+    impl std::fmt::Display for Outage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the payment provider is down")
+        }
+    }
+
+    impl StdError for Outage {
+        fn source(&self) -> Option<&(dyn StdError + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    impl ToProblem for Outage {
+        fn to_problem(&self) -> Option<Problem> {
+            Some(Problem::new(503, code::UNAVAILABLE).with_retry_after(30))
+        }
+    }
+
+    /// A server problem answers the sentence an opaque failure answers, so it
+    /// files the line an opaque failure files; a bare problem or a client one
+    /// withholds nothing and files none.
+    #[test]
+    fn a_server_problem_files_the_chain_its_answer_withholds() {
+        use super::ErrorReportChain as _;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let failed = || logs.find(crate::TARGET, "graphql operation failed");
+
+        let outage = ErrorReport(Outage(Ledger)).into_graphql_error();
+        assert_eq!(outage.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(extensions(&outage)[CODE_EXTENSION], "UNAVAILABLE");
+        let lines = failed();
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert_eq!(lines[0].level, "error");
+        assert!(
+            lines[0]
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1")),
+            "{lines:#?}"
+        );
+
+        let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
+            .context("charging the card");
+        let charged = ErrorReport(carried).into_graphql_error();
+        assert_eq!(charged.message, OPAQUE_CLIENT_MESSAGE);
+        let lines = failed();
+        assert_eq!(lines.len(), 2, "{lines:#?}");
+        assert!(
+            lines[1]
+                .field("error")
+                .is_some_and(|e| e.contains("charging the card")),
+            "{lines:#?}"
+        );
+
+        let bare = problem_error(&Problem::new(503, code::UNAVAILABLE));
+        assert_eq!(bare.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(failed().len(), 2, "a bare problem withholds nothing");
+
+        let conflict = problem_error(&Problem::new(409, code::CONFLICT));
+        assert_eq!(conflict.message, "conflict");
+        assert_eq!(failed().len(), 2, "a client problem withholds nothing");
     }
 
     #[test]

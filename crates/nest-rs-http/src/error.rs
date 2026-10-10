@@ -385,8 +385,8 @@ impl HttpError {
 impl HttpError {
     /// The response this error answers at the edge: as
     /// [`into_response`](Self::into_response) renders it, except that a
-    /// [`Problem`] its cause carries answers its own document, and the chain of
-    /// a `5xx` it answers without one is filed once at `error`.
+    /// [`Problem`] its cause carries answers its own document; the chain a `5xx`
+    /// answer withholds is filed once at `error`.
     pub(crate) fn answer(self) -> Response {
         let chain: Option<&(dyn Error + 'static)> = match &self.0.cause {
             Cause::Anyhow(error) => Some(error.as_ref()),
@@ -398,20 +398,34 @@ impl HttpError {
         let Some(chain) = chain else {
             return self.into_response();
         };
-        let Some(problem) = nest_rs_core::__private::find_in_chain::<Problem>(chain) else {
-            if self.0.status.is_server_error() {
-                tracing::error!(
-                    target: crate::target::HTTP,
-                    error = %nest_rs_core::error_message(chain),
-                    "request failed",
-                );
-            }
+        let problem = nest_rs_core::__private::find_in_chain::<Problem>(chain);
+        let withheld = match problem {
+            Some(problem) => nest_rs_core::__private::withheld(problem, chain),
+            None => self
+                .0
+                .status
+                .is_server_error()
+                .then(|| nest_rs_core::error_message(chain)),
+        };
+        if let Some(said) = withheld {
+            failed(&said);
+        }
+        let Some(problem) = problem else {
             return self.into_response();
         };
         let mut response = problem_response(problem);
         response.extensions_mut().extend(self.0.extensions);
         response
     }
+}
+
+/// The operator's line for a failure the answer withholds: its whole chain.
+pub(crate) fn failed(said: &str) {
+    tracing::error!(
+        target: crate::target::HTTP,
+        error = %said,
+        "request failed",
+    );
 }
 
 /// A [`ResponseError`]'s own rendering, behind the box that erased its type.

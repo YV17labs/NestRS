@@ -126,7 +126,8 @@ not `ToProblem`: a route answers a `Problem` only when the error is one or
 carries one in its chain. What no seam answers — no `ResponseError`, no
 `ToProblem` where the edge reads it, no framework type in its chain — is
 answered opaquely on every edge, and its whole chain is filed once at
-`error`: a failed handler is never logged nowhere.
+`error`, as is the chain behind a `5xx` problem: a failed handler is never
+logged nowhere.
 
 ## Route-bound filters via `#[use_filters(...)]`
 

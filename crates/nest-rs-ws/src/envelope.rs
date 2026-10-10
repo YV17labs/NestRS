@@ -186,7 +186,7 @@ impl WsReply {
     /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
     /// failure without its value — each with a `warn` carrying the whole chain.
     /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`], its chain filed once at
-    /// `error`.
+    /// `error`, as is the chain behind a `5xx` problem.
     pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
     where
         E: Into<Box<dyn Error + Send + Sync>> + 'static,
@@ -200,7 +200,7 @@ fn chain_reply(event: &str, error: &(dyn Error + 'static)) -> WsReply {
     let frame = if let Some(frame) = find_in_chain::<WsError>(error) {
         frame.clone()
     } else if let Some(problem) = find_in_chain::<Problem>(error) {
-        WsError::from_problem(problem)
+        return problem_reply(event, error, problem);
     } else if let Some(rejection) = find_in_chain::<PipeError>(error) {
         WsError::from_pipe(rejection)
     } else if let Some(report) = DecodeError::in_chain(error) {
@@ -210,6 +210,17 @@ fn chain_reply(event: &str, error: &(dyn Error + 'static)) -> WsReply {
     };
     answered(event, error);
     WsReply::Error(frame)
+}
+
+/// `problem`'s frame as the answer to `error`: a refusal answered, filed at
+/// `warn`, unless the `5xx` answer withholds the chain behind it, which is then
+/// filed as an opaque failure's is.
+fn problem_reply(event: &str, error: &(dyn Error + 'static), problem: &Problem) -> WsReply {
+    match nest_rs_core::__private::withheld(problem, error) {
+        Some(said) => failed(event, &said),
+        None => answered(event, error),
+    }
+    WsReply::Error(WsError::from_problem(problem))
 }
 
 /// The line a handler's error answered with a frame files: its whole chain.
@@ -222,14 +233,19 @@ fn answered(event: &str, error: &(dyn Error + 'static)) {
     );
 }
 
-/// The opaque frame, with what the error said on the operator's line at `error`.
-fn opaque_reply(event: &str, said: &str) -> WsReply {
+/// The operator's line for a failure the frame withholds: its whole chain.
+fn failed(event: &str, said: &str) {
     tracing::error!(
         target: crate::TARGET,
         event,
         error = %said,
         "websocket message failed",
     );
+}
+
+/// The opaque frame, with what the error said on the operator's line at `error`.
+fn opaque_reply(event: &str, said: &str) -> WsReply {
+    failed(event, said);
     WsReply::Error(WsError::new(OPAQUE_CLIENT_MESSAGE))
 }
 
@@ -289,7 +305,7 @@ impl<T> ReplyValueFallback for ReplyValue<T> {
 ///
 /// 1. A [`ToProblem`] error takes the inherent method: the problem it says, in
 ///    its frame ([`WsError::from_problem`]); `None` answers opaquely, its chain
-///    filed at `error`.
+///    filed at `error`, as is the chain behind a `5xx` problem.
 /// 2. Any other error taking a box — `Send` or not — takes
 ///    [`ErrorReportChain`]: the vocabulary its chain carries
 ///    ([`WsReply::from_handler_error`]), else the opaque frame.
@@ -304,10 +320,7 @@ impl<E: ToProblem> ErrorReport<E> {
     /// The problem's frame, or the opaque one.
     pub fn into_frame(self, event: &str) -> WsReply {
         match self.0.to_problem() {
-            Some(problem) => {
-                answered(event, &self.0);
-                WsReply::Error(WsError::from_problem(&problem))
-            }
+            Some(problem) => problem_reply(event, &self.0, &problem),
             None => opaque_reply(event, &nest_rs_core::error_message(&self.0)),
         }
     }
@@ -440,6 +453,93 @@ mod tests {
         assert!(
             frame.get("errors").is_none(),
             "absent detail must not ship an explicit null, matching HTTP: {frame}",
+        );
+    }
+
+    #[derive(Debug)]
+    struct Outage;
+
+    impl std::fmt::Display for Outage {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the search index at 10.0.0.1 refused")
+        }
+    }
+
+    impl Error for Outage {}
+
+    impl ToProblem for Outage {
+        fn to_problem(&self) -> Option<Problem> {
+            Some(Problem::new(503, nest_rs_core::problem::code::UNAVAILABLE).with_retry_after(30))
+        }
+    }
+
+    /// A server problem answers the sentence an opaque failure answers, so it
+    /// files the line an opaque failure files, at `error`, by either tier; a
+    /// bare problem or a client one is a refusal answered, at `warn`.
+    #[test]
+    fn a_server_problem_files_the_chain_its_frame_withholds_at_error() {
+        use nest_rs_core::problem::code;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let failed = || logs.find(crate::TARGET, "websocket message failed");
+        let answered = || logs.find(crate::TARGET, "subscribe_message handler returned Err");
+
+        let WsReply::Error(frame) = ErrorReport(Outage).into_frame("search") else {
+            panic!("an error answers an error frame");
+        };
+        assert_eq!(frame.error, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
+        assert_eq!(
+            frame.errors,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 30 })),
+        );
+        let lines = failed();
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert_eq!(lines[0].level, "error");
+        assert!(
+            lines[0]
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1")),
+            "{lines:#?}"
+        );
+
+        let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
+            .context("charging the card");
+        let WsReply::Error(frame) = WsReply::from_handler_error("charge", carried) else {
+            panic!("an error answers an error frame");
+        };
+        assert_eq!(frame.error, OPAQUE_CLIENT_MESSAGE);
+        let lines = failed();
+        assert_eq!(lines.len(), 2, "{lines:#?}");
+        assert!(
+            lines[1]
+                .field("error")
+                .is_some_and(|e| e.contains("charging the card")),
+            "{lines:#?}"
+        );
+        assert!(answered().is_empty(), "{:#?}", answered());
+
+        for (problem, said) in [
+            (
+                Problem::new(503, code::UNAVAILABLE),
+                nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+            ),
+            (Problem::new(409, code::CONFLICT), "conflict"),
+        ] {
+            let WsReply::Error(frame) = WsReply::from_handler_error("charge", problem) else {
+                panic!("an error answers an error frame");
+            };
+            assert_eq!(frame.error, said);
+        }
+        assert_eq!(
+            failed().len(),
+            2,
+            "a bare problem or a client one withholds nothing"
+        );
+        let refused = answered();
+        assert_eq!(refused.len(), 2, "{refused:#?}");
+        assert!(
+            refused.iter().all(|line| line.level == "warn"),
+            "{refused:#?}"
         );
     }
 

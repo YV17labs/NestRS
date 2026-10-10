@@ -178,6 +178,14 @@ as one `application/problem+json` body. The transport lifts any leftover
 plain-text error onto the RFC 9457 envelope at its edge; internal (`5xx`)
 detail is dropped so a driver or panic message never reaches the wire.
 
+An error nobody meant for the client — an `anyhow` chain, a
+`poem::error::InternalServerError(e)` — is never lost on the way: it answers an
+opaque `500` problem, and its whole chain is filed once at `error` on
+`nest_rs::http`. A `nest_rs::core::Problem` the chain carries answers itself
+instead — its status, its `detail` on a `4xx`, its `code` as an extension
+member and its `Retry-After` — the same contract GraphQL, WebSockets and MCP
+answer it by (`ProblemDetails::from_problem` builds the document).
+
 The two `ResponseError` types convert into `poem::Error`, so `?`
 propagates them through a `poem::Result` handler. `AuthError` implements
 `IntoResponse` rather than `ResponseError`: it is returned as a handler's

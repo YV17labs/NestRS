@@ -1,3 +1,8 @@
+use std::error::Error;
+
+use nest_rs_core::__private::find_in_chain;
+use nest_rs_core::{DecodeError, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem};
+use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
 
 use crate::opaque::Opaque;
@@ -58,6 +63,37 @@ impl WsError {
             errors: Some(details),
         }
     }
+
+    /// The frame a [`Problem`] answers: its
+    /// [`client_message`](Problem::client_message), and its code — with its
+    /// wait as `retryAfterSeconds` when it has one — under `errors`.
+    ///
+    /// ```
+    /// use nest_rs_core::Problem;
+    /// use nest_rs_core::problem::code;
+    /// use nest_rs_ws::WsError;
+    ///
+    /// let frame = WsError::from_problem(&Problem::new(409, code::CONFLICT));
+    /// assert_eq!(frame.error, "conflict");
+    /// assert_eq!(frame.errors, Some(serde_json::json!({ "code": "CONFLICT" })));
+    /// ```
+    pub fn from_problem(problem: &Problem) -> Self {
+        let mut errors = serde_json::Map::new();
+        errors.insert("code".to_owned(), problem.code().as_str().into());
+        if let Some(seconds) = problem.retry_after() {
+            errors.insert("retryAfterSeconds".to_owned(), seconds.into());
+        }
+        Self::with_details(problem.client_message(), serde_json::Value::Object(errors))
+    }
+
+    /// The frame a [`PipeError`] answers: its message, and its field-level
+    /// detail under `errors` when it has some.
+    fn from_pipe(rejection: &PipeError) -> Self {
+        match rejection.details() {
+            Some(details) => Self::with_details(rejection.message(), details.clone()),
+            None => Self::new(rejection.message()),
+        }
+    }
 }
 
 impl std::fmt::Display for WsError {
@@ -101,7 +137,7 @@ impl WsReply {
         WsReply::Error(WsError::new(message))
     }
 
-    /// The error frame a rejected [`PipeError`](nest_rs_pipes::PipeError) puts on
+    /// The error frame a rejected [`PipeError`] puts on
     /// the wire, carrying its per-field detail, with a `warn` on `nest_rs::ws`.
     pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
@@ -120,7 +156,7 @@ impl WsReply {
 
     /// The error frame a payload that does not deserialize puts on the wire,
     /// with a `warn`. Both say where it failed and what kind of value was found
-    /// ([`DecodeError`](nest_rs_core::DecodeError)), never the value.
+    /// ([`DecodeError`]), never the value.
     pub fn payload_error(event: &str, error: &serde_json::Error) -> WsReply {
         let error = nest_rs_core::DecodeError::new(error);
         tracing::warn!(
@@ -145,27 +181,56 @@ impl WsReply {
         WsReply::Error(WsError::new(format!("unknown event `{event}`")))
     }
 
-    /// The error frame a handler's `Err` produces, with a `warn` carrying the
-    /// whole cause chain. The frame carries the error's own sentence, any decode
-    /// failure in its chain said without its value
-    /// ([`DecodeError::redact`](nest_rs_core::DecodeError::redact)); a [`WsError`]
-    /// in the chain is sent whole.
+    /// The error frame a handler's `Err` produces, read off the vocabulary its
+    /// chain carries: a [`WsError`] is sent whole, a [`Problem`] in its frame
+    /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
+    /// failure without its value — each with a `warn` carrying the whole chain.
+    /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`], its chain filed once at
+    /// `error`.
     pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
     where
-        E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+        E: Into<Box<dyn Error + Send + Sync>> + 'static,
     {
-        let error = nest_rs_core::boxed_error(error);
-        tracing::warn!(
-            target: crate::TARGET,
-            event,
-            error = %nest_rs_core::error_message(&*error),
-            "subscribe_message handler returned Err",
-        );
-        match error.downcast::<WsError>() {
-            Ok(frame) => WsReply::Error(*frame),
-            Err(error) => WsReply::Error(WsError::new(handler_sentence(&*error))),
-        }
+        chain_reply(event, &*nest_rs_core::boxed_error(error))
     }
+}
+
+/// The frame a handler's error carries in its chain, else the opaque one.
+fn chain_reply(event: &str, error: &(dyn Error + 'static)) -> WsReply {
+    let frame = if let Some(frame) = find_in_chain::<WsError>(error) {
+        frame.clone()
+    } else if let Some(problem) = find_in_chain::<Problem>(error) {
+        WsError::from_problem(problem)
+    } else if let Some(rejection) = find_in_chain::<PipeError>(error) {
+        WsError::from_pipe(rejection)
+    } else if let Some(report) = DecodeError::in_chain(error) {
+        WsError::new(report.to_string())
+    } else {
+        return opaque_reply(event, &nest_rs_core::error_message(error));
+    };
+    answered(event, error);
+    WsReply::Error(frame)
+}
+
+/// The line a handler's error answered with a frame files: its whole chain.
+fn answered(event: &str, error: &(dyn Error + 'static)) {
+    tracing::warn!(
+        target: crate::TARGET,
+        event,
+        error = %nest_rs_core::error_message(error),
+        "subscribe_message handler returned Err",
+    );
+}
+
+/// The opaque frame, with what the error said on the operator's line at `error`.
+fn opaque_reply(event: &str, said: &str) -> WsReply {
+    tracing::error!(
+        target: crate::TARGET,
+        event,
+        error = %said,
+        "websocket message failed",
+    );
+    WsReply::Error(WsError::new(OPAQUE_CLIENT_MESSAGE))
 }
 
 /// Turns a handler's return value into a [`WsReply`] **by type**, so a `Result`
@@ -222,78 +287,77 @@ impl<T> ReplyValueFallback for ReplyValue<T> {
 /// operator reads — **by type**, resolved where the expansion names it, in three
 /// tiers, each taken only when the one above does not apply:
 ///
-/// 1. An error converting into a boxed `Send + Sync` one — and `'static`, which
-///    an error borrowing nothing is — takes the inherent method: its whole cause
-///    chain is logged, and a [`WsError`] is sent whole
-///    ([`WsReply::from_handler_error`]).
-/// 2. Any other error — one holding an `Rc`, a `Box<dyn Error>` — takes
-///    [`ErrorReportChain`]: its causes are logged.
-/// 3. Any other `Display` type takes [`ErrorReportFallback`]: it has no causes to
-///    walk, so its sentence is its whole chain, read by serde's wording alone.
-///
-/// In every tier the frame says a decode failure without its value.
+/// 1. A [`ToProblem`] error takes the inherent method: the problem it says, in
+///    its frame ([`WsError::from_problem`]); `None` answers opaquely, its chain
+///    filed at `error`.
+/// 2. Any other error taking a box — `Send` or not — takes
+///    [`ErrorReportChain`]: the vocabulary its chain carries
+///    ([`WsReply::from_handler_error`]), else the opaque frame.
+/// 3. Any other `Display` type takes [`ErrorReportFallback`]: it has no causes
+///    to read vocabulary from, so it answers opaquely, its sentence on the
+///    operator's line said without a decode failure's value.
 ///
 /// A type that is none of them does not compile.
 pub struct ErrorReport<E>(pub E);
 
-impl<E> ErrorReport<E>
-where
-    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
-{
-    /// The error frame, with the whole cause chain on the operator's line.
+impl<E: ToProblem> ErrorReport<E> {
+    /// The problem's frame, or the opaque one.
     pub fn into_frame(self, event: &str) -> WsReply {
-        WsReply::from_handler_error(event, self.0)
+        match self.0.to_problem() {
+            Some(problem) => {
+                answered(event, &self.0);
+                WsReply::Error(WsError::from_problem(&problem))
+            }
+            None => opaque_reply(event, &nest_rs_core::error_message(&self.0)),
+        }
     }
 }
 
-/// The error that is not `Send + Sync` case of [`ErrorReport`] — the second tier.
+/// The error that is not a [`ToProblem`] case of [`ErrorReport`] — the second
+/// tier.
 pub trait ErrorReportChain {
-    /// The error frame, with the whole cause chain on the operator's line.
+    /// The frame its chain's vocabulary answers, else the opaque one.
     fn into_frame(self, event: &str) -> WsReply;
 }
 
 impl<E> ErrorReportChain for ErrorReport<E>
 where
-    E: Into<Box<dyn std::error::Error>>,
+    E: Into<Box<dyn Error>> + 'static,
 {
     fn into_frame(self, event: &str) -> WsReply {
-        let error: Box<dyn std::error::Error> = self.0.into();
-        tracing::warn!(
-            target: crate::TARGET,
-            event,
-            error = %nest_rs_core::error_message(&*error),
-            "subscribe_message handler returned Err",
-        );
-        WsReply::Error(WsError::new(handler_sentence(&*error)))
+        chain_reply(event, &*boxed(self.0))
     }
+}
+
+/// `error` boxed with every link kept as the type it is: an `anyhow::Error` is
+/// unwrapped as [`nest_rs_core::boxed_error`] unwraps it, since anyhow's own
+/// box hides the error it holds from a chain walk.
+fn boxed<E: Into<Box<dyn Error>> + 'static>(error: E) -> Box<dyn Error> {
+    let mut slot = Some(error);
+    if let Some(anyhow) = (&mut slot as &mut dyn std::any::Any)
+        .downcast_mut::<Option<nest_rs_core::anyhow::Error>>()
+        .and_then(Option::take)
+    {
+        return anyhow.reallocate_into_boxed_dyn_error_without_backtrace();
+    }
+    // Unreachable fallback: `slot` is emptied only by the `take` that returned above.
+    slot.map_or_else(|| Box::from(OPAQUE_CLIENT_MESSAGE), Into::into)
 }
 
 /// The `Display`-only case of [`ErrorReport`] — the third tier, implemented on a
 /// borrow so that method resolution reaches it only after the two above.
 pub trait ErrorReportFallback {
-    /// The error frame, with the error's sentence on the operator's line.
+    /// The opaque frame, with the error's sentence on the operator's line.
     fn into_frame(self, event: &str) -> WsReply;
 }
 
 /// A `Display`-only error has no chain to read a decode failure off, so its
-/// sentence is read by serde's wording alone — on the line and in the frame.
+/// sentence is read by serde's wording alone.
 impl<E: std::fmt::Display> ErrorReportFallback for &ErrorReport<E> {
     fn into_frame(self, event: &str) -> WsReply {
-        let sentence = nest_rs_core::DecodeError::redact(&self.0.to_string(), None).into_owned();
-        tracing::warn!(
-            target: crate::TARGET,
-            event,
-            error = %sentence,
-            "subscribe_message handler returned Err",
-        );
-        WsReply::Error(WsError::new(sentence))
+        let said = DecodeError::redact(&self.0.to_string(), None).into_owned();
+        opaque_reply(event, &said)
     }
-}
-
-/// The sentence a handler's error puts in its frame: its own, with each decode
-/// failure in its chain said as its report.
-fn handler_sentence(error: &(dyn std::error::Error + 'static)) -> String {
-    nest_rs_core::DecodeError::redact(&error.to_string(), Some(error)).into_owned()
 }
 
 #[cfg(test)]

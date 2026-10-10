@@ -51,6 +51,7 @@
 //! A deliberate `McpError::invalid_params(…)`, meant for the model to read and
 //! retry, is returned directly, never through here.
 
+use nest_rs_core::ToProblem;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
 
@@ -70,15 +71,7 @@ where
     E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
     fn opaque(self) -> Result<T, McpError> {
-        self.map_err(|err| {
-            let err = nest_rs_core::boxed_error(err);
-            tracing::error!(
-                target: crate::TARGET,
-                error = %nest_rs_core::error_message(&*err),
-                "mcp operation failed",
-            );
-            McpError::internal_error(OPAQUE, None)
-        })
+        self.map_err(|err| opaque_error(&*nest_rs_core::boxed_error(err)))
     }
 }
 
@@ -86,6 +79,50 @@ where
 /// `details` as the error's data; emitted by `#[tools]`, never written by hand.
 pub fn pipe_error(err: &PipeError) -> McpError {
     McpError::invalid_params(err.message().to_owned(), err.details().cloned())
+}
+
+/// Render what a [`ToProblem`] error says — a
+/// [`Problem`](nest_rs_core::Problem) among them — as the JSON-RPC error an MCP
+/// operation answers with: a `4xx` as `invalid_request`, a `5xx` as
+/// `internal_error`, the problem's
+/// [`client_message`](nest_rs_core::Problem::client_message) as the message,
+/// and its code —
+/// with its wait as `retryAfterSeconds` — under `data`. An error that says none
+/// answers as [`Opaque`] does, its chain filed at `error`.
+///
+/// ```
+/// use nest_rs_core::Problem;
+/// use nest_rs_core::problem::code;
+///
+/// let error = nest_rs_mcp::problem_error(&Problem::new(404, code::NOT_FOUND));
+/// assert_eq!(error.message, "not found");
+/// assert_eq!(error.data, Some(serde_json::json!({ "code": "NOT_FOUND" })));
+/// ```
+pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
+    let Some(problem) = error.to_problem() else {
+        return opaque_error(error);
+    };
+    let mut data = serde_json::Map::new();
+    data.insert("code".to_owned(), problem.code().as_str().into());
+    if let Some(seconds) = problem.retry_after() {
+        data.insert("retryAfterSeconds".to_owned(), seconds.into());
+    }
+    let data = Some(serde_json::Value::Object(data));
+    if problem.is_server_error() {
+        McpError::internal_error(problem.client_message(), data)
+    } else {
+        McpError::invalid_request(problem.client_message(), data)
+    }
+}
+
+/// The opaque answer, with `error`'s whole chain on the operator's line.
+fn opaque_error(error: &(dyn std::error::Error + 'static)) -> McpError {
+    tracing::error!(
+        target: crate::TARGET,
+        error = %nest_rs_core::error_message(error),
+        "mcp operation failed",
+    );
+    McpError::internal_error(OPAQUE, None)
 }
 
 /// The failure a decorated operation reports when it declares guards and finds
@@ -127,6 +164,8 @@ pub fn refused<R: OperationAnswer>(error: McpError) -> R {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::Problem;
+
     use super::*;
 
     #[test]
@@ -184,6 +223,66 @@ mod tests {
                 .is_some_and(|e| e.contains("secret_column")),
             "the cause the reply withholds is exactly what the log has to carry, got {:?}",
             event.fields,
+        );
+    }
+
+    #[test]
+    fn a_problem_answers_its_family_its_sentence_and_its_code() {
+        use nest_rs_core::problem::code;
+
+        let refused =
+            problem_error(&Problem::new(409, code::CONFLICT).with_detail("the slug is taken"));
+        assert_eq!(refused.code, rmcp::model::ErrorCode::INVALID_REQUEST);
+        assert_eq!(refused.message, "the slug is taken");
+        assert_eq!(
+            refused.data,
+            Some(serde_json::json!({ "code": "CONFLICT" }))
+        );
+
+        let unavailable = problem_error(
+            &Problem::new(503, code::UNAVAILABLE)
+                .with_detail("store at 10.0.0.1 down")
+                .with_retry_after(7),
+        );
+        assert_eq!(unavailable.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            unavailable.message,
+            nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE
+        );
+        assert_eq!(
+            unavailable.data,
+            Some(serde_json::json!({ "code": "UNAVAILABLE", "retryAfterSeconds": 7 })),
+        );
+    }
+
+    #[test]
+    fn a_to_problem_error_saying_none_answers_opaquely_and_files_its_chain() {
+        #[derive(Debug)]
+        struct LedgerDown;
+
+        impl std::fmt::Display for LedgerDown {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("the ledger at 10.0.0.1 refused")
+            }
+        }
+
+        impl std::error::Error for LedgerDown {}
+
+        impl ToProblem for LedgerDown {
+            fn to_problem(&self) -> Option<Problem> {
+                None
+            }
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let error = problem_error(&LedgerDown);
+        assert_eq!(error.message, OPAQUE);
+        assert!(!format!("{error:?}").contains("10.0.0.1"), "{error:?}");
+        let failed = logs.expect_one("nest_rs::mcp", "mcp operation failed");
+        assert!(
+            failed
+                .field("error")
+                .is_some_and(|e| e.contains("10.0.0.1"))
         );
     }
 

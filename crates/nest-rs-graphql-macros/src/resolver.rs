@@ -568,10 +568,18 @@ fn wrapper_output(sig: &Signature) -> syn::ReturnType {
 /// a `#[subscription]`'s is refused there at compile time instead.
 fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenStream2 {
     if let Returned::Fallible(_) = returned(sig) {
+        // By type, never `Into`: an error nobody meant for the client answers
+        // opaquely, its chain logged (`nest_rs_graphql`'s error tiers). The
+        // report is built by its constructor, never by a call here: on a
+        // `Result<T, !>` that call would be unreachable code.
         return quote! {
             ::core::result::Result::map_err(
-                #call,
-                ::core::convert::Into::<::nest_rs_graphql::async_graphql::Error>::into,
+                ::core::result::Result::map_err(#call, ::nest_rs_graphql::__private::ErrorReport),
+                |__nestrs_report| {
+                    #[allow(unused_imports)]
+                    use ::nest_rs_graphql::__private::{ErrorReportChain as _, ErrorReportDeliberate as _};
+                    __nestrs_report.into_graphql_error()
+                },
             )
         };
     }

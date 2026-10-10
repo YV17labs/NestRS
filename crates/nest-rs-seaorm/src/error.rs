@@ -86,6 +86,34 @@ impl ServiceError {
     }
 }
 
+/// What every edge without its own rendering of a `ServiceError` answers: a
+/// business variant's problem, its sentence as the detail; `None` for `Db`,
+/// `Masking` and `Internal`, which the edge answers opaquely, logging the cause.
+impl nest_rs_core::ToProblem for ServiceError {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        use nest_rs_core::Problem;
+        use nest_rs_core::problem::code;
+
+        let problem = match self {
+            Self::Validation(_) | Self::Invalid(_) => Problem::new(422, code::INVALID_ARGUMENT),
+            Self::Conflict(_) => Problem::new(409, code::CONFLICT),
+            Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
+            Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
+            Self::Db(_) | Self::Masking(_) | Self::Internal(_) => return None,
+        };
+        Some(problem.with_detail(self.to_string()))
+    }
+}
+
+/// `?` on a `ServiceError` inside an `async_graphql::Result` answers as the
+/// resolver returning it would: through [`ToProblem`](nest_rs_core::ToProblem).
+#[cfg(feature = "graphql")]
+impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
+    fn from(error: ServiceError) -> Self {
+        nest_rs_graphql::problem_error(&error)
+    }
+}
+
 #[cfg(feature = "http")]
 pub use http::crud_error;
 
@@ -378,6 +406,45 @@ mod tests {
             !rendered.contains("hunter2"),
             "the submitted value must never ride back out: {rendered}",
         );
+    }
+
+    #[test]
+    fn a_business_variant_says_its_problem_and_an_opaque_one_says_none() {
+        use nest_rs_core::ToProblem;
+        use nest_rs_core::problem::code;
+
+        let said = |error: ServiceError| {
+            error
+                .to_problem()
+                .map(|problem| (problem.status(), problem.code(), problem.client_message()))
+        };
+        assert_eq!(
+            said(ServiceError::not_found("no such widget")),
+            Some((404, code::NOT_FOUND, "no such widget".into()))
+        );
+        assert_eq!(
+            said(ServiceError::conflict("closed")),
+            Some((409, code::CONFLICT, "closed".into()))
+        );
+        assert_eq!(
+            said(ServiceError::forbidden("not yours")),
+            Some((403, code::FORBIDDEN, "not yours".into()))
+        );
+        assert_eq!(
+            said(ServiceError::invalid("empty")),
+            Some((422, code::INVALID_ARGUMENT, "empty".into()))
+        );
+        assert_eq!(
+            said(ServiceError::Validation(validator::ValidationErrors::new())),
+            Some((422, code::INVALID_ARGUMENT, "validation failed".into()))
+        );
+        for opaque in [
+            ServiceError::Db(DbErr::Custom("relation \"posts\" does not exist".into())),
+            ServiceError::Masking("row 7".into()),
+            ServiceError::internal("hash failed"),
+        ] {
+            assert_eq!(opaque.to_problem(), None, "{opaque:?}");
+        }
     }
 }
 

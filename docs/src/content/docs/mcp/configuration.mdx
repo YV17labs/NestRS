@@ -75,13 +75,20 @@ Six constructors cover the common cases:
 | `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
 | `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
 
-A typical adapter for a domain error:
+A domain error implementing `ToProblem` answers through `problem_error`: the
+problem's sentence, `invalid_request` for a `4xx` and `internal_error` for a
+`5xx`, its code under `data.code` — or, when the error says none, the opaque
+answer `Opaque` gives, its chain filed at `error`:
 
 ```rust title="crates/features/src/weather/mcp/tool.rs"
-fn internal<E: std::fmt::Display>(e: E) -> McpError {
-    McpError::internal_error(e.to_string(), None)
-}
+use nest_rs::mcp::{McpError, problem_error};
+
+let report = self.svc.forecast(&city).await.map_err(|error| problem_error(&error))?;
 ```
+
+Never `McpError::internal_error(e.to_string(), …)` over an error you did not
+build: the model reads whatever its `Display` says — a driver's SQL, an
+upstream URL — and may repeat it.
 
 The `data` field accepts any JSON value — attach structured diagnostics there
 when the model would benefit from them (e.g. the validator's per-field errors).

@@ -313,6 +313,31 @@ impl DecodeError {
         Self { sentence }
     }
 
+    /// The report of the first decode failure in `error`'s chain, `error`
+    /// itself first: what an edge answers for a failure it reads as one.
+    ///
+    /// ```
+    /// use nest_rs_core::DecodeError;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// #[error("the stored profile is unreadable")]
+    /// struct Unreadable(#[source] serde_json::Error);
+    ///
+    /// let failure = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+    /// let report = DecodeError::in_chain(&Unreadable(failure)).expect("a decode failure in the chain");
+    /// assert_eq!(report.to_string(), "invalid type: a string, expected u64 at line 1 column 16");
+    /// ```
+    pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
+        let mut link = Some(error);
+        while let Some(current) = link {
+            if let Some(report) = Self::of(current) {
+                return Some(report);
+            }
+            link = current.source();
+        }
+        None
+    }
+
     /// `link` as the report it is, when it is a decode failure — serde_json's
     /// error, or serde's own value error.
     pub(crate) fn of(link: &(dyn std::error::Error + 'static)) -> Option<Self> {

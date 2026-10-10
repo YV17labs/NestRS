@@ -188,13 +188,12 @@ pub fn error_to_poem(error: HttpError) -> poem::Error {
     }
 }
 
-/// A poem error carrying an [`HttpError`], rendered as nestrs renders it: poem's
-/// own rendering would replace the response's extensions with its error's.
-pub(crate) fn render_carried(
-    error: poem::Error,
-) -> std::result::Result<poem::Response, poem::Error> {
+/// The [`HttpError`] a poem error carries, taken out to be rendered as nestrs
+/// renders it: poem's own rendering would replace the response's extensions with
+/// its error's.
+pub(crate) fn take_carried(error: poem::Error) -> std::result::Result<HttpError, poem::Error> {
     if error.is::<Carried>() {
-        Ok(response_to_poem(error_from_poem(error).into_response()))
+        Ok(error_from_poem(error))
     } else {
         Err(error)
     }

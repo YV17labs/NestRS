@@ -77,7 +77,7 @@ pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
-pub use error::{Opaque, pipe_error, unresolvable_chain};
+pub use error::{Opaque, pipe_error, problem_error, unresolvable_chain};
 pub use guard::{BoxFuture, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;

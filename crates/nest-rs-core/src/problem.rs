@@ -5,9 +5,13 @@
 //! Each edge answers a problem in its own standard form: an RFC 9457 problem
 //! document with a `code` member on HTTP (`ProblemDetails` is its document),
 //! `extensions.code` on GraphQL, `data.errors.code` in a WebSocket error frame,
-//! `data.code` in an MCP JSON-RPC error. An error that is neither the edge's own
-//! deliberate error, a `ToProblem` error nor framework vocabulary is answered
-//! opaquely ([`OPAQUE_CLIENT_MESSAGE`]) and its chain is logged once at `error`.
+//! `data.code` in an MCP JSON-RPC error. Where a [`ToProblem`] error is read
+//! differs: GraphQL's and WebSocket's handler wrappers probe a handler's error
+//! for it by type, an MCP operation converts one with
+//! `nest_rs_mcp::problem_error`, and HTTP reads a [`Problem`] only — the error
+//! itself or one its chain carries — beside an error's own `ResponseError`. An
+//! error the edge finds no answer in is answered opaquely
+//! ([`OPAQUE_CLIENT_MESSAGE`]) and its chain is logged once at `error`.
 //!
 //! ```
 //! use nest_rs_core::problem::code;
@@ -277,12 +281,16 @@ impl fmt::Display for Problem {
 
 impl Error for Problem {}
 
-/// An error that says what its client may read.
+/// An error that says what its client may read, implemented once by a domain
+/// error type.
 ///
-/// Probed by type wherever an edge renders a handler's error: `Some(problem)`
-/// answers that problem in the edge's standard form; `None` answers opaquely and
-/// logs the error's whole chain at `error`. Implemented by a domain error type,
-/// once, for every edge.
+/// GraphQL's `#[operations]` and WebSocket's `#[messages]` wrappers probe a
+/// handler's error for it by type; an MCP operation converts one with
+/// `nest_rs_mcp::problem_error`. HTTP does not read it: a route answers a
+/// [`Problem`] its error is or carries, or the error's own `ResponseError`, so
+/// a domain error a route returns implements that too. `Some(problem)` answers
+/// that problem in the edge's standard form; `None` answers opaquely and logs
+/// the error's whole chain at `error`.
 pub trait ToProblem: Error + Send + Sync + 'static {
     /// The problem to answer, or `None` to answer opaquely.
     fn to_problem(&self) -> Option<Problem>;

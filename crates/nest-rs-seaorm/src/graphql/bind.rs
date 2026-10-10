@@ -16,8 +16,12 @@ use crate::{Access, Authorized, CrudService};
 )]
 pub fn parse_v7(id: &str) -> Result<Uuid> {
     let invalid = || {
-        Error::new(nest_rs_core::UUID_V7_REQUIRED)
-            .extend_with(|_, e| e.set("code", "INVALID_ARGUMENT"))
+        Error::new(nest_rs_core::UUID_V7_REQUIRED).extend_with(|_, e| {
+            e.set(
+                nest_rs_graphql::CODE_EXTENSION,
+                nest_rs_core::problem::code::INVALID_ARGUMENT.as_str(),
+            );
+        })
     };
     let parsed = Uuid::parse_str(id).map_err(|_| invalid())?;
     if parsed.get_version_num() != 7 {
@@ -34,8 +38,12 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
         error = %nest_rs_core::error_message(err),
         "by-id access load failed",
     );
-    Error::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
-        .extend_with(|_, e| e.set("code", "INTERNAL_SERVER_ERROR"))
+    Error::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE).extend_with(|_, e| {
+        e.set(
+            nest_rs_graphql::CODE_EXTENSION,
+            nest_rs_core::problem::code::INTERNAL.as_str(),
+        );
+    })
 }
 
 /// Turn a by-id argument into the loaded, authorized entity (the resolver
@@ -104,6 +112,9 @@ fn not_found_to_err<A: ActionMarker, E: EntityTrait>(
 ) -> Result<Authorized<A, E>> {
     match model {
         Some(model) => Ok(Authorized::new(model)),
-        None => Err(Error::new("not found").extend_with(|_, e| e.set("code", "NOT_FOUND"))),
+        None => Err(nest_rs_graphql::problem_error(&nest_rs_core::Problem::new(
+            404,
+            nest_rs_core::problem::code::NOT_FOUND,
+        ))),
     }
 }

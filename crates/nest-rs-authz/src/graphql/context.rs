@@ -43,7 +43,12 @@ pub fn ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
 /// GraphQL refusal carries, whether the class gate or a data-layer `bind`
 /// (`nest_rs_seaorm::graphql::bind`) emits it.
 pub fn forbidden() -> Error {
-    Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
+    Error::new("forbidden").extend_with(|_, e| {
+        e.set(
+            nest_rs_graphql::CODE_EXTENSION,
+            nest_rs_core::problem::code::FORBIDDEN.as_str(),
+        );
+    })
 }
 
 /// [`forbidden`] naming the response fields the caller's field grant refuses —
@@ -72,5 +77,10 @@ pub(crate) fn insufficient_scope(required: &[String]) -> Error {
 /// `nest_rs_guards::denial_to_graphql_error` gives a `401` denial, so a client
 /// reads one code for "log in" whichever layer refused.
 pub(crate) fn unauthenticated() -> Error {
-    Error::new("unauthenticated").extend_with(|_, e| e.set("code", "UNAUTHENTICATED"))
+    Error::new("unauthenticated").extend_with(|_, e| {
+        e.set(
+            nest_rs_graphql::CODE_EXTENSION,
+            nest_rs_core::problem::code::UNAUTHENTICATED.as_str(),
+        );
+    })
 }

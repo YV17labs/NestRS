@@ -162,9 +162,16 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
         .expect("a GraphQL response body");
 
     // A `DbErr` `Display` would name the table and, on a constraint, its values.
-    assert!(
-        body.contains("internal error") && body.contains("INTERNAL_SERVER_ERROR"),
-        "the client gets a generic error with a programmable code: {body}",
+    let body_json: serde_json::Value = serde_json::from_str(&body).expect("a JSON body");
+    assert_eq!(
+        body_json["errors"][0]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "the client gets a generic error: {body}",
+    );
+    assert_eq!(
+        body_json["errors"][0]["extensions"]["code"],
+        nest_rs_core::problem::code::INTERNAL.as_str(),
+        "under the one code every opaque failure carries: {body}",
     );
     assert!(
         !body.contains("bind_probe_table_that_does_not_exist"),

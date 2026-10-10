@@ -1,5 +1,7 @@
-//! What a failing message tells the client, and what it tells the operator: an
-//! error frame prints the handler's error, and a `DbErr`'s `Display` carries SQL.
+//! A failure the client is owed no word of, said where it is met: `.opaque()`
+//! turns any error into the [`WsError`] a handler returns, answering
+//! [`OPAQUE_CLIENT_MESSAGE`] and filing the whole chain at `error`, whatever the
+//! error's type would otherwise have answered.
 //!
 //! ```
 //! # use std::sync::Arc;

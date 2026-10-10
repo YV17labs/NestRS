@@ -88,14 +88,32 @@ Review a new edge, or a change to one, against it:
    ability re-installed per dispatch through `nest_rs_seaorm`'s
    `dispatch::with_data_context`, so commit and rollback cannot drift.
 10. **A `#[config]` and its `for_root`** (`container.md`).
-11. **Error opacity** — an `Opaque` trait beside the edge's error type logs the
-    real error at `error` and answers `nest_rs_core::OPAQUE_CLIENT_MESSAGE`. The
-    trait is per edge and only the constant is shared, because the trait's output
-    *is* the edge's error type, which is what lets `.opaque()?` infer. A
-    handler's error is boxed with `nest_rs_core::boxed_error`, never `.into()`,
-    so its chain stays readable; every reply built from an error says a decode
-    failure without its value (`DecodeError::redact`). Held by each edge's
-    behaviour tests.
+11. **Error opacity** — an error that is neither the edge's own deliberate
+    error, a `nest_rs_core::ToProblem` error where the edge reads one, nor
+    framework vocabulary is answered opaquely on every edge
+    (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`, the `INTERNAL` code), its chain
+    logged once at `error`. `Problem`, `Code` and `ToProblem` are the
+    one client-error contract: a `Problem` answers in the edge's standard
+    form (a `code` member, `extensions.code`, `errors.code`, `data.code`),
+    never with its detail on a `5xx`, a denial carries the same `code`
+    wherever it has no status line, and every code the framework emits is a
+    `nest_rs_core::problem::code` constant. The edge decides **by type**
+    where it names the handler's error — GraphQL's and WS's wrappers probe
+    `ToProblem` before the chain, an MCP operation converts with
+    `problem_error` — and a `Problem`, `PipeError` or decode failure its
+    chain carries answers itself; HTTP reads no `ToProblem`: it renders an
+    error's own `ResponseError` as built and reads the chain of what it
+    would otherwise render as text. GraphQL holds the rule at
+    compile time: async-graphql's `custom-error-conversion` is on, so a `?`
+    cannot turn a foreign error's `Display` into a client message. An
+    `Opaque` trait beside the edge's error type says the same at a call
+    site; the trait is per edge and only the constant is shared, because the
+    trait's output *is* the edge's error type, which is what lets
+    `.opaque()?` infer. A handler's error is boxed with
+    `nest_rs_core::boxed_error`, never `.into()`, so its chain stays
+    readable; every reply built from an error says a decode failure without
+    its value (`DecodeError::redact`). Held by each edge's behaviour tests
+    and a trybuild snapshot of the refused `?`.
 12. **Discovery and its gate** (`container.md`).
 13. **Aggregation**, as above.
 14. **A mount** — a `Transport` through `TransportContribution`, stating its
@@ -285,7 +303,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   code everywhere (only a module owning its whole mount, as GraphQL does, may
   configure one), and `global_prefix` moves the whole surface. A failing
   operation talks to a language model, so it answers through `Opaque`; a
-  deliberate `McpError::invalid_params` is returned directly. **Identity has two
+  deliberate `McpError::invalid_params` is returned directly, and a `Problem`
+  through `problem_error`. **Identity has two
   owners**: the app declares `McpOptions { server }` — name, version, branding
   and `instructions` — and a host may refine only `name` and `title` for its
   endpoint; `instructions` on `#[mcp]` is a compile error. Identity has no

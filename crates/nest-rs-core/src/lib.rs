@@ -144,6 +144,7 @@ pub mod __private {
     pub use crate::container::__private::{
         collect_dynamic_import, enter_import, leave_import, register_dynamic_import,
     };
+    pub use crate::error_message::__private::find_in_chain;
     pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler};
     pub use crate::layer_chain::__private::{
         ResolvedLayer, check_specs_resolvable, compose_chain, dedup_bucket, resolve_global_layers,

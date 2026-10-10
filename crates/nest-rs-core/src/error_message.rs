@@ -86,6 +86,27 @@ where
     slot.map_or_else(|| Box::from(NO_MESSAGE), Into::into)
 }
 
+/// `error_message` is public: its tier-2 items live here, reached only through
+/// the crate's `__private`.
+pub(crate) mod __private {
+    use std::error::Error;
+
+    /// The first `T` in `error`'s chain, `error` itself first: how an edge
+    /// finds the framework vocabulary a failure carries wherever it was wrapped.
+    pub fn find_in_chain<'e, T: Error + 'static>(
+        error: &'e (dyn Error + 'static),
+    ) -> Option<&'e T> {
+        let mut link = Some(error);
+        while let Some(current) = link {
+            if let Some(found) = current.downcast_ref::<T>() {
+                return Some(found);
+            }
+            link = current.source();
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt;
@@ -266,6 +287,26 @@ mod tests {
         let hidden: Box<dyn Error + Send + Sync> = anyhow::Error::from(secret()).into();
         assert!(hidden.downcast_ref::<serde_json::Error>().is_none());
         assert_eq!(error_message(&*hidden), REPORT);
+    }
+
+    #[test]
+    fn the_first_link_of_a_type_is_found_wherever_it_was_wrapped() {
+        use super::__private::find_in_chain;
+
+        let error = Wrapped {
+            message: "the queue backend failed",
+            cause: Some(Box::new(Wrapped {
+                message: "pool timed out",
+                cause: Some(io("timed out")),
+            })),
+        };
+        let found = find_in_chain::<std::io::Error>(&error).map(ToString::to_string);
+        assert_eq!(found.as_deref(), Some("timed out"));
+        assert!(find_in_chain::<std::fmt::Error>(&error).is_none());
+        assert!(
+            find_in_chain::<Wrapped>(&error)
+                .is_some_and(|top| top.message.starts_with("the queue"))
+        );
     }
 
     #[test]

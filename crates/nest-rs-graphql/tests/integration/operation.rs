@@ -18,13 +18,25 @@ struct SearchResult {
     hits: i32,
 }
 
-/// A developer's own error: `Display`, and no `From<async_graphql::Error>`.
+/// A developer's own error, saying what its client may read through
+/// `ToProblem` rather than through a `From<…> for async_graphql::Error`.
 #[derive(Debug)]
 struct LookupError;
 
 impl std::fmt::Display for LookupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("nothing by that name")
+        f.write_str("no note under that name")
+    }
+}
+
+impl std::error::Error for LookupError {}
+
+impl nest_rs_core::ToProblem for LookupError {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        Some(
+            nest_rs_core::Problem::new(404, nest_rs_core::problem::code::NOT_FOUND)
+                .with_detail("nothing by that name"),
+        )
     }
 }
 

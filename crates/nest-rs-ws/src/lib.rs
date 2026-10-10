@@ -75,13 +75,18 @@
 //! - `()` — send nothing.
 //! - `T` — serialize as the reply on the request's event name.
 //! - `Result<(), E>` / `Result<T, E>` — `Err(e)` becomes an error frame
-//!   `{ "event": "<event>", "data": { "error": "<Display of e>" } }` and a
-//!   `warn!(target: "nest_rs::ws", ...)` log.
+//!   `{ "event": "<event>", "data": { "error": "…", "errors": … } }`, said by
+//!   `e`'s **type**: a [`WsError`] as built; a
+//!   [`ToProblem`](nest_rs_core::ToProblem) error as the problem it says
+//!   ([`WsError::from_problem`]); a `Problem`, a pipe rejection or a decode
+//!   failure its chain carries, in its own form, without a decode failure's
+//!   value; anything else as
+//!   [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE).
 //!
-//! **`Display` for the error must be wire-safe**: [`Opaque`]'s `.opaque()?` logs
-//! the real error at `error` on `nest_rs::ws` and hands the client a constant.
-//! Reach for it on any failure a client is not owed an explanation for — a
-//! `DbErr` above all, whose `Display` carries SQL.
+//! An answered error is filed at `warn` on `nest_rs::ws`, an opaque one at
+//! `error`. An error's `Display` never reaches the frame. [`Opaque`]'s
+//! `.opaque()?` says at the call site that a failure is none of the client's
+//! business, whatever its type.
 //!
 //! # Server→client push
 //!

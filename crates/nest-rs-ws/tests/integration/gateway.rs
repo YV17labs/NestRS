@@ -251,6 +251,33 @@ impl TestGateway {
             .map_err(DecodeDisplayOnly)
     }
 
+    /// The edge's own deliberate error.
+    #[subscribe_message("deliberate")]
+    #[public]
+    async fn deliberate_handler(&self) -> Result<String, nest_rs_ws::WsError> {
+        Err(nest_rs_ws::WsError::new("nope"))
+    }
+
+    /// A domain error saying what its client may read.
+    #[subscribe_message("taken")]
+    #[public]
+    async fn taken_handler(&self) -> Result<String, Taken> {
+        Err(Taken)
+    }
+
+    /// A `Problem` carried through anyhow answers itself.
+    #[subscribe_message("problem_in_anyhow")]
+    #[public]
+    async fn problem_in_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        Err(
+            nest_rs_core::anyhow::Error::from(nest_rs_core::Problem::new(
+                404,
+                nest_rs_core::problem::code::NOT_FOUND,
+            ))
+            .context("loading the room"),
+        )
+    }
+
     /// A deliberate frame, carried through anyhow: it is found and sent whole,
     /// details included.
     #[subscribe_message("frame_in_anyhow")]
@@ -264,11 +291,27 @@ impl TestGateway {
     }
 }
 
+/// A domain error that says what its client may read, never its own sentence.
+#[derive(Debug, thiserror::Error)]
+#[error("the handle ada@example.com is taken")]
+struct Taken;
+
+impl nest_rs_core::ToProblem for Taken {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        Some(
+            nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
+                .with_detail("the handle is taken")
+                .with_retry_after(30),
+        )
+    }
+}
+
 /// What every `decode_*` handler decodes: a number, sent a secret.
 const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
 
 /// A `Display`-only error spelling a decode failure — the third tier, which has
-/// no chain to read it off.
+/// no chain to read vocabulary off: it answers opaquely, its sentence on the
+/// operator's line said without the value.
 struct DecodeDisplayOnly(serde_json::Error);
 
 impl std::fmt::Display for DecodeDisplayOnly {
@@ -322,17 +365,30 @@ async fn result_ok_serializes_to_reply() {
     }
 }
 
+/// An error nobody meant for the client answers the opaque frame; its chain is
+/// filed once, at `error`.
 #[tokio::test]
-async fn result_err_becomes_error_frame() {
+async fn result_err_becomes_an_opaque_error_frame() {
+    let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(&WsClient::for_test(), "err", serde_json::Value::Null)
         .await;
     match reply {
         WsReply::Error(msg) => {
-            assert!(msg.error.contains("boom"), "want 'boom' in {msg}");
+            assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{msg}");
+            assert!(msg.errors.is_none(), "{msg:?}");
         }
         _ => panic!("expected Error for Result::Err"),
     }
+    let failed = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(failed.level, "error");
+    assert_eq!(failed.field("event").as_deref(), Some("err"));
+    assert_eq!(failed.field("error").as_deref(), Some("boom"));
+    assert!(
+        logs.find(nest_rs_ws::TARGET, "subscribe_message handler returned Err")
+            .is_empty(),
+        "an opaque failure is filed once",
+    );
 }
 
 #[tokio::test]
@@ -347,16 +403,17 @@ async fn result_ok_unit_sends_none() {
 }
 
 #[tokio::test]
-async fn result_err_unit_becomes_error_frame() {
+async fn result_err_unit_becomes_an_opaque_error_frame() {
+    let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(&WsClient::for_test(), "err_unit", serde_json::Value::Null)
         .await;
     match reply {
-        WsReply::Error(msg) => {
-            assert!(msg.error.contains("boom-unit"), "want 'boom-unit' in {msg}");
-        }
+        WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         _ => panic!("expected Error for Result<(), E>::Err"),
     }
+    let failed = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(failed.field("error").as_deref(), Some("boom-unit"));
 }
 
 #[tokio::test]
@@ -514,14 +571,18 @@ async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
         .await;
 
     match reply {
-        WsReply::Error(msg) => assert_eq!(msg.error, "database unavailable"),
+        WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
         WsReply::None => panic!("expected an error frame"),
     }
 
-    let event = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
-    assert_eq!(event.level, "warn");
+    let event = logs.expect_one("nest_rs::ws", "websocket message failed");
+    assert_eq!(event.level, "error");
     assert_eq!(event.field("event").as_deref(), Some("renamed"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some("database unavailable")
+    );
 }
 
 #[tokio::test]
@@ -536,11 +597,15 @@ async fn an_aliased_result_with_a_display_only_error_is_an_error_frame() {
         .await;
 
     match reply {
-        WsReply::Error(msg) => assert_eq!(msg.error, "display-only failure"),
+        WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
         WsReply::None => panic!("expected an error frame"),
     }
-    logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+    let failed = logs.expect_one("nest_rs::ws", "websocket message failed");
+    assert_eq!(
+        failed.field("error").as_deref(),
+        Some("display-only failure")
+    );
 }
 
 #[tokio::test]
@@ -584,14 +649,17 @@ async fn a_result_inside_a_result_is_an_error_frame_however_it_is_spelled() {
             .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
             .await
         {
-            WsReply::Error(msg) => assert_eq!(msg.error, "database unavailable", "{event}"),
+            WsReply::Error(msg) => {
+                assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{event}");
+            }
             WsReply::Reply(value) => {
                 panic!("`{event}`: the inner Err was shipped as a success frame — {value}")
             }
             WsReply::None => panic!("`{event}`: expected an error frame"),
         }
-        let line = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+        let line = logs.expect_one("nest_rs::ws", "websocket message failed");
         assert_eq!(line.field("event").as_deref(), Some(event));
+        assert_eq!(line.field("error").as_deref(), Some("database unavailable"));
     }
 }
 
@@ -614,10 +682,12 @@ async fn an_error_that_is_not_send_logs_its_cause_chain() {
             .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
             .await
         {
-            WsReply::Error(msg) => assert_eq!(msg.error, "read failed", "{event}"),
+            WsReply::Error(msg) => {
+                assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{event}");
+            }
             _ => panic!("`{event}`: expected an error frame"),
         }
-        let line = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+        let line = logs.expect_one("nest_rs::ws", "websocket message failed");
         assert_eq!(
             line.field("error").as_deref(),
             Some("read failed: replica lagging"),
@@ -766,7 +836,8 @@ async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_va
         if frame.contains("sk_live") {
             quoting.push(format!("`{event}` frame: {frame}"));
         }
-        logs.expect_one(nest_rs_ws::TARGET, "subscribe_message handler returned Err");
+        assert_eq!(error.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{event}");
+        logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
         quoting.extend(
             logs.events()
                 .into_iter()
@@ -1299,7 +1370,7 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
         ("decode_unsendable", REPORT.to_owned()),
         (
             "decode_display_only",
-            format!("could not read the amount: {REPORT}"),
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE.to_owned(),
         ),
     ] {
         let reply = TestGateway
@@ -1317,6 +1388,53 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
         .map(|event| format!("{} {:?}", event.message, event.fields))
         .collect();
     assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
+}
+
+/// The edge's own deliberate error answers as built.
+#[tokio::test]
+async fn a_ws_error_a_handler_returns_answers_as_built() {
+    let reply = TestGateway
+        .dispatch(&WsClient::for_test(), "deliberate", serde_json::Value::Null)
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, "nope");
+    assert!(frame.errors.is_none(), "{frame:?}");
+}
+
+/// A `ToProblem` error answers its problem — its detail, its code and its wait
+/// under `errors` — never its own sentence; a `Problem` in an anyhow chain
+/// answers itself.
+#[tokio::test]
+async fn a_problem_answers_its_detail_its_code_and_its_wait() {
+    let reply = TestGateway
+        .dispatch(&WsClient::for_test(), "taken", serde_json::Value::Null)
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, "the handle is taken");
+    assert_eq!(
+        frame.errors,
+        Some(serde_json::json!({ "code": "CONFLICT", "retryAfterSeconds": 30 })),
+    );
+
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "problem_in_anyhow",
+            serde_json::Value::Null,
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, "not found");
+    assert_eq!(
+        frame.errors,
+        Some(serde_json::json!({ "code": "NOT_FOUND" }))
+    );
 }
 
 #[tokio::test]

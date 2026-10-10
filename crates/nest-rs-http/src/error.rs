@@ -9,8 +9,10 @@ use std::time::Duration;
 
 use http::{Extensions, StatusCode};
 
+use nest_rs_core::Problem;
+
 use crate::headers::one_of;
-use crate::problem::ProblemDetails;
+use crate::problem::{ProblemDetails, problem_response};
 use crate::response::{IntoResponse, Response};
 
 /// Any error, boxed: a body's, or the cause an [`HttpError`] carries.
@@ -108,6 +110,28 @@ pub trait ResponseError {
         Self: Error + Send + Sync + Sized + 'static,
     {
         ProblemDetails::answering(self.status(), self).into_response()
+    }
+}
+
+/// A [`Problem`] answers its status, its document with the `code` member and
+/// its `Retry-After`, so `?` on one answers it.
+///
+/// ```
+/// use nest_rs_core::Problem;
+/// use nest_rs_core::problem::code;
+/// use nest_rs_http::{HttpError, StatusCode};
+///
+/// let error = HttpError::from(Problem::new(409, code::CONFLICT));
+/// assert_eq!(error.status(), StatusCode::CONFLICT);
+/// ```
+impl ResponseError for Problem {
+    fn status(&self) -> StatusCode {
+        // `Problem::new` holds its status to 400..=599, every one of them valid.
+        StatusCode::from_u16(Problem::status(self)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    fn as_response(&self) -> Response {
+        problem_response(self)
     }
 }
 
@@ -354,6 +378,36 @@ impl HttpError {
             }
         };
         response.extensions_mut().extend(extensions);
+        response
+    }
+}
+
+impl HttpError {
+    /// The response this error answers at the edge: as
+    /// [`into_response`](Self::into_response) renders it, except that a
+    /// [`Problem`] its cause carries answers its own document, and the chain of
+    /// a `5xx` it answers without one is filed once at `error`.
+    pub(crate) fn answer(self) -> Response {
+        let chain: Option<&(dyn Error + 'static)> = match &self.0.cause {
+            Cause::Anyhow(error) => Some(error.as_ref()),
+            Cause::Error(error) => Some(&**error),
+            _ => None,
+        };
+        let Some(chain) = chain else {
+            return self.into_response();
+        };
+        let Some(problem) = nest_rs_core::__private::find_in_chain::<Problem>(chain) else {
+            if self.0.status.is_server_error() {
+                tracing::error!(
+                    target: crate::target::HTTP,
+                    error = %nest_rs_core::error_message(chain),
+                    "request failed",
+                );
+            }
+            return self.into_response();
+        };
+        let mut response = problem_response(problem);
+        response.extensions_mut().extend(self.0.extensions);
         response
     }
 }

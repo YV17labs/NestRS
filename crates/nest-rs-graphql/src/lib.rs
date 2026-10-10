@@ -36,7 +36,7 @@ pub mod unit;
 pub use config::GraphqlConfig;
 pub use context::{BoxFuture, GraphqlOperationGuard};
 pub use context::{GraphqlContextSeed, SeedLifetime};
-pub use error::{FIELD_ERRORS_EXTENSION, pipe_error};
+pub use error::{CODE_EXTENSION, FIELD_ERRORS_EXTENSION, pipe_error, problem_error};
 pub use federation::GraphqlFederationGuard;
 pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
 pub use module::{GraphqlModule, GraphqlSetup};
@@ -50,6 +50,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::context::{FallbackOperationGuard, GraphqlVariablePipe};
+    pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate};
     pub use crate::federation::FederationGate;
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
     pub use crate::operation::{IsStreamReturn, answers_a_stream, run_operation};

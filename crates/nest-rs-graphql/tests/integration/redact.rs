@@ -48,16 +48,53 @@ impl ChargeResolver {
 
     #[query]
     #[public]
-    async fn own_decode(&self) -> async_graphql::Result<u64> {
+    async fn own_decode(&self) -> Result<u64, serde_json::Error> {
+        serde_json::from_str::<u64>(SECRET_BODY)
+    }
+
+    #[query]
+    #[public]
+    async fn own_anyhow(&self) -> nest_rs_core::anyhow::Result<u64> {
         Ok(serde_json::from_str::<u64>(SECRET_BODY)?)
     }
 
     #[query]
     #[public]
-    async fn own_anyhow(&self) -> async_graphql::Result<u64> {
-        let decoded: nest_rs_core::anyhow::Result<u64> =
-            serde_json::from_str::<u64>(SECRET_BODY).map_err(Into::into);
-        Ok(decoded?)
+    async fn leaky(&self) -> nest_rs_core::anyhow::Result<u64> {
+        Err(nest_rs_core::anyhow::anyhow!("secret 42"))
+    }
+
+    #[query]
+    #[public]
+    async fn deliberate(&self) -> async_graphql::Result<u64> {
+        Err(async_graphql::Error::new("bad input"))
+    }
+
+    #[query]
+    #[public]
+    async fn conflicted(&self) -> Result<u64, Taken> {
+        Err(Taken)
+    }
+}
+
+/// A domain error that says what its client may read.
+#[derive(Debug)]
+struct Taken;
+
+impl std::fmt::Display for Taken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the handle ada@example.com is taken")
+    }
+}
+
+impl std::error::Error for Taken {}
+
+impl nest_rs_core::ToProblem for Taken {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        Some(
+            nest_rs_core::Problem::new(409, nest_rs_core::problem::code::CONFLICT)
+                .with_detail("the handle is taken"),
+        )
     }
 }
 
@@ -127,4 +164,74 @@ async fn an_error_an_operation_answers_over_the_socket_says_it_without_the_value
         );
         assert!(!item.to_string().contains(SECRET), "{item}");
     }
+}
+
+async fn answer(app: &TestApp, query: &str) -> serde_json::Value {
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": query }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.json().await.value().deserialize()
+}
+
+/// An error nobody meant for the client: the constant, the `INTERNAL` code,
+/// and the whole chain on the operator's line, once.
+#[tokio::test]
+async fn an_error_no_one_meant_for_the_client_answers_opaquely_and_files_its_chain() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+    let body = answer(&app, "{ leaky }").await;
+    assert_eq!(
+        body["errors"][0]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{body}"
+    );
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{body}"
+    );
+    assert!(!body.to_string().contains("secret"), "{body}");
+
+    let failed = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+    assert_eq!(failed.level, "error");
+    assert!(
+        failed
+            .field("error")
+            .is_some_and(|e| e.contains("secret 42")),
+        "{failed:#?}",
+    );
+}
+
+/// The edge's own error is the author's deliberate answer, sent as built.
+#[tokio::test]
+async fn a_deliberate_graphql_error_answers_as_built() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+    let body = answer(&app, "{ deliberate }").await;
+    assert_eq!(body["errors"][0]["message"], "bad input", "{body}");
+    assert!(
+        logs.find(nest_rs_graphql::TARGET, "graphql operation failed")
+            .is_empty(),
+        "an answered failure is never filed at `error`",
+    );
+}
+
+/// A `ToProblem` error answers its problem: its detail and its code, never its
+/// `Display`.
+#[tokio::test]
+async fn a_to_problem_error_answers_its_code_and_detail() {
+    let app = boot().await;
+    let body = answer(&app, "{ conflicted }").await;
+    assert_eq!(
+        body["errors"][0]["message"], "the handle is taken",
+        "{body}"
+    );
+    assert_eq!(
+        body["errors"][0]["extensions"]["code"], "CONFLICT",
+        "{body}"
+    );
+    assert!(!body.to_string().contains("ada@example.com"), "{body}");
 }

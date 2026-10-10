@@ -6,7 +6,7 @@
 //! unmounted-route 404, a 413) onto the same `application/problem+json` envelope.
 
 use http::{HeaderValue, StatusCode, header};
-use nest_rs_core::DecodeError;
+use nest_rs_core::{DecodeError, Problem};
 use poem::error::{ParseQueryError, ResponseError};
 use poem::{IntoResponse, Response};
 use serde::Serialize;
@@ -15,6 +15,22 @@ use serde::Serialize;
 // poem-typed file; `challenge` re-exports it as RFC 6750's grammar.
 /// The scheme name, matched case-insensitively per RFC 7235 §2.1.
 pub const BEARER: &str = "Bearer";
+
+/// The extension member a problem document carries its
+/// [`Code`](nest_rs_core::Code) in.
+const CODE: &str = "code";
+
+/// The response a [`Problem`] answers: its document, and `Retry-After` when it
+/// names a wait (RFC 9110 §10.2.3).
+pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
+    let mut response = crate::IntoResponse::into_response(ProblemDetails::from_problem(problem));
+    if let Some(seconds) = problem.retry_after() {
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+    }
+    response
+}
 
 /// Body of an `application/problem+json` response. `type` is the only field a
 /// client may key on, so the constructors' URIs are stable across releases.
@@ -64,6 +80,33 @@ impl ProblemDetails {
             detail: Some(DecodeError::redact(&err.to_string(), Some(err)).into_owned()),
             instance: None,
             extensions: serde_json::Map::new(),
+        }
+    }
+
+    /// The HTTP document of a [`Problem`]: its status's own problem, its
+    /// [`detail`](Problem::detail) on a `4xx`, and its code as the `code`
+    /// extension member.
+    ///
+    /// ```
+    /// use nest_rs_core::Problem;
+    /// use nest_rs_core::problem::code;
+    /// use nest_rs_http::ProblemDetails;
+    ///
+    /// let document = ProblemDetails::from_problem(
+    ///     &Problem::new(409, code::CONFLICT).with_detail("the handle is taken"),
+    /// );
+    /// assert_eq!(document.status.as_u16(), 409);
+    /// assert_eq!(document.detail.as_deref(), Some("the handle is taken"));
+    /// assert_eq!(document.extensions["code"], "CONFLICT");
+    /// ```
+    pub fn from_problem(problem: &Problem) -> Self {
+        // `Problem::new` holds its status to 400..=599, every one of them valid.
+        let status =
+            StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let document = Self::from_status(status).with_extension(CODE, problem.code().as_str());
+        match problem.detail() {
+            Some(detail) => document.with_detail(detail),
+            None => document,
         }
     }
 
@@ -248,12 +291,17 @@ pub async fn normalize_error_response(resp: Response) -> Response {
     {
         problem = problem.with_detail(DecodeError::redact(text.trim(), None).into_owned());
     }
+    replacing(problem, &parts.headers)
+}
+
+/// `problem` as the answer, keeping the headers of the response it replaces.
+fn replacing(problem: ProblemDetails, headers: &http::HeaderMap) -> Response {
     let mut response = problem.as_response();
     // The fresh body is uncompressed: a stale `Content-Encoding` would fail decoding.
     // An original header replaces the envelope's default (a bare `Bearer`), since a
     // client reads the first value; later occurrences append (`Set-Cookie`).
     let mut replaced = std::collections::HashSet::new();
-    for (name, value) in parts.headers.iter() {
+    for (name, value) in headers.iter() {
         if name == header::CONTENT_TYPE
             || name == header::CONTENT_LENGTH
             || name == header::CONTENT_ENCODING
@@ -279,24 +327,57 @@ fn is_raw_text(resp: &Response) -> bool {
         .is_none_or(|ct| ct.starts_with("text/plain"))
 }
 
-/// An `Err` as the response it renders: poem's own rendering, except that a raw
-/// text body says each decode failure in the error's chain without its value,
-/// and an [`HttpError`](crate::HttpError) answers as it renders itself.
+/// An `Err` as the response it renders, by one rule: an error that renders
+/// itself — a [`ResponseError`], a ready response, an
+/// [`HttpError`](crate::HttpError) — answers as it renders. Any other poem
+/// renders as its own sentence, so it is read instead: a [`Problem`] its chain
+/// carries answers its document, and a `5xx` answers opaquely, its chain filed
+/// once at `error`. A raw text body left says each decode failure in the
+/// error's chain without its value.
 ///
 /// `Query<T>`'s rejection is transparent over its serde error, so that one is
 /// read off the type.
 pub(crate) fn render_error(err: poem::Error) -> Response {
-    let err = match crate::poem_bridge::render_carried(err) {
-        Ok(rendered) => return rendered,
+    let err = match crate::poem_bridge::take_carried(err) {
+        Ok(carried) => return crate::poem_bridge::response_to_poem(carried.answer()),
         Err(err) => err,
     };
+    let source = std::error::Error::source(&err);
+    let problem = source
+        .and_then(nest_rs_core::__private::find_in_chain::<Problem>)
+        .cloned();
+    let withheld = (problem.is_none() && err.status().is_server_error())
+        .then(|| source.map(nest_rs_core::error_message))
+        .flatten();
     let sentence = err.to_string();
     let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
     if let Some(query) = err.downcast_ref::<ParseQueryError>() {
         said = DecodeError::redact(&said, Some(&query.0)).into_owned();
     }
     let redacted = (said != sentence).then_some(said);
-    let resp = err.into_response();
+    let mut resp = err.into_response();
+    if (problem.is_some() || withheld.is_some()) && is_raw_text(&resp) {
+        let body = resp.take_body();
+        if !body.is_empty() {
+            let (parts, _) = resp.into_parts();
+            let mut answer = match (problem, withheld) {
+                (Some(problem), _) => {
+                    crate::poem_bridge::response_to_poem(problem_response(&problem))
+                }
+                (None, chain) => {
+                    tracing::error!(
+                        target: crate::target::HTTP,
+                        error = %chain.unwrap_or_default(),
+                        "request failed",
+                    );
+                    replacing(ProblemDetails::from_status(parts.status), &parts.headers)
+                }
+            };
+            answer.extensions_mut().extend(parts.extensions);
+            return answer;
+        }
+        resp.set_body(body);
+    }
     match redacted {
         Some(said) if is_raw_text(&resp) => {
             let (parts, _) = resp.into_parts();

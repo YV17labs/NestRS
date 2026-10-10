@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_graphql::futures_util::stream::Stream;
 use async_graphql::{Context, Error, Result};
 use nest_rs::authz::{Read, Update};
-use nest_rs::graphql::{crud, resolver};
+use nest_rs::graphql::{crud, problem_error, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
@@ -34,7 +34,12 @@ impl PostsResolver {
             async_graphql::Error::new("PostAuthorGuard must run before publish_post")
         })?;
         match bind::<Update, PostsService>(ctx, &id).await? {
-            Some(model) => Ok(Some(self.svc.publish(model, actor_id).await?)),
+            Some(model) => self
+                .svc
+                .publish(model, actor_id)
+                .await
+                .map(Some)
+                .map_err(|error| problem_error(&error)),
             None => Ok(None),
         }
     }

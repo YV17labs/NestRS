@@ -116,6 +116,18 @@ and its `ResponseError` impl sits next to it (the features crate
 already links poem because it ships HTTP controllers). Most features
 never need this — they compose the framework's types.
 
+`ResponseError` is HTTP's seam. An error that also crosses GraphQL,
+WebSockets or MCP implements `nest_rs::core::ToProblem` once: the `Problem`
+it says — a status, a `Code`, a detail — is what those edges answer, each in
+its own form (see [GraphQL errors](/graphql/errors/)). A resolver or a
+gateway handler returning the error is read by its type; an MCP tool
+converts it with `nest_rs::mcp::problem_error`. HTTP reads `ResponseError`,
+not `ToProblem`: a route answers a `Problem` only when the error is one or
+carries one in its chain. What no seam answers — no `ResponseError`, no
+`ToProblem` where the edge reads it, no framework type in its chain — is
+answered opaquely on every edge, and its whole chain is filed once at
+`error`: a failed handler is never logged nowhere.
+
 ## Route-bound filters via `#[use_filters(...)]`
 
 Sometimes the mapping depends on the *route*, not the error. Maybe

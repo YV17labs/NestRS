@@ -75,7 +75,10 @@ async-trait = "0.1"
 parking_lot = "0.12"
 
 # `=`: nest-rs-graphql reads async-graphql's registry internals.
-async-graphql = { version = "=7.2.1", default-features = false, features = ["dataloader", "playground"] }
+# `custom-error-conversion` removes the blanket `From<T: Display>` into its
+# error: a `?` in a resolver body would otherwise ship a foreign error's
+# sentence before the wrapper could answer it opaquely.
+async-graphql = { version = "=7.2.1", default-features = false, features = ["custom-error-conversion", "dataloader", "playground"] }
 async-graphql-poem = "=7.2.1"
 inventory = "0.3"
 

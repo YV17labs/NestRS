@@ -748,7 +748,7 @@ async fn handle_text<G: Gateway>(
                     );
                     Some(error_frame(
                         &envelope.event,
-                        &crate::WsError::new("internal error"),
+                        &crate::WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
                     ))
                 }
             }

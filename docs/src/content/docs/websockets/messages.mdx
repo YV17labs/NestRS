@@ -172,11 +172,22 @@ The error frame is shaped like any other envelope:
 { "event": "send", "data": { "error": "text must not be empty" } }
 ```
 
-The string comes from `e.to_string()` — i.e. the `Display` impl of your
-error type — with one rewrite the framework makes for you: a decode failure
-in the error, whose serde sentence quotes the value it refused, is said without
-it (`invalid type: a string, expected u64 at line 1 column 24`). What a handler
-failed to decode need not even be this client's. A rejection that carries **structured** detail adds an `errors`
+What it says is decided by the error's **type**, so a client reads only what
+someone meant it to read:
+
+- a `WsError` is sent whole — `WsError::new("text must not be empty")`, or a
+  `String` through `?` into a `Result<T, WsError>`;
+- an error implementing `ToProblem` answers the problem it says: its sentence,
+  and its code under `errors` (`{ "code": "CONFLICT" }`, plus
+  `retryAfterSeconds` when it names a wait); `ServiceError` is one;
+- the framework's own vocabulary found in the chain — a `Problem`, a pipe
+  rejection, a decode failure said without its value
+  (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its
+  own form;
+- **anything else answers `"internal error"`**, and its whole chain is filed
+  once at `error` on `nest_rs::ws`.
+
+A rejection that carries **structured** detail adds an `errors`
 member beside it — a `Valid<T>` payload names the offending fields, the same way
 the HTTP body does:
 
@@ -199,25 +210,20 @@ too-short password never rides back out. `message` is `null` unless the
 `#[validate]` rule set one.
 
 `errors` is **absent**, not `null`, when the failure had nothing structured to
-say, so a client can branch on its presence. Every refused dispatch lands a
-`warn!` on the `nest_rs::ws` target alongside the frame — a pipe rejection, a
-payload that does not deserialize, an unknown event, and a handler-returned
-`Err` alike — so a denied dispatch shows up in logs without extra
-instrumentation.
+say, so a client can branch on its presence. Every refused dispatch is filed
+alongside the frame — a pipe rejection, a payload that does not deserialize, an
+unknown event and a handler's answered `Err` at `warn` on `nest_rs::ws`, a
+guard's denial at `warn` on `nest_rs::layers`, an opaque failure at `error` —
+so a denied dispatch shows up in logs without extra instrumentation.
 
 A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =
 Result<T, MyError>` produces the identical error frame and the identical
-`warn`: the decision is made on the type, so however the return is spelled,
+line: the decision is made on the type, so however the return is spelled,
 an `Err` never reaches the reply `data`.
 
-<Aside type="caution" title="`Display` reaches the client — `Opaque` is the way out">
-The frame carries `e.to_string()`, so the frame is the one place a typed
-error's `Display` becomes a client-visible string. Avoid
-`#[error(transparent)]` over an ORM or `sqlx` error whose message can echo
-a query.
-
-When the failure is one the client is owed no explanation for, do not rely
-on the error type being polite — say so:
+<Aside type="caution" title="`Opaque` says it at the call site">
+An error with no `ToProblem` is already answered opaquely. When a failure the
+client could read is one it must not, say so where it happens:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::Opaque;
@@ -275,15 +281,28 @@ same kind, include an `id` field in the payload and echo it in the
 response.
 
 **Explicit failure** — the operation can fail and the client needs to
-see why:
+see why, so the error says what the client may read through `ToProblem`:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
+use nest_rs::core::problem::code;
+use nest_rs::core::{Problem, ToProblem};
+
 #[derive(thiserror::Error, Debug)]
 enum SendError {
     #[error("text must not be empty")]
     Empty,
     #[error("rate limited")]
     RateLimit,
+}
+
+impl ToProblem for SendError {
+    fn to_problem(&self) -> Option<Problem> {
+        Some(match self {
+            Self::Empty => Problem::new(422, code::INVALID_ARGUMENT)
+                .with_detail("text must not be empty"),
+            Self::RateLimit => Problem::new(429, code::RATE_LIMITED),
+        })
+    }
 }
 
 #[subscribe_message("send")]
@@ -298,11 +317,14 @@ async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
 
 ```text frame="terminal"
 > {"event":"send","data":{"author":"ada","text":""}}
-< {"event":"send","data":{"error":"text must not be empty"}}
+< {"event":"send","data":{"error":"text must not be empty","errors":{"code":"INVALID_ARGUMENT"}}}
 ```
 
-The wire shape stays the same envelope — clients branch on the presence of
-`data.error`, and read `data.errors` when they need to point at a field.
+Without the `ToProblem` impl the same `Err` answers `"internal error"`: an
+error's `Display` is never what decides. The wire shape stays the same
+envelope — clients branch on the presence of `data.error`, on
+`data.errors.code` for the class, and read the field entries under
+`data.errors` when they need to point at a field.
 
 ## The envelope itself
 

@@ -5,19 +5,24 @@ sidebar:
   order: 7
 ---
 
-A resolver returns `T` or `async_graphql::Result<T>`; an `Err`
-short-circuits with a GraphQL error envelope alongside `data`. A return is
-fallible when it is spelled the way async-graphql reads one — `Result<T, E>` or
-`FieldResult<T>`, `E` anything that converts into `async_graphql::Error` (a
-`Display` error does) — and anything else is a value: a payload named
-`SearchResult` is an object. A `Result` renamed on import (`use
-async_graphql::Result as GqlResult`) or behind an alias is still known by its
-type, and fails like a spelled one — on the operation line and to the client. The
-message goes on `errors[].message`; structured data goes on
-`errors[].extensions`. The framework owns the mapping for its shared
-error types — `ServiceError` from `nest-rs-seaorm`, `CredentialError`
-and `TokenError` from `nest-rs-authn` — so a feature returns its
-service result and the wire shape just works.
+A resolver returns `T` or a `Result<T, E>`; an `Err` short-circuits with a
+GraphQL error envelope alongside `data`. Which envelope is decided by the
+error's **type**, so a client reads only what someone meant it to read:
+
+- an `async_graphql::Error` you built is answered as built;
+- an error implementing `ToProblem` answers the problem it says — its sentence
+  and a stable `extensions.code`;
+- the framework's own vocabulary found in the chain — a `Problem`, a pipe
+  rejection, a decode failure said without its value — answers in its own form;
+- **anything else answers `"internal error"` under the `INTERNAL` code**, and its
+  whole chain is filed once at `error` on `nest_rs::graphql`.
+
+A return is fallible when it is spelled the way async-graphql reads one —
+`Result<T, E>` or `FieldResult<T>` — and anything else is a value: a payload
+named `SearchResult` is an object. The message goes on `errors[].message`;
+structured data goes on `errors[].extensions`. The framework's shared error
+type, `ServiceError` from `nest-rs-seaorm`, implements `ToProblem`, so a feature
+returns its service result and the wire shape just works.
 
 ## The smallest error
 
@@ -56,30 +61,66 @@ On the wire:
 }
 ```
 
+`Error::new` is the deliberate spelling: a `?` that would turn a foreign error
+into an `async_graphql::Error` does not compile, because async-graphql's
+`custom-error-conversion` is on — the blanket conversion would ship the error's
+`Display` before the framework could answer it opaquely. Return the error itself
+(`Result<T, MyError>`) and let its type decide.
+
 A decode failure is the one message the framework rewrites. serde's sentence
-quotes the value it refused — a resolver's `?` on `serde_json` or on an anyhow
-chain holding its error, async-graphql's own `Json<T>` scalar coercing an
+quotes the value it refused — a resolver returning a `serde_json` error, or an
+anyhow chain holding one, async-graphql's own `Json<T>` scalar coercing an
 argument — so `errors[].message` says where and what kind instead:
-`invalid type: a string, expected u64 at line 1 column 24`. It holds on the
-socket as on `POST`.
+`invalid type: a string, expected u64 at line 1 column 24`, under the
+`INVALID_ARGUMENT` code. It holds on the socket as on `POST`.
 
 ## Extensions and codes
 
-`extensions` carry structured data — a stable code clients can branch
-on without parsing the message:
+`extensions.code` is the stable class a client branches on without parsing the
+message. The framework's codes are constants in `nest_rs::core::problem::code`
+— `UNAUTHENTICATED`, `FORBIDDEN`, `INSUFFICIENT_SCOPE`, `RATE_LIMITED`,
+`UNAVAILABLE`, `INVALID_ARGUMENT`, `NOT_FOUND`, `CONFLICT`, `INTERNAL`: the HTTP
+reason phrase for an HTTP class, gRPC's canonical name otherwise. Every refusal
+the framework writes reads them: a guard's denial, the by-id binding (a `bind`
+argument that is not a UUID v7 answers `"id must be a UUID v7"` under
+`INVALID_ARGUMENT`, the twin of the HTTP path's `400`), an opaque failure.
+
+A feature's own error says its class through `ToProblem`, once for GraphQL,
+WebSockets and MCP (HTTP reads its `ResponseError`, see
+[Exception filters](/fundamentals/exception-filters/)):
+
+```rust title="crates/features/src/posts/error.rs"
+use nest_rs::core::problem::code;
+use nest_rs::core::{Code, Problem, ToProblem};
+
+pub const SLUG_TAKEN: Code = Code::new("SLUG_TAKEN");
+
+#[derive(Debug, thiserror::Error)]
+pub enum PublishError {
+    #[error("the slug is taken")]
+    SlugTaken,
+    #[error("the post is not a draft")]
+    NotADraft,
+    #[error("the search index refused the post")]
+    Index(#[source] std::io::Error),
+}
+
+impl ToProblem for PublishError {
+    fn to_problem(&self) -> Option<Problem> {
+        match self {
+            Self::SlugTaken => Some(Problem::new(409, SLUG_TAKEN).with_detail("the slug is taken")),
+            Self::NotADraft => Some(Problem::new(409, code::CONFLICT)),
+            Self::Index(_) => None,
+        }
+    }
+}
+```
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
-use async_graphql::{Error, Result};
-
-#[query]
-#[public]
-async fn post(&self, id: String) -> Result<String> {
-    if id.is_empty() {
-        return Err(Error::new("id must not be empty").extend_with(|_, e| {
-            e.set("code", "INVALID_ARGUMENT");
-        }));
-    }
-    Ok(format!("post {id}"))
+#[mutation]
+#[authorize(Update, posts::Entity)]
+async fn publish(&self, id: String) -> Result<Post, PublishError> {
+    self.svc.publish(&id).await
 }
 ```
 
@@ -87,100 +128,61 @@ async fn post(&self, id: String) -> Result<String> {
 {
     "errors": [
         {
-            "message": "id must not be empty",
-            "extensions": { "code": "INVALID_ARGUMENT" },
-            "path": ["post"]
+            "message": "the slug is taken",
+            "extensions": { "code": "SLUG_TAKEN" },
+            "path": ["publish"]
         }
     ]
 }
 ```
 
-Codes are free-form strings — pick a vocabulary and stick to it. A
-typical set: `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`,
-`INVALID_ARGUMENT`, `INTERNAL`. The framework's own by-id binding uses the same
-vocabulary: a `bind` argument that is not a UUID v7 — malformed, or well-formed
-but a different version — answers `"id must be a UUID v7"` with
-`extensions.code = "INVALID_ARGUMENT"`, the GraphQL twin of the HTTP path's
-`400`. The Apollo spec calls out these names
-and clients converge on them.
+A problem without a detail says its code in words (`NOT_A_DRAFT` would read
+`not a draft`); a `5xx` never carries one — a `503` answers
+`"service unavailable"`, any other `"internal error"`. `None` is the opaque
+answer: `Index`'s chain is filed at `error`, the client reads the constant. A
+`Code` declared in a `const` is checked when it compiles: `Code::new("conflict")`
+is refused, and so is a `Problem` whose status is not a `4xx` or a `5xx`.
 
-## Mapping `ServiceError`
+## `ServiceError`
 
-A `CrudService` method returns `Result<T, ServiceError>` — the shared
-framework error covering the two failure modes every service has:
-
-```rust title="crates/nest-rs-seaorm/src/error.rs"
-pub enum ServiceError {
-    Validation(ValidationErrors),
-    Db(DbErr),
-}
-```
-
-A resolver propagates that into a GraphQL `Result<T>` with `?`:
+A `CrudService` method returns `Result<T, ServiceError>`, and `ServiceError`
+implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
+`Forbidden` `FORBIDDEN`, `Invalid` and `Validation` `INVALID_ARGUMENT`, each with
+its own sentence; `Db`, `Masking` and `Internal` answer opaquely, their cause
+filed at `error`. A resolver returns the service's result as it is:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
-use async_graphql::Result;
 use nest_rs::authz::Read;
 use nest_rs::graphql::{operations, resolver};
+use nest_rs::seaorm::ServiceError;
 
 #[operations]
 impl PostsResolver {
     #[query]
     #[authorize(Read, posts::Entity)]
-    async fn post(&self, id: String) -> Result<Post> {
-        Ok(self.svc.find_by_id(&id).await?)
+    async fn post(&self, id: String) -> Result<Post, ServiceError> {
+        self.svc.find_by_id(&id).await
     }
 }
 ```
 
-`ServiceError` already implements `Into<async_graphql::Error>`
-through async-graphql's `From<E: Display>` blanket — the `Display`
-side stays wire-safe (`"database error"` for the `Db` variant) so a
-SQL fragment never leaks. The `Validation` variant forwards through
-`validator`'s structured error.
-
-For a richer envelope, wrap the conversion to attach a code:
-
-```rust title="crates/features/src/posts/graphql/resolver.rs"
-use async_graphql::{Error, ErrorExtensions, Result};
-use nest_rs::seaorm::ServiceError;
-
-fn graphql_from_service(err: ServiceError) -> Error {
-    let code = match &err {
-        ServiceError::Validation(_) => "INVALID_ARGUMENT",
-        ServiceError::Db(_) => "INTERNAL",
-    };
-    Error::new(err.to_string()).extend_with(|_, e| e.set("code", code))
-}
-
-#[query]
-#[authorize(Read, posts::Entity)]
-async fn post(&self, id: String) -> Result<Post> {
-    self.svc.find_by_id(&id).await.map_err(graphql_from_service)
-}
-```
-
-Same shape for `CredentialError` (always `UNAUTHENTICATED`) and
-`TokenError` (`UNAUTHENTICATED` with the RFC 6749 error code in a
-nested field if you need it).
+A body that mixes failures keeps `async_graphql::Result` and uses `?`:
+`ServiceError` converts into `async_graphql::Error` through the same
+`ToProblem`, the one conversion `nest-rs-seaorm` writes for it.
 
 ## An error the client is not owed
 
-`ServiceError` is wire-safe by construction — its `Db` variant displays as
-`"database error"`, never the `DbErr` underneath. **A feature's own error
-type has no such discipline imposed on it**, and a `Display` that wraps a
-driver error carries SQL, column names and sometimes row values into the
-error frame.
-
-`Opaque` is the seam for that, and it reads the same on every client-facing
-transport — HTTP, GraphQL, WebSockets and MCP:
+An error with no `ToProblem` is already answered opaquely. `Opaque` says so at
+the call site, where a failure the client could otherwise read is one it must
+not — and it reads the same on every client-facing transport, HTTP, GraphQL,
+WebSockets and MCP:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::graphql::Opaque;
 
 #[query]
 #[authorize(Read, posts::Entity)]
-async fn post(&self, id: String) -> Result<Post> {
+async fn post(&self, id: String) -> async_graphql::Result<Post> {
     Ok(self.svc.find_by_id(&id).await.opaque()?)
 }
 ```
@@ -190,17 +192,14 @@ a constant message on the wire, under the same `INTERNAL` code an internal
 denial carries — so a client cannot tell an unexpected failure from a
 refusal it was owed no explanation for.
 
-Reach for it on a failure that is none of the caller's business. A
-validation rejection or an authorization denial is the opposite case:
-those exist to be read, and travel as themselves.
-
 ## Authorization denials
 
-The `GraphqlAbilityBridge` from `nest-rs-authz`'s `graphql` feature
-turns an `Ability` refusal into a `FORBIDDEN`-coded error before the
-The same bridge answers a missing or invalid principal with
-`UNAUTHENTICATED`, since it runs authentication in band before the
-operation.
+A guard's denial reads the same on every edge. On GraphQL it answers its
+sentence under its code — `UNAUTHENTICATED`, `FORBIDDEN`, `INSUFFICIENT_SCOPE`
+with `requiredScopes`, `RATE_LIMITED` with `retryAfterSeconds` — and a server
+side failure never carries the guard's text: an unavailable dependency answers
+`"service unavailable"` under `UNAVAILABLE` (with `retryAfterSeconds` when
+known), an internal denial `"internal error"` under `INTERNAL`.
 
 The handler doesn't write the mapping; it just declares
 `#[authorize(Action, Entity)]`. See [Security](/security/) for

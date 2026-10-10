@@ -1,6 +1,8 @@
-//! What a failing operation tells the client, and what it tells the operator:
-//! an error is built from the resolver error's `Display`, and a `DbErr`'s
-//! carries SQL.
+//! A failure the client is owed no word of, said where it is met: `.opaque()`
+//! turns any error into the `async_graphql::Error` a resolver body returns,
+//! answering [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE)
+//! under the `INTERNAL` code and filing the whole chain at `error`, whatever the
+//! error's type would otherwise have answered.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -58,7 +60,6 @@
 //! `denial_to_graphql_error` is the shape a refusal already travels through.
 
 use async_graphql::Error as GraphqlError;
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 
 /// Turn a failure the client must not read into one it may.
 ///
@@ -77,23 +78,15 @@ where
     E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
     fn opaque(self) -> Result<T, GraphqlError> {
-        self.map_err(|err| {
-            let err = nest_rs_core::boxed_error(err);
-            tracing::error!(
-                target: crate::TARGET,
-                error = %nest_rs_core::error_message(&*err),
-                "graphql operation failed",
-            );
-            // The `INTERNAL` code an internal denial carries, so the two are indistinguishable.
-            use async_graphql::ErrorExtensions;
-            GraphqlError::new(OPAQUE_CLIENT_MESSAGE).extend_with(|_, e| e.set("code", "INTERNAL"))
-        })
+        self.map_err(|err| crate::error::opaque_error(&*nest_rs_core::boxed_error(err)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::fmt::Display;
+
+    use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 
     use super::*;
 

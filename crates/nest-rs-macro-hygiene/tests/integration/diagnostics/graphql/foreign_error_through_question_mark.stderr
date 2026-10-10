@@ -1,0 +1,22 @@
+error[E0277]: `?` couldn't convert the error to `nest_rs::nest_rs_graphql::async_graphql::Error`
+  --> tests/integration/diagnostics/graphql/foreign_error_through_question_mark.rs:18:16
+   |
+18 |         Ok(read?)
+   |            ----^ the trait `From<std::io::Error>` is not implemented for `nest_rs::nest_rs_graphql::async_graphql::Error`
+   |            |
+   |            this can't be annotated with `?` because it has type `Result<_, std::io::Error>`
+   |
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: `nest_rs::nest_rs_graphql::async_graphql::Error` implements trait `From<T>`
+  --> $CARGO/async-graphql-$VERSION/src/error.rs
+   |
+   | impl From<&'static str> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<&str>`
+...
+   | impl From<String> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<std::string::String>`
+   |
+  ::: $WORKSPACE/crates/nest-rs-seaorm/src/error.rs
+   |
+   | impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<nest_rs::nest_rs_seaorm::ServiceError>`

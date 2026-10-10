@@ -1652,6 +1652,7 @@ dependencies = [
  "libc",
  "nest-rs-config-macros",
  "nest-rs-core",
+ "rustls",
  "rustls-native-certs",
  "serde",
  "serde_json",

@@ -356,7 +356,6 @@ pub fn crypto_provider() -> Arc<CryptoProvider> {
 
 /// Why a PEM pair cannot be presented, each half judged as rustls judges it.
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum PairRefusal {
     /// The certificate does not parse as PEM.
     CertificateNotPem,

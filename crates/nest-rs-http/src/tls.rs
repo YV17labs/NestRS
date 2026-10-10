@@ -5,12 +5,10 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting};
+use nest_rs_config::__private::{PairRefusal, certified_key as checked_pair};
+use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting, crypto_provider};
 use rustls::ServerConfig;
-use rustls::crypto::aws_lc_rs::sign::any_supported_type;
-use rustls::crypto::{CryptoProvider, aws_lc_rs};
-use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::crypto::aws_lc_rs;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 use tokio_rustls::TlsAcceptor;
@@ -245,66 +243,45 @@ impl ResolvesServerCert for ReloadingResolver {
     }
 }
 
-/// The process-wide crypto provider the listener builds with, aws-lc-rs
-/// installed first when the app has not chosen one: a client built later from
-/// the default — `redis`'s — then finds one, rather than panicking when two
-/// providers are compiled in.
-fn crypto_provider() -> Arc<CryptoProvider> {
-    if let Some(installed) = CryptoProvider::get_default() {
-        return Arc::clone(installed);
-    }
-    // Losing a race to another installer leaves theirs in place, and theirs is
-    // the one handed back.
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "losing the race leaves the other installer's provider, which is read back below"
-    )]
-    let _ = aws_lc_rs::default_provider().install_default();
-    CryptoProvider::get_default()
-        .map_or_else(|| Arc::new(aws_lc_rs::default_provider()), Arc::clone)
-}
-
 /// The one place a certificate is built from a PEM pair, at boot and on
 /// renewal, refusing what cannot serve: a pair that does not parse, an empty
 /// chain, and a pair whose halves do not correspond, which would install and
-/// fail every handshake.
+/// fail every handshake — judged by the check every TLS client's identity
+/// passes too.
 ///
 /// A parse failure is described, never quoted: the parser's error carries the
 /// line it choked on, which may hold the whole private key.
-#[expect(
-    clippy::map_err_ignore,
-    reason = "the PEM parser's error quotes the line it choked on, which may hold the private key"
-)]
 fn certified_key(cert: &[u8], key: &[u8]) -> Result<CertifiedKey> {
-    let chain = CertificateDer::pem_slice_iter(cert)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| anyhow::anyhow!("the certificate is not valid PEM: {PEM_SHAPE}"))?;
-    anyhow::ensure!(
-        !chain.is_empty(),
-        "the certificate holds no CERTIFICATE block — an empty or truncated file reads as a \
-         chain with nothing in it, which every handshake then fails to present",
-    );
-    let key = PrivateKeyDer::from_pem_slice(key).map_err(|error| match error {
-        rustls::pki_types::pem::Error::NoItemsFound => anyhow::anyhow!(
-            "the private key holds no PRIVATE KEY block — an empty file, a certificate or a \
-             public key in its place, or an encrypted key, which has to be decrypted first"
-        ),
-        _ => anyhow::anyhow!("the private key is not valid PEM: {PEM_SHAPE}"),
-    })?;
     // Loaded with aws-lc-rs whatever provider the app installed: its keys
-    // expose their public half, which `keys_match` needs.
-    let signing = any_supported_type(&key)
-        .context("the private key is not a type this build of rustls can sign with")?;
-    let certified = CertifiedKey::new(chain, signing);
-    certified.keys_match().map_err(|error| match error {
-        rustls::Error::InconsistentKeys(_) => anyhow::anyhow!(
-            "the certificate and the private key do not correspond — the chain has to start \
-             with this key's own certificate, and a renewal that writes the two as separate \
-             operations is observable half-done; installing that pair fails every handshake"
-        ),
-        other => anyhow::anyhow!("the certificate cannot be read as X.509: {other}"),
-    })?;
-    Ok(certified)
+    // expose their public half, so a mismatch is always seen.
+    checked_pair(cert, key, aws_lc_rs::default_provider().key_provider).map_err(|refused| {
+        match refused {
+            PairRefusal::CertificateNotPem => {
+                anyhow::anyhow!("the certificate is not valid PEM: {PEM_SHAPE}")
+            }
+            PairRefusal::NoCertificate => anyhow::anyhow!(
+                "the certificate holds no CERTIFICATE block — an empty or truncated file reads \
+                 as a chain with nothing in it, which every handshake then fails to present"
+            ),
+            PairRefusal::KeyNotPem => {
+                anyhow::anyhow!("the private key is not valid PEM: {PEM_SHAPE}")
+            }
+            PairRefusal::NoPrivateKey => anyhow::anyhow!(
+                "the private key holds no PRIVATE KEY block — an empty file, a certificate or a \
+                 public key in its place, or an encrypted key, which has to be decrypted first"
+            ),
+            PairRefusal::KeyUnusable(error) => anyhow::Error::new(error)
+                .context("the private key is not a type this build of rustls can sign with"),
+            PairRefusal::Mismatch => anyhow::anyhow!(
+                "the certificate and the private key do not correspond — the chain has to start \
+                 with this key's own certificate, and a renewal that writes the two as separate \
+                 operations is observable half-done; installing that pair fails every handshake"
+            ),
+            PairRefusal::Unreadable(error) => {
+                anyhow::anyhow!("the certificate cannot be read as X.509: {error}")
+            }
+        }
+    })
 }
 
 /// What a PEM value has to look like, said instead of quoting one that does not.
@@ -462,6 +439,7 @@ mod tests {
     use std::sync::LazyLock;
 
     use nest_rs_testing::{TestAuthority, TestCertificate};
+    use rustls::pki_types::PrivateKeyDer;
 
     use super::*;
 

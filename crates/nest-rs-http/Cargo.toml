@@ -14,10 +14,11 @@ categories = ["web-programming::http-server", "asynchronous"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
-# `HttpTls::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
+# `HttpTls::from_env` reads the `<PREFIX>_HTTP__TLS_*` keys through the
 # framework-wide env scheme (`env_var`, empty-as-unset), like every other
-# per-crate `from_env` shortcut.
-nest-rs-config.workspace = true
+# per-crate `from_env` shortcut; `tls` brings the process's crypto provider
+# and the one check that a certificate is its key's.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # The pipes themselves are transport-agnostic; this crate only adapts them to
 # poem (the `Valid`/`Piped` extractors). `validator` is needed for the `Validate`
 # bound on `Valid`; `serde_json` renders a `PipeError` as a JSON 400.

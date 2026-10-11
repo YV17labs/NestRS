@@ -112,7 +112,18 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
     bus.emit(Unobserved).await;
 }
 
-/// A boundary's transaction through the data layer's port, no ORM behind it.
+/// Another driver's pool: nothing to hold work for, the trait's defaults.
+struct Pool;
+
+impl nest_rs_database::Executor for Pool {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A boundary's transaction through the data layer's port, no ORM behind it,
+/// holding work as a driver does: under what the unit carries into its commit,
+/// on its pool, tagged with the scope it was registered under.
 #[derive(Default)]
 struct OpenTransaction(std::sync::Mutex<Vec<nest_rs_database::Deferred>>);
 
@@ -122,6 +133,21 @@ impl nest_rs_database::Executor for OpenTransaction {
     }
 
     fn after_commit(&self, work: nest_rs_database::Deferred) -> Option<nest_rs_database::Deferred> {
+        let pool: Arc<dyn nest_rs_database::Executor> = Arc::new(Pool);
+        let work: nest_rs_database::Deferred = match nest_rs_database::current_executor_scope() {
+            Some(nest_rs_database::ExecutorScope::Request) => {
+                Box::pin(nest_rs_database::with_request_executor(pool, work))
+            }
+            Some(nest_rs_database::ExecutorScope::Job) => {
+                Box::pin(nest_rs_database::with_job_executor(pool, work))
+            }
+            None => Box::pin(nest_rs_database::with_executor(pool, work)),
+        };
+        let work: nest_rs_database::Deferred =
+            match nest_rs_core::RequestContinuation::capture(nest_rs_core::Continuation::Commit) {
+                Some(carried) => Box::pin(carried.scope(work)),
+                None => work,
+            };
         self.held().push(work);
         None
     }
@@ -195,13 +221,6 @@ async fn an_event_whose_transaction_rolls_back_is_never_dispatched() {
 
 #[tokio::test]
 async fn an_event_with_no_transaction_to_wait_for_is_dispatched_before_emit_returns() {
-    struct Pool;
-    impl nest_rs_database::Executor for Pool {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
     let (_app, awarder, ledger) = booted().await;
     nest_rs_database::with_request_executor(Arc::new(Pool), awarder.award(7)).await;
     assert_eq!(ledger.credited.load(Ordering::SeqCst), 7);
@@ -410,5 +429,100 @@ async fn a_listener_held_for_the_commit_still_reads_what_its_emitter_carried() {
         seen(&probe),
         [Some("acme")],
         "the value crossed into the commit with the event",
+    );
+}
+
+/// What a listener ran on: the executor, named, and the scope it was tagged with.
+type RanOn = (
+    Option<&'static str>,
+    Option<nest_rs_database::ExecutorScope>,
+);
+
+#[injectable]
+#[derive(Default)]
+struct ExecutorProbe {
+    seen: std::sync::Mutex<Vec<RanOn>>,
+}
+
+#[injectable]
+struct ExecutorListeners {
+    #[inject]
+    probe: Arc<ExecutorProbe>,
+}
+
+#[derive(Clone)]
+struct Recorded;
+
+#[listeners]
+impl ExecutorListeners {
+    #[on_event]
+    async fn on_recorded(&self, _event: Recorded) {
+        let executor = nest_rs_database::current_executor().map(|executor| {
+            if executor.as_any().is::<Pool>() {
+                "pool"
+            } else if executor.as_any().is::<OpenTransaction>() {
+                "transaction"
+            } else {
+                "another"
+            }
+        });
+        self.probe
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((executor, nest_rs_database::current_executor_scope()));
+    }
+}
+
+#[module(imports = [EventsModule], providers = [ExecutorProbe, ExecutorListeners])]
+struct ExecutorEventsModule;
+
+async fn executor_booted() -> (App, Arc<EventBus>, Arc<ExecutorProbe>) {
+    let app = App::new::<ExecutorEventsModule>().expect("boots");
+    let bus = app
+        .container()
+        .get::<EventBus>()
+        .expect("the bus is provided");
+    let probe = app
+        .container()
+        .get::<ExecutorProbe>()
+        .expect("the probe is provided");
+    (app, bus, probe)
+}
+
+fn ran_on(probe: &ExecutorProbe) -> Vec<RanOn> {
+    probe
+        .seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+#[tokio::test]
+async fn a_listener_run_at_once_runs_on_its_emitters_executor() {
+    let (_app, bus, probe) = executor_booted().await;
+
+    nest_rs_database::with_request_executor(Arc::new(Pool), bus.emit(Recorded)).await;
+
+    assert_eq!(
+        ran_on(&probe),
+        [(Some("pool"), Some(nest_rs_database::ExecutorScope::Request))],
+        "nothing to wait for: the listener runs inside its emitter, on its executor",
+    );
+}
+
+#[tokio::test]
+async fn a_listener_held_for_the_commit_runs_on_what_its_driver_installed() {
+    let (_app, bus, probe) = executor_booted().await;
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_database::with_job_executor(transaction.clone(), bus.emit(Recorded)).await;
+    assert!(ran_on(&probe).is_empty(), "held until the commit");
+
+    transaction.commit().await;
+    assert_eq!(
+        ran_on(&probe),
+        [(Some("pool"), Some(nest_rs_database::ExecutorScope::Job))],
+        "the driver's pool, under the scope the work was registered with",
     );
 }

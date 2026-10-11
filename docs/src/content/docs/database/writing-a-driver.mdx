@@ -93,11 +93,18 @@ holds another.
 trait's default hands the work back to run at once — right for a handle with
 no transaction, and wrong for one with: a driver that leaves it out dispatches
 every event emitted inside a transaction before that transaction has landed,
-and announces writes a rollback then undoes. Run the held work on your
-non-transactional handle, under what the unit carries into its commit —
-`nest_rs::core::RequestContinuation::capture(Continuation::Commit)`, taken
-where the work is registered: the scope, the ability, every value that
-crosses — and contain a panic in it — the commit already stood.
+and announces writes a rollback then undoes.
+
+Your boundary runs the held work where it settles, so take what the work
+needs where it is registered, inside `after_commit`: what the unit carries
+into its commit, `nest_rs::core::RequestContinuation::capture(Continuation::Commit)`
+— the ability, the trace, every value that crosses — and the scope it runs
+under, `nest_rs::database::current_executor_scope()`. The capture carries no
+executor of yours, and its scope goes with it, so re-install your
+non-transactional handle inside the capture under the scope you read:
+`with_request_executor`, `with_job_executor`, or `with_executor` when none was
+tagged. A job's held work installed untagged would fail closed like a request.
+Contain a panic in it: the commit already stood.
 
 The other continuations — a streaming body, a DataLoader batch — reach the
 pool through the first-party driver alone: under another driver they run

@@ -3159,6 +3159,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-database",
+ "nest-rs-events",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-health",

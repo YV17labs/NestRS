@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::Continuation;
 use nest_rs_core::tracing::Instrument;
 use parking_lot::RwLock;
 
@@ -53,11 +52,11 @@ impl EventBus {
     ///
     /// Inside a unit of work holding a transaction, the dispatch waits for it
     /// through [`nest_rs_database::after_commit`]: it runs on commit, outside
-    /// the transaction, and is dropped unrun on rollback or failure. With no
-    /// transaction it runs before `emit` returns. Either way each listener
-    /// runs under what the emitter carries into a commit — its ability, the
-    /// pool rather than a transaction, a package's values — as a child of its
-    /// trace.
+    /// the transaction, under what the emitter carried into it — the pool, its
+    /// ability, a package's values — and is dropped unrun on rollback or
+    /// failure. With no transaction to wait for it runs before `emit` returns,
+    /// inside the emitter, on its executor. Either way each listener is a unit
+    /// of its own, a child of the emitter's trace.
     ///
     /// A slow listener delays the ones after it and the emitter: work that must
     /// not block belongs on the queue. A panicking listener is caught, logged at
@@ -77,16 +76,11 @@ impl EventBus {
         let event_name = std::any::type_name::<E>();
         // Outside the loop: one emit is one trace, even with nothing ambient.
         let cause = nest_rs_core::Correlation::inherited();
-        let carried = nest_rs_core::RequestContinuation::capture(Continuation::Commit);
+        // No capture here: the executor that holds the dispatch carries it into
+        // its commit, and one that hands it back runs it inside the emitter.
         nest_rs_database::after_commit(async move {
-            let dispatch = async move {
-                for Listener { name, run } in listeners {
-                    dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
-                }
-            };
-            match carried {
-                Some(carried) => carried.scope(dispatch).await,
-                None => dispatch.await,
+            for Listener { name, run } in listeners {
+                dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
             }
         })
         .await;
@@ -119,7 +113,7 @@ async fn dispatch_one(
         started: std::time::Instant::now(),
         filed: false,
     };
-    // Nested, never a fresh context, which would drop what the emit carried.
+    // Nested, never a fresh context, which would drop what the emitter carries.
     let outcome =
         nest_rs_core::with_request_scope(None, correlation, nest_rs_core::panic::contain(fut))
             .instrument(span)

@@ -54,8 +54,8 @@ how far the value travels (`.claude/decisions/ambient-carry.md`).
 
 **A continuation that can outlive the transaction never holds it.** Where a
 unit continues after the future that accepted it, the executor steps down to
-the pool — a streaming body, a DataLoader batch, work held for the commit and
-an emitted event's listeners — and is dropped on a task handed to
+the pool — a streaming body, a DataLoader batch, work held for the commit, an
+emitted event's listeners among it — and is dropped on a task handed to
 `TaskContext`, a connection's next message and a job's envelope, where a write
 opens a unit of its own. The ability crosses everywhere but a job's envelope.
 One exception is planned: a mutation operation's batches will run on the
@@ -107,7 +107,9 @@ writes. With nothing to wait for it dispatches before `emit` returns.
   commit is an event whose listener pushes.
 - **Another ORM's driver** owes `Executor::after_commit` on every handle its
   boundaries settle; the trait's default runs the work at once, which is right
-  for a pool only.
+  for a pool only. What it holds runs under the `Commit` capture taken where
+  the work was registered, its own pool re-installed inside under the scope
+  read there (the trait method's rustdoc).
 
 ## Write capability is segregated, never a placeholder
 

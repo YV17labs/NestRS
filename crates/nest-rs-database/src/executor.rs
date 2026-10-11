@@ -39,6 +39,14 @@ pub trait Executor: Any + Send + Sync + 'static {
     /// boundary that opened none), dropped on every other outcome. The default
     /// hands it back — right for a pool and for a transaction a caller opened
     /// itself; a driver whose boundaries settle a transaction overrides it.
+    ///
+    /// Held work runs where the boundary settles, so it runs under what the
+    /// unit carried where it was registered: the executor captures that here,
+    /// for a [`Commit`](Continuation::Commit)
+    /// ([`RequestContinuation::capture`](nest_rs_core::RequestContinuation::capture)),
+    /// and installs inside it its handle outside the transaction, under the
+    /// [`current_executor_scope`] read here — the capture carries no other
+    /// driver's executor, nor its scope.
     fn after_commit(&self, work: Deferred) -> Option<Deferred> {
         Some(work)
     }

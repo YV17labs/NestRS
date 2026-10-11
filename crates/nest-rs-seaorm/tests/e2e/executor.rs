@@ -1,6 +1,7 @@
 //! What a unit's continuation runs on: a streaming body a mutating route
 //! returns reads on the pool once the route's transaction has committed, under
-//! the caller's ability.
+//! the caller's ability; a listener with no commit to wait for runs inside its
+//! emitter, in the transaction the caller opened itself.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::http::Authorize;
@@ -134,5 +135,79 @@ async fn a_streaming_body_reads_on_the_pool_after_the_commit_under_the_callers_a
     assert_eq!(
         listed, "1,3",
         "the body sees the committed write and only the rows the caller may read",
+    );
+}
+
+/// Whether a listener ran inside its emitter's own transaction.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct TxnProbe {
+    seen: std::sync::Mutex<Vec<bool>>,
+}
+
+#[nest_rs_core::injectable]
+struct TxnListeners {
+    #[inject]
+    probe: std::sync::Arc<TxnProbe>,
+}
+
+#[derive(Clone)]
+struct Recorded;
+
+#[nest_rs_events::listeners]
+impl TxnListeners {
+    #[on_event]
+    async fn on_recorded(&self, _event: Recorded) {
+        let in_txn = matches!(
+            nest_rs_seaorm::current_executor(),
+            Some(nest_rs_seaorm::Executor::Txn(_))
+        );
+        self.probe
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(in_txn);
+    }
+}
+
+#[module(
+    imports = [nest_rs_events::EventsModule],
+    providers = [TxnProbe, TxnListeners],
+)]
+struct TxnEventsModule;
+
+#[tokio::test]
+async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_it() {
+    use sea_orm::TransactionTrait;
+
+    let app = nest_rs_core::App::new::<TxnEventsModule>().expect("boots");
+    let bus = app
+        .container()
+        .get::<nest_rs_events::EventBus>()
+        .expect("the bus is provided");
+    let probe = app
+        .container()
+        .get::<TxnProbe>()
+        .expect("the probe is provided");
+    let txn = crate::harness::connect()
+        .await
+        .begin()
+        .await
+        .expect("the caller opens its own transaction");
+
+    let txn = std::sync::Arc::new(txn);
+    nest_rs_seaorm::with_executor(
+        nest_rs_seaorm::Executor::Txn(std::sync::Arc::clone(&txn)),
+        bus.emit(Recorded),
+    )
+    .await;
+
+    assert_eq!(
+        *probe
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [true],
+        "the caller's commit is its own: the listener runs at once, in its transaction",
     );
 }

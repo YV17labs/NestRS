@@ -137,6 +137,9 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
 # The pool's default budget is pinned below the authentication guard's net.
 nest-rs-authn = { path = "../nest-rs-authn" }
+# The `executor` e2e emits under a caller's own transaction: the bus dispatches
+# through this crate's `after_commit`, and only a live `BEGIN` makes a `Txn`.
+nest-rs-events = { path = "../nest-rs-events" }
 
 [lints]
 workspace = true

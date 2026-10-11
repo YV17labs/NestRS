@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
+description = "SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule::for_root` opens the one pool (`NESTRS_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`Repo`, the ambient executor, the request layers); `#[expose]` and `#[wire_enum]` make an entity its wire DTO, inputs and GraphQL object. Transport extractors (`Bind`, `WsDataContext`, `McpDataContext`) live behind Cargo features."
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
 
@@ -26,10 +26,9 @@ default = []
 # `full`) fails to resolve that module (it otherwise only compiles under
 # workspace feature unification).
 http = ["nest-rs-authz/http"]
-# GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
-# (the `BatchContext` that re-installs the request executor + ability around
-# each `#[dataloader]` batch), and what `#[expose(…, graphql)]` emits: the
-# object derives, the relation bridges and their dataloaders.
+# GraphQL transport extractors: the `bind` resolver helper, and what
+# `#[expose(…, graphql)]` emits: the object derives, the relation bridges and
+# their dataloaders.
 # `nest-rs-authz/graphql` is forwarded because `src/graphql/bind.rs` refuses
 # through `nest_rs_authz::graphql::forbidden`.
 graphql = [

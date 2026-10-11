@@ -126,12 +126,10 @@ fn dataloader_for_method(
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 seed: |__container, __batches, __request| {
                     let __loader = <#loader_name>::from_container(__container);
-                    // A batch runs on a spawned task where task-locals are gone:
-                    // the spawner re-installs the executor and ability.
                     __request.data(
                         ::nest_rs_graphql::async_graphql::dataloader::DataLoader::new(
                             __loader,
-                            ::nest_rs_graphql::__private::batch_spawner(__container, __batches),
+                            ::nest_rs_graphql::__private::batch_spawner(__batches),
                         ),
                     )
                 },

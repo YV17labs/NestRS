@@ -31,8 +31,8 @@ cargo add nest-rs --features authz
 
 `AbilityFactory` is a tiny trait you implement once. The framework
 calls `define` per request, after the authn guard attached the
-principal. The resulting `Ability` lives in request extensions and as
-a `task_local!` for the data layer.
+principal. The resulting `Ability` lives in request extensions and in
+the request's ambient context for the data layer.
 
 A minimal policy is one statement — "members read their org's users":
 
@@ -148,8 +148,8 @@ async fn search(
 }
 ```
 
-A service method or any code running under the request's task-local
-reads the ability directly:
+A service method or any code the request reaches — a streaming body and
+a dataloader batch included — reads the ability directly:
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::authz::current_ability;

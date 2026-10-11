@@ -3,6 +3,7 @@
 use nest_rs_testing::TestApp;
 
 mod authorize;
+mod bridge;
 mod mask;
 
 /// POST one operation as `role` (empty ⇒ no header, i.e. the anonymous caller)

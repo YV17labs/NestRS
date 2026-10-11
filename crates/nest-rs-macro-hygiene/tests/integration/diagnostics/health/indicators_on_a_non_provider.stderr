@@ -15,8 +15,8 @@ help: the trait `ProviderResidency` is not implemented for `Plain`
              AllowAllMcpGuard
              GraphqlAbilityBridge<A, G>
              HealthService
-             LoaderScope
              McpAbilityBridge<A, G>
              McpDataContext
              SeaOrmHealthIndicator
+             WorkerDbContext
            and $N others

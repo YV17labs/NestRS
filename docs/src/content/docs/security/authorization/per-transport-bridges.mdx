@@ -44,7 +44,7 @@ scaffolded.
 | Bridge | Provides | What it bridges |
 |--------|----------|------------------|
 | `AuthzModule` | `AuthzGuard` (`AbilityGuard<AuthzAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
-| `AuthzGraphqlModule` | `AuthzGraphqlBridge` (`dyn OperationGuard`), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
+| `AuthzGraphqlModule` | `AuthzGraphqlBridge` (`dyn OperationGuard`) | Re-runs the HTTP guard chain on `/graphql` and scopes the operation, the dataloader batches it triggers included |
 | `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message — which is what the per-message `#[authorize]` gate and reply mask read |
 | `AuthzMcpModule` | `AuthzMcpBridge` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `McpDataContext` as `dyn McpToolContext` | Re-runs the HTTP guard chain on the MCP endpoint and installs the ability *inside* each tool dispatch; the data context adds the executor + per-operation transaction |
 
@@ -83,8 +83,8 @@ pub struct UsersController { /* ... */ }
 `AbilityGuard` reads the `Claims` an `AuthnGuard` attached, calls
 `AuthzAbility::define(&actor, &mut builder)`, and inserts
 `Arc<Ability>` into request extensions. The `Authorize` shaper later
-installs that ability as a task-local via `with_ability` so
-`Repo::scoped` sees it.
+makes that ability ambient via `with_ability` so `Repo::scoped` sees it,
+in the handler and in any streaming body it returns.
 
 ## GraphQL — marker guards over a shared dispatch
 
@@ -165,10 +165,10 @@ route. `covers()` names the guards the bridge runs itself: the bridge runs where
 the pool lists the first of them, and the pool skips them, so an `AuthnGuard`
 listed in both runs once.
 
-The bridge also registers a `LoaderScope` as `dyn BatchContext` so
-dataloaders that fan out across batches snapshot the ability + pool
-executor per batch — relations stay scoped without the resolver
-threading anything.
+A dataloader batch carries what its request carries, so relations that
+fan out across batches run under the same ability, on the pool — scoped
+without the resolver threading anything, and with nothing more to
+register.
 
 ## WebSockets — per-message scope
 
@@ -217,9 +217,9 @@ impl ChatGateway {
 `AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
 guards on a real `GET`, so they attest `HttpGuard`, not `WsGuard`;
 `#[gateway]` emits that bound, and `WsGuard` is what a guard bound beside
-a `#[subscribe_message]` owes instead. The upgrade's
-task-locals unwind before any message handler runs, so `WsDataContext`
-re-seeds the executor and ability around each message.
+a `#[subscribe_message]` owes instead. The upgrade has
+returned before any message handler runs, so `WsDataContext` installs the
+executor and ability around each message.
 
 **Above that, a message declares its posture like an operation on any
 other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or

@@ -38,7 +38,6 @@ pub use context::{BoxFuture, GraphqlOperationGuard};
 pub use context::{GraphqlContextSeed, SeedLifetime};
 pub use error::{CODE_EXTENSION, FIELD_ERRORS_EXTENSION, pipe_error, problem_error};
 pub use federation::GraphqlFederationGuard;
-pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use opaque::Opaque;
 pub use operation::GraphqlOperationContext;

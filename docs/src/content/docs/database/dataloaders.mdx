@@ -162,19 +162,21 @@ A resolver returning `Post` from a notification field uses the auto-emitted
 `PostsServiceById`; the loader is the property of `PostsService` and any
 new feature reaches it through the existing one.
 
-## Batches run on a snapshot of the request context
+## Batches carry the request with them
 
-async-graphql runs each batch on a spawned task — fresh task-local
-storage. Without intervention, the ambient executor and ability would be
-gone and the loader would read on the pool, unscoped.
+async-graphql runs each batch on a task of its own, which starts with
+nothing ambient. The spawner captures what the request carries the moment a
+field asks the loader — its trace, the caller's ability, every value it
+carries — and runs the batch under it. You bind nothing for this: a batch
+reads through `Repo` filtered by the caller's ability, and every line it
+logs carries the request's `trace_id`.
 
-The framework installs a `LoaderScope` (bound to `dyn GraphqlBatchContext`)
-that runs while the per-request loader is built, snapshots the executor and
-ability, and re-installs them around each batch future. You don't write
-this; importing `AuthzGraphqlModule` on the resolver activates it. The
-captured executor is the **pool**, never the request transaction — a batch
-runs off the request task, and a write inside a loader would race the
-auto-commit's `Arc::try_unwrap`. Loaders are reads.
+A batch is shared by every field of the request that loads through the
+loader, so it carries the **request's** values, never one field's. Its
+executor is the **pool**, never the request transaction — a batch runs
+beside the request, and a write inside a loader would race the commit. So
+a relation resolved in a mutation's own response reads the state before the
+mutation. Loaders are reads.
 
 ## Going further
 

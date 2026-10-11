@@ -10,8 +10,7 @@
 //! a `#[query]`/`#[mutation]` makes `#[resolver]` emit both the gate and the
 //! response mask — the GraphQL analog of the HTTP `Authorize<A, E>` extractor.
 //!
-//! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`,
-//! `LoaderScope`).
+//! Data-coupled bindings live in `nest_rs_seaorm::graphql` (`bind`).
 //!
 //! ```
 //! # use std::sync::Arc;

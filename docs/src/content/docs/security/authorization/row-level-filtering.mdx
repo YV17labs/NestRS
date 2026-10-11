@@ -85,14 +85,16 @@ service.
 ## The ambient ability
 
 `Repo::scoped(...)` reads the ability via
-`nest_rs::authz::current_ability()` — a `tokio::task_local!` set by
-the transport's authz guard. Three install depths cooperate:
+`nest_rs::authz::current_ability()` — a value of the request's ambient
+context, installed by the transport's authz layer. Three install depths
+cooperate:
 
 - **HTTP** — the `Authorize` shaper installs `with_ability(ability,
   handler)` after the `AbilityGuard` attached the ability to the
-  request. The handler sees it.
+  request. The handler sees it, and so does a streaming body it returns.
 - **GraphQL** — `GraphqlAbilityBridge::around` installs it for the
-  duration of the operation. Resolvers and dataloaders see it.
+  duration of the operation. Resolvers see it, and so do the dataloader
+  batches they trigger.
 - **WebSockets** — `WsDataContext` installs it per message. The
   message handler sees it.
 

@@ -9,6 +9,8 @@
 //! of its shutdown window.
 
 use std::any::TypeId;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -16,7 +18,7 @@ use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
 };
 use async_graphql::{Request, ServerResult};
-use nest_rs_core::{Container, ReachableProviders, TaskContext};
+use nest_rs_core::{Container, Continuation, ReachableProviders, TaskContext};
 use nest_rs_http::DetachedWork;
 
 /// One DataLoader registration, module-gated by its owner's reachability:
@@ -30,49 +32,26 @@ pub struct GraphqlLoaderRegistration {
 
 inventory::collect!(GraphqlLoaderRegistration);
 
-/// A DataLoader batch's work, boxed for spawning on its own task.
-pub type GraphqlBatchFuture =
-    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+/// A DataLoader batch's work, as async-graphql hands it to the spawner.
+type BatchFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
-/// Spawns a batch future, having re-established the request's ambient state
-/// around it (see [`GraphqlBatchContext`]).
-pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
-
-/// Re-establishes per-request ambient state (executor, ability) inside a
-/// DataLoader batch, which async-graphql runs on a task with empty task-locals.
-/// `spawner` is called per request inside the operation's ambient scope.
+/// The spawner a request's DataLoader batches run through, filed under
+/// `batches`.
 ///
-/// Bind with `providers = [MyBridge as dyn GraphqlBatchContext]`, implemented by
-/// `nest_rs_seaorm::graphql::LoaderScope`. Without one, batches spawn bare and a
-/// loader reading through `Repo` fails; the schema build warns.
-pub trait GraphqlBatchContext: Send + Sync + 'static {
-    /// Build a spawner that carries the current request's ambient executor +
-    /// ability into each batch it runs.
-    fn spawner(&self) -> GraphqlBatchSpawner;
-}
-
-/// The spawner a request's DataLoader batches run through: the bound
-/// [`GraphqlBatchContext`]'s, else a bare `tokio::spawn`, filed under `batches`.
-pub fn batch_spawner(container: &Container, batches: &DetachedWork) -> GraphqlBatchSpawner {
-    let inner = match container.get_dyn::<dyn GraphqlBatchContext>() {
-        Some(ctx) => ctx.spawner(),
-        None => Box::new(|fut| {
-            tokio::spawn(fut);
-        }),
-    };
-    instrumented(inner, batches.clone())
-}
-
-/// Carry the request's [`TaskContext`] across the batch's task boundary, and
-/// run the batch as `batches` work, whatever the registered context does with
-/// the future otherwise — the one seam every batch goes through.
-fn instrumented(inner: GraphqlBatchSpawner, batches: DetachedWork) -> GraphqlBatchSpawner {
-    Box::new(move |fut| {
-        let carried = batches.clone();
-        inner(Box::pin(async move {
-            let _ = carried.run(TaskContext::current().carry(fut)).await;
-        }));
-    })
+/// async-graphql calls it on the resolver's task, inside `load_many`, so the
+/// capture taken there sees the request: the batch runs under what the request
+/// carries into a [`Batch`](Continuation::Batch) — its trace, the caller's
+/// ability, the pool rather than its transaction — whichever field triggered
+/// it.
+pub fn batch_spawner(batches: &DetachedWork) -> impl Fn(BatchFuture) + Send + Sync + 'static {
+    let batches = batches.clone();
+    move |batch| {
+        let carried = TaskContext::capture(Continuation::Batch);
+        let batches = batches.clone();
+        tokio::spawn(async move {
+            let _ = batches.run(carried.carry(batch)).await;
+        });
+    }
 }
 
 /// The per-request seeding step of one reachable dataloader.
@@ -91,7 +70,6 @@ impl LoaderExtensionFactory {
     pub(crate) fn new(container: Container, batches: DetachedWork) -> Self {
         warn_unreachable_loaders(&container);
         let seeds = reachable_seeds(&container);
-        warn_missing_batch_context(&container, seeds.len());
         Self {
             container,
             seeds,
@@ -138,25 +116,6 @@ fn warn_unreachable_loaders(container: &Container) {
     }
 }
 
-/// Warn once at schema build when loaders are seeded but nothing re-installs
-/// the request's ambient state around their batches: a `Repo` read then fails
-/// before any SQL is issued.
-fn warn_missing_batch_context(container: &Container, seeded: usize) {
-    const HINT: &str = "list `LoaderScope as dyn GraphqlBatchContext` in a reachable module \
-         (`nestrs g graphql` writes it into authz/graphql/) — without it every batch runs on a \
-         task with no ambient executor, and each relation field answers with an error before \
-         any SQL is issued";
-    if seeded == 0 || container.get_dyn::<dyn GraphqlBatchContext>().is_some() {
-        return;
-    }
-    tracing::warn!(
-        target: crate::TARGET,
-        loaders = seeded,
-        hint = HINT,
-        "dataloaders seeded with no batch context",
-    );
-}
-
 impl ExtensionFactory for LoaderExtensionFactory {
     fn create(&self) -> Arc<dyn Extension> {
         Arc::new(LoaderExtension {
@@ -190,8 +149,6 @@ impl Extension for LoaderExtension {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
     #[test]
@@ -269,113 +226,37 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the test's receiver may already be gone"
-    )]
-    async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
-        let container = Container::builder().build();
-        let spawner = batch_spawner(&container, &DetachedWork::new());
-        let ran = Arc::new(AtomicUsize::new(0));
-        let r = ran.clone();
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        spawner(Box::pin(async move {
-            r.fetch_add(1, Ordering::SeqCst);
-            let _ = tx.send(());
-        }));
-        rx.await.expect("spawned future resolves");
-        assert_eq!(ran.load(Ordering::SeqCst), 1);
-    }
+    /// A value the triggering unit carries, read back by the batch.
+    #[derive(Debug, PartialEq)]
+    struct Caller(&'static str);
 
-    struct CountingContext {
-        count: Arc<AtomicUsize>,
-    }
-
-    impl GraphqlBatchContext for CountingContext {
-        fn spawner(&self) -> GraphqlBatchSpawner {
-            let count = self.count.clone();
-            Box::new(move |fut| {
-                count.fetch_add(1, Ordering::SeqCst);
-                tokio::spawn(fut);
-            })
-        }
-    }
+    impl nest_rs_core::AmbientValue for Caller {}
 
     #[tokio::test]
     #[expect(
         clippy::let_underscore_must_use,
         reason = "the test's receiver may already be gone"
     )]
-    async fn batch_spawner_routes_through_a_registered_batch_context() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let ctx: Arc<dyn GraphqlBatchContext> = Arc::new(CountingContext {
-            count: count.clone(),
-        });
-        let container = Container::builder().provide_dyn(ctx).build();
-
-        let spawner = batch_spawner(&container, &DetachedWork::new());
+    async fn a_batch_runs_under_what_its_unit_carried_when_it_was_spawned() {
+        let spawner = batch_spawner(&DetachedWork::new());
+        let correlation = nest_rs_core::Correlation::minted(None);
+        let trace = correlation.trace_id();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        spawner(Box::pin(async move {
-            let _ = tx.send(());
-        }));
-        rx.await.expect("spawned future resolves");
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            1,
-            "the bridge's spawner must wrap the future, not be bypassed",
-        );
-    }
-}
-
-#[cfg(test)]
-mod batch_context_warning {
-    use nest_rs_testing::LogCapture;
-
-    use super::*;
-
-    struct Bridge;
-
-    impl GraphqlBatchContext for Bridge {
-        fn spawner(&self) -> GraphqlBatchSpawner {
-            Box::new(|fut| {
-                tokio::spawn(fut);
+        nest_rs_core::with_request_scope(None, correlation, async {
+            nest_rs_core::with_ambient(Arc::new(Caller("alice")), async {
+                spawner(Box::pin(async move {
+                    let _ = tx.send((
+                        nest_rs_core::current_trace_id(),
+                        nest_rs_core::ambient::<Caller>(),
+                    ));
+                }));
             })
-        }
-    }
+            .await;
+        })
+        .await;
 
-    const EVENT: &str = "dataloaders seeded with no batch context";
-
-    #[test]
-    fn seeded_loaders_without_a_batch_context_warn_at_schema_build() {
-        let logs = LogCapture::install();
-        warn_missing_batch_context(&Container::builder().build(), 3);
-
-        let event = logs.expect_one("nest_rs::graphql", EVENT);
-        assert_eq!(event.level, "warn");
-        assert_eq!(event.field("loaders").as_deref(), Some("3"));
-        assert!(
-            event
-                .field("hint")
-                .is_some_and(|h| h.contains("LoaderScope as dyn GraphqlBatchContext")),
-            "the hint names the binding: {event:#?}",
-        );
-    }
-
-    #[test]
-    fn a_bound_batch_context_is_silent() {
-        let container = Container::builder()
-            .provide_dyn::<dyn GraphqlBatchContext>(Arc::new(Bridge))
-            .build();
-        let logs = LogCapture::install();
-        warn_missing_batch_context(&container, 3);
-        logs.expect_none("nest_rs::graphql", EVENT);
-    }
-
-    #[test]
-    fn no_loaders_means_no_warning() {
-        let logs = LogCapture::install();
-        warn_missing_batch_context(&Container::builder().build(), 0);
-        logs.expect_none("nest_rs::graphql", EVENT);
+        let (seen_trace, seen_caller) = rx.await.expect("the batch runs");
+        assert_eq!(seen_trace, Some(trace), "the batch keeps its unit's trace");
+        assert_eq!(seen_caller.as_deref(), Some(&Caller("alice")));
     }
 }

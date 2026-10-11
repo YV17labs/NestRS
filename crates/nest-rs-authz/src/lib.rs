@@ -10,8 +10,8 @@
 //! [`AbilityGuard`] is the one guard, answering all four edges.
 //!
 //! Bindings: `http`, `graphql`, `ws`, `mcp`. The data-coupled bindings
-//! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
-//! `nest-rs-seaorm`.
+//! (`Bind`, the GraphQL `bind` helper, `WsDataContext`, `McpDataContext`) live
+//! in `nest-rs-seaorm`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

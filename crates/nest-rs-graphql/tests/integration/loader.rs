@@ -3,10 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nest_rs_core::{injectable, module};
+use nest_rs_core::{AmbientValue, ambient, injectable, module, with_ambient};
 use nest_rs_graphql::async_graphql::dataloader::{DataLoader, Loader};
 use nest_rs_graphql::async_graphql::{self, Context};
-use nest_rs_graphql::{GraphqlModule, dataloader, operations, resolver};
+use nest_rs_graphql::{
+    BoxFuture, GraphqlModule, GraphqlOperationGuard, dataloader, operations, resolver,
+};
+use nest_rs_http::poem;
 use nest_rs_http::{HttpConfig, HttpModule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -46,6 +49,140 @@ async fn a_loader_runs_its_owners_method_and_not_a_trait_method_of_the_same_name
     let loaded = ShelfLabels(Arc::new(Shelf)).load(&[7]).await;
     let Ok(loaded) = loaded;
     assert_eq!(loaded.get(&7).map(String::as_str), Some("shelf 7"));
+}
+
+/// Who the request is for, as an ability bridge says what the caller may do.
+#[derive(Debug)]
+struct Caller(&'static str);
+
+impl AmbientValue for Caller {}
+
+/// Adds the caller around the request's execution, as the authorization
+/// bridge installs the caller's ability.
+#[injectable]
+#[derive(Default)]
+struct CallerBridge;
+
+impl GraphqlOperationGuard for CallerBridge {
+    fn before<'a>(
+        &'a self,
+        _req: &'a mut poem::Request,
+    ) -> BoxFuture<'a, Result<(), poem::Response>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn around<'a>(
+        &'a self,
+        _req: &'a poem::Request,
+        inner: BoxFuture<'a, ()>,
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(with_ambient(Arc::new(Caller("alice")), inner))
+    }
+}
+
+/// Answers each key with what its batch ran under.
+#[injectable]
+#[derive(Default)]
+struct TraceShelf;
+
+#[dataloader]
+impl TraceShelf {
+    async fn traces(&self, keys: &[i32]) -> HashMap<i32, String> {
+        let seen = nest_rs_core::current_trace_id()
+            .map(|trace| trace.to_hex())
+            .unwrap_or_default();
+        keys.iter().map(|key| (*key, seen.clone())).collect()
+    }
+
+    async fn callers(&self, keys: &[i32]) -> HashMap<i32, String> {
+        let seen = ambient::<Caller>().map_or("nobody", |caller| caller.0);
+        keys.iter().map(|key| (*key, seen.to_owned())).collect()
+    }
+}
+
+#[resolver]
+struct TraceShelfResolver;
+
+#[operations]
+impl TraceShelfResolver {
+    #[query]
+    #[public]
+    async fn batch_trace(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
+        let loader = ctx.data::<DataLoader<TraceShelfTraces>>()?;
+        let Ok(found) = loader.load_one(id).await;
+        Ok(found.unwrap_or_default())
+    }
+
+    #[query]
+    #[public]
+    async fn batch_caller(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
+        let loader = ctx.data::<DataLoader<TraceShelfCallers>>()?;
+        let Ok(found) = loader.load_one(id).await;
+        Ok(found.unwrap_or_default())
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [
+        TraceShelf,
+        TraceShelfResolver,
+        CallerBridge as dyn GraphqlOperationGuard,
+    ],
+)]
+struct TraceShelfApp;
+
+#[tokio::test]
+async fn a_batch_runs_under_the_trace_of_the_request_that_triggered_it() {
+    let app = nest_rs_testing::TestApp::for_module::<TraceShelfApp>()
+        .await
+        .expect("the schema boots");
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ batchTrace(id: 7) }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let request_trace = resp
+        .0
+        .headers()
+        .get(nest_rs_http::TRACERESPONSE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split('-').nth(1))
+        .map(str::to_owned)
+        .expect("the edge answers the trace it served the request under");
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+
+    assert_eq!(
+        body["data"]["batchTrace"].as_str(),
+        Some(request_trace.as_str()),
+        "the batch reads the request's trace id: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_batch_reads_what_the_request_carries_with_no_batch_binding() {
+    let app = nest_rs_testing::TestApp::for_module::<TraceShelfApp>()
+        .await
+        .expect("the schema boots");
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(
+            &serde_json::json!({ "query": "{ a: batchCaller(id: 1) b: batchCaller(id: 2) }" }),
+        )
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+
+    assert_eq!(body["data"]["a"].as_str(), Some("alice"), "{body}");
+    assert_eq!(
+        body["data"]["b"].as_str(),
+        Some("alice"),
+        "one batch serves both fields: {body}",
+    );
 }
 
 /// Set when the slow batch is dropped, finished and started, in turn.

@@ -50,8 +50,8 @@ inventory.workspace = true
 poem.workspace = true
 # GraphqlModule logs the boot-time SDL emit through the framework's tracing.
 tracing.workspace = true
-# A DataLoader batch is spawned onto the runtime; the fallback spawner (no
-# `BatchContext` bound) names `tokio::spawn` directly.
+# A DataLoader batch is spawned onto the runtime, under what its request
+# carries into it.
 tokio.workspace = true
 
 [dev-dependencies]

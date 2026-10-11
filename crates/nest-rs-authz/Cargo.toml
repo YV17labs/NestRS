@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `LoaderScope`, `WsDataContext`) live in `nest-rs-seaorm` so the engine stays free of a data-layer dependency."
+description = "Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `WsDataContext`, `McpDataContext`) live in `nest-rs-seaorm` so the engine stays free of a data-layer dependency."
 keywords = ["framework", "nestrs", "authorization", "permissions", "rbac"]
 categories = ["authentication", "web-programming"]
 
@@ -37,8 +37,7 @@ http = [
 ]
 # GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
 # accessor + `ContextSeed`, and the `authorize` class-level gate. The
-# resolver-side `bind` helper and `LoaderScope` live in
-# `nest_rs_seaorm::graphql`.
+# resolver-side `bind` helper lives in `nest_rs_seaorm::graphql`.
 graphql = [
     "dep:nest-rs-graphql",
     # The root `AbilityGuard` is what a resolver binds, and its `check_http`

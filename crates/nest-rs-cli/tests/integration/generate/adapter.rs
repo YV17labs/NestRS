@@ -492,9 +492,12 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
     let authz_graphql = fs::read_to_string(src.join("authz/graphql/module.rs")).unwrap();
     assert!(
         authz_graphql.contains("dyn GraphqlOperationGuard")
-            && authz_graphql.contains("dyn GraphqlBatchContext")
             && authz_graphql.contains("forward_principal!(Claims)"),
-        "the two providers the bridge needs, and the principal forward: {authz_graphql}"
+        "the bridge, and the principal forward: {authz_graphql}"
+    );
+    assert!(
+        !authz_graphql.contains("LoaderScope"),
+        "a DataLoader batch carries what its request carries, with no binding: {authz_graphql}"
     );
     let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
     assert!(

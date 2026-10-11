@@ -162,10 +162,10 @@ request-scoped provider (both share the per-request cache); a cycle
 panics at resolution with the named chain.
 
 <Aside type="caution">
-A `#[dataloader]` batch closure runs **off-task** (a spawned future),
-so a request-scoped provider is not reachable inside batch
-computation — batches re-establish ambient state through their own
-`BatchContext` seam.
+A `#[dataloader]` batch closure runs **off-task** (a spawned future)
+and serves every field of the request, so a request-scoped provider is
+not reachable inside batch computation — a batch carries the request's
+ambient values instead: its trace, the caller's ability, the pool.
 </Aside>
 
 **Transient** — rebuild on every `Scoped<T>` / `get::<T>()` extraction.

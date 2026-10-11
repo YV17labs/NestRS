@@ -324,8 +324,7 @@ pub type AuthzGraphqlBridge = GraphqlAbilityBridge<AuthnGuard, AuthzGuard>;
 "#;
 
 pub(crate) const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::graphql::{GraphqlBatchContext, GraphqlOperationGuard, forward_principal};
-use nest_rs::seaorm::graphql::LoaderScope;
+use nest_rs::graphql::{GraphqlOperationGuard, forward_principal};
 
 use super::bridge::AuthzGraphqlBridge;
 use crate::authz::AuthzModule;
@@ -333,10 +332,7 @@ use crate::authn::Claims;
 
 #[module(
     imports = [AuthzModule],
-    providers = [
-        AuthzGraphqlBridge as dyn GraphqlOperationGuard,
-        LoaderScope as dyn GraphqlBatchContext,
-    ],
+    providers = [AuthzGraphqlBridge as dyn GraphqlOperationGuard],
 )]
 pub struct AuthzGraphqlModule;
 

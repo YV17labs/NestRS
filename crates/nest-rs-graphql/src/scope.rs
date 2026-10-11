@@ -45,8 +45,9 @@
 //! # }
 //! ```
 //!
-//! **Caveat.** A `#[dataloader]` batch runs off-task, so a request-scoped
-//! provider is **not** reachable there; batches use [`crate::GraphqlBatchContext`].
+//! **Caveat.** A `#[dataloader]` batch runs off-task and is shared by every
+//! field of the request, so a request-scoped provider is **not** reachable
+//! there; a batch reads the ambient values its request carries into it.
 
 use std::any::type_name;
 use std::ops::Deref;

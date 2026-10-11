@@ -53,9 +53,10 @@ impl<E: EntityTrait> Repo<E> {
             const HINT: &str = "a Repo query runs against the executor its transport installs: \
                  HTTP through SeaOrmDatabaseModule's DbContext interceptor, a WS message through \
                  `WsDataContext as dyn SocketContext`, an MCP tool through \
-                 `McpDataContext as dyn McpToolContext`, a dataloader batch through \
-                 `LoaderScope as dyn GraphqlBatchContext`, and worker/cron jobs through \
-                 SeaOrmDatabaseModule's JobContext — none of those is bound on this path";
+                 `McpDataContext as dyn McpToolContext`, and worker/cron jobs through \
+                 SeaOrmDatabaseModule's JobContext; a dataloader batch, a streaming body and \
+                 after-commit work run on the pool of the unit they continue, and a task spawned \
+                 off a unit carries none, so it opens its own — no unit of work runs on this path";
             tracing::error!(
                 target: crate::target::ORM,
                 entity = std::any::type_name::<E>(),
@@ -275,8 +276,8 @@ mod tests {
         let detail = err.to_string();
         assert!(detail.contains("no ambient database executor"), "{detail}");
         assert!(
-            detail.contains("LoaderScope as dyn GraphqlBatchContext"),
-            "the dataloader binding is one of the ones named: {detail}",
+            detail.contains("WsDataContext as dyn SocketContext"),
+            "the socket's binding is one of the ones named: {detail}",
         );
 
         let event = logs.expect_one(crate::target::ORM, "no ambient database executor");
@@ -288,9 +289,37 @@ mod tests {
         assert!(
             event
                 .field("hint")
-                .is_some_and(|h| h.contains("LoaderScope as dyn GraphqlBatchContext")),
+                .is_some_and(|h| h.contains("a task spawned off a unit carries none")),
             "…and the bindings that would supply one: {event:#?}",
         );
+    }
+
+    #[tokio::test]
+    async fn a_task_spawned_off_a_unit_fails_closed_for_want_of_an_executor() {
+        let ability = Arc::new(AbilityBuilder::new().build().expect("an empty ability"));
+        let pool = Executor::Pool(sea_orm::DatabaseConnection::default());
+        let carried = with_request_executor(
+            pool,
+            with_ability(ability, async {
+                assert!(Repo::<widget::Entity>::conn().is_ok(), "the unit has one");
+                nest_rs_core::TaskContext::current()
+            }),
+        )
+        .await;
+
+        let (opened, scoped) = tokio::spawn(carried.carry(async {
+            (
+                Repo::<widget::Entity>::conn().is_ok(),
+                nest_rs_authz::current_ability().is_some(),
+            )
+        }))
+        .await
+        .expect("the task runs");
+        assert!(
+            !opened,
+            "a task that may outlive its unit opens its own, never borrows its spawner's",
+        );
+        assert!(scoped, "the caller's ability still travels with it");
     }
 
     #[tokio::test]

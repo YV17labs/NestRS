@@ -50,8 +50,8 @@ through.
 ## Under the hood: the ambient executor
 
 `Executor` is a SeaORM connection — the pool or the request's transaction —
-installed in a `tokio::task_local!` for the duration of the handler. Three
-variants:
+installed in the request's ambient context for the duration of the handler.
+Three variants:
 
 ```rust title="nest_rs::seaorm::Executor"
 pub enum Executor {
@@ -66,9 +66,9 @@ pub enum Executor {
 that never queries — costs no round-trip at all. `Txn` is the eager handle,
 for a transaction something already opened.
 
-`Repo::<E>::conn()` reads the task-local back. Outside the scope it returns
-an error naming the `DbContext` interceptor — a service called with no
-ambient executor is a wiring bug, not a silent miss.
+`Repo::<E>::conn()` reads it back. Outside the scope it returns an error
+naming the bindings that install one — a service called with no ambient
+executor is a wiring bug, not a silent miss.
 
 ```rust title="crates/features/src/posts/service.rs"
 let conn = Repo::<Posts>::conn()?;
@@ -92,6 +92,17 @@ An anonymous caller is a request, not a job: on a `#[public]` route the
 ability guard still installs one, built from `define_visitor`, and `Repo`
 filters by it like any other. Nothing here treats "no login" as "no filter"
 — see [Public reads](/security/authorization/public-reads/).
+
+### Where a unit continues
+
+Some work a unit starts runs after the future that started it: a streaming
+body polled once the handler returned, a DataLoader batch on a task of its
+own, work held for the commit. Each runs on the **pool** the unit's executor
+was opened on, never on its transaction — a body is polled after the commit,
+a batch serves the whole request, held work runs once the transaction is
+gone — and under the caller's ability. A task you hand to `TaskContext`
+carries the ability but **no executor**: it may outlive the unit, so a write
+in it has to open a unit of its own, and a `Repo` call there fails closed.
 
 ## The DbContext interceptor
 
@@ -222,7 +233,7 @@ Both are for a *programmatic* boundary in a service, not for a job body (see
 
 A truly contextless path — a shutdown hook that runs after every transport
 has closed, a one-shot CLI command bootstrapped outside `App::run` — has
-no task-local to read. That is the one documented `Repo` bypass: inject
+no ambient executor to read. That is the one documented `Repo` bypass: inject
 an `Arc<DatabaseConnection>` and call SeaORM directly.
 
 ```rust title="crates/features/src/users/service.rs"

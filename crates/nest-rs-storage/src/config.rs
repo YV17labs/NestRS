@@ -6,7 +6,7 @@ use nest_rs_config::{
 };
 
 /// How long a call waits for S3's answer by default: under the authentication
-/// guard's 20-second net and the HTTP edge's 30-second request timeout.
+/// guard's 18-second net and the HTTP edge's 20-second request timeout.
 const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
 
 /// How long a transfer waits for its next bytes by default: the 30 seconds

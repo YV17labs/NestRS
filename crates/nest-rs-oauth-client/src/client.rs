@@ -228,7 +228,7 @@ impl OAuthClient {
     /// endpoint and this bound.
     ///
     /// A login makes up to three calls (GitHub), 15 s, which must stay under
-    /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (20 s) and the
+    /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (18 s) and the
     /// HTTP edge's request timeout, or a silent provider is reported by neither name.
     pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 

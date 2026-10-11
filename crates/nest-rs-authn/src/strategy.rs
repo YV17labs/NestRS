@@ -15,8 +15,9 @@ use crate::error::AuthError;
 /// for an unreachable identity store. It sits above the longest shipped login
 /// (GitHub social login: three `OAuthClient` calls bounded at 5 s each) and
 /// below the HTTP edge's request timeout (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`,
-/// 30 s by default).
-pub const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(20);
+/// 20 s by default), which counts from the request's arrival and would
+/// otherwise answer first, naming no strategy.
+pub const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(18);
 
 /// Turns a request into a principal. A strategy either authenticates the
 /// caller (`Ok(principal)`) or reports why it could not (`Err`). A strategy

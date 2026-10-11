@@ -107,7 +107,7 @@ The two bounds are the AWS SDK's. A call waits for S3's answer within
 `OPERATION_TIMEOUT_SECS`, every retry included, and past it fails with its
 own error, `the call did not end within 15s, every retry included — the budget
 <PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
-HTTP edge's 30-second timeout answers a bare `503` in its place. That error is
+HTTP edge's 20-second timeout answers a bare `503` in its place. That error is
 for an S3 that never answers: a call whose attempts keep failing stops
 retrying once half the budget is spent and fails on S3's own error, its last
 cause included. An upload's

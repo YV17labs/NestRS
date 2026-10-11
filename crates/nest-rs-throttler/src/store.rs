@@ -62,15 +62,15 @@ impl Decision {
 
 /// How long [`ThrottlerGuard`](crate::ThrottlerGuard) waits on
 /// [`ThrottlerStore::hit`] before it treats the store as one that cannot
-/// answer: **20 seconds**.
+/// answer: **18 seconds**.
 ///
 /// **A net under the store, never the store's budget**: past it the guard denies
 /// for the whole window, fail closed, and says so at `warn`. It sits above
 /// `RedisThrottler`'s per-command budget (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`,
 /// 10 s by default), so it never pre-empts a named cause, and below the HTTP
-/// request timeout (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, 30 s), so a hung store
+/// request timeout (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, 20 s), so a hung store
 /// reads the same on every edge.
-pub const HIT_TIMEOUT: Duration = Duration::from_secs(20);
+pub const HIT_TIMEOUT: Duration = Duration::from_secs(18);
 
 /// Contract a rate-limit backend fulfils for [`crate::ThrottlerGuard`]. The
 /// in-process [`InMemoryThrottler`] is the default; a shared-store implementor

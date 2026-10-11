@@ -44,11 +44,11 @@ pub(crate) const STATEMENT_TIMEOUT: DurationBounds = DurationBounds::secs(
 );
 
 /// The statement bound when none is set: under the authentication guard's
-/// 20 s net and the HTTP edge's default 30 s deadline.
+/// 18 s net and the HTTP edge's default 20 s deadline.
 const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The acquire budget when none is set: under the authentication guard's 20 s
-/// net and the HTTP edge's default 30 s deadline, so a dry pool answers with its
+/// The acquire budget when none is set: under the authentication guard's 18 s
+/// net and the HTTP edge's default 20 s deadline, so a dry pool answers with its
 /// own error.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -67,7 +67,7 @@ pub struct SeaOrmConfig {
     /// How long to wait for a connection before failing, in whole seconds, from
     /// 1 to 3600; `None` waits 10 s. The boot refuses a budget at or past the
     /// net of a guard whose code reaches the pool — the authentication guard's
-    /// 20 s — which is every guard's once
+    /// 18 s — which is every guard's once
     /// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) binds `Repo`.
     pub connect_timeout_secs: Option<u64>,
     /// How long one statement runs before Postgres cancels it

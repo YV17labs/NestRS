@@ -79,9 +79,10 @@ async fn a_server_that_serves_database_zero_alone_fails_the_boot_at_once_naming_
 }
 
 /// The default budget sits below the net of every port a binding serves — the
-/// queue's, the throttler guard's and the scheduler's — with the room each
-/// net's documentation argues — twice the budget, for a deployment that raised
-/// it — read from the constants that set them rather than retyped.
+/// queue's, the throttler guard's and the scheduler's — read from the constants
+/// that set them rather than retyped. A deployment that raises it is held under
+/// each net by the boot, not by room left here: the queue's and the throttler's
+/// sit under the HTTP edge's request timeout, which bounds them from above.
 #[test]
 fn the_connection_budget_answers_before_every_ports_net() {
     let budget = RedisConfig::default().connect_timeout;
@@ -93,10 +94,6 @@ fn the_connection_budget_answers_before_every_ports_net() {
         assert!(
             budget < net,
             "the connection budget ({budget:?}) must answer before {what} ({net:?})"
-        );
-        assert!(
-            budget * 2 <= net,
-            "{what} ({net:?}) leaves room for a budget raised to twice its default ({budget:?})"
         );
     }
 }

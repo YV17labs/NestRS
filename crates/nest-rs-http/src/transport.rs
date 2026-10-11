@@ -331,6 +331,7 @@ impl HttpTransport {
         http = http.shutdown_timeout(cfg.shutdown_timeout);
         http.max_concurrent_connections = cfg.connection_cap()?;
         http.deadlines = cfg.deadlines()?;
+        cfg.warn_when_requests_outlast_the_window();
         http = http.fail_secure_strict(cfg.fail_secure_strict);
         http = http.security_headers(cfg.security_headers.clone());
         http = http.compression(cfg.compression);

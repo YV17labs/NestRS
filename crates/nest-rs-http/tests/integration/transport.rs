@@ -441,12 +441,16 @@ async fn a_request_in_flight_when_shutdown_starts_is_answered_inside_the_window(
     logs.expect_none(nest_rs_http::target::HTTP, CUT);
 }
 
-/// A request still running when the window closes is cut: no answer, its
-/// handler dropped where it waits, and the line counts it.
+/// A request with no budget of its own still running when the window closes is
+/// cut: no answer, its handler dropped where it waits, and the line counts it.
 #[tokio::test]
 async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
     let logs = LogCapture::install();
-    let serving = serve().await;
+    let serving = serve_module::<ShutdownModule>(HttpConfig {
+        request_timeout: None,
+        ..HttpConfig::default()
+    })
+    .await;
     let mut client = request(serving.port, "/shutdown/stuck").await;
     STUCK.notified().await;
 
@@ -504,6 +508,28 @@ async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
         Some(nest_rs_core::operation_log::CANCELLED),
     );
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+/// With the defaults a request's budget fits the window, so one admitted before
+/// a stop is answered — `503` at its own deadline — rather than cut.
+#[tokio::test]
+async fn with_the_defaults_a_request_admitted_before_a_stop_is_answered_inside_the_window() {
+    let logs = LogCapture::install();
+    let serving = serve().await;
+    let mut client = request(serving.port, "/shutdown/stuck").await;
+    STUCK.notified().await;
+    after(Duration::from_secs(5)).await;
+
+    let took = serving.stop().await;
+
+    let window = HttpConfig::default().shutdown_timeout;
+    assert!(
+        took < window,
+        "the request's deadline came before the window's close, took {took:?}",
+    );
+    let answer = read_to_end(&mut client).await;
+    assert!(answer.starts_with("HTTP/1.1 503"), "{answer}");
+    logs.expect_none(nest_rs_http::target::HTTP, CUT);
 }
 
 /// An idle kept-alive connection is closed at the signal.
@@ -615,4 +641,54 @@ async fn work_stopped_on_several_mounts_is_waited_for_once() {
         ],
         "each mount names what it left running",
     );
+}
+
+/// What a deployment whose request budget outlasts its shutdown window is told
+/// at boot.
+const OUTLASTS: &str = "the request timeout outlasts the shutdown window: a request admitted \
+                        just before a stop can be cut unanswered";
+
+/// The transport [`HttpModule`](nest_rs_http::HttpModule) builds from the
+/// environment `vars` over the defaults.
+fn built_from(vars: &[(&str, &str)]) -> HttpTransport {
+    use nest_rs_config::Config as _;
+    let config = HttpConfig::from_env(
+        &nest_rs_config::ConfigService::with_vars("http", vars.iter().copied()),
+        HttpConfig::default(),
+    )
+    .expect("the environment is in range");
+    HttpTransport::from_config(&config).expect("a deployment may accept it knowingly")
+}
+
+/// A budget past the window, or none at all, is said once where the config is
+/// read; a warning, not a refusal.
+#[test]
+fn a_request_timeout_outlasting_the_shutdown_window_is_said_once_at_boot() {
+    let window = HttpConfig::default().shutdown_timeout.as_secs().to_string();
+    for (value, said) in [("30", "30"), ("0", "0")] {
+        let logs = LogCapture::install();
+        built_from(&[("REQUEST_TIMEOUT_SECS", value)]);
+        let line = logs.expect_one(nest_rs_http::target::HTTP, OUTLASTS);
+        assert_eq!(line.level, "warn", "{value}");
+        assert_eq!(
+            line.field("request_timeout_secs").as_deref(),
+            Some(said),
+            "{value}"
+        );
+        assert_eq!(
+            line.field("shutdown_timeout_secs").as_deref(),
+            Some(window.as_str()),
+            "{value}"
+        );
+    }
+}
+
+/// The defaults are ordered, and a budget inside the window says nothing.
+#[test]
+fn a_request_timeout_inside_the_shutdown_window_is_not_remarked() {
+    for vars in [&[][..], &[("REQUEST_TIMEOUT_SECS", "5")][..]] {
+        let logs = LogCapture::install();
+        built_from(vars);
+        logs.expect_none(nest_rs_http::target::HTTP, OUTLASTS);
+    }
 }

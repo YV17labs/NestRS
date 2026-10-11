@@ -265,7 +265,10 @@ to a port or installing it around every unit of work, and whoever arms a net
 declares it — a binding over the resource it hands its port, a guard around its
 strategy; a default is pinned by a unit test wherever both constants are
 visible. An edge's deadline is the deployment's, not a net: only its default is
-ordered. **A command whose answer is the only record of what it claimed is
+ordered — above every net a request waits under and its body's read gap,
+which it would otherwise answer for, and inside the shutdown window
+(`decisions/deadline-order.md`); a deployment breaking the second is told at
+boot. **A command whose answer is the only record of what it claimed is
 never cut** — a timeout does not undo it — so it waits on the socket's liveness
 instead (`queue.md`). Past a net every member
 fails closed in its own terms: an occurrence claim skips the occurrence at

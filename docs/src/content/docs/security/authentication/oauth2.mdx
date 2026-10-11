@@ -250,7 +250,7 @@ three calls through the client (GitHub: the exchange, `/user`,
 `/user/emails`), so a login spends at most 15 s on its provider — inside
 the guard's own bound on a strategy,
 [`AUTHENTICATE_TIMEOUT`](/security/authentication/#advanced-write-your-own-strategy)
-(20 s), and the HTTP edge's request timeout (30 s by default). A
+(18 s), and the HTTP edge's request timeout (20 s by default). A
 provider that stops answering is reported by the client, naming the
 endpoint, before either of those speaks for it.
 

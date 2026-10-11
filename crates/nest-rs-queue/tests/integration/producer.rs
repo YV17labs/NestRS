@@ -4,6 +4,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
+use nest_rs_http::HttpConfig;
 use nest_rs_queue::{
     BACKEND_TIMEOUT, Capabilities, Capability, ENQUEUE_BATCH, Envelope, JobId, JobProducer,
     JobProducerExt, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName,
@@ -751,6 +752,20 @@ async fn a_backend_answering_inside_the_net_is_waited_for() {
         .push(TranscodeQueue, song(), None)
         .await
         .expect("answered inside the net");
+}
+
+/// The net under the HTTP edge's request timeout, both read from the constants
+/// that set them: a handler's push to a backend that never answers fails with
+/// the port's error naming the queue, not the edge's `503` naming nothing.
+#[test]
+fn the_bound_answers_before_the_http_edge_times_a_request_out() {
+    let timeout = HttpConfig::default()
+        .request_timeout
+        .expect("the HTTP edge bounds a request by default");
+    assert!(
+        BACKEND_TIMEOUT < timeout,
+        "{BACKEND_TIMEOUT:?} vs {timeout:?}"
+    );
 }
 
 #[tokio::test(start_paused = true)]

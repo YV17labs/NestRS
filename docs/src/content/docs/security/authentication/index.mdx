@@ -132,13 +132,13 @@ A custom strategy binds exactly like the shipped one:
 bound with `#[use_guards(...)]`.
 
 The guard waits for `authenticate` for at most
-`nest_rs::authn::AUTHENTICATE_TIMEOUT` — 20 seconds — and then denies the
+`nest_rs::authn::AUTHENTICATE_TIMEOUT` — 18 seconds — and then denies the
 request. That is a net, not a budget: a strategy that calls a backend bounds
 each call itself, the way the [OAuth2 client](/security/authentication/oauth2/)
 does, so an outage reaches the caller as your strategy's own failure, with its
 cause, long before the net. The net sits above every login the framework ships
 (a social login spends at most 15 s on its provider) and below the HTTP edge's
-30-second request timeout, so a strategy that hangs is refused by the guard, on
+20-second request timeout, so a strategy that hangs is refused by the guard, on
 every edge — a route, the GraphQL POST, the MCP POST, the WebSocket upgrade —
 with the 503 an unreachable identity store gets, `#[public]` routes included.
 The guard logs `strategy did not answer within the guard's timeout; denying

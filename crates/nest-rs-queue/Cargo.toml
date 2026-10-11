@@ -52,7 +52,7 @@ tokio-util.workspace = true
 
 [dev-dependencies]
 # `test-util` (not part of tokio's `full`) pauses time, so a backend that never
-# answers meets the net without the suite waiting its twenty seconds out.
+# answers meets the net without the suite waiting its eighteen seconds out.
 tokio = { workspace = true, features = ["test-util"] }
 # `consume`'s tests assert the events a job attempt files, not only its outcome;
 # `queue` is the behaviour kit the worker's suite runs over an in-memory backend.
@@ -68,6 +68,9 @@ anyhow.workspace = true
 nest-rs-codegen = { path = "../nest-rs-codegen" }
 # A `Piped<P, T>` job argument, run by an attempt (tests/integration/consume.rs).
 nest-rs-pipes = { path = "../nest-rs-pipes" }
+# The HTTP edge's default request timeout, which `BACKEND_TIMEOUT` sits under
+# (tests/integration/producer.rs).
+nest-rs-http = { path = "../nest-rs-http" }
 
 [lints]
 workspace = true

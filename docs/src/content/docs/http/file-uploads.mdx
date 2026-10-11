@@ -144,7 +144,7 @@ states the parts.
   holding it. For very large media the presigned PUT still wins — it avoids
   proxying the bytes through the server at all.
 - A long upload runs against the [request timeout](/http/configuration/#request-timeout),
-  `30` seconds by default and counted from the request's arrival, its body's
+  `20` seconds by default and counted from the request's arrival, its body's
   reading included: an upload slower than that is answered `503` part-way. A
   transport taking large files over slow links turns the budget off
   (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0`) or raises it — there is no budget per

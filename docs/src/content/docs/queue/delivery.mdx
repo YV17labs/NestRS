@@ -144,7 +144,7 @@ killed — and is dead-lettered without running, as
 
 Every command a worker or a producer sends answers or fails within
 `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an outage
-fails calls rather than holding them. The boot refuses a budget of twenty
+fails calls rather than holding them. The boot refuses a budget of eighteen
 seconds or more, the queue port's own net on every call: the port would stop
 waiting first, and a failure would reach its caller as a bare timeout instead of
 Redis's own cause. A worker's read blocks on a connection of
@@ -168,7 +168,7 @@ the URL's name — which now reaches the new primary — and says so at `warn`,
 replica`. The writes refused meanwhile fail as any refused call does.
 
 A push, a cancel and a checkpoint's read or save fail within one budget too, as
-the connection's own failure, before the queue port's net — twenty seconds —
+the connection's own failure, before the queue port's net — eighteen seconds —
 gives up on the call; see
 [When a push fails](/queue/producing-jobs/#when-a-push-fails).
 

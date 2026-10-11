@@ -17,10 +17,12 @@ const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 /// 15 seconds: under the 30–60 s idle timeout common to proxies and browsers.
 const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// 20 seconds, plus 5 for the shutdown hooks and 3 for the telemetry flush
 /// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`): 28, under Kubernetes' default 30.
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+/// The shutdown window's own default, so a request admitted just before a stop
+/// is answered inside the window.
+const DEFAULT_REQUEST_TIMEOUT: Duration = DEFAULT_SHUTDOWN_TIMEOUT;
 
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
     "SHUTDOWN_TIMEOUT_SECS",
@@ -252,8 +254,11 @@ pub struct HttpConfig {
     /// is aborted with `503 Service Unavailable` and a `Retry-After`. `None` ⇒
     /// no timeout. Read from `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, whole
     /// seconds from 1 to 3600 or `0` for no timeout — refused outside, from the
-    /// environment and from the pinned struct alike; defaults to 30 seconds.
-    /// Off in code is `None`; a pinned zero is refused.
+    /// environment and from the pinned struct alike; defaults to 20 seconds,
+    /// the [`shutdown_timeout`](Self::shutdown_timeout) default, so a request
+    /// admitted just before a stop is answered inside the window. A budget past
+    /// the window, or none, is said once at boot with a `warn`. Off in code is
+    /// `None`; a pinned zero is refused.
     pub request_timeout: Option<Duration>,
     /// `true` (the default) fails boot when global guards are registered and
     /// an endpoint the transport cannot shape (an imperative `mount(...)`)
@@ -380,7 +385,7 @@ impl Default for HttpConfig {
             server_header: false,
             global_prefix: None,
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
-            request_timeout: Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)),
+            request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
             fail_secure_strict: true,
             security_headers: HttpSecurityHeaders::default(),
             compression: false,
@@ -429,6 +434,26 @@ impl HttpConfig {
             idle: check(IDLE_TIMEOUT, self.idle_timeout)?,
             send: check(SEND_TIMEOUT, self.send_timeout)?,
         })
+    }
+
+    /// One boot `warn` when [`request_timeout`](Self::request_timeout) is off
+    /// or outlasts [`shutdown_timeout`](Self::shutdown_timeout): a request
+    /// admitted just before a stop can then be cut unanswered. Not a refusal —
+    /// a deployment may accept it knowingly.
+    pub(crate) fn warn_when_requests_outlast_the_window(&self) {
+        if self
+            .request_timeout
+            .is_some_and(|budget| budget <= self.shutdown_timeout)
+        {
+            return;
+        }
+        tracing::warn!(
+            target: crate::target::HTTP,
+            request_timeout_secs = self.request_timeout.map_or(0, |budget| budget.as_secs()),
+            shutdown_timeout_secs = self.shutdown_timeout.as_secs(),
+            "the request timeout outlasts the shutdown window: a request admitted just before a \
+             stop can be cut unanswered",
+        );
     }
 
     /// `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`, as this process spells it.
@@ -1077,6 +1102,21 @@ mod tests {
         )
         .expect("the variable overrides the pin");
         assert_eq!(cfg.max_concurrent_connections, 5);
+    }
+
+    /// The "default is ordered" half of the rule: a request admitted just
+    /// before a stop is answered inside the window.
+    #[test]
+    fn the_default_request_timeout_fits_the_default_shutdown_window() {
+        let defaults = HttpConfig::default();
+        let budget = defaults
+            .request_timeout
+            .expect("a request is bounded by default");
+        assert!(
+            budget <= defaults.shutdown_timeout,
+            "{budget:?} outlasts the {:?} window",
+            defaults.shutdown_timeout,
+        );
     }
 
     #[test]

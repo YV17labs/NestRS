@@ -25,8 +25,8 @@ pub const BACKEND_REMEDY: &str = "Import exactly one queue backend's binding —
 ///
 /// A net, never a backend's budget: it sits above the Redis adapter's
 /// per-command budget (`RedisConfig::connect_timeout`, 10 s by default) and
-/// below the HTTP edge's request timeout (`HttpConfig::request_timeout`, 30 s).
-pub const BACKEND_TIMEOUT: Duration = Duration::from_secs(20);
+/// below the HTTP edge's request timeout (`HttpConfig::request_timeout`, 20 s).
+pub const BACKEND_TIMEOUT: Duration = Duration::from_secs(18);
 
 /// A queue backend's name and optional capabilities, declared once as a
 /// constant and read by every site that refuses a declaration the backend

@@ -3,7 +3,7 @@
 //!
 //! The module default is pinned generously (60/minute), so a `429` on the third
 //! request can only come from the route's own declaration. The stalled stores
-//! run on paused time, so the twenty seconds cost nothing.
+//! run on paused time, so the eighteen seconds cost nothing.
 
 use std::sync::Arc;
 use std::time::Duration;

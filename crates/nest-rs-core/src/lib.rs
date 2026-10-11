@@ -42,6 +42,16 @@
 //! each trait, so a bound host runs too; one the boot finds absent carries
 //! [`INERT_HOST_HINT`].
 //!
+//! # One pipeline
+//!
+//! [`Interceptor`] and [`ExceptionFilter`] name no edge. An edge that
+//! dispatches through this crate runs each unit through one staged pipeline,
+//! written and tested once: the interceptors a module brings at the unit stage
+//! ([`macro@interceptor`]), the guards and the posture's class gate, the
+//! exception filters, the handler stage's interceptors, then the handler. A
+//! failure stays a failure whatever a layer answers, so the unit's data rolls
+//! back.
+//!
 //! # Discovery
 //!
 //! Module-wired items implement [`Discoverable`] and are found through link-time
@@ -78,12 +88,15 @@ pub mod container;
 pub(crate) mod cycle_guard;
 pub mod discoverable;
 pub mod discovery;
+mod dispatch;
 pub mod env_flag;
 pub mod env_prefix;
 pub mod error;
 pub mod error_message;
+mod exception_filter;
 mod handler;
 mod identifier;
+mod interceptor;
 pub mod layer;
 pub mod layer_chain;
 pub mod lifecycle;
@@ -94,12 +107,16 @@ pub mod module;
 mod net;
 mod opaque;
 pub mod operation_log;
+mod outcome;
 pub mod panic;
 pub mod problem;
 mod process_start;
 pub mod request_scope;
+mod site;
 mod stderr_lines;
 pub mod target;
+#[cfg(test)]
+mod testing;
 pub mod trace_context;
 pub mod transport;
 mod type_name;
@@ -131,8 +148,10 @@ pub use error::{
     WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
+pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
 pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
+pub use interceptor::{Interceptor, InterceptorSpec, Next, interceptor};
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT};
@@ -140,6 +159,7 @@ pub use module::{Collecting, DynamicModule, Module, Registering};
 pub use net::{Net, Unanswered, within};
 pub use opaque::{OPAQUE_CLIENT_MESSAGE, UNAVAILABLE_CLIENT_MESSAGE};
 pub use operation_log::Edge;
+pub use outcome::{Failure, Outcome, Settled};
 pub use panic::panic_message;
 pub use problem::{Code, Problem, ToProblem};
 pub use request_scope::{
@@ -161,12 +181,18 @@ pub mod __private {
     pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
     pub use crate::ambient::{Pending, install_pending, with_ambient_from};
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
+    pub use crate::app::__private::{use_exception_filters_global, use_interceptors_global};
     pub use crate::container::__private::{
         collect_dynamic_import, enter_import, leave_import, refuse_site, register_dynamic_import,
         site_chains, take_site_refusal,
     };
+    pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::error_message::__private::find_in_chain;
+    pub use crate::exception_filter::__private::ErasedExceptionFilter;
     pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
+    pub use crate::interceptor::__private::{
+        InterceptorRegistration, InterceptorStage, register_interceptor,
+    };
     pub use crate::layer_chain::__private::{
         ResolvedLayer, SiteChains, check_specs_resolvable, compose_chain, dedup_bucket,
         resolve_global_layers,
@@ -174,9 +200,13 @@ pub mod __private {
     pub use crate::lifecycle::__private::LifecycleHook;
     pub use crate::module::__private::{dynamic_import_module, module_registered};
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
+    pub use crate::outcome::__private::{caught_problem, settled};
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::problem::__private::withheld;
     pub use crate::process_start::ProcessStart;
+    pub use crate::site::{
+        GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, declare_site,
+    };
     pub use crate::trace_context::__private::{
         current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
         set_span_linker, with_pending_ids,
@@ -356,3 +386,88 @@ pub use nest_rs_core_macros::injectable;
 /// `JsonSchema` and routes each back here, so a DTO crossing any transport
 /// declares none of them.
 pub use nest_rs_core_macros::input;
+
+/// Declare a struct as an interceptor its module brings for every unit it
+/// serves — `#[interceptor]` after the guards and the class gate, or
+/// `#[interceptor(stage = unit)]` around them.
+///
+/// The struct is a singleton provider, built like an `#[injectable]` one, and
+/// only an imported module's reaches a unit. A type the app also lists runs
+/// once; its order within its stage is its [`Layer::priority`], then module
+/// import order.
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use nest_rs_core::{
+///     App, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable, interceptor,
+///     module,
+/// };
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// struct Metrics {
+///     units: AtomicUsize,
+/// }
+///
+/// #[interceptor]
+/// struct CountUnits {
+///     #[inject]
+///     metrics: Arc<Metrics>,
+/// }
+///
+/// impl Layer for CountUnits {}
+///
+/// #[async_trait]
+/// impl Interceptor for CountUnits {
+///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+///         self.metrics.units.fetch_add(1, Ordering::Relaxed);
+///         next.run(cx).await
+///     }
+/// }
+///
+/// #[module(providers = [Metrics, CountUnits])]
+/// struct MetricsModule;
+/// # use std::any::TypeId;
+/// # use nest_rs_core::__private::{
+/// #     GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, Tail,
+/// #     declare_handler, declare_site, declare_unit, dispatch, new_unit_context, settled,
+/// # };
+/// # use nest_rs_core::{Handler, Posture, UnitView, operation_log::Kind};
+/// # struct Jobs;
+/// # struct JobView;
+/// # impl UnitView for JobView {}
+/// # struct Run;
+/// # impl Tail for Run {
+/// #     async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+/// #         Ok(settled())
+/// #     }
+/// # }
+/// # static RUN: Handler = declare_handler(HandlerDeclaration {
+/// #     unit: declare_unit("nest-rs-queue", "nest_rs::queue", Kind::Consumer, "queue.job"),
+/// #     host: TypeId::of::<Jobs>(),
+/// #     host_name: "Jobs",
+/// #     method: "run",
+/// #     address: "jobs",
+/// #     posture: Posture::System,
+/// #     meta: MetaLevels::default,
+/// # });
+/// # static SITE: Site = declare_site(&RUN, SiteDeclaration {
+/// #     layers: SiteLayers::default,
+/// #     global: GlobalLayers::ALL,
+/// #     guard_stage: None,
+/// #     class_gate: None,
+/// # });
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let app = App::builder().module::<MetricsModule>().build().await?;
+/// # let chains = SITE.chains(app.container())?;
+/// # let mut view = JobView;
+/// # let mut cx = new_unit_context(&RUN, &mut view, None, None);
+/// # assert!(dispatch(&mut cx, &chains, &mut Run).await.is_ok());
+/// let metrics = app.container().get::<Metrics>().expect("provided");
+/// assert_eq!(metrics.units.load(Ordering::Relaxed), 1);
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_core_macros::interceptor;

@@ -717,6 +717,56 @@ fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'stat
     names
 }
 
+/// `app` is public: its tier-2 items live here, reached only through the
+/// crate's `__private`.
+pub(crate) mod __private {
+    use super::AppBuilder;
+    use crate::exception_filter::{ExceptionFilterSpec, GlobalExceptionFilters};
+    use crate::interceptor::{GlobalInterceptors, InterceptorSpec};
+    use crate::layer_chain::__private::check_specs_resolvable;
+
+    /// List `specs` as the interceptors every unit runs at the handler stage,
+    /// first listed outermost; one no imported module provides fails the boot
+    /// at the wiring step, in every app.
+    pub fn use_interceptors_global(
+        builder: AppBuilder,
+        specs: impl IntoIterator<Item = InterceptorSpec>,
+    ) -> AppBuilder {
+        let specs = specs.into_iter().map(|spec| spec.0).collect();
+        builder.provide(GlobalInterceptors(specs)).provide_wiring(
+            "nest_rs::layers::interceptors",
+            |container| {
+                check_specs_resolvable::<GlobalInterceptors>(
+                    container,
+                    "interceptor",
+                    "an unresolvable global interceptor would silently drop",
+                )
+                .map_err(anyhow::Error::msg)
+            },
+        )
+    }
+
+    /// List `specs` as the exception filters every unit tries after its
+    /// method's and its host's; one no imported module provides fails the boot
+    /// at the wiring step, in every app.
+    pub fn use_exception_filters_global(
+        builder: AppBuilder,
+        specs: impl IntoIterator<Item = ExceptionFilterSpec>,
+    ) -> AppBuilder {
+        let specs = specs.into_iter().map(|spec| spec.0).collect();
+        builder
+            .provide(GlobalExceptionFilters(specs))
+            .provide_wiring("nest_rs::layers::exception_filters", |container| {
+                check_specs_resolvable::<GlobalExceptionFilters>(
+                    container,
+                    "exception filter",
+                    "an unresolvable global exception filter would silently drop",
+                )
+                .map_err(anyhow::Error::msg)
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tokio_util::sync::CancellationToken;

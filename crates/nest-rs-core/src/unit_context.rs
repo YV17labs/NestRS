@@ -11,6 +11,7 @@ use tokio::time::Instant;
 use crate::ambient::{AmbientValue, Pending};
 use crate::handler::{Handler, Reflector};
 use crate::operation_log::{Edge, Unit};
+use crate::outcome::Failure;
 
 /// Everything a layer knows about the unit it runs around: which unit, on which
 /// edge, dispatched to which [`Handler`], for which [`Peer`], by when, and the
@@ -26,6 +27,9 @@ pub struct UnitContext<'a> {
     deadline: Option<Instant>,
     /// What the running stage attached, made ambient once it has passed.
     pending: Pending,
+    /// The failure the rest of the unit came to, recorded by `Next::run` for
+    /// the interceptor that called it.
+    failed_inner: Option<Failure>,
 }
 
 impl<'a> UnitContext<'a> {
@@ -121,6 +125,17 @@ impl<'a> UnitContext<'a> {
             .get::<T>()
             .or_else(crate::ambient::ambient::<T>)
     }
+
+    /// Record what the rest of the unit came to, for the interceptor whose
+    /// `next` ran it.
+    pub(crate) fn set_failed_inner(&mut self, failed: Option<&Failure>) {
+        self.failed_inner = failed.map(Failure::shared);
+    }
+
+    /// The failure recorded since the last [`set_failed_inner`](Self::set_failed_inner).
+    pub(crate) fn take_failed_inner(&mut self) -> Option<Failure> {
+        self.failed_inner.take()
+    }
 }
 
 impl fmt::Debug for UnitContext<'_> {
@@ -173,6 +188,7 @@ pub fn new_unit_context<'a>(
         peer,
         deadline,
         pending: Pending::default(),
+        failed_inner: None,
     }
 }
 

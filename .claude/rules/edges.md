@@ -229,6 +229,14 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   the transport**, where the specification places it
   (`.claude/decisions/mcp-discovery-at-transport.md`).
 
+**The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
+`nest_rs::core::{Interceptor, ExceptionFilter}`, `#[interceptor]` (handler
+stage) and `#[interceptor(stage = unit)]`, and one `dispatch` — unit stage,
+guard stage and class gate, exception filters (method, host, app), handler
+stage (the app's, the modules' in import order, host, method), tail. An edge
+moves onto it in its own change, a `Site` per dispatch site, and its row of the
+table above goes with it; until then that table is what runs.
+
 ## Posture inside an operation
 
 The posture is not a layer: the impl half turns it into a class gate and a mask.

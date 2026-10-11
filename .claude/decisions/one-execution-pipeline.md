@@ -99,3 +99,37 @@ contract beside today's families; each edge moves in its own branch
 `feat/websocket-on-pipeline`, `feat/mcp-on-pipeline`,
 `feat/jobs-ticks-listeners-on-pipeline`); `refactor/retire-replaced-contracts-and-poem`
 removes the three crates. Each appends an entry here where it departs.
+
+**2026-10-11 — the contract landed beside today's families, with five
+departures.** `nest-rs-core` holds `Outcome`, `Settled`, `Failure`,
+`Interceptor` and `Next`, `ExceptionFilter`, `Caught` and `Catch`, their specs,
+`Layer::serves`, `#[interceptor]` and `#[interceptor(stage = unit)]` (a
+singleton provider plus a registration its module attaches), and, tier 2, the
+`Site` a decorator declares in a `static`, the `UnitChains` each container
+composes for it once and holds, and `dispatch`. No edge dispatches through it
+yet; the app's two lists are reached through `__private` until
+`feat/http-on-pipeline` makes them `AppBuilder` methods. Where it departs:
+
+- **`dispatch` is generic over the edge's tail**, whose `call` returns a future
+  rather than a box: a `Bare` site runs its tail inline and allocates nothing,
+  a `GateOnly` one boxes its guard stage alone, and only a `Layered` one boxes
+  the tail, since `Next` must hold it erased. What is instantiated per tail is
+  the shape switch; the stages are written once, behind the box.
+- **What a site folds of the app-wide layers is three switches**
+  (`GlobalLayers`: the unit stage, the app's exception filters, the handler
+  stage's app-wide interceptors), not one "nested" flag: a GraphQL root field
+  folds the filters and the interceptors but not the unit stage its request
+  ran, a self-mount the unit stage and the filters but no interceptor, MCP's
+  other requests the unit stage alone, a field resolver none.
+- **A filter's problem rides on the failure.** `Caught::Problem` leaves the
+  unit failed and its error whole; the edge reads the problem off the
+  failure and renders it over whatever its view held, filing a `5xx`'s
+  withheld chain as for any other.
+- **The handler stage's app-wide bucket is one site**: the app's list, then
+  the modules' in import order, ordered by `Layer::priority` with that order
+  breaking a tie — a priority orders the app's and the modules' together,
+  never ahead of the host's or the method's. `serves` filters every app-wide
+  list, the exception filters' too.
+- **`force` is the guard stage's.** Guards are the one family with a
+  `#[force_*]`, so the site's guard-stage factory carries it; no other list of
+  the declaration takes one.

@@ -1,5 +1,6 @@
-//! Surface-agnostic nestrs decorators (`#[injectable]`, `#[module]`,
-//! `#[hooks]`, `#[input]`, `#[main]`), re-exported by `nest-rs-core`.
+//! Surface-agnostic nestrs decorators (`#[injectable]`, `#[interceptor]`,
+//! `#[module]`, `#[hooks]`, `#[input]`, `#[main]`), re-exported by
+//! `nest-rs-core`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -9,6 +10,7 @@ mod entry;
 mod hooks;
 mod injectable;
 mod input;
+mod interceptor;
 mod module;
 
 /// Declares a struct as a provider: `#[inject]` fields resolve via
@@ -32,6 +34,24 @@ mod module;
 #[proc_macro_attribute]
 pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(injectable::injectable(args, input).into()).into()
+}
+
+/// Declares a struct as an interceptor a module brings for every unit it
+/// serves: a singleton provider, built like an `#[injectable]` one, that each
+/// site composes from the container once.
+///
+/// One key, `stage = handler | unit` (default `handler`):
+///
+/// - `handler` runs it after the guards and the class gate, after the
+///   interceptors the app lists, in module import order.
+/// - `unit` runs it around the guards, so it sees a denial too — an opening,
+///   written in the source.
+///
+/// Its order within its stage is its `Layer::priority`; a type the app also
+/// lists runs once.
+#[proc_macro_attribute]
+pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()
 }
 
 /// Registers a provider's lifecycle hooks; `App` invokes each method tagged

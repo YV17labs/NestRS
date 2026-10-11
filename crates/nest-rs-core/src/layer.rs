@@ -22,8 +22,15 @@
 //!
 //! The sub-traits live in `nest_rs_guards`, `nest_rs_pipes`,
 //! `nest_rs_interceptors`, `nest_rs_filters` and `nest_rs_exception_filters`.
+//!
+//! This crate holds the edge-neutral [`Interceptor`](crate::Interceptor) and
+//! [`ExceptionFilter`](crate::ExceptionFilter) beside them: one pipeline whose
+//! stage order is written once, which each edge adopts in place of its
+//! HTTP-typed families.
 
 use std::sync::Arc;
+
+use crate::operation_log::Unit;
 
 /// What kind of layer this is — one role per sub-trait, and the vocabulary the
 /// fixed execution order across kinds is written in.
@@ -89,6 +96,15 @@ pub trait Layer: Send + Sync + 'static {
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+
+    /// Whether this layer has work at `unit`. Read once when an app-wide list
+    /// is composed for a site, never per call, so a layer serving one edge
+    /// costs the others nothing; a layer a decorator binds at a site always
+    /// runs there.
+    fn serves(&self, unit: Unit) -> bool {
+        let _ = unit;
+        true
+    }
 }
 
 impl<T: Layer + ?Sized> Layer for Arc<T> {
@@ -98,5 +114,9 @@ impl<T: Layer + ?Sized> Layer for Arc<T> {
 
     fn name(&self) -> &'static str {
         (**self).name()
+    }
+
+    fn serves(&self, unit: Unit) -> bool {
+        (**self).serves(unit)
     }
 }

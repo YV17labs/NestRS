@@ -1,0 +1,5 @@
+error: unknown #[interceptor] stage `sideways`; expected `unit` or `handler`
+ --> tests/integration/diagnostics/core/unknown_interceptor_stage.rs:6:23
+  |
+6 | #[interceptor(stage = sideways)]
+  |                       ^^^^^^^^

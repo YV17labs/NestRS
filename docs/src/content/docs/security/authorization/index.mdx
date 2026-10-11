@@ -161,6 +161,11 @@ if let Some(ab) = current_ability() {
 }
 ```
 
+`can` sees the model alone. A grant's relation is taken to hold, as if
+the query that read the model had checked it — true of a read scoped to
+the same action, so load a model you check for `Update` through `Repo`
+under `Update`, or `Bind` — and a denial the row cannot decide refuses.
+
 `current_ability()` returns `None` outside a request (worker job,
 shutdown hook). Worker jobs run **unscoped** by design — system work
 should not be filtered by a caller's ability. See

@@ -156,10 +156,11 @@ Response masking reconstructs the full row from the wire body to apply
 `Ability::mask`, which needs a default for every unexposed column. The
 macro provides one for the trivial scalar types (`String`, `Option`,
 `bool`, numbers). A hidden column of a type it can't default — `Uuid`,
-a timestamp, `Decimal`, a custom enum — needs a hand-written
-`impl WireModelDefaults`, or the crate fails to **compile**, naming the
-missing impl. A column an ability rule predicates on is therefore best left
-**exposed**.
+a timestamp, `Decimal`, a custom enum — takes `#[wire_default]` (its
+type's `Default`) or `#[wire_default(expr)]`; without one, a masked
+response fails closed with a **500**. A rule reading a hidden column
+decides no pushed row, so a column an ability rule predicates on is best
+left **exposed**, read-only.
 See [Response masking](/security/authorization/response-masking/).
 </Aside>
 

@@ -65,11 +65,13 @@ opt-in, so a column added by a later migration never leaks by omission — the
 failure direction is the safe one. The remaining risk is the reverse: an
 `#[expose]` written by habit on a column that should not travel.
 
-**Does any ability rule predicate on a column you did not expose?** Masking
+**Does a rule a push depends on read a column you did not expose?** Masking
 rebuilds the row from the wire body and fills unexposed columns with a
-placeholder, so such a rule is evaluated against the placeholder rather than the
-value and masks the wrong fields. Nothing catches this — see
-[Response masking](/security/authorization/response-masking/).
+placeholder, which the mask never decides a rule on: on a reply it trusts the
+`Repo` read, and on a subscription item or a `masked_reply` value it refuses the
+row. A feed whose policy reads a hidden column delivers nothing; expose that
+column, read-only — see
+[What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see).
 
 ## Going further
 

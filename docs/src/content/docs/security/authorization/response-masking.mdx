@@ -42,7 +42,7 @@ things:
    true.
 2. **Shaper trigger.** The `RouteResponseShaper` impl wraps the
    handler in `with_ability(ability, inner)` (so `Repo::scoped`
-   reads the right ability) and runs `mask_response::<user::Entity>`
+   reads the right ability) and runs `mask_entity_response::<user::Entity>`
    on the way out.
 
 <Aside type="caution">
@@ -122,12 +122,42 @@ Pair every masked route with a
 [negative-path test](/testing/negative-path/) that pins the masked body
 shape — a regression surfaces immediately, not after an audit.
 
+## What the mask cannot see
+
+The mask runs on the value the handler returned, rebuilt into a `Model`.
+What the value does not carry is missing from it: a relation, a column
+`#[expose]` keeps off the wire, and an exposed column the value's own type
+leaves out, which the rebuild would otherwise read as `None`. A rule that
+reads any of them — `p.related(…)`, a predicate on a hidden `deleted` flag
+or on an `archived_at` the DTO omits — is decided by where the value came
+from.
+
+- **A reply** — what an `#[authorize]` operation returns — was read through
+  `Repo` under the same ability, and that read's SQL already applied every
+  rule. The mask trusts it: a row a relational grant admitted stays, a
+  relational denial has already left out the rows it names, and a row's
+  fields come from the grants the mask can decide on the row.
+- **A push** — a [subscription](/graphql/subscriptions/) item, a
+  `masked_reply` value — went through no read. A grant the mask cannot decide
+  grants nothing, and such a denial denies, so the item does not ship. The
+  first refusal per entity and action logs one `warn` on `nest_rs::authz`
+  with `reason = "undecidable_on_push"`.
+
+A rule on a column the value does carry is decided on the spot, so a feed
+scoped by `org_id` keeps working: expose the column the rule reads,
+read-only, and pushed rows are decided like any other.
+
+`masked_reply` masks for the caller whose ability is ambient — the right
+answer for a reply to that caller. A push to *other* connections
+(`WsServer::emit`, `broadcast`) is not masked per recipient: send only what
+every recipient may read.
+
 ## How it works (internals)
 
 <Aside type="note">
 Everything below is the mechanism, not the surface — first-time builders
-can stop here and come back when they hit a hand-written
-`WireModelDefaults` or want to audit the fail-closed path.
+can stop here and come back when they hit a hidden column `#[expose]`
+cannot default or want to audit the fail-closed path.
 </Aside>
 
 ### The pipeline after a 2xx
@@ -151,7 +181,7 @@ serialize → response body
 
 Each step has a defined failure mode:
 
-- **Parse fails** (the body was not JSON) → original bytes ship.
+- **Parse fails** (the body was not JSON) → 500. Fail closed.
 - **`wire_to_model` fails** (object shape does not match `Model`) →
   500. Fail closed — and the same for a failure on any array element,
   or a re-serialize failure.
@@ -179,86 +209,68 @@ pub fn mask_many<'m, E>(
 ) -> Vec<serde_json::Value>
 ```
 
-For a collection: drops the models the caller cannot see
-(`Ability::can` returns false), masks the rest. The
-`retain_wire_keys` step runs per item afterwards.
+For a collection read through `Repo` for the same action: drops the
+models the caller cannot see, masks the rest. A rule the row cannot
+decide counts as that read counted it — where `Ability::can`, which
+knows of no read, refuses on such a denial. The `retain_wire_keys` step
+runs per item afterwards.
 
 A grant with no `.fields` returns `FieldSet::All` — every column is
 permitted. A grant with `.fields([Id, Name])` returns
 `FieldSet::Only({"id", "name"})`. The masker unions:
 `FieldSet::Only(union_of_grants)` unless any matching grant is
-`FieldSet::All`, which clears the restriction.
+`FieldSet::All`, which clears the restriction. A grant the mask cannot
+decide on the row widens nothing; when only such grants admitted a row
+read through `Repo`, it keeps the fields every one of them permits.
 
 ### `retain_wire_keys` — the defense in depth
 
-After `Ability::mask` produces a `serde_json::Value`, the shaper
-drops keys absent from the original wire body:
-
-```rust title="inside the framework — you don't write this"
-fn retain_wire_keys(masked: &mut Value, wire: &Value) {
-    let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
-        return;
-    };
-    masked_obj.retain(|key, _| wire_obj.contains_key(key));
-}
-```
+After `Ability::mask` produces a `serde_json::Value`, the shaper keeps
+only the keys the body carried among those `#[expose]` lists for the
+entity — `WireModelDefaults::wire_keys`. A key the body left out never
+comes back with the value the rebuild gave it.
 
 Why this step exists: an `Ability` grant with no `.fields` permits
 every column on the `Model`. If the `Model` carries a
 `password_hash` field (server-only, never carries `#[expose]` so it is
 absent from the wire DTO), an unrestricted grant would have it pass `Ability::mask`
-untouched. `retain_wire_keys` then drops it because it was never on
-the wire DTO to begin with.
+untouched. `retain_wire_keys` then drops it, even from a handler that
+returned the raw `Model`.
 
 ### `WireModelDefaults` — filling the gaps
 
 To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
 body, by design, omits every unexposed column. `WireModelDefaults`
-fills them with placeholder values so deserialization succeeds:
+fills them with placeholder values so deserialization succeeds, and
+says which columns it filled:
 
 ```rust title="nest_rs::authz::WireModelDefaults"
 pub trait WireModelDefaults: EntityTrait {
     fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
+    fn wire_keys() -> Option<&'static [&'static str]> { None }
+    fn is_placeholdered(_column: Self::Column) -> bool { false }
+    fn wire_key(column: Self::Column) -> Option<&'static str> { /* its name, if a wire key */ }
 }
 ```
 
-The `#[expose]` macro emits an impl per entity that fills every
-unexposed scalar column with a JSON default (`""`, `0`, `null`). The
-defaults are discarded again by `retain_wire_keys` before the body
+The `#[expose]` macro emits the impl: every unexposed scalar column gets
+a JSON default (`""`, `0`, `false`, `null`), `is_placeholdered` names
+exactly those columns, and `wire_key` names the key each exposed column
+crosses the wire under, so a rule is never decided on a placeholder or
+on a column the body left out
+([What the mask cannot see](#what-the-mask-cannot-see)).
+The defaults are discarded again by `retain_wire_keys` before the body
 ships — they never reach the wire.
 
-A few column types the macro cannot default automatically:
+A hidden column of any other type — a non-`Option` `Uuid` or timestamp,
+a `Decimal`, a custom enum — has no automatic placeholder, so the
+round-trip fails closed. Give it one with `#[wire_default]`, the type's
+`Default`, or `#[wire_default(expr)]`:
 
-- A non-`Option` `Uuid` (e.g. an unexposed `org_id` foreign key) — no
-  wire default, so the round-trip cannot reconstruct the model and the
-  response fails closed.
-- Non-`Option` timestamps (`DateTimeWithTimeZone`).
-- `Decimal` (no canonical zero in JSON).
-- Custom Rust enums with no `Default` impl.
-- Columns whose `Default` is meaningful business state.
-
-Hand-write a `WireModelDefaults` impl for those entities:
-
-```rust title="crates/features/src/invoices/entity.rs"
-impl WireModelDefaults for invoice::Entity {
-    fn fill_wire_defaults(map: &mut Map<String, Value>) {
-        map.entry("amount").or_insert(serde_json::json!("0"));
-        map.entry("currency").or_insert(serde_json::json!("USD"));
-    }
-}
+```rust title="crates/features/src/users/entities/user.rs"
+#[wire_default]
+pub role: UserRole,
 ```
-
-<Aside type="caution">
-**A column an ability rule predicates on must carry its real value during
-masking — expose it, do not default it.** The mask rebuilds the model and
-re-runs the grant's `Predicate` (`org_id == actor.org_id`) to decide which
-fields to keep. A `WireModelDefaults` placeholder (`Uuid::nil()`) would make
-that predicate compare against the wrong value and mask the row's fields *out*,
-while the SQL pre-filter went on using the real column — which is what keeps
-the mistake invisible. So a tenant key like `org_id` is best `#[expose]`d
-read-only (output, never an input), exactly because it is the column the policy
-depends on. **Nothing checks this for you**; it is a review question.
-</Aside>
 
 A handler returning a body that does not deserialize even with
 defaults yields 500 with `"response masking failed: body did not

@@ -106,6 +106,12 @@ read — most often `AuthzWsModule` was never imported), and a body that
 cannot be reconciled with the entity at all. Both answer an error frame
 and log a `warn` on `nest_rs::authz`.
 
+The reply is what the handler read through `Repo` under the caller's
+ability, so a rule the frame cannot show — a relation, a hidden column — is
+the read's to have decided. A frame pushed to *other* connections is not a
+reply and is not masked for them; see
+[Server-side push](/websockets/server-push/#a-push-is-not-masked).
+
 ## The payload
 
 Whatever you put in `data` arrives in your handler typed. The macro

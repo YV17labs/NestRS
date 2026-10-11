@@ -70,6 +70,15 @@ published in org A reaches the first and never reaches the second. The
 resolver body writes no filter — the posture attribute is the whole
 mechanism, the same one `#[authorize]` arms on a query.
 
+That policy reads `org_id`, a column the item carries. An item is pushed,
+not read through `Repo`, so a rule that reads what the item does not carry
+— a relation, an unexposed column, a column the item's type leaves out —
+cannot be decided on it: such a grant admits no item, and such a denial
+refuses every one
+([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
+Expose the column the rule reads, read-only, carry it on the item, and the
+item is decided like a row.
+
 ## Feeding a subscription
 
 A stream needs a source. The demo publishes one from the event it already
@@ -191,6 +200,9 @@ Everything else is the GraphQL module's own configuration — see
   field's type is the item's, not a `Result`, so there is no error channel
   per item: failing closed means the item does not ship. The drop is
   logged at `warn` on `nest_rs::graphql` with the operation name.
+- **A relational rule decides no item.** The subscriber sees nothing, and
+  `nest_rs::authz` logs one `warn` (`reason = "undecidable_on_push"`) per
+  entity and action, not one per item.
 - **`bind = Service` binds at subscribe, not per item** — it names one
   subject for the subscription, the way it names one for a mutation.
 - **A request-scoped provider is unreachable** from a subscription — see

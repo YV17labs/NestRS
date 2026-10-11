@@ -132,6 +132,15 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_on_a_filled_column_is_never_decided_on_its_placeholder() {
+        assert!(Entity::is_placeholdered(Column::Role));
+        assert!(Entity::is_placeholdered(Column::PasswordHash));
+        assert!(Entity::is_placeholdered(Column::DeletedAt));
+        assert!(!Entity::is_placeholdered(Column::OrgId));
+        assert!(!Entity::is_placeholdered(Column::Id));
+    }
+
+    #[test]
     fn debug_redacts_the_password_hash() {
         let model = Model {
             id: Uuid::nil(),

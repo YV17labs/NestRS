@@ -140,9 +140,9 @@ load-bearing.
 
 <Aside type="caution">
 An unexposed column whose type isn't trivial to default (a `Decimal`, a
-custom enum) needs a hand-written `impl WireModelDefaults` so the
-masker can still walk the row. The error message points at the missing
-impl when boot fails.
+custom enum) takes `#[wire_default]` so the masker can still rebuild the
+row. Without it, a masked response carrying that row fails closed with a
+500.
 </Aside>
 
 ## The mod entry

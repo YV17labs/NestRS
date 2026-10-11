@@ -1,6 +1,14 @@
 //! Single condition AST shared by the query pre-filter
 //! ([`Predicate::to_condition`] → SQL `WHERE`) and the response check
 //! ([`Predicate::matches`] → in-memory).
+//!
+//! The in-memory side answers only what the row in hand shows, as the SQL
+//! `to_condition` renders would: an `eq` or `ne` against `NULL` is `IS NULL` or
+//! `IS NOT NULL`, as sea-orm renders it, and any other comparison with `NULL`
+//! is `UNKNOWN`, SQL's third truth value. What the row cannot show at all — a
+//! relation, a column the wire never carried, two value types only the
+//! database compares — is left undecided, and the mask says what that means
+//! for the row.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;
@@ -58,8 +66,8 @@ pub enum Predicate<E: EntityTrait> {
 /// sub-condition is pre-lowered to SQL (over `R`'s columns) at rule-definition
 /// time, and the join metadata comes from the [`RelationDef`].
 ///
-/// [`Predicate::matches`] cannot traverse the relation without loading the
-/// parent, so it defers row visibility to SQL (returns `true`).
+/// The in-memory check cannot traverse the relation without loading the
+/// parent, so it leaves the rule to SQL.
 #[derive(Clone)]
 pub struct RelatedPredicate {
     /// `E -> R` relation: yields the from-column (on `E`), the to-column (on
@@ -170,52 +178,170 @@ impl<E: EntityTrait> Predicate<E> {
         }
     }
 
-    /// Reads each column with [`ModelTrait::get`], which returns the same
-    /// [`Value`] the SQL side compares against — so the in-memory check and
-    /// the SQL filter cannot disagree.
+    /// Whether SQL's filter certainly admits this row, read off its own columns.
+    ///
+    /// Each column is read with [`ModelTrait::get`], which returns the same
+    /// [`Value`] the SQL side compares against. A relation, or a comparison
+    /// between two value types only the database can compare, is not decided
+    /// here and reads `false`; [`Ability::can`](crate::Ability::can) is the
+    /// instance check, which takes a grant's relation to hold.
     pub fn matches(&self, model: &E::Model) -> bool {
+        self.decide(model, &nothing_invented) == Truth::True
+    }
+
+    /// What this predicate is on `model`, as SQL would compute it from the row's
+    /// columns. `invented` names the columns whose value the row was given
+    /// rather than read, so a rule on one is undecided.
+    pub(crate) fn decide(&self, model: &E::Model, invented: &dyn Fn(E::Column) -> bool) -> Truth {
+        self.judge(model, invented, Truth::Undecidable)
+    }
+
+    /// [`decide`](Self::decide) on a row read whole, with every relation taken
+    /// to hold: how the instance check reads a grant, leaving a relation to the
+    /// read that produced the row.
+    pub(crate) fn decide_holding_relations(&self, model: &E::Model) -> Truth {
+        self.judge(model, &nothing_invented, Truth::True)
+    }
+
+    /// The one walk behind both readings; `relation` is what a relation is.
+    fn judge(
+        &self,
+        model: &E::Model,
+        invented: &dyn Fn(E::Column) -> bool,
+        relation: Truth,
+    ) -> Truth {
         match self {
-            Predicate::Always => true,
+            Predicate::Always => Truth::True,
             // Fail-closed: a denied predicate accepts no row.
-            Predicate::Deny => false,
-            Predicate::Eq(col, value) => &model.get(*col) == value,
-            Predicate::In(col, values) => {
-                let actual = model.get(*col);
-                values.iter().any(|v| v == &actual)
+            Predicate::Deny => Truth::False,
+            Predicate::Related(_) => relation,
+            Predicate::Eq(col, _)
+            | Predicate::In(col, _)
+            | Predicate::Cmp(col, _, _)
+            | Predicate::IsNull(col, _)
+                if invented(*col) =>
+            {
+                Truth::Undecidable
             }
-            Predicate::Cmp(col, op, value) => {
-                let actual = model.get(*col);
-                match op {
-                    // `Value: PartialEq`, so inequality needs no ordering.
-                    CmpOp::Ne => &actual != value,
-                    // Ordered comparisons fail closed when the two values are
-                    // not orderable (mismatched variants, or a NULL column):
-                    // an undecidable comparison never reports a match.
-                    _ => match value_ordering(&actual, value) {
-                        Some(ord) => match op {
-                            CmpOp::Lt => ord == Ordering::Less,
-                            CmpOp::Lte => ord != Ordering::Greater,
-                            CmpOp::Gt => ord == Ordering::Greater,
-                            CmpOp::Gte => ord != Ordering::Less,
-                            CmpOp::Ne => unreachable!("Ne handled above"),
-                        },
-                        None => false,
-                    },
-                }
+            // sea-orm renders `eq` and `ne` against a `NULL` value as `IS NULL`
+            // and `IS NOT NULL` (`ColumnTrait::eq`), never as `= NULL`.
+            Predicate::Eq(col, value) if !value.is_some() => Truth::of(!model.get(*col).is_some()),
+            Predicate::Cmp(col, CmpOp::Ne, value) if !value.is_some() => {
+                Truth::of(model.get(*col).is_some())
             }
-            Predicate::IsNull(col, want_null) => model.get(*col).is_some() != *want_null,
-            Predicate::And(parts) => parts.iter().all(|p| p.matches(model)),
-            Predicate::Or(parts) => parts.iter().any(|p| p.matches(model)),
-            Predicate::Not(inner) => !inner.matches(model),
-            // Row visibility for a relational rule is decided in SQL: the
-            // in-memory check cannot traverse the relation, so it defers.
-            Predicate::Related(_) => true,
+            Predicate::Eq(col, value) => compare(&model.get(*col), value, |a, b| Some(a == b)),
+            Predicate::In(col, values) => one_of(&model.get(*col), values),
+            Predicate::Cmp(col, op, value) => compare(&model.get(*col), value, |a, b| match op {
+                // `Value: PartialEq`, so inequality needs no ordering.
+                CmpOp::Ne => Some(a != b),
+                CmpOp::Lt => value_ordering(a, b).map(Ordering::is_lt),
+                CmpOp::Lte => value_ordering(a, b).map(Ordering::is_le),
+                CmpOp::Gt => value_ordering(a, b).map(Ordering::is_gt),
+                CmpOp::Gte => value_ordering(a, b).map(Ordering::is_ge),
+            }),
+            Predicate::IsNull(col, want_null) => Truth::of(model.get(*col).is_some() != *want_null),
+            Predicate::And(parts) => {
+                Truth::all(parts.iter().map(|p| p.judge(model, invented, relation)))
+            }
+            Predicate::Or(parts) => {
+                Truth::any(parts.iter().map(|p| p.judge(model, invented, relation)))
+            }
+            Predicate::Not(inner) => inner.judge(model, invented, relation).not(),
         }
     }
 }
 
-/// Order two [`Value`]s of the same variant (`Value` is not `PartialOrd`).
-/// `None` for `NULL` operands or mismatched variants, which `Cmp` reads as no match.
+/// What a predicate is on one row, as far as the row shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Truth {
+    /// SQL's `TRUE`: the filter admits the row.
+    True,
+    /// SQL's `FALSE`.
+    False,
+    /// SQL's `UNKNOWN`, from a comparison with `NULL`: the filter admits the
+    /// row neither under it nor under its negation.
+    Unknown,
+    /// The row cannot show it: a relation, an invented column, or two value
+    /// types only the database compares.
+    Undecidable,
+}
+
+impl Truth {
+    fn of(holds: bool) -> Self {
+        if holds { Truth::True } else { Truth::False }
+    }
+
+    fn not(self) -> Self {
+        match self {
+            Truth::True => Truth::False,
+            Truth::False => Truth::True,
+            other => other,
+        }
+    }
+
+    /// SQL's `AND`: one `FALSE` decides it whatever the others are.
+    fn all(parts: impl Iterator<Item = Truth>) -> Self {
+        let mut out = Truth::True;
+        for part in parts {
+            match part {
+                Truth::False => return Truth::False,
+                Truth::Undecidable => out = Truth::Undecidable,
+                Truth::Unknown if out == Truth::True => out = Truth::Unknown,
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// SQL's `OR`: one `TRUE` decides it whatever the others are.
+    fn any(parts: impl Iterator<Item = Truth>) -> Self {
+        let mut out = Truth::False;
+        for part in parts {
+            match part {
+                Truth::True => return Truth::True,
+                Truth::Undecidable => out = Truth::Undecidable,
+                Truth::Unknown if out == Truth::False => out = Truth::Unknown,
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// The `invented` of a row read whole: every column holds what was read.
+pub(crate) fn nothing_invented<C>(_column: C) -> bool {
+    false
+}
+
+/// SQL's verdict on `actual <op> bound` for a bound the SQL side binds as a
+/// value: `UNKNOWN` with a `NULL` operand, and undecided across two value
+/// types, or where `test` cannot order the two.
+fn compare(
+    actual: &Value,
+    bound: &Value,
+    test: impl FnOnce(&Value, &Value) -> Option<bool>,
+) -> Truth {
+    if !actual.is_some() || !bound.is_some() {
+        return Truth::Unknown;
+    }
+    if std::mem::discriminant(actual) != std::mem::discriminant(bound) {
+        return Truth::Undecidable;
+    }
+    test(actual, bound).map_or(Truth::Undecidable, Truth::of)
+}
+
+/// SQL's `actual IN (values)`: an empty list matches nothing, and a list that
+/// misses the value but holds a `NULL` is `UNKNOWN`.
+fn one_of(actual: &Value, values: &[Value]) -> Truth {
+    Truth::any(
+        values
+            .iter()
+            .map(|value| compare(actual, value, |a, b| Some(a == b))),
+    )
+}
+
+/// Order two [`Value`]s of the same variant (`Value` is not `PartialOrd`);
+/// `None` for a variant it cannot order, which leaves the comparison undecided.
 fn value_ordering(a: &Value, b: &Value) -> Option<Ordering> {
     use Value::*;
     match (a, b) {
@@ -725,19 +851,194 @@ mod tests {
     }
 
     #[test]
-    fn related_defers_row_visibility_to_sql_in_memory() {
+    fn a_relation_is_left_to_sql() {
         let p = PredicateBuilder::<child::Entity>::new()
             .related::<parent::Entity, _>(child::Relation::Parent, |c| {
                 c.eq(parent::Column::OrgId, 7)
             });
-        assert!(p.matches(&child::Model {
+        let row = child::Model {
             id: 1,
-            parent_id: 99
-        }));
-        assert!(p.matches(&child::Model {
-            id: 2,
-            parent_id: 1
-        }));
+            parent_id: 99,
+        };
+        assert_eq!(p.decide(&row, &nothing_invented), Truth::Undecidable);
+        assert!(!p.matches(&row), "a row shows nothing of its parent");
+    }
+
+    #[test]
+    fn a_rule_on_an_invented_column_is_undecided() {
+        let invented = |col: widget::Column| matches!(col, widget::Column::Tag);
+        let row = tagged(1, 7, "a", Some("x"));
+        for p in [
+            b().eq(widget::Column::Tag, "x"),
+            b().is_in(widget::Column::Tag, ["x"]),
+            b().ne(widget::Column::Tag, "y"),
+            b().gte(widget::Column::Tag, "a"),
+            b().is_not_null(widget::Column::Tag),
+        ] {
+            assert_eq!(p.decide(&row, &invented), Truth::Undecidable);
+            assert_eq!(
+                p.decide(&row, &nothing_invented),
+                Truth::True,
+                "read, it is decided"
+            );
+        }
+        assert_eq!(
+            b().eq(widget::Column::OrgId, 7).decide(&row, &invented),
+            Truth::True,
+            "a column the row was not given stays decided",
+        );
+    }
+
+    #[test]
+    fn an_undecided_part_decides_only_what_the_others_leave_open() {
+        let undecided = || PredicateBuilder::<widget::Entity>::new().is_null(widget::Column::Tag);
+        let invented = |col: widget::Column| matches!(col, widget::Column::Tag);
+        let row = model(1, 7, "a");
+        let decide = |p: Predicate<widget::Entity>| p.decide(&row, &invented);
+
+        assert_eq!(decide(undecided()), Truth::Undecidable);
+        assert_eq!(
+            decide(b().all([b().eq(widget::Column::OrgId, 8), undecided()])),
+            Truth::False,
+        );
+        assert_eq!(
+            decide(b().all([b().eq(widget::Column::OrgId, 7), undecided()])),
+            Truth::Undecidable,
+        );
+        assert_eq!(
+            decide(b().any([b().eq(widget::Column::OrgId, 7), undecided()])),
+            Truth::True,
+        );
+        assert_eq!(
+            decide(b().any([b().eq(widget::Column::OrgId, 8), undecided()])),
+            Truth::Undecidable,
+        );
+        assert_eq!(decide(b().not(undecided())), Truth::Undecidable);
+    }
+
+    /// SQL's `tag <> 'x'` and `NOT (tag < 'm')` are `UNKNOWN` on a `NULL` tag,
+    /// and its filter admits neither row.
+    #[test]
+    fn a_comparison_with_null_is_unknown_and_so_is_its_negation() {
+        let row = tagged(1, 7, "a", None);
+        for p in [
+            b().ne(widget::Column::Tag, "x"),
+            b().not(b().lt(widget::Column::Tag, "m")),
+            b().not(b().eq(widget::Column::Tag, "x")),
+        ] {
+            assert_eq!(p.decide(&row, &nothing_invented), Truth::Unknown);
+            assert!(!p.matches(&row));
+        }
+        assert_eq!(
+            b().any([
+                b().ne(widget::Column::Tag, "x"),
+                b().eq(widget::Column::OrgId, 7)
+            ])
+            .decide(&row, &nothing_invented),
+            Truth::True,
+        );
+    }
+
+    /// sea-orm renders `eq(col, None)` as `IS NULL` and `ne(col, None)` as
+    /// `IS NOT NULL`, which the row decides, negated or not.
+    #[test]
+    fn an_eq_or_ne_against_null_is_a_nullness_test() {
+        let eq = || b().eq(widget::Column::Tag, None::<String>);
+        let ne = || b().ne(widget::Column::Tag, None::<String>);
+        assert!(sql(&eq()).contains(r#""tag" IS NULL"#), "{}", sql(&eq()));
+        assert!(
+            sql(&ne()).contains(r#""tag" IS NOT NULL"#),
+            "{}",
+            sql(&ne())
+        );
+
+        let untagged = tagged(1, 7, "a", None);
+        let labelled = tagged(2, 7, "a", Some("x"));
+        let decide =
+            |p: Predicate<widget::Entity>, row: &widget::Model| p.decide(row, &nothing_invented);
+        assert_eq!(decide(eq(), &untagged), Truth::True);
+        assert_eq!(decide(eq(), &labelled), Truth::False);
+        assert_eq!(decide(ne(), &untagged), Truth::False);
+        assert_eq!(decide(ne(), &labelled), Truth::True);
+        assert_eq!(decide(b().not(eq()), &labelled), Truth::True);
+        assert_eq!(decide(b().not(ne()), &untagged), Truth::True);
+        assert!(eq().matches(&untagged) && ne().matches(&labelled));
+    }
+
+    /// Only `eq` and `ne` turn a `NULL` value into a nullness test; an ordering
+    /// against one compares with `NULL`.
+    #[test]
+    fn an_ordering_against_null_stays_unknown() {
+        let row = tagged(1, 7, "a", Some("x"));
+        assert!(sql(&b().lt(widget::Column::Tag, None::<String>)).contains(r#""tag" < NULL"#));
+        for p in [
+            b().lt(widget::Column::Tag, None::<String>),
+            b().not(b().gte(widget::Column::Tag, None::<String>)),
+        ] {
+            assert_eq!(p.decide(&row, &nothing_invented), Truth::Unknown);
+        }
+    }
+
+    /// A grant read by the instance check takes its relation to hold, so a
+    /// negated relation grants nothing on a row that cannot show it.
+    #[test]
+    fn holding_relations_matches_a_relation_and_refuses_its_negation() {
+        let p = || PredicateBuilder::<child::Entity>::new();
+        let in_org = || {
+            p().related::<parent::Entity, _>(child::Relation::Parent, |c| {
+                c.eq(parent::Column::OrgId, 7)
+            })
+        };
+        let row = child::Model {
+            id: 1,
+            parent_id: 99,
+        };
+        assert_eq!(in_org().decide_holding_relations(&row), Truth::True);
+        assert_eq!(
+            p().not(in_org()).decide_holding_relations(&row),
+            Truth::False
+        );
+        assert_eq!(
+            p().all([p().eq(child::Column::Id, 2), in_org()])
+                .decide_holding_relations(&row),
+            Truth::False,
+            "the row's own columns still decide what they can",
+        );
+        assert_eq!(in_org().decide(&row, &nothing_invented), Truth::Undecidable);
+    }
+
+    #[test]
+    fn a_list_holding_null_misses_as_unknown() {
+        let p = b().is_in(widget::Column::Tag, [Some("a"), None]);
+        assert_eq!(
+            p.decide(&tagged(1, 7, "a", Some("a")), &nothing_invented),
+            Truth::True
+        );
+        assert_eq!(
+            p.decide(&tagged(1, 7, "a", Some("b")), &nothing_invented),
+            Truth::Unknown
+        );
+        assert_eq!(
+            b().not(p)
+                .decide(&tagged(1, 7, "a", Some("b")), &nothing_invented),
+            Truth::Unknown,
+        );
+    }
+
+    #[test]
+    fn two_value_types_only_the_database_compares_are_undecided() {
+        let row = model(1, 7, "a");
+        assert_eq!(
+            b().eq(widget::Column::OrgId, 7_i64)
+                .decide(&row, &nothing_invented),
+            Truth::Undecidable,
+        );
+        assert_eq!(
+            b().not(b().eq(widget::Column::OrgId, 8_i64))
+                .decide(&row, &nothing_invented),
+            Truth::Undecidable,
+            "negated, a guess would admit the row",
+        );
     }
 
     #[test]

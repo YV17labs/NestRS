@@ -43,6 +43,10 @@ impl WireModelDefaults for post::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "title", "published"])
     }
+
+    fn is_placeholdered(column: post::Column) -> bool {
+        matches!(column, post::Column::Secret)
+    }
 }
 
 // `JsonSchema`: a route with no response shaper advertises its payload in OpenAPI.

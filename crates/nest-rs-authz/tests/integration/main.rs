@@ -27,6 +27,78 @@ mod mcp;
 #[cfg(feature = "ws")]
 mod ws;
 
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod wire_mask;
+
+/// An org, for a post's relational rules to reach.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub(crate) mod org {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[sea_orm(table_name = "orgs")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// A post through the real `#[expose]`: it belongs to an org, keeps a
+/// server-only `deleted` flag, and exposes an `archived_at` a wire row may
+/// leave out — three things a mask rebuilt from the wire cannot see.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub(crate) mod post {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Post")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+    #[sea_orm(table_name = "posts")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        #[expose]
+        pub id: i32,
+        #[expose]
+        pub org_id: i32,
+        #[expose]
+        pub title: String,
+        #[expose]
+        pub archived_at: Option<i64>,
+        pub deleted: bool,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {
+        #[sea_orm(
+            belongs_to = "super::org::Entity",
+            from = "Column::OrgId",
+            to = "super::org::Column::Id"
+        )]
+        Org,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    /// A post of org `id`: a rule only the relation decides.
+    pub(crate) fn in_org(
+        p: &nest_rs_authz::PredicateBuilder<Entity>,
+        id: i32,
+    ) -> nest_rs_authz::Predicate<Entity> {
+        p.related::<super::org::Entity, _>(Relation::Org, |o| o.eq(super::org::Column::Id, id))
+    }
+
+    /// The wire row of post `id` in org `org_id`, as a reply or a push carries
+    /// it when its type leaves `archived_at` out.
+    pub(crate) fn wire(id: i32, org_id: i32) -> serde_json::Value {
+        serde_json::json!({ "id": id, "org_id": org_id, "title": format!("post {id}") })
+    }
+}
+
 /// A parent/child pair whose one job is to be the *wrong* relation: `child`
 /// belongs_to `parent`, so a `related` call naming any other entity is the
 /// mismatch that trips the fail-closed `Deny` sentinel.
@@ -104,5 +176,9 @@ impl nest_rs_authz::WireModelDefaults for widget::Entity {
 
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
+    }
+
+    fn is_placeholdered(column: widget::Column) -> bool {
+        matches!(column, widget::Column::Secret)
     }
 }

@@ -137,10 +137,15 @@ column. An irreconcilable body or a missing ambient ability fails closed on
 every transport.
 
 Rebuilding needs a value for every unexposed column. The macro defaults the
-safe scalars; any other hidden column takes `#[wire_default(…)]`, a placeholder
-stripped before the body ships. **It is sound only where no ability rule
-predicates on that column** — otherwise the mask compares the placeholder and
-silently filters rows.
+safe scalars, any other hidden column takes `#[wire_default(…)]` (a placeholder
+stripped before the body ships), and the macro names every column it may
+invent and the key of every column it exposes. **A rule
+the in-memory mask cannot decide — a relation, an unexposed column, one the
+value left out — is trusted to the `Repo` read on a decorated reply and refused
+on a pushed value** (a subscription item, `masked_reply`): only the read
+applied it. A decorated reply
+whose rows did not come through `Repo` under the same ability keeps that trust,
+which is the limit (`.claude/decisions/mask-provenance.md`).
 
 `#[authorize(Action, Entity)]` beside the operation is the arming declaration
 on every edge; the decorator emits the gate and the mask, and that is what
@@ -162,9 +167,10 @@ makes posture greppable:
   because the reply shape is decided syntactically.
 
 `masked_reply` / `masked_output_ambient` are for surfaces **no decorator
-reaches** — a hand-built `WsServer::emit`, a hand-written MCP
-`ServerHandler`. Inside a decorated handler they bypass the posture nobody
-can then `rg` for.
+reaches** — a hand-written MCP `ServerHandler`, a value built for the caller.
+Both mask for the ambient principal, never per recipient: a `WsServer::emit`
+to other connections carries what the sender may read. Inside a decorated
+handler they bypass the posture nobody can then `rg` for.
 
 ## Extractors and bridges
 

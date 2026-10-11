@@ -14,7 +14,7 @@
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
 
-use crate::ability::mask_reason;
+use crate::ability::{Provenance, mask_reason};
 use crate::gate::transport;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -187,7 +187,7 @@ where
         }
     };
 
-    match mask_wire_json::<S>(ability, action, &wire) {
+    match mask_wire_json::<S>(ability, action, &wire, Provenance::Loaded) {
         Ok(MaskedWire::Passthrough) => {
             resp.set_body(bytes);
             resp

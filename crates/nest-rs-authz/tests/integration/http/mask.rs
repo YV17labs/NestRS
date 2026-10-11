@@ -45,6 +45,10 @@ impl WireModelDefaults for widget::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
     }
+
+    fn is_placeholdered(column: widget::Column) -> bool {
+        matches!(column, widget::Column::Secret)
+    }
 }
 
 // `JsonSchema` too: an `Authorize`-shaped route publishes its response schema.
@@ -373,6 +377,109 @@ async fn a_list_masks_each_row_and_retains_wire_keys() {
         !body.contains("secret"),
         "secret never appears on the wire: {body}",
     );
+}
+
+/// `narrow` holds a title-only grant beside a relational one; anyone else reads
+/// every post but those a relation denies.
+#[injectable]
+#[derive(Default)]
+struct PostAbilityInjector;
+
+impl Layer for PostAbilityInjector {}
+
+#[async_trait]
+impl Guard for PostAbilityInjector {
+    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
+        use crate::post;
+
+        let narrow = req
+            .headers()
+            .get("x-role")
+            .is_some_and(|role| role == "narrow");
+        let mut b = AbilityBuilder::new();
+        if narrow {
+            b.can(Action::Read, post::Entity)
+                .fields([post::Column::Title]);
+            b.can(Action::Read, post::Entity)
+                .when(|p| post::in_org(&p, 7));
+        } else {
+            b.can(Action::Read, post::Entity);
+            b.cannot(Action::Read, post::Entity)
+                .when(|p| post::in_org(&p, 9));
+        }
+        req.extensions_mut()
+            .insert(Arc::new(b.build().expect("valid test ability")));
+        Ok(())
+    }
+}
+
+impl HttpGuard for PostAbilityInjector {}
+
+#[controller(path = "/posts")]
+struct PostController;
+
+#[routes]
+impl PostController {
+    /// The rows a `Repo` read under the caller's ability returns: its SQL
+    /// applied every rule, the relational ones included.
+    #[get("/")]
+    #[authorize(Read, crate::post::Entity)]
+    async fn list(&self) -> Json<Vec<crate::post::Post>> {
+        let row = |id: i32| {
+            crate::post::Post::from(&crate::post::Model {
+                id,
+                org_id: 7,
+                title: format!("post {id}"),
+                archived_at: None,
+                deleted: false,
+            })
+        };
+        Json(vec![row(1), row(2)])
+    }
+}
+
+#[module(providers = [PostAbilityInjector, PostController])]
+struct PostModule;
+
+async fn posts(role: &str) -> serde_json::Value {
+    let app = TestApp::builder()
+        .module::<PostModule>()
+        .use_guards_global([guard::<PostAbilityInjector>()])
+        .build()
+        .await
+        .expect("post harness boots");
+    let resp = app.http().get("/posts").header("x-role", role).send().await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("body");
+    serde_json::from_str(&body).expect("a JSON body")
+}
+
+/// The denial's relation was decided in SQL, which excluded what it denies:
+/// re-deciding it on a rebuilt row would drop every row SQL admitted.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_the_read_admitted() {
+    let rows = posts("member").await;
+    assert_eq!(
+        rows.as_array().map(Vec::len),
+        Some(2),
+        "the read already left out what the denial names: {rows}",
+    );
+}
+
+/// A row the title-only grant decides takes that grant's fields; the
+/// relational grant cannot prove it matched this row, so it widens nothing.
+#[tokio::test]
+async fn a_relational_grant_widens_no_row_a_decided_grant_narrows() {
+    let rows = posts("narrow").await;
+    let rows = rows.as_array().expect("a list");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(
+            row.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+            Some(vec![&"title".to_owned()]),
+            "{row}",
+        );
+    }
 }
 
 #[tokio::test]

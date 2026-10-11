@@ -12,7 +12,7 @@ use serde::de::DeserializeOwned;
 
 use super::ability;
 use super::context::forbidden_fields;
-use crate::ability::mask_reason;
+use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason, transport};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults};
@@ -26,8 +26,11 @@ use crate::{Ability, Action, ActionMarker, WireModelDefaults};
 /// `#[subscription]`. A resolver never calls it.
 ///
 /// Each item is a row — the gate ran once, at subscribe — so one the ability
-/// refuses is dropped, never nulled. Fails **closed**: a value that cannot be
-/// reconciled with `E::Model` is an `Err`, and the caller drops the item.
+/// refuses is dropped, never nulled. No `Repo` read filtered it, so a rule
+/// reading a relation or a column the item does not carry — an unexposed one,
+/// or an exposed one its type leaves out — grants nothing and, as a denial,
+/// denies. Fails **closed**: a value that cannot be reconciled with `E::Model`
+/// is an `Err`, and the caller drops the item.
 pub fn masked_item_for<A, E, O>(ctx: &Context<'_>, item: O) -> Result<Option<O>, Error>
 where
     A: ActionMarker,
@@ -57,7 +60,12 @@ where
             &err,
         )
     })?;
-    let verdict = ability.evaluate::<E>(action, &model);
+    let verdict = ability.evaluate::<E>(
+        action,
+        &model,
+        Provenance::Pushed,
+        &crate::wire_mask::invented_in::<E>(&wire),
+    );
     if !verdict.allowed {
         return Ok(None);
     }
@@ -88,9 +96,9 @@ where
 /// ability refuses are dropped either way.
 ///
 /// Fails **closed**: an irreconcilable value is a GraphQL error, never
-/// unmasked data. Same caveat as HTTP masking: a hidden column an ability rule
-/// predicates on is reconstructed from its [`WireModelDefaults`] default, so
-/// such columns are best left exposed.
+/// unmasked data. The value is one the resolver read through `Repo` under this
+/// ability, so a rule reading a relation or an unexposed column is the read's
+/// to have decided.
 ///
 /// [`Ability::mask`]: crate::Ability::mask
 /// [`Ability::mask_many`]: crate::Ability::mask_many
@@ -111,7 +119,7 @@ where
             &err,
         )
     })?;
-    match mask_wire_json::<E>(&ability, action, &wire) {
+    match mask_wire_json::<E>(&ability, action, &wire, Provenance::Loaded) {
         Ok(MaskedWire::Passthrough) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
             Ok(masked) => Ok(masked),

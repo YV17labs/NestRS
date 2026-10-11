@@ -18,6 +18,7 @@ use nest_rs_http::poem::Request;
 use nest_rs_mcp::{Json, McpError, McpOperationGuard, mcp, tools};
 
 use super::{PassGuard, widget};
+use crate::post;
 
 /// The wire shape: `name` optional so a field-restricted mask yields `null`
 /// rather than an irreconcilable value.
@@ -35,8 +36,28 @@ struct StrictWidgetDto {
     name: String,
 }
 
+/// A post as a tool returns it; `title` is required.
+#[input]
+struct PostDto {
+    id: i32,
+    org_id: i32,
+    title: String,
+}
+
+impl PostDto {
+    fn new(id: i32, org_id: i32) -> Self {
+        Self {
+            id,
+            org_id,
+            title: format!("post {id}"),
+        }
+    }
+}
+
 /// `admin` reads widgets unrestricted; `viewer` reads them but only the `id`
-/// field; `auditor` reads only widget 1, and only its `id`.
+/// field; `auditor` reads only widget 1, and only its `id`. `member` reads every
+/// post but those a relation denies; `org_member` reads the `id` and `org_id`
+/// of posts a relation grants.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -67,6 +88,18 @@ impl Guard for AbilityInjector {
                     .can(Action::Read, widget::Entity)
                     .when(|p| p.eq(widget::Column::Id, 1))
                     .fields([widget::Column::Id]);
+            }
+            "member" => {
+                builder.can(Action::Read, post::Entity);
+                builder
+                    .cannot(Action::Read, post::Entity)
+                    .when(|p| post::in_org(&p, 9));
+            }
+            "org_member" => {
+                builder
+                    .can(Action::Read, post::Entity)
+                    .when(|p| post::in_org(&p, 7))
+                    .fields([post::Column::Id, post::Column::OrgId]);
             }
             _ => {}
         }
@@ -116,6 +149,21 @@ impl MaskTool {
             id: 1,
             name: "first".to_owned(),
         }))
+    }
+
+    /// The rows a `Repo` read under the caller's ability returns: posts of
+    /// orgs 7 and 8.
+    #[tool]
+    #[authorize(Read, post::Entity)]
+    async fn posts(&self) -> Result<Json<Vec<PostDto>>, McpError> {
+        Ok(Json(vec![PostDto::new(1, 7), PostDto::new(2, 8)]))
+    }
+
+    /// One post the read admitted.
+    #[tool]
+    #[authorize(Read, post::Entity)]
+    async fn post(&self) -> Result<Json<PostDto>, McpError> {
+        Ok(Json(PostDto::new(1, 7)))
     }
 
     /// The opt-out: no gate, no mask.
@@ -250,5 +298,39 @@ async fn public_opts_out_of_masking() {
         body.contains("first"),
         "`#[public]` declares no gate and no mask — the operation is responsible \
          for its own output: {body}",
+    );
+}
+
+/// The read behind the tool already left out what a relational denial names,
+/// so the mask keeps every row it was handed.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_the_read_admitted() {
+    let body = call("member", "posts").await;
+    assert!(
+        body.contains(r#""id":1"#) && body.contains(r#""id":2"#),
+        "{body}"
+    );
+}
+
+/// The read admitted the post through the relational grant, so the fields
+/// it permits are the ones refused: `title` alone, never the whole subject.
+#[tokio::test]
+async fn a_relational_grant_names_the_one_field_it_withholds() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let body = call("org_member", "post").await;
+    assert!(!body.contains("post 1"), "{body}");
+
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("field_not_granted"),
+        "{:?}",
+        event.fields,
+    );
+    assert_eq!(
+        event.field("fields").as_deref(),
+        Some("title"),
+        "{:?}",
+        event.fields
     );
 }

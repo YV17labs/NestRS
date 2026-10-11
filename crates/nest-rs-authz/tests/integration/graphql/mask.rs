@@ -57,6 +57,10 @@ impl WireModelDefaults for widget::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
     }
+
+    fn is_placeholdered(column: widget::Column) -> bool {
+        matches!(column, widget::Column::Secret)
+    }
 }
 
 /// The wire shape: `name` optional so a field-restricted mask yields `None`
@@ -485,6 +489,227 @@ async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
     assert_eq!(
         admin[1]["widgetFeed"]["name"], "grace",
         "the same emitted item is unmasked for the caller who may read it",
+    );
+}
+
+/// A post as the feed pushes it and the queries return it: the wire carries no
+/// `deleted`, and no `archived_at`.
+#[derive(Clone, Debug, SimpleObject, Serialize, Deserialize)]
+struct PostDto {
+    id: i32,
+    org_id: i32,
+    title: String,
+}
+
+impl PostDto {
+    fn new(id: i32, org_id: i32) -> Self {
+        Self {
+            id,
+            org_id,
+            title: format!("post {id}"),
+        }
+    }
+}
+
+#[injectable]
+struct PostFeed {
+    tx: broadcast::Sender<PostDto>,
+}
+
+impl Default for PostFeed {
+    fn default() -> Self {
+        Self {
+            tx: broadcast::channel(8).0,
+        }
+    }
+}
+
+#[resolver]
+struct PostFeedResolver {
+    #[inject]
+    feed: Arc<PostFeed>,
+}
+
+#[operations]
+impl PostFeedResolver {
+    /// The rows a `Repo` read under the caller's ability returns: posts of
+    /// orgs 7 and 8.
+    #[query]
+    #[authorize(Read, crate::post::Entity)]
+    async fn posts(&self) -> GqlResult<Vec<PostDto>> {
+        Ok(vec![PostDto::new(1, 7), PostDto::new(2, 8)])
+    }
+
+    #[subscription]
+    #[authorize(Read, crate::post::Entity)]
+    async fn post_feed(&self) -> Result<impl Stream<Item = PostDto>, GqlError> {
+        let rx = self.feed.tx.subscribe();
+        Ok(stream::unfold(rx, |mut rx| async move {
+            match rx.recv().await {
+                Ok(post) => Some((post, rx)),
+                Err(_) => None,
+            }
+        }))
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [
+        PassGuard,
+        AbilityInjector,
+        TestOpGuard as dyn GraphqlOperationGuard,
+        PostFeed,
+        PostFeedResolver,
+    ],
+)]
+struct PostFeedGraphqlModule;
+
+async fn boot_posts() -> TestApp {
+    TestApp::builder()
+        .module::<PostFeedGraphqlModule>()
+        .build()
+        .await
+        .expect("the post schema boots")
+}
+
+/// The first `postFeed` item a subscriber under `ability` receives, once the
+/// feed pushed `posts` (`(id, org_id)` each).
+async fn first_post_pushed(ability: AbilityBuilder, posts: &[(i32, i32)]) -> serde_json::Value {
+    let app = boot_posts().await;
+    let schema = nest_rs_graphql::__private::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    );
+    let feed = app
+        .container()
+        .get::<PostFeed>()
+        .expect("the feed is a provider of the booted app");
+    let ability = Arc::new(ability.build().expect("valid test ability"));
+    let received = schema
+        .execute_stream(
+            GqlRequest::new("subscription { postFeed { id orgId title } }").data(ability),
+            None,
+        )
+        .map(payload)
+        .take(1)
+        .collect::<Vec<_>>();
+    let emit = async {
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            feed.tx.receiver_count() >= 1
+        })
+        .await;
+        for &(id, org_id) in posts {
+            feed.tx
+                .send(PostDto::new(id, org_id))
+                .expect("the subscriber is live");
+        }
+    };
+    let (received, ()) = tokio::join!(received, emit);
+    received[0]["postFeed"].clone()
+}
+
+/// `query` run under `ability`, its data and errors as JSON.
+async fn posts_read(ability: AbilityBuilder, query: &str) -> serde_json::Value {
+    let app = boot_posts().await;
+    let schema = nest_rs_graphql::__private::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    );
+    let ability = Arc::new(ability.build().expect("valid test ability"));
+    let response = schema.execute(GqlRequest::new(query).data(ability)).await;
+    serde_json::to_value(response).expect("a GraphQL response is JSON")
+}
+
+/// No SQL read a pushed item, so a relation grant decides nothing about it: the
+/// subscriber's one item is the post its decided grant names, never a post of
+/// another org the relation would have refused.
+#[tokio::test]
+async fn an_item_a_relation_alone_grants_never_reaches_the_subscriber() {
+    use crate::post;
+
+    let mut member = AbilityBuilder::new();
+    member
+        .can(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 7));
+    member
+        .can(Action::Read, post::Entity)
+        .when(|p| p.eq(post::Column::Id, 99));
+
+    let first = first_post_pushed(member, &[(1, 8), (2, 7), (99, 8)]).await;
+
+    assert_eq!(
+        first["id"], 99,
+        "posts 1 and 2 rest on the relation alone: {first}"
+    );
+}
+
+/// `PostDto` leaves `archived_at` out, so an item never says whether it is
+/// archived: the grant reading it decides nothing, where the `None` serde gave
+/// the rebuilt row admitted every item.
+#[tokio::test]
+async fn an_item_whose_type_leaves_the_rules_column_out_is_not_judged_on_it() {
+    use crate::post;
+
+    let mut reader = AbilityBuilder::new();
+    reader
+        .can(Action::Read, post::Entity)
+        .when(|p| p.is_null(post::Column::ArchivedAt));
+    reader
+        .can(Action::Read, post::Entity)
+        .when(|p| p.eq(post::Column::Id, 99));
+
+    let first = first_post_pushed(reader, &[(1, 7), (99, 7)]).await;
+
+    assert_eq!(
+        first["id"], 99,
+        "post 1 rests on a column it never carried: {first}"
+    );
+}
+
+/// The read behind a query already left out what a relational denial names,
+/// so the mask keeps every row it was handed.
+#[tokio::test]
+async fn a_relational_denial_keeps_every_row_a_query_read() {
+    use crate::post;
+
+    let mut member = AbilityBuilder::new();
+    member.can(Action::Read, post::Entity);
+    member
+        .cannot(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 9));
+
+    let json = posts_read(member, "{ posts { id orgId title } }").await;
+
+    assert_eq!(
+        json["data"]["posts"].as_array().map(Vec::len),
+        Some(2),
+        "{json}"
+    );
+}
+
+/// A field grant strips `title`, which `PostDto` requires, so the mask reports
+/// what it took instead of handing the value back; the rows it reports on are
+/// still every row the read admitted.
+#[tokio::test]
+async fn a_field_masked_query_keeps_every_row_a_relational_denial_left() {
+    use crate::post;
+
+    let mut member = AbilityBuilder::new();
+    member
+        .can(Action::Read, post::Entity)
+        .fields([post::Column::Id, post::Column::OrgId]);
+    member
+        .cannot(Action::Read, post::Entity)
+        .when(|p| post::in_org(&p, 9));
+
+    let json = posts_read(member, "{ posts { id orgId } }").await;
+
+    assert!(json.get("errors").is_none(), "{json}");
+    assert_eq!(
+        json["data"]["posts"].as_array().map(Vec::len),
+        Some(2),
+        "{json}"
     );
 }
 

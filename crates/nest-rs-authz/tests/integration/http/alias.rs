@@ -45,6 +45,10 @@ impl WireModelDefaults for gadget::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "name"])
     }
+
+    fn is_placeholdered(column: gadget::Column) -> bool {
+        matches!(column, gadget::Column::Secret)
+    }
 }
 
 /// Grants `Read` on the entity when `x-grant: yes`, denies otherwise — the

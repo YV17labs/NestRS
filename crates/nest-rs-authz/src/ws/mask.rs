@@ -2,8 +2,9 @@
 //!
 //! The framework-carried path is [`masked_reply_for`], emitted automatically by
 //! `#[messages]` after every `#[authorize(Action, Entity)]`-declared message; a
-//! gateway never calls it. [`crate::masked_reply`] remains the manual primitive
-//! for a hand-built server push (`WsServer::emit`), which no decorator reaches.
+//! gateway never calls it. [`crate::masked_reply`] masks a value no decorator
+//! reaches, for the caller whose ability is ambient — never per recipient of a
+//! `WsServer::emit`.
 //!
 //! Unlike GraphQL and MCP, this ships the masked serialized value rather than
 //! reconstructing the handler's type: a WS frame, like an HTTP body, has no
@@ -16,7 +17,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::ability::mask_reason;
+use crate::ability::{Provenance, mask_reason};
 use crate::gate::transport;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Action, ActionMarker, WireModelDefaults, current_ability};
@@ -61,7 +62,7 @@ where
             ));
         }
     };
-    match mask_wire_json::<E>(&ability, action, &wire) {
+    match mask_wire_json::<E>(&ability, action, &wire, Provenance::Loaded) {
         Ok(MaskedWire::Masked(masked)) => Ok(masked),
         Ok(MaskedWire::Passthrough) => Ok(wire),
         Err(err) => Err(mask_failure::<E>(

@@ -45,6 +45,10 @@ impl WireModelDefaults for post::Entity {
     fn wire_keys() -> Option<&'static [&'static str]> {
         Some(&["id", "title", "published"])
     }
+
+    fn is_placeholdered(column: post::Column) -> bool {
+        matches!(column, post::Column::Secret)
+    }
 }
 
 /// The federated type; its `@key` is the entity resolver's `id` argument.

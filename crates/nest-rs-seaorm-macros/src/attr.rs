@@ -4,6 +4,7 @@
 use nest_rs_codegen::{Arg, Grammar, ungrouped_expr};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
+use syn::ext::IdentExt;
 use syn::parse::Parse;
 use syn::{
     Expr, Fields, GenericArgument, Ident, ItemStruct, LitStr, Path, PathArguments, Token, Type,
@@ -60,14 +61,37 @@ pub(crate) struct ResourceField {
     /// field resolver; `None` ⇒ a default per relation kind (`relations::emit`).
     pub complexity: Option<Expr>,
     /// `#[wire_default]` (`Some(None)`, the type's `Default`) or
-    /// `#[wire_default(expr)]`; sound only when no `Ability` rule predicates on the column.
+    /// `#[wire_default(expr)]`: the placeholder a masked reply is rebuilt with.
     pub wire_default: Option<Option<Expr>>,
+    /// The `Column` variant `DeriveEntityModel` generates for this field; `None`
+    /// for a relation or an `ignore`d field, which have none.
+    pub column: Option<Ident>,
 }
 
 impl ResourceField {
     pub(crate) fn in_output_struct(&self) -> bool {
         self.read && self.relation.is_none()
     }
+
+    /// The key serde writes this field under: its ident, without an `r#`.
+    pub(crate) fn key(&self) -> LitStr {
+        LitStr::new(&self.ident.unraw().to_string(), self.ident.span())
+    }
+}
+
+/// The `Column` variant sea-orm names a field: its `enum_name`, else the field
+/// in UpperCamelCase, with `Self` escaped as sea-orm escapes it. `None` for an
+/// `enum_name` that is no identifier, which sea-orm's derive refuses itself.
+fn column_variant(field: &Ident, enum_name: Option<&LitStr>) -> Option<Ident> {
+    let mut variant = match enum_name {
+        Some(lit) => lit.parse::<Ident>().ok()?,
+        None => nest_rs_codegen::pascal_case(&field.unraw()),
+    };
+    if variant == "Self" {
+        variant = format_ident!("Self_");
+    }
+    variant.set_span(field.span());
+    Some(variant)
 }
 
 pub(crate) fn complexity_attr(user: &Option<Expr>, default: Option<&str>) -> TokenStream2 {
@@ -176,6 +200,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut is_belongs_to = false;
         let mut is_has_many = false;
         let mut from_col: Option<Ident> = None;
+        let mut enum_name: Option<LitStr> = None;
+        let mut ignored = false;
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("primary_key") {
@@ -194,6 +220,10 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                 } else if m.path.is_ident("from") {
                     let written: Expr = m.value()?.parse()?;
                     from_col = Some(foreign_key(&written)?);
+                } else if m.path.is_ident("enum_name") {
+                    enum_name = Some(m.value()?.parse()?);
+                } else if m.path.is_ident("ignore") {
+                    ignored = true;
                 } else if m.input.peek(Token![=]) {
                     // Consume any other value so the meta parser can advance.
                     let _: syn::Expr = m.value()?.parse()?;
@@ -365,6 +395,12 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             }
         }
 
+        let column = if relation.is_some() || ignored {
+            None
+        } else {
+            column_variant(&ident, enum_name.as_ref())
+        };
+
         fields.push(ResourceField {
             ident,
             ty,
@@ -376,6 +412,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             relation,
             complexity,
             wire_default,
+            column,
         });
     }
 

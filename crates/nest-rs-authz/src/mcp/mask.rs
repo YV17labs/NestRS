@@ -13,7 +13,7 @@ use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::ability::mask_reason;
+use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason, transport};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults, current_ability};
@@ -62,7 +62,7 @@ where
             ));
         }
     };
-    match mask_wire_json::<E>(&ability, action, &wire) {
+    match mask_wire_json::<E>(&ability, action, &wire, Provenance::Loaded) {
         Ok(MaskedWire::Passthrough) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
             Ok(masked) => Ok(masked),

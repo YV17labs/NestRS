@@ -27,7 +27,9 @@ anyhow.workspace = true
 [dev-dependencies]
 # `LogCapture`: an unconfigured provider is inert, and inert is indistinguishable
 # from absent at every call site — the boot warn is the only trace.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `TestAuthority`: the GitHub double serves over TLS, as every provider is
+# dialled.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 tokio = { workspace = true }
 
 [lints]

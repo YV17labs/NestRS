@@ -160,6 +160,14 @@ account. A verified email may link a new provider to an existing
 account; an unverified one never does.
 </Aside>
 
+GitHub's profile does not say whether its email is verified, so the GitHub
+provider reads the verified-emails endpoint too (the `user:email` scope).
+When that call fails — an outage, a revoked scope — the login goes on with
+the profile email, unverified, and says so once at `warn` on
+`nest_rs::social`, with `provider = "github"` and the call's error: a
+returning user on that fallback cannot reach their account until the
+lookup answers again.
+
 ## Write your own provider
 
 A provider is real code — the profile shape, and any provider quirk —

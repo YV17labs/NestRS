@@ -1,7 +1,5 @@
 //! [`endpoint_shown`] — a URL as a sentence may show it.
 
-use std::fmt::Write as _;
-
 /// `url` as a sentence may show it: scheme, host, port and path — never
 /// userinfo, query or fragment, where a credential travels; a value that does
 /// not parse is shown as "an unparsable URL".
@@ -23,20 +21,12 @@ pub fn endpoint_shown(url: &str) -> String {
     if parsed.cannot_be_a_base() {
         return format!("a {}: URL", parsed.scheme());
     }
-    let mut shown = format!(
-        "{}://{}",
-        parsed.scheme(),
-        parsed.host_str().unwrap_or_default()
-    );
-    if let Some(port) = parsed.port() {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "fmt::Write for String never fails"
-        )]
-        let _ = write!(shown, ":{port}");
+    let (scheme, path) = (parsed.scheme(), parsed.path());
+    let host = parsed.host_str().unwrap_or_default();
+    match parsed.port() {
+        Some(port) => format!("{scheme}://{host}:{port}{path}"),
+        None => format!("{scheme}://{host}{path}"),
     }
-    shown.push_str(parsed.path());
-    shown
 }
 
 #[cfg(test)]

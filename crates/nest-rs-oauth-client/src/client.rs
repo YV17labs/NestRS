@@ -207,9 +207,7 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
 /// `validator`'s own `Display` lists each rule's parameters, the rejected value
 /// among them; [`ConfigError::validation`] says the field and the rule alone.
 fn invalid(errors: ValidationErrors) -> AuthError {
-    AuthError::Failed(
-        ConfigError::validation(<OAuthClientConfig as Namespaced>::NAMESPACE, errors).to_string(),
-    )
+    AuthError::Failed(ConfigError::validation(OAuthClientConfig::NAMESPACE, errors).to_string())
 }
 
 fn backend() -> reqwest::ClientBuilder {

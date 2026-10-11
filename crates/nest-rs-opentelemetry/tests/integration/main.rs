@@ -1,6 +1,6 @@
-//! `OpenTelemetryModule`'s boot contract, and the OTLP exporters' client. nextest runs every test in a process
-//! of its own, so a test that initialises OpenTelemetry never does it for
-//! another.
+//! `OpenTelemetryModule`'s boot contract, and the OTLP exporters' client.
+//! nextest runs every test in a process of its own, so a test that initialises
+//! OpenTelemetry never does it for another.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

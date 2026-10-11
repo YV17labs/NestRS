@@ -145,7 +145,7 @@ impl ConfigError {
             crate::var_name(namespace, key),
             format!(
                 "must be set, inline or through {} — {why}",
-                crate::var_name(namespace, &format!("{key}_FILE"))
+                crate::var_name(namespace, &crate::service::file_key(key))
             ),
         )
     }

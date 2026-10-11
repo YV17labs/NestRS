@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
-    Setting, config, endpoint_shown,
+    Namespaced, Setting, config, endpoint_shown,
 };
 
 /// How long a call waits for S3's answer by default: under the authentication
@@ -271,7 +271,7 @@ fn resolve_credential(
         }
         Some(setting) => Ok(setting.value),
         None if base.trim().is_empty() => Err(ConfigError::unset(
-            <StorageConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            StorageConfig::NAMESPACE,
             key,
             "`StorageConfig::defaults()` holds the development pair in a declared development or \
              test profile alone, `StorageConfig::default()` never, and a config pinned in code \

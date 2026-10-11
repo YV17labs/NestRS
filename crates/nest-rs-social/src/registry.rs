@@ -78,7 +78,7 @@ where
     // value among them.
     config
         .validate()
-        .map_err(|errors| anyhow::Error::new(ConfigError::validation(C::NAMESPACE, errors)))?;
+        .map_err(|errors| ConfigError::validation(C::NAMESPACE, errors))?;
     Ok(Some(Arc::new(make(config)?)))
 }
 

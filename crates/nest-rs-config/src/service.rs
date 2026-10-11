@@ -446,7 +446,7 @@ enum Spelled {
     File(PathBuf),
 }
 
-fn file_key(key: &str) -> String {
+pub(crate) fn file_key(key: &str) -> String {
     format!("{key}_FILE")
 }
 

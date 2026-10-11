@@ -87,17 +87,14 @@ impl OAuthResourceConfig {
     pub fn into_metadata(self) -> Result<ProtectedResourceMetadata, AuthError> {
         let resource = self.resource.unwrap_or_default();
         let resource = resource.trim();
+        let resource_setting = nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE");
         if resource.is_empty() {
             return Err(AuthError::Failed(format!(
-                "{} must name this deployment's canonical URI \
+                "{resource_setting} must name this deployment's canonical URI \
                  (for example https://api.example.com)",
-                nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE"),
             )));
         }
-        validate_canonical_uri(
-            resource,
-            &nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE"),
-        )?;
+        validate_canonical_uri(resource, &resource_setting)?;
 
         let authorization_servers: Vec<String> = self
             .authorization_servers
@@ -113,14 +110,7 @@ impl OAuthResourceConfig {
             )));
         }
         for (index, issuer) in authorization_servers.iter().enumerate() {
-            validate_canonical_uri(
-                issuer,
-                &format!(
-                    "entry {} of {}",
-                    index + 1,
-                    nest_rs_config::spellings(Self::NAMESPACE, "AUTHORIZATION_SERVERS")
-                ),
-            )?;
+            validate_canonical_uri(issuer, &entry(index, "AUTHORIZATION_SERVERS"))?;
         }
 
         // `scope` is space-delimited: a space or a quote would split a scope or
@@ -128,11 +118,10 @@ impl OAuthResourceConfig {
         for (index, scope) in self.scopes_supported.iter().enumerate() {
             if !is_scope_token(scope) {
                 return Err(AuthError::Failed(format!(
-                    "entry {} of {} is not a valid OAuth scope token (RFC 6749 §3.3): the \
-                     grammar is `1*( %x21 / %x23-5B / %x5D-7E )` — printable ASCII excluding \
-                     space, `\"` and `\\`",
-                    index + 1,
-                    nest_rs_config::spellings(Self::NAMESPACE, "SCOPES_SUPPORTED"),
+                    "{} is not a valid OAuth scope token (RFC 6749 §3.3): the grammar is \
+                     `1*( %x21 / %x23-5B / %x5D-7E )` — printable ASCII excluding space, `\"` \
+                     and `\\`",
+                    entry(index, "SCOPES_SUPPORTED"),
                 )));
             }
         }
@@ -142,25 +131,22 @@ impl OAuthResourceConfig {
         let bearer_methods_supported = if self.bearer_methods_supported.is_empty() {
             vec![BEARER_METHOD_HEADER.to_owned()]
         } else {
-            let setting = || nest_rs_config::spellings(Self::NAMESPACE, "BEARER_METHODS_SUPPORTED");
             for (index, method) in self.bearer_methods_supported.iter().enumerate() {
                 if !BEARER_METHODS_DEFINED.contains(&method.as_str()) {
                     return Err(AuthError::Failed(format!(
-                        "entry {} of {} is not an RFC 9728 §2 bearer method: the defined values \
-                         are {BEARER_METHODS_DEFINED:?}",
-                        index + 1,
-                        setting(),
+                        "{} is not an RFC 9728 §2 bearer method: the defined values are \
+                         {BEARER_METHODS_DEFINED:?}",
+                        entry(index, "BEARER_METHODS_SUPPORTED"),
                     )));
                 }
                 // `bearer_token` reads only the `Authorization` header, and a client acts
                 // on the document before reaching a handler: refused, not warned.
                 if method != BEARER_METHOD_HEADER {
                     return Err(AuthError::Failed(format!(
-                        "entry {} of {} is the RFC 9728 bearer method `{method}`, but this \
-                         framework reads a bearer token only from the `Authorization` header — \
-                         advertising it would tell clients to use a form this server refuses",
-                        index + 1,
-                        setting(),
+                        "{} is the RFC 9728 bearer method `{method}`, but this framework reads a \
+                         bearer token only from the `Authorization` header — advertising it \
+                         would tell clients to use a form this server refuses",
+                        entry(index, "BEARER_METHODS_SUPPORTED"),
                     )));
                 }
             }
@@ -180,6 +166,16 @@ impl OAuthResourceConfig {
             },
         ))
     }
+}
+
+/// Entry `index` (from zero) of the list `key` sets, as a refusal names it: by
+/// place, never by value.
+fn entry(index: usize, key: &str) -> String {
+    format!(
+        "entry {} of {}",
+        index + 1,
+        nest_rs_config::spellings(OAuthResourceConfig::NAMESPACE, key)
+    )
 }
 
 /// RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — printable

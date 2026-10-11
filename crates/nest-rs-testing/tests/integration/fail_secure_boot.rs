@@ -120,8 +120,8 @@ async fn an_unresolvable_global_guard_fails_boot() {
         "a global guard with no provider must fail boot, not silently drop",
     );
     assert!(
-        err.to_string().contains("GhostGuard"),
-        "the error names the unresolvable guard: {err}",
+        format!("{err:#}").contains("GhostGuard"),
+        "the error names the unresolvable guard: {err:#}",
     );
 }
 
@@ -171,6 +171,24 @@ fn refused_wiring(
         .downcast_ref::<WiringFailedError>()
         .unwrap_or_else(|| panic!("the kernel's wiring step refuses it: {chain}"));
     (wiring.registry, chain)
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_guard() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_guards_global([guard::<GhostGuard>()])
+        .build_headless()
+        .await;
+    let (registry, chain) = refused_wiring(
+        result,
+        "a worker would boot with a global guard silently dropped",
+    );
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
+    assert!(
+        chain.contains("GhostGuard"),
+        "the error names the unresolvable guard: {chain}",
+    );
 }
 
 #[tokio::test]

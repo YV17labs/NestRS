@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
-use nest_rs_guards::{NoBearerChallenge, RequiredScopes};
-use nest_rs_http::challenge::BEARER;
+use nest_rs_guards::RequiredScopes;
+use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
 use nest_rs_http::interceptor;
 use nest_rs_interceptors::{Interceptor, Next};
 use poem::http::{HeaderValue, StatusCode, header};

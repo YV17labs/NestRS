@@ -18,6 +18,18 @@ pub const INVALID_TOKEN: &str = "invalid_token";
 /// carry the scope the operation requires.
 pub const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
 
+/// Opt a `401` out of the `Bearer` challenge, by inserting it into the
+/// response's extensions.
+///
+/// A password-login rejection or a token-endpoint refusal means *these
+/// credentials are wrong*, not *go discover an authorization server*; the RFC
+/// 9728 interceptor (`nest-rs-oauth-resource`) reads this and leaves the
+/// response alone.
+///
+/// An app whose own `401` means the same thing marks it the same way.
+#[derive(Clone, Copy, Debug)]
+pub struct NoBearerChallenge;
+
 /// Render `Bearer error="<code>"` — the minimal conformant challenge.
 ///
 /// `code` is always a constant from §3.1's closed set, never caller data, so

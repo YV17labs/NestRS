@@ -4,7 +4,7 @@
 use nest_rs_core::__private::{ResolvedLayer, check_specs_resolvable};
 use nest_rs_core::AppBuilder;
 use nest_rs_http::__private::SelfMountGuardWrap;
-use nest_rs_http::{GlobalGuardsActive, HttpBootCheck};
+use nest_rs_http::GlobalGuardsActive;
 use poem::EndpointExt;
 use poem::endpoint::BoxEndpoint;
 
@@ -87,21 +87,19 @@ impl AppBuilderGuardsExt for AppBuilder {
                 }
                 .boxed()
             }))
-            // A global guard whose provider was never registered would
-            // resolve to `None` and silently drop — every route would lose
-            // its fail-secure net. Fail boot instead, naming the guards.
-            .provide_meta(HttpBootCheck::new(|container| {
+            // At the wiring step, so an app serving no HTTP refuses it too.
+            .provide_wiring("nest_rs::guards::global", |container| {
                 check_specs_resolvable::<GuardSpecs>(
                     container,
                     "guard",
                     "an unresolvable global guard would silently drop and leave every route \
                      unguarded",
-                )?;
-                // Declared-phase ordering + produced/expected principal
-                // cross-check on the global chain — a reversed or mismatched
-                // pairing fails boot here instead of answering 500 per request.
-                crate::dispatch::boot_validate_guards(container, &[], "the global guard chain")
-            }));
+                )
+                .and_then(|()| {
+                    crate::dispatch::boot_validate_guards(container, &[], "the global guard chain")
+                })
+                .map_err(nest_rs_core::anyhow::Error::msg)
+            });
         if active {
             builder.provide(GlobalGuardsActive)
         } else {

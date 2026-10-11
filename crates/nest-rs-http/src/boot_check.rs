@@ -1,6 +1,7 @@
 //! Boot-time fail-secure checks the HTTP transport runs before mounting
-//! anything: a global spec whose provider was never registered would otherwise
-//! be dropped silently, and every route would lose that guard.
+//! anything, for what matters only when it serves: a controller's or a
+//! gateway's declared guards, an endpoint's own declarations. A check every app
+//! owes, whatever it serves, runs on the kernel's wiring step instead.
 
 use nest_rs_core::Container;
 

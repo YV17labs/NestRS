@@ -525,6 +525,30 @@ async fn a_route_whose_method_scope_lists_authorization_first_fails_the_boot_nam
     );
 }
 
+#[module(providers = [SessionGuard, PolicyGuard])]
+struct PhasedGuardsModule;
+
+#[tokio::test]
+async fn a_global_pool_listing_authorization_first_fails_the_boot_of_an_app_serving_no_http() {
+    let Err(refused) = TestApp::builder()
+        .module::<PhasedGuardsModule>()
+        .use_guards_global([guard::<PolicyGuard>(), guard::<SessionGuard>()])
+        .build_headless()
+        .await
+    else {
+        panic!("the app would boot with a pool that answers 500 wherever it runs");
+    };
+    let chain = format!("{refused:#}");
+    let wiring = refused
+        .downcast_ref::<nest_rs_core::WiringFailedError>()
+        .unwrap_or_else(|| panic!("the kernel's wiring step refuses it: {chain}"));
+    assert_eq!(wiring.registry, "nest_rs::guards::global", "{chain}");
+    assert!(
+        chain.contains("PolicyGuard") && chain.contains("SessionGuard"),
+        "the refusal names both guards: {chain}",
+    );
+}
+
 static FRESH_SESSION_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 /// An authentication-phase guard that counts its runs, so a replay is seen.

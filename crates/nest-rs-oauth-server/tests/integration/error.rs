@@ -5,7 +5,7 @@
 //! interceptor must not stamp a `Bearer` challenge onto the `401`.
 
 use nest_rs_core::module;
-use nest_rs_guards::NoBearerChallenge;
+use nest_rs_http::challenge::NoBearerChallenge;
 use nest_rs_http::{HttpModule, controller, routes};
 use nest_rs_oauth_server::TokenError;
 use nest_rs_testing::TestApp;

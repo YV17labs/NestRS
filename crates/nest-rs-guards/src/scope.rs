@@ -83,15 +83,3 @@ mod tests {
         assert!(GrantedScopes::default().as_slice().is_empty());
     }
 }
-
-/// Opt a `401` out of the `Bearer` challenge, by inserting it into the
-/// response's extensions.
-///
-/// A password-login rejection or a token-endpoint refusal means *these
-/// credentials are wrong*, not *go discover an authorization server*; the RFC
-/// 9728 interceptor (`nest-rs-oauth-resource`) reads this and leaves the
-/// response alone.
-///
-/// An app whose own `401` means the same thing marks it the same way.
-#[derive(Clone, Copy, Debug)]
-pub struct NoBearerChallenge;

@@ -54,3 +54,15 @@ registration and the global-guard check onto the wiring step;
 HTTP and poem dependencies; `feat/endpoint-guards-and-class-gate` has each
 in-band edge run its chain and removes the slots. Each appends an entry here
 where it departs.
+
+**2026-10-11 — `refactor/guard-and-pipe-registration` landed its part.**
+`NoBearerChallenge` is `nest_rs_http::challenge::NoBearerChallenge`, and the
+OAuth authorization server no longer depends on guards. Global pipes register
+in `nest-rs-pipes`; `/graphql` and each WebSocket gateway resolve the pool once,
+at mount, composed as every site composes a family, so the two pipe slots
+guards filled for them are gone, and a gateway's mount reads what each connection
+needs from the container itself. The global guards' resolvability and phase
+checks run on the kernel's wiring step, as the pipes' does, so every global
+family is now checked there. No departure from the record. Guards still depend
+on poem and `nest-rs-http`, and on the in-band edges behind features, until the
+two branches named above land.

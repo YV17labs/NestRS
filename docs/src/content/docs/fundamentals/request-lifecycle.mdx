@@ -105,10 +105,10 @@ provides it. `AuthzGuard` is provided by `AuthzModule` — add
 route the dependency through a module `PostsHttpModule` already imports.
 ```
 
-A global pipe, interceptor, filter or exception filter that cannot resolve (its
-provider's module is not imported) fails the boot of every app, one that serves
-no HTTP included, naming the type: the check runs at the boot's wiring step,
-before any hook. A global guard fails the same way when HTTP configures.
+A global guard, pipe, interceptor, filter or exception filter that cannot
+resolve (its provider's module is not imported) fails the boot of every app, one
+that serves no HTTP included, naming the type: the check runs at the boot's
+wiring step, before any hook.
 
 A layer a site declares — on a controller, a route, a gateway or one of its
 messages — that no imported module provides fails the boot too, naming the
@@ -118,7 +118,8 @@ site ever runs without a layer it declares.
 
 A route whose guards are misordered — an authorization guard listed before the
 authentication guard whose principal it reads, at any scope — fails the boot
-naming both, rather than answering `500` to every request. An imperative
+naming both, rather than answering `500` to every request; a global pool listed
+that way fails it in an app serving no route too. An imperative
 self-mount under active global guards fails too, unless
 `fail_secure_strict = false` downgrades it to a warn (it defaults to `true`).
 

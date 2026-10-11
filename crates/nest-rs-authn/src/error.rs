@@ -11,7 +11,7 @@ use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 
-use nest_rs_guards::NoBearerChallenge;
+use nest_rs_http::challenge::NoBearerChallenge;
 
 /// Hashing-level failure from [`hash_password`](crate::hash_password) /
 /// [`verify_password`](crate::verify_password).

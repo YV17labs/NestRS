@@ -19,7 +19,7 @@ nest-rs-authn.workspace = true
 # `TokenError` renders itself as the §5.2 JSON envelope, and marks the response
 # `NoBearerChallenge` so a token refusal is never dressed up as a
 # oauth-resource challenge.
-nest-rs-guards.workspace = true
+nest-rs-http.workspace = true
 poem.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -37,7 +37,9 @@ anyhow.workspace = true
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }
-nest-rs-http = { path = "../nest-rs-http" }
+# The suite mounts a token endpoint through `#[controller]` / `#[routes]`,
+# whose expansion runs the route's guard chain.
+nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-testing = { path = "../nest-rs-testing" }
 tokio = { workspace = true }
 

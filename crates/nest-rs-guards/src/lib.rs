@@ -120,7 +120,7 @@ pub use guard::GraphqlGuard;
 pub use guard::McpGuard;
 #[cfg(feature = "ws")]
 pub use guard::WsGuard;
-pub use scope::{GrantedScopes, NoBearerChallenge, RequiredScopes};
+pub use scope::{GrantedScopes, RequiredScopes};
 // The bridge `#[messages]` wraps per-event guards in.
 #[cfg(feature = "ws")]
 pub use guard::GuardAsWsMessageCheck;

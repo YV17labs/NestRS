@@ -1,7 +1,7 @@
 //! RFC 6749 §5.2's token-endpoint error vocabulary, and the client
 //! authentication (§2.3.1) an issuer performs before it mints anything.
 
-use nest_rs_guards::NoBearerChallenge;
+use nest_rs_http::challenge::NoBearerChallenge;
 use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 

@@ -185,8 +185,8 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   global interceptors observe it. A guard may attach context (`Ctx<T>`), and
   per-handler metadata is `#[meta(EXPR)]` read through `Reflector`.
 - **Boot is fail-secure.** An unresolvable global spec fails the boot naming the
-  type — interceptors, filters, exception filters and pipes at the kernel's
-  wiring step (`provide_wiring`), in every app; guards through `HttpBootCheck`.
+  type, at the kernel's wiring step (`provide_wiring`), in every app whatever it
+  serves; so does a global guard pool listed out of phase order.
   **No site runs without a layer it declares**: one composed at boot (a route, a
   gateway's upgrade and messages) fails the boot naming the layer and the site,
   one composed on its first dispatch (a GraphQL or MCP operation) refuses that

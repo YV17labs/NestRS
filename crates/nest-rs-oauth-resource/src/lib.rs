@@ -8,7 +8,7 @@
 //!   no credential at all, and
 //! - the interceptor that stamps the `resource_metadata` pointer onto every
 //!   `401` — the one seam HTTP, WS and MCP share. A `401` that is not a
-//!   oauth-resource refusal opts out with `nest_rs_guards::NoBearerChallenge`.
+//!   oauth-resource refusal opts out with `nest_rs_http::challenge::NoBearerChallenge`.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

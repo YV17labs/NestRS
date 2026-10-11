@@ -56,7 +56,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::Container;
+use nest_rs_core::{AppLifecycle, Container};
 use nest_rs_http::HttpTransport;
 use nest_rs_ws::WsEnvelope;
 use serde_json::Value;
@@ -115,6 +115,11 @@ impl WsApp {
     /// The DI [`Container`], for resolving providers directly in assertions.
     pub fn container(&self) -> &Container {
         self.app.container()
+    }
+
+    /// The app's [`AppLifecycle`].
+    pub fn lifecycle(&self) -> &std::sync::Arc<AppLifecycle> {
+        self.app.lifecycle()
     }
 
     /// The address the transport is listening on.

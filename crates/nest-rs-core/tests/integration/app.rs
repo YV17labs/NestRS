@@ -91,6 +91,79 @@ async fn a_transport_that_returns_an_error_is_named_before_the_shutdown() {
     );
 }
 
+/// A transport that serves until it is asked to stop, then fails its stop.
+struct FailsItsStop;
+
+#[async_trait::async_trait]
+impl Transport for FailsItsStop {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+        cancel.cancelled().await;
+        Err(anyhow!("the open connections did not close"))
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct FailsTwiceModule;
+
+impl Module for FailsTwiceModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(TransportContribution {
+                name: "FailsItsStop",
+                build: |_| Ok(Box::new(FailsItsStop)),
+            })
+            .provide_meta(TransportContribution {
+                name: "Failing",
+                build: |_| Ok(Box::new(Failing)),
+            })
+    }
+}
+
+#[tokio::test]
+async fn each_transport_that_fails_is_named_and_the_first_failure_is_the_app_s_error() {
+    let logs = LogCapture::install();
+    let err = App::new::<FailsTwiceModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("a failed transport is the app's error");
+    assert!(
+        err.to_string().contains("listener stopped"),
+        "the first failure: {err}"
+    );
+
+    let mut failed: Vec<(Option<String>, Option<String>)> = logs
+        .find(target::APP, "transport failed; shutting down")
+        .into_iter()
+        .map(|event| {
+            assert_eq!(event.level, "error");
+            (event.field("transport"), event.field("error"))
+        })
+        .collect();
+    failed.sort();
+    assert_eq!(
+        failed,
+        [
+            (
+                Some("Failing".to_owned()),
+                Some("the listener stopped accepting".to_owned())
+            ),
+            (
+                Some("FailsItsStop".to_owned()),
+                Some("the open connections did not close".to_owned())
+            ),
+        ],
+        "each failure is said, naming its transport"
+    );
+}
+
 #[nest_rs_core::main]
 async fn serve_a_transport_that_panics() -> anyhow::Result<()> {
     App::new::<PanickingModule>()?.run().await

@@ -12,8 +12,10 @@ use crate::container::Container;
 /// server, a scheduler, a queue worker, ….
 ///
 /// [`crate::App::run`] awaits `configure` on each transport in registration
-/// order, then spawns every `serve` future with a shared [`CancellationToken`]
-/// that SIGTERM/SIGINT triggers.
+/// order, then spawns every `serve` future under the app's stop token: its
+/// [`CancellationToken`] fires the instant the app turns
+/// [`Draining`](crate::AppState::Draining) — at `SIGINT` / `SIGTERM`, or when
+/// another transport fails.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
     /// Scan the container for the surfaces this transport serves and wire them

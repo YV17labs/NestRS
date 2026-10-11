@@ -515,3 +515,127 @@ async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
         Some("the cache backend refused the warm-up"),
     );
 }
+
+static ONCE_INITS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct CountsInit;
+
+#[hooks]
+impl CountsInit {
+    #[on_module_init]
+    async fn count(&self) {
+        ONCE_INITS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[module(providers = [CountsInit])]
+struct CountsInitModule;
+
+#[tokio::test]
+async fn an_app_runs_its_init_hooks_once_however_often_it_is_initialised() {
+    let app = App::new::<CountsInitModule>().expect("the module boots");
+    app.init().await.expect("the init phases drain");
+    app.init().await.expect("a second init is a no-op");
+    app.run().await.expect("the run serves nothing and stops");
+
+    assert_eq!(ONCE_INITS.load(Ordering::SeqCst), 1);
+}
+
+static FAILED_INITS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct FailsInit;
+
+#[hooks]
+impl FailsInit {
+    #[on_module_init]
+    async fn connect(&self) -> anyhow::Result<()> {
+        FAILED_INITS.fetch_add(1, Ordering::SeqCst);
+        Err(anyhow::anyhow!(
+            "the discovery backend refused the registration"
+        ))
+    }
+}
+
+#[module(providers = [FailsInit])]
+struct FailsInitModule;
+
+#[tokio::test]
+async fn an_init_that_failed_is_refused_again_without_a_hook_running() {
+    let app = App::new::<FailsInitModule>().expect("the module boots");
+    let first = app.init().await.expect_err("the hook fails the init");
+    assert!(
+        format!("{first:#}").contains("discovery backend"),
+        "{first:#}"
+    );
+
+    let again = app
+        .init()
+        .await
+        .expect_err("a failed init does not run again");
+    assert!(
+        again
+            .downcast_ref::<nest_rs_core::InitFailedError>()
+            .is_some(),
+        "{again:#}"
+    );
+    let run = app
+        .run()
+        .await
+        .expect_err("nor does the run that follows it");
+    assert!(
+        run.downcast_ref::<nest_rs_core::InitFailedError>()
+            .is_some(),
+        "{run:#}"
+    );
+    assert_eq!(FAILED_INITS.load(Ordering::SeqCst), 1);
+}
+
+static WARMED_BEFORE_THE_DROP: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct WarmsThenWaits;
+
+#[hooks]
+impl WarmsThenWaits {
+    #[on_module_init]
+    async fn warm(&self) {
+        WARMED_BEFORE_THE_DROP.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[on_application_bootstrap]
+    async fn announce(&self) {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[module(providers = [WarmsThenWaits])]
+struct WarmsThenWaitsModule;
+
+#[tokio::test(start_paused = true)]
+async fn an_init_dropped_while_a_hook_waits_is_refused_again_without_a_hook_running() {
+    let app = App::new::<WarmsThenWaitsModule>().expect("the module boots");
+    tokio::time::timeout(Duration::from_secs(1), app.init())
+        .await
+        .expect_err("the init waits on its second hook until the caller drops it");
+
+    let again = tokio::time::timeout(Duration::from_secs(1), app.init())
+        .await
+        .expect("the second init runs no hook, so none holds it")
+        .expect_err("an init that never finished does not run again");
+    assert!(
+        again
+            .downcast_ref::<nest_rs_core::InitFailedError>()
+            .is_some(),
+        "{again:#}"
+    );
+    assert_eq!(
+        WARMED_BEFORE_THE_DROP.load(Ordering::SeqCst),
+        1,
+        "the hook that finished ran once"
+    );
+}

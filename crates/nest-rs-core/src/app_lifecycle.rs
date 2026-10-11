@@ -1,0 +1,281 @@
+//! [`AppLifecycle`] — where a running [`App`](crate::App) stands and why it
+//! stops, injectable by any provider; only the kernel moves it.
+
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+
+/// Where the app stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AppState {
+    /// From the start of the boot until its transports serve.
+    Starting,
+    /// The boot is done and the transports serve.
+    Ready,
+    /// A stop was asked; serving winds down.
+    Draining,
+}
+
+/// Why the app stops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StopCause {
+    /// `SIGINT`, or Ctrl-C on Windows.
+    Interrupt,
+    /// `SIGTERM`.
+    Terminate,
+    /// A transport returned `Err`, panicked, or stopped serving on its own —
+    /// an app left with no transport serving stops for this cause.
+    TransportFailed,
+}
+
+impl StopCause {
+    /// The signal's name, for a cause a signal is.
+    pub(crate) fn signal(self) -> Option<&'static str> {
+        match self {
+            Self::Interrupt => Some("SIGINT"),
+            Self::Terminate => Some("SIGTERM"),
+            Self::TransportFailed => None,
+        }
+    }
+}
+
+/// The state and the cause, moved together so that no reader sees one without
+/// the other.
+#[derive(Clone, Copy, Debug)]
+enum Stand {
+    Starting,
+    Ready,
+    Draining(StopCause),
+}
+
+/// The app's lifecycle, injectable as `Arc<AppLifecycle>`: where it stands, why
+/// it stops, and the token its stop cancels. One per [`App`](crate::App),
+/// seeded before any factory runs, so a factory, a constructor or a hook may
+/// read it; only the kernel moves it.
+///
+/// A loop a provider runs beside the app stops at [`stopping`](Self::stopping)
+/// — the instant a stop is asked, before the transports drain — and is joined
+/// in the provider's own shutdown hook, since a constructor cannot await:
+///
+/// ```
+/// use std::sync::Arc;
+/// use std::time::Duration;
+///
+/// use nest_rs_core::{App, AppLifecycle, hooks, injectable, module};
+/// use tokio::sync::Mutex;
+/// use tokio::task::JoinHandle;
+///
+/// #[injectable]
+/// struct Heartbeat {
+///     #[inject]
+///     lifecycle: Arc<AppLifecycle>,
+///     beating: Mutex<Option<JoinHandle<u32>>>,
+/// }
+///
+/// #[hooks]
+/// impl Heartbeat {
+///     #[on_application_bootstrap]
+///     async fn start(&self) {
+///         let stopping = self.lifecycle.stopping();
+///         let beating = tokio::spawn(async move {
+///             let mut beats = 0;
+///             loop {
+///                 tokio::select! {
+///                     () = stopping.cancelled() => return beats,
+///                     () = tokio::time::sleep(Duration::from_secs(10)) => beats += 1,
+///                 }
+///             }
+///         });
+///         *self.beating.lock().await = Some(beating);
+///     }
+///
+///     #[on_module_destroy]
+///     async fn stop(&self) -> anyhow::Result<()> {
+///         if let Some(beating) = self.beating.lock().await.take() {
+///             beating.await?;
+///         }
+///         Ok(())
+///     }
+/// }
+///
+/// #[module(providers = [Heartbeat])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// # let app = App::builder().module::<AppModule>().build().await?;
+/// # let heartbeat = app.container().get::<Heartbeat>();
+/// # app.run().await?;
+/// # assert!(heartbeat.is_some_and(|h| h.beating.try_lock().is_ok_and(|b| b.is_none())));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct AppLifecycle {
+    stand: watch::Sender<Stand>,
+    stop: CancellationToken,
+}
+
+impl AppLifecycle {
+    pub(crate) fn new() -> Self {
+        Self {
+            stand: watch::Sender::new(Stand::Starting),
+            stop: CancellationToken::new(),
+        }
+    }
+
+    /// Where the app stands now.
+    pub fn state(&self) -> AppState {
+        match *self.stand.borrow() {
+            Stand::Starting => AppState::Starting,
+            Stand::Ready => AppState::Ready,
+            Stand::Draining(_) => AppState::Draining,
+        }
+    }
+
+    /// Resolves once the app is [`Ready`](AppState::Ready); `false` once it is
+    /// draining, whether or not it served first.
+    pub async fn ready(&self) -> bool {
+        let mut stand = self.stand.subscribe();
+        loop {
+            match *stand.borrow_and_update() {
+                Stand::Starting => {}
+                Stand::Ready => return true,
+                Stand::Draining(_) => return false,
+            }
+            if stand.changed().await.is_err() {
+                return false;
+            }
+        }
+    }
+
+    /// A child of the app's stop token, cancelled the instant the app turns
+    /// [`Draining`](AppState::Draining).
+    pub fn stopping(&self) -> CancellationToken {
+        self.stop.child_token()
+    }
+
+    /// Why the app stops: `Some` once it is draining, the first cause asked.
+    pub fn cause(&self) -> Option<StopCause> {
+        match *self.stand.borrow() {
+            Stand::Draining(cause) => Some(cause),
+            Stand::Starting | Stand::Ready => None,
+        }
+    }
+
+    /// `Starting → Ready`, said once; an app already draining stays so.
+    pub(crate) fn turn_ready(&self, transports: &str) {
+        let turned = self.stand.send_if_modified(|stand| match stand {
+            Stand::Starting => {
+                *stand = Stand::Ready;
+                true
+            }
+            Stand::Ready | Stand::Draining(_) => false,
+        });
+        if turned {
+            tracing::info!(target: crate::target::APP, transports, "app ready");
+        }
+    }
+
+    /// `Starting | Ready → Draining`, the first cause winning, then the stop
+    /// token cancelled; `false` when the app was already draining.
+    pub(crate) fn drain(&self, cause: StopCause) -> bool {
+        let drained = self.stand.send_if_modified(|stand| match stand {
+            Stand::Starting | Stand::Ready => {
+                *stand = Stand::Draining(cause);
+                true
+            }
+            Stand::Draining(_) => false,
+        });
+        if drained {
+            tracing::info!(
+                target: crate::target::APP,
+                ?cause,
+                signal = cause.signal(),
+                "app draining",
+            );
+            self.stop.cancel();
+        }
+        drained
+    }
+
+    /// The token every transport serves under: cancelled with the stop, never
+    /// by a transport for the others.
+    pub(crate) fn serving(&self) -> CancellationToken {
+        self.stop.child_token()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn an_app_turns_ready_then_drains_for_the_first_cause_asked() {
+        let logs = LogCapture::install();
+        let lifecycle = AppLifecycle::new();
+        let stopping = lifecycle.stopping();
+        assert_eq!(lifecycle.state(), AppState::Starting);
+        assert_eq!(lifecycle.cause(), None);
+
+        lifecycle.turn_ready("Http, Scheduler");
+        lifecycle.turn_ready("Http, Scheduler");
+        assert_eq!(lifecycle.state(), AppState::Ready);
+        assert!(lifecycle.ready().await);
+        assert!(!stopping.is_cancelled());
+
+        assert!(lifecycle.drain(StopCause::Terminate));
+        assert!(!lifecycle.drain(StopCause::TransportFailed));
+        assert_eq!(lifecycle.state(), AppState::Draining);
+        assert_eq!(lifecycle.cause(), Some(StopCause::Terminate));
+        assert!(stopping.is_cancelled());
+        assert!(!lifecycle.ready().await, "it no longer serves");
+
+        let ready = logs.expect_one(crate::target::APP, "app ready");
+        assert_eq!(
+            ready.field("transports").as_deref(),
+            Some("Http, Scheduler")
+        );
+        let draining = logs.expect_one(crate::target::APP, "app draining");
+        assert_eq!(draining.field("cause").as_deref(), Some("Terminate"));
+        assert_eq!(draining.field("signal").as_deref(), Some("SIGTERM"));
+    }
+
+    #[tokio::test]
+    async fn an_app_draining_before_it_served_never_turns_ready() {
+        let lifecycle = AppLifecycle::new();
+        assert!(lifecycle.drain(StopCause::Interrupt));
+        lifecycle.turn_ready("Http");
+
+        assert_eq!(lifecycle.state(), AppState::Draining);
+        assert!(!lifecycle.ready().await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_waiter_on_ready_wakes_at_the_transition() {
+        let lifecycle = std::sync::Arc::new(AppLifecycle::new());
+        let waiting = tokio::spawn({
+            let lifecycle = std::sync::Arc::clone(&lifecycle);
+            async move { lifecycle.ready().await }
+        });
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert!(!waiting.is_finished(), "still starting");
+
+        lifecycle.turn_ready("Http");
+        assert_eq!(waiting.await.ok(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn a_transport_cancelling_its_own_token_stops_no_other() {
+        let lifecycle = AppLifecycle::new();
+        let one = lifecycle.serving();
+        let other = lifecycle.serving();
+        one.cancel();
+
+        assert!(!other.is_cancelled());
+        assert!(!lifecycle.stopping().is_cancelled());
+        assert_eq!(lifecycle.state(), AppState::Starting);
+    }
+}

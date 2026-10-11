@@ -9,19 +9,19 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, provider_order,
     reachable_descriptors, reachable_provider_ids, validate_access_graph,
     validate_keyed_access_graph,
 };
+use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
-    LateFactoryError, UnregisteredModuleError, UnresolvedFactoryError,
+    InitFailedError, LateFactoryError, UnregisteredModuleError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
@@ -34,6 +34,17 @@ use crate::way_down::{WayDown, watch_signals};
 /// until shutdown.
 pub struct App {
     container: Container,
+    lifecycle: Arc<AppLifecycle>,
+    init: tokio::sync::Mutex<Init>,
+}
+
+/// Where the app's init phases stand: they run once per [`App`], and an init
+/// that failed or never finished is kept as failed, so no hook runs twice.
+#[derive(Clone, Copy)]
+enum Init {
+    NotRun,
+    Done,
+    Failed,
 }
 
 /// Fail the boot if any unkeyed provider was registered twice, rather than let
@@ -107,9 +118,11 @@ impl App {
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
+        let lifecycle = Arc::new(AppLifecycle::new());
         // `collect` runs first so a module queuing a factory is refused below.
         let root = std::any::type_name::<M>();
         let builder = Container::builder()
+            .provide_arc(Arc::clone(&lifecycle))
             .enter_phase(Phase::Collect)
             .enter_root(root)
             .import::<M>()
@@ -126,6 +139,7 @@ impl App {
         check_register_phase(&mut builder)?;
         // Seeded after register, yet global infrastructure for the access graph.
         let global: HashSet<TypeId> = HashSet::from([
+            TypeId::of::<AppLifecycle>(),
             TypeId::of::<ReachableProviders>(),
             TypeId::of::<ProviderOrder>(),
             TypeId::of::<Composition>(),
@@ -140,7 +154,15 @@ impl App {
         )?;
         let container = builder.build();
         crate::wiring::wire(&container)?;
-        Ok(Self { container })
+        Ok(Self::assembled(container, lifecycle))
+    }
+
+    fn assembled(container: Container, lifecycle: Arc<AppLifecycle>) -> Self {
+        Self {
+            container,
+            lifecycle,
+            init: tokio::sync::Mutex::new(Init::NotRun),
+        }
     }
 
     /// Start an [`AppBuilder`] for apps that must seed runtime values or build
@@ -155,17 +177,43 @@ impl App {
         &self.container
     }
 
+    /// The app's [`AppLifecycle`], the one its providers inject.
+    pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
+        &self.lifecycle
+    }
+
     /// Run the init lifecycle phases (`OnModuleInit`, then
     /// `OnApplicationBootstrap`) against the built container, without serving.
+    ///
+    /// They run once per app: a later `init` or [`run`](Self::run) skips them,
+    /// and after an init that failed or was dropped before it finished, both
+    /// return [`InitFailedError`] without running a hook.
     pub async fn init(&self) -> Result<()> {
-        run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
-        run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await?;
+        let mut init = self.init.lock().await;
+        match *init {
+            Init::Done => return Ok(()),
+            Init::Failed => return Err(InitFailedError.into()),
+            Init::NotRun => {}
+        }
+        // Failed until the phases return: a caller dropping this future while
+        // a hook waits leaves it so, and no hook that finished runs again.
+        *init = Init::Failed;
+        self.init_phases().await?;
+        *init = Init::Done;
         Ok(())
     }
 
+    async fn init_phases(&self) -> Result<()> {
+        run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
+        run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await
+    }
+
     /// Configure each transport against the container, run the init lifecycle
-    /// hooks, then run all transports concurrently. SIGINT / SIGTERM cancels the
-    /// shared token; the first transport that errors also cancels the others.
+    /// hooks unless [`init`](Self::init) already did, then run all transports
+    /// concurrently under the app's stop token. The app is
+    /// [`Ready`](crate::AppState::Ready) once they serve, and turns
+    /// [`Draining`](crate::AppState::Draining) at `SIGINT` / `SIGTERM` or when a
+    /// transport fails, which stops the others.
     ///
     /// A site a transport composes as it configures — a route, a gateway — that
     /// could not compose (a layer it declares resolves to no provider, a
@@ -179,8 +227,6 @@ impl App {
     /// A signal received once the way down has begun exits at once (130 /
     /// 143). Transports come only from imported modules.
     pub async fn run(self) -> Result<()> {
-        let App { container } = self;
-
         tracing::info!(
             target: crate::target::APP,
             version = env!("CARGO_PKG_VERSION"),
@@ -188,8 +234,8 @@ impl App {
         );
 
         let mut transports: Vec<(&'static str, Box<dyn Transport>)> = Vec::new();
-        for contribution in Discovery::new(&container).meta::<TransportContribution>() {
-            let transport = (contribution.meta.build)(&container)?;
+        for contribution in Discovery::new(&self.container).meta::<TransportContribution>() {
+            let transport = (contribution.meta.build)(&self.container)?;
             tracing::info!(
                 target: crate::target::APP,
                 transport = contribution.meta.name,
@@ -198,12 +244,12 @@ impl App {
             transports.push((contribution.meta.name, transport));
         }
 
-        for (_, t) in transports.iter_mut() {
-            t.configure(&container).await?;
+        for (_, transport) in transports.iter_mut() {
+            transport.configure(&self.container).await?;
         }
         // A site composed at `configure` (a route, a gateway) refuses here, its
         // mount having no `Result` to fail with.
-        if let Some(refusal) = crate::container::__private::take_site_refusal(&container) {
+        if let Some(refusal) = crate::container::__private::take_site_refusal(&self.container) {
             return Err(refusal);
         }
         let stop_bound = transports
@@ -218,20 +264,19 @@ impl App {
             "way down bounded",
         );
 
-        run_phase(&container, LifecyclePhase::OnModuleInit).await?;
-        run_phase(&container, LifecyclePhase::OnApplicationBootstrap).await?;
-
-        let cancel = CancellationToken::new();
+        self.init().await?;
         let way_down = Arc::new(WayDown::default());
-        watch_signals(cancel.clone(), Arc::clone(&way_down));
+        watch_signals(&self.lifecycle, Arc::clone(&way_down));
 
+        let names: Vec<&'static str> = transports.iter().map(|(name, _)| *name).collect();
+        self.lifecycle.turn_ready(&names.join(", "));
         let mut join = JoinSet::new();
         let mut serving: HashMap<tokio::task::Id, &'static str> = HashMap::new();
         for (name, transport) in transports {
-            let token = cancel.clone();
-            let task = join.spawn(crate::panic::contain(async move {
-                transport.serve(token).await
-            }));
+            let stop = self.lifecycle.serving();
+            let task = join.spawn(crate::panic::contain(
+                async move { transport.serve(stop).await },
+            ));
             serving.insert(task.id(), name);
         }
         way_down.transports(still_serving(&serving));
@@ -247,13 +292,15 @@ impl App {
             match res.map(|(_, served)| served) {
                 Ok(Ok(Ok(()))) => {}
                 Ok(Ok(Err(e))) => {
-                    if first_err.is_none() {
-                        tracing::error!(target: crate::target::APP, error = %crate::error_message(&*e), "transport failed; shutting down");
-                        first_err = Some(e);
-                        cancel.cancel();
-                    }
+                    tracing::error!(
+                        target: crate::target::APP,
+                        transport,
+                        error = %crate::error_message(&*e),
+                        "transport failed; shutting down",
+                    );
+                    self.lifecycle.drain(StopCause::TransportFailed);
+                    first_err.get_or_insert(e);
                 }
-                // Said even after the first error: no one else files a contained panic.
                 Ok(Err(payload)) => {
                     crate::contained_panic!(
                         target: crate::target::APP,
@@ -261,27 +308,27 @@ impl App {
                         "transport task panicked; shutting down",
                         transport,
                     );
-                    if first_err.is_none() {
-                        first_err = Some(anyhow!("transport `{transport}` panicked"));
-                        cancel.cancel();
-                    }
+                    self.lifecycle.drain(StopCause::TransportFailed);
+                    first_err.get_or_insert_with(|| anyhow!("transport `{transport}` panicked"));
                 }
                 // Cancelled with its runtime; a panic raised as it was dropped is the hook's.
                 Err(join_err) => {
-                    if first_err.is_none() {
-                        tracing::error!(
-                            target: crate::target::APP,
-                            transport,
-                            error = %crate::error_message(&join_err),
-                            "transport task ended before it returned; shutting down",
-                        );
-                        first_err =
-                            Some(anyhow!("transport `{transport}` ended before it returned"));
-                        cancel.cancel();
-                    }
+                    tracing::error!(
+                        target: crate::target::APP,
+                        transport,
+                        error = %crate::error_message(&join_err),
+                        "transport task ended before it returned; shutting down",
+                    );
+                    self.lifecycle.drain(StopCause::TransportFailed);
+                    first_err.get_or_insert_with(|| {
+                        anyhow!("transport `{transport}` ended before it returned")
+                    });
                 }
             }
         }
+        // Every transport ended with no stop asked: the shutdown hooks still
+        // find the app draining, so a loop one of them joins has stopped.
+        self.lifecycle.drain(StopCause::TransportFailed);
 
         // The three phases share one deadline, which `way_down::__main` reads too.
         let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
@@ -291,7 +338,7 @@ impl App {
             LifecyclePhase::BeforeApplicationShutdown,
             LifecyclePhase::OnApplicationShutdown,
         ] {
-            run_phase_lenient(&container, phase, deadline, &way_down).await;
+            run_phase_lenient(&self.container, phase, deadline, &way_down).await;
         }
         way_down.exit();
 
@@ -487,13 +534,16 @@ impl AppBuilder {
     pub async fn build(self) -> Result<App> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
+        let lifecycle = Arc::new(AppLifecycle::new());
         let AppBuilder {
             mut builder,
             modules,
             overrides,
         } = self;
 
-        builder = builder.enter_phase(Phase::Collect);
+        builder = builder
+            .provide_arc(Arc::clone(&lifecycle))
+            .enter_phase(Phase::Collect);
         for hooks in &modules {
             builder = (hooks.import)(builder.enter_root(hooks.name)).leave_import();
         }
@@ -551,7 +601,7 @@ impl AppBuilder {
         let builder = seal(builder, &descriptors, &roots, &global, &global_keyed)?;
         let container = builder.build();
         crate::wiring::wire(&container)?;
-        Ok(App { container })
+        Ok(App::assembled(container, lifecycle))
     }
 }
 
@@ -593,6 +643,8 @@ fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'stat
 
 #[cfg(test)]
 mod tests {
+    use tokio_util::sync::CancellationToken;
+
     use super::*;
     use crate::module::{Collecting, Registering};
 

@@ -285,8 +285,12 @@ edge's suite). Synchronous seams (`AbilityFactory`, the WS `Registry`,
 ## Lifecycle hooks and the way down
 
 `#[hooks]` submits phase-tagged methods; `App::run` drains each phase in a
-stable `(provider, method)` order. An init hook that fails or panics aborts the
-boot naming it. Shutdown hooks are best-effort — a failure or panic is logged at
+stable `(provider, method)` order. The init phases run once per `App`, whether
+`init` or `run` reaches them first; an init hook that fails or panics aborts the
+boot naming it, and the app refuses its init again (`InitFailedError`).
+The app's state and stop cause are `AppLifecycle`'s; the kernel alone moves
+them, and a loop a provider runs beside the app stops at its `stopping()`.
+Shutdown hooks are best-effort — a failure or panic is logged at
 `error` and the next runs — and the three shutdown phases **share one budget**,
 never a bound per hook (`k` stuck hooks would cost `k` bounds). A hook still
 waiting when it is spent is abandoned at `warn` naming its module; every later

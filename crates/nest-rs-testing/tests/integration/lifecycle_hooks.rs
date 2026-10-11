@@ -1,10 +1,13 @@
 //! `#[hooks]` through the real macro: phase-tagged methods run in
 //! `(provider, method)` order within a phase, bare and `Result`-returning
-//! alike, and a failing init hook aborts the boot.
+//! alike, and a failing init hook aborts the boot; the harness runs them once
+//! and hands out the app's lifecycle.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{App, hooks, injectable, module};
+use nest_rs_core::{App, AppLifecycle, AppState, hooks, injectable, module};
+use nest_rs_testing::TestApp;
 
 static LOG: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
@@ -87,5 +90,56 @@ async fn a_failing_init_hook_aborts_boot() {
     assert!(
         msg.contains("init exploded"),
         "the error surfaces the hook's own message: {msg}",
+    );
+}
+
+static HARNESS_INITS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+struct WatchesTheApp {
+    #[inject]
+    lifecycle: Arc<AppLifecycle>,
+}
+
+#[hooks]
+impl WatchesTheApp {
+    #[on_module_init]
+    async fn count(&self) {
+        HARNESS_INITS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[module(providers = [WatchesTheApp])]
+struct WatchedModule;
+
+#[tokio::test]
+async fn the_harness_runs_init_once_and_hands_out_the_lifecycle_its_providers_inject() {
+    let app = TestApp::for_module::<WatchedModule>()
+        .await
+        .expect("the module boots");
+    let watcher = app
+        .container()
+        .get::<WatchesTheApp>()
+        .expect("the provider is built");
+    assert!(Arc::ptr_eq(app.lifecycle(), &watcher.lifecycle));
+    assert_eq!(app.lifecycle().state(), AppState::Starting);
+
+    let headless = TestApp::builder()
+        .module::<WatchedModule>()
+        .build_headless()
+        .await
+        .expect("the module boots");
+    headless.init().await.expect("the init phases run");
+    headless.init().await.expect("a second init is a no-op");
+    let watcher = headless
+        .container()
+        .get::<WatchesTheApp>()
+        .expect("the provider is built");
+    assert!(Arc::ptr_eq(headless.lifecycle(), &watcher.lifecycle));
+
+    assert_eq!(
+        HARNESS_INITS.load(Ordering::SeqCst),
+        2,
+        "each app ran its init hooks once: the TestApp's build, the HeadlessApp's first init"
     );
 }

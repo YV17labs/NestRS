@@ -162,7 +162,7 @@ fn a_second_signal_while_a_transport_will_not_stop_exits_at_once_naming_it() {
     let mut child = ChildProcess::spawn(CHILD_TEST, "transport");
     child.expect_line(READY);
     child.signal("TERM");
-    child.expect_line("shutdown signal received");
+    child.expect_line("app draining");
     child.signal("TERM");
 
     let (code, printed) = child.exit_within(Duration::from_secs(2));

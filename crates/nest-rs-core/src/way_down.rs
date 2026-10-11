@@ -13,11 +13,10 @@
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use tokio_util::sync::CancellationToken;
-
+use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::lifecycle::LifecyclePhase;
 
 /// Where the way down stands, for the line a signal received during it files.
@@ -128,6 +127,13 @@ impl Received {
             Self::Terminate => 143,
         }
     }
+
+    fn cause(self) -> StopCause {
+        match self {
+            Self::Interrupt => StopCause::Interrupt,
+            Self::Terminate => StopCause::Terminate,
+        }
+    }
 }
 
 /// Every stop signal the process can receive, as one stream — installed once,
@@ -180,12 +186,12 @@ impl Signals {
     }
 }
 
-/// Watch for the signals that stop the process: the first cancels `cancel`;
-/// one received once `cancel` is cancelled exits at once.
+/// Watch for the signals that stop the process: the first turns the app
+/// draining; one received once it drains exits at once.
 ///
 /// The handlers are installed here, not in the spawned task: a signal before
 /// its first poll would meet the OS default action and kill the process silently.
-pub(crate) fn watch_signals(cancel: CancellationToken, way_down: std::sync::Arc<WayDown>) {
+pub(crate) fn watch_signals(lifecycle: &Arc<AppLifecycle>, way_down: Arc<WayDown>) {
     let mut signals = match Signals::install() {
         Ok(signals) => signals,
         Err(error) => {
@@ -198,17 +204,16 @@ pub(crate) fn watch_signals(cancel: CancellationToken, way_down: std::sync::Arc<
             return;
         }
     };
+    let app = Arc::downgrade(lifecycle);
+    let stopping = lifecycle.stopping();
     tokio::spawn(async move {
         tokio::select! {
             signal = signals.next() => {
-                tracing::info!(
-                    target: crate::target::APP,
-                    signal = signal.name(),
-                    "shutdown signal received",
-                );
-                cancel.cancel();
+                if !app.upgrade().is_some_and(|app| app.drain(signal.cause())) {
+                    way_down.exit_at_once(signal);
+                }
             }
-            () = cancel.cancelled() => {}
+            () = stopping.cancelled() => {}
         }
         let signal = signals.next().await;
         way_down.exit_at_once(signal);

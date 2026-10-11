@@ -133,11 +133,13 @@ Within a phase, hooks run **sequentially** in `(provider, method)` name
 order — stable across builds, never parallel. The two halves of the
 lifecycle treat failure differently, and deliberately:
 
-- **Init is strict.** `on_module_init` then `on_application_bootstrap`
-  run one hook at a time; the **first error aborts boot** with a
-  message naming the provider, method, and phase. Nothing is listening
-  yet, so a failed warm-up never leaves a half-started server accepting
-  traffic.
+- **Init is strict, and runs once.** `on_module_init` then
+  `on_application_bootstrap` run one hook at a time; the **first error
+  aborts boot** with a message naming the provider, method, and phase.
+  Nothing is listening yet, so a failed warm-up never leaves a
+  half-started server accepting traffic. `App::init()` and `App::run()`
+  share the phases: whichever comes second skips them, and after an init
+  that failed both return `InitFailedError` without running a hook again.
 - **Shutdown is exhaustive.** The three teardown phases start every hook
   even if one fails or panics — either is logged at `error` on the
   `nest_rs::lifecycle` target, naming the hook, and the next hook still
@@ -167,22 +169,95 @@ Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migra
 `App::run` walks a fixed sequence. The hooks bracket the serving window:
 
 ```
-build container
+build container             — Starting
 → wire registries           — events, health, social: filled before any hook
 → attach + configure transports
-→ on_module_init            ┐ strict — first error or panic aborts boot
+→ on_module_init            ┐ strict, once — first error or panic aborts boot
 → on_application_bootstrap  ┘
+→ Ready                        — `app ready`
 → serve (until SIGINT / SIGTERM, or a transport errors)
+→ Draining                     — `app draining`, with its cause
 → transports stop              — each within its own window
 → on_module_destroy            ┐ exhaustive — every hook starts, errors and
 → before_application_shutdown  │ panics logged; five seconds between all of
 → on_application_shutdown      ┘ them, what still waits then is abandoned
 ```
 
-Shutdown is triggered by `SIGINT` / `SIGTERM` (a shared cancellation
-token cancels every transport), or by the first transport that errors —
-which cancels the rest, then runs the teardown phases once the last
-transport has stopped.
+Shutdown is triggered by `SIGINT` / `SIGTERM`, or by the first transport
+that errors. Either one turns the app `Draining`, which cancels the stop
+token every transport serves under; the teardown phases run once the
+last transport has stopped.
+
+## Where the app stands
+
+Some code needs more than a hook's moment: whether the app serves yet,
+or why it is stopping. Every app carries one `AppLifecycle`, seeded
+before the first factory runs, so a factory, a constructor or a hook
+injects it like any other provider — and only the kernel moves it.
+
+| Method | Answers |
+|---|---|
+| `state()` | `AppState::Starting` from the start of the boot, `Ready` once the transports serve, `Draining` once a stop is asked |
+| `cause()` | `None` until the app drains, then why: `StopCause::Interrupt` (`SIGINT`, or Ctrl-C on Windows), `Terminate` (`SIGTERM`), `TransportFailed` (a transport returned an error, panicked, or stopped serving on its own) |
+| `stopping()` | a `CancellationToken`, cancelled the instant the app turns `Draining` |
+| `ready().await` | `true` once the app is `Ready`, `false` once it drains, whether or not it served first |
+
+Each move is one `info` on `nest_rs::app`: `app ready`, with the
+`transports` it serves, then `app draining`, with its `cause` — and the
+`signal` when a signal asked. The first cause wins: a transport that
+fails while the app already drains for a `SIGTERM` leaves it at
+`Terminate`.
+
+**A loop running beside the app stops at `stopping()`** — the instant a
+stop is asked, before the transports drain, so it is not still working
+when the shutdown hooks run. A constructor cannot await, so the loop
+starts in a hook and is joined in the provider's own shutdown hook:
+
+```rust title="crates/features/src/blog/heartbeat.rs"
+use std::sync::Arc;
+use std::time::Duration;
+
+use nest_rs::core::{AppLifecycle, hooks, injectable};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+
+#[injectable]
+pub struct Heartbeat {
+    #[inject]
+    lifecycle: Arc<AppLifecycle>,
+    beating: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[hooks]
+impl Heartbeat {
+    #[on_application_bootstrap]
+    async fn start(&self) {
+        let stopping = self.lifecycle.stopping();
+        let beating = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = stopping.cancelled() => return,
+                    () = tokio::time::sleep(Duration::from_secs(10)) => {}
+                }
+                tracing::debug!(target: crate::blog::TARGET, interval_secs = 10, "heartbeat");
+            }
+        });
+        *self.beating.lock().await = Some(beating);
+    }
+
+    #[on_module_destroy]
+    async fn stop(&self) -> anyhow::Result<()> {
+        if let Some(beating) = self.beating.lock().await.take() {
+            beating.await?;
+        }
+        Ok(())
+    }
+}
+```
+
+A shutdown hook that must know why the app stops reads `cause()`: it is
+what NestJS hands `beforeApplicationShutdown(signal)` and
+`onApplicationShutdown(signal)` as their argument.
 
 ## The way down
 
@@ -262,8 +337,8 @@ exiting at once is what was asked.
 <Aside type="tip">
 A test harness can drive the init phases without serving: `App::init()`
 runs `on_module_init` then `on_application_bootstrap` against the built
-container, so an e2e test exercises the same startup the server
-performs.
+container, once, so an e2e test exercises the same startup the server
+performs. `TestApp::builder().build()` has already run them.
 </Aside>
 
 ## Common things a hook does

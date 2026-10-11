@@ -28,9 +28,12 @@
 //! `#[injectable(scope = transient)]` rebuilds on every resolution. Lifecycle
 //! hooks (`#[on_module_init]`, `#[on_application_bootstrap]`,
 //! `#[on_module_destroy]`, …) run per phase as [`App::run`] drains them —
-//! init failure aborts boot, shutdown is best-effort. A registry a module fills
-//! from the assembled container is filled before the first hook, by the wiring
-//! step it attaches with [`ContainerBuilder::provide_wiring`].
+//! init runs once and its failure aborts boot, shutdown is best-effort. A
+//! registry a module fills from the assembled container is filled before the
+//! first hook, by the wiring step it attaches with
+//! [`ContainerBuilder::provide_wiring`]. Where the app stands and why it stops
+//! are [`AppLifecycle`]'s, which any provider injects and only the kernel
+//! moves.
 //!
 //! A hook host — like a scheduled method, a listener, an indicator and a
 //! processor — is resolved outside any request, so it must be a **singleton
@@ -65,6 +68,7 @@
 pub mod access;
 mod answer;
 pub mod app;
+mod app_lifecycle;
 mod budget;
 pub mod container;
 pub(crate) mod cycle_guard;
@@ -100,6 +104,7 @@ mod wiring;
 
 pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use app::{App, AppBuilder};
+pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use budget::Budget;
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::{
@@ -111,9 +116,9 @@ pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
     AccessGraphError, BudgetPastNetError, ContestedDeclarationError, DecodeError,
-    DuplicateProviderError, FactoryCycleError, KeyedDependencyError, LateFactoryError,
-    MissingDependencyError, ProviderCycleError, ScopeViolationError, UnregisteredModuleError,
-    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
+    DuplicateProviderError, FactoryCycleError, InitFailedError, KeyedDependencyError,
+    LateFactoryError, MissingDependencyError, ProviderCycleError, ScopeViolationError,
+    UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{boxed_error, error_message};
 pub use handler::{Handler, Posture, Reflector};

@@ -1,7 +1,9 @@
 //! Booted app with no HTTP client, for queue workers and schedulers.
 
+use std::sync::Arc;
+
 use anyhow::Result;
-use nest_rs_core::{App, Container, Transport};
+use nest_rs_core::{App, AppLifecycle, Container, Transport};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +23,13 @@ impl HeadlessApp {
         self.app.container()
     }
 
-    /// Run the app's init phases without standing up any transport.
+    /// The app's [`AppLifecycle`].
+    pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
+        self.app.lifecycle()
+    }
+
+    /// Run the app's init phases without standing up any transport — once, as
+    /// [`App::init`] does.
     pub async fn init(&self) -> Result<()> {
         self.app.init().await
     }

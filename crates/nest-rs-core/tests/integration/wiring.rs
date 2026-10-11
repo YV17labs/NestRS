@@ -131,7 +131,7 @@ async fn wirings_run_once_each_in_registration_order_against_the_sealed_containe
     assert_eq!(wired(), ["tests::first", "tests::second"]);
 
     app.init().await.expect("the init hooks run");
-    app.init().await.expect("and run again");
+    app.init().await.expect("a second init is a no-op");
     assert_eq!(
         wired(),
         ["tests::first", "tests::second"],

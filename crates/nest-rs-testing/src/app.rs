@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
-use nest_rs_core::{App, AppBuilder, Container, Module, Transport};
+use nest_rs_core::{App, AppBuilder, AppLifecycle, Container, Module, Transport};
 use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, ExceptionFilterSpec};
 use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
 use nest_rs_guards::{AppBuilderGuardsExt, AppBuilderPipesExt, GuardSpec, PipeSpec};
@@ -64,10 +64,11 @@ impl TestApp {
         self.app.container()
     }
 
-    /// Re-runs the init phases (`OnModuleInit` / `OnApplicationBootstrap`),
-    /// which [`TestAppBuilder::build`] already ran once.
-    pub async fn init(&self) -> Result<()> {
-        self.app.init().await
+    /// The app's [`AppLifecycle`]: in-process, it stays
+    /// [`Starting`](nest_rs_core::AppState::Starting), since no transport
+    /// serves it.
+    pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
+        self.app.lifecycle()
     }
 }
 
@@ -204,7 +205,8 @@ impl TestAppBuilder {
         self
     }
 
-    /// Build the app, configure the HTTP transport and run the init phases.
+    /// Build the app, configure the HTTP transport and run the init phases —
+    /// once: they do not run again for this app.
     pub async fn build(self) -> Result<TestApp> {
         let app = self.inner.build().await?;
         // A default transport would ignore every field the module configured,

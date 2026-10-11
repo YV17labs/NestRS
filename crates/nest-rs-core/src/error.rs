@@ -168,6 +168,13 @@ pub struct FactoryCycleError {
     pub type_names: Vec<&'static str>,
 }
 
+/// The app's init phases failed, or were dropped before they finished, on an
+/// earlier call: they do not run again, so neither
+/// [`App::init`](crate::App::init) nor [`App::run`](crate::App::run) proceeds.
+#[derive(Debug, Error)]
+#[error("the app's init failed earlier: it does not run again")]
+pub struct InitFailedError;
+
 /// A module queued an async factory during the register phase, once the
 /// collect phase had ended, so no boot drains it. A default whose output is
 /// already present is discarded instead; a declaration is refused all the same.

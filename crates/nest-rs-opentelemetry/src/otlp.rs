@@ -44,10 +44,14 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
         // `id_generator`.
         .with_id_generator(crate::id_generator::AdoptFrameworkIds::default());
 
-    let endpoint = config
-        .otlp_endpoint
-        .as_deref()
-        .map(|s| s.trim_end_matches('/'));
+    // Parsed once, whatever set it: a config built in code skipped `from_env`.
+    let endpoint = match config.otlp_endpoint.as_deref() {
+        Some(raw) => {
+            crate::config::otlp_endpoint(raw, &crate::config::otlp_endpoint_setting())?;
+            Some(raw.trim().trim_end_matches('/'))
+        }
+        None => None,
+    };
 
     if let Some(base) = endpoint {
         let span_exporter = SpanExporter::builder()
@@ -55,7 +59,7 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
             .with_endpoint(format!("{}/v1/traces", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
+            .map_err(not_built("traces", base))?;
         tracer_builder = tracer_builder.with_batch_exporter(span_exporter);
     }
 
@@ -69,7 +73,7 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
             .with_endpoint(format!("{}/v1/metrics", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
+            .map_err(not_built("metrics", base))?;
         // Explicit: the SDK's 60 s default reads as a broken metrics pipeline for a
         // full minute during setup.
         let reader = PeriodicReader::builder(metric_exporter)
@@ -86,7 +90,7 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
             .with_endpoint(format!("{}/v1/logs", base))
             .with_protocol(Protocol::HttpBinary)
             .build()
-            .map_err(|e| OpenTelemetryError::Otlp(e.to_string()))?;
+            .map_err(not_built("logs", base))?;
         let logger_provider = SdkLoggerProvider::builder()
             .with_resource(resource)
             .with_batch_exporter(log_exporter)
@@ -103,6 +107,20 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
         meter_provider,
         logger_provider,
     })
+}
+
+/// An exporter the SDK would not build, said without its own error, whose
+/// sentence quotes the endpoint whole.
+fn not_built<'a>(
+    signal: &'static str,
+    base: &'a str,
+) -> impl FnOnce(opentelemetry_otlp::ExporterBuildError) -> OpenTelemetryError + 'a {
+    move |_| {
+        OpenTelemetryError::Otlp(format!(
+            "the OTLP {signal} exporter for {} could not be built",
+            nest_rs_config::endpoint_shown(base)
+        ))
+    }
 }
 
 fn build_resource(config: &OpenTelemetryConfig) -> Resource {

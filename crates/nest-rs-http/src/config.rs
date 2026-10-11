@@ -595,10 +595,7 @@ fn version_header(env: &ConfigService, base: String) -> Result<String> {
     };
     match HeaderName::from_bytes(raw.value.as_bytes()) {
         Ok(_) => Ok(raw.value),
-        Err(_) => Err(raw.refuse(format_args!(
-            "`{}` is not a valid HTTP header name",
-            raw.shown()
-        ))),
+        Err(_) => Err(raw.refuse("is not a valid HTTP header name")),
     }
 }
 
@@ -616,14 +613,10 @@ fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<I
         .enumerate()
         .map(|(index, s)| {
             s.parse::<IpAddr>().map_err(|e| {
-                if raw.from_file() {
-                    raw.refuse(format_args!(
-                        "entry {} of the list in the file it names is not an IP address: {e}",
-                        index + 1
-                    ))
-                } else {
-                    raw.refuse(format_args!("invalid IP `{s}`: {e}"))
-                }
+                raw.refuse(format_args!(
+                    "entry {} of the list is not an IP address: {e}",
+                    index + 1
+                ))
             })
         })
         .collect()
@@ -700,6 +693,41 @@ mod tests {
         }
     }
 
+    /// An inline value is refused as a file's is, by its variable and never
+    /// by the value — at every key `HttpConfig` judges itself.
+    #[test]
+    fn a_refused_inline_value_names_its_variable_and_is_never_shown() {
+        const SECRET: &str = "hunter2_secret";
+        for (key, value) in [
+            ("VERSIONING", SECRET.to_owned()),
+            ("TRUSTED_PROXIES", format!("10.0.0.1,{SECRET}")),
+            ("VERSION_HEADER", format!("{SECRET} bad")),
+            ("TLS_RELOAD_SECS", SECRET.to_owned()),
+            ("CORS_MAX_AGE", SECRET.to_owned()),
+            ("HSTS", format!("{SECRET}\u{7}")),
+            ("PORT", SECRET.to_owned()),
+            ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
+            ("MAX_CONCURRENT_CONNECTIONS", SECRET.to_owned()),
+            ("HEADER_READ_TIMEOUT_SECS", SECRET.to_owned()),
+            ("IDLE_TIMEOUT_SECS", SECRET.to_owned()),
+            ("SEND_TIMEOUT_SECS", SECRET.to_owned()),
+        ] {
+            let mut vars = vec![(key, value.as_str())];
+            if key == "CORS_MAX_AGE" {
+                vars.push(("CORS_ORIGINS", "https://a.example"));
+            }
+            let env = ConfigService::with_vars("http", vars);
+            let err = HttpConfig::from_env(&env, HttpConfig::default())
+                .expect_err("the value is refused")
+                .to_string();
+            assert!(
+                err.contains(&nest_rs_config::var_name("http", key)),
+                "{key}: names the variable: {err}"
+            );
+            assert!(!err.contains(SECRET), "{key}: never shows the value: {err}");
+        }
+    }
+
     #[test]
     fn defaults_bind_all_interfaces_on_3000_with_no_tls_no_cors() {
         let d = HttpConfig::default();
@@ -756,7 +784,11 @@ mod tests {
                 .expect_err("a bad IP must abort the boot");
             let msg = err.to_string();
             assert!(msg.contains("TRUSTED_PROXIES"), "{msg}");
-            assert!(msg.contains("10.0.0.oops"), "{msg}");
+            assert!(
+                msg.contains("entry 2 of the list is not an IP address"),
+                "names the entry by its place, not its value: {msg}"
+            );
+            assert!(!msg.contains("10.0.0.oops"), "{msg}");
             Ok(())
         });
     }

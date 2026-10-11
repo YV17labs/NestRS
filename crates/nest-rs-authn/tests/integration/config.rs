@@ -650,14 +650,24 @@ fn algorithms_are_read_by_their_jose_names() {
             && message.contains("names no algorithm"),
         "{message}"
     );
-    for refused in ["none", "rs256", "ES512", "HS256,nope"] {
+    for (refused, entry, name) in [
+        ("none", 1, "none"),
+        ("rs256", 1, "rs256"),
+        ("ES512", 1, "ES512"),
+        ("HS256,nope", 2, "nope"),
+    ] {
         let message = read(refused)
             .err()
             .unwrap_or_else(|| panic!("{refused:?} must fail the boot"))
             .to_string();
         assert!(
-            message.contains(&var_name(AuthnConfig::NAMESPACE, "ALGORITHMS")),
+            message.contains(&var_name(AuthnConfig::NAMESPACE, "ALGORITHMS"))
+                && message.contains(&format!("entry {entry} of the list names an algorithm")),
             "{message}"
+        );
+        assert!(
+            !message.contains(name),
+            "a configured value is described, never quoted: {message}"
         );
     }
     let unset = AuthnConfig::from_env(

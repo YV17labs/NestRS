@@ -126,6 +126,13 @@ three as event fields.** **One event, said once**: a line restates nothing a
 field or the enclosing span carries, and no two layers emit the same event.
 **The formatter escapes every value**, so no field can forge a line.
 
+**A value is described, never quoted** — in a line, an error or a reply
+(`.claude/decisions/payload-never-quoted.md`): a URL is shown through
+`nest_rs_config::endpoint_shown`, a `validator` failure through
+`ConfigError::validation`, a serde failure through `DecodeError`; no sentence
+formats a raw `ValidationErrors`, a serde error or a configured string. Held by
+review: no lint reads a `Display`.
+
 Three deviations from OpenTelemetry's log data model, each deliberate:
 
 - **`actor_id` is a top-level key.** The model's nearest equivalent is the

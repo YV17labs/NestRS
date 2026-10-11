@@ -170,20 +170,15 @@ fn algorithms(env: &ConfigService) -> nest_rs_config::Result<Option<Vec<Algorith
         .split(',')
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(|name| {
+        .enumerate()
+        .map(|(index, name)| {
             // The parser's error says no more than that the name is unknown.
             name.parse::<Algorithm>().ok().ok_or_else(|| {
-                if setting.from_file() {
-                    setting.refuse(format_args!(
-                        "names an algorithm this verifier does not run: use {}",
-                        known()
-                    ))
-                } else {
-                    setting.refuse(format_args!(
-                        "`{name}` is not an algorithm this verifier runs: use {}",
-                        known()
-                    ))
-                }
+                setting.refuse(format_args!(
+                    "entry {} of the list names an algorithm this verifier does not run: use {}",
+                    index + 1,
+                    known()
+                ))
             })
         })
         .collect::<nest_rs_config::Result<Vec<_>>>()

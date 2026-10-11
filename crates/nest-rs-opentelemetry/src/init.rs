@@ -87,7 +87,10 @@ impl OpenTelemetry {
                 target: crate::TARGET,
                 service = %config.service_name,
                 mode = "otlp",
-                endpoint = config.otlp_endpoint.as_deref().unwrap_or("<none>"),
+                endpoint = config
+                    .otlp_endpoint
+                    .as_deref()
+                    .map_or_else(|| "<none>".to_owned(), nest_rs_config::endpoint_shown),
                 sample_ratio = config.trace_sample_ratio,
                 log_format = ?config.log_format,
                 otlp_export = exporters.meter_provider.is_some(),

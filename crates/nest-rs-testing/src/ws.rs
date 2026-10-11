@@ -207,9 +207,10 @@ impl WsSocketBuilder {
                 request.headers_mut().insert(
                     poem::http::HeaderName::from_bytes(name.as_bytes())
                         .with_context(|| format!("`{name}` is not a header name"))?,
-                    value
-                        .parse()
-                        .with_context(|| format!("`{value}` is not a header value"))?,
+                    // A test header is often a credential: named, never quoted.
+                    value.parse().with_context(|| {
+                        format!("header `{name}` holds a value that is not a header value")
+                    })?,
                 );
             }
             match tokio_tungstenite::connect_async(request).await {
@@ -403,4 +404,30 @@ impl WsSocket {
 
 fn close(frame: CloseFrame) -> (CloseCode, String) {
     (u16::from(frame.code).into(), frame.reason.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A header value that cannot be sent is named by its header, never quoted:
+    /// a test header is often `Authorization`.
+    #[tokio::test]
+    async fn a_header_value_that_cannot_be_sent_is_named_by_its_header() {
+        let refused = WsSocketBuilder {
+            url: "ws://127.0.0.1:9/socket".to_owned(),
+            headers: vec![("authorization".to_owned(), "Bearer s3cr3t\n".to_owned())],
+            timeout: DEFAULT_TIMEOUT,
+        }
+        .try_connect()
+        .await
+        .err()
+        .expect("a newline is no header value");
+        let sentence = format!("{refused:#}");
+        assert!(
+            sentence.contains("header `authorization` holds a value that is not a header value"),
+            "{sentence}"
+        );
+        assert!(!sentence.contains("s3cr3t"), "{sentence}");
+    }
 }

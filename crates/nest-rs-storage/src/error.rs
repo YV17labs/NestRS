@@ -46,7 +46,9 @@ pub enum StorageError {
         allow_http_var = ::nest_rs_config::var_name("storage", "ALLOW_HTTP"),
     )]
     PlaintextEndpoint {
-        /// The offending endpoint.
+        /// The offending endpoint, as
+        /// [`endpoint_shown`](nest_rs_config::endpoint_shown) shows it: no
+        /// userinfo, query or fragment.
         endpoint: String,
     },
 }

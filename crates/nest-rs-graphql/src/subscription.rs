@@ -482,7 +482,8 @@ where
                     if !(message.is_text() || message.is_binary()) {
                         continue;
                     }
-                    let mut parsed = serde_json::from_slice::<ClientMessage>(&message.into_bytes());
+                    let mut parsed = serde_json::from_slice::<ClientMessage>(&message.into_bytes())
+                        .map_err(not_a_message);
                     match &mut parsed {
                         Ok(ClientMessage::Start { id, payload }) => {
                             let operation = Operation::of(payload);
@@ -500,6 +501,31 @@ where
     }
 }
 
+/// What a frame that is not a graphql-ws message is refused as.
+const NOT_A_MESSAGE: &str = "not a graphql-ws message";
+
+/// A frame that does not decode, as the engine is handed it: the engine closes
+/// the socket with the error's sentence as the reason, and serde's sentence
+/// quotes the payload it refused.
+fn not_a_message(error: serde_json::Error) -> serde_json::Error {
+    tracing::debug!(
+        target: crate::TARGET,
+        error = %nest_rs_core::DecodeError::new(&error),
+        "graphql-ws frame refused: it does not decode as a protocol message",
+    );
+    <serde_json::Error as nest_rs_core::__private::serde::de::Error>::custom(NOT_A_MESSAGE)
+}
+
+/// RFC 6455 §5.5: a control frame's payload is at most 125 bytes, the close
+/// code taking two of them.
+const CLOSE_REASON_MAX: usize = 123;
+
+/// `reason` cut to [`CLOSE_REASON_MAX`] bytes on a character boundary, so no
+/// engine sentence can make the close frame one the peer must refuse.
+fn close_reason(reason: &str) -> &str {
+    &reason[..reason.floor_char_boundary(CLOSE_REASON_MAX)]
+}
+
 /// Put a Close frame on the wire, then flush — best-effort, since a peer that
 /// has already gone cannot be told anything.
 async fn close_socket(
@@ -508,7 +534,10 @@ async fn close_socket(
     reason: &str,
 ) {
     if let Err(err) = sink
-        .send(Message::Close(Some((code, reason.to_owned()))))
+        .send(Message::Close(Some((
+            code,
+            close_reason(reason).to_owned(),
+        ))))
         .await
     {
         tracing::debug!(
@@ -600,6 +629,27 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn a_close_reason_is_cut_to_what_a_control_frame_carries_on_a_character_boundary() {
+        assert_eq!(close_reason("going away"), "going away");
+        let long = "é".repeat(100);
+        let cut = close_reason(&long);
+        assert!(cut.len() <= CLOSE_REASON_MAX, "{}", cut.len());
+        assert_eq!(cut.len(), 122, "the last whole character before the limit");
+        assert!(long.starts_with(cut));
+    }
+
+    #[test]
+    fn a_frame_that_is_not_a_protocol_message_is_refused_without_its_payload() {
+        let refused = serde_json::from_slice::<ClientMessage>(
+            br#"{"type":"subscribe","id":"1","payload":"sk_live_secret"}"#,
+        )
+        .map_err(not_a_message)
+        .err()
+        .expect("a string is no request payload");
+        assert_eq!(refused.to_string(), NOT_A_MESSAGE);
+    }
 
     /// A panic inside a `Drop` during an unwind aborts the process, and this
     /// `Drop` reaches a `tokio` task-local.

@@ -123,7 +123,7 @@ impl Storage {
         // gates transfers only, so presigning would mint a plaintext signed URL.
         if crate::config::is_plaintext(&self.config.endpoint) && !self.config.allow_http {
             return Err(StorageError::PlaintextEndpoint {
-                endpoint: self.config.endpoint.clone(),
+                endpoint: nest_rs_config::endpoint_shown(&self.config.endpoint),
             });
         }
         // A config handed to `new` skipped `from_env`, and the ranges with it.
@@ -732,6 +732,19 @@ mod tests {
                     .contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP"))
             );
         }
+    }
+
+    /// A hand-built config's endpoint may carry a credential in its
+    /// userinfo; the refusal shows the endpoint without it.
+    #[tokio::test]
+    async fn the_plaintext_refusal_shows_the_endpoint_without_its_userinfo() {
+        let err = client("http://k:s3cr3t@minio:9000", false)
+            .presign_get("k", Duration::from_secs(900))
+            .await
+            .expect_err("a plaintext presigned URL must never be minted")
+            .to_string();
+        assert!(err.contains("http://minio:9000/"), "{err}");
+        assert!(!err.contains("s3cr3t"), "{err}");
     }
 
     #[tokio::test]

@@ -94,7 +94,10 @@ impl OAuthResourceConfig {
                 nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE"),
             )));
         }
-        validate_canonical_uri(resource)?;
+        validate_canonical_uri(
+            resource,
+            &nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE"),
+        )?;
 
         let authorization_servers: Vec<String> = self
             .authorization_servers
@@ -109,18 +112,27 @@ impl OAuthResourceConfig {
                 nest_rs_config::spellings(Self::NAMESPACE, "AUTHORIZATION_SERVERS"),
             )));
         }
-        for issuer in &authorization_servers {
-            validate_canonical_uri(issuer)?;
+        for (index, issuer) in authorization_servers.iter().enumerate() {
+            validate_canonical_uri(
+                issuer,
+                &format!(
+                    "entry {} of {}",
+                    index + 1,
+                    nest_rs_config::spellings(Self::NAMESPACE, "AUTHORIZATION_SERVERS")
+                ),
+            )?;
         }
 
         // `scope` is space-delimited: a space or a quote would split a scope or
         // break out of the quoted challenge parameter.
-        for scope in &self.scopes_supported {
+        for (index, scope) in self.scopes_supported.iter().enumerate() {
             if !is_scope_token(scope) {
                 return Err(AuthError::Failed(format!(
-                    "`{scope}` is not a valid OAuth scope token (RFC 6749 §3.3): the grammar \
-                     is `1*( %x21 / %x23-5B / %x5D-7E )` — printable ASCII excluding space, \
-                     `\"` and `\\`"
+                    "entry {} of {} is not a valid OAuth scope token (RFC 6749 §3.3): the \
+                     grammar is `1*( %x21 / %x23-5B / %x5D-7E )` — printable ASCII excluding \
+                     space, `\"` and `\\`",
+                    index + 1,
+                    nest_rs_config::spellings(Self::NAMESPACE, "SCOPES_SUPPORTED"),
                 )));
             }
         }
@@ -130,20 +142,25 @@ impl OAuthResourceConfig {
         let bearer_methods_supported = if self.bearer_methods_supported.is_empty() {
             vec![BEARER_METHOD_HEADER.to_owned()]
         } else {
-            for method in &self.bearer_methods_supported {
+            let setting = || nest_rs_config::spellings(Self::NAMESPACE, "BEARER_METHODS_SUPPORTED");
+            for (index, method) in self.bearer_methods_supported.iter().enumerate() {
                 if !BEARER_METHODS_DEFINED.contains(&method.as_str()) {
                     return Err(AuthError::Failed(format!(
-                        "`{method}` is not an RFC 9728 §2 bearer method: the defined values \
+                        "entry {} of {} is not an RFC 9728 §2 bearer method: the defined values \
                          are {BEARER_METHODS_DEFINED:?}",
+                        index + 1,
+                        setting(),
                     )));
                 }
                 // `bearer_token` reads only the `Authorization` header, and a client acts
                 // on the document before reaching a handler: refused, not warned.
                 if method != BEARER_METHOD_HEADER {
                     return Err(AuthError::Failed(format!(
-                        "`{method}` is a defined RFC 9728 bearer method, but this framework \
-                         reads a bearer token only from the `Authorization` header — \
+                        "entry {} of {} is the RFC 9728 bearer method `{method}`, but this \
+                         framework reads a bearer token only from the `Authorization` header — \
                          advertising it would tell clients to use a form this server refuses",
+                        index + 1,
+                        setting(),
                     )));
                 }
             }
@@ -199,40 +216,38 @@ fn is_loopback_authority(rest: &str) -> bool {
 }
 
 /// The MCP authorization spec's canonical-URI rules: absolute, with a scheme, no
-/// fragment; a trailing slash is legal but discouraged, so it only warns.
-fn validate_canonical_uri(uri: &str) -> Result<(), AuthError> {
+/// fragment; a trailing slash is legal but discouraged, so it only warns. A
+/// refusal names `setting` and never the URI, which may carry userinfo.
+fn validate_canonical_uri(uri: &str, setting: &str) -> Result<(), AuthError> {
+    let refused =
+        |why: &str| AuthError::Failed(format!("{setting} is not a canonical resource URI: {why}"));
     let Some((scheme, rest)) = uri.split_once("://") else {
-        return Err(AuthError::Failed(format!(
-            "`{uri}` is not a canonical resource URI: it has no scheme (expected \
-             something like https://api.example.com)"
-        )));
+        return Err(refused(
+            "it has no scheme (expected something like https://api.example.com)",
+        ));
     };
     if scheme.is_empty() || rest.is_empty() {
-        return Err(AuthError::Failed(format!(
-            "`{uri}` is not a canonical resource URI: scheme and authority are both required"
-        )));
+        return Err(refused("scheme and authority are both required"));
     }
     // RFC 9728 §1.2: a resource identifier uses the https scheme; loopback is
     // spared for local development.
     if !scheme.eq_ignore_ascii_case("https") && !is_loopback_authority(rest) {
-        return Err(AuthError::Failed(format!(
-            "`{uri}` is not a canonical resource URI: RFC 9728 §1.2 requires the https scheme (http is accepted only on localhost/127.0.0.1/[::1] for local development)"
-        )));
+        return Err(refused(
+            "RFC 9728 §1.2 requires the https scheme (http is accepted only on \
+             localhost/127.0.0.1/[::1] for local development)",
+        ));
     }
     if uri.contains('#') {
-        return Err(AuthError::Failed(format!(
-            "`{uri}` is not a canonical resource URI: a fragment is not allowed"
-        )));
+        return Err(refused("a fragment is not allowed"));
     }
     // These end up inside a quoted `WWW-Authenticate` parameter.
     if uri
         .chars()
         .any(|c| c.is_ascii_control() || matches!(c, '"' | '\\' | ' '))
     {
-        return Err(AuthError::Failed(format!(
-            "`{uri}` is not a canonical resource URI: it contains a space, a quote or a \
-             control character"
-        )));
+        return Err(refused(
+            "it contains a space, a quote or a control character",
+        ));
     }
     if uri.len() > 1 && uri.ends_with('/') {
         tracing::warn!(
@@ -323,6 +338,46 @@ mod tests {
             .into_metadata()
             .expect_err("scope with a space");
         assert!(err.to_string().contains("RFC 6749 §3.3"), "got: {err}");
+    }
+
+    /// A refused value is described by its setting and place, never quoted: a
+    /// resource URI or an issuer may carry userinfo.
+    #[test]
+    fn a_refused_value_is_named_by_its_setting_and_never_quoted() {
+        for (config, setting) in [
+            (
+                valid().with_resource("http://user:s3cr3t@api.example.com"),
+                "RESOURCE",
+            ),
+            (
+                valid().with_authorization_servers([
+                    "https://auth.example.com",
+                    "http://user:s3cr3t@auth.example.com",
+                ]),
+                "AUTHORIZATION_SERVERS",
+            ),
+            (
+                valid().with_scopes_supported(["posts:read", "s3cr3t scope"]),
+                "SCOPES_SUPPORTED",
+            ),
+            (
+                OAuthResourceConfig {
+                    bearer_methods_supported: vec!["s3cr3t".into()],
+                    ..valid()
+                },
+                "BEARER_METHODS_SUPPORTED",
+            ),
+        ] {
+            let err = config.into_metadata().expect_err(setting).to_string();
+            assert!(
+                err.contains(&nest_rs_config::var_name(
+                    OAuthResourceConfig::NAMESPACE,
+                    setting
+                )),
+                "{err}"
+            );
+            assert!(!err.contains("s3cr3t"), "{err}");
+        }
     }
 
     #[test]

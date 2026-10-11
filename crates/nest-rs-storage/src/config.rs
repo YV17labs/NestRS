@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
-    Setting, config,
+    Setting, config, endpoint_shown,
 };
 
 /// How long a call waits for S3's answer by default: under the authentication
@@ -98,7 +98,7 @@ pub struct StorageConfig {
 impl std::fmt::Debug for StorageConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StorageConfig")
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &endpoint_shown(&self.endpoint))
             .field("region", &self.region)
             .field("access_key", &"<redacted>")
             .field("secret_key", &"<redacted>")
@@ -179,17 +179,18 @@ fn resolve_endpoint(
     allow_http: bool,
 ) -> nest_rs_config::Result<String> {
     let allow_http_var = env.var_name("ALLOW_HTTP");
-    let reason = |endpoint: &dyn std::fmt::Display| {
+    let reason = |endpoint: &str| {
         format!(
-            "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false (its \
+            "the plain-http endpoint {} is refused because {allow_http_var} is false (its \
              value in `StorageConfig::default()`, and in `StorageConfig::defaults()` outside a \
              declared development or test profile) — credentials and presigned URLs would travel \
-             unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
+             unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in",
+            endpoint_shown(endpoint)
         )
     };
     match setting {
         Some(setting) if is_plaintext(&setting.value) && !allow_http => {
-            Err(setting.refuse(reason(&setting.shown())))
+            Err(setting.refuse(reason(&setting.value)))
         }
         Some(setting) => Ok(setting.value),
         None if is_plaintext(&base) && !allow_http => {
@@ -550,6 +551,32 @@ mod tests {
             resolve_endpoint(&unset(), None, "  HTTP://x:9000".into(), false).is_err(),
             "the scheme check must not be defeated by case or leading space",
         );
+    }
+
+    /// The endpoint may carry a credential in its userinfo: the refusal shows
+    /// it through `endpoint_shown`, as `Debug` does.
+    #[test]
+    fn a_refused_endpoint_is_shown_without_its_userinfo() {
+        for (setting, base) in [
+            (
+                ConfigService::with_vars("storage", [("ENDPOINT", "http://k:s3cr3t@minio:9000")])
+                    .setting("ENDPOINT")
+                    .expect("reads"),
+                String::new(),
+            ),
+            (None, "http://k:s3cr3t@minio:9000".to_owned()),
+        ] {
+            let refused = resolve_endpoint(&unset(), setting, base, false)
+                .expect_err("plaintext + allow_http=false")
+                .to_string();
+            assert!(refused.contains("http://minio:9000/"), "{refused}");
+            assert!(!refused.contains("s3cr3t"), "{refused}");
+        }
+        let pinned = StorageConfig {
+            endpoint: "https://k:s3cr3t@minio:9000".into(),
+            ..StorageConfig::default()
+        };
+        assert!(!format!("{pinned:?}").contains("s3cr3t"), "{pinned:?}");
     }
 
     #[test]

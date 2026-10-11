@@ -393,6 +393,26 @@ async fn ticks_app<M: nest_rs_core::Module + 'static>() -> (WsApp, Arc<TickResol
     (app, state)
 }
 
+/// A frame that is not a graphql-ws message closes the socket `1002` with a
+/// fixed reason, within what a close frame carries: serde's sentence would
+/// quote the payload.
+#[tokio::test]
+async fn a_frame_that_does_not_decode_closes_the_socket_without_quoting_it() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+
+    socket
+        .send_text(r#"{"type":"subscribe","id":"1","payload":"sk_live_secret"}"#)
+        .await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(u16::from(code), 1002, "§7.4.1 1002: a protocol error");
+    assert!(!reason.contains("sk_live"), "{reason}");
+    assert!(reason.len() <= 123, "{}", reason.len());
+}
+
 #[tokio::test]
 async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
     let logs = LogCapture::install();

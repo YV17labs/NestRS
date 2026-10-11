@@ -244,8 +244,7 @@ impl ConfigService {
     /// [`get`](Self::get), keeping which spelling supplied the value — for a
     /// consumer that judges the value itself. Its refusal is
     /// [`Setting::refuse`], which names the variable the deployment actually
-    /// set, and it quotes the value only through [`Setting::shown`], which never
-    /// repeats what a file held.
+    /// set and never quotes the value.
     ///
     /// A duration's key — one ending in `_SECS` or `_MS` — is refused here and
     /// at every reader built on this one: it is read through
@@ -384,13 +383,9 @@ impl ConfigService {
     }
 
     /// `Err` (naming the variable) when set-but-unparseable — boot-fatal, no
-    /// silent fallback. [`Setting::parse`] words the refusal, so a value read
-    /// from a file is never passed through the parser's reason.
-    pub fn parse<T>(&self, key: &str) -> Result<Option<T>, ConfigError>
-    where
-        T: FromStr,
-        T::Err: std::fmt::Display,
-    {
+    /// silent fallback. [`Setting::parse`] words the refusal, so the value is
+    /// never passed through the parser's reason.
+    pub fn parse<T: FromStr>(&self, key: &str) -> Result<Option<T>, ConfigError> {
         self.setting(key)?
             .map(|setting| setting.parse())
             .transpose()
@@ -415,14 +410,7 @@ impl ConfigService {
         match self.setting(key)? {
             None => Ok(default),
             Some(setting) => nest_rs_core::parse_bool(&setting.value).ok_or_else(|| {
-                if setting.from_file() {
-                    setting.refuse("expected a boolean in the file it names")
-                } else {
-                    setting.refuse(format_args!(
-                        "expected a boolean, got `{}`",
-                        setting.shown()
-                    ))
-                }
+                setting.refuse("expected a boolean (1/0, true/false, yes/no, on/off)")
             }),
         }
     }
@@ -589,30 +577,55 @@ mod tests {
         }
     }
 
-    /// `parse` keeps the parser's reason for an inline value and drops it for
-    /// one read from a file, whose content it may quote.
+    /// `parse` never passes a value through the parser's reason, whose
+    /// sentence may quote it: inline or read from a file alike, the refusal
+    /// names the variable and the type expected.
     #[test]
-    fn parse_never_passes_a_file_value_through_the_parsers_reason() {
+    fn parse_never_passes_a_value_through_the_parsers_reason() {
         figment::Jail::expect_with(|jail| {
             jail.create_file("secret", "hunter2-SECRET")?;
-            let from_file = ConfigService::with_vars("fixture", [("MODE_FILE", "secret")])
-                .parse::<Echoing>("MODE")
-                .unwrap_err()
-                .to_string();
-            assert!(!from_file.contains("hunter2"), "{from_file}");
-            assert!(
-                from_file.contains(&var_name("fixture", "MODE_FILE")),
-                "{from_file}"
-            );
-            assert!(from_file.contains("does not parse as"), "{from_file}");
-
-            let inline = ConfigService::with_vars("fixture", [("MODE", "sideways")])
-                .parse::<Echoing>("MODE")
-                .unwrap_err()
-                .to_string();
-            assert!(inline.contains("unknown value \"sideways\""), "{inline}");
+            for (env, var) in [
+                (
+                    ConfigService::with_vars("fixture", [("MODE_FILE", "secret")]),
+                    var_name("fixture", "MODE_FILE"),
+                ),
+                (
+                    ConfigService::with_vars("fixture", [("MODE", "hunter2-SECRET")]),
+                    var_name("fixture", "MODE"),
+                ),
+            ] {
+                let refused = env.parse::<Echoing>("MODE").unwrap_err().to_string();
+                assert!(!refused.contains("hunter2"), "{refused}");
+                assert!(refused.contains(&var), "{refused}");
+                assert!(refused.contains("does not parse as"), "{refused}");
+            }
             Ok(())
         });
+    }
+
+    /// An inline value is refused as a file's is: by its variable and what was
+    /// expected, never by the value.
+    #[test]
+    fn an_inline_value_is_refused_without_the_value() {
+        let env = ConfigService::with_vars("fixture", [("ON", "s3cr3t"), ("PORT", "s3cr3t")]);
+
+        let flag = env.flag("ON", false).unwrap_err().to_string();
+        assert_eq!(
+            flag,
+            format!(
+                "invalid value for {}: expected a boolean (1/0, true/false, yes/no, on/off)",
+                var_name("fixture", "ON")
+            )
+        );
+
+        let port = env.parse::<u16>("PORT").unwrap_err().to_string();
+        assert_eq!(
+            port,
+            format!(
+                "invalid value for {}: does not parse as u16",
+                var_name("fixture", "PORT")
+            )
+        );
     }
 
     /// A record a structured value lists: a client and the secret it carries.
@@ -682,10 +695,9 @@ mod tests {
         });
     }
 
-    /// A consumer's refusal names the spelling that supplied the value, and
-    /// quotes a file's content only as a placeholder.
+    /// A consumer's refusal names the spelling that supplied the value.
     #[test]
-    fn a_setting_refuses_under_its_spelling_and_shows_a_file_value_as_a_placeholder() {
+    fn a_setting_refuses_under_its_spelling() {
         figment::Jail::expect_with(|jail| {
             jail.create_file("secret", "hunter2-SECRET\n")?;
             let env = ConfigService::with_vars("fixture", [("KEY_FILE", "secret"), ("OTHER", "x")]);
@@ -694,10 +706,7 @@ mod tests {
             assert_eq!(file.value, "hunter2-SECRET");
             assert!(file.from_file());
             assert_eq!(file.var(), var_name("fixture", "KEY_FILE"));
-            let refused = file
-                .refuse(format_args!("`{}` is no good", file.shown()))
-                .to_string();
-            assert!(!refused.contains("hunter2"), "{refused}");
+            let refused = file.refuse("is no good").to_string();
             assert!(
                 refused.contains(&var_name("fixture", "KEY_FILE")),
                 "{refused}"
@@ -707,7 +716,6 @@ mod tests {
             let inline = env.setting("OTHER").unwrap().expect("present");
             assert!(!inline.from_file());
             assert_eq!(inline.var(), var_name("fixture", "OTHER"));
-            assert_eq!(inline.shown().to_string(), "x");
 
             let material = env.material("KEY").unwrap().expect("present");
             assert_eq!(material.var(), var_name("fixture", "KEY_FILE"));

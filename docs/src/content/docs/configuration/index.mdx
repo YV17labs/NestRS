@@ -250,12 +250,15 @@ the two tiers the deployment chooses: either spelling in the process environment
 
 **A value you judge yourself is refused through its `Setting`.** `get` hands
 back the string alone, so a message built around it can only guess which
-spelling was set, and may quote a value a file held. `env.setting("KEY")?` keeps
-both: `setting.refuse(reason)` names the variable the deployment actually set,
-and `setting.shown()` renders the value when it was inline and
-`<the content of the file <PREFIX>_<NS>__KEY_FILE names>` when it was not.
-`env.parse` refuses the same way, and drops the parser's own reason for a value
-read from a file, since that reason may quote its input.
+spelling was set. `env.setting("KEY")?` keeps both: `setting.refuse(reason)`
+names the variable the deployment actually set, and your `reason` says what was
+expected — `is not a valid HTTP header name` — never the value, inline or read
+from a file: a deployment's configuration is somebody's data, and the boot's
+error is logged. `env.parse` refuses the same way, saying the type it expected
+and dropping the parser's own reason, which may quote its input. A URL is shown
+through `nest_rs::config::endpoint_shown`, which keeps its scheme, host, port
+and path and leaves out the userinfo, query and fragment a credential travels
+in.
 
 **A structured value is refused without its content, whichever spelling gave
 it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and

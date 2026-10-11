@@ -44,6 +44,9 @@ otlp = [
 # though it is one of `nest-rs-core`'s default features.
 nest-rs-core = { workspace = true, features = ["logging"] }
 nest-rs-config.workspace = true
+# The OTLP endpoint is parsed once, when the config resolves, by the WHATWG
+# parser the exporter's HTTP client dials through.
+url.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true

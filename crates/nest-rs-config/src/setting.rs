@@ -12,9 +12,10 @@ use crate::error::ConfigError;
 /// One key's value and the variable that supplied it: `<KEY>` when it was
 /// inline, `<KEY>_FILE` when it was read from the file that variable names.
 ///
-/// A consumer judging the value refuses it through [`refuse`](Self::refuse) and
-/// quotes it only through [`shown`](Self::shown), which never repeats what a
-/// file held.
+/// A consumer judging the value refuses it through [`refuse`](Self::refuse),
+/// naming the variable and what it expected, and never quoting the value,
+/// inline or read from a file: a deployment's configuration is somebody's data,
+/// and a refusal is logged.
 ///
 /// `Debug` shows the variable and never the value.
 #[derive(Clone)]
@@ -48,8 +49,7 @@ impl<T> Setting<T> {
     }
 
     /// The boot error refusing this value for `reason`, naming the variable that
-    /// supplied it. `reason` must not quote the value; quote it through
-    /// [`shown`](Setting::shown).
+    /// supplied it. `reason` says what was expected and must not quote the value.
     pub fn refuse(&self, reason: impl fmt::Display) -> ConfigError {
         ConfigError::parse(self.var.clone(), reason.to_string())
     }
@@ -59,23 +59,18 @@ impl Setting {
     /// The value parsed as `T`, refused under this setting's variable when it
     /// does not parse.
     ///
-    /// The parser's own reason is kept for an inline value and dropped for one
-    /// read from a file: `T::Err`'s `Display` is free to quote its input, and a
-    /// file is where a secret is given.
-    pub fn parse<T>(&self) -> Result<T, ConfigError>
-    where
-        T: FromStr,
-        T::Err: fmt::Display,
-    {
-        self.value.parse::<T>().map_err(|e| {
-            if self.from_file {
-                self.refuse(format_args!(
-                    "does not parse as {}",
-                    std::any::type_name::<T>()
-                ))
-            } else {
-                self.refuse(e)
-            }
+    /// The refusal names `T` and drops the parser's own reason, inline or from
+    /// a file alike: `T::Err`'s `Display` is free to quote its input.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the parser's error may quote the value; the refusal names the type instead"
+    )]
+    pub fn parse<T: FromStr>(&self) -> Result<T, ConfigError> {
+        self.value.parse::<T>().map_err(|_| {
+            self.refuse(format_args!(
+                "does not parse as {}",
+                std::any::type_name::<T>()
+            ))
         })
     }
 
@@ -89,24 +84,6 @@ impl Setting {
             var: self.var.clone(),
             source: DecodeError::new(&error),
         })
-    }
-
-    /// The value as a refusal may quote it: verbatim when it was inline, and a
-    /// fixed placeholder naming the variable when it was read from a file.
-    pub fn shown(&self) -> impl fmt::Display + '_ {
-        Shown(self)
-    }
-}
-
-struct Shown<'a>(&'a Setting);
-
-impl fmt::Display for Shown<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.from_file {
-            write!(f, "<the content of the file {} names>", self.0.var)
-        } else {
-            f.write_str(&self.0.value)
-        }
     }
 }
 

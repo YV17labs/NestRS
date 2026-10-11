@@ -215,8 +215,7 @@ impl HttpSecurityHeaders {
 }
 
 /// Boot-fatal check that a non-empty header value parses as an HTTP header
-/// value, naming the offending env var. Only a value pinned in code reaches
-/// this refusal, so quoting it leaks nothing the environment held.
+/// value, naming the offending env var and never the value.
 #[expect(
     clippy::map_err_ignore,
     reason = "InvalidHeaderValue carries nothing; the refusal names the variable"
@@ -224,10 +223,7 @@ impl HttpSecurityHeaders {
 fn validate_header_value(env: &ConfigService, key: &str, value: &Option<String>) -> Result<()> {
     if let Some(v) = non_empty(value) {
         HeaderValue::from_str(&v).map_err(|_| {
-            ConfigError::parse(
-                env.var_name(key),
-                format!("`{v}` is not a valid HTTP header value"),
-            )
+            ConfigError::parse(env.var_name(key), "is not a valid HTTP header value")
         })?;
     }
     Ok(())
@@ -257,10 +253,7 @@ fn override_header(
         )));
     }
     if HeaderValue::from_str(value).is_err() {
-        return Err(setting.refuse(format_args!(
-            "`{}` is not a valid HTTP header value",
-            setting.shown()
-        )));
+        return Err(setting.refuse("is not a valid HTTP header value"));
     }
     Ok(Some(setting.value))
 }

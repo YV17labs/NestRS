@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, env_var};
+use nest_rs_config::{
+    Bound, ConfigError, ConfigService, DurationBounds, Floor, endpoint_shown, env_var, var_name,
+};
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_core::parse_bool;
@@ -38,7 +40,10 @@ pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds::secs(
 /// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,
 /// METRIC_INTERVAL_SECS}` (see [`EnvPrefix`]). The OTel exporter is wired only
 /// when `otlp_endpoint` is set.
-#[derive(Clone, Debug)]
+///
+/// `Debug` shows the endpoint through [`endpoint_shown`]: its userinfo and
+/// query may carry a collector's credential.
+#[derive(Clone)]
 pub struct OpenTelemetryConfig {
     /// `service.name` on every span, metric and log; defaults to the value passed
     /// to [`new`](Self::new).
@@ -66,6 +71,41 @@ pub struct OpenTelemetryConfig {
     /// How often the `PeriodicReader` flushes metrics to the collector; defaults to
     /// the OTel SDK's own 60 s.
     pub metric_interval: Duration,
+}
+
+impl std::fmt::Debug for OpenTelemetryConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenTelemetryConfig")
+            .field("service_name", &self.service_name)
+            .field("service_version", &self.service_version)
+            .field("deployment_environment", &self.deployment_environment)
+            .field("service_instance_id", &self.service_instance_id)
+            .field("log_filter", &self.log_filter)
+            .field("log_format", &self.log_format)
+            .field("log_source_location", &self.log_source_location)
+            .field(
+                "otlp_endpoint",
+                &self.otlp_endpoint.as_deref().map(endpoint_shown),
+            )
+            .field("trace_sample_ratio", &self.trace_sample_ratio)
+            .field("metric_interval", &self.metric_interval)
+            .finish()
+    }
+}
+
+/// The OTLP endpoint, parsed: a value that does not parse is refused naming
+/// `var`, the variable that sets it, and never quoting it.
+pub(crate) fn otlp_endpoint(raw: &str, var: &str) -> Result<url::Url, ConfigError> {
+    url::Url::parse(raw.trim())
+        .map_err(|error| ConfigError::parse(var, format!("does not parse as a URL: {error}")))
+}
+
+/// The OTLP endpoint's variable, and the field a config built in code sets.
+pub(crate) fn otlp_endpoint_setting() -> String {
+    format!(
+        "{}, or `OpenTelemetryConfig::otlp_endpoint` in code",
+        var_name(NAMESPACE, "OTLP_ENDPOINT")
+    )
 }
 
 /// Report a set-but-unparseable **logging-family** variable on stderr, keeping
@@ -138,7 +178,13 @@ impl OpenTelemetryConfig {
             }
         }
 
-        cfg.otlp_endpoint = env.get("OTLP_ENDPOINT")?;
+        cfg.otlp_endpoint = match env.setting("OTLP_ENDPOINT")? {
+            Some(setting) => {
+                otlp_endpoint(&setting.value, setting.var())?;
+                Some(setting.value)
+            }
+            None => None,
+        };
         if let Some(setting) = env.setting("SAMPLE_RATIO")? {
             let ratio = setting.parse::<f64>()?;
             // `NaN` parses as an `f64` and survives `clamp`.
@@ -317,6 +363,33 @@ mod tests {
             assert_eq!(cfg.trace_sample_ratio, 1.0);
             Ok(())
         });
+    }
+
+    /// The endpoint may carry a collector's credential in its userinfo: a
+    /// refusal names the variable, and `Debug` shows the endpoint without it.
+    #[test]
+    fn an_endpoint_is_refused_and_shown_without_its_value() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                var_name("opentelemetry", "OTLP_ENDPOINT"),
+                "https://u:s3cr3t@[::1",
+            );
+            let refused = OpenTelemetryConfig::from_env("svc")
+                .expect_err("an endpoint that does not parse")
+                .to_string();
+            assert!(
+                refused.contains(&var_name("opentelemetry", "OTLP_ENDPOINT"))
+                    && refused.contains("does not parse as a URL"),
+                "{refused}"
+            );
+            assert!(!refused.contains("s3cr3t"), "{refused}");
+            Ok(())
+        });
+        let config =
+            OpenTelemetryConfig::new("svc").with_otlp_endpoint("https://u:s3cr3t@otel:4318");
+        let debug = format!("{config:?}");
+        assert!(debug.contains("https://otel:4318/"), "{debug}");
+        assert!(!debug.contains("s3cr3t"), "{debug}");
     }
 
     #[test]

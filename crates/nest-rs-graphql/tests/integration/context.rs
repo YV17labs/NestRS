@@ -371,3 +371,42 @@ async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_an
     assert!(!message.contains("sk_live"), "without the value: {message}");
     assert!(body.get("data").is_none(), "nothing executed: {body}");
 }
+
+/// A multipart request whose `map` part is not a map of files: serde's sentence
+/// would quote the part.
+#[tokio::test]
+async fn a_multipart_part_that_does_not_decode_is_answered_without_its_value() {
+    let app = TestApp::builder()
+        .module::<GraphqlTestModule>()
+        .build()
+        .await
+        .expect("boots");
+    let body = "--nestrs\r\n\
+        content-disposition: form-data; name=\"operations\"\r\n\r\n\
+        {\"query\":\"{ tag }\"}\r\n\
+        --nestrs\r\n\
+        content-disposition: form-data; name=\"map\"\r\n\r\n\
+        {\"0\":\"sk_live_secret\"}\r\n\
+        --nestrs--\r\n";
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header("content-type", "multipart/form-data; boundary=nestrs")
+        .body(body)
+        .send()
+        .await;
+
+    resp.assert_status(poem::http::StatusCode::BAD_REQUEST);
+    let body = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a response body");
+    assert!(!body.contains("sk_live"), "{body}");
+    assert!(
+        body.contains("the `map` part: invalid type: a string"),
+        "{body}"
+    );
+}

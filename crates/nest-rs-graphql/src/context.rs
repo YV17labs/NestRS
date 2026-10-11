@@ -307,7 +307,7 @@ async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchReques
             .map(|batch| batch.0)
             .map_err(|refusal| {
                 let reason = match refusal.downcast_ref::<async_graphql::ParseRequestError>() {
-                    Some(parse) => nest_rs_core::error_message(parse),
+                    Some(parse) => multipart_refusal(parse),
                     None => UNREADABLE.to_owned(),
                 };
                 refused(&reason, refusal.status())
@@ -326,6 +326,30 @@ async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchReques
 
 /// What a body that failed to read is said as; the body cap answers `413` itself.
 const UNREADABLE: &str = "the request body could not be read";
+
+/// Why a multipart body is not a GraphQL request, read by variant: the
+/// `operations` and `map` parts' decoders wrap serde's sentence, which quotes
+/// the part; every other variant's own sentence is fixed.
+fn multipart_refusal(parse: &async_graphql::ParseRequestError) -> String {
+    use async_graphql::ParseRequestError as Refused;
+
+    fn part(name: &str, source: &(dyn std::error::Error + Send + Sync + 'static)) -> String {
+        match source.downcast_ref::<serde_json::Error>() {
+            Some(error) => format!(
+                "the `{name}` part: {}",
+                nest_rs_core::DecodeError::new(error)
+            ),
+            None => format!("the `{name}` part does not decode"),
+        }
+    }
+
+    match parse {
+        Refused::InvalidRequest(source) => part("operations", source.as_ref()),
+        Refused::InvalidFilesMap(source) => part("map", source.as_ref()),
+        Refused::Io(_) => UNREADABLE.to_owned(),
+        fixed => fixed.to_string(),
+    }
+}
 
 /// Why `bytes` is not a GraphQL request, as the shape it was decodes it.
 fn what_it_is_not(bytes: &[u8]) -> String {

@@ -7,12 +7,12 @@ use std::any::TypeId;
 use std::cell::Cell;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::task::{Context, Poll, Waker};
 
 use async_trait::async_trait;
 
-use crate::dispatch::{GuardStage, Tail};
+use crate::dispatch::{BoxFuture, GuardStage, Tail};
 use crate::handler::{Handler, HandlerDeclaration, MetaLevels, Posture, declare_handler};
 use crate::layer::Layer;
 use crate::operation_log::{__private::declare_unit, Kind, Unit};
@@ -58,16 +58,16 @@ pub(crate) static RUN: Handler = declare_handler(HandlerDeclaration {
     meta: MetaLevels::default,
 });
 
-/// What ran, in order, as each layer wrote it.
+/// The fake edge's view: what ran, in order, as each layer of the unit wrote
+/// it.
 #[derive(Default)]
-pub(crate) struct Trail(Mutex<Vec<String>>);
+pub(crate) struct TrailView(Mutex<Vec<String>>);
 
-impl Trail {
-    pub(crate) fn push(&self, step: impl Into<String>) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(step.into());
+impl UnitView for TrailView {}
+
+impl TrailView {
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
     pub(crate) fn steps(&self) -> Vec<String> {
@@ -78,25 +78,13 @@ impl Trail {
     }
 }
 
-/// The fake edge's view: the trail every layer of the unit writes to.
-pub(crate) struct TrailView(pub(crate) Arc<Trail>);
-
-impl UnitView for TrailView {}
-
-impl TrailView {
-    pub(crate) fn new() -> Self {
-        Self(Arc::default())
-    }
-
-    pub(crate) fn steps(&self) -> Vec<String> {
-        self.0.steps()
-    }
-}
-
 /// Write `step` to the trail of the unit `cx` describes.
 pub(crate) fn record(cx: &UnitContext<'_>, step: impl Into<String>) {
     if let Some(view) = cx.switch_to::<TrailView>() {
-        view.0.push(step);
+        view.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(step.into());
     }
 }
 
@@ -163,10 +151,7 @@ pub(crate) struct RecordingGuards {
 pub(crate) struct Refused;
 
 impl GuardStage for RecordingGuards {
-    fn check<'a>(
-        &'a self,
-        cx: &'a mut UnitContext<'_>,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), Failure>> + Send + 'a>> {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
             record(cx, "guards");
             if self.admit {

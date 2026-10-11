@@ -5,12 +5,11 @@
 use std::any::{TypeId, type_name};
 use std::error::Error;
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::dispatch::BoxFuture;
 use crate::layer::Layer;
 use crate::layer_chain::__private::ResolvedLayer;
 use crate::layer_chain::{GlobalSpecs, LayerSpec};
@@ -159,7 +158,7 @@ pub(crate) async fn catch(
 /// `exception_filter` is private: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
-    use super::{Catch, Caught, ExceptionFilter, Failure, Future, Layer, Pin, UnitContext};
+    use super::{BoxFuture, Catch, Caught, ExceptionFilter, Failure, Layer, UnitContext};
 
     /// An [`ExceptionFilter`] behind its exception type, as a site holds it.
     pub trait ErasedExceptionFilter: Layer {
@@ -169,7 +168,7 @@ pub(crate) mod __private {
             &'a self,
             failure: &'a Failure,
             cx: &'a mut UnitContext<'_>,
-        ) -> Option<Pin<Box<dyn Future<Output = Caught> + Send + 'a>>>;
+        ) -> Option<BoxFuture<'a, Caught>>;
     }
 
     impl<F: ExceptionFilter> ErasedExceptionFilter for F {
@@ -177,7 +176,7 @@ pub(crate) mod __private {
             &'a self,
             failure: &'a Failure,
             cx: &'a mut UnitContext<'_>,
-        ) -> Option<Pin<Box<dyn Future<Output = Caught> + Send + 'a>>> {
+        ) -> Option<BoxFuture<'a, Caught>> {
             let exception = F::Exception::__find(failure)?;
             Some(self.catch(exception, cx))
         }

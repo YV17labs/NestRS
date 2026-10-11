@@ -21,7 +21,7 @@ use crate::site::{Shape, UnitChains};
 use crate::unit_context::{UnitContext, take_pending};
 
 /// A future the pipeline holds behind a box.
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// What an edge runs last: its pipes, the handler, the posture's mask and the
 /// reply written into its view.
@@ -203,12 +203,11 @@ mod tests {
             .unwrap_or_else(|unresolved| panic!("the site composes: {unresolved}"))
     }
 
-    async fn run(chains: &UnitChains, tail: &mut RecordingTail) -> (Outcome, Vec<String>) {
+    async fn run<T: Tail>(chains: &UnitChains, tail: &mut T) -> (Outcome, Vec<String>) {
         let mut view = TrailView::new();
-        let trail = Arc::clone(&view.0);
         let mut cx = new_unit_context(&SEND, &mut view, None, None);
         let outcome = dispatch(&mut cx, chains, tail).await;
-        (outcome, trail.steps())
+        (outcome, view.steps())
     }
 
     #[tokio::test]
@@ -421,12 +420,10 @@ mod tests {
                 class_gate: None,
             },
         );
-        let mut view = TrailView::new();
-        let mut cx = new_unit_context(&SEND, &mut view, None, None);
-        let outcome = dispatch(&mut cx, &chains, &mut Reading).await;
+        let (outcome, steps) = run(&chains, &mut Reading).await;
         assert!(outcome.is_ok());
         assert_eq!(
-            view.steps(),
+            steps,
             [
                 "inside next: Some(Attached(\"by the interceptor\"))",
                 "after next: None",
@@ -498,12 +495,9 @@ mod tests {
             ),
             (false, vec!["after next: None"]),
         ] {
-            let chains = at_the_unit_stage(admit);
-            let mut view = TrailView::new();
-            let mut cx = new_unit_context(&SEND, &mut view, None, None);
-            let outcome = dispatch(&mut cx, &chains, &mut Reading).await;
+            let (outcome, steps) = run(&at_the_unit_stage(admit), &mut Reading).await;
             assert_eq!(outcome.is_ok(), admit);
-            assert_eq!(view.steps(), expected, "admitted: {admit}");
+            assert_eq!(steps, expected, "admitted: {admit}");
         }
     }
 

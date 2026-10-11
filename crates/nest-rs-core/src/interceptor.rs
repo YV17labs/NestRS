@@ -206,13 +206,7 @@ impl<'a> Next<'a> {
 
     async fn proceed(self, cx: &mut UnitContext<'_>) -> Outcome {
         match self.links.split_first() {
-            Some((link, links)) => {
-                let next = Next {
-                    links,
-                    rest: self.rest,
-                };
-                call_link(link, cx, next).await
-            }
+            Some((link, links)) => call_link(link, cx, Next::new(links, self.rest)).await,
             None => match self.rest {
                 Rest::Unit { chains, tail } => after_unit_stage(cx, chains, tail).await,
                 Rest::Tail(tail) => tail.call_boxed(cx).await,
@@ -222,6 +216,9 @@ impl<'a> Next<'a> {
 }
 
 /// Run the handler stage: `links` outermost first, then the tail.
+///
+/// Not `Next::proceed`: the unit stage's future holds this one, so holding
+/// that one here would make it infinitely sized (E0733).
 pub(crate) async fn run_handler_stage(
     cx: &mut UnitContext<'_>,
     links: &[ResolvedLayer<dyn Interceptor>],
@@ -353,7 +350,7 @@ pub(crate) fn module_interceptors(
     stage: __private::InterceptorStage,
 ) -> Vec<&LayerSpec<dyn Interceptor>> {
     let order = container.get::<ProviderOrder>();
-    let mut found: Vec<(usize, &LayerSpec<dyn Interceptor>)> = container
+    let mut found: Vec<&LayerSpec<dyn Interceptor>> = container
         .metadata_entries(TypeId::of::<__private::InterceptorRegistration>())
         .into_iter()
         .flatten()
@@ -363,14 +360,9 @@ pub(crate) fn module_interceptors(
                 .downcast_ref::<__private::InterceptorRegistration>()?;
             (registration.stage == stage).then_some(&registration.spec)
         })
-        // Registration order where the container records no declaration order.
-        .map(|spec| {
-            (
-                order.as_ref().map_or(0, |order| order.rank(spec.type_id)),
-                spec,
-            )
-        })
         .collect();
-    found.sort_by_key(|(rank, _)| *rank);
-    found.into_iter().map(|(_, spec)| spec).collect()
+    // Stable: registration order where the container records no declaration
+    // order.
+    found.sort_by_key(|spec| order.as_ref().map_or(0, |order| order.rank(spec.type_id)));
+    found
 }

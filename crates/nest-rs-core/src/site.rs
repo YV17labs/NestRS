@@ -229,7 +229,12 @@ impl UnitChains {
         let bound = (declared.layers)();
 
         let unit_stage = if global.unit_stage {
-            let mut stage = resolve_modules(container, InterceptorStage::Unit, &label)?;
+            let mut stage = resolve_all(
+                container,
+                module_interceptors(container, InterceptorStage::Unit),
+                LayerSite::Global,
+                &label,
+            )?;
             stage.retain(|entry| entry.layer.serves(unit));
             // Stable: import order breaks a tie.
             stage.sort_by_key(|entry| entry.layer.priority());
@@ -241,22 +246,23 @@ impl UnitChains {
         let mut global_interceptors = Vec::new();
         if global.interceptors {
             global_interceptors.extend(resolve_global_layers::<GlobalInterceptors>(container));
-            global_interceptors.extend(resolve_modules(
+            global_interceptors.extend(resolve_all(
                 container,
-                InterceptorStage::Handler,
+                module_interceptors(container, InterceptorStage::Handler),
+                LayerSite::Global,
                 &label,
             )?);
             global_interceptors.retain(|entry| entry.layer.serves(unit));
         }
         let mut handler_stage = compose_chain(
             global_interceptors,
-            resolve_bound(
+            resolve_all(
                 container,
                 bound.host_interceptors.iter().map(|spec| &spec.0),
                 LayerSite::Host,
                 &label,
             )?,
-            resolve_bound(
+            resolve_all(
                 container,
                 bound.method_interceptors.iter().map(|spec| &spec.0),
                 LayerSite::Method,
@@ -280,13 +286,13 @@ impl UnitChains {
         }
         let mut exception_filters = compose_chain(
             global_filters,
-            resolve_bound(
+            resolve_all(
                 container,
                 bound.host_exception_filters.iter().map(|spec| &spec.0),
                 LayerSite::Host,
                 &label,
             )?,
-            resolve_bound(
+            resolve_all(
                 container,
                 bound.method_exception_filters.iter().map(|spec| &spec.0),
                 LayerSite::Method,
@@ -330,31 +336,27 @@ impl UnitChains {
     }
 
     fn log_composed(&self, site: &str) {
-        let names = |chain: &[ResolvedLayer<dyn Interceptor>]| {
-            chain
-                .iter()
-                .map(|entry| crate::type_name::shorten(entry.name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let filters = self
-            .exception_filters
-            .iter()
-            .map(|entry| crate::type_name::shorten(entry.name))
-            .collect::<Vec<_>>()
-            .join(", ");
         tracing::trace!(
             target: crate::target::LAYERS,
             site,
             shape = ?self.shape,
-            unit_stage = names(&self.unit_stage),
+            unit_stage = joined_names(&self.unit_stage),
             guard_stage = self.guard_stage.is_some(),
             class_gate = self.class_gate.is_some(),
-            exception_filters = filters,
-            handler_stage = names(&self.handler_stage),
+            exception_filters = joined_names(&self.exception_filters),
+            handler_stage = joined_names(&self.handler_stage),
             "site composed",
         );
     }
+}
+
+/// A chain's layers as a log line names them, in the order they run.
+fn joined_names<L: ?Sized>(chain: &[ResolvedLayer<L>]) -> String {
+    chain
+        .iter()
+        .map(|entry| crate::type_name::shorten(entry.name))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The site as a boot error names it: the method on its host, or the address
@@ -367,21 +369,9 @@ fn site_label(handler: &Handler) -> String {
     }
 }
 
-/// The interceptors modules brought for `stage`, as global entries in import
-/// order.
-fn resolve_modules(
-    container: &Container,
-    stage: InterceptorStage,
-    site: &str,
-) -> Result<Vec<ResolvedLayer<dyn Interceptor>>, UnresolvedLayerError> {
-    module_interceptors(container, stage)
-        .into_iter()
-        .map(|spec| resolve(container, spec, LayerSite::Global, site))
-        .collect()
-}
-
-/// What a site's decorators bound at `source`, every one resolved.
-fn resolve_bound<'s, L: ?Sized + 's>(
+/// Every spec of `specs`, resolved as an entry from `source`; the first that
+/// does not resolve refuses the site.
+fn resolve_all<'s, L: ?Sized + 's>(
     container: &Container,
     specs: impl IntoIterator<Item = &'s LayerSpec<L>>,
     source: LayerSite,
@@ -389,28 +379,21 @@ fn resolve_bound<'s, L: ?Sized + 's>(
 ) -> Result<Vec<ResolvedLayer<L>>, UnresolvedLayerError> {
     specs
         .into_iter()
-        .map(|spec| resolve(container, spec, source, site))
+        .map(|spec| {
+            let layer = spec
+                .resolve(container)
+                .ok_or_else(|| UnresolvedLayerError {
+                    layer: spec.name,
+                    site: site.to_owned(),
+                })?;
+            Ok(ResolvedLayer {
+                type_id: spec.type_id,
+                name: spec.name,
+                source,
+                layer,
+            })
+        })
         .collect()
-}
-
-fn resolve<L: ?Sized>(
-    container: &Container,
-    spec: &LayerSpec<L>,
-    source: LayerSite,
-    site: &str,
-) -> Result<ResolvedLayer<L>, UnresolvedLayerError> {
-    let layer = spec
-        .resolve(container)
-        .ok_or_else(|| UnresolvedLayerError {
-            layer: spec.name,
-            site: site.to_owned(),
-        })?;
-    Ok(ResolvedLayer {
-        type_id: spec.type_id,
-        name: spec.name,
-        source,
-        layer,
-    })
 }
 
 /// Say once per process, at `debug`, that an interceptor listed at the handler

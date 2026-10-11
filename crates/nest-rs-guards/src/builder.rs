@@ -1,10 +1,5 @@
-//! Extension traits that add the global Layer-System APIs to
-//! [`AppBuilder`]:
-//!
-//! - [`AppBuilderGuardsExt::use_guards_global`] — register guards once,
-//!   applied to every transport.
-//! - [`AppBuilderPipesExt::use_pipes_global`] — register
-//!   request-body pipes once, applied to every JSON HTTP handler.
+//! [`AppBuilderGuardsExt::use_guards_global`] — register guards once, applied
+//! to every transport.
 
 use nest_rs_core::__private::{ResolvedLayer, check_specs_resolvable};
 use nest_rs_core::AppBuilder;
@@ -19,13 +14,11 @@ use crate::dispatch::GlobalPoolMcpGuard;
 use crate::dispatch::deny_http;
 #[cfg(feature = "graphql")]
 use crate::dispatch::{GlobalPoolFederationGuard, GlobalPoolOperationGuard};
-use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
+use crate::registry::{GuardSpec, GuardSpecs};
 #[cfg(feature = "graphql")]
-use nest_rs_graphql::__private::{FallbackOperationGuard, FederationGate, GraphqlVariablePipe};
+use nest_rs_graphql::__private::{FallbackOperationGuard, FederationGate};
 #[cfg(feature = "mcp")]
 use nest_rs_mcp::__private::FallbackMcpGuard;
-#[cfg(feature = "ws")]
-use nest_rs_ws::__private::WsDataPipe;
 
 /// Adds `.use_guards_global(...)` to [`AppBuilder`].
 ///
@@ -117,74 +110,6 @@ impl AppBuilderGuardsExt for AppBuilder {
     }
 }
 
-/// Adds `.use_pipes_global(...)` to [`AppBuilder`]. Each pipe runs before
-/// every JSON HTTP handler; per-route opt-out via `#[no_pipes]`.
-pub trait AppBuilderPipesExt: Sized {
-    /// Register `specs` as the global pipe pool — run before every JSON HTTP
-    /// handler unless a route opts out with `#[no_pipes]`.
-    fn use_pipes_global<I>(self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = PipeSpec>;
-}
-
-impl AppBuilderPipesExt for AppBuilder {
-    fn use_pipes_global<I>(self, specs: I) -> Self
-    where
-        I: IntoIterator<Item = PipeSpec>,
-    {
-        let builder = self.provide(PipeSpecs(specs.into_iter().collect()));
-        // Global pipes over `/graphql` operation variables; the endpoint holds
-        // only the fn pointer.
-        #[cfg(feature = "graphql")]
-        let builder = builder.provide(GraphqlVariablePipe(run_graphql_variable_pipes));
-        // WS per-message data pipes, folded over `data` after guards, before dispatch.
-        #[cfg(feature = "ws")]
-        let builder = builder.provide(WsDataPipe(run_ws_data_pipes));
-        builder.provide_meta(HttpBootCheck::new(|container| {
-            check_specs_resolvable::<PipeSpecs>(
-                container,
-                "pipe",
-                "an unresolvable global pipe would silently drop its edge validation",
-            )
-        }))
-    }
-}
-
-/// The seed behind [`GraphqlVariablePipe`]: fold every registered global pipe's
-/// `transform_graphql_variables` over an operation's variables.
-#[cfg(feature = "graphql")]
-fn run_graphql_variable_pipes(
-    container: &nest_rs_core::Container,
-    value: &mut serde_json::Value,
-) -> std::result::Result<(), nest_rs_pipes::PipeError> {
-    if let Some(specs) = container.get::<PipeSpecs>() {
-        for spec in &specs.0 {
-            if let Some(pipe) = spec.resolve(container) {
-                pipe.transform_graphql_variables(value)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The seed behind [`WsDataPipe`]: fold every registered global pipe's
-/// `transform_ws_data` over a message's `data`.
-#[cfg(feature = "ws")]
-fn run_ws_data_pipes(
-    container: &nest_rs_core::Container,
-    event: &str,
-    value: &mut serde_json::Value,
-) -> std::result::Result<(), nest_rs_pipes::PipeError> {
-    if let Some(specs) = container.get::<PipeSpecs>() {
-        for spec in &specs.0 {
-            if let Some(pipe) = spec.resolve(container) {
-                pipe.transform_ws_data(event, value)?;
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Runs the composed global guard chain at a `Guarded` self-mounted endpoint's
 /// edge, applied through `SelfMountGuardWrap`. Resolved at configure time, so a
 /// broken chain surfaces at boot.
@@ -205,64 +130,5 @@ impl poem::Endpoint for SelfMountGuarded {
             }
         }
         self.inner.call(req).await
-    }
-}
-
-#[cfg(all(test, feature = "ws"))]
-mod tests {
-    use super::*;
-    use nest_rs_core::{Container, Layer};
-    use nest_rs_pipes::{GlobalPipe, PipeError};
-    use serde_json::{Value, json};
-
-    use crate::registry::pipe;
-
-    /// Uppercases `data.msg`, and rejects the `"boom"` event — exercises both the
-    /// transform and the error path of the WS data-pipe bridge.
-    #[derive(Default)]
-    struct WsUpcase;
-
-    impl Layer for WsUpcase {}
-
-    impl GlobalPipe for WsUpcase {
-        fn transform_ws_data(&self, event: &str, value: &mut Value) -> Result<(), PipeError> {
-            if event == "boom" {
-                return Err(PipeError::new("no boom allowed"));
-            }
-            if let Some(msg) = value.get("msg").and_then(Value::as_str) {
-                let upper = msg.to_uppercase();
-                value["msg"] = Value::String(upper);
-            }
-            Ok(())
-        }
-    }
-
-    // The full WS bridge, short of the trivial call from `handle_text`.
-    #[test]
-    fn ws_data_pipe_bridge_folds_transform_ws_data() {
-        let container = Container::builder()
-            .provide(WsUpcase)
-            .provide(PipeSpecs(vec![pipe::<WsUpcase>()]))
-            .provide(nest_rs_ws::__private::WsDataPipe(run_ws_data_pipes))
-            .build();
-
-        let fold = nest_rs_ws::__private::resolve_ws_data_pipe(&container)
-            .expect("a bridge is registered");
-
-        let mut data = json!({ "msg": "hi" });
-        fold("chat", &mut data).expect("the transform runs");
-        assert_eq!(data["msg"], "HI", "the pipe uppercased the message");
-
-        let mut data = json!({ "msg": "x" });
-        let Err(err) = fold("boom", &mut data) else {
-            panic!("the `boom` event must be rejected");
-        };
-        assert_eq!(err.message(), "no boom allowed");
-    }
-
-    #[test]
-    fn no_bridge_means_no_fold() {
-        let container = Container::builder().build();
-        assert!(nest_rs_ws::__private::resolve_ws_data_pipe(&container).is_none());
     }
 }

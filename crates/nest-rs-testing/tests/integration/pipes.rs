@@ -4,9 +4,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::pipe;
 use nest_rs_http::{controller, routes};
-use nest_rs_pipes::{GlobalPipe, PipeError};
+use nest_rs_pipes::{GlobalPipe, PipeError, pipe};
 use nest_rs_testing::TestApp;
 use poem::http::StatusCode;
 use poem::web::Json;

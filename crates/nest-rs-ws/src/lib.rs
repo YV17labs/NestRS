@@ -165,7 +165,7 @@ pub use envelope::{
     ReplyValueFallback, WsEnvelope, WsError, WsReply,
 };
 pub use error::WsScopeError;
-pub use gateway::{Gateway, GatewayEndpoint, WsDataFold, gateway_endpoint};
+pub use gateway::{Gateway, GatewayEndpoint, gateway_endpoint};
 pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::{WsModule, WsSetup};
 pub use namespace::WsNamespaces;
@@ -178,7 +178,6 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::gateway::{WsDataPipe, resolve_ws_data_pipe};
     pub use crate::namespace::WsNamespaceEntry;
 }
 

@@ -15,7 +15,7 @@ use nest_rs_core::{Container, Layer};
 use nest_rs_http::BodyError;
 use nest_rs_http::poem::error::ReadBodyError;
 use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
-use nest_rs_pipes::GlobalPipe;
+use nest_rs_pipes::{GlobalPipe, PipeSpecs};
 use serde_json::Value;
 
 use crate::dispatch::denial_convert::{denial_to_http_response, deny_http};
@@ -23,7 +23,6 @@ use crate::dispatch::scoped_spec::{
     ScopedGuardSpec, ScopedPipeSpec, report_unresolved, resolve_global_guards, resolve_scoped,
 };
 use crate::dispatch::validate::validate_guard_chain;
-use crate::registry::PipeSpecs;
 use crate::{Denial, Guard};
 
 /// HTTP per-route shaper: the deduped guard + pipe chains, wrapped around the

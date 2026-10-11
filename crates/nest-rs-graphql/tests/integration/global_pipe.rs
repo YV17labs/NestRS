@@ -4,9 +4,8 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::pipe;
 use nest_rs_http::HttpTransport;
-use nest_rs_pipes::{GlobalPipe, PipeError};
+use nest_rs_pipes::{GlobalPipe, PipeError, pipe};
 use nest_rs_testing::TestApp;
 use serde_json::Value;
 
@@ -51,7 +50,24 @@ impl EchoResolver {
     }
 }
 
-#[module(providers = [EchoResolver, VarPipe])]
+/// Appends `!` to the `raw` variable, so a second run shows.
+#[injectable]
+#[derive(Default)]
+struct BangPipe;
+
+impl Layer for BangPipe {}
+
+impl GlobalPipe for BangPipe {
+    fn transform_graphql_variables(&self, value: &mut Value) -> Result<(), PipeError> {
+        if let Some(raw) = value.get("raw").and_then(Value::as_str) {
+            let banged = format!("{raw}!");
+            value["raw"] = Value::String(banged);
+        }
+        Ok(())
+    }
+}
+
+#[module(providers = [EchoResolver, VarPipe, BangPipe])]
 struct EchoFeatureModule;
 
 #[module(imports = [GraphqlModule::for_root(None), EchoFeatureModule])]
@@ -138,4 +154,27 @@ async fn variables_a_pipe_left_unusable_are_reported_without_their_value() {
         message,
         "variable pipe produced an invalid variables object: invalid type: a string, expected a map"
     );
+}
+
+#[tokio::test]
+async fn a_pipe_listed_twice_runs_once() {
+    let app = TestApp::builder()
+        .module::<AppWithVarPipe>()
+        .use_pipes_global([pipe::<BangPipe>(), pipe::<BangPipe>()])
+        .http(HttpTransport::new())
+        .build()
+        .await
+        .expect("the schema boots and mounts at /graphql");
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({
+            "query": "query($raw: String!) { echo(raw: $raw) }",
+            "variables": { "raw": "hi" },
+        }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.assert_json(serde_json::json!({ "data": { "echo": "hi!" } }))
+        .await;
 }

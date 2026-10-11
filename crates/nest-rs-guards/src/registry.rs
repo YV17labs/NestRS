@@ -1,14 +1,11 @@
-//! Layer registration — typed specs the builder uses to seed the global
-//! layer chain into the container. Each transport's shaper resolves them
-//! against the live container at configure time.
-//!
-//! `GuardSpec` and `PipeSpec` are [`LayerSpec`] aliases.
+//! Guard registration — the typed specs the builder seeds the global guard
+//! chain with. Each transport's shaper resolves them against the live
+//! container at configure time.
 
 use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{Container, LayerSpec};
-use nest_rs_pipes::GlobalPipe;
 
 use crate::Guard;
 
@@ -51,37 +48,6 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
     })
 }
 
-/// One entry in the `use_pipes_global` list — same shape as [`GuardSpec`].
-pub type PipeSpec = LayerSpec<dyn GlobalPipe>;
-
-/// Construct a [`PipeSpec`] for the given pipe type.
-///
-/// ```
-/// # use nest_rs_core::{App, Layer, injectable, module};
-/// # use nest_rs_guards::{AppBuilderPipesExt, pipe};
-/// # use nest_rs_pipes::GlobalPipe;
-/// # #[injectable]
-/// # #[derive(Default)]
-/// # struct StripUnknownFields;
-/// # impl Layer for StripUnknownFields {}
-/// # impl GlobalPipe for StripUnknownFields {}
-/// # #[module(providers = [StripUnknownFields])]
-/// # struct AppModule;
-/// # #[nest_rs_core::main]
-/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
-/// App::builder()
-///     .use_pipes_global([pipe::<StripUnknownFields>()])
-///     .module::<AppModule>()
-/// #   .build().await?;
-/// # Ok(())
-/// # }
-/// ```
-pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
-    LayerSpec::new(TypeId::of::<P>(), std::any::type_name::<P>(), |c| {
-        c.get::<P>().map(|arc| arc as Arc<dyn GlobalPipe>)
-    })
-}
-
 /// The unresolved `Vec<GuardSpec>` seeded into the container by
 /// `AppBuilder::use_guards_global(...)`. Each transport reads it at
 /// configure time and resolves against the live container.
@@ -107,15 +73,5 @@ impl GuardSpecs {
     ) -> Vec<nest_rs_core::__private::ResolvedLayer<dyn Guard>> {
         let global = nest_rs_core::__private::resolve_global_layers::<Self>(container);
         nest_rs_core::__private::compose_chain(global, Vec::new(), Vec::new(), &[], label)
-    }
-}
-
-/// The unresolved `Vec<PipeSpec>` seeded by `AppBuilder::use_pipes_global`.
-pub struct PipeSpecs(pub Vec<PipeSpec>);
-
-impl nest_rs_core::layer_chain::GlobalSpecs for PipeSpecs {
-    type Layer = dyn GlobalPipe;
-    fn specs(&self) -> &[PipeSpec] {
-        &self.0
     }
 }

@@ -3176,6 +3176,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-opentelemetry",
+ "nest-rs-pipes",
  "nest-rs-seaorm",
  "nest-rs-ws",
  "poem",

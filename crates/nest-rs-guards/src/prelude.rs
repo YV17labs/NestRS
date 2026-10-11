@@ -20,10 +20,7 @@
 //! # fn main() {}
 //! ```
 
-pub use crate::{
-    AppBuilderGuardsExt, AppBuilderPipesExt, Denial, Guard, GuardSpec, HttpGuard, PipeSpec, guard,
-    pipe,
-};
+pub use crate::{AppBuilderGuardsExt, Denial, Guard, GuardSpec, HttpGuard, guard};
 pub use async_trait::async_trait;
 pub use nest_rs_core::{Layer, LayerKind, LayerSite, Posture, injectable};
 #[cfg(feature = "graphql")]

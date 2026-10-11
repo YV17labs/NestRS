@@ -168,7 +168,7 @@ executions; it chooses the **site**, by the family's nature:
 | Family | Global scope runs at | Controller / handler scope runs at |
 |---|---|---|
 | Guard | the route shaper; a `Guarded` self-mount's edge; the in-band operation guard; the federation gate | the same, plus each in-band operation's chain and a gateway's per-message table |
-| Pipe | the route shaper | the route shaper; per argument on the other edges |
+| Pipe | the route shaper; `/graphql` POST variables and WS `data` at their endpoint — a graphql-ws operation runs none | the route shaper; per argument on the other edges |
 | Exception filter | the route, closest to the handler | the route |
 | Interceptor | the transport edge — sees 404s, denials and self-mounts, before authentication | around the handler, inside the guards |
 | Filter | the transport edge | around the handler, inside the guards |
@@ -185,8 +185,8 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   global interceptors observe it. A guard may attach context (`Ctx<T>`), and
   per-handler metadata is `#[meta(EXPR)]` read through `Reflector`.
 - **Boot is fail-secure.** An unresolvable global spec fails the boot naming the
-  type — interceptors, filters and exception filters at the kernel's wiring step
-  (`provide_wiring`), in every app; guards and pipes through `HttpBootCheck`.
+  type — interceptors, filters, exception filters and pipes at the kernel's
+  wiring step (`provide_wiring`), in every app; guards through `HttpBootCheck`.
   **No site runs without a layer it declares**: one composed at boot (a route, a
   gateway's upgrade and messages) fails the boot naming the layer and the site,
   one composed on its first dispatch (a GraphQL or MCP operation) refuses that
@@ -298,8 +298,11 @@ router parses. The rewrite is skipped when nothing is versioned.
   and bind per argument on all five transports in two forms the orphan rule
   forces: HTTP wraps the extractor (`nest_rs_http::Piped`), the others wrap the
   wire value (`nest_rs_pipes::Piped`, inside `Parameters<…>` on MCP). Global
-  pipes exist on HTTP only. Reusable pipes are framework primitives — never
-  define one in an app.
+  pipes register in `nest-rs-pipes`, beside their contract, and run over an
+  HTTP body, `/graphql` POST variables and a WS message's `data`, each edge
+  resolving the pool once at mount; MCP and queues have none, and an operation
+  on the graphql-ws socket, a subscription included, runs none yet. Reusable
+  pipes are framework primitives — never define one in an app.
 - **WS is not a `Transport`**: an upgrade is an HTTP `GET`, so a gateway
   self-mounts on `HttpTransport` and inherits its port, CORS and TLS. One
   envelope, `{event, data}`. A handler returns at most a `Result` around a

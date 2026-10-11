@@ -24,7 +24,7 @@ default = []
 # chain runners.
 graphql = ["dep:nest-rs-graphql"]
 # WebSocket surface: the `check_ws_message` guard entry, `GuardAsWsMessageCheck`
-# bridge, the per-message chain runner, and the `WsDataPipe` global-pipe fold.
+# bridge and the per-message chain runner.
 ws = ["dep:nest-rs-ws"]
 # MCP surface: `GlobalPoolMcpGuard`, the `McpOperationGuard` that runs the
 # global pool in band on `/mcp`, a registered bridge inside it (the twin of

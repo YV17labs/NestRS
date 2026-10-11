@@ -48,7 +48,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
-    pub use crate::context::{FallbackOperationGuard, GraphqlVariablePipe};
+    pub use crate::context::FallbackOperationGuard;
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate};
     pub use crate::federation::FederationGate;
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};

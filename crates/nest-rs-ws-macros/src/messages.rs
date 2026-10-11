@@ -503,16 +503,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             let __server = <#self_ty>::__nestrs_registry(__container);
                             let mut __chains = ::nest_rs_ws::EventLayerTable::new();
                             #(#chain_inserts)*
-                            let __ctx = ::nest_rs_core::Container::get_dyn::<
-                                dyn ::nest_rs_ws::SocketContext,
-                            >(__container);
-                            let __data_pipe = ::nest_rs_ws::__private::resolve_ws_data_pipe(__container);
                             let __ep = ::nest_rs_ws::gateway_endpoint(
                                 __gw,
                                 __server,
                                 __chains,
-                                __ctx,
-                                __data_pipe,
+                                __container,
                                 ::core::clone::Clone::clone(&__carried),
                             );
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);

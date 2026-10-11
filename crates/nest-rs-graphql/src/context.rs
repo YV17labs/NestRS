@@ -10,7 +10,10 @@ use std::sync::Arc;
 use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
+use nest_rs_core::__private::serde::Serialize;
+use nest_rs_core::__private::serde::de::DeserializeOwned;
 use nest_rs_core::{Container, ReachableProviders};
+use nest_rs_pipes::{GlobalPipe, PipeError};
 use poem::http::{StatusCode, header};
 use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, RequestBody, Response, Result};
 
@@ -92,22 +95,18 @@ pub struct FallbackOperationGuard(pub PoolRunnerFactory);
 type PoolRunnerFactory =
     fn(&Container, Option<Arc<dyn GraphqlOperationGuard>>) -> Arc<dyn GraphqlOperationGuard>;
 
-/// Bridge slot for global pipes on GraphQL operation **variables**, seeded by
-/// `nest-rs-guards`' `use_pipes_global` with a fold of every
-/// [`GlobalPipe::transform_graphql_variables`](nest_rs_pipes::GlobalPipe).
-pub struct GraphqlVariablePipe(
-    pub fn(&Container, &mut serde_json::Value) -> Result<(), nest_rs_pipes::PipeError>,
-);
-
 /// The per-request step one [`GraphqlContextSeed`] contributes.
 type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;
 
 /// What both `/graphql` endpoints — POST and graphql-ws — need from the
 /// container, resolved **once** at mount so the two cannot enforce different
-/// postures.
+/// postures. The global pipes are the exception: the graphql-ws engine takes
+/// its operations without them.
 pub(crate) struct OperationBridge {
     pub(crate) container: Container,
     pub(crate) op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
+    /// The global pipes folded over each POST operation's variables.
+    pipes: Arc<[Arc<dyn GlobalPipe>]>,
     /// The seeds that fire for this app, module-gated once at mount.
     seeds: Arc<[ContextSeed]>,
     /// The subset a graphql-ws connection inherits from its upgrade.
@@ -167,10 +166,12 @@ impl OperationBridge {
             .filter(|reg| reg.lifetime == SeedLifetime::Connection)
             .map(|reg| reg.seed)
             .collect();
+        let pipes = nest_rs_pipes::__private::resolve_global_pipes(&container);
         Self {
             connection_seeds,
             container,
             op_guard,
+            pipes,
             seeds,
         }
     }
@@ -203,35 +204,18 @@ impl<E> ContextEndpoint<E> {
         }
     }
 
-    /// Run the global pipes over each operation's variables when a
-    /// [`GraphqlVariablePipe`] bridge is provided; a rejection returns a GraphQL
-    /// error response.
+    /// Run the global pipes over each operation's variables; a refusal returns
+    /// a GraphQL error response.
     fn pipe_variables(
         &self,
         batch: BatchRequest,
     ) -> std::result::Result<BatchRequest, Box<Response>> {
-        let container = &self.bridge.container;
-        let Some(bridge) = container.get::<GraphqlVariablePipe>() else {
+        let pipes = &self.bridge.pipes;
+        if pipes.is_empty() {
             return Ok(batch);
-        };
+        }
         let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
-            let mut value = serde_json::to_value(&r.variables).unwrap_or(serde_json::Value::Null);
-            if let Err(err) = (bridge.0)(container, &mut value) {
-                return Err(variable_pipe_error_response(&err));
-            }
-            // A pipe may rewrite the variables into a shape that is no longer a
-            // GraphQL variables object.
-            r.variables = match serde_json::from_value(value) {
-                Ok(variables) => variables,
-                Err(err) => {
-                    return Err(variable_pipe_error_response(
-                        &nest_rs_pipes::PipeError::new(format!(
-                            "variable pipe produced an invalid variables object: {}",
-                            nest_rs_core::DecodeError::new(&err),
-                        )),
-                    ));
-                }
-            };
+            r.variables = fold_variables(&r.variables, pipes)?;
             Ok(r)
         };
         match batch {
@@ -245,6 +229,38 @@ impl<E> ContextEndpoint<E> {
             }
         }
     }
+}
+
+/// Fold `pipes` over `variables` through the JSON form a pipe reads; a pipe's
+/// refusal, and variables that do not survive the round trip, answer as a
+/// GraphQL error.
+fn fold_variables<T: Serialize + DeserializeOwned>(
+    variables: &T,
+    pipes: &[Arc<dyn GlobalPipe>],
+) -> std::result::Result<T, Box<Response>> {
+    let mut value = serde_json::to_value(variables).map_err(|err| {
+        let err = nest_rs_core::DecodeError::new(&err);
+        tracing::error!(
+            target: crate::TARGET,
+            error = %err,
+            "graphql variables could not be written as JSON for the global pipes",
+        );
+        variable_pipe_error_response(&PipeError::new(format!(
+            "the operation variables could not be read as JSON: {err}",
+        )))
+    })?;
+    for pipe in pipes {
+        pipe.transform_graphql_variables(&mut value)
+            .map_err(|err| variable_pipe_error_response(&err))?;
+    }
+    // A pipe may rewrite the variables into a shape that is no longer a
+    // GraphQL variables object.
+    serde_json::from_value(value).map_err(|err| {
+        variable_pipe_error_response(&PipeError::new(format!(
+            "variable pipe produced an invalid variables object: {}",
+            nest_rs_core::DecodeError::new(&err),
+        )))
+    })
 }
 
 /// Whether **every** operation definition in **every** request of the batch is
@@ -383,7 +399,7 @@ fn refused(reason: &str, status: StatusCode) -> Response {
 
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
 /// with an `errors` array, field-level errors under `extensions.errors`.
-fn variable_pipe_error_response(err: &nest_rs_pipes::PipeError) -> Box<Response> {
+fn variable_pipe_error_response(err: &PipeError) -> Box<Response> {
     let mut error = serde_json::json!({ "message": err.message() });
     if let Some(details) = err.details() {
         error["extensions"] = serde_json::json!({ crate::FIELD_ERRORS_EXTENSION: details });
@@ -590,5 +606,45 @@ mod tests {
     #[test]
     fn a_field_named_like_a_mutation_stays_read_only() {
         assert!(is_read_only(&mut single("{ mutationLog { id } }")));
+    }
+
+    use nest_rs_core::__private::serde;
+
+    /// Variables whose JSON form cannot be written.
+    struct Unwritable;
+
+    impl serde::Serialize for Unwritable {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {
+            Err(<S::Error as serde::ser::Error>::custom(
+                "sk_live_51HsecretTOKEN",
+            ))
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for Unwritable {
+        fn deserialize<D: serde::Deserializer<'de>>(_: D) -> std::result::Result<Self, D::Error> {
+            Ok(Self)
+        }
+    }
+
+    #[tokio::test]
+    async fn variables_that_cannot_be_read_as_json_answer_the_pipe_error_not_null() {
+        let Err(refusal) = fold_variables(&Unwritable, &[]) else {
+            panic!("the pipes would run over `null` in place of the variables");
+        };
+        assert_eq!(refusal.status(), StatusCode::OK);
+        let body = refusal
+            .into_body()
+            .into_bytes()
+            .await
+            .expect("the refusal's body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("a JSON body");
+        assert_eq!(body["data"], serde_json::Value::Null, "{body}");
+        let message = body["errors"][0]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.starts_with("the operation variables could not be read as JSON"),
+            "{body}",
+        );
+        assert!(!message.contains("sk_live"), "never the value: {body}");
     }
 }

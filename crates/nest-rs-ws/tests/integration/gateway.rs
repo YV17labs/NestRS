@@ -3,7 +3,7 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim, Valid};
+use nest_rs_pipes::{GlobalPipe, ParseArray, Pipe, PipeError, Piped, Trim, Valid, pipe};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, async_trait, gateway, messages};
@@ -1323,6 +1323,81 @@ async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
             Some(WsFrame::Close(_)),
         ),
         "an unrouted event is a client typo, not a reason to end the connection",
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Uppercases `data.msg`, and refuses the `boom` event outright.
+#[injectable]
+#[derive(Default)]
+struct ShoutPipe;
+
+impl Layer for ShoutPipe {}
+
+impl GlobalPipe for ShoutPipe {
+    fn transform_ws_data(
+        &self,
+        event: &str,
+        value: &mut serde_json::Value,
+    ) -> Result<(), PipeError> {
+        if event == "boom" {
+            return Err(PipeError::new("no boom allowed"));
+        }
+        if let Some(msg) = value.get("msg").and_then(serde_json::Value::as_str) {
+            value["msg"] = serde_json::Value::String(msg.to_uppercase());
+        }
+        Ok(())
+    }
+}
+
+#[gateway(path = "/piped")]
+pub(crate) struct PipedGateway;
+
+#[messages]
+impl PipedGateway {
+    #[subscribe_message("say")]
+    #[public]
+    async fn say(&self, data: serde_json::Value) -> serde_json::Value {
+        data
+    }
+
+    #[subscribe_message("boom")]
+    #[public]
+    async fn boom(&self) -> &'static str {
+        "the handler ran"
+    }
+}
+
+#[module(imports = [WsModule], providers = [ShoutPipe, PipedGateway])]
+struct PipedModule;
+
+#[tokio::test]
+async fn a_global_pipe_folds_over_each_messages_data_and_its_refusal_is_a_frame() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<PipedModule>()
+        .use_pipes_global([pipe::<ShoutPipe>()])
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+
+    let mut socket = app.socket("/piped").connect().await;
+    socket.send("say", serde_json::json!({ "msg": "hi" })).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(
+        reply["data"]["msg"], "HI",
+        "the pipe ran before the handler: {reply}"
+    );
+
+    socket.send("boom", serde_json::json!({ "msg": "x" })).await;
+    let refusal = socket.next_envelope().await;
+    assert_eq!(
+        refusal,
+        serde_json::json!({
+            "event": "boom",
+            "data": { "error": "invalid data for `boom`: no boom allowed" },
+        }),
+        "the pipe's refusal answers in place of the handler",
     );
 
     app.shutdown().await.expect("the transport stops cleanly");

@@ -48,6 +48,7 @@ nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-filters.workspace = true
 nest-rs-exception-filters.workspace = true
+nest-rs-pipes.workspace = true
 anyhow.workspace = true
 # `test` adds poem's in-process TestClient; `tower-compat` comes from the
 # workspace default and is harmless here.
@@ -133,9 +134,6 @@ tokio.workspace = true
 # service injecting the loaded config; `nest-rs-config` is already a normal
 # dependency. `validator` backs the `#[config]` struct's `#[validate]` derive.
 validator.workspace = true
-# The pipes test (`tests/integration/pipes.rs`) needs the `GlobalPipe` trait + a
-# `serde_json::Value` body to observe a pipe rewriting it.
-nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The exception-filters test (`tests/integration/exception_filters.rs`) needs the
 # trait + a typed error to throw and catch.
 thiserror.workspace = true

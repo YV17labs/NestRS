@@ -9,7 +9,7 @@ use nest_rs_core::{
     Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
 };
 use nest_rs_http::DetachedWork;
-use nest_rs_pipes::PipeError;
+use nest_rs_pipes::GlobalPipe;
 use tracing::Instrument;
 
 use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig};
@@ -45,42 +45,23 @@ pub trait Gateway: Send + Sync + 'static {
     }
 }
 
-/// A per-message data-pipe runner with the container already captured, built
-/// once when a gateway mounts.
-pub type WsDataFold = dyn Fn(&str, &mut serde_json::Value) -> Result<(), PipeError> + Send + Sync;
-
-/// Bridge slot for global pipes on a WS message's `data`, seeded by
-/// `nest-rs-guards` (which depends on this crate, not the reverse) with a fold
-/// of every [`GlobalPipe::transform_ws_data`](nest_rs_pipes::GlobalPipe).
-pub struct WsDataPipe(pub fn(&Container, &str, &mut serde_json::Value) -> Result<(), PipeError>);
-
-/// Resolve the [`WsDataPipe`] bridge at gateway mount into a runner with the
-/// container captured; `None` when no global pipes are registered.
-pub fn resolve_ws_data_pipe(container: &Container) -> Option<Arc<WsDataFold>> {
-    let bridge = container.get::<WsDataPipe>()?;
-    let container = container.clone();
-    Some(Arc::new(
-        move |event: &str, data: &mut serde_json::Value| (bridge.0)(&container, event, data),
-    ))
-}
-
-/// Assemble a [`GatewayEndpoint`] from a gateway, its resolved per-connection
-/// wiring, and the [`DetachedWork`] its `HttpEndpointMeta` declares. Called by
-/// `#[messages]`-generated mount code.
+/// Assemble a [`GatewayEndpoint`] from a gateway, its per-message guard table,
+/// the container it mounts from, and the [`DetachedWork`] its `HttpEndpointMeta`
+/// declares; what each connection needs from the container is resolved here,
+/// once. Called by `#[messages]`-generated mount code.
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: EventLayerTable,
-    ctx: Option<Arc<dyn SocketContext>>,
-    data_pipe: Option<Arc<WsDataFold>>,
+    container: &Container,
     sockets: DetachedWork,
 ) -> GatewayEndpoint<G, N> {
     GatewayEndpoint {
         gateway,
         server,
         guards: Arc::new(guards),
-        ctx,
-        data_pipe,
+        ctx: container.get_dyn::<dyn SocketContext>(),
+        pipes: nest_rs_pipes::__private::resolve_global_pipes(container),
         sockets,
     }
 }
@@ -92,7 +73,8 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     server: Arc<WsServer<N>>,
     guards: Arc<EventLayerTable>,
     ctx: Option<Arc<dyn SocketContext>>,
-    data_pipe: Option<Arc<WsDataFold>>,
+    /// The global pipes folded over each message's `data`.
+    pipes: Arc<[Arc<dyn GlobalPipe>]>,
     /// Every socket this gateway serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
@@ -132,7 +114,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let carried = RequestContinuation::capture(Continuation::Connection);
         let wiring = DispatchWiring {
             ambient,
-            data_pipe: self.data_pipe.clone(),
+            pipes: Arc::clone(&self.pipes),
             root_container,
             // The connection inherits the upgrade request's id and actor.
             connection: nest_rs_core::Correlation::inherited(),
@@ -169,7 +151,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
 /// every message.
 struct DispatchWiring {
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
-    data_pipe: Option<Arc<WsDataFold>>,
+    pipes: Arc<[Arc<dyn GlobalPipe>]>,
     root_container: Option<Container>,
     /// The upgrade that opened this socket, actor included: nothing
     /// re-authenticates per message.
@@ -714,7 +696,7 @@ async fn handle_text<G: Gateway>(
         }
     };
     let WsEnvelope { event, mut data } = envelope;
-    let data_pipe = wiring.data_pipe.as_ref();
+    let pipes = &wiring.pipes;
     let event_ref = event.clone();
     let conn_id = client.id();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
@@ -723,10 +705,10 @@ async fn handle_text<G: Gateway>(
             return WsReply::Error(frame);
         }
         // Guards see the raw value; global data pipes run after them.
-        if let Some(pipe) = data_pipe
-            && let Err(err) = pipe(&event_ref, &mut data)
-        {
-            return WsReply::pipe_error(&event_ref, "data", err);
+        for pipe in pipes.iter() {
+            if let Err(err) = pipe.transform_ws_data(&event_ref, &mut data) {
+                return WsReply::pipe_error(&event_ref, "data", err);
+            }
         }
         gateway.dispatch(client, &event_ref, data).await
     });
@@ -951,7 +933,7 @@ mod tests {
     fn wiring() -> DispatchWiring {
         DispatchWiring {
             ambient: None,
-            data_pipe: None,
+            pipes: Arc::new([]),
             root_container: None,
             connection: nest_rs_core::Correlation::minted(None),
         }

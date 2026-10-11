@@ -64,8 +64,8 @@ impl Pipe for Trim {
 }
 ```
 
-If you need DI-injected logic at the request boundary, that's a service
-or an interceptor — not a pipe.
+If you need DI-injected logic at the request boundary, that's a service,
+an interceptor, or a [global pipe](#global-pipes) — not a per-argument pipe.
 
 ## The built-in set
 
@@ -224,6 +224,65 @@ async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
     /* ... */
 }
 ```
+
+## Global pipes
+
+A `GlobalPipe` shapes input across the whole app at once: register it in
+`main` and no route opts in. It reads the raw JSON before anything decodes it
+— an HTTP request body, a `/graphql` POST operation's variables, a WebSocket
+message's `data` — and overrides only the methods for the inputs it rewrites.
+Unlike a per-argument pipe it is a provider: `#[injectable]`, listed in a
+module's `providers`, called with `&self`.
+
+```rust title="crates/features/src/pipes/trim_strings.rs"
+use nest_rs::core::{Layer, injectable};
+use nest_rs::pipes::{GlobalPipe, PipeError};
+use serde_json::Value;
+
+#[injectable]
+#[derive(Default)]
+pub struct TrimStrings;
+
+impl Layer for TrimStrings {}
+
+impl GlobalPipe for TrimStrings {
+    fn transform_body(&self, body: &mut Value) -> Result<(), PipeError> {
+        if let Some(fields) = body.as_object_mut() {
+            for field in fields.values_mut() {
+                if let Value::String(text) = field {
+                    *text = text.trim().to_owned();
+                }
+            }
+        }
+        Ok(())
+    }
+}
+```
+
+```rust title="apps/blog/src/main.rs"
+use nest_rs::pipes::{AppBuilderPipesExt, pipe};
+use features::pipes::TrimStrings;
+
+App::builder()
+    .use_pipes_global([pipe::<TrimStrings>()])
+    .module::<BlogModule>()
+```
+
+The pool runs after the guards and before the handler, once per type however
+often it is listed; an HTTP route opts out with `#[no_pipes]`. A refusal
+answers as the edge's own error, as in the table above. A pipe in the pool that
+no imported module provides fails the boot, naming it, whether or not the app
+serves HTTP. MCP tool arguments and queue payloads take no global pipe: bind a
+per-argument pipe there.
+
+<Aside type="caution">
+**An operation sent over the graphql-ws socket runs no global pipe** — a
+[subscription](/graphql/subscriptions/), or a query or mutation a client sends
+on the socket rather than in a POST. Its variables reach the resolver as the
+client wrote them: validate an argument a subscription reads with a
+per-argument pipe (`Valid<T>`, `Piped<P, T>`), never with the global pool
+alone.
+</Aside>
 
 ## Pipes vs `Bind`
 

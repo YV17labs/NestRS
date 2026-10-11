@@ -1,12 +1,15 @@
-//! Global pipes — JSON-body shaping that applies to every handler.
+//! Global pipes — input shaping registered once for the whole app.
 //!
-//! A [`GlobalPipe`] inspects or rewrites the JSON request body **before** the
-//! extractor runs. Registered once with
-//! `App::builder().use_pipes_global(...)`, it applies to every JSON-bodied
-//! HTTP handler in the app — no per-route opt-in. The framework gives
-//! pipes the [`LayerKind::Pipe`](nest_rs_core::LayerKind) execution slot:
-//! they run after Guards and before the handler. Per-route opt-out is
-//! `#[no_pipes]`.
+//! A [`GlobalPipe`] inspects or rewrites the raw input **before** it is decoded
+//! for the handler: a JSON request body, a `/graphql` POST operation's
+//! variables, a WebSocket message's `data`. Registered once with
+//! `App::builder().use_pipes_global(...)`, it applies to each of those inputs
+//! in the app — no per-route opt-in. The framework gives pipes the
+//! [`LayerKind::Pipe`](nest_rs_core::LayerKind) execution slot: they run after
+//! Guards and before the handler. An HTTP route opts out with `#[no_pipes]`.
+//! MCP tool arguments, queue payloads and an operation sent over the
+//! graphql-ws socket, a subscription included, run no global pipe: bind a
+//! per-argument pipe there.
 //!
 //! ## Defining a global pipe
 //!
@@ -31,9 +34,9 @@
 //!
 //! ## Registering globally
 //!
-//! `App::builder().use_pipes_global([pipe::<StripUnknownFields>()])`, with
-//! `AppBuilderPipesExt` and `pipe` imported from `nest-rs-guards`; the running
-//! example sits on `nest_rs_guards::pipe`.
+//! `App::builder().use_pipes_global([pipe::<StripUnknownFields>()])`, through
+//! [`AppBuilderPipesExt`](crate::AppBuilderPipesExt); the example on
+//! [`pipe`](fn@crate::pipe) runs it.
 
 use std::sync::Arc;
 
@@ -41,11 +44,11 @@ use nest_rs_core::Layer;
 
 use crate::PipeError;
 
-/// A request-body validator/transformer applied to every handler across
-/// every transport. Runs after `Guard`s, before the extractor (HTTP) or
-/// before the resolver/handler (GraphQL/WS).
+/// A request-input validator/transformer applied to every JSON HTTP body,
+/// `/graphql` POST operation and WebSocket message. Runs after `Guard`s, before
+/// the extractor (HTTP) or before the resolver/handler (GraphQL/WS).
 ///
-/// One impl, three transports — override only the `transform_*` method
+/// One impl, three edges — override only the `transform_*` method
 /// the pipe actually rewrites. A no-op default means "doesn't apply to
 /// this transport", not "skip validation".
 pub trait GlobalPipe: Layer {
@@ -56,9 +59,10 @@ pub trait GlobalPipe: Layer {
         Ok(())
     }
 
-    /// Inspect or rewrite the GraphQL operation variables in place. Runs
-    /// before any resolver fires. Return [`PipeError`] to reject the
-    /// operation. Default no-op.
+    /// Inspect or rewrite a `/graphql` POST operation's variables in place.
+    /// Runs before any resolver fires; an operation sent over the graphql-ws
+    /// socket does not run it. Return [`PipeError`] to reject the operation.
+    /// Default no-op.
     fn transform_graphql_variables(&self, _value: &mut serde_json::Value) -> Result<(), PipeError> {
         Ok(())
     }

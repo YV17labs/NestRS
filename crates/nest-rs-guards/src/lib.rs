@@ -108,7 +108,7 @@ pub mod prelude;
 mod registry;
 mod scope;
 
-pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
+pub use builder::AppBuilderGuardsExt;
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
 pub use guard::{Guard, GuardPhase, HttpGuard, PrincipalClaim};
@@ -126,7 +126,7 @@ pub use scope::{GrantedScopes, NoBearerChallenge, RequiredScopes};
 pub use guard::GuardAsWsMessageCheck;
 // Re-exported for macro-emitted code.
 pub use nest_rs_core::layer_chain;
-pub use registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs, guard, pipe};
+pub use registry::{GuardSpec, GuardSpecs, guard};
 // Re-exported so a `Guard` impl needs no `async-trait` dependency of its own.
 pub use async_trait::async_trait;
 

@@ -2,13 +2,14 @@
 //! provider was never registered, a controller guard no module provides, or two
 //! controllers on one prefix, fail the boot.
 
-use nest_rs_core::{Layer, injectable, module, target};
+use nest_rs_core::{Layer, WiringFailedError, injectable, module, target};
 use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
 use nest_rs_filters::{Filter, RequestSnapshot, filter};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
-use nest_rs_testing::TestApp;
+use nest_rs_pipes::{GlobalPipe, pipe};
+use nest_rs_testing::{HeadlessApp, TestApp};
 use poem::{IntoResponse, Request, Response};
 
 /// Registered as a provider: the resolvable control case.
@@ -87,6 +88,15 @@ impl ExceptionFilter for GhostExceptionFilter {
     }
 }
 
+/// Deliberately **not** listed in any module's providers.
+#[injectable]
+#[derive(Default)]
+struct GhostPipe;
+
+impl Layer for GhostPipe {}
+
+impl GlobalPipe for GhostPipe {}
+
 #[module(providers = [WiredGuard])]
 struct GuardOnlyModule;
 
@@ -145,6 +155,39 @@ async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_intercepto
     assert!(
         format!("{err:#}").contains("GhostInterceptor"),
         "the error names the unresolvable interceptor: {err:#}",
+    );
+}
+
+/// The wiring a headless boot refused with, and the chain it says.
+fn refused_wiring(
+    result: anyhow::Result<HeadlessApp>,
+    expectation: &str,
+) -> (&'static str, String) {
+    let Err(err) = result else {
+        panic!("{expectation}");
+    };
+    let chain = format!("{err:#}");
+    let wiring = err
+        .downcast_ref::<WiringFailedError>()
+        .unwrap_or_else(|| panic!("the kernel's wiring step refuses it: {chain}"));
+    (wiring.registry, chain)
+}
+
+#[tokio::test]
+async fn an_app_serving_no_http_still_fails_on_an_unresolvable_global_pipe() {
+    let result = TestApp::builder()
+        .module::<GuardOnlyModule>()
+        .use_pipes_global([pipe::<GhostPipe>()])
+        .build_headless()
+        .await;
+    let (registry, chain) = refused_wiring(
+        result,
+        "a worker would boot with a global pipe silently dropped",
+    );
+    assert_eq!(registry, "nest_rs::pipes::global", "{chain}");
+    assert!(
+        chain.contains("GhostPipe"),
+        "the error names the unresolvable pipe: {chain}",
     );
 }
 

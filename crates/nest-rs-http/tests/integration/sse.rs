@@ -8,8 +8,8 @@ use std::time::Duration;
 use nest_rs_core::{AmbientValue, Layer, ambient, injectable, module, with_ambient};
 use nest_rs_http::futures_util::StreamExt;
 use nest_rs_http::{
-    HttpConfig, HttpModule, SseEvent, SseStream, async_trait, controller, futures_util::stream,
-    routes,
+    HttpConfig, HttpModule, Scoped, SseEvent, SseStream, async_trait, controller,
+    futures_util::stream, routes,
 };
 use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_testing::LogCapture;
@@ -258,6 +258,57 @@ async fn every_event_of_a_stream_reads_what_a_layer_added_for_its_request() {
         assert!(
             text.contains(&format!("data: {n} alice")),
             "event {n} reads the caller: {text:?}",
+        );
+    }
+}
+
+/// One per request: the instance a stream resolves says whose scope it reads.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct Visit;
+
+#[controller(path = "/visit")]
+struct VisitFeedController;
+
+#[routes]
+impl VisitFeedController {
+    /// Three events, each resolving the request's `Visit` when the body is
+    /// polled and saying whether it is the instance the handler was given.
+    #[sse("/events")]
+    #[public]
+    async fn events(&self, visit: Scoped<Visit>) -> SseStream {
+        let given = visit.into_inner();
+        SseStream::new(stream::iter(1..=3).map(move |n| {
+            let resolved =
+                nest_rs_http::current_request_scope().and_then(|scope| scope.get::<Visit>());
+            let which = match resolved {
+                Some(resolved) if Arc::ptr_eq(&resolved, &given) => "the request's",
+                Some(_) => "another",
+                None => "none",
+            };
+            SseEvent::message(format!("{n} {which}"))
+        }))
+    }
+}
+
+#[module(providers = [Visit, VisitFeedController])]
+struct VisitFeedModule;
+
+#[tokio::test]
+async fn every_event_of_a_stream_resolves_its_requests_own_scoped_provider() {
+    let client = boot::<VisitFeedModule>().await;
+    let resp = client.get("/visit/events").send().await;
+    resp.assert_status_is_ok();
+    let text = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("the stream is text");
+    for n in 1..=3 {
+        assert!(
+            text.contains(&format!("data: {n} the request's")),
+            "event {n} resolves from the scope its handler ran in: {text:?}",
         );
     }
 }

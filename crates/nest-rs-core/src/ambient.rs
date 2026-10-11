@@ -433,6 +433,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_request_scope_crosses_into_a_body_a_task_and_a_commit_alone() {
+        let scope = Arc::new(crate::RequestScope::new(
+            crate::Container::builder().build(),
+        ));
+        for into in EVERY {
+            let carried =
+                with_request_scope(Some(Arc::clone(&scope)), Correlation::minted(None), async {
+                    RequestContinuation::capture(into)
+                })
+                .await
+                .expect("a unit is running where it was captured");
+            let crossed = carried.enter(crate::current_request_scope);
+            match into {
+                Continuation::Body | Continuation::Task | Continuation::Commit => assert!(
+                    crossed.is_some_and(|crossed| Arc::ptr_eq(&crossed, &scope)),
+                    "{into:?} resolves from the request's own scope",
+                ),
+                Continuation::Batch | Continuation::Connection | Continuation::Envelope => assert!(
+                    crossed.is_none(),
+                    "{into:?} resolves from no scope of the request's",
+                ),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_capture_takes_what_the_unit_carries_when_it_is_captured() {
         let carried = with_ambient(Arc::new(Tenant("acme")), async {
             TaskContext::capture(Continuation::Task)
@@ -450,9 +476,12 @@ mod tests {
         let request = Correlation::minted(None);
         let request_trace = request.trace_id();
         let request_span = request.span_id();
-        let batch = with_request_scope(None, request.clone(), async {
+        let scope = Arc::new(crate::RequestScope::new(
+            crate::Container::builder().build(),
+        ));
+        let batch = with_request_scope(Some(Arc::clone(&scope)), request.clone(), async {
             with_ambient(Arc::new(Handle::Transaction), async {
-                with_request_scope(None, request.child(), async {
+                with_request_scope(Some(scope), request.child(), async {
                     with_ambient(Arc::new(Tenant("the field's own")), async {
                         assert_eq!(
                             ambient::<Tenant>().as_deref(),

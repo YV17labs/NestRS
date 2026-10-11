@@ -729,6 +729,15 @@ impl CallerResolver {
         let caller = nest_rs_core::ambient::<Caller>().map_or("nobody", |caller| caller.0);
         futures_stream::iter([caller.to_owned()])
     }
+
+    /// Whether the operation reads a request scope off the ambient context, as
+    /// a service resolving a request-scoped provider would.
+    #[subscription]
+    #[public]
+    async fn request_scoped(&self) -> impl futures_stream::Stream<Item = bool> {
+        let scoped = nest_rs_core::current_request_scope().is_some();
+        futures_stream::iter([scoped])
+    }
 }
 
 #[module(
@@ -751,4 +760,22 @@ async fn an_operation_on_the_socket_reads_what_its_upgrade_carried() {
     let item = next_message(&mut socket).await;
     assert_eq!(item["type"], "next", "{item}");
     assert_eq!(item["payload"]["data"]["caller"], "alice", "{item}");
+}
+
+#[tokio::test]
+async fn an_operation_on_the_socket_reads_no_request_scope_off_its_upgrade() {
+    let app = TestApp::builder()
+        .module::<CallerApp>()
+        .build_ws()
+        .await
+        .expect("the schema boots on a real port");
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { requestScoped }").await;
+
+    let item = next_message(&mut socket).await;
+    assert_eq!(item["type"], "next", "{item}");
+    assert_eq!(
+        item["payload"]["data"]["requestScoped"], false,
+        "the upgrade ran with a request scope, and the socket carries none of it: {item}",
+    );
 }

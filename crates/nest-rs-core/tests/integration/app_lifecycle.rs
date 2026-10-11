@@ -15,7 +15,7 @@ use nest_rs_core::{
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
 
-use crate::ChildProcess;
+use crate::{ChildProcess, Failing};
 
 /// What each step of the boot read from the handle, in the order it read it.
 static READ: Mutex<Vec<(&'static str, AppState)>> = Mutex::new(Vec::new());
@@ -140,24 +140,6 @@ async fn a_provider_reads_starting_through_the_boot_and_ready_once_the_app_serve
     );
 }
 
-/// Fails at once, as if its listener broke.
-struct FailsAtOnce;
-
-#[async_trait::async_trait]
-impl Transport for FailsAtOnce {
-    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn serve(self: Box<Self>, _stop: CancellationToken) -> anyhow::Result<()> {
-        Err(anyhow!("the listener stopped accepting"))
-    }
-
-    fn stop_bound(&self) -> Duration {
-        Duration::ZERO
-    }
-}
-
 /// Serves until the app's stop token fires.
 struct ServesUntilStopped;
 
@@ -187,8 +169,8 @@ impl Module for FailingBesideServingModule {
                 build: |_| Ok(Box::new(ServesUntilStopped)),
             })
             .provide_meta(TransportContribution {
-                name: "FailsAtOnce",
-                build: |_| Ok(Box::new(FailsAtOnce)),
+                name: "Failing",
+                build: |_| Ok(Box::new(Failing)),
             })
     }
 }

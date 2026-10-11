@@ -28,6 +28,27 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use nest_rs_core::{Container, Transport};
+use tokio_util::sync::CancellationToken;
+
+/// A transport whose `serve` fails at once, as if its listener broke.
+pub(crate) struct Failing;
+
+#[async_trait::async_trait]
+impl Transport for Failing {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("the listener stopped accepting"))
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
 /// Rust's own panic hook back once a `#[nest_rs_core::main]` run has installed
 /// the framework's, so an assertion failing after it prints rather than
 /// becoming an event in the test's capture.

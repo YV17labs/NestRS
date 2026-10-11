@@ -52,6 +52,7 @@
 //! [`WsConfig`]: https://docs.rs/nest-rs-ws
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -118,7 +119,7 @@ impl WsApp {
     }
 
     /// The app's [`AppLifecycle`].
-    pub fn lifecycle(&self) -> &std::sync::Arc<AppLifecycle> {
+    pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
         self.app.lifecycle()
     }
 

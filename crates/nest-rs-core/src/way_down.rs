@@ -85,85 +85,47 @@ pub(crate) fn exit() {
 fn exit_at_once(signal: Received) -> ! {
     let code = signal.exit_code();
     let signal = signal.name();
+    macro_rules! abandoning {
+        ($($field:tt)*) => {
+            tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                $($field)*,
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            )
+        };
+    }
     {
         let step = locked(&WAY_DOWN);
         match &*step {
             Step::Main => before_any_app(signal, code),
-            Step::Boot(None) => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "boot",
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
-            Step::Boot(Some(BootStep::Factory { type_name })) => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "boot",
-                type_name,
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
-            Step::Boot(Some(BootStep::Configure { transport })) => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "boot",
-                transport = transport.as_str(),
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
+            Step::Boot(None) => abandoning!(step = "boot"),
+            Step::Boot(Some(BootStep::Factory { type_name })) => {
+                abandoning!(step = "boot", type_name)
+            }
+            Step::Boot(Some(BootStep::Configure { transport })) => {
+                abandoning!(step = "boot", transport = transport.as_str())
+            }
             Step::Boot(Some(BootStep::InitHook {
                 phase,
                 provider,
                 method,
                 origin,
-            })) => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "boot",
-                ?phase,
-                provider,
-                method,
-                origin,
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
-            Step::Transports(running) => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "transports",
-                transports = running.join(", ").as_str(),
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
+            })) => abandoning!(step = "boot", ?phase, provider, method, origin),
+            Step::Transports(running) => {
+                abandoning!(
+                    step = "transports",
+                    transports = running.join(", ").as_str()
+                )
+            }
             Step::Hook {
                 phase,
                 provider,
                 method,
-            } => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "shutdown hooks",
-                ?phase,
-                provider,
-                method,
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
-            Step::Exit => tracing::error!(
-                target: crate::target::APP,
-                signal,
-                exit_code = code,
-                step = "exit",
-                "shutdown signal received on the way down: exiting at once, abandoning what still \
-                 runs",
-            ),
+            } => abandoning!(step = "shutdown hooks", ?phase, provider, method),
+            Step::Exit => abandoning!(step = "exit"),
         }
     }
     std::process::exit(code)
@@ -392,21 +354,16 @@ static HOOKS_DEADLINE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 /// real clock, never a runtime's, which a test may have paused.
 pub(crate) fn hooks_deadline(left: Duration) {
     let deadline = std::time::Instant::now() + left;
-    let mut recorded = HOOKS_DEADLINE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut recorded = locked(&HOOKS_DEADLINE);
     *recorded = Some(recorded.map_or(deadline, |earlier| earlier.max(deadline)));
 }
 
 /// What remains of the shutdown hooks' budget, the time the runtime's
 /// teardown may take — all of it when no app ran.
 fn teardown_budget() -> Duration {
-    HOOKS_DEADLINE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .map_or(crate::SHUTDOWN_HOOKS_TIMEOUT, |deadline| {
-            deadline.saturating_duration_since(std::time::Instant::now())
-        })
+    locked(&HOOKS_DEADLINE).map_or(crate::SHUTDOWN_HOOKS_TIMEOUT, |deadline| {
+        deadline.saturating_duration_since(std::time::Instant::now())
+    })
 }
 
 /// What `#[nest_rs::main]` expands to: install the process panic hook, run the
@@ -573,10 +530,7 @@ mod tests {
             .run()
             .await
             .expect("stops cleanly");
-        let recorded = HOOKS_DEADLINE
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .expect("the run recorded its deadline");
+        let recorded = locked(&HOOKS_DEADLINE).expect("the run recorded its deadline");
         assert!(
             recorded >= ran + crate::SHUTDOWN_HOOKS_TIMEOUT
                 && recorded <= Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT,

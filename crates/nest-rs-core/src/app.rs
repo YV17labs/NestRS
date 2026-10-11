@@ -181,7 +181,8 @@ impl App {
             .import::<M>()
             .leave_import();
         check_register_phase(&mut builder)?;
-        // Seeded after register, yet global infrastructure for the access graph.
+        // Global infrastructure for the access graph: the lifecycle seeded
+        // before collect, the rest after register.
         let global: HashSet<TypeId> = HashSet::from([
             TypeId::of::<AppLifecycle>(),
             TypeId::of::<ReachableProviders>(),
@@ -310,7 +311,7 @@ impl App {
                 transport: (*name).to_owned(),
             };
             self.lifecycle
-                .boot(step, transport.configure(&self.container))
+                .boot(&step, transport.configure(&self.container))
                 .await??;
         }
         // A site composed at `configure` (a route, a gateway) refuses here, its
@@ -353,8 +354,8 @@ impl App {
             };
             let transport = serving.remove(&ended).unwrap_or("<unknown>");
             crate::way_down::transports(still_serving(&serving));
-            match res.map(|(_, served)| served) {
-                Ok(Ok(Ok(()))) => {}
+            let failed = match res.map(|(_, served)| served) {
+                Ok(Ok(Ok(()))) => None,
                 Ok(Ok(Err(e))) => {
                     tracing::error!(
                         target: crate::target::APP,
@@ -362,8 +363,7 @@ impl App {
                         error = %crate::error_message(&*e),
                         "transport failed; shutting down",
                     );
-                    self.lifecycle.drain(StopCause::TransportFailed);
-                    first_err.get_or_insert(e);
+                    Some(e)
                 }
                 Ok(Err(payload)) => {
                     crate::contained_panic!(
@@ -372,8 +372,7 @@ impl App {
                         "transport task panicked; shutting down",
                         transport,
                     );
-                    self.lifecycle.drain(StopCause::TransportFailed);
-                    first_err.get_or_insert_with(|| anyhow!("transport `{transport}` panicked"));
+                    Some(anyhow!("transport `{transport}` panicked"))
                 }
                 // Cancelled with its runtime; a panic raised as it was dropped is the hook's.
                 Err(join_err) => {
@@ -383,11 +382,12 @@ impl App {
                         error = %crate::error_message(&join_err),
                         "transport task ended before it returned; shutting down",
                     );
-                    self.lifecycle.drain(StopCause::TransportFailed);
-                    first_err.get_or_insert_with(|| {
-                        anyhow!("transport `{transport}` ended before it returned")
-                    });
+                    Some(anyhow!("transport `{transport}` ended before it returned"))
                 }
+            };
+            if let Some(failed) = failed {
+                self.lifecycle.drain(StopCause::TransportFailed);
+                first_err.get_or_insert(failed);
             }
         }
         // When every transport ended on its own, no stop was asked yet: the
@@ -395,7 +395,7 @@ impl App {
         // them joins on `stopping()` would hold it to the budget.
         self.lifecycle.drain(StopCause::TransportFailed);
 
-        // The three phases share one deadline, which `way_down::__main` reads too.
+        // The three phases share one deadline, which `way_down::main` reads too.
         let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
         crate::way_down::hooks_deadline(crate::SHUTDOWN_HOOKS_TIMEOUT);
         for phase in [
@@ -653,7 +653,7 @@ impl AppBuilder {
                 let type_name = queued.name;
                 let factory = (queued.factory)(builder.snapshot());
                 let register = lifecycle
-                    .boot(BootStep::Factory { type_name }, factory)
+                    .boot(&BootStep::Factory { type_name }, factory)
                     .await?
                     .map_err(|source| FactoryFailedError { type_name, source })?;
                 builder = register(builder);

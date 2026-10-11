@@ -13,22 +13,7 @@ use nest_rs_core::{
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
 
-struct Failing;
-
-#[async_trait::async_trait]
-impl Transport for Failing {
-    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
-        Err(anyhow!("the listener stopped accepting"))
-    }
-
-    fn stop_bound(&self) -> Duration {
-        Duration::ZERO
-    }
-}
+use crate::Failing;
 
 struct FailingModule;
 

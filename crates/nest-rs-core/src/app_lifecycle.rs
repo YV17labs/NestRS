@@ -142,16 +142,10 @@ impl AppLifecycle {
     /// draining, whether or not it served first.
     pub async fn ready(&self) -> bool {
         let mut stand = self.stand.subscribe();
-        loop {
-            match *stand.borrow_and_update() {
-                Stand::Starting => {}
-                Stand::Ready => return true,
-                Stand::Draining(_) => return false,
-            }
-            if stand.changed().await.is_err() {
-                return false;
-            }
-        }
+        stand
+            .wait_for(|stand| !matches!(stand, Stand::Starting))
+            .await
+            .is_ok_and(|stand| matches!(*stand, Stand::Ready))
     }
 
     /// A child of the app's stop token, cancelled the instant the app turns
@@ -214,10 +208,10 @@ impl AppLifecycle {
     /// then dropped where it waits, and the boot returns the interruption.
     pub(crate) async fn boot<T>(
         &self,
-        step: BootStep,
+        step: &BootStep,
         future: impl Future<Output = T>,
     ) -> Result<T, BootInterruptedError> {
-        crate::way_down::boot_step(Some(&step));
+        crate::way_down::boot_step(Some(step));
         let outcome = tokio::select! {
             biased;
             cause = self.stopped() => Err(cause),
@@ -232,7 +226,10 @@ impl AppLifecycle {
                 step = %step,
                 "shutdown signal received during the boot: stopping it",
             );
-            BootInterruptedError { cause, step }
+            BootInterruptedError {
+                cause,
+                step: step.clone(),
+            }
         })
     }
 
@@ -252,6 +249,10 @@ impl AppLifecycle {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
     use nest_rs_testing::LogCapture;
 
     use super::*;
@@ -299,12 +300,12 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_waiter_on_ready_wakes_at_the_transition() {
-        let lifecycle = std::sync::Arc::new(AppLifecycle::new());
+        let lifecycle = Arc::new(AppLifecycle::new());
         let waiting = tokio::spawn({
-            let lifecycle = std::sync::Arc::clone(&lifecycle);
+            let lifecycle = Arc::clone(&lifecycle);
             async move { lifecycle.ready().await }
         });
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(!waiting.is_finished(), "still starting");
 
         lifecycle.turn_ready("Http");
@@ -326,13 +327,13 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_boot_step_waiting_when_the_stop_is_asked_is_dropped_and_named() {
         let logs = LogCapture::install();
-        let lifecycle = std::sync::Arc::new(AppLifecycle::new());
+        let lifecycle = Arc::new(AppLifecycle::new());
         let booting = tokio::spawn({
-            let lifecycle = std::sync::Arc::clone(&lifecycle);
+            let lifecycle = Arc::clone(&lifecycle);
             async move {
                 lifecycle
                     .boot(
-                        BootStep::Factory {
+                        &BootStep::Factory {
                             type_name: "app::Pool",
                         },
                         std::future::pending::<()>(),
@@ -340,7 +341,7 @@ mod tests {
                     .await
             }
         });
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         lifecycle.drain(StopCause::Terminate);
 
         let interrupted = booting
@@ -371,18 +372,18 @@ mod tests {
     async fn a_boot_step_already_stopped_never_starts() {
         let lifecycle = AppLifecycle::new();
         lifecycle.drain(StopCause::Interrupt);
-        let started = std::sync::atomic::AtomicBool::new(false);
+        let started = AtomicBool::new(false);
 
         let outcome = lifecycle
             .boot(
-                BootStep::Configure {
+                &BootStep::Configure {
                     transport: "Http".to_owned(),
                 },
-                async { started.store(true, std::sync::atomic::Ordering::SeqCst) },
+                async { started.store(true, Ordering::SeqCst) },
             )
             .await;
 
         assert!(outcome.is_err());
-        assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!started.load(Ordering::SeqCst));
     }
 }

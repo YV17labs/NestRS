@@ -141,16 +141,11 @@ pub(crate) async fn run_phase(
             origin: hook.origin,
         };
         match lifecycle
-            .boot(step, panic::contain((hook.run)(container)))
+            .boot(&step, panic::contain((hook.run)(container)))
             .await?
         {
             Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                return Err(err.context(format!(
-                    "lifecycle hook {}::{} ({phase:?}) failed",
-                    hook.provider, hook.method
-                )));
-            }
+            Ok(Err(err)) => return Err(err.context(format!("{step} failed"))),
             Err(payload) => {
                 crate::contained_panic!(
                     target: crate::target::LIFECYCLE,
@@ -161,11 +156,7 @@ pub(crate) async fn run_phase(
                     method = hook.method,
                     origin = hook.origin,
                 );
-                anyhow::bail!(
-                    "lifecycle hook {}::{} ({phase:?}) panicked",
-                    hook.provider,
-                    hook.method,
-                );
+                anyhow::bail!("{step} panicked");
             }
         }
     }

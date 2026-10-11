@@ -98,6 +98,13 @@ impl TraceShelf {
         let seen = ambient::<Caller>().map_or("nobody", |caller| caller.0);
         keys.iter().map(|key| (*key, seen.to_owned())).collect()
     }
+
+    async fn spans(&self, keys: &[i32]) -> HashMap<i32, String> {
+        let seen = tracing::Span::current()
+            .metadata()
+            .map_or("none", |metadata| metadata.name());
+        keys.iter().map(|key| (*key, seen.to_owned())).collect()
+    }
 }
 
 #[resolver]
@@ -117,6 +124,14 @@ impl TraceShelfResolver {
     #[public]
     async fn batch_caller(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
         let loader = ctx.data::<DataLoader<TraceShelfCallers>>()?;
+        let Ok(found) = loader.load_one(id).await;
+        Ok(found.unwrap_or_default())
+    }
+
+    #[query]
+    #[public]
+    async fn batch_span(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
+        let loader = ctx.data::<DataLoader<TraceShelfSpans>>()?;
         let Ok(found) = loader.load_one(id).await;
         Ok(found.unwrap_or_default())
     }
@@ -158,6 +173,29 @@ async fn a_batch_runs_under_the_trace_of_the_request_that_triggered_it() {
         body["data"]["batchTrace"].as_str(),
         Some(request_trace.as_str()),
         "the batch reads the request's trace id: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_batch_runs_in_its_requests_span_as_it_carries_its_requests_ids() {
+    let _logs = nest_rs_testing::LogCapture::install();
+    let app = nest_rs_testing::TestApp::for_module::<TraceShelfApp>()
+        .await
+        .expect("the schema boots");
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ batchSpan(id: 7) }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+
+    assert_eq!(
+        body["data"]["batchSpan"].as_str(),
+        Some(nest_rs_http::unit::REQUEST.name()),
+        "the export nests the batch where its lines say it belongs, never under the \
+         field that asked first: {body}",
     );
 }
 

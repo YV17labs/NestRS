@@ -16,8 +16,10 @@ use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
 };
 use async_graphql::{Request, ServerResult};
-use nest_rs_core::{Container, Continuation, ReachableProviders, TaskContext};
+use futures_util::future::Either;
+use nest_rs_core::{Container, Continuation, ReachableProviders, RequestContinuation};
 use nest_rs_http::DetachedWork;
+use tracing::Instrument;
 
 /// One DataLoader registration, module-gated by its owner's reachability:
 /// `container.get::<Owner>()` would panic at request time otherwise.
@@ -37,16 +39,22 @@ inventory::collect!(GraphqlLoaderRegistration);
 /// capture taken there sees the request: the batch runs under what the request
 /// carries into a [`Batch`](Continuation::Batch) — its trace, the caller's
 /// ability, the pool rather than its transaction — whichever field triggered
-/// it.
+/// it. Built where the request seeds its loaders, before any field runs, it
+/// holds the request's span, so the export files a batch where its lines do.
 pub fn batch_spawner(
     batches: &DetachedWork,
 ) -> impl Fn(crate::BoxFuture<'static, ()>) + Send + Sync + 'static {
     let batches = batches.clone();
+    let span = tracing::Span::current();
     move |batch| {
-        let carried = TaskContext::capture(Continuation::Batch);
+        let batch = match RequestContinuation::capture(Continuation::Batch) {
+            Some(carried) => Either::Left(carried.scope(batch)),
+            None => Either::Right(batch),
+        };
+        let batch = batch.instrument(span.clone());
         let batches = batches.clone();
         tokio::spawn(async move {
-            let _ = batches.run(carried.carry(batch)).await;
+            let _ = batches.run(batch).await;
         });
     }
 }

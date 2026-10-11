@@ -19,7 +19,7 @@ $ NESTRS_OPENAPI__TITLE="Publish API" \
 
 | Field | Env var | Default | Effect |
 |---|---|---|---|
-| `enabled` | `<PREFIX>_OPENAPI__ENABLED` | dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
+| `enabled` | `<PREFIX>_OPENAPI__ENABLED` | declared dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
 | `title` | `<PREFIX>_OPENAPI__TITLE` | `nestrs API` | `info.title`. |
 | `version` | `<PREFIX>_OPENAPI__VERSION` | `0.1.0` | `info.version` — your API's version, not the framework's. |
 | `summary` | `<PREFIX>_OPENAPI__SUMMARY` | none | `info.summary`, one line. |
@@ -55,7 +55,8 @@ so the deployment can still override any one of them, a single contact or
 license key included. See the [precedence chain](/configuration/#the-dual-path-rule).
 
 `OpenApiConfig::defaults()` is the profile's base, so the documentation stays
-a development surface: served in development and test, closed elsewhere. Over
+a development surface: served when the process declares development or test,
+closed elsewhere — a process that declares no `<PREFIX>_ENV` included. Over
 `..Default::default()` it is closed in every profile, until `enabled: true` in
 the pin or `<PREFIX>_OPENAPI__ENABLED=true` in the deployment opens it — a
 visible line, logged at `warn` outside a development or test profile.

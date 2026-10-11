@@ -12,6 +12,8 @@
 
 mod dotenv;
 mod env_prefix;
+mod environment;
+mod module;
 mod namespace;
 mod service;
 mod unclaimed;

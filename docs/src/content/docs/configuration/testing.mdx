@@ -201,8 +201,12 @@ Two consequences:
 
 - The `.env` cascade skips `.env.local` (per-machine secrets stay out of
   the test).
-- Env-aware framework defaults stay off: the GraphQL playground doesn't
-  mount, SDL emission doesn't fire, dev-only middleware unloads.
+- The development conveniences the framework keys on the profile are on,
+  as in development: the OpenAPI documentation serves `/api`, Server-Timing
+  stamps its header, storage adds the dev container's credentials and
+  allows plain HTTP, and Redis defaults to the loopback. What lives only in
+  `.env.development` stays off: the GraphQL playground doesn't mount, and
+  SDL emission doesn't fire.
 
 A test that wants to assert prod behavior overrides this explicitly
 before building the app — `unsafe { std::env::set_var("<PREFIX>_ENV",

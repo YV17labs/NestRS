@@ -23,14 +23,14 @@ impl Config for ServerTimingConfig {
     // Not in `from_env`: overlaying it would rewrite a pinned `enabled: true`.
     fn defaults() -> Self {
         Self {
-            enabled: dev_profile(Environment::from_env()),
+            enabled: !Environment::from_env().is_deployed(),
         }
     }
 
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let environment = Environment::from_env();
         let enabled = env.flag("ENABLED", base.enabled)?;
-        if enabled && !dev_profile(environment) {
+        if enabled && environment.is_deployed() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
@@ -39,10 +39,6 @@ impl Config for ServerTimingConfig {
         }
         Ok(Self { enabled })
     }
-}
-
-fn dev_profile(environment: Environment) -> bool {
-    !matches!(environment, Environment::Production | Environment::Staging)
 }
 
 #[cfg(test)]
@@ -77,11 +73,12 @@ mod tests {
             ("test", true),
             ("staging", false),
             ("production", false),
+            ("", false),
         ] {
             assert_eq!(
                 in_profile(profile, ServerTimingConfig::defaults).enabled,
                 enabled,
-                "{profile}",
+                "{profile:?}",
             );
         }
     }

@@ -68,13 +68,21 @@ pub enum Environment {
 
 | `<PREFIX>_ENV` | Variant |
 |--------------|---------|
-| unset, anything unrecognized | `Development` |
+| `development` / `dev` | `Development` |
 | `test` | `Test` |
 | `staging` / `stage` | `Staging` |
-| `production` / `prod` | `Production` |
+| `production` / `prod`, unset, anything unrecognized | `Production` |
 
-The default is `Development`. Tests default to `Test` (the test harness
-sets it before any builder runs).
+The default is `Production`. A process that declares nothing reads
+`.env.production`, never `.env.development`, and arms no development
+convenience: the OpenAPI documentation stays closed, storage refuses plain
+HTTP and has no credential, Redis has no loopback URL. An app importing
+`ConfigModule::for_root()` says so once at boot, at `info` on
+`nest_rs::config` — `no environment declared; running as production` — and an
+unrecognized value is said once on stderr, by the variable's name.
+`nestrs run dev` declares `development` on the process; a run outside it, an
+IDE's included, declares it the same way. Tests default to `Test` (the test
+harness sets it before any builder runs).
 
 ### Test mode is hermetic
 
@@ -110,7 +118,8 @@ Exactly once per process, before your `main` runs:
   own values.
 - **`ConfigModule::for_root()`** does *not* parse it. Its collect reads
   `<PREFIX>_ENV` from the real environment and registers the resulting
-  `Arc<Environment>`, which is what decides *which* files the parse read.
+  `Arc<Environment>`, which is what decides *which* files the parse read — and
+  files the `info` line above when the process declared none.
 
 <Aside type="caution">
 A binary that does not run on `#[nest_rs::main]` calls

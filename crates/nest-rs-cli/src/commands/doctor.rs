@@ -365,14 +365,14 @@ fn cascade_text(dir: &Path, env_prefix: &str, real: impl Fn(&str) -> Option<OsSt
 }
 
 /// The environment whose files the loader reads for a `<PREFIX>_ENV` value,
-/// mirroring `nest_rs_config::Environment`: `prod` reads `.env.production`, and
-/// empty, unset or unrecognised read the development files.
+/// mirroring `nest_rs_config::Environment`: `dev` reads `.env.development`, and
+/// empty, unset or unrecognised read the production files.
 fn cascade_environment(declared: Option<&str>) -> &'static str {
     match declared.map(str::trim) {
-        Some("production" | "prod") => "production",
+        Some("development" | "dev") => "development",
         Some("staging" | "stage") => "staging",
         Some("test") => "test",
-        _ => "development",
+        _ => "production",
     }
 }
 
@@ -622,9 +622,18 @@ mod tests {
             !present(real(&[]), &test, "NESTRS_SEAORM__URL"),
             "test skips .env.local"
         );
+        std::fs::write(dir.join(".env.development"), "NESTRS_STORAGE__BUCKET=dev\n")
+            .expect("write");
         let unset = cascade_text(&dir, "NESTRS", real(&[]));
+        assert!(
+            present(real(&[]), &unset, "NESTRS_REDIS__URL"),
+            "an undeclared process reads .env.production"
+        );
+        assert!(
+            !present(real(&[]), &unset, "NESTRS_STORAGE__BUCKET"),
+            "and never .env.development"
+        );
         assert!(present(real(&[]), &unset, "NESTRS_SEAORM__URL"));
-        assert!(!present(real(&[]), &unset, "NESTRS_REDIS__URL"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -635,9 +644,10 @@ mod tests {
         assert_eq!(cascade_environment(Some("stage")), "staging");
         assert_eq!(cascade_environment(Some("test")), "test");
         assert_eq!(cascade_environment(Some("dev")), "development");
-        assert_eq!(cascade_environment(Some("")), "development");
-        assert_eq!(cascade_environment(Some("producton")), "development");
-        assert_eq!(cascade_environment(None), "development");
+        assert_eq!(cascade_environment(Some(" development ")), "development");
+        assert_eq!(cascade_environment(Some("")), "production");
+        assert_eq!(cascade_environment(Some("producton")), "production");
+        assert_eq!(cascade_environment(None), "production");
     }
 
     /// A variable given as a file is set, when the file holds a value.

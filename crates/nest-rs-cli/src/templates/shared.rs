@@ -103,7 +103,7 @@ export {{env_prefix_var}} := "{{env_prefix}}"
 pub(crate) const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
 # cascade, so it has to exist before any file is read. It also arms every
 # development-only affordance (the `POST /auth/dev-token` route `nestrs g auth`
-# writes), which is why absence has to mean "not development" everywhere else."#;
+# writes), which is why absence means production everywhere else."#;
 
 pub(crate) const GITIGNORE: &str = r#"/target
 **/*.rs.bk
@@ -144,10 +144,10 @@ pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.
 #   >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
-pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides. An unset {{env_prefix}}_ENV still loads
-# this cascade, but arms no development-only affordance: those need it set, on the
-# process, to development, dev or test — `nestrs run dev` does it. Setting it here
-# would be too late and is refused at boot.
+pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides, read only when the process declares
+# {{env_prefix}}_ENV=development (or dev) — `nestrs run dev` does it; an unset one runs as
+# production and never reads this file. Setting it here would be too late and is
+# refused at boot.
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
 # Verbose, human-readable logs while developing.

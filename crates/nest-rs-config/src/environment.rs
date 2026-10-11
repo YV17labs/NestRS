@@ -1,53 +1,62 @@
 //! Active runtime [`Environment`] — selects the `.env` cascade and branches
 //! code paths.
 
+use std::sync::Once;
+
 use nest_rs_core::EnvPrefix;
 
 use crate::source::real_env_var;
 
 /// Read from the reserved `<PREFIX>_ENV`, outside the `<PREFIX>_<DOMAIN>__<KEY>`
 /// scheme: it selects which `.env` files to load, so it comes from the real
-/// process environment alone. Unset or unrecognised ⇒
-/// [`Development`](Self::Development).
+/// process environment alone. Unset, empty or unrecognised ⇒
+/// [`Production`](Self::Production): a development convenience is armed only
+/// by a process that declares its profile.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Environment {
-    /// Local development — the default when `<PREFIX>_ENV` is unset or unrecognised.
-    #[default]
+    /// Local development, declared as `development` or `dev`.
     Development,
-    /// `.env.local` is **not** loaded so tests stay hermetic.
+    /// Declared as `test`; `.env.local` is **not** loaded so tests stay hermetic.
     Test,
-    /// Pre-production staging.
+    /// Pre-production staging, declared as `staging` or `stage`.
     Staging,
-    /// Production.
+    /// Production, declared as `production` or `prod` — and what a process that
+    /// leaves `<PREFIX>_ENV` unset, empty or unrecognised runs as.
+    #[default]
     Production,
 }
 
 impl Environment {
     /// Read the active environment from `<PREFIX>_ENV` (real process env only).
+    ///
+    /// A value that names no environment is read as
+    /// [`Production`](Self::Production), and said once per process on stderr,
+    /// by the variable's name alone.
     #[expect(
         clippy::print_stderr,
         reason = "this runs at the top of main, before any subscriber exists; stderr is the one sink guaranteed visible"
     )]
     pub fn from_env() -> Self {
+        static WARNED: Once = Once::new();
         let var = Self::var_name();
-        let raw = real_env_var(&var);
-        let (env, unrecognized) = classify(raw.as_deref());
-        if let Some(value) = unrecognized {
-            eprintln!(
-                "nestrs: WARNING — unrecognized {var}={value:?}; falling back to \
-                 `development`. A misspelled production value loads the development `.env` \
-                 cascade in production. Use one of: development, test, staging, production."
-            );
+        let (env, unrecognized) = classify(real_env_var(&var).as_deref());
+        if unrecognized {
+            WARNED.call_once(|| {
+                eprintln!(
+                    "nestrs: WARNING — {var} holds a value that is none of development, dev, \
+                     test, staging, stage, production, prod; it is read as `production`."
+                );
+            });
         }
         env
     }
 
     /// The environment the process **declares**, or `None` when nobody set it.
     ///
-    /// Unset, empty and unrecognised are all `None`, so a development-only
-    /// affordance gated on this fails closed — unlike [`from_env`](Self::from_env),
-    /// which maps absence to [`Development`](Self::Development).
+    /// Unset, empty and unrecognised are all `None`, where
+    /// [`from_env`](Self::from_env) reads them as
+    /// [`Production`](Self::Production).
     pub fn declared() -> Option<Self> {
         declare(real_env_var(&Self::var_name()).as_deref())
     }
@@ -71,19 +80,30 @@ impl Environment {
     pub fn is_production(&self) -> bool {
         matches!(self, Self::Production)
     }
+
+    /// Whether this is a deployment — [`Staging`](Self::Staging) or
+    /// [`Production`](Self::Production) — where a config's
+    /// [`defaults`](crate::Config::defaults) arms no development convenience
+    /// and stays its `Default`.
+    pub fn is_deployed(&self) -> bool {
+        match self {
+            Self::Staging | Self::Production => true,
+            Self::Development | Self::Test => false,
+        }
+    }
 }
 
-/// Classify a raw `<PREFIX>_ENV` value into an [`Environment`], returning
-/// `Some(value)` in the second slot when the value was **set but
-/// unrecognized** (so the caller can surface it) and `None` when it was unset,
-/// empty, or an explicit development alias.
-fn classify(raw: Option<&str>) -> (Environment, Option<String>) {
+/// Classify a raw `<PREFIX>_ENV` value into an [`Environment`], with `true`
+/// in the second slot when the value was **set but unrecognized** (so the
+/// caller can surface it) — never for unset or empty, which are production
+/// silently.
+fn classify(raw: Option<&str>) -> (Environment, bool) {
     match raw.map(str::trim) {
-        Some("production" | "prod") => (Environment::Production, None),
-        Some("staging" | "stage") => (Environment::Staging, None),
-        Some("test") => (Environment::Test, None),
-        Some("development" | "dev" | "") | None => (Environment::Development, None),
-        Some(other) => (Environment::Development, Some(other.to_owned())),
+        Some("development" | "dev") => (Environment::Development, false),
+        Some("test") => (Environment::Test, false),
+        Some("staging" | "stage") => (Environment::Staging, false),
+        Some("production" | "prod" | "") | None => (Environment::Production, false),
+        Some(_) => (Environment::Production, true),
     }
 }
 
@@ -92,8 +112,8 @@ fn classify(raw: Option<&str>) -> (Environment, Option<String>) {
 fn declare(raw: Option<&str>) -> Option<Environment> {
     let value = raw.map(str::trim).filter(|v| !v.is_empty())?;
     match classify(Some(value)) {
-        (env, None) => Some(env),
-        (_, Some(_)) => None,
+        (env, false) => Some(env),
+        (_, true) => None,
     }
 }
 
@@ -118,8 +138,16 @@ mod tests {
     }
 
     #[test]
-    fn default_is_development() {
-        assert_eq!(Environment::default(), Environment::Development);
+    fn is_deployed_matches_staging_and_production_alone() {
+        assert!(Environment::Production.is_deployed());
+        assert!(Environment::Staging.is_deployed());
+        assert!(!Environment::Development.is_deployed());
+        assert!(!Environment::Test.is_deployed());
+    }
+
+    #[test]
+    fn default_is_production() {
+        assert_eq!(Environment::default(), Environment::Production);
     }
 
     #[test]
@@ -149,18 +177,27 @@ mod tests {
     }
 
     #[test]
-    fn classify_treats_unset_empty_and_dev_aliases_as_silent_development() {
-        for raw in [None, Some(""), Some("  "), Some("development"), Some("dev")] {
+    fn classify_reads_unset_and_empty_as_silent_production() {
+        for raw in [None, Some(""), Some("  ")] {
             let (env, unrecognized) = classify(raw);
-            assert_eq!(env, Environment::Development, "for {raw:?}");
-            assert!(unrecognized.is_none(), "must be silent for {raw:?}");
+            assert_eq!(env, Environment::Production, "for {raw:?}");
+            assert!(!unrecognized, "must be silent for {raw:?}");
         }
     }
 
     #[test]
-    fn classify_flags_a_set_but_unrecognized_value_while_defaulting_to_development() {
-        let (env, unrecognized) = classify(Some("producton"));
-        assert_eq!(env, Environment::Development);
-        assert_eq!(unrecognized.as_deref(), Some("producton"));
+    fn classify_reads_the_development_aliases_as_silent_development() {
+        for raw in [Some("development"), Some("dev"), Some(" dev ")] {
+            let (env, unrecognized) = classify(raw);
+            assert_eq!(env, Environment::Development, "for {raw:?}");
+            assert!(!unrecognized, "must be silent for {raw:?}");
+        }
+    }
+
+    #[test]
+    fn classify_flags_a_set_but_unrecognized_value_while_reading_it_as_production() {
+        let (env, unrecognized) = classify(Some("prd"));
+        assert_eq!(env, Environment::Production);
+        assert!(unrecognized, "the value is reported as unrecognised");
     }
 }

@@ -118,7 +118,7 @@ The header hands every client the time each backend took, so outside the
 development and test profiles the module stamps nothing until the deployment
 says so — the posture the [OpenAPI documentation](/openapi/configuration/) has.
 The profile is `<PREFIX>_ENV` ([the env cascade](/configuration/env-cascade/)),
-and one variable opens the header:
+production when the process declares none, and one variable opens the header:
 
 ```bash frame="terminal"
 $ NESTRS_ENV=staging NESTRS_SERVER_TIMING__ENABLED=true nestrs run start api

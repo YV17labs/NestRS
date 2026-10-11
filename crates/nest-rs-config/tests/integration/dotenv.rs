@@ -6,18 +6,17 @@ use nest_rs_config::Environment;
 /// Unset on the process, declared in the file: the file matches the resolution
 /// by absence only, and still aborts.
 #[test]
-#[should_panic(expected = "is `development` in the `.env` cascade")]
+#[should_panic(
+    expected = "is `production` in the `.env` cascade, but the process environment does not carry it"
+)]
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
 fn the_environment_written_into_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
-        jail.create_file(
-            ".env",
-            &format!("{}=development\n", Environment::var_name()),
-        )?;
-        nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
+        jail.create_file(".env", &format!("{}=production\n", Environment::var_name()))?;
+        nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Production);
         Ok(())
     });
 }
@@ -237,6 +236,79 @@ mod published_before_main {
                     .lines()
                     .any(|line| line == "CASCADE_DEPLOYED=from_deployment"),
                 "the deployment's value wins over the file's: {stdout}",
+            );
+            Ok(())
+        });
+    }
+}
+
+/// A process that declares no environment runs as production from its first
+/// line: the cascade it publishes is production's, never development's.
+mod an_undeclared_process {
+    use std::process::Command;
+
+    use nest_rs_config::{ConfigService, Environment, var_name};
+
+    const CHILD_ROLE: &str = "NEST_RS_CONFIG_UNDECLARED_CHILD";
+
+    const CHILD_TEST: &str = "dotenv::an_undeclared_process::undeclared_child_process";
+
+    const NAMESPACE: &str = "undeclared_probe";
+
+    #[nest_rs_core::main]
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
+    async fn print_what_an_undeclared_process_resolves() {
+        let picked = ConfigService::for_namespace(NAMESPACE)
+            .get("PICK")
+            .expect("a plain read")
+            .unwrap_or_default();
+        println!("ENVIRONMENT={}", Environment::from_env().as_str());
+        println!("PICK={picked}");
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the parent test hands the child its role through the environment"
+    )]
+    fn undeclared_child_process() {
+        if std::env::var(CHILD_ROLE).is_ok() {
+            print_what_an_undeclared_process_resolves();
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn reads_the_production_files_and_never_the_development_ones() {
+        figment::Jail::expect_with(|jail| {
+            let pick = var_name(NAMESPACE, "PICK");
+            jail.create_file(".env.development", &format!("{pick}=dev\n"))?;
+            jail.create_file(".env.production", &format!("{pick}=prod\n"))?;
+
+            let child = Command::new(std::env::current_exe().expect("the test binary"))
+                .args(["--exact", CHILD_TEST, "--nocapture"])
+                .current_dir(jail.directory())
+                .env(CHILD_ROLE, "1")
+                .env_remove(Environment::var_name())
+                .env_remove(&pick)
+                .output()
+                .expect("the child runs");
+
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            assert!(child.status.success(), "{stdout}");
+            assert!(
+                stdout.lines().any(|line| line == "ENVIRONMENT=production"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.lines().any(|line| line == "PICK=prod"),
+                "an undeclared process reads .env.production: {stdout}"
             );
             Ok(())
         });

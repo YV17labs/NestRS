@@ -22,7 +22,8 @@ pub struct ConfigModule;
 impl ConfigModule {
     /// Register the active [`Environment`] so a provider can inject
     /// `Arc<Environment>` and branch on the profile. Its position among
-    /// `imports` carries no meaning.
+    /// `imports` carries no meaning. A process that declares no
+    /// `<PREFIX>_ENV` runs as production, and the boot says so once at `info`.
     pub fn for_root() -> ConfigRootSetup {
         ConfigRootSetup
     }
@@ -145,7 +146,8 @@ impl<C: Config> DynamicModule for ConfigFeatureSetup<C> {
 }
 
 /// The import produced by [`ConfigModule::for_root`]. Registers the active
-/// [`Environment`] so later config loads see the resolved `.env` cascade.
+/// [`Environment`] so later config loads see the resolved `.env` cascade, and
+/// files one `info` when the process declared none.
 pub struct ConfigRootSetup;
 
 impl DynamicModule for ConfigRootSetup {
@@ -154,8 +156,17 @@ impl DynamicModule for ConfigRootSetup {
     }
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        let environment = Environment::from_env();
+        if Environment::declared().is_none() {
+            tracing::info!(
+                target: crate::TARGET,
+                environment = environment.as_str(),
+                declared = false,
+                "no environment declared; running as production",
+            );
+        }
         // No `set_var` on the boot path: a spawned worker's `getenv` could race it.
-        builder.provide(Environment::from_env())
+        builder.provide(environment)
     }
 }
 

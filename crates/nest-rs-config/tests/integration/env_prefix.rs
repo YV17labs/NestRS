@@ -100,11 +100,11 @@ fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
 fn the_active_environment_is_read_from_the_declared_prefix() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
-        jail.set_env("ACME_ENV", "production");
+        jail.set_env("ACME_ENV", "development");
         jail.set_env("NESTRS_ENV", "staging");
         assert_eq!(
             Environment::from_env(),
-            Environment::Production,
+            Environment::Development,
             "ACME_ENV decides; NESTRS_ENV is just another variable now",
         );
         Ok(())

@@ -80,9 +80,10 @@ Importing the bare `StorageModule` — what a feature module does — leaves the
 whole config to the environment.
 
 Two defaults below are **profile-dependent**, and both differences are
-security ones: only a development or test profile adds the dev container's
-credentials and allows plain HTTP, so an unset key elsewhere fails boot by name
-instead of authenticating with a public default.
+security ones: only a declared development or test profile adds the dev
+container's credentials and allows plain HTTP, so an unset key elsewhere — a
+process that declares no `<PREFIX>_ENV` included — fails boot by name instead of
+authenticating with a public default.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -239,9 +240,10 @@ Ok(Response::builder().body(Body::from_bytes_stream(stream)))
 ```
 
 <Aside type="caution">
-`ALLOW_HTTP=false` — its value outside a development or test profile, and in
-every profile for a config pinned over `..Default::default()` — refuses a
-plain-`http://` endpoint **at boot**, naming `<PREFIX>_STORAGE__ENDPOINT`. It
+`ALLOW_HTTP=false` — its value outside a declared development or test
+profile, and in every profile for a config pinned over `..Default::default()`
+— refuses a plain-`http://` endpoint **at boot**, naming
+`<PREFIX>_STORAGE__ENDPOINT`. It
 covers presigned URLs too: signing is a local computation, so a plaintext
 endpoint would otherwise hand clients a working URL carrying the SigV4
 signature. Point it at an `https://` endpoint, or set

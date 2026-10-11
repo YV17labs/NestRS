@@ -45,9 +45,9 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// framework-namespaced `<PREFIX>_STORAGE__*` keys.
 ///
 /// `Default` is the production-safe value: an `https://` endpoint in
-/// path-style addressing, plain HTTP refused and no credential. A development
-/// or test profile's [`Config::defaults`] adds the dev container's pair and
-/// allows plain HTTP; a config pinned over `..Default::default()` gets neither
+/// path-style addressing, plain HTTP refused and no credential. A declared
+/// development or test profile's [`Config::defaults`] adds the dev container's
+/// pair and allows plain HTTP; a config pinned over `..Default::default()` gets neither
 /// in any profile, and one pinned over `..StorageConfig::defaults()` gets the
 /// profile's. For real AWS S3, leave [`endpoint`](Self::endpoint) empty and
 /// set [`force_path_style`](Self::force_path_style) to `false`.
@@ -72,7 +72,7 @@ pub struct StorageConfig {
     pub force_path_style: bool,
     /// Allow reaching the endpoint over plain `http://`
     /// (`<PREFIX>_STORAGE__ALLOW_HTTP`): `false` by default, and `true` only in
-    /// a development or test profile's [`Config::defaults`].
+    /// a declared development or test profile's [`Config::defaults`].
     pub allow_http: bool,
     /// The most a call waits for S3's answer, every retry included; a
     /// download's body is held by [`read_timeout`](Self::read_timeout) instead.
@@ -130,12 +130,12 @@ impl Default for StorageConfig {
 }
 
 impl Config for StorageConfig {
-    /// In a development or test profile, the dev container's pair and plain
-    /// HTTP over `Default`. Here rather than in `from_env`, so it never
-    /// rewrites a pinned struct.
+    /// In a declared development or test profile, the dev container's pair
+    /// and plain HTTP over `Default`. Here rather than in `from_env`, so it
+    /// never rewrites a pinned struct.
     fn defaults() -> Self {
         let safe = Self::default();
-        if !dev_profile() {
+        if Environment::from_env().is_deployed() {
             return safe;
         }
         Self {
@@ -183,7 +183,7 @@ fn resolve_endpoint(
         format!(
             "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false (its \
              value in `StorageConfig::default()`, and in `StorageConfig::defaults()` outside a \
-             development or test profile) — credentials and presigned URLs would travel \
+             declared development or test profile) — credentials and presigned URLs would travel \
              unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
         )
     };
@@ -257,14 +257,6 @@ pub(crate) fn is_plaintext(endpoint: &str) -> bool {
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
 }
 
-/// `true` in a development or test profile.
-fn dev_profile() -> bool {
-    !matches!(
-        Environment::from_env(),
-        Environment::Production | Environment::Staging
-    )
-}
-
 /// The resolved credential, refusing a blank one under the spelling that set
 /// it, or its variable when unset.
 fn resolve_credential(
@@ -282,7 +274,7 @@ fn resolve_credential(
             env.var_name(key),
             format!(
                 "must be set, inline or through {} — `StorageConfig::defaults()` holds the \
-                 development pair in a development or test profile alone, \
+                 development pair in a declared development or test profile alone, \
                  `StorageConfig::default()` never, and a config pinned in code reads the pair \
                  from the deployment, not `.env`",
                 env.var_name(&format!("{key}_FILE"))
@@ -347,6 +339,24 @@ mod tests {
         clippy::result_large_err,
         reason = "figment::Jail fixes the closure's error type"
     )]
+    fn an_undeclared_environment_gets_neither_the_pair_nor_plain_http() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(Environment::var_name(), "");
+            let d = <StorageConfig as Config>::defaults();
+            assert!(!d.allow_http, "plain HTTP waits for a declared profile");
+            assert!(
+                d.access_key.is_empty() && d.secret_key.is_empty(),
+                "the development pair waits for a declared profile"
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn a_pin_over_the_profiles_defaults_keeps_the_pair_in_development_alone() {
         figment::Jail::expect_with(|jail| {
             let pin = || StorageConfig {
@@ -390,7 +400,7 @@ mod tests {
         assert!(
             refused.contains(
                 "its value in `StorageConfig::default()`, and in `StorageConfig::defaults()` \
-                 outside a development or test profile"
+                 outside a declared development or test profile"
             ),
             "the sentence says where the false comes from, whatever the profile: {refused}"
         );

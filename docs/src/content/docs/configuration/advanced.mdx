@@ -215,22 +215,18 @@ parameters, so it names the client and not the accepted set. That set is
 `Config::defaults()` when nothing was pinned at the import site. `Default` is
 the production-safe value, in every profile; a development convenience — a
 credential the dev container accepts, plain HTTP, public documentation — lives
-in `defaults()`, armed by the profile. The framework does this for its own
-storage and OpenAPI configs:
+in `defaults()`, armed only by a declared development or test profile. A
+process that declares no `<PREFIX>_ENV` runs as production, so it gets
+`Default`. The framework does this for its own storage, Redis and OpenAPI
+configs:
 
 ```rust title="apps/auth/src/config.rs"
 use nest_rs::config::Environment;
 
-/// Two lines, written per crate: the framework's own copies are private, so
-/// there is nothing to import.
-fn dev_profile() -> bool {
-    !matches!(Environment::from_env(), Environment::Production | Environment::Staging)
-}
-
 impl Config for StorageConfig {
     fn defaults() -> Self {
         let safe = Self::default();
-        if !dev_profile() { return safe; }
+        if Environment::from_env().is_deployed() { return safe; }
         // Development and test: the dev container's pair, plain HTTP allowed.
         Self { access_key: "nestrs".into(), secret_key: "nestrs".into(), allow_http: true, ..safe }
     }

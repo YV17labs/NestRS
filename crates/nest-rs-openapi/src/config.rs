@@ -65,7 +65,7 @@ impl Config for OpenApiConfig {
     // Not in `from_env`: overlaying it would rewrite a pinned `enabled: true`.
     fn defaults() -> Self {
         Self {
-            enabled: docs_default_enabled(Environment::from_env()),
+            enabled: !Environment::from_env().is_deployed(),
             ..Self::default()
         }
     }
@@ -74,7 +74,7 @@ impl Config for OpenApiConfig {
         let d = base;
         let environment = Environment::from_env();
         let enabled = env.flag("ENABLED", d.enabled)?;
-        if enabled && !docs_default_enabled(environment) {
+        if enabled && environment.is_deployed() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
@@ -154,10 +154,6 @@ fn license_from_env(
     Ok(license)
 }
 
-fn docs_default_enabled(environment: Environment) -> bool {
-    !matches!(environment, Environment::Production | Environment::Staging)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +187,22 @@ mod tests {
             )
             .expect("ok");
             assert!(!cfg.enabled, "a pin opens the docs only by saying so");
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn an_undeclared_environment_serves_no_documentation() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "");
+            assert!(
+                !<OpenApiConfig as Config>::defaults().enabled,
+                "a process that declares no profile runs as production"
+            );
             Ok(())
         });
     }
@@ -297,11 +309,27 @@ mod tests {
     }
 
     #[test]
-    fn docs_default_off_outside_dev() {
-        assert!(docs_default_enabled(Environment::Development));
-        assert!(docs_default_enabled(Environment::Test));
-        assert!(!docs_default_enabled(Environment::Staging));
-        assert!(!docs_default_enabled(Environment::Production));
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn the_unpinned_default_serves_the_documentation_in_development_and_test_alone() {
+        figment::Jail::expect_with(|jail| {
+            for (profile, enabled) in [
+                ("development", true),
+                ("test", true),
+                ("staging", false),
+                ("production", false),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                assert_eq!(
+                    <OpenApiConfig as Config>::defaults().enabled,
+                    enabled,
+                    "{profile}"
+                );
+            }
+            Ok(())
+        });
     }
 
     #[test]

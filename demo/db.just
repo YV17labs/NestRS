@@ -1,3 +1,6 @@
+# Local migrations and seed run against the dev container, so they declare its profile.
+export NESTRS_ENV := "development"
+
 _default:
     @just --list db
 

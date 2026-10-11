@@ -315,7 +315,8 @@ pub(crate) fn reachable_provider_ids(
 
 /// Every reachable provider in **declaration order**: modules depth-first from
 /// the roots along their `imports = [...]`, and within each module its
-/// `providers = [...]` left to right; first occurrence wins.
+/// `providers = [...]` left to right; first occurrence wins. A `Foo as dyn
+/// Trait` binding is ranked under both keys it holds, the trait object first.
 pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -326,9 +327,10 @@ pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]
             continue;
         };
         for p in desc.providers {
-            let key = (p.provides)();
-            if seen.insert(key) {
-                order.push(key);
+            for key in [(p.provides)(), (p.provider)()] {
+                if seen.insert(key) {
+                    order.push(key);
+                }
             }
         }
     }
@@ -688,6 +690,32 @@ mod tests {
             &HashSet::new(),
         );
         assert!(keys.contains(&TypeId::of::<OrgsResolver>()));
+    }
+
+    #[test]
+    fn a_provider_bound_as_dyn_is_reachable_and_ranked_under_its_own_type() {
+        trait Port {}
+        let app = ModuleDescriptor {
+            module: || TypeId::of::<AppMod>(),
+            name: "AppModule",
+            imports: &[],
+            providers: &[ProviderDescriptor {
+                name: "dyn Port",
+                provides: || TypeId::of::<std::sync::Arc<dyn Port>>(),
+                provider: || TypeId::of::<OrgsResolver>(),
+                injects: no_deps,
+                inject_names: no_names,
+                injects_optional: no_deps,
+                injects_keyed: no_keyed_deps,
+                also_provides: provides_only_itself,
+            }],
+        };
+        let order = provider_order(&[&app], &[TypeId::of::<AppMod>()]);
+        let rank = ProviderOrder::new(order.iter().copied());
+        assert!(rank.rank(TypeId::of::<OrgsResolver>()) < usize::MAX);
+        let keys = reachable_provider_ids(&order, &HashSet::new());
+        assert!(keys.contains(&TypeId::of::<OrgsResolver>()));
+        assert!(keys.contains(&TypeId::of::<std::sync::Arc<dyn Port>>()));
     }
 
     #[test]

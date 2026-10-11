@@ -1,8 +1,9 @@
 use nest_rs_codegen::last_segment_ident;
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{Expr, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
 
 pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -10,6 +11,10 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as ItemStruct);
     let name = item.ident.clone();
     let name_str = name.to_string();
+    let groups = match group_providers(&args.providers) {
+        Ok(groups) => groups,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     // `enter_import`/`leave_import` let a contested declaration's boot error
     // name the module and position that imported it.
@@ -88,12 +93,18 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
         ProviderBinding::Dyn { provider, trait_ty } => {
             let name_lit = format!("dyn {}", path_tail_of_type(trait_ty));
+            let provider_lit = path_tail(provider);
             quote! {
                 ::nest_rs_core::__private::ProviderDescriptor {
                     name: #name_lit,
                     provides: || ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>(),
                     provider: || ::std::any::TypeId::of::<#provider>(),
-                    also_provides: <#provider as ::nest_rs_core::Discoverable>::also_provides,
+                    also_provides: || {
+                        let mut __keys =
+                            <#provider as ::nest_rs_core::Discoverable>::also_provides();
+                        __keys.push((::std::any::TypeId::of::<#provider>(), #provider_lit));
+                        __keys
+                    },
                     injects: <#provider as ::nest_rs_core::Discoverable>::injected,
                     inject_names: <#provider as ::nest_rs_core::Discoverable>::injected_names,
                     injects_optional: <#provider as ::nest_rs_core::Discoverable>::injected_optional,
@@ -113,48 +124,58 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    let body = if args.providers.is_empty() {
+    let body = if groups.is_empty() {
         quote! {
             #(#import_calls)*
             ::nest_rs_core::__private::module_registered(#name_str);
             builder
         }
     } else {
-        let count = proc_macro2::Literal::usize_unsuffixed(args.providers.len());
-        // Per provider: its register attempt, its provided key, and a stall-time
-        // classification of why it is still pending.
+        let count = proc_macro2::Literal::usize_unsuffixed(groups.len());
+        // Per provider: its register attempt, the keys it provides, and a
+        // stall-time classification of why it is still pending.
         let parts: Vec<(
             proc_macro2::TokenStream,
             proc_macro2::TokenStream,
             proc_macro2::TokenStream,
-        )> = args
-            .providers
+        )> = groups
             .iter()
             .enumerate()
-            .map(|(i, binding)| {
+            .map(|(i, group)| {
                 let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                let (provider, name_lit, provided_key, register_action) = match binding {
-                    ProviderBinding::Concrete(p) => (
-                        p,
-                        path_tail(p),
-                        quote! { ::std::any::TypeId::of::<#p>() },
+                let (provider, provided_keys, register_action) = match group {
+                    ProviderGroup::Concrete(p) => (
+                        *p,
+                        vec![quote! { ::std::any::TypeId::of::<#p>() }],
                         quote! {
                             builder = <#p as ::nest_rs_core::Discoverable>::register(builder);
                         },
                     ),
-                    ProviderBinding::Dyn { provider, trait_ty } => (
-                        provider,
-                        path_tail(provider),
-                        quote! { ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>() },
+                    ProviderGroup::Dyn { provider, traits } => (
+                        *provider,
+                        std::iter::once(quote! { ::std::any::TypeId::of::<#provider>() })
+                            .chain(traits.iter().map(|trait_ty| {
+                                quote! {
+                                    ::std::any::TypeId::of::<::std::sync::Arc<#trait_ty>>()
+                                }
+                            }))
+                            .collect(),
                         quote! {
-                            let __snapshot = builder.snapshot();
-                            let __provider = #provider::from_container(&__snapshot);
-                            let __dyn: ::std::sync::Arc<#trait_ty> =
-                                ::std::sync::Arc::new(__provider);
-                            builder = builder.provide_dyn::<#trait_ty>(__dyn);
+                            let __provider: ::std::sync::Arc<#provider> = ::std::sync::Arc::new(
+                                <#provider>::from_container(&builder.snapshot()),
+                            );
+                            builder = builder
+                                .provide_arc::<#provider>(::std::sync::Arc::clone(&__provider));
+                            #(
+                                builder = builder.provide_dyn::<#traits>(
+                                    ::std::sync::Arc::clone(&__provider)
+                                        as ::std::sync::Arc<#traits>,
+                                );
+                            )*
                         },
                     ),
                 };
+                let name_lit = path_tail(provider);
                 let step = quote! {
                     if !__done[#idx] {
                         // An optional dep waits only while a pending provider supplies it.
@@ -177,7 +198,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 };
                 let key_push = quote! {
                     if !__done[#idx] {
-                        __pending_keys.push(#provided_key);
+                        #( __pending_keys.push(#provided_keys); )*
                     }
                 };
                 let classify = quote! {
@@ -251,8 +272,27 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
+    // A const item, so `cargo check` evaluates it; spanned on the provider path
+    // the developer wrote, since `assert!` takes a literal naming no type.
+    let residency_checks = groups.iter().filter_map(|group| match group {
+        ProviderGroup::Dyn { provider, .. } => Some(quote_spanned! {provider.span()=>
+            const _: () = ::core::assert!(
+                <#provider as ::nest_rs_core::ProviderResidency>::SINGLETON,
+                "`as dyn Trait` binds one instance built at boot for the app's lifetime, so the \
+                 provider must be a singleton the container holds. This one is not: an edge host \
+                 (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, \
+                 `scope = request` builds one per request, and `scope = transient` one per \
+                 resolution. Bind a plain #[injectable] singleton; reach a scoped provider \
+                 through the edge's `Scoped<T>`.",
+            );
+        }),
+        ProviderGroup::Concrete(_) => None,
+    });
+
     quote! {
         #item
+
+        #(#residency_checks)*
 
         impl ::nest_rs_core::Module for #name {
             fn register(
@@ -321,10 +361,105 @@ const IMPORTS_TAKE: &str =
 const PROVIDERS_TAKE: &str = "a list of provider types, e.g. `providers = [UsersService]`, or \
      `Store as dyn Cache` to register one under a trait object";
 
+/// One provider type of a `providers` list, as written: listed bare, or bound
+/// under each trait it is listed `as dyn` with — never both, never twice.
+enum ProviderGroup<'a> {
+    Concrete(&'a Path),
+    Dyn {
+        provider: &'a Path,
+        traits: Vec<&'a Type>,
+    },
+}
+
+/// The list grouped by provider path as written, refusing at the second entry a
+/// provider listed twice or listed bare beside its `as dyn` binding.
+fn group_providers(bindings: &[ProviderBinding]) -> syn::Result<Vec<ProviderGroup<'_>>> {
+    let site = nest_rs_codegen::site("module", Some("providers"));
+    let mut groups: Vec<(String, ProviderGroup<'_>)> = Vec::new();
+    let mut refusal: Option<syn::Error> = None;
+    for binding in bindings {
+        let (provider, trait_ty) = match binding {
+            ProviderBinding::Concrete(p) => (p, None),
+            ProviderBinding::Dyn { provider, trait_ty } => (provider, Some(&**trait_ty)),
+        };
+        let spelled = written(quote!(#provider));
+        let Some((_, group)) = groups.iter_mut().find(|(seen, _)| *seen == spelled) else {
+            let group = match trait_ty {
+                None => ProviderGroup::Concrete(provider),
+                Some(trait_ty) => ProviderGroup::Dyn {
+                    provider,
+                    traits: vec![trait_ty],
+                },
+            };
+            groups.push((spelled, group));
+            continue;
+        };
+        let refused = match (group, trait_ty) {
+            (ProviderGroup::Concrete(_), None) => Some(format!(
+                "{site}: `{spelled}` is listed twice — a provider is listed once"
+            )),
+            (ProviderGroup::Concrete(_), Some(trait_ty)) => Some(beside(&site, &spelled, trait_ty)),
+            (ProviderGroup::Dyn { traits, .. }, None) => Some(beside(&site, &spelled, traits[0])),
+            (ProviderGroup::Dyn { traits, .. }, Some(trait_ty)) => {
+                let bound = written(quote!(#trait_ty));
+                if traits.iter().any(|seen| written(quote!(#seen)) == bound) {
+                    Some(format!(
+                        "{site}: `{spelled} as {bound}` is listed twice — a provider is listed \
+                         once"
+                    ))
+                } else {
+                    traits.push(trait_ty);
+                    None
+                }
+            }
+        };
+        if let Some(message) = refused {
+            let error = syn::Error::new_spanned(binding.tokens(), message);
+            match &mut refusal {
+                Some(first) => first.combine(error),
+                None => refusal = Some(error),
+            }
+        }
+    }
+    match refusal {
+        Some(error) => Err(error),
+        None => Ok(groups.into_iter().map(|(_, group)| group).collect()),
+    }
+}
+
+/// The refusal of a bare `provider` beside its binding `as trait_ty`.
+fn beside(site: &str, provider: &str, trait_ty: &Type) -> String {
+    format!(
+        "{site}: `{provider}` is listed beside `{provider} as {}`, which already holds it under \
+         its own type — remove the bare entry",
+        written(quote!(#trait_ty))
+    )
+}
+
+/// Tokens as a developer wrote them: `crate::Store`, `dyn Cache`.
+fn written(tokens: proc_macro2::TokenStream) -> String {
+    tokens
+        .to_string()
+        .replace(" :: ", "::")
+        .replace(":: ", "::")
+        .replace(" < ", "<")
+        .replace(" >", ">")
+}
+
 /// `MyService` or `MyService as dyn MyTrait`.
 enum ProviderBinding {
     Concrete(Path),
     Dyn { provider: Path, trait_ty: Box<Type> },
+}
+
+impl ProviderBinding {
+    /// The entry as written, for a refusal's span.
+    fn tokens(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Concrete(p) => quote!(#p),
+            Self::Dyn { provider, trait_ty } => quote!(#provider as #trait_ty),
+        }
+    }
 }
 
 impl Parse for ProviderBinding {
@@ -381,5 +516,60 @@ impl Parse for ModuleArgs {
             Ok(())
         })?;
         Ok(args)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(tokens: proc_macro2::TokenStream) -> Vec<ProviderBinding> {
+        let parse = Punctuated::<ProviderBinding, Token![,]>::parse_terminated;
+        syn::parse::Parser::parse2(parse, tokens)
+            .expect("a providers list")
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn one_provider_bound_as_two_traits_is_one_group_in_first_entry_order() {
+        let bindings = list(quote! { Store as dyn Cache, Users, Store as dyn Flush });
+        let groups = group_providers(&bindings).expect("two traits are no repeat");
+        assert_eq!(groups.len(), 2);
+        let ProviderGroup::Dyn { traits, .. } = &groups[0] else {
+            panic!("the binding keeps its first entry's slot");
+        };
+        assert_eq!(traits.len(), 2);
+        assert!(matches!(groups[1], ProviderGroup::Concrete(_)));
+    }
+
+    #[test]
+    fn a_repeat_is_refused_at_its_site_in_the_words_written() {
+        for (tokens, says) in [
+            (
+                quote! { crate::Store, crate::Store },
+                "`crate::Store` is listed twice — a provider is listed once",
+            ),
+            (
+                quote! { Store as dyn Cache<u8>, Store as dyn Cache<u8> },
+                "`Store as dyn Cache<u8>` is listed twice",
+            ),
+            (
+                quote! { Store as dyn Cache, Store },
+                "`Store` is listed beside `Store as dyn Cache`, which already holds it under \
+                 its own type — remove the bare entry",
+            ),
+            (
+                quote! { Store, Store as dyn Cache },
+                "`Store` is listed beside `Store as dyn Cache`",
+            ),
+        ] {
+            let refused = group_providers(&list(tokens))
+                .err()
+                .expect("a repeat is refused")
+                .to_string();
+            assert!(refused.starts_with("#[module] `providers`: "), "{refused}");
+            assert!(refused.contains(says), "{refused}");
+        }
     }
 }

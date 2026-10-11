@@ -262,6 +262,20 @@ Consumers inject `Arc<dyn PostsService>`, never `PostsServiceImpl`. There
 is **no `exports = [...]`** list — Rust visibility plus the
 `as dyn Trait` binding is the encapsulation primitive.
 
+The binding builds **one** `PostsServiceImpl` and holds it under its own type
+and under each trait it is listed with, so `[Impl as dyn A, Impl as dyn B]` is
+one instance. Its `#[hooks]`, `#[scheduled]` and `#[listeners]` methods run on
+the instance every `Arc<dyn PostsService>` consumer holds. Listing
+`PostsServiceImpl` bare beside its binding is a compile error: the binding
+already holds it.
+
+Only a singleton can be bound. Every consumer of `Arc<dyn Trait>` shares the
+instance built at boot, so binding anything else is a compile error: an edge
+host (`#[controller]`, `#[gateway]`, `#[resolver]`, `#[mcp]`) is built at
+mount, a `scope = request` provider once per request, and a
+`scope = transient` provider on every resolution. Bind a plain `#[injectable]`
+singleton, and reach a scoped provider through the edge's `Scoped<T>`.
+
 When you do not need to hide the impl, register `PostsService` directly
 in `PostsModule` — as in the snippets above. The trait pattern is optional:
 use it when a second feature needs the port without coupling to your

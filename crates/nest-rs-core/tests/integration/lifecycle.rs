@@ -1,5 +1,5 @@
-//! Covers `src/lifecycle.rs` — hook shapes, a host bound only as `dyn Trait`,
-//! and shutdown hooks that fail, hang or panic.
+//! Covers `src/lifecycle.rs` — hook shapes, a host bound as `dyn Trait`, and
+//! shutdown hooks that fail, hang or panic.
 
 use nest_rs_core::target;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,54 +29,15 @@ impl DynOnlyHost {
 #[module(providers = [DynOnlyHost as dyn Bridge])]
 struct DynOnlyModule;
 
-static BUILDS: AtomicUsize = AtomicUsize::new(0);
-
-#[injectable]
-struct BothWaysHost {
-    // `#[injectable]` builds a unit struct as a bare `Self`, bypassing `Default`.
-    _counted: (),
-}
-
-impl Default for BothWaysHost {
-    fn default() -> Self {
-        BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { _counted: () }
-    }
-}
-
-impl Bridge for BothWaysHost {}
-
-#[hooks]
-impl BothWaysHost {
-    #[on_module_init]
-    async fn init(&self) {}
-}
-
-#[module(providers = [BothWaysHost, BothWaysHost as dyn Bridge])]
-struct BothWaysModule;
-
 #[tokio::test]
-async fn a_host_bound_only_as_dyn_never_fires() {
+async fn a_host_bound_as_dyn_fires_its_hooks_once() {
     let app = App::new::<DynOnlyModule>().expect("the module boots");
     app.init().await.expect("the init phases drain");
 
     assert_eq!(
         DYN_ONLY.load(Ordering::SeqCst),
-        0,
-        "the container holds `Arc<dyn Bridge>`, never a `DynOnlyHost` to call",
-    );
-}
-
-#[tokio::test]
-async fn listing_a_host_both_ways_builds_it_twice() {
-    let app = App::new::<BothWaysModule>().expect("the module boots");
-    app.init().await.expect("the init phases drain");
-
-    assert_eq!(
-        BUILDS.load(Ordering::SeqCst),
-        2,
-        "each binding constructs its own instance — the decorators fire on one, \
-         every `Arc<dyn Bridge>` consumer holds the other",
+        1,
+        "the container holds the host under its own type beside `Arc<dyn Bridge>`",
     );
 }
 

@@ -37,8 +37,10 @@
 //!
 //! A hook host — like a scheduled method, a listener, an indicator and a
 //! processor — is resolved outside any request, so it must be a **singleton
-//! stored under its own type** ([`ProviderResidency`]); a host bound only as
-//! `dyn Trait` is inert and carries [`INERT_HOST_HINT`].
+//! stored under its own type** ([`ProviderResidency`]). `Foo as dyn Trait`
+//! binds a singleton only, and holds that one `Foo` under its own type and
+//! each trait, so a bound host runs too; one the boot finds absent carries
+//! [`INERT_HOST_HINT`].
 //!
 //! # Discovery
 //!
@@ -292,6 +294,7 @@ pub use nest_rs_core_macros::main;
 /// let app = App::new::<AppModule>()?;
 /// let greeter = app.container().get_dyn::<dyn Greeter>();
 /// assert_eq!(greeter.map(|g| g.greet()), Some("hello"));
+/// assert!(app.container().get::<English>().is_some());
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub use nest_rs_core_macros::module;

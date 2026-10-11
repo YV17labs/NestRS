@@ -51,11 +51,14 @@ framework half.
   dynamic imports are not deduplicated.
 - **The container is flat and the access graph is the contract.** Visibility is
   Rust's: hide an implementation module-private and bind a `pub trait` with
-  `provide_dyn`; there is no `exports` list. `#[module]` records each provider's
-  injected types, and the boot fails (`AccessGraphError`) on a provider injecting
-  what its module neither owns, imports transitively, nor receives as global
-  infrastructure. It governs `#[inject]` and the `#[use_*]` layer lists;
-  `Container::get` at runtime is an unchecked escape hatch.
+  `Foo as dyn Trait`; there is no `exports` list. The binding takes a singleton
+  only (a `const` assertion on its residency) and holds that one `Foo` under
+  its own type and each trait it is listed with, so a listing names a provider
+  once. `#[module]` records each provider's injected types, and the boot fails
+  (`AccessGraphError`) on a provider injecting what its module neither owns,
+  imports transitively, nor receives as global infrastructure. It governs
+  `#[inject]` and the `#[use_*]` layer lists; `Container::get` at runtime is an
+  unchecked escape hatch.
 
 ## `for_root` — one seam, one value, no chain
 
@@ -189,18 +192,17 @@ boot there; one that fails ends it with `WiringFailedError` naming the registry.
 **An inert host is reported at the level its cause earns**, and the boot reads
 the cause (`InertHost`, from the module descriptors and the app's
 `Composition`). The app's own code — a host in its roots' crates that no
-imported module lists, one bound only as `dyn Trait`, one registered outside
-every imported module — is a `warn` with `cause` and a `hint` naming that
-cause's remedy. A framework capability the app never opted into, and a library
-crate's host the app neither imports nor registers, is another binary's, at
-`debug`. Three disciplines bind every boot diagnostic:
+imported module lists, one registered outside every imported module — is a
+`warn` with `cause` and a `hint` naming that cause's remedy. A framework
+capability the app never opted into, and a library crate's host the app
+neither imports nor registers, is another binary's, at `debug`. Three
+disciplines bind every boot diagnostic:
 
 - **Escalate no further than the fact supports** — a shape correct in another
   composition warns or says less; a boot error there refuses working code.
-- **A hint prescribes only the edit its cause has, once it knows the cause.**
-  Listing a `dyn`-bound host under its own type too builds it twice, so that
-  edit is named as the one not to make; where the cause cannot be read,
-  `INERT_HOST_HINT` names every cause and prescribes none.
+- **A hint prescribes only the edit its cause has, once it knows the cause**;
+  where the cause cannot be read, `INERT_HOST_HINT` names every cause and
+  prescribes none.
 - **A `warn` whose sentence is wrong is worse than none**, so one shared
   sentence serves every site, and the level is one shared predicate
   (`is_framework_owned`).

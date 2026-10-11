@@ -5,7 +5,8 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    App, ContainerBuilder, Discoverable, DynamicModule, Registering, injectable, module,
+    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, ReachableProviders,
+    Registering, injectable, module,
 };
 
 struct AbsentDep;
@@ -417,4 +418,56 @@ fn providers_waiting_on_each_other_fail_the_boot_naming_the_cycle() {
         .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
     assert_eq!(cycle.module, "CycleModule");
     assert_eq!(cycle.type_names, ["CycleLeft", "CycleRight"]);
+}
+
+trait Ledger: Send + Sync {}
+
+#[injectable]
+#[derive(Default)]
+struct BoundLedger;
+
+impl Ledger for BoundLedger {}
+
+#[module(providers = [BoundLedger as dyn Ledger])]
+struct BoundLedgerModule;
+
+#[test]
+fn a_provider_bound_as_dyn_is_reachable_under_its_own_type() {
+    let app = App::new::<BoundLedgerModule>().expect("the module boots");
+    let reachable = app
+        .container()
+        .get::<ReachableProviders>()
+        .expect("the boot seeds the reachable set");
+    assert!(
+        ReachableProviders::reaches(Some(&reachable), TypeId::of::<BoundLedger>()),
+        "a listener, processor, tick or indicator on the host is gated by its own type"
+    );
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct StrayLedgerReader {
+    #[inject]
+    ledger: Arc<BoundLedger>,
+}
+
+#[module(providers = [StrayLedgerReader])]
+struct StrayLedgerReaderModule;
+
+#[module(imports = [BoundLedgerModule, StrayLedgerReaderModule])]
+struct StrayLedgerRoot;
+
+#[test]
+fn a_consumer_of_a_dyn_bound_provider_under_its_own_type_imports_its_module() {
+    let Err(refused) = App::new::<StrayLedgerRoot>() else {
+        panic!("a consumer reaching a provider its module does not import must fail the boot");
+    };
+    let refused = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+    assert_eq!(refused.consumer, "StrayLedgerReader");
+    assert_eq!(refused.owner, "BoundLedgerModule", "{refused}");
 }

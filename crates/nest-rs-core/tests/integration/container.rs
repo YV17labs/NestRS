@@ -1,9 +1,11 @@
 //! Covers `src/container.rs` — one type has one provider whatever its scope, so
-//! a second registration fails the boot naming both; a replaced keyed binding
-//! warns and continues.
+//! a second registration fails the boot naming both; `Foo as dyn Trait` holds
+//! one `Foo` under its own type and each trait; a replaced keyed binding warns
+//! and continues.
 
 use nest_rs_core::target;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
     App, Collecting, Container, ContainerBuilder, DuplicateProviderError, Module, ProviderScope,
@@ -314,4 +316,101 @@ async fn an_override_replaces_the_trait_object_a_module_binds() {
         app.container().get_dyn::<dyn Greeting>().map(|g| g.word()),
         Some("bonjour")
     );
+}
+
+trait Left: Send + Sync {
+    fn serial(&self) -> usize;
+}
+
+trait Right: Send + Sync {
+    fn serial(&self) -> usize;
+}
+
+static BOUND_BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+struct Bound {
+    serial: usize,
+}
+
+impl Default for Bound {
+    fn default() -> Self {
+        Self {
+            serial: BOUND_BUILDS.fetch_add(1, Ordering::SeqCst),
+        }
+    }
+}
+
+impl Left for Bound {
+    fn serial(&self) -> usize {
+        self.serial
+    }
+}
+
+impl Right for Bound {
+    fn serial(&self) -> usize {
+        self.serial
+    }
+}
+
+#[module(providers = [Bound as dyn Left, Bound as dyn Right])]
+struct BoundModule;
+
+/// The address an `Arc` points at, whatever its pointee's metadata.
+fn address<T: ?Sized>(arc: &Arc<T>) -> *const () {
+    Arc::as_ptr(arc).cast::<()>()
+}
+
+#[test]
+fn a_provider_bound_as_two_traits_is_one_instance_under_its_own_type_and_each_trait() {
+    let app = App::new::<BoundModule>().expect("the module boots");
+    let container = app.container();
+    let own = container.get::<Bound>().expect("held under its own type");
+    let left = container.get_dyn::<dyn Left>().expect("held as `dyn Left`");
+    let right = container
+        .get_dyn::<dyn Right>()
+        .expect("held as `dyn Right`");
+
+    assert_eq!(
+        address(&own),
+        address(&left),
+        "one allocation under both keys"
+    );
+    assert_eq!(
+        address(&own),
+        address(&right),
+        "one allocation under every key"
+    );
+    assert_eq!(left.serial(), right.serial());
+    assert_eq!(
+        BOUND_BUILDS.load(Ordering::SeqCst),
+        1,
+        "the constructor runs once for every key the provider is listed with"
+    );
+}
+
+#[module(providers = [Hello])]
+struct ConcreteHelloModule;
+
+#[module(imports = [ConcreteHelloModule, HelloModule])]
+struct HelloBothWaysRoot;
+
+#[test]
+fn a_provider_in_one_module_and_bound_as_dyn_in_another_is_a_duplicate_of_its_type() {
+    let duplicate = names_both(
+        App::new::<HelloBothWaysRoot>(),
+        std::any::type_name::<Hello>(),
+        "`ConcreteHelloModule` at `imports[0]` of `HelloBothWaysRoot`",
+        "`HelloModule` at `imports[1]` of `HelloBothWaysRoot`",
+    );
+    assert_eq!(duplicate.scopes, None, "{duplicate}");
+}
+
+#[module(providers = [Hello, crate::container::Hello as dyn Greeting])]
+struct TwoSpellingsModule;
+
+#[test]
+fn two_spellings_of_one_provider_in_one_list_are_a_duplicate_of_its_type() {
+    let duplicate = duplicate(App::new::<TwoSpellingsModule>());
+    assert_eq!(duplicate.type_name, std::any::type_name::<Hello>());
 }

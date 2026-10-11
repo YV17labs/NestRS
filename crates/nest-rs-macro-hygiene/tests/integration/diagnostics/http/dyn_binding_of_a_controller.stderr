@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `as dyn Trait` binds one instance built at boot for the app's lifetime, so the provider must be a singleton the container holds. This one is not: an edge host (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, `scope = request` builds one per request, and `scope = transient` one per resolution. Bind a plain #[injectable] singleton; reach a scoped provider through the edge's `Scoped<T>`.
+  --> tests/integration/diagnostics/http/dyn_binding_of_a_controller.rs:19:23
+   |
+19 | #[module(providers = [ThingsController as dyn Catalog])]
+   |                       ^^^^^^^^^^^^^^^^ evaluation of `_` failed here

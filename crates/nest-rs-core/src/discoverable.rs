@@ -74,7 +74,8 @@ pub trait Discoverable {
 /// What the container holds under a provider's **own type**, stated by whatever
 /// decorator built it — and read by the impl halves that resolve their host
 /// there (`#[hooks]`, `#[scheduled]`, `#[listeners]`, `#[indicators]`,
-/// `#[processor]`).
+/// `#[processor]`), and by `#[module]`'s `Foo as dyn Trait`, which holds one
+/// `Foo` for the app's lifetime under its own type and each trait.
 ///
 /// Those five resolve with `Container::get::<Host>()` outside any request,
 /// which answers correctly only for **a singleton stored under its own type**:
@@ -99,13 +100,15 @@ pub trait Discoverable {
 /// # assert!(container.get::<MyHandWrittenProvider>().is_some());
 /// ```
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a provider, so a provider-hosted decorator (`#[hooks]`, \
-               `#[scheduled]`, `#[listeners]`, `#[indicators]`, `#[processor]`) cannot reach it",
+    message = "`{Self}` is not a provider the container holds under its own type for the app's \
+               lifetime, so it can neither host `#[hooks]`, `#[scheduled]`, `#[listeners]`, \
+               `#[indicators]` or `#[processor]` nor be bound `as dyn Trait`",
     label = "the container holds no singleton of this type",
-    note = "those decorators resolve their host with `Container::get::<Self>()`, outside any \
-            request, so the host must be a provider the container holds under its own type. Add \
-            `#[injectable]` — or, on a provider registered by hand with `ContainerBuilder::provide`, \
-            write `impl ProviderResidency` for it with `const SINGLETON: bool = true`"
+    note = "a provider-hosted decorator resolves its host with `Container::get::<Self>()`, outside \
+            any request, and `as dyn Trait` holds one instance under its own type beside the trait \
+            object, so the type must be a singleton provider. Add `#[injectable]` — or, on a \
+            provider registered by hand with `ContainerBuilder::provide`, write \
+            `impl ProviderResidency` for it with `const SINGLETON: bool = true`"
 )]
 pub trait ProviderResidency {
     /// `true` when the container holds **one instance of this provider, under
@@ -118,13 +121,12 @@ pub trait ProviderResidency {
 /// the booted container does not hold, and the cause is unknown — the run-time
 /// half ([`unresolved_host`]), or a container built without a composition.
 ///
-/// It names causes and prescribes nothing: listing a `dyn`-bound host under its
-/// own type too builds it twice, each decorator firing on an instance no
-/// `Arc<dyn Trait>` consumer holds.
+/// It names causes and prescribes nothing: only a site that knows the cause may
+/// prescribe an edit.
 pub const INERT_HOST_HINT: &str = concat!(
     "nothing is registered under that exact type. Common causes: its module is not imported ",
-    "by this app (import it, or delete the methods); it is bound only as `dyn Trait`; it is ",
-    "imported through a `for_root`; it is registered by hand under a key or a trait",
+    "by this app (import it, or delete the methods); it is imported through a `for_root`; it ",
+    "is registered by hand under a key or a trait",
 );
 
 /// Why a discovered host is inert in this app — which decides the level the
@@ -158,18 +160,9 @@ pub enum InertHost {
     /// Held under its own type by this app's container, and listed by no module
     /// it imports: registered by hand or through a `for_root`.
     RegisteredOutsideModules,
-    /// Listed by a module this app imports under another key only — `Foo as
-    /// dyn Trait` — while a decorated method resolves its host under its own
-    /// type.
-    BoundUnderAnotherKey {
-        /// The module that lists it.
-        module: &'static str,
-        /// The key it is listed under, as the module's descriptor names it.
-        key: &'static str,
-    },
-    /// Listed under its own type by a module this app imports, and absent all
-    /// the same — or the container carries no composition to read — so the
-    /// cause is not known.
+    /// Listed by a module this app imports — bare or `as dyn Trait`, which
+    /// holds it under its own type too — and absent all the same, or the
+    /// container carries no composition to read, so the cause is not known.
     Unknown,
 }
 
@@ -188,7 +181,6 @@ impl InertHost {
             Self::ModuleNotImported { .. } => "module_not_imported",
             Self::NotListed => "not_listed",
             Self::RegisteredOutsideModules => "registered_outside_modules",
-            Self::BoundUnderAnotherKey { .. } => "bound_under_another_key",
             Self::Unknown => "unknown",
         }
     }
@@ -222,11 +214,6 @@ impl InertHost {
                  the `providers` of the `#[module]`s it imports: list it in one of those instead \
                  of registering it by hand",
             ),
-            Self::BoundUnderAnotherKey { module, key } => Cow::Owned(format!(
-                "`{module}` lists it only as `{key}`, and a decorated method resolves its host \
-                 under its own type: move the methods to a provider listed under its own type — \
-                 listing this one a second time, under its own type, would build it twice"
-            )),
             Self::Unknown => Cow::Borrowed(INERT_HOST_HINT),
         }
     }
@@ -266,14 +253,9 @@ fn classify(
 ) -> InertHost {
     let mut unreached = None;
     for module in descriptors {
-        for provider in module.providers.iter().filter(|p| (p.provider)() == host) {
+        if module.providers.iter().any(|p| (p.provider)() == host) {
             if !composition.reaches((module.module)()) {
                 unreached.get_or_insert(module.name);
-            } else if (provider.provides)() != host {
-                return InertHost::BoundUnderAnotherKey {
-                    module: module.name,
-                    key: provider.name,
-                };
             } else {
                 return InertHost::Unknown;
             }
@@ -402,7 +384,7 @@ mod tests {
     /// without naming a `providers` list or an imperative.
     #[test]
     fn the_inert_host_hint_names_the_causes_and_prescribes_no_edit() {
-        for cause in ["not imported", "dyn Trait", "for_root", "by hand"] {
+        for cause in ["not imported", "for_root", "by hand", "a trait"] {
             assert!(INERT_HOST_HINT.contains(cause), "{INERT_HOST_HINT}");
         }
         assert!(
@@ -451,8 +433,8 @@ mod tests {
         }
 
         /// A workspace's composition: the app's root imports `BoundModule`,
-        /// which lists `Bound` only as `dyn Port`; `WorkerTasksModule` lists
-        /// `Tasks` and is imported by no root of this app.
+        /// which lists `Bound` as `dyn Port`; `WorkerTasksModule` lists `Tasks`
+        /// and is imported by no root of this app.
         fn workspace() -> (Vec<ModuleDescriptor>, Composition) {
             let modules = vec![
                 ModuleDescriptor {
@@ -544,24 +526,14 @@ mod tests {
             );
         }
 
+        /// `as dyn Port` holds `Bound` under its own type too, so an imported
+        /// module's binding is no cause: absent all the same, it is unknown.
         #[test]
-        fn a_host_bound_under_another_key_names_the_binding() {
+        fn a_host_an_imported_module_binds_as_dyn_is_not_inert_for_that() {
             for origin in ["api::bound", "features::bound"] {
                 let inert = classified(origin, TypeId::of::<Bound>());
-                assert_eq!(
-                    inert,
-                    InertHost::BoundUnderAnotherKey {
-                        module: "BoundModule",
-                        key: "dyn Port"
-                    },
-                    "{origin}"
-                );
-                assert!(inert.is_the_apps());
-                assert!(
-                    !inert.hint().contains("providers = ["),
-                    "the remedy never prescribes the double listing that builds it twice: {}",
-                    inert.hint()
-                );
+                assert_eq!(inert, InertHost::Unknown, "{origin}");
+                assert_eq!(inert.hint(), super::super::INERT_HOST_HINT);
             }
         }
 

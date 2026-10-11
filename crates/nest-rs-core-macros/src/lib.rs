@@ -55,6 +55,12 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `DynamicModule`, e.g. `HttpModule::for_root(None)`); `providers` holds
 /// `Foo` (a `Discoverable` type) or `Foo as dyn Trait` (a trait-object binding).
 ///
+/// A binding takes a singleton — an edge host, or a `scope = request` or
+/// `scope = transient` provider, bound so is a compile error — and holds one
+/// `Foo` under its own type and each trait it is listed with. A provider is
+/// listed once: a bare `Foo` beside its binding, or an entry written twice, is
+/// a compile error.
+///
 /// A diamond import builds its providers once; a dynamic import is not
 /// deduplicated, and its expression is evaluated once. Providers register in
 /// dependency order, whatever their order in the list. A missing dependency

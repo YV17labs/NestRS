@@ -123,10 +123,13 @@
 //!
 //! # Ambient request data context
 //!
-//! The connection loop runs after the upgrade completes, so the task-locals an
-//! HTTP request installs have unwound by the time a message handler runs. The
-//! [`SocketContext`] seam captures per-connection state from the post-guard
-//! upgrade request and re-installs it around each dispatch.
+//! The connection loop runs after the upgrade completes, under what the
+//! upgrade carried into a [`Connection`](nest_rs_core::Continuation::Connection):
+//! its trace, its actor and every value that crosses reach each hook and
+//! message, never its scope or its transaction. Each message is a unit of its
+//! own, so what it needs per message — the executor, and the ability while no
+//! guard makes it ambient at the upgrade — the [`SocketContext`] seam captures
+//! from the post-guard upgrade request and re-installs around each dispatch.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

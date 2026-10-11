@@ -183,16 +183,19 @@ impl AmbientValue for QueryBudget {
 }
 ```
 
-Your layer adds the value around the unit, and anything the unit calls reads
-it back:
+Your layer adds the value around the unit:
 
 ```rust title="crates/yourpkg/src/interceptor.rs"
 async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
     let locale = Arc::new(Locale(negotiated(&req)));
     with_ambient(locale, next.run(req)).await
 }
+```
 
-// anywhere the request reaches, its body and its batches included
+Anything the request reaches reads it back — a service, its streaming body,
+the DataLoader batches its fields trigger:
+
+```rust title="nest_rs::core::ambient"
 let locale = ambient::<Locale>();
 ```
 

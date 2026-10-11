@@ -11,7 +11,8 @@ use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
 /// ability the connection's `SocketContext` re-installed for this message.
 ///
 /// A missing ability is a wiring failure (no data context registered) and fails
-/// **closed**: the upgrade's task-locals have unwound by the time a message arrives.
+/// **closed**: no guard makes the ability ambient at the upgrade yet, so a
+/// message reads the one its data context installs.
 pub fn authorize<A: ActionMarker, S: Subject>(event: &'static str) -> Result<(), WsError> {
     let Some(ability) = current_ability() else {
         // A wiring failure: said to the operator, terse to the client.

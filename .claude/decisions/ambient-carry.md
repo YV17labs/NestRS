@@ -87,8 +87,10 @@ continuations and the carry of every framework value ship as decided: a
 WebSocket gateway and a graphql-ws socket capture their upgrade for
 `Connection`, a DataLoader spawner captures for `Batch` where a field asks
 the loader, a route captures for `Body` where it returns a streaming body,
-and `after_commit` and `EventBus::emit` capture for `Commit`. Where it
-departs:
+and an executor holding work for its commit captures for `Commit` where the
+work is registered. `EventBus::emit` captures nothing: a dispatch held for
+the commit runs under its executor's capture, and one with nothing to wait
+for runs inside its emitter, on the emitter's executor. Where it departs:
 
 - **No guard attaches yet.** Today's HTTP guard has no context to attach
   through, and making `AbilityGuard`'s ability ambient on every guarded route
@@ -108,7 +110,9 @@ departs:
 - **A nested unit is any unit opened inside another** (`with_request_scope`
   while one runs): it inherits its parent's values and records the parent, so
   a batch captured inside it carries the outermost unit's values and
-  identity. A capture is flat and holds no parent, so nothing a continuation
-  does not carry stays reachable through it; `RequestContinuation::current`,
-  which cloned the running context whole, transaction included, gave way to
+  identity, and runs in that unit's span, which the spawner holds from where
+  the request seeds its loaders. A capture is flat and holds no parent, so
+  nothing a continuation does not carry stays reachable through it.
+  `RequestContinuation::current` cloned the running context whole; in one
+  map a whole clone would hold the transaction, so it gave way to
   `RequestContinuation::capture`.

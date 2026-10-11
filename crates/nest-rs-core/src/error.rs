@@ -6,6 +6,8 @@ use std::borrow::Cow;
 use serde_json::error::Category;
 use thiserror::Error;
 
+use crate::container::ProviderScope;
+
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
 #[derive(Debug, Error)]
@@ -102,18 +104,40 @@ impl AccessError {
     }
 }
 
-/// A concrete type or a trait object was registered more than once — two
-/// modules, or a seed and a module, providing the same type. The test override
-/// path is exempt.
+/// A type registered twice — a concrete type or a trait object, under any two
+/// scopes; names both registrations and, when they differ, their scopes. The
+/// test override path is exempt.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error(
-    "duplicate provider: `{type_name}` is registered more than once. Two modules (or a seed and a \
-     module) provide the same type — remove the redundant registration; a test replaces a \
-     provider with `override_value` or `override_dyn`."
+    "duplicate provider: `{type_name}` is registered by {first} and again by {second}{} — one \
+     type has one provider: remove one registration; a test replaces a provider with \
+     `override_value`, `override_arc` or `override_dyn`",
+    scopes_clause(*.scopes)
 )]
 pub struct DuplicateProviderError {
-    /// The type registered more than once.
+    /// The type registered twice.
     pub type_name: &'static str,
+    /// The registration made first: an import site, a seed, or a factory and
+    /// the site that queued it.
+    pub first: String,
+    /// The registration that repeated it, the same way.
+    pub second: String,
+    /// The two scopes, first then second, when they differ.
+    pub scopes: Option<(ProviderScope, ProviderScope)>,
+}
+
+/// ` (first as a singleton, then request-scoped)` when two registrations hold
+/// one type under two scopes; nothing otherwise.
+fn scopes_clause(scopes: Option<(ProviderScope, ProviderScope)>) -> String {
+    match scopes {
+        Some((first, second)) => format!(
+            " (first {}, then {})",
+            first.as_registered(),
+            second.as_registered()
+        ),
+        None => String::new(),
+    }
 }
 
 /// Two import sites each *declared* a value for the same type, and one of them

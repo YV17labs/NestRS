@@ -106,7 +106,9 @@ pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use app::{App, AppBuilder, BootStep};
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use budget::Budget;
-pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
+pub use container::{
+    Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey, ProviderScope,
+};
 pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, is_framework_owned,
     unresolved_host,

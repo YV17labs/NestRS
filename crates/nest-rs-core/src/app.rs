@@ -20,9 +20,8 @@ use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
-    AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
-    FactoryFailedError, InitFailedError, LateFactoryError, UnregisteredModuleError,
-    UnresolvedFactoryError,
+    AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
+    LateFactoryError, UnregisteredModuleError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
@@ -91,16 +90,13 @@ impl std::fmt::Display for BootStep {
     }
 }
 
-/// Fail the boot if any unkeyed provider was registered twice, rather than let
-/// the last write win silently.
+/// Fail the boot if any unkeyed type was registered twice, in any two scopes,
+/// rather than let one registration silently replace the other.
 fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
-    if let Some(dup) = builder.duplicate_providers().first() {
-        return Err(DuplicateProviderError {
-            type_name: dup.type_name,
-        }
-        .into());
+    match builder.duplicate_providers().first() {
+        Some(duplicate) => Err(duplicate.error().into()),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Fail the boot when two import sites each declared a value for one type —
@@ -153,7 +149,7 @@ impl App {
     ///
     /// Every wiring failure: [`AccessGraphError`](crate::AccessGraphError),
     /// [`MissingDependencyError`](crate::MissingDependencyError),
-    /// [`DuplicateProviderError`],
+    /// [`DuplicateProviderError`](crate::DuplicateProviderError),
     /// [`ProviderCycleError`](crate::ProviderCycleError),
     /// [`UnresolvedFactoryError`] for a module that queued an async factory, a
     /// module's own refusal ([`ContainerBuilder::refuse`]), and
@@ -649,6 +645,7 @@ impl AppBuilder {
                 .into());
             };
             let queued = pending.remove(index);
+            let mut steps = Vec::with_capacity(1 + queued.derives.len());
             if !builder.contains(queued.id()) {
                 let type_name = queued.name;
                 let factory = (queued.factory)(builder.snapshot());
@@ -656,11 +653,10 @@ impl AppBuilder {
                     .boot(&BootStep::Factory { type_name }, factory)
                     .await?
                     .map_err(|source| FactoryFailedError { type_name, source })?;
-                builder = register(builder);
+                steps.push(register);
             }
-            for derive in queued.derives {
-                builder = derive(builder);
-            }
+            steps.extend(queued.derives);
+            builder = builder.install(queued.queued_by, steps);
             check_budgets(&builder, &reached, Some(&queued.provides))?;
         }
         // Seeded after register, yet global infrastructure for the access graph.

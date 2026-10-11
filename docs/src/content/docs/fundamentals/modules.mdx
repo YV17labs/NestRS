@@ -246,7 +246,9 @@ reachable only through `PostsHttpModule` — that is the point.
 `App::builder().build().await` runs four phases, in order:
 
 1. **Seeds** — runtime values from `main` via `.provide(value)`. A seed
-   wins over a factory or a module-built provider of the same type.
+   wins over a factory of the same type; a seed of a type a module lists is
+   a duplicate the boot refuses — a test replaces a provider with an
+   override.
 2. **Collect** — every imported module queues the async factories it
    declares (DB pools, …), a dynamic module's from its `collect`.
 3. **Factories** — the queue is awaited; outputs land in the container as

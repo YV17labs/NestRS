@@ -1,10 +1,14 @@
-//! Covers `src/container.rs` — a duplicate unkeyed provider fails the boot; a
-//! replaced keyed binding or a scope change under a type warns and continues.
+//! Covers `src/container.rs` — one type has one provider whatever its scope, so
+//! a second registration fails the boot naming both; a replaced keyed binding
+//! warns and continues.
 
 use nest_rs_core::target;
 use std::sync::Arc;
 
-use nest_rs_core::Container;
+use nest_rs_core::{
+    App, Collecting, Container, ContainerBuilder, DuplicateProviderError, Module, ProviderScope,
+    Registering, injectable, module,
+};
 use nest_rs_testing::LogCapture;
 
 #[derive(Debug, PartialEq)]
@@ -33,48 +37,205 @@ fn a_second_registration_under_one_key_names_the_provider_and_the_key() {
     );
 }
 
-#[test]
-fn a_singleton_shadowed_by_a_transient_of_the_same_type_is_reported() {
-    let logs = LogCapture::install();
-    let _container = Container::builder()
-        .provide(Pool("singleton"))
-        .provide_transient(|_| Pool("transient"))
-        .build();
-
-    let event = logs.expect_one(target::CONTAINER, "provider scope conflict");
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("existing_kind").as_deref(), Some("singleton"));
-    assert_eq!(event.field("new_kind").as_deref(), Some("transient"));
+fn duplicate(boot: anyhow::Result<App>) -> DuplicateProviderError {
+    let Err(refused) = boot else {
+        panic!("one registration would be dropped for the other");
+    };
+    refused
+        .downcast::<DuplicateProviderError>()
+        .unwrap_or_else(|refused| panic!("not the duplicate: {refused:#}"))
 }
 
-#[test]
-fn the_conflict_is_reported_from_either_direction() {
-    let logs = LogCapture::install();
-    let _container = Container::builder()
-        .provide_transient(|_| Pool("transient"))
-        .provide(Pool("singleton"))
-        .build();
-
-    let event = logs.expect_one(target::CONTAINER, "provider scope conflict");
-    assert_eq!(event.field("existing_kind").as_deref(), Some("transient"));
-    assert_eq!(event.field("new_kind").as_deref(), Some("singleton"));
-}
-
-#[test]
-fn a_request_scoped_factory_replaced_by_another_says_which_kind_it_was() {
-    let logs = LogCapture::install();
-    let _container = Container::builder()
-        .provide_scoped(|_| Pool("first"))
-        .provide_scoped(|_| Pool("second"))
-        .build();
-
-    let event = logs.expect_one(target::CONTAINER, "provider override");
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("kind").as_deref(), Some("request_scoped"));
+/// The duplicate `boot` refused, checked to name `type_name` and both sites, in
+/// its fields and in its sentence.
+fn names_both(
+    boot: anyhow::Result<App>,
+    type_name: &str,
+    first: &str,
+    second: &str,
+) -> DuplicateProviderError {
+    let duplicate = duplicate(boot);
+    let sentence = duplicate.to_string();
+    assert!(duplicate.type_name.contains(type_name), "{sentence}");
+    assert_eq!(duplicate.first, first, "{sentence}");
+    assert_eq!(duplicate.second, second, "{sentence}");
     assert!(
-        event.field("provider").is_some_and(|p| p.contains("Pool")),
-        "{:?}",
-        event.fields,
+        sentence.contains(&format!("registered by {first} and again by {second}")),
+        "{sentence}"
+    );
+    duplicate
+}
+
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerRequest;
+
+#[module(providers = [PerRequest])]
+struct FirstRequestModule;
+
+#[module(providers = [PerRequest])]
+struct SecondRequestModule;
+
+#[module(imports = [FirstRequestModule, SecondRequestModule])]
+struct TwoRequestScopedRoot;
+
+#[test]
+fn a_request_scoped_provider_registered_twice_fails_the_boot_naming_both() {
+    let duplicate = names_both(
+        App::new::<TwoRequestScopedRoot>(),
+        "PerRequest",
+        "`FirstRequestModule` at `imports[0]` of `TwoRequestScopedRoot`",
+        "`SecondRequestModule` at `imports[1]` of `TwoRequestScopedRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes, None,
+        "one scope says no scopes: {duplicate}"
+    );
+}
+
+#[injectable(scope = transient)]
+#[derive(Default)]
+struct Rebuilt;
+
+#[module(providers = [Rebuilt])]
+struct FirstTransientModule;
+
+#[module(providers = [Rebuilt])]
+struct SecondTransientModule;
+
+#[module(imports = [FirstTransientModule, SecondTransientModule])]
+struct TwoTransientRoot;
+
+#[test]
+fn a_transient_provider_registered_twice_fails_the_boot_naming_both() {
+    let duplicate = names_both(
+        App::new::<TwoTransientRoot>(),
+        "Rebuilt",
+        "`FirstTransientModule` at `imports[0]` of `TwoTransientRoot`",
+        "`SecondTransientModule` at `imports[1]` of `TwoTransientRoot`",
+    );
+    assert_eq!(duplicate.scopes, None, "{duplicate}");
+}
+
+#[injectable]
+#[derive(Default)]
+struct Shelf;
+
+#[module(providers = [Shelf])]
+struct SingletonShelfModule;
+
+/// Registers `Shelf` by hand under another scope than `#[injectable]` gave it.
+struct TransientShelfModule;
+
+impl Module for TransientShelfModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transient(|_| Shelf)
+    }
+}
+
+struct RequestShelfModule;
+
+impl Module for RequestShelfModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_scoped(|_| Shelf)
+    }
+}
+
+#[module(imports = [SingletonShelfModule, TransientShelfModule])]
+struct SingletonThenTransientRoot;
+
+#[module(imports = [TransientShelfModule, SingletonShelfModule])]
+struct TransientThenSingletonRoot;
+
+#[module(imports = [SingletonShelfModule, RequestShelfModule])]
+struct SingletonThenRequestRoot;
+
+#[test]
+fn a_singleton_then_a_transient_of_one_type_fail_the_boot_naming_both_scopes() {
+    let duplicate = names_both(
+        App::new::<SingletonThenTransientRoot>(),
+        "Shelf",
+        "`SingletonShelfModule` at `imports[0]` of `SingletonThenTransientRoot`",
+        "`TransientShelfModule` at `imports[1]` of `SingletonThenTransientRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes,
+        Some((ProviderScope::Singleton, ProviderScope::Transient))
+    );
+    assert!(
+        duplicate
+            .to_string()
+            .contains("(first as a singleton, then transient)"),
+        "{duplicate}"
+    );
+}
+
+#[test]
+fn a_transient_then_a_singleton_of_one_type_fail_the_boot_naming_both_scopes() {
+    let duplicate = names_both(
+        App::new::<TransientThenSingletonRoot>(),
+        "Shelf",
+        "`TransientShelfModule` at `imports[0]` of `TransientThenSingletonRoot`",
+        "`SingletonShelfModule` at `imports[1]` of `TransientThenSingletonRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes,
+        Some((ProviderScope::Transient, ProviderScope::Singleton))
+    );
+    assert!(
+        duplicate
+            .to_string()
+            .contains("(first transient, then as a singleton)"),
+        "{duplicate}"
+    );
+}
+
+#[test]
+fn a_singleton_then_a_request_scoped_provider_of_one_type_fail_the_boot_naming_both_scopes() {
+    let duplicate = names_both(
+        App::new::<SingletonThenRequestRoot>(),
+        "Shelf",
+        "`SingletonShelfModule` at `imports[0]` of `SingletonThenRequestRoot`",
+        "`RequestShelfModule` at `imports[1]` of `SingletonThenRequestRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes,
+        Some((ProviderScope::Singleton, ProviderScope::Request))
+    );
+    assert!(
+        duplicate
+            .to_string()
+            .contains("(first as a singleton, then request-scoped)"),
+        "{duplicate}"
+    );
+}
+
+/// Queues a factory of `Shelf`, which `SingletonShelfModule` also lists.
+struct QueuesShelfModule;
+
+impl Module for QueuesShelfModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.provide_factory(|_| async { Ok(Shelf) })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+}
+
+#[module(imports = [QueuesShelfModule, SingletonShelfModule])]
+struct FactoryThenModuleRoot;
+
+#[tokio::test]
+async fn a_factory_output_a_module_also_lists_names_the_import_that_queued_the_factory() {
+    names_both(
+        App::builder()
+            .module::<FactoryThenModuleRoot>()
+            .build()
+            .await,
+        "Shelf",
+        "a factory queued by `QueuesShelfModule` at `imports[0]` of `FactoryThenModuleRoot`",
+        "`SingletonShelfModule` at `imports[1]` of `FactoryThenModuleRoot`",
     );
 }
 
@@ -82,7 +243,7 @@ trait Greeting: Send + Sync {
     fn word(&self) -> &'static str;
 }
 
-#[nest_rs_core::injectable]
+#[injectable]
 struct Hello;
 
 impl Greeting for Hello {
@@ -91,7 +252,7 @@ impl Greeting for Hello {
     }
 }
 
-#[nest_rs_core::injectable]
+#[injectable]
 struct Bonjour;
 
 impl Greeting for Bonjour {
@@ -100,37 +261,29 @@ impl Greeting for Bonjour {
     }
 }
 
-#[nest_rs_core::module(providers = [Hello as dyn Greeting])]
+#[module(providers = [Hello as dyn Greeting])]
 struct HelloModule;
 
-#[nest_rs_core::module(providers = [Bonjour as dyn Greeting])]
+#[module(providers = [Bonjour as dyn Greeting])]
 struct BonjourModule;
 
-#[nest_rs_core::module(imports = [HelloModule, BonjourModule])]
+#[module(imports = [HelloModule, BonjourModule])]
 struct BothGreetingsModule;
-
-fn duplicate(boot: anyhow::Result<nest_rs_core::App>) -> nest_rs_core::DuplicateProviderError {
-    let Err(refused) = boot else {
-        panic!("one binding would be dropped for the other");
-    };
-    refused
-        .downcast::<nest_rs_core::DuplicateProviderError>()
-        .unwrap_or_else(|refused| panic!("not the duplicate: {refused:#}"))
-}
 
 #[test]
 fn two_modules_binding_one_trait_object_fail_the_boot_naming_it() {
-    let duplicate = duplicate(nest_rs_core::App::new::<BothGreetingsModule>());
-    assert_eq!(
-        duplicate.type_name,
-        std::any::type_name::<Arc<dyn Greeting>>()
+    names_both(
+        App::new::<BothGreetingsModule>(),
+        std::any::type_name::<Arc<dyn Greeting>>(),
+        "`HelloModule` at `imports[0]` of `BothGreetingsModule`",
+        "`BonjourModule` at `imports[1]` of `BothGreetingsModule`",
     );
 }
 
 #[tokio::test]
-async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot() {
+async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot_naming_the_seed() {
     let duplicate = duplicate(
-        nest_rs_core::App::builder()
+        App::builder()
             .provide_dyn::<dyn Greeting>(Arc::new(Bonjour))
             .module::<HelloModule>()
             .build()
@@ -140,11 +293,18 @@ async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot() {
         duplicate.type_name,
         std::any::type_name::<Arc<dyn Greeting>>()
     );
+    assert_eq!(duplicate.first, "a seed (`App::builder().provide…`)");
+    assert!(
+        duplicate
+            .second
+            .contains("HelloModule`, a root the app is built from"),
+        "{duplicate}"
+    );
 }
 
 #[tokio::test]
 async fn an_override_replaces_the_trait_object_a_module_binds() {
-    let app = nest_rs_core::App::builder()
+    let app = App::builder()
         .module::<HelloModule>()
         .override_dyn::<dyn Greeting>(Arc::new(Bonjour))
         .build()

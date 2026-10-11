@@ -40,7 +40,10 @@ framework half.
   request-scoped providers (one instance each per request), never the reverse,
   and a handler reaches it through the edge's `Scoped<T>`. `scope = transient`
   is rebuilt on every resolution; a transient cycle panics at first resolution
-  naming the chain — the one provider error not caught at boot.
+  naming the chain — the one provider error not caught at boot. A singleton
+  injects neither (`ScopeViolationError`). **A type has one provider whatever
+  its scope**: a second registration fails the boot naming both and their
+  scopes (`DuplicateProviderError`) — never warned and replaced.
 - **Modules compose by type or by configured value** (`DynamicModule`), and a
   configured value is the module its required `DynamicModule::module` names, as
   NestJS's `DynamicModule { module }` is — declared, never read off what

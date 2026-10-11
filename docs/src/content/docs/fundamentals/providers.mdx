@@ -129,6 +129,11 @@ pub struct IdGenerator { /* ... */ }
 | `request` | Once per request | Cached for that request |
 | `transient` | On every resolution | Never cached |
 
+A type has **one provider, whatever its scope**. Listing it in two modules, or
+registering it once as a singleton and once request-scoped, fails the boot with
+a `DuplicateProviderError` naming both registrations and, when they differ,
+both scopes.
+
 **Singletons** — `PostsService`, `PostsController`, the DB pool: built at
 boot, injected as `Arc<T>`.
 

@@ -168,8 +168,8 @@ pub(crate) fn validate_access_graph(
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
 
-    // First binding wins; a key registered in two modules is a separate
-    // (override) concern the container already warns about.
+    // First listing wins: it only names a module to import, and two imported
+    // modules registering one key already failed the boot (`DuplicateProviderError`).
     let mut provided_by: HashMap<TypeId, (&'static str, &'static str)> = HashMap::new();
     for d in descriptors {
         for p in d.providers {

@@ -56,6 +56,31 @@ impl ProviderKey {
     }
 }
 
+/// How long one instance of a provider lives — the values of
+/// `#[injectable(scope = …)]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProviderScope {
+    /// One instance for the app's lifetime, built at boot.
+    Singleton,
+    /// One instance per request, built from the request's scope.
+    Request,
+    /// A fresh instance on every resolution.
+    Transient,
+}
+
+impl ProviderScope {
+    /// How a registration under this scope reads in a sentence: "first as a
+    /// singleton, then request-scoped".
+    pub(crate) fn as_registered(self) -> &'static str {
+        match self {
+            Self::Singleton => "as a singleton",
+            Self::Request => "request-scoped",
+            Self::Transient => "transient",
+        }
+    }
+}
+
 /// A keyed `#[inject(key = "…")]` dependency reported by
 /// [`Discoverable::injected_keyed`](crate::Discoverable::injected_keyed).
 ///
@@ -100,6 +125,9 @@ pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send
 /// it — since a dependent may wait on either.
 pub(crate) struct QueuedFactory {
     pub(crate) name: &'static str,
+    /// The import whose phase queued it — `None` at the app root — which its
+    /// output's registration is named by.
+    pub(crate) queued_by: Option<ImportSite>,
     pub(crate) provides: Vec<TypeId>,
     pub(crate) after: Vec<TypeId>,
     /// Whether an import site chose `T`, so a value already present is not
@@ -122,7 +150,7 @@ impl QueuedFactory {
 /// One import whose phase is running: the module whose `imports = [..]` names
 /// it — `None` for a root the app was built from — and the import as written.
 #[derive(Clone, Copy)]
-struct ImportSite {
+pub(crate) struct ImportSite {
     /// The module and the import's position in its list.
     importer: Option<(&'static str, usize)>,
     import: &'static str,
@@ -135,6 +163,30 @@ impl std::fmt::Display for ImportSite {
                 write!(f, "`{}` at `imports[{at}]` of `{importer}`", self.import)
             }
             None => write!(f, "`{}`, a root the app is built from", self.import),
+        }
+    }
+}
+
+/// Where a registration the builder holds came from, as a duplicate names it.
+#[derive(Clone, Copy)]
+pub(crate) enum Origin {
+    /// Registered before any root is entered: a value `App::builder()` seeded.
+    Seed,
+    /// Registered while this import's phase ran.
+    Import(ImportSite),
+    /// A factory's output, queued by this import — `None` at the app root.
+    Factory(Option<ImportSite>),
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Seed => f.write_str("a seed (`App::builder().provide…`)"),
+            Self::Import(site) => site.fmt(f),
+            Self::Factory(Some(site)) => write!(f, "a factory queued by {site}"),
+            Self::Factory(None) => {
+                f.write_str("a factory queued by `App::builder().provide_factory`")
+            }
         }
     }
 }
@@ -397,7 +449,14 @@ pub struct ContainerBuilder {
     import_sites: Vec<ImportSite>,
     scoped: HashMap<TypeId, ScopedFactory>,
     transient: HashMap<TypeId, TransientFactory>,
-    /// Unkeyed registrations that replaced an earlier one
+    /// The first registration of each unkeyed type, whatever its scope, so a
+    /// second names both.
+    origins: HashMap<TypeId, (Origin, ProviderScope)>,
+    /// Set while the factory drain installs a factory's output
+    /// ([`install`](Self::install)): the registrations it makes are that
+    /// factory's.
+    installing: Option<Origin>,
+    /// Second registrations of one unkeyed type
     /// ([`duplicate_providers`](Self::duplicate_providers)).
     duplicates: Vec<DuplicateProvider>,
     /// Dynamic imports (`Foo::for_root(opts)`) the collect phase constructed,
@@ -421,28 +480,43 @@ pub(crate) enum Phase {
 /// position in the list.
 type DynamicImportSite = (TypeId, usize);
 
-/// An unkeyed provider registered more than once; a keyed one warns and the
-/// last write wins.
+/// A second registration of one unkeyed type, whatever the two scopes; a keyed
+/// one warns and the last write wins.
 #[derive(Clone, Copy)]
 pub(crate) struct DuplicateProvider {
     /// Type name of the doubly-registered provider.
     pub type_name: &'static str,
+    first: (Origin, ProviderScope),
+    second: (Origin, ProviderScope),
+}
+
+impl DuplicateProvider {
+    /// The boot error naming both registrations.
+    pub(crate) fn error(&self) -> crate::DuplicateProviderError {
+        let ((first, first_scope), (second, second_scope)) = (self.first, self.second);
+        crate::DuplicateProviderError {
+            type_name: self.type_name,
+            first: first.to_string(),
+            second: second.to_string(),
+            scopes: (first_scope != second_scope).then_some((first_scope, second_scope)),
+        }
+    }
 }
 
 impl ContainerBuilder {
     /// Register a value, wrapped in `Arc` internally.
-    pub fn provide<T: Any + Send + Sync>(mut self, value: T) -> Self {
-        self.record_if_replacing(&ProviderKey::typed::<T>(), std::any::type_name::<T>());
-        self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
-        self.providers
-            .insert(ProviderKey::typed::<T>(), Arc::new(value));
-        self
+    ///
+    /// A type has one provider whatever its scope: a second registration of
+    /// `T` is a duplicate the boot refuses
+    /// ([`DuplicateProviderError`](crate::DuplicateProviderError)), naming
+    /// both.
+    pub fn provide<T: Any + Send + Sync>(self, value: T) -> Self {
+        self.provide_arc(Arc::new(value))
     }
 
     /// Register an already-shared `Arc<T>`.
     pub fn provide_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.record_if_replacing(&ProviderKey::typed::<T>(), std::any::type_name::<T>());
-        self.warn_if_cross_kind_singleton(TypeId::of::<T>(), std::any::type_name::<T>());
+        self.record::<T>(ProviderScope::Singleton);
         self.providers.insert(ProviderKey::typed::<T>(), value);
         self
     }
@@ -453,12 +527,9 @@ impl ContainerBuilder {
     /// type coexist in the flat container without a newtype wrapper.
     ///
     /// Keyed providers are singletons only. Registering twice under the same
-    /// `(T, name)` warns and last-write-wins, mirroring [`provide`](Self::provide).
-    pub fn provide_keyed<T: Any + Send + Sync>(mut self, name: &'static str, value: T) -> Self {
-        self.record_if_replacing(&ProviderKey::named::<T>(name), std::any::type_name::<T>());
-        self.providers
-            .insert(ProviderKey::named::<T>(name), Arc::new(value));
-        self
+    /// `(T, name)` warns and the last write wins.
+    pub fn provide_keyed<T: Any + Send + Sync>(self, name: &'static str, value: T) -> Self {
+        self.provide_keyed_arc(name, Arc::new(value))
     }
 
     /// [`provide_keyed`](Self::provide_keyed) for an already-shared `Arc<T>`.
@@ -467,8 +538,16 @@ impl ContainerBuilder {
         name: &'static str,
         value: Arc<T>,
     ) -> Self {
-        self.record_if_replacing(&ProviderKey::named::<T>(name), std::any::type_name::<T>());
-        self.providers.insert(ProviderKey::named::<T>(name), value);
+        let key = ProviderKey::named::<T>(name);
+        if self.providers.contains_key(&key) {
+            tracing::warn!(
+                target: crate::target::CONTAINER,
+                provider = std::any::type_name::<T>(),
+                key = name,
+                "keyed provider override",
+            );
+        }
+        self.providers.insert(key, value);
         self
     }
 
@@ -489,63 +568,54 @@ impl ContainerBuilder {
         self
     }
 
-    /// A **bare** registration — a concrete type or a trait object — that
-    /// replaces an earlier one: two modules (or a seed and a module) registering
-    /// the same type by mistake. [`App`](crate::App) reads
-    /// [`duplicate_providers`](Self::duplicate_providers) after the register
-    /// phase and **fails the boot**, uniform with every other wiring error. The
-    /// test override path ([`replace`](Self::replace),
-    /// [`replace_dyn`](Self::replace_dyn)) does not route here.
-    /// **Keyed** providers ([`provide_keyed`](Self::provide_keyed)) keep the
-    /// documented last-write-wins: re-registering `(T, name)` is a supported
-    /// keyed override, so it warns rather than failing the boot.
-    fn record_if_replacing(&mut self, key: &ProviderKey, type_name: &'static str) {
-        if !self.providers.contains_key(key) {
-            return;
-        }
-        match key.name {
-            None => self.duplicates.push(DuplicateProvider { type_name }),
-            Some(name) => tracing::warn!(
-                target: crate::target::CONTAINER,
-                provider = type_name,
-                key = name,
-                "keyed provider override",
-            ),
+    /// Note the registration of `T` under `scope` by whatever is registering
+    /// now; a second registration of one unkeyed type, whatever the two
+    /// scopes, is kept for [`App`](crate::App) to refuse once the register
+    /// phase ends, naming both. The test override path
+    /// ([`replace`](Self::replace), [`replace_dyn`](Self::replace_dyn)) does
+    /// not route here.
+    fn record<T: ?Sized + 'static>(&mut self, scope: ProviderScope) {
+        let second = (self.registration_origin(), scope);
+        match self.origins.get(&TypeId::of::<T>()) {
+            Some(&first) => self.duplicates.push(DuplicateProvider {
+                type_name: std::any::type_name::<T>(),
+                first,
+                second,
+            }),
+            None => {
+                self.origins.insert(TypeId::of::<T>(), second);
+            }
         }
     }
 
-    /// Unkeyed providers registered more than once, for the boot to refuse.
+    /// What is registering now: the factory being installed, else the import
+    /// whose phase runs, else — before any root is entered — a seed.
+    fn registration_origin(&self) -> Origin {
+        match (self.installing, self.import_sites.last()) {
+            (Some(factory), _) => factory,
+            (None, Some(site)) => Origin::Import(*site),
+            (None, None) => Origin::Seed,
+        }
+    }
+
+    /// Second registrations of one unkeyed type, for the boot to refuse.
     pub(crate) fn duplicate_providers(&self) -> &[DuplicateProvider] {
         &self.duplicates
     }
 
-    /// Warn when a singleton registration shadows an existing transient factory
-    /// of the same `TypeId`: `Container::get` checks `transient` first, so the
-    /// singleton would be unreachable.
-    fn warn_if_cross_kind_singleton(&self, id: TypeId, type_name: &'static str) {
-        if self.transient.contains_key(&id) {
-            tracing::warn!(
-                target: crate::target::CONTAINER,
-                provider = type_name,
-                existing_kind = "transient",
-                new_kind = "singleton",
-                "provider scope conflict",
-            );
+    /// Run `steps` — a factory's output and the trait objects bound off it —
+    /// as registrations of the factory `queued_by` queued.
+    pub(crate) fn install(
+        mut self,
+        queued_by: Option<ImportSite>,
+        steps: impl IntoIterator<Item = Registrar>,
+    ) -> Self {
+        let outer = self.installing.replace(Origin::Factory(queued_by));
+        for step in steps {
+            self = step(self);
         }
-    }
-
-    /// Warn when a transient registration shadows an existing singleton of the
-    /// same `TypeId`, leaving the singleton unreachable.
-    fn warn_if_cross_kind_transient(&self, id: TypeId, type_name: &'static str) {
-        if self.providers.contains_key(&ProviderKey::of(id)) {
-            tracing::warn!(
-                target: crate::target::CONTAINER,
-                provider = type_name,
-                existing_kind = "singleton",
-                new_kind = "transient",
-                "provider scope conflict",
-            );
-        }
+        self.installing = outer;
+        self
     }
 
     /// Register a trait-object provider, stored as `Arc<Arc<T>>` so the outer
@@ -555,9 +625,9 @@ impl ContainerBuilder {
     /// ([`DuplicateProviderError`](crate::DuplicateProviderError)); a test swaps
     /// one with [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
-        let key = ProviderKey::of(TypeId::of::<Arc<T>>());
-        self.record_if_replacing(&key, std::any::type_name::<Arc<T>>());
-        self.providers.insert(key, Arc::new(value));
+        self.record::<Arc<T>>(ProviderScope::Singleton);
+        self.providers
+            .insert(ProviderKey::of(TypeId::of::<Arc<T>>()), Arc::new(value));
         self
     }
 
@@ -930,6 +1000,7 @@ impl ContainerBuilder {
         });
         let mut queued = QueuedFactory {
             name,
+            queued_by: self.import_sites.last().copied(),
             provides: vec![id],
             after,
             declared: remedy.is_some(),
@@ -993,23 +1064,16 @@ impl ContainerBuilder {
 
     /// Register a request-scoped provider: `factory` builds a fresh `T` for
     /// each request, cached by a [`RequestScope`] — emitted by
-    /// `#[injectable(scope = request)]`.
+    /// `#[injectable(scope = request)]`. A second registration of `T`, in any
+    /// scope, is a duplicate the boot refuses.
     pub fn provide_scoped<T, F>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
         F: Fn(&RequestScope) -> T + Send + Sync + 'static,
     {
-        let id = TypeId::of::<T>();
-        if self.scoped.contains_key(&id) {
-            tracing::warn!(
-                target: crate::target::CONTAINER,
-                provider = std::any::type_name::<T>(),
-                kind = "request_scoped",
-                "provider override",
-            );
-        }
+        self.record::<T>(ProviderScope::Request);
         self.scoped.insert(
-            id,
+            TypeId::of::<T>(),
             Arc::new(move |scope| Arc::new(factory(scope)) as AnyArc),
         );
         self
@@ -1017,24 +1081,16 @@ impl ContainerBuilder {
 
     /// Register a transient provider: `factory` builds a fresh `T` every time
     /// `Container::get::<T>()` (or a [`RequestScope`]) resolves it — emitted by
-    /// `#[injectable(scope = transient)]`.
+    /// `#[injectable(scope = transient)]`. A second registration of `T`, in
+    /// any scope, is a duplicate the boot refuses.
     pub fn provide_transient<T, F>(mut self, factory: F) -> Self
     where
         T: Any + Send + Sync,
         F: Fn(&RequestScope) -> T + Send + Sync + 'static,
     {
-        let id = TypeId::of::<T>();
-        if self.transient.contains_key(&id) {
-            tracing::warn!(
-                target: crate::target::CONTAINER,
-                provider = std::any::type_name::<T>(),
-                kind = "transient",
-                "provider override",
-            );
-        }
-        self.warn_if_cross_kind_transient(id, std::any::type_name::<T>());
+        self.record::<T>(ProviderScope::Transient);
         self.transient.insert(
-            id,
+            TypeId::of::<T>(),
             Arc::new(move |scope| Arc::new(factory(scope)) as AnyArc),
         );
         self
@@ -1271,14 +1327,36 @@ mod tests {
         assert!(container.get::<Greeter>().is_none());
     }
 
+    /// The sentence the first duplicate `builder` kept would fail the boot with.
+    fn first_duplicate(builder: &ContainerBuilder) -> crate::DuplicateProviderError {
+        builder
+            .duplicate_providers()
+            .first()
+            .expect("a duplicate is kept")
+            .error()
+    }
+
     #[test]
-    fn provide_override_keeps_the_last_value() {
-        // The boot, not the builder, refuses the duplicate.
-        let container = Container::builder()
-            .provide(Counter(1))
-            .provide(Counter(2))
-            .build();
-        assert_eq!(container.get::<Counter>().unwrap().0, 2);
+    fn a_second_value_of_one_type_is_kept_as_a_duplicate_for_the_boot() {
+        let builder = Container::builder().provide(Counter(1)).provide(Counter(2));
+        let duplicate = first_duplicate(&builder);
+        assert_eq!(duplicate.type_name, std::any::type_name::<Counter>());
+        assert_eq!(duplicate.scopes, None);
+    }
+
+    #[test]
+    fn a_seed_and_a_modules_registration_of_one_type_name_the_seed() {
+        let builder = Container::builder().provide(Counter(1));
+        let builder =
+            __private::enter_import(builder, "Root", 0, "CountersModule").provide(Counter(2));
+        let sentence = first_duplicate(&builder).to_string();
+        assert!(
+            sentence.contains(
+                "registered by a seed (`App::builder().provide…`) and again by \
+                 `CountersModule` at `imports[0]` of `Root`"
+            ),
+            "{sentence}"
+        );
     }
 
     #[test]
@@ -1614,13 +1692,24 @@ mod tests {
     }
 
     #[test]
-    fn transient_override_replaces_earlier_factory() {
-        let container = Container::builder()
+    fn a_second_transient_factory_of_one_type_is_a_duplicate() {
+        let builder = Container::builder()
             .provide_transient(|_| Counter(1))
-            .provide_transient(|_| Counter(2))
-            .build();
-        let resolved: Arc<Counter> = container.get().unwrap();
-        assert_eq!(resolved.0, 2);
+            .provide_transient(|_| Counter(2));
+        let duplicate = first_duplicate(&builder);
+        assert_eq!(duplicate.type_name, std::any::type_name::<Counter>());
+        assert_eq!(duplicate.scopes, None, "one scope twice names none");
+    }
+
+    #[test]
+    fn a_second_request_scoped_factory_of_one_type_is_a_duplicate() {
+        let builder = Container::builder()
+            .provide_scoped(|_| Counter(1))
+            .provide_scoped(|_| Counter(2));
+        assert_eq!(
+            first_duplicate(&builder).type_name,
+            std::any::type_name::<Counter>()
+        );
     }
 
     /// The `tracing` lines emitted on the calling thread while `f` runs.
@@ -1661,46 +1750,47 @@ mod tests {
     }
 
     #[test]
-    fn singleton_then_transient_same_typeid_warns_cross_kind() {
-        let logs = capture_warns(|| {
-            let _ = Container::builder()
-                .provide(Counter(1))
-                .provide_transient(|_| Counter(2))
-                .build();
-        });
-        assert!(
-            logs.contains("provider scope conflict"),
-            "expected cross-kind warn, got: {logs}",
-        );
-        assert!(
-            logs.contains("existing_kind") && logs.contains("singleton"),
-            "warn must name the existing singleton: {logs}",
-        );
-        assert!(
-            logs.contains("new_kind") && logs.contains("transient"),
-            "warn must name the incoming transient: {logs}",
-        );
+    fn one_type_under_two_scopes_is_a_duplicate_naming_both_in_order() {
+        let cases: [(ContainerBuilder, (ProviderScope, ProviderScope)); 4] = [
+            (
+                Container::builder()
+                    .provide(Counter(1))
+                    .provide_transient(|_| Counter(2)),
+                (ProviderScope::Singleton, ProviderScope::Transient),
+            ),
+            (
+                Container::builder()
+                    .provide_transient(|_| Counter(1))
+                    .provide(Counter(2)),
+                (ProviderScope::Transient, ProviderScope::Singleton),
+            ),
+            (
+                Container::builder()
+                    .provide(Counter(1))
+                    .provide_scoped(|_| Counter(2)),
+                (ProviderScope::Singleton, ProviderScope::Request),
+            ),
+            (
+                Container::builder()
+                    .provide_scoped(|_| Counter(1))
+                    .provide_transient(|_| Counter(2)),
+                (ProviderScope::Request, ProviderScope::Transient),
+            ),
+        ];
+        for (builder, scopes) in cases {
+            assert_eq!(first_duplicate(&builder).scopes, Some(scopes));
+        }
     }
 
     #[test]
-    fn transient_then_singleton_same_typeid_warns_cross_kind() {
-        let logs = capture_warns(|| {
-            let _ = Container::builder()
-                .provide_transient(|_| Counter(1))
-                .provide(Counter(2))
-                .build();
-        });
+    fn the_scopes_clause_reads_first_then_second() {
+        let builder = Container::builder()
+            .provide_scoped(|_| Counter(1))
+            .provide(Counter(2));
+        let sentence = first_duplicate(&builder).to_string();
         assert!(
-            logs.contains("provider scope conflict"),
-            "expected cross-kind warn, got: {logs}",
-        );
-        assert!(
-            logs.contains("existing_kind") && logs.contains("transient"),
-            "warn must name the existing transient: {logs}",
-        );
-        assert!(
-            logs.contains("new_kind") && logs.contains("singleton"),
-            "warn must name the incoming singleton: {logs}",
+            sentence.contains("(first request-scoped, then as a singleton)"),
+            "{sentence}"
         );
     }
 

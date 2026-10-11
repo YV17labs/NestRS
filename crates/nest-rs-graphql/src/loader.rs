@@ -9,8 +9,6 @@
 //! of its shutdown window.
 
 use std::any::TypeId;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -32,9 +30,6 @@ pub struct GraphqlLoaderRegistration {
 
 inventory::collect!(GraphqlLoaderRegistration);
 
-/// A DataLoader batch's work, as async-graphql hands it to the spawner.
-type BatchFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
 /// The spawner a request's DataLoader batches run through, filed under
 /// `batches`.
 ///
@@ -43,7 +38,9 @@ type BatchFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 /// carries into a [`Batch`](Continuation::Batch) — its trace, the caller's
 /// ability, the pool rather than its transaction — whichever field triggered
 /// it.
-pub fn batch_spawner(batches: &DetachedWork) -> impl Fn(BatchFuture) + Send + Sync + 'static {
+pub fn batch_spawner(
+    batches: &DetachedWork,
+) -> impl Fn(crate::BoxFuture<'static, ()>) + Send + Sync + 'static {
     let batches = batches.clone();
     move |batch| {
         let carried = TaskContext::capture(Continuation::Batch);

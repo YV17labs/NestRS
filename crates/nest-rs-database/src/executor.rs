@@ -269,11 +269,6 @@ mod tests {
     }
 
     #[test]
-    fn a_task_carries_no_executor() {
-        assert!(crossing(Arc::new(OnPool), Continuation::Task).is_none());
-    }
-
-    #[test]
     fn a_continuation_that_opens_its_own_unit_carries_no_executor() {
         for into in [
             Continuation::Task,

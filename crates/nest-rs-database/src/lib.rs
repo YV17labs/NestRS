@@ -8,10 +8,9 @@
 //! streaming body, a DataLoader batch and after-commit work as the pool, and
 //! to no task, so a detached write cannot run outside a unit of work — and
 //! [`after_commit`], the one way an effect waits for that unit of work to
-//! commit. It is what every ORM
-//! integration plugs into — not an ORM itself. The non-HTTP side is wired
-//! through `nest_rs_worker::JobContext`, which a worker transport
-//! (`#[scheduled]`, `#[processor]`) resolves before each job.
+//! commit. It is what every ORM integration plugs into — not an ORM itself.
+//! The non-HTTP side is wired through `nest_rs_worker::JobContext`, which a
+//! worker transport (`#[scheduled]`, `#[processor]`) resolves before each job.
 //!
 //! The first-class implementation is `nest-rs-seaorm` (SeaORM): it ships
 //! `Repo` (row-level filter), `CrudService`, `Bind`, the HTTP mask

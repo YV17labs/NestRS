@@ -63,24 +63,17 @@ impl RequestCtx {
     /// each value through its `carry`. Flat, so nothing it did not carry stays
     /// reachable through a parent.
     fn captured(self: &Arc<Self>, into: Continuation) -> Arc<Self> {
-        let unit = match into {
-            Continuation::Batch => self.unit_root(),
-            _ => self,
-        };
-        let scope = match into {
-            Continuation::Batch | Continuation::Connection | Continuation::Envelope => None,
-            _ => unit.scope.clone(),
+        let (unit, keeps_scope) = match into {
+            Continuation::Batch => (self.unit_root(), false),
+            Continuation::Connection | Continuation::Envelope => (self, false),
+            Continuation::Body | Continuation::Task | Continuation::Commit => (self, true),
         };
         let ambient = unit.ambient.carried(into);
-        let same_scope = match (&scope, &unit.scope) {
-            (Some(kept), Some(held)) => Arc::ptr_eq(kept, held),
-            (kept, held) => kept.is_none() && held.is_none(),
-        };
-        if ambient.is_none() && same_scope && unit.parent.is_none() {
+        if ambient.is_none() && (keeps_scope || unit.scope.is_none()) && unit.parent.is_none() {
             return Arc::clone(unit);
         }
         Arc::new(Self {
-            scope,
+            scope: unit.scope.clone().filter(|_| keeps_scope),
             correlation: unit.correlation.clone(),
             ambient: ambient.unwrap_or_else(|| unit.ambient.clone()),
             parent: None,

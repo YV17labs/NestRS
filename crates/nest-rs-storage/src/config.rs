@@ -47,10 +47,10 @@ pub(crate) const READ_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// `Default` is the production-safe value: an `https://` endpoint in
 /// path-style addressing, plain HTTP refused and no credential. A declared
 /// development or test profile's [`Config::defaults`] adds the dev container's
-/// pair and allows plain HTTP; a config pinned over `..Default::default()` gets neither
-/// in any profile, and one pinned over `..StorageConfig::defaults()` gets the
-/// profile's. For real AWS S3, leave [`endpoint`](Self::endpoint) empty and
-/// set [`force_path_style`](Self::force_path_style) to `false`.
+/// pair and allows plain HTTP; a config pinned over `..Default::default()` gets
+/// neither in any profile, and one pinned over `..StorageConfig::defaults()`
+/// gets the profile's. For real AWS S3, leave [`endpoint`](Self::endpoint)
+/// empty and set [`force_path_style`](Self::force_path_style) to `false`.
 #[config(namespace = "storage")]
 #[derive(Clone)]
 pub struct StorageConfig {
@@ -317,37 +317,19 @@ mod tests {
                     "{profile}"
                 );
             }
-            for profile in ["staging", "production"] {
+            for profile in ["staging", "production", ""] {
                 jail.set_env(Environment::var_name(), profile);
                 let d = <StorageConfig as Config>::defaults();
                 assert!(
                     d.access_key.is_empty() && d.secret_key.is_empty() && !d.allow_http,
-                    "{profile}"
+                    "{profile:?}"
                 );
                 assert_eq!(
                     format!("{d:?}"),
                     format!("{:?}", StorageConfig::default()),
-                    "{profile}"
+                    "{profile:?}"
                 );
             }
-            Ok(())
-        });
-    }
-
-    #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
-    fn an_undeclared_environment_gets_neither_the_pair_nor_plain_http() {
-        figment::Jail::expect_with(|jail| {
-            jail.set_env(Environment::var_name(), "");
-            let d = <StorageConfig as Config>::defaults();
-            assert!(!d.allow_http, "plain HTTP waits for a declared profile");
-            assert!(
-                d.access_key.is_empty() && d.secret_key.is_empty(),
-                "the development pair waits for a declared profile"
-            );
             Ok(())
         });
     }

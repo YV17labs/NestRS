@@ -175,10 +175,6 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
 /// runtime existed, so a binary calls nothing for it. A child process, since
 /// the cascade is read once per process, from where it runs.
 mod published_before_main {
-    use std::process::Command;
-
-    const CHILD_ROLE: &str = "NEST_RS_CONFIG_CASCADE_CHILD";
-
     const CHILD_TEST: &str = "dotenv::published_before_main::cascade_child_process";
 
     #[nest_rs_core::main]
@@ -197,12 +193,8 @@ mod published_before_main {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the parent test hands the child its role through the environment"
-    )]
     fn cascade_child_process() {
-        if std::env::var(CHILD_ROLE).is_ok() {
+        if crate::is_child() {
             print_what_main_finds();
         }
     }
@@ -216,10 +208,8 @@ mod published_before_main {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_PROBE=1\nCASCADE_DEPLOYED=from_file\n")?;
 
-            let child = Command::new(std::env::current_exe().expect("the test binary"))
-                .args(["--exact", CHILD_TEST, "--nocapture"])
+            let child = crate::child(CHILD_TEST)
                 .current_dir(jail.directory())
-                .env(CHILD_ROLE, "1")
                 .env("CASCADE_DEPLOYED", "from_deployment")
                 .env_remove("CASCADE_PROBE")
                 .output()
@@ -245,11 +235,7 @@ mod published_before_main {
 /// A process that declares no environment runs as production from its first
 /// line: the cascade it publishes is production's, never development's.
 mod an_undeclared_process {
-    use std::process::Command;
-
     use nest_rs_config::{ConfigService, Environment, var_name};
-
-    const CHILD_ROLE: &str = "NEST_RS_CONFIG_UNDECLARED_CHILD";
 
     const CHILD_TEST: &str = "dotenv::an_undeclared_process::undeclared_child_process";
 
@@ -270,12 +256,8 @@ mod an_undeclared_process {
     }
 
     #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the parent test hands the child its role through the environment"
-    )]
     fn undeclared_child_process() {
-        if std::env::var(CHILD_ROLE).is_ok() {
+        if crate::is_child() {
             print_what_an_undeclared_process_resolves();
         }
     }
@@ -291,10 +273,8 @@ mod an_undeclared_process {
             jail.create_file(".env.development", &format!("{pick}=dev\n"))?;
             jail.create_file(".env.production", &format!("{pick}=prod\n"))?;
 
-            let child = Command::new(std::env::current_exe().expect("the test binary"))
-                .args(["--exact", CHILD_TEST, "--nocapture"])
+            let child = crate::child(CHILD_TEST)
                 .current_dir(jail.directory())
-                .env(CHILD_ROLE, "1")
                 .env_remove(Environment::var_name())
                 .env_remove(&pick)
                 .output()

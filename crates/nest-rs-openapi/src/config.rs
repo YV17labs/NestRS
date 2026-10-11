@@ -192,22 +192,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
-    fn an_undeclared_environment_serves_no_documentation() {
-        figment::Jail::expect_with(|jail| {
-            jail.set_env(nest_rs_config::Environment::var_name(), "");
-            assert!(
-                !<OpenApiConfig as Config>::defaults().enabled,
-                "a process that declares no profile runs as production"
-            );
-            Ok(())
-        });
-    }
-
-    #[test]
     fn from_env_falls_back_to_defaults_when_unset() {
         let cfg =
             OpenApiConfig::from_env(&ConfigService::with_vars("openapi", []), Default::default())
@@ -320,12 +304,13 @@ mod tests {
                 ("test", true),
                 ("staging", false),
                 ("production", false),
+                ("", false),
             ] {
                 jail.set_env(nest_rs_config::Environment::var_name(), profile);
                 assert_eq!(
                     <OpenApiConfig as Config>::defaults().enabled,
                     enabled,
-                    "{profile}"
+                    "{profile:?}"
                 );
             }
             Ok(())

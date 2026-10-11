@@ -687,3 +687,68 @@ async fn a_socket_whose_client_stops_reading_is_dropped_at_the_send_deadline() {
     app.shutdown().await.expect("the transport stops cleanly");
     drop(socket);
 }
+
+/// Who the upgrade was for, read back by the operations its socket runs.
+#[derive(Debug)]
+struct Caller(&'static str);
+
+impl nest_rs_core::AmbientValue for Caller {}
+
+/// Adds the caller around the upgrade request, as a guard's attachment does.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct CallerInterceptor;
+
+impl nest_rs_core::Layer for CallerInterceptor {}
+
+#[nest_rs_http::async_trait]
+impl nest_rs_interceptors::Interceptor for CallerInterceptor {
+    async fn intercept(
+        &self,
+        req: poem::Request,
+        next: nest_rs_interceptors::Next<'_>,
+    ) -> poem::Result<poem::Response> {
+        nest_rs_core::with_ambient(Arc::new(Caller("alice")), next.run(req)).await
+    }
+}
+
+#[resolver]
+struct CallerResolver;
+
+#[operations]
+impl CallerResolver {
+    #[query]
+    #[public]
+    async fn caller_ping(&self) -> bool {
+        true
+    }
+
+    #[subscription]
+    #[public]
+    async fn caller(&self) -> impl futures_stream::Stream<Item = String> {
+        let caller = nest_rs_core::ambient::<Caller>().map_or("nobody", |caller| caller.0);
+        futures_stream::iter([caller.to_owned()])
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [CallerInterceptor, CallerResolver],
+)]
+struct CallerApp;
+
+#[tokio::test]
+async fn an_operation_on_the_socket_reads_what_its_upgrade_carried() {
+    let app = TestApp::builder()
+        .module::<CallerApp>()
+        .use_interceptors_global([nest_rs_interceptors::interceptor::<CallerInterceptor>()])
+        .build_ws()
+        .await
+        .expect("the schema boots on a real port");
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { caller }").await;
+
+    let item = next_message(&mut socket).await;
+    assert_eq!(item["type"], "next", "{item}");
+    assert_eq!(item["payload"]["data"]["caller"], "alice", "{item}");
+}

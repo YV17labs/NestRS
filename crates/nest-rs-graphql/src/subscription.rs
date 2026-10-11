@@ -21,7 +21,7 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
-use nest_rs_core::{Container, Correlation};
+use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::DetachedWork;
 use tracing::Instrument;
 
@@ -213,6 +213,9 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let guard = self.bridge.op_guard.clone();
         // Read on the request task, before poem answers the `101`.
         let correlation = socket_correlation();
+        // Never the upgrade's scope nor its transaction: the socket's own
+        // executor is installed below.
+        let carried = RequestContinuation::capture(Continuation::Connection);
         let sockets = self.sockets.clone();
 
         Ok(websocket
@@ -263,7 +266,14 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 };
                 // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
                 let _ = sockets
-                    .run(nest_rs_core::with_request_scope(None, correlation, served))
+                    .run(async move {
+                        match carried {
+                            Some(carried) => carried.scope(served).await,
+                            None => {
+                                nest_rs_core::with_request_scope(None, correlation, served).await
+                            }
+                        }
+                    })
                     .instrument(span)
                     .await;
                 if let Some(ended) = ended {

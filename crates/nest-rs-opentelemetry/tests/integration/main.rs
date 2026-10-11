@@ -1,4 +1,4 @@
-//! `OpenTelemetryModule`'s boot contract. nextest runs every test in a process
+//! `OpenTelemetryModule`'s boot contract, and the OTLP exporters' client. nextest runs every test in a process
 //! of its own, so a test that initialises OpenTelemetry never does it for
 //! another.
 #![allow(
@@ -10,3 +10,5 @@
 )]
 
 mod module;
+#[cfg(feature = "otlp")]
+mod otlp;

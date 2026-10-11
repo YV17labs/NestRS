@@ -101,7 +101,7 @@ nest_rs_core::inventory::submit! {
         config_namespace: <GithubSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
         build: |container| {
             resolve_provider::<GithubSocialProvider, GithubSocialConfig>(container, |config| {
-                let client = OAuthClient::new(config.oauth2_config())
+                let client = OAuthClient::new(config.oauth2_config()?)
                     .map_err(|e| anyhow::anyhow!("invalid GitHub OAuth2 client config: {e}"))?;
                 Ok(GithubSocialProvider::new(client))
             })

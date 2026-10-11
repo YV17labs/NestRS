@@ -26,7 +26,8 @@ The tables below name the `_FILE` spelling only where a key is usually given
 that way.
 
 **Every TLS client reads the same three keys.** In each namespace whose module
-opens a TLS connection — `redis`, `storage`, `authn` — `TLS_CA_CERT` names the
+opens a TLS connection — `redis`, `storage`, `authn`, `oauth__client`,
+`opentelemetry` — `TLS_CA_CERT` names the
 authorities the peer's certificate must chain to, replacing the system's, and
 `TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
 requires one, both or neither. The certificate is verified whatever is set, and
@@ -185,10 +186,12 @@ Read once `StaticFilesModule` is imported, and pinned through its `for_root`
 | Key | Meaning |
 |---|---|
 | `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
-| `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
+| `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export): `http://` exports in plaintext, `https://` over TLS alone; another scheme, or a value that does not parse as a URL, fails the boot |
 | `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
 | `METRIC_INTERVAL_SECS` | metric export period, from `1` to `3600` (default `60`; `0` is refused). Traces and logs export immediately — metrics wait for this flush |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
+| `TLS_CA_CERT` | PEM certificates of the authorities an `https://` collector's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate, or beside an `http://` endpoint, fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither; beside an `http://` endpoint, they fail the boot |
 
 The console layer reads the [`<PREFIX>_LOG*` family](#logging--prefix_log)
 above — there are no OTel-specific log variables.
@@ -226,11 +229,13 @@ boot naming the field:
 | Key | Meaning |
 |---|---|
 | `CLIENT_ID` / `CLIENT_SECRET` | the registered OAuth2 client credentials |
-| `AUTH_URL` | provider authorization endpoint (where the user consents) |
-| `TOKEN_URL` | provider token endpoint (code → tokens) |
-| `REDIRECT_URL` | this app's callback the provider returns to |
-| `USERINFO_URL` | provider endpoint the profile is fetched from |
+| `AUTH_URL` | provider authorization endpoint (where the user consents); `https` only (RFC 6749 §3.1) |
+| `TOKEN_URL` | provider token endpoint (code → tokens); `https` only (RFC 6749 §3.2) |
+| `REDIRECT_URL` | this app's callback the provider returns to; `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]` (RFC 8252 §7.3) |
+| `USERINFO_URL` | provider endpoint the profile is fetched from; `https` only (RFC 6750 §5.3) |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
+| `TLS_CA_CERT` | PEM certificates of the authorities the provider's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate fails the boot |
+| `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a provider that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 
 ## `oauth__resource` — `<PREFIX>_OAUTH__RESOURCE__*`
 

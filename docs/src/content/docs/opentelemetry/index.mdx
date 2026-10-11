@@ -104,6 +104,7 @@ pinned `OpenTelemetryConfig`.
 | `<PREFIX>_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
 | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
 | `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
+| `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | `tls` | the system's authorities, no client certificate |
 
 The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
 the subscriber stays console-only; the W3C propagator is still installed so
@@ -122,6 +123,33 @@ NESTRS_LOG=info \
 The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the
 batch processors export from a dedicated non-Tokio thread so the blocking
 reqwest client is the right pick, the upstream-recommended pairing.
+
+### An encrypted export
+
+The endpoint's scheme decides, as the OTLP specification lets it: an
+`http://` endpoint exports in plaintext — a collector beside the app, as a
+sidecar or a node agent, is the common case — and an `https://` one over
+TLS alone. Any other scheme, and a value that does not parse as a URL, fail
+the boot naming `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT`, never its value,
+which may carry a collector's credential.
+
+An `https://` collector's certificate is verified against the system's
+authorities, or the ones `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` names, which
+replace them; a collector requiring a client certificate gets `TLS_CERT`
+and `TLS_KEY`. Each takes its `_FILE` spelling, and none is accepted beside
+an `http://` endpoint, where it would go unused. The clients are this
+crate's own: they follow no redirect, give up reaching the collector after
+3 s, and cut each export where the SDK stops waiting for it —
+`OTEL_EXPORTER_OTLP_TRACES_TIMEOUT` (or `_METRICS_`, `_LOGS_`), then
+`OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, then 10 s. A value that is
+not a whole number of milliseconds is ignored, as the SDK ignores it, and
+said once at `warn` with the variable's name.
+
+```bash frame="terminal"
+NESTRS_OPENTELEMETRY__OTLP_ENDPOINT=https://otel-collector.internal:4318 \
+NESTRS_OPENTELEMETRY__TLS_CA_CERT_FILE=/run/secrets/collector-ca.pem \
+  nestrs run start api
+```
 
 ## Feature flags
 

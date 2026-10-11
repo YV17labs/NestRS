@@ -17,7 +17,9 @@ categories = ["authentication", "web-programming"]
 nest-rs-core.workspace = true
 # `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth__client`), loaded from
 # `NESTRS_OAUTH__CLIENT__*`; `validator` backs this crate's own `Validate` impls.
-nest-rs-config.workspace = true
+# `tls` is `ClientTls`, what the provider's certificate must chain to and the
+# certificate presented to it.
+nest-rs-config = { workspace = true, features = ["tls"] }
 validator.workspace = true
 # `AuthError` is the framework's authentication failure, and the CSRF/PKCE
 # transaction is a `JwtService`-signed cookie — both belong to the crate that
@@ -41,8 +43,9 @@ anyhow.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# `LogCapture` asserts the callback-refusal `warn` carries its `reason`.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `LogCapture` asserts the callback-refusal `warn` carries its `reason`;
+# `TestAuthority` issues the certificate each provider double presents over TLS.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 # Forging an expired transaction cookie, to prove `exchange` refuses it. The
 # crate hides `jsonwebtoken` from consumers; only the test that has to mint a
 # malformed token names it.

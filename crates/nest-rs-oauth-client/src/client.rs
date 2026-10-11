@@ -5,7 +5,7 @@ use std::fmt;
 use std::time::Duration;
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
-use nest_rs_config::{ConfigError, Namespaced};
+use nest_rs_config::{ClientTls, ConfigError, ConfigService, Namespaced};
 use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
@@ -221,6 +221,39 @@ fn backend() -> reqwest::ClientBuilder {
         .timeout(OAuthClient::CALL_TIMEOUT)
 }
 
+/// The backend trusting what `tls` names — the system's authorities unless it
+/// names others — and presenting its certificate when it holds one.
+fn verified(tls: &ClientTls) -> Result<reqwest::Client, AuthError> {
+    let names = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
+    tls.check(&names)
+        .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+    let roots = reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
+        AuthError::Failed(format!(
+            "the authorities the OAuth provider's certificate chains to do not read as PEM: {}",
+            nest_rs_core::error_message(&error)
+        ))
+    })?;
+    let mut builder = backend().tls_certs_only(roots);
+    if let Some((cert, key)) = tls.identity_pem() {
+        let pem = [cert, b"\n", key].concat();
+        let identity = reqwest::Identity::from_pem(&pem).map_err(|error| {
+            AuthError::Failed(format!(
+                "{} and {} could not be presented: {}",
+                names.spellings("TLS_CERT"),
+                names.spellings("TLS_KEY"),
+                nest_rs_core::error_message(&error)
+            ))
+        })?;
+        builder = builder.identity(identity);
+    }
+    builder.build().map_err(|error| {
+        AuthError::Failed(format!(
+            "the OAuth client could not be built: {}",
+            nest_rs_core::error_message(&error)
+        ))
+    })
+}
+
 /// A transient Authorization-Code (PKCE) client built per flow from an
 /// [`OAuthClientConfig`]; its backend refuses redirects (anti-SSRF) and bounds every call.
 pub struct OAuthClient {
@@ -242,12 +275,14 @@ impl OAuthClient {
     pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Builds a client from a validated `config`; its backend follows no redirect
-    /// (an SSRF risk in a token exchange, per `oauth2`) and bounds every call.
+    /// (an SSRF risk in a token exchange, per `oauth2`), bounds every call and
+    /// trusts what `config.tls` names. A provider endpoint that is not `https`,
+    /// a redirect that is neither `https` nor loopback `http`, and TLS material
+    /// no handshake could use are refused, naming the setting.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
         config.validate().map_err(invalid)?;
-        let http = backend()
-            .build()
-            .map_err(|e| AuthError::Failed(e.to_string()))?;
+        config.refuse_plaintext()?;
+        let http = verified(&config.tls)?;
         Ok(Self { config, http })
     }
 
@@ -392,6 +427,8 @@ impl OAuthClient {
 
     /// Authenticated `GET` against any provider endpoint (GitHub's verified emails,
     /// say), deserialized into `T`, through this client's redirect-refusing backend.
+    /// A `url` that is not `https` is refused before anything is sent: the call
+    /// carries the bearer token.
     pub async fn fetch<T: DeserializeOwned>(
         &self,
         url: &str,
@@ -401,6 +438,12 @@ impl OAuthClient {
             role: PROVIDER_ENDPOINT,
             url,
         };
+        if !reqwest::Url::parse(url.trim()).is_ok_and(|url| url.scheme() == "https") {
+            return Err(AuthError::Failed(format!(
+                "{endpoint} is not an https URL, and RFC 6750 §5.3 sends a bearer token over TLS \
+                 alone"
+            )));
+        }
         self.read(&endpoint, access_token).await
     }
 
@@ -467,6 +510,16 @@ mod tests {
             redirect_url: "https://app.example/callback".into(),
             userinfo_url: "https://provider.example/userinfo".into(),
             scopes: vec!["read".into()],
+            tls: ClientTls::default(),
+        }
+    }
+
+    /// A client over `config` whatever it holds, built past `new`'s refusals to
+    /// reach what runs after them.
+    fn unchecked(config: OAuthClientConfig) -> OAuthClient {
+        OAuthClient {
+            config,
+            http: backend().build().expect("the backend builds"),
         }
     }
 
@@ -581,9 +634,12 @@ mod tests {
     fn authorize_surfaces_basic_client_error() {
         let mut config = valid_config();
         config.auth_url = "not a url".into();
-        let client = OAuthClient::new(config).expect("new accepts non-empty fields");
+        assert!(
+            matches!(OAuthClient::new(config.clone()), Err(AuthError::Failed(_))),
+            "new refuses it first"
+        );
         assert!(matches!(
-            client.authorize(&jwt(), "acme"),
+            unchecked(config).authorize(&jwt(), "acme"),
             Err(AuthError::Failed(_))
         ));
     }
@@ -609,7 +665,7 @@ mod tests {
         let jwt = jwt();
         let mut config = valid_config();
         config.token_url = "::::".into();
-        let client = OAuthClient::new(config).expect("new accepts non-empty fields");
+        let client = unchecked(config);
         let transaction = signed_transaction(&jwt, "acme", "the-signed-state");
 
         for (presented, matches) in [

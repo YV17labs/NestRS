@@ -17,7 +17,7 @@ nest-rs-authn.workspace = true
 # Providers compose the shared Authorization-Code flow rather than each writing
 # their own; `SocialProvider::authorize`/`exchange` default to it.
 nest-rs-oauth-client.workspace = true
-nest-rs-config.workspace = true
+nest-rs-config = { workspace = true, features = ["tls"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

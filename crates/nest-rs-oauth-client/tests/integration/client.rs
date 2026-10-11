@@ -1,9 +1,18 @@
-//! Covers `src/client.rs` — authorize URL and pre-network exchange checks.
+//! Covers `src/client.rs` — the authorize URL, the exchange's checks, and every
+//! call against a provider served over TLS by an in-process double whose
+//! certificate a `TestAuthority` issued.
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use nest_rs_authn::{AuthError, JwtOptions, JwtService};
-use nest_rs_oauth_client::{OAuthClient, TARGET};
-use nest_rs_testing::LogCapture;
+use nest_rs_config::{ClientTls, Config, ConfigService, Material, Namespaced, var_name};
+use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, TARGET};
+use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use serde::Deserialize;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::TcpListener;
 
 use super::config::valid_config;
 
@@ -179,16 +188,127 @@ const CODE: &str = "authorization-code-never-quoted";
 const ACCESS_TOKEN: &str = "access-token-never-quoted";
 const QUERY_SECRET: &str = "query-key-never-quoted";
 
+/// The authority every double's certificate chains to, and a client trusts
+/// only through `TLS_CA_CERT`: the system's store does not hold it.
+static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+
+static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.server(&["127.0.0.1"]));
+
+/// The client's TLS settings trusting [`AUTHORITY`].
+fn trusting() -> ClientTls {
+    ClientTls::new(
+        Some(Material {
+            bytes: AUTHORITY.pem().as_bytes().to_vec(),
+            path: None,
+        }),
+        None,
+    )
+}
+
+/// What a double does with each request it reads.
+#[derive(Clone)]
+enum Behaviour {
+    /// Holds the connection and never answers; the clock stops at the first
+    /// request read, so the `CALL_TIMEOUT` wait is free.
+    Silent,
+    /// Writes this raw HTTP/1.1 answer, then closes.
+    Answer(String),
+}
+
+/// An OAuth provider over TLS on loopback, one request per connection, every
+/// request it reads counted.
+struct Provider {
+    addr: SocketAddr,
+    requests: Arc<AtomicUsize>,
+}
+
+impl Provider {
+    async fn serving(behaviour: Behaviour) -> Self {
+        Self::serving_to(behaviour, None).await
+    }
+
+    /// A provider requiring a client certificate `clients` issued when it names
+    /// an authority.
+    async fn serving_to(behaviour: Behaviour, clients: Option<&TestAuthority>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&requests);
+        let acceptor = CERTIFICATE.acceptor(clients);
+        let paused = Arc::new(AtomicBool::new(false));
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (acceptor, behaviour, counted, paused) = (
+                    acceptor.clone(),
+                    behaviour.clone(),
+                    Arc::clone(&counted),
+                    Arc::clone(&paused),
+                );
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let mut head = Vec::new();
+                    let mut buf = [0_u8; 4096];
+                    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => head.extend_from_slice(&buf[..read]),
+                        }
+                    }
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    match behaviour {
+                        Behaviour::Silent => {
+                            if !paused.swap(true, Ordering::SeqCst) {
+                                tokio::time::pause();
+                            }
+                            std::future::pending::<()>().await;
+                        }
+                        Behaviour::Answer(answer) => {
+                            let _ = tls.write_all(answer.as_bytes()).await;
+                            let _ = tls.shutdown().await;
+                        }
+                    }
+                });
+            }
+        });
+        Self { addr, requests }
+    }
+
+    /// A provider answering every request with `status_line`, `headers` and
+    /// `body`.
+    async fn answering(status_line: &str, headers: &[(&str, String)], body: &str) -> Self {
+        let mut answer = format!(
+            "HTTP/1.1 {status_line}\r\ncontent-length: {}\r\nconnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            answer.push_str(&format!("{name}: {value}\r\n"));
+        }
+        answer.push_str("\r\n");
+        answer.push_str(body);
+        Self::serving(Behaviour::Answer(answer)).await
+    }
+
+    fn requests(&self) -> usize {
+        self.requests.load(Ordering::SeqCst)
+    }
+}
+
 /// A client whose every endpoint is on `addr`, each URL carrying
-/// [`QUERY_SECRET`] in its query.
-fn client_for(addr: std::net::SocketAddr) -> OAuthClient {
-    OAuthClient::new(nest_rs_oauth_client::OAuthClientConfig {
+/// [`QUERY_SECRET`] in its query, trusting [`AUTHORITY`].
+fn client_for(addr: SocketAddr) -> OAuthClient {
+    OAuthClient::new(endpoints_on(addr, trusting())).expect("client builds")
+}
+
+fn endpoints_on(addr: SocketAddr, tls: ClientTls) -> OAuthClientConfig {
+    OAuthClientConfig {
         client_secret: CLIENT_SECRET.into(),
-        token_url: format!("http://{addr}/token?key={QUERY_SECRET}"),
-        userinfo_url: format!("http://{addr}/userinfo?key={QUERY_SECRET}"),
+        token_url: format!("https://{addr}/token?key={QUERY_SECRET}"),
+        userinfo_url: format!("https://{addr}/userinfo?key={QUERY_SECRET}"),
+        tls,
         ..valid_config()
-    })
-    .expect("client builds")
+    }
 }
 
 /// The sentence a provider's outage is reported under, checked to quote no secret.
@@ -221,29 +341,6 @@ fn secret_free(sentence: &str, extra: &[&str]) -> String {
     sentence.to_owned()
 }
 
-/// A provider that accepts every connection and never answers.
-///
-/// The clock stops once the first connection is accepted, so the `CALL_TIMEOUT`
-/// wait is free; a test drives one call, since a second connection would race the
-/// clock's jump to its connect bound.
-async fn silent_provider() -> std::net::SocketAddr {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind a local listener");
-    let addr = listener.local_addr().expect("a bound address");
-    tokio::spawn(async move {
-        let mut held = Vec::new();
-        loop {
-            let (socket, _) = listener.accept().await.expect("accept");
-            if held.is_empty() {
-                tokio::time::pause();
-            }
-            held.push(socket);
-        }
-    });
-    addr
-}
-
 /// Await `call` for twice `bound` and no longer, so an unbounded client fails here.
 async fn within_twice<T>(
     bound: std::time::Duration,
@@ -256,7 +353,8 @@ async fn within_twice<T>(
 
 #[tokio::test]
 async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
-    let addr = silent_provider().await;
+    let provider = Provider::serving(Behaviour::Silent).await;
+    let addr = provider.addr;
     let client = client_for(addr);
     let jwt = crate::jwt();
     let auth = client.authorize(&jwt, "acme").expect("authorize");
@@ -282,7 +380,7 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
     assert_eq!(
         unavailable_sentence_of(&error, &[&tx.pkce]),
         format!(
-            "the OAuth provider's token endpoint (http://{addr}/token) did not answer within {:?}",
+            "the OAuth provider's token endpoint (https://{addr}/token) did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
         ),
     );
@@ -290,7 +388,8 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
 
 #[tokio::test]
 async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() {
-    let addr = silent_provider().await;
+    let provider = Provider::serving(Behaviour::Silent).await;
+    let addr = provider.addr;
     let client = client_for(addr);
 
     let sent = tokio::time::Instant::now();
@@ -305,7 +404,7 @@ async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() 
     assert_eq!(
         unavailable_sentence_of(&error, &[]),
         format!(
-            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) did not answer within {:?}",
+            "the OAuth provider's userinfo endpoint (https://{addr}/userinfo) did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
         ),
     );
@@ -313,14 +412,15 @@ async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() 
 
 #[tokio::test]
 async fn a_fetch_the_provider_never_answers_fails_at_the_call_timeout() {
-    let addr = silent_provider().await;
+    let provider = Provider::serving(Behaviour::Silent).await;
+    let addr = provider.addr;
     let client = client_for(addr);
 
     let sent = tokio::time::Instant::now();
     let error = within_twice(
         OAuthClient::CALL_TIMEOUT,
         client.fetch::<serde_json::Value>(
-            &format!("http://{addr}/user/emails?key={QUERY_SECRET}"),
+            &format!("https://{addr}/user/emails?key={QUERY_SECRET}"),
             ACCESS_TOKEN,
         ),
     )
@@ -331,7 +431,7 @@ async fn a_fetch_the_provider_never_answers_fails_at_the_call_timeout() {
     assert_eq!(
         unavailable_sentence_of(&error, &[]),
         format!(
-            "the OAuth provider's endpoint (http://{addr}/user/emails) did not answer within {:?}",
+            "the OAuth provider's endpoint (https://{addr}/user/emails) did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
         ),
     );
@@ -353,7 +453,7 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
     let sentence = unavailable_sentence_of(&error, &[]);
     assert!(
         sentence.starts_with(&format!(
-            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) could not be called: "
+            "the OAuth provider's userinfo endpoint (https://{addr}/userinfo) could not be called: "
         )),
         "{sentence}"
     );
@@ -365,91 +465,58 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
 
 #[tokio::test]
 async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status() {
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let provider = Provider::answering("401 Unauthorized", &[], "").await;
+    let addr = provider.addr;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind a local listener");
-    let addr = listener.local_addr().expect("a bound address");
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut request = [0_u8; 4096];
-        let _ = socket.read(&mut request).await;
-        socket
-            .write_all(
-                b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-            )
-            .await
-            .expect("answer");
-    });
-    let client = client_for(addr);
-
-    let error = client
+    let error = client_for(addr)
         .userinfo::<serde_json::Value>(ACCESS_TOKEN)
         .await
         .expect_err("a refused read returns no profile");
     assert_eq!(
         sentence_of(&error, &[]),
         format!(
-            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered 401 Unauthorized"
+            "the OAuth provider's userinfo endpoint (https://{addr}/userinfo) answered 401 Unauthorized"
         ),
     );
 }
 
-/// A local provider answering its first request with `status_line`, an optional
+/// A local provider answering every request with `status_line`, an optional
 /// `Retry-After`, and an HTML outage page, which no §5.2 error parses from.
-async fn provider_answering(
-    status_line: &'static str,
-    retry_after: Option<&'static str>,
-) -> std::net::SocketAddr {
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind a local listener");
-    let addr = listener.local_addr().expect("a bound address");
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut request = [0_u8; 4096];
-        let _ = socket.read(&mut request).await;
-        let body = "<html>down for maintenance</html>";
-        let wait = retry_after
-            .map(|wait| format!("retry-after: {wait}\r\n"))
-            .unwrap_or_default();
-        let answer = format!(
-            "HTTP/1.1 {status_line}\r\ncontent-type: text/html\r\n{wait}content-length: {}\r\n\
-             connection: close\r\n\r\n{body}",
-            body.len()
-        );
-        socket.write_all(answer.as_bytes()).await.expect("answer");
-    });
-    addr
+async fn provider_answering(status_line: &str, retry_after: Option<&str>) -> Provider {
+    let mut headers = vec![("content-type", "text/html".to_owned())];
+    if let Some(wait) = retry_after {
+        headers.push(("retry-after", wait.to_owned()));
+    }
+    Provider::answering(status_line, &headers, "<html>down for maintenance</html>").await
 }
 
 /// A `5xx` or `429` is the provider's outage, never the caller's failed sign-in,
 /// on the read and on the exchange; a delay-seconds `Retry-After` travels.
 #[tokio::test]
 async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
-    let addr = provider_answering("503 Service Unavailable", Some("7")).await;
+    let provider = provider_answering("503 Service Unavailable", Some("7")).await;
+    let addr = provider.addr;
     let error = client_for(addr)
         .userinfo::<serde_json::Value>(ACCESS_TOKEN)
         .await
         .expect_err("an outage returns no profile");
     assert_eq!(
         unavailable_sentence_of(&error, &[]),
-        format!("the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered 503"),
+        format!("the OAuth provider's userinfo endpoint (https://{addr}/userinfo) answered 503"),
     );
     assert_eq!(error.retry_after_secs(), Some(7));
 
-    let addr = provider_answering("429 Too Many Requests", None).await;
-    let error = client_for(addr)
+    let provider = provider_answering("429 Too Many Requests", None).await;
+    let error = client_for(provider.addr)
         .userinfo::<serde_json::Value>(ACCESS_TOKEN)
         .await
         .expect_err("a throttled read returns no profile");
     unavailable_sentence_of(&error, &[]);
     assert_eq!(error.retry_after_secs(), None, "no wait is invented");
 
-    let addr = provider_answering("502 Bad Gateway", Some("Wed, 21 Oct 2015 07:28:00 GMT")).await;
+    let provider =
+        provider_answering("502 Bad Gateway", Some("Wed, 21 Oct 2015 07:28:00 GMT")).await;
+    let addr = provider.addr;
     let client = client_for(addr);
     let jwt = crate::jwt();
     let auth = client.authorize(&jwt, "acme").expect("authorize");
@@ -464,7 +531,7 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     };
     assert_eq!(
         unavailable_sentence_of(&error, &[&tx.pkce]),
-        format!("the OAuth provider's token endpoint (http://{addr}/token) answered 502"),
+        format!("the OAuth provider's token endpoint (https://{addr}/token) answered 502"),
     );
     assert_eq!(
         error.retry_after_secs(),
@@ -476,25 +543,14 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
 /// A profile that does not decode is reported by where and what kind, never by the value.
 #[tokio::test]
 async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
     const PROVIDER_TOKEN: &str = "ya29.provider-token-never-quoted";
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind a local listener");
-    let addr = listener.local_addr().expect("a bound address");
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accept");
-        let mut request = [0_u8; 4096];
-        let _ = socket.read(&mut request).await;
-        let body = format!(r#"{{"id":"{PROVIDER_TOKEN}"}}"#);
-        let answer = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
-             connection: close\r\n\r\n{body}",
-            body.len()
-        );
-        socket.write_all(answer.as_bytes()).await.expect("answer");
-    });
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        &format!(r#"{{"id":"{PROVIDER_TOKEN}"}}"#),
+    )
+    .await;
+    let addr = provider.addr;
     #[derive(Debug, serde::Deserialize)]
     #[expect(
         dead_code,
@@ -510,9 +566,184 @@ async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
     assert_eq!(
         sentence_of(&error, &[PROVIDER_TOKEN]),
         format!(
-            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered a body \
+            "the OAuth provider's userinfo endpoint (https://{addr}/userinfo) answered a body \
              that does not parse: invalid type: a string, expected u64 at line 1 column 40"
         ),
+    );
+}
+
+/// A provider whose certificate a private authority signed is trusted only
+/// once `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names that authority; without it
+/// the handshake fails, and no request reaches the provider.
+#[tokio::test]
+async fn a_token_endpoint_behind_a_private_authority_is_trusted_only_with_its_authority() {
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        r#"{"access_token":"issued","token_type":"bearer"}"#,
+    )
+    .await;
+    let exchange = |client: OAuthClient| async move {
+        let jwt = crate::jwt();
+        let auth = client.authorize(&jwt, "acme").expect("authorize");
+        let tx: Transaction = jwt
+            .verify_handshake("oauth-tx", &auth.transaction)
+            .expect("the transaction verifies");
+        client
+            .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+            .await
+    };
+
+    let system_only =
+        OAuthClient::new(endpoints_on(provider.addr, ClientTls::default())).expect("client builds");
+    let Err(refused) = exchange(system_only).await else {
+        panic!("a certificate no trusted authority signed must not be talked to");
+    };
+    assert!(
+        unavailable_sentence_of(&refused, &[]).contains("could not be called"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        provider.requests(),
+        0,
+        "no request crossed the failed handshake"
+    );
+
+    let env = ConfigService::with_vars(
+        OAuthClientConfig::NAMESPACE,
+        [("TLS_CA_CERT", AUTHORITY.pem())],
+    );
+    let configured =
+        OAuthClientConfig::from_env(&env, endpoints_on(provider.addr, ClientTls::default()))
+            .expect("the authority reads");
+    let Ok(tokens) = exchange(OAuthClient::new(configured).expect("client builds")).await else {
+        panic!("the authority the deployment named is trusted");
+    };
+    assert_eq!(tokens.access_token, "issued");
+    assert_eq!(provider.requests(), 1);
+}
+
+/// A provider requiring a client certificate is handed the one the deployment
+/// sets under `<PREFIX>_OAUTH__CLIENT__TLS_CERT` and `TLS_KEY`; without one,
+/// no request reaches it.
+#[tokio::test]
+async fn a_provider_requiring_a_client_certificate_is_handed_the_configured_one() {
+    let clients = TestAuthority::new();
+    let issued = clients.client("nestrs-test-client");
+    let provider = Provider::serving_to(
+        Behaviour::Answer(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\
+             connection: close\r\n\r\n{}"
+                .to_owned(),
+        ),
+        Some(&clients),
+    )
+    .await;
+
+    let error = client_for(provider.addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("a provider requiring a certificate refuses a client presenting none");
+    assert!(
+        unavailable_sentence_of(&error, &[]).contains("could not be called"),
+        "{error:?}"
+    );
+    assert_eq!(
+        provider.requests(),
+        0,
+        "no request crossed the refused handshake"
+    );
+
+    let env = ConfigService::with_vars(
+        OAuthClientConfig::NAMESPACE,
+        [
+            ("TLS_CA_CERT", AUTHORITY.pem()),
+            ("TLS_CERT", issued.cert.as_str()),
+            ("TLS_KEY", issued.key.as_str()),
+        ],
+    );
+    let presenting =
+        OAuthClientConfig::from_env(&env, endpoints_on(provider.addr, ClientTls::default()))
+            .expect("the deployment's certificate over the trusted authority");
+    OAuthClient::new(presenting)
+        .expect("client builds")
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect("the profile is read presenting the certificate");
+    assert_eq!(provider.requests(), 1);
+}
+
+/// A redirect is an answer, never followed: a provider's `3xx` could send the
+/// bearer token anywhere.
+#[tokio::test]
+async fn a_redirect_is_answered_and_never_followed() {
+    let provider = Provider::answering(
+        "302 Found",
+        &[("location", "https://127.0.0.1:9/elsewhere".to_owned())],
+        "",
+    )
+    .await;
+    let addr = provider.addr;
+
+    let error = client_for(addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("a redirect returns no profile");
+    assert_eq!(
+        sentence_of(&error, &[]),
+        format!(
+            "the OAuth provider's userinfo endpoint (https://{addr}/userinfo) answered 302 Found"
+        ),
+    );
+    assert_eq!(provider.requests(), 1, "the redirect was not followed");
+}
+
+/// `fetch` carries the bearer token, so a URL that is not `https` is refused
+/// before a connection is opened.
+#[tokio::test]
+async fn a_fetch_over_plain_http_is_refused_before_anything_is_sent() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let addr = listener.local_addr().expect("its address");
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while let Ok((_held, _)) = listener.accept().await {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
+    let error = client_for(addr)
+        .fetch::<serde_json::Value>(
+            &format!("http://u:{QUERY_SECRET}@{addr}/user/emails"),
+            ACCESS_TOKEN,
+        )
+        .await
+        .expect_err("plain http carries no bearer token");
+    assert_eq!(
+        sentence_of(&error, &[]),
+        format!(
+            "the OAuth provider's endpoint (http://{addr}/user/emails) is not an https URL, and \
+             RFC 6750 §5.3 sends a bearer token over TLS alone"
+        ),
+    );
+    tokio::task::yield_now().await;
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was dialled");
+}
+
+/// A provider endpoint over plain http is refused when the client is built,
+/// naming the variable that sets it.
+#[test]
+fn a_provider_endpoint_over_plain_http_is_refused_at_construction() {
+    let Err(AuthError::Failed(sentence)) = OAuthClient::new(OAuthClientConfig {
+        token_url: "http://provider.example/token".into(),
+        ..valid_config()
+    }) else {
+        panic!("a plaintext token endpoint must not build a client");
+    };
+    assert!(
+        sentence.contains(&var_name(OAuthClientConfig::NAMESPACE, "TOKEN_URL"))
+            && sentence.contains("RFC 6749 §3.2"),
+        "{sentence}"
     );
 }
 

@@ -83,6 +83,14 @@ impl OpenTelemetry {
                 .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
             mark_initialized();
 
+            for variable in exporters.ignored_timeouts {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    variable,
+                    "OTLP export timeout is not a whole number of milliseconds; ignored, as the \
+                     SDK ignores it",
+                );
+            }
             tracing::info!(
                 target: crate::TARGET,
                 service = %config.service_name,

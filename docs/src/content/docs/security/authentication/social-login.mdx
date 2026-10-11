@@ -205,6 +205,36 @@ impl SocialProviderConfig for AcmeSocialConfig {
 Report `false` for a *partially* set config — that is what makes it fail
 `validate` and abort boot instead of vanishing.
 
+The config also composes the `OAuthClientConfig` the shared client takes:
+your provider's endpoints, the deployment's credentials and its redirect.
+Refuse the redirect there, under your own variable — the client refuses a
+plaintext one too, but by `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL`, a name
+your deployment never set:
+
+```rust title="crates/features/src/social/config.rs"
+impl AcmeSocialConfig {
+    pub(crate) fn oauth2_config(&self) -> Result<OAuthClientConfig, AuthError> {
+        refuse_plaintext_redirect(
+            &self.redirect_url,
+            &format!(
+                "{}, or `AcmeSocialConfig::redirect_url` in code",
+                spellings(Self::NAMESPACE, "REDIRECT_URL")
+            ),
+        )?;
+        Ok(OAuthClientConfig {
+            client_id: self.client_id.clone(),
+            client_secret: self.client_secret.clone(),
+            auth_url: "https://acme.dev/oauth/authorize".into(),
+            token_url: "https://acme.dev/oauth/token".into(),
+            redirect_url: self.redirect_url.clone(),
+            userinfo_url: "https://api.acme.dev/me".into(),
+            scopes: self.scopes.clone(),
+            tls: ClientTls::default(),
+        })
+    }
+}
+```
+
 **3. Submit the registry entry.** `resolve_provider` is the standard
 `build`: a provided instance wins, then a provided config, then the
 environment.
@@ -217,7 +247,7 @@ nest_rs::core::inventory::submit! {
         config_namespace: AcmeSocialConfig::NAMESPACE,
         build: |container| {
             resolve_provider::<AcmeProvider, AcmeSocialConfig>(container, |config| {
-                let client = OAuthClient::new(config.oauth2_config())
+                let client = OAuthClient::new(config.oauth2_config()?)
                     .map_err(|e| anyhow::anyhow!("invalid Acme OAuth2 client config: {e}"))?;
                 Ok(AcmeProvider::new(client))
             })
@@ -237,6 +267,14 @@ Per provider, under `<PREFIX>_SOCIAL__<PROVIDER>__`: `CLIENT_ID`,
 `CLIENT_SECRET`, `REDIRECT_URL`, and optional `SCOPES` (a comma list;
 defaults to the provider's login set). The secret is secret-shaped —
 keep it out of committed config.
+
+`REDIRECT_URL` is an `https` URL, or `http` on a loopback address
+(`http://localhost:3000/…`, RFC 8252 §7.3) for local development; any
+other is refused at boot, naming `<PREFIX>_SOCIAL__<PROVIDER>__REDIRECT_URL`.
+The provider's own endpoints are `https`
+constants, verified against the system's authorities, and a custom
+provider's `fetch` refuses a URL that is not `https` — the call carries
+the user's access token.
 
 ## Going further
 

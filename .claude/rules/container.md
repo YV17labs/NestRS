@@ -280,11 +280,16 @@ store; a push or cancel is an error to its caller and a checkpoint call fails
 the attempt as retryable; `Strategy::authenticate` denies at `warn`; an
 indicator reads down — its deadline is the orchestrator's probe, below every
 budget by design, so it declares no net. **An outbound client the framework
-opens carries its own connect and total bounds**, and is private to the crate
-whose protocol needs it (OAuth's exchange, storage's presigned upload) — never
-an outbound HTTP surface (`CLAUDE.md`, hard "no"). A body it streams is a
-transfer, bounded by its stall rather than its total, so no size is cut
-(storage's `read_timeout` beside its `operation_timeout`).
+opens follows one policy**, and is private to the crate whose protocol needs it
+(OAuth's exchange, the JWK Set, the OTLP export, storage) — never an outbound
+HTTP surface (`CLAUDE.md`, hard "no"): its TLS is `ClientTls`; it speaks
+`https` unless its protocol's specification lets the URL declare plaintext
+(OTLP's `http://`) or the deployment opts in (storage's `ALLOW_HTTP`), and TLS
+material beside a plaintext URL is refused; it follows no redirect, but where
+its library decides (object_store follows S3's); it carries its own connect and
+total bounds; and a sentence shows its URL only through `endpoint_shown`. A
+body it streams is a transfer, bounded by its stall rather than its total, so no
+size is cut (storage's `read_timeout` beside its `operation_timeout`).
 
 A worker job — a queue attempt, a tick — is the one unit no edge deadline
 bounds, so its decorator's `timeout` key is its deadline, defaulting to

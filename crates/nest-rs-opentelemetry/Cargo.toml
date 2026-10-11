@@ -36,6 +36,7 @@ otlp = [
     "dep:opentelemetry-appender-tracing",
     "dep:tracing-opentelemetry",
     "dep:uuid",
+    "dep:reqwest",
 ]
 
 [dependencies]
@@ -43,7 +44,9 @@ otlp = [
 # the kernel's console, not a second one. Stated rather than leaned on, even
 # though it is one of `nest-rs-core`'s default features.
 nest-rs-core = { workspace = true, features = ["logging"] }
-nest-rs-config.workspace = true
+# `tls` is `ClientTls`, what the collector's certificate must chain to and the
+# certificate presented to it.
+nest-rs-config = { workspace = true, features = ["tls"] }
 # The OTLP endpoint is parsed once, when the config resolves, by the WHATWG
 # parser the exporter's HTTP client dials through.
 url.workspace = true
@@ -58,8 +61,16 @@ opentelemetry-semantic-conventions = { workspace = true, optional = true }
 opentelemetry-appender-tracing = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
+# The exporters' HTTP client is this crate's, built with `ClientTls`, so https
+# and its verification depend on no other crate's features: `blocking` is the
+# client the SDK's HTTP exporters take, `rustls` (the workspace's) the TLS.
+reqwest = { workspace = true, features = ["blocking"], optional = true }
 
 [dev-dependencies]
+# `TestAuthority` issues the certificate the collector double presents over TLS.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# The collector double serves on a runtime of its own.
+tokio.workspace = true
 # `OpenTelemetryConfig::from_env` reads `NESTRS_OPENTELEMETRY__*` off the process
 # env; the tests isolate it with `figment::Jail`, matching how `nest-rs-config`
 # tests its env reads.

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ConfigError, ConfigService, DurationBounds, Floor, endpoint_shown, env_var, var_name,
+    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Floor, endpoint_shown, env_var,
 };
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
@@ -38,8 +38,8 @@ pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds::secs(
 /// [`logging::var`](nest_rs_core::logging::var)); everything OTel-specific lives
 /// under `<PREFIX>_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,
 /// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,
-/// METRIC_INTERVAL_SECS}` (see [`EnvPrefix`]). The OTel exporter is wired only
-/// when `otlp_endpoint` is set.
+/// METRIC_INTERVAL_SECS,TLS_CA_CERT,TLS_CERT,TLS_KEY}` (see [`EnvPrefix`]). The
+/// OTel exporter is wired only when `otlp_endpoint` is set.
 ///
 /// `Debug` shows the endpoint through [`endpoint_shown`]: its userinfo and
 /// query may carry a collector's credential.
@@ -71,6 +71,12 @@ pub struct OpenTelemetryConfig {
     /// How often the `PeriodicReader` flushes metrics to the collector; defaults to
     /// the OTel SDK's own 60 s.
     pub metric_interval: Duration,
+    /// What an `https://` collector's certificate must chain to — the system's
+    /// authorities unless `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` names others,
+    /// which replace them — and the certificate presented to a collector
+    /// requiring one (`TLS_CERT` and `TLS_KEY`). Refused beside an `http://`
+    /// endpoint, which declares the export in plaintext.
+    pub tls: ClientTls,
 }
 
 impl std::fmt::Debug for OpenTelemetryConfig {
@@ -89,6 +95,7 @@ impl std::fmt::Debug for OpenTelemetryConfig {
             )
             .field("trace_sample_ratio", &self.trace_sample_ratio)
             .field("metric_interval", &self.metric_interval)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -98,14 +105,6 @@ impl std::fmt::Debug for OpenTelemetryConfig {
 pub(crate) fn otlp_endpoint(raw: &str, var: &str) -> Result<url::Url, ConfigError> {
     url::Url::parse(raw.trim())
         .map_err(|error| ConfigError::parse(var, format!("does not parse as a URL: {error}")))
-}
-
-/// The OTLP endpoint's variable, and the field a config built in code sets.
-pub(crate) fn otlp_endpoint_setting() -> String {
-    format!(
-        "{}, or `OpenTelemetryConfig::otlp_endpoint` in code",
-        var_name(NAMESPACE, "OTLP_ENDPOINT")
-    )
 }
 
 /// Report a set-but-unparseable **logging-family** variable on stderr, keeping
@@ -141,6 +140,7 @@ impl OpenTelemetryConfig {
             otlp_endpoint: None,
             trace_sample_ratio: 1.0,
             metric_interval: DEFAULT_METRIC_INTERVAL,
+            tls: ClientTls::default(),
         }
     }
 
@@ -194,6 +194,7 @@ impl OpenTelemetryConfig {
             cfg.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         }
         cfg.metric_interval = METRIC_INTERVAL.read(&env, cfg.metric_interval)?.value;
+        cfg.tls = ClientTls::from_env(&env, cfg.tls)?;
 
         Ok(cfg)
     }

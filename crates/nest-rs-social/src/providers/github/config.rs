@@ -1,5 +1,6 @@
-use nest_rs_config::{Config, ConfigService, config};
-use nest_rs_oauth_client::OAuthClientConfig;
+use nest_rs_authn::AuthError;
+use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, config, spellings};
+use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
 
 use crate::registry::SocialProviderConfig;
 
@@ -39,9 +40,17 @@ impl GithubSocialConfig {
     }
 
     /// Compose the transport-level [`OAuthClientConfig`] the shared client needs:
-    /// deployment credentials + provider-constant endpoints.
-    pub(crate) fn oauth2_config(&self) -> OAuthClientConfig {
-        OAuthClientConfig {
+    /// deployment credentials + provider-constant endpoints, the redirect refused
+    /// under this config's own variable when the client would refuse it.
+    pub(crate) fn oauth2_config(&self) -> Result<OAuthClientConfig, AuthError> {
+        refuse_plaintext_redirect(
+            &self.redirect_url,
+            &format!(
+                "{}, or `GithubSocialConfig::redirect_url` in code",
+                spellings(Self::NAMESPACE, "REDIRECT_URL")
+            ),
+        )?;
+        Ok(OAuthClientConfig {
             client_id: self.client_id.clone(),
             client_secret: self.client_secret.clone(),
             auth_url: Self::AUTH_URL.to_owned(),
@@ -49,7 +58,8 @@ impl GithubSocialConfig {
             redirect_url: self.redirect_url.clone(),
             userinfo_url: Self::USERINFO_URL.to_owned(),
             scopes: self.scopes_or_default(),
-        }
+            tls: ClientTls::default(),
+        })
     }
 }
 
@@ -123,10 +133,52 @@ mod tests {
 
     #[test]
     fn oauth2_config_carries_provider_constant_endpoints() {
-        let oauth = complete().oauth2_config();
+        let oauth = complete()
+            .oauth2_config()
+            .expect("an https redirect composes");
         assert_eq!(oauth.auth_url, GithubSocialConfig::AUTH_URL);
         assert_eq!(oauth.token_url, GithubSocialConfig::TOKEN_URL);
         assert_eq!(oauth.userinfo_url, GithubSocialConfig::USERINFO_URL);
         assert_eq!(oauth.client_id, "id");
+    }
+
+    /// The deployment set `<PREFIX>_SOCIAL__GITHUB__REDIRECT_URL`, so a refused
+    /// redirect names that variable, never the OAuth client's, nor the URL.
+    #[test]
+    fn a_refused_redirect_names_the_providers_own_variable() {
+        for (redirect, why) in [
+            (
+                "http://u:s3cr3t@app.example/social/github/callback",
+                "RFC 8252 §7.3",
+            ),
+            ("http://u:s3cr3t@[::1", "does not parse as a URL"),
+        ] {
+            let Err(AuthError::Failed(sentence)) = GithubSocialConfig {
+                redirect_url: redirect.into(),
+                ..complete()
+            }
+            .oauth2_config() else {
+                panic!("{redirect} is refused");
+            };
+            assert!(
+                sentence.contains(&nest_rs_config::var_name("social__github", "REDIRECT_URL"))
+                    && sentence.contains("`GithubSocialConfig::redirect_url` in code")
+                    && sentence.contains(why),
+                "{sentence}"
+            );
+            assert!(
+                !sentence.contains("OAUTH__CLIENT") && !sentence.contains("s3cr3t"),
+                "{sentence}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_loopback_redirect_composes() {
+        let config = GithubSocialConfig {
+            redirect_url: "http://localhost:3000/social/github/callback".into(),
+            ..complete()
+        };
+        assert!(config.oauth2_config().is_ok());
     }
 }

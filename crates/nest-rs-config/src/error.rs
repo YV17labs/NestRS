@@ -121,6 +121,34 @@ impl ConfigError {
     pub fn validation(namespace: &'static str, errors: ValidationErrors) -> Self {
         Self::Validation { namespace, errors }
     }
+
+    /// Build a [`Parse`](Self::Parse) error for `key` of `namespace`, a value no
+    /// tier set and no default fills: "must be set, inline or through
+    /// `<KEY>_FILE`", then `why` there is no default to fall back on.
+    ///
+    /// ```
+    /// use nest_rs_config::{ConfigError, var_name};
+    ///
+    /// let refused = ConfigError::unset("seaorm", "URL", "a deployment names its database");
+    /// assert_eq!(
+    ///     refused.to_string(),
+    ///     format!(
+    ///         "invalid value for {}: must be set, inline or through {} — a deployment names its \
+    ///          database",
+    ///         var_name("seaorm", "URL"),
+    ///         var_name("seaorm", "URL_FILE"),
+    ///     ),
+    /// );
+    /// ```
+    pub fn unset(namespace: &str, key: &str, why: impl std::fmt::Display) -> Self {
+        Self::parse(
+            crate::var_name(namespace, key),
+            format!(
+                "must be set, inline or through {} — {why}",
+                crate::var_name(namespace, &format!("{key}_FILE"))
+            ),
+        )
+    }
 }
 
 /// `message` without the values a decoder quoted in it.
@@ -298,6 +326,19 @@ mod tests {
             assert!(!text.contains(SECRET), "{text}");
             assert!(text.contains(what), "the failure is still said: {text}");
         }
+    }
+
+    #[test]
+    fn an_unset_value_names_both_spellings_and_why_there_is_no_default() {
+        let text = ConfigError::unset("fixture", "TOKEN", "it has no default").to_string();
+        assert_eq!(
+            text,
+            format!(
+                "invalid value for {}: must be set, inline or through {} — it has no default",
+                crate::var_name("fixture", "TOKEN"),
+                crate::var_name("fixture", "TOKEN_FILE"),
+            )
+        );
     }
 
     /// A refusal that quotes nothing is said word for word.

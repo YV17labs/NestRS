@@ -214,10 +214,12 @@ impl SeaOrmConfig {
     /// carries the password.
     pub fn connect_options(&self) -> Result<ConnectOptions> {
         if self.url.is_empty() {
-            return Err(Self::refuse_url(format!(
-                "must be set, inline or through {}",
-                nest_rs_config::var_name(Self::NAMESPACE, "URL_FILE")
-            )));
+            return Err(ConfigError::unset(
+                Self::NAMESPACE,
+                "URL",
+                "`SeaOrmConfig` has no default URL, since the database it opens is the \
+                 deployment's to name",
+            ));
         }
         let mode = self.tls_mode()?;
         let budget = match self.connect_timeout_secs {

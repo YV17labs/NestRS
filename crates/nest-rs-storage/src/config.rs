@@ -159,8 +159,8 @@ impl Config for StorageConfig {
             tls,
             endpoint,
             region: env.get("REGION")?.unwrap_or(d.region),
-            access_key: resolve_credential(env, "ACCESS_KEY", access_key, d.access_key)?,
-            secret_key: resolve_credential(env, "SECRET_KEY", secret_key, d.secret_key)?,
+            access_key: resolve_credential("ACCESS_KEY", access_key, d.access_key)?,
+            secret_key: resolve_credential("SECRET_KEY", secret_key, d.secret_key)?,
             bucket: env.get("BUCKET")?.unwrap_or(d.bucket),
             force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
             allow_http,
@@ -261,7 +261,6 @@ pub(crate) fn is_plaintext(endpoint: &str) -> bool {
 /// The resolved credential, refusing a blank one under the spelling that set
 /// it, or its variable when unset.
 fn resolve_credential(
-    env: &ConfigService,
     key: &str,
     setting: Option<Setting>,
     base: String,
@@ -271,15 +270,12 @@ fn resolve_credential(
             Err(setting.refuse("is blank — it must hold the credential"))
         }
         Some(setting) => Ok(setting.value),
-        None if base.trim().is_empty() => Err(ConfigError::parse(
-            env.var_name(key),
-            format!(
-                "must be set, inline or through {} — `StorageConfig::defaults()` holds the \
-                 development pair in a declared development or test profile alone, \
-                 `StorageConfig::default()` never, and a config pinned in code reads the pair \
-                 from the deployment, not `.env`",
-                env.var_name(&format!("{key}_FILE"))
-            ),
+        None if base.trim().is_empty() => Err(ConfigError::unset(
+            <StorageConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            key,
+            "`StorageConfig::defaults()` holds the development pair in a declared development or \
+             test profile alone, `StorageConfig::default()` never, and a config pinned in code \
+             reads the pair from the deployment, not `.env`",
         )),
         None => Ok(base),
     }
@@ -507,7 +503,7 @@ mod tests {
     fn credential_blank_aborts_naming_both_its_spellings() {
         // The struct default holds no pair, so an unset variable over it
         // arrives here blank.
-        let err = resolve_credential(&unset(), "SECRET_KEY", None, String::new())
+        let err = resolve_credential("SECRET_KEY", None, String::new())
             .expect_err("must abort")
             .to_string();
         assert!(
@@ -519,7 +515,7 @@ mod tests {
             "and its file spelling: {err}",
         );
         assert!(
-            resolve_credential(&unset(), "SECRET_KEY", None, "   ".into()).is_err(),
+            resolve_credential("SECRET_KEY", None, "   ".into()).is_err(),
             "whitespace-only is blank too",
         );
     }
@@ -529,7 +525,7 @@ mod tests {
         let env = ConfigService::with_vars("storage", [("ACCESS_KEY", "AKIAREAL")]);
         let setting = env.setting("ACCESS_KEY").expect("reads");
         assert_eq!(
-            resolve_credential(&env, "ACCESS_KEY", setting, String::new()).expect("set ⇒ ok"),
+            resolve_credential("ACCESS_KEY", setting, String::new()).expect("set ⇒ ok"),
             "AKIAREAL",
         );
     }

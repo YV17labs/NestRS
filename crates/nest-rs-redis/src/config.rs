@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor,
-    Result, Setting, config,
+    Namespaced, Result, Setting, config,
 };
 
 /// The Redis a declared development or test profile's [`Config::defaults`]
@@ -112,7 +112,7 @@ impl Config for RedisConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let connect_timeout = CONNECT_TIMEOUT.read(env, base.connect_timeout)?.value;
         Ok(Self {
-            url: resolve_url(env, env.setting("URL")?, base.url)?,
+            url: resolve_url(env.setting("URL")?, base.url)?,
             connect_timeout,
             tls: ClientTls::from_env(env, base.tls)?,
         })
@@ -122,21 +122,18 @@ impl Config for RedisConfig {
 /// The deployment's URL, else the base's — a pin, or the profile's loopback —
 /// refusing a blank one under the spelling that set it, or the variable when
 /// neither holds one.
-fn resolve_url(env: &ConfigService, setting: Option<Setting>, base: String) -> Result<String> {
+fn resolve_url(setting: Option<Setting>, base: String) -> Result<String> {
     match setting {
         Some(setting) if setting.value.trim().is_empty() => {
             Err(setting.refuse("is blank — it must hold the Redis URL"))
         }
         Some(setting) => Ok(setting.value),
-        None if base.trim().is_empty() => Err(ConfigError::parse(
-            env.var_name("URL"),
-            format!(
-                "must be set, inline or through {} — `RedisConfig::defaults()` holds the \
-                 loopback in a declared development or test profile alone, \
-                 `RedisConfig::default()` never, and a config pinned in code reads the URL \
-                 from the deployment, not `.env`",
-                env.var_name("URL_FILE")
-            ),
+        None if base.trim().is_empty() => Err(ConfigError::unset(
+            RedisConfig::NAMESPACE,
+            "URL",
+            "`RedisConfig::defaults()` holds the loopback in a declared development or test \
+             profile alone, `RedisConfig::default()` never, and a config pinned in code reads \
+             the URL from the deployment, not `.env`",
         )),
         None => Ok(base),
     }
@@ -144,8 +141,6 @@ fn resolve_url(env: &ConfigService, setting: Option<Setting>, base: String) -> R
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_config::Namespaced;
-
     use super::*;
 
     #[test]
@@ -243,8 +238,12 @@ mod tests {
         .expect_err("a process that declares no profile runs as production")
         .to_string();
         assert!(
-            refused.contains(&nest_rs_config::var_name("redis", "URL")),
-            "{refused}"
+            refused.contains(&format!(
+                "{}: must be set, inline or through {} — ",
+                nest_rs_config::var_name("redis", "URL"),
+                nest_rs_config::var_name("redis", "URL_FILE"),
+            )),
+            "the refusal names both spellings of the variable: {refused}"
         );
     }
 

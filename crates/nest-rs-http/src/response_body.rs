@@ -3,7 +3,10 @@
 //! hyper writes a body after the handler returns, with the edge's task-locals
 //! unwound and its span exited, so a streamed body (`#[sse]`, a download) would
 //! run under no context: [`carry`] wraps every non-empty body, whatever the
-//! access log is set to.
+//! access log is set to. A streaming body a route returned runs under what its
+//! handler ran under, captured as a `Body` continuation where it returned
+//! ([`continue_body`]): the caller's ability, the pool rather than the
+//! transaction the route settles.
 //!
 //! hyper picks `Content-Length` over chunked from `size_hint().exact()`, and
 //! poem's `Body::from_bytes_stream` reports `(0, None)`: [`Carried`] is a real
@@ -26,7 +29,7 @@ use http_body_util::combinators::BoxBody;
 use poem::{Body, Response};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
-use nest_rs_core::RequestContinuation;
+use nest_rs_core::{Continuation, RequestContinuation};
 
 use crate::access_log::AccessLog;
 use crate::drain::Drain;
@@ -46,8 +49,27 @@ pub struct OpenEndedBody;
 /// impls.
 type PoemBody = BoxBody<Bytes, IoError>;
 
+/// What a streaming body continues its request under: what the handler ran
+/// under, captured where it returned the body, each value through its own
+/// `carry` — the executor as the pool, never the transaction the route settles.
+#[derive(Clone)]
+struct BodyContinuation(RequestContinuation);
+
+/// Capture, for a body that streams, what the handler's unit carries into it;
+/// a body of known length is written at once and needs none.
+pub(crate) fn continue_body(mut resp: Response) -> Response {
+    let body: PoemBody = resp.take_body().into();
+    let streams = !body.is_end_stream() && body.size_hint().exact().is_none();
+    resp.set_body(Body::from(body));
+    if streams && let Some(carried) = RequestContinuation::capture(Continuation::Body) {
+        resp.extensions_mut().insert(BodyContinuation(carried));
+    }
+    resp
+}
+
 /// Attach the request to its own response body, and file the access line when
-/// the body ends.
+/// the body ends: under what the handler ran under when it returned a
+/// streaming body, under `continuation` otherwise.
 ///
 /// A body with nothing left to write — a `204`, a `304` — is handed back
 /// untouched, and the line is filed here.
@@ -59,7 +81,11 @@ pub(crate) fn carry(
     drain: &Arc<Drain>,
 ) -> Response {
     let status = resp.status().as_u16();
-    let (parts, body) = resp.into_parts();
+    let (mut parts, body) = resp.into_parts();
+    let continuation = parts
+        .extensions
+        .remove::<BodyContinuation>()
+        .map_or(continuation, |body| body.0);
     if body.is_empty() {
         span.record("http.response.body.size", 0);
         if let Some(log) = log {

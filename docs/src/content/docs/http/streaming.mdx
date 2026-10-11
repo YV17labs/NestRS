@@ -36,6 +36,13 @@ object-storage client's [`get_stream`](/storage/) hands back the S3
 `GetObject` chunks directly, so a large download proxies through the
 server without ever sitting whole in process memory.
 
+The stream is polled after the handler returned, and it runs under what the
+handler ran under: the request's trace and actor, the caller's ability, every
+ambient value a layer added. A service the stream calls reads on the **pool**,
+never on the route's transaction — that one has settled by the time the body
+is written — so a read in the stream of a `POST` sees what the route
+committed.
+
 ## Server-Sent Events
 
 `#[sse("/path")]` is a `GET` that answers a long-lived `text/event-stream`.

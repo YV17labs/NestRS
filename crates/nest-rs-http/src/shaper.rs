@@ -137,8 +137,11 @@ where
     E: Endpoint + Send + Sync,
     E::Output: IntoResponse,
 {
+    /// The handler, its streaming body continuing under what the handler ran
+    /// under.
     async fn plain(&self, req: Request) -> Result<Response> {
-        self.inner.call(req).await.map(IntoResponse::into_response)
+        let resp = self.inner.call(req).await?.into_response();
+        Ok(crate::response_body::continue_body(resp))
     }
 
     async fn probed(&self, req: Request, route: &'static str) -> Result<Response> {

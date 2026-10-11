@@ -2,12 +2,16 @@
 //! peer that stops reading. Its compile-time refusals are trybuild snapshots in
 //! `nest-rs-macro-hygiene`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::module;
+use nest_rs_core::{AmbientValue, Layer, ambient, injectable, module, with_ambient};
+use nest_rs_http::futures_util::StreamExt;
 use nest_rs_http::{
-    HttpConfig, HttpModule, SseEvent, SseStream, controller, futures_util::stream, routes,
+    HttpConfig, HttpModule, SseEvent, SseStream, async_trait, controller, futures_util::stream,
+    routes,
 };
+use nest_rs_interceptors::{Interceptor, Next};
 use nest_rs_testing::LogCapture;
 use tokio::io::AsyncWriteExt;
 
@@ -197,4 +201,63 @@ async fn a_peer_that_stops_reading_an_event_stream_is_cut_at_the_send_deadline()
     );
     assert_eq!(cut.level, "warn");
     cancel.cancel();
+}
+
+/// Who a layer said the request is for, read back by the stream it opens.
+#[derive(Debug)]
+struct Caller(&'static str);
+
+impl AmbientValue for Caller {}
+
+/// Adds the caller around the handler, as a package's interceptor would.
+#[injectable]
+#[derive(Default)]
+struct CallerInterceptor;
+
+impl Layer for CallerInterceptor {}
+
+#[async_trait]
+impl Interceptor for CallerInterceptor {
+    async fn intercept(&self, req: poem::Request, next: Next<'_>) -> poem::Result<poem::Response> {
+        with_ambient(Arc::new(Caller("alice")), next.run(req)).await
+    }
+}
+
+#[controller(path = "/caller")]
+struct CallerFeedController;
+
+#[routes]
+impl CallerFeedController {
+    /// Three events, each naming the caller the stream reads off the ambient
+    /// context when the body is polled, long after the handler returned.
+    #[sse("/events")]
+    #[use_interceptors(CallerInterceptor)]
+    async fn events(&self) -> SseStream {
+        SseStream::new(stream::iter(1..=3).map(|n| {
+            let caller = ambient::<Caller>().map_or("nobody", |caller| caller.0);
+            SseEvent::message(format!("{n} {caller}"))
+        }))
+    }
+}
+
+#[module(providers = [CallerInterceptor, CallerFeedController])]
+struct CallerFeedModule;
+
+#[tokio::test]
+async fn every_event_of_a_stream_reads_what_a_layer_added_for_its_request() {
+    let client = boot::<CallerFeedModule>().await;
+    let resp = client.get("/caller/events").send().await;
+    resp.assert_status_is_ok();
+    let text = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("the stream is text");
+    for n in 1..=3 {
+        assert!(
+            text.contains(&format!("data: {n} alice")),
+            "event {n} reads the caller: {text:?}",
+        );
+    }
 }

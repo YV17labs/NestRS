@@ -3,7 +3,6 @@
 //! self-mount — reads it under the transport's cap and its gap bound, after
 //! routing and the guards rather than at the edge.
 
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -13,9 +12,9 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::combinators::BoxBody;
-use tokio::time::{Instant, Sleep};
 
 use crate::error::BodyError;
+use crate::stall::Stall;
 
 /// Where a read through [`Capped`] stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,12 +58,8 @@ pub(crate) struct Capped {
     /// length under the cap.
     limit: Option<usize>,
     seen: usize,
-    gap: Duration,
-    /// Allocated on the first `Pending`, so a body already buffered pays for no
-    /// timer.
-    timer: Option<Pin<Box<Sleep>>>,
-    /// No frame has arrived since the timer was set.
-    armed: bool,
+    /// The wait for the next frame, from the first `Pending` after the last.
+    gap: Stall,
     verdict: Verdict,
 }
 
@@ -81,27 +76,8 @@ impl Capped {
             inner: body,
             limit,
             seen: 0,
-            gap,
-            timer: None,
-            armed: false,
+            gap: Stall::new(gap),
             verdict,
-        }
-    }
-
-    /// The inner body has nothing yet: wait on the gap bound, set when the
-    /// last frame was taken.
-    fn wait(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, io::Error>>> {
-        let gap = self.gap;
-        let timer = self
-            .timer
-            .get_or_insert_with(|| Box::pin(tokio::time::sleep(gap)));
-        if !self.armed {
-            timer.as_mut().reset(Instant::now() + gap);
-            self.armed = true;
-        }
-        match timer.as_mut().poll(cx) {
-            Poll::Ready(()) => Poll::Ready(Some(Err(self.stop(Overrun::Gap(gap))))),
-            Poll::Pending => Poll::Pending,
         }
     }
 
@@ -128,7 +104,7 @@ impl Body for Capped {
         }
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
-                this.armed = false;
+                this.gap.clear();
                 if let (Some(limit), Some(data)) = (this.limit, frame.data_ref()) {
                     this.seen = this.seen.saturating_add(data.len());
                     if this.seen > limit {
@@ -137,7 +113,10 @@ impl Body for Capped {
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
-            Poll::Pending => this.wait(cx),
+            Poll::Pending => this
+                .gap
+                .poll_elapsed(cx)
+                .map(|()| Some(Err(this.stop(Overrun::Gap(this.gap.bound()))))),
             ended => ended,
         }
     }
@@ -211,7 +190,7 @@ mod tests {
         .await;
         assert_eq!(read_whole.expect("read"), b"all there");
         assert!(
-            ready.timer.is_none(),
+            !ready.gap.has_timer(),
             "a body that never pends allocates no timer"
         );
 
@@ -223,8 +202,11 @@ mod tests {
         ))
         .await;
         assert_eq!(read_whole.expect("read"), b"ab");
-        assert!(pended.timer.is_some(), "a pending read arms the timer");
-        assert!(!pended.armed, "the frame after the wait clears it");
+        assert!(pended.gap.has_timer(), "a pending read arms the timer");
+        assert!(
+            !pended.gap.is_waiting(),
+            "the frame after the wait clears it"
+        );
     }
 
     #[tokio::test(start_paused = true)]

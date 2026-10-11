@@ -54,6 +54,7 @@ mod security_headers;
 mod server;
 mod shaper;
 mod sse;
+mod stall;
 pub mod target;
 #[cfg(test)]
 mod testing;

@@ -12,13 +12,13 @@
 //! stream's task is done and its connection counts idle.
 
 use std::future::Future;
-use std::pin::{Pin, pin};
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use tokio::time::{Instant, Sleep};
+use crate::stall::Stall;
 
 tokio::task_local! {
     /// The running stream task's wait, for the body its request answers.
@@ -87,7 +87,7 @@ pub(crate) async fn within<F: Future>(stream: F, send_timeout: Duration) -> Opti
     let wait = Arc::new(WindowWait::default());
     let mut stream = pin!(WAIT.scope(Arc::clone(&wait), stream));
     let mut seen = None;
-    let mut stall: Option<Pin<Box<Sleep>>> = None;
+    let mut stall = Stall::new(send_timeout);
     std::future::poll_fn(move |cx| {
         if let Poll::Ready(output) = stream.as_mut().poll(cx) {
             return Poll::Ready(Some(output));
@@ -97,22 +97,17 @@ pub(crate) async fn within<F: Future>(stream: F, send_timeout: Duration) -> Opti
         };
         if seen != Some(frame) {
             seen = Some(frame);
-            let due = Instant::now() + send_timeout;
-            match &mut stall {
-                Some(stall) => stall.as_mut().reset(due),
-                None => stall = Some(Box::pin(tokio::time::sleep_until(due))),
-            }
+            stall.clear();
         }
-        match stall.as_mut().map(|stall| stall.as_mut().poll(cx)) {
-            Some(Poll::Ready(())) => Poll::Ready(None),
-            _ => Poll::Pending,
-        }
+        stall.poll_elapsed(cx).map(|()| None)
     })
     .await
 }
 
 #[cfg(test)]
 mod tests {
+    use tokio::time::Instant;
+
     use super::*;
 
     const SEND: Duration = Duration::from_secs(60);

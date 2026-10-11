@@ -7,7 +7,6 @@
 //! all the connection's — the handshake's, a body's, a WebSocket's frames — so
 //! the send deadline is held here.
 
-use std::future::Future;
 use std::io::{Error as IoError, ErrorKind, IoSlice};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,8 +16,10 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, Result as IoResult};
 use tokio::sync::OwnedSemaphorePermit;
-use tokio::time::{Instant, Sleep};
+use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
+
+use crate::stall::Stall;
 
 /// The sockets a transport has accepted and not yet dropped, how many of them
 /// the shutdown window closed, and the two instants of its way down.
@@ -46,9 +47,7 @@ impl Drain {
             inner: io,
             drain: Arc::clone(self),
             _place: place,
-            send_timeout,
-            stall: None,
-            stalled: false,
+            stall: Stall::new(send_timeout),
         }
     }
 
@@ -124,44 +123,29 @@ pub(crate) struct DrainSocket<Io> {
     inner: Io,
     drain: Arc<Drain>,
     _place: OwnedSemaphorePermit,
-    send_timeout: Duration,
-    /// Allocated the first time a write waits, and kept for the next.
-    stall: Option<Pin<Box<Sleep>>>,
-    /// A write is waiting, and `stall` holds its deadline.
-    stalled: bool,
+    /// The send deadline, over the write that waits.
+    stall: Stall,
 }
 
 impl<Io> DrainSocket<Io> {
     /// A write came back `polled`: one that went through clears the stall.
     fn written<T>(&mut self, cx: &mut Context<'_>, polled: Poll<IoResult<T>>) -> Poll<IoResult<T>> {
         if polled.is_ready() {
-            self.stalled = false;
+            self.stall.clear();
             return polled;
         }
         self.stall(cx)
     }
 
-    /// A write or flush waits: the stall is armed — once, so it counts from
-    /// the first wait — and the wait fails past it.
+    /// A write or flush waits, and fails past the send deadline, counted from
+    /// the first wait.
     fn stall<T>(&mut self, cx: &mut Context<'_>) -> Poll<IoResult<T>> {
-        let stall = match &mut self.stall {
-            Some(stall) if self.stalled => stall,
-            Some(stall) => {
-                stall.as_mut().reset(Instant::now() + self.send_timeout);
-                stall
-            }
-            None => self
-                .stall
-                .insert(Box::pin(tokio::time::sleep(self.send_timeout))),
-        };
-        self.stalled = true;
-        match stall.as_mut().poll(cx) {
-            Poll::Ready(()) => Poll::Ready(Err(IoError::new(
+        self.stall.poll_elapsed(cx).map(|()| {
+            Err(IoError::new(
                 ErrorKind::TimedOut,
                 "the peer took nothing within the send deadline",
-            ))),
-            Poll::Pending => Poll::Pending,
-        }
+            ))
+        })
     }
 }
 

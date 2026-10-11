@@ -3,8 +3,10 @@
 //! [`RawBody`] reads the whole body into [`Bytes`], capped at
 //! [`RawBody::DEFAULT_LIMIT`] (2 MiB) unless the transport edge carries a
 //! configured cap ([`current_body_limit`]); past it, `413 Payload Too Large`.
-//! For a handler that needs the exact bytes, such as a webhook verifying a
-//! signature.
+//! For code that needs the exact bytes. It reads after routing and the guards,
+//! like every reader: the edge wraps the body and reads none of it, so a guard
+//! verifying a webhook's signature reads it the same way, under the same cap,
+//! and sets the bytes back for the handler.
 
 use std::ops::Deref;
 
@@ -31,8 +33,9 @@ pub(crate) async fn with_body_limit<F: std::future::Future>(
     }
 }
 
-/// The transport's configured whole-body byte cap, when one is installed.
-/// Body readers fall back to their own default on `None`.
+/// The transport's configured whole-body byte cap, when one is installed: what
+/// a reader — an extractor, a guard reading the body — buffers at most. Body
+/// readers fall back to their own default on `None`.
 pub fn current_body_limit() -> Option<usize> {
     BODY_LIMIT.try_with(|limit| *limit).ok()
 }

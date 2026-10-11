@@ -386,8 +386,9 @@ impl HttpTransport {
         self
     }
 
-    /// Abort any request that runs longer than `timeout`, answering `503 Service
-    /// Unavailable` with a `Retry-After`. Without this call no timeout is enforced.
+    /// Abort any request still running `timeout` after its arrival, its body's
+    /// reading included, answering `503 Service Unavailable` with a
+    /// `Retry-After`. Without this call no timeout is enforced.
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = Some(timeout);
         self
@@ -775,6 +776,7 @@ impl Transport for HttpTransport {
                 container.clone(),
                 timeout,
                 body_limit,
+                self.deadlines.body_read,
                 edge_headers,
                 true,
                 // No compression outside, so nothing can rewrite the body.
@@ -805,6 +807,7 @@ impl Transport for HttpTransport {
                 container.clone(),
                 timeout,
                 body_limit,
+                self.deadlines.body_read,
                 edge_headers,
                 fuse_normalize,
                 // Compression replaces the request body but not its `Content-Length`.

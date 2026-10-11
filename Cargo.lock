@@ -2785,6 +2785,8 @@ name = "nest-rs-guards"
 version = "7.0.0"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
+ "base64 0.23.1",
  "futures-util",
  "nest-rs-core",
  "nest-rs-exception-filters",

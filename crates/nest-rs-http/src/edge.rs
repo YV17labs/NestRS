@@ -1,9 +1,15 @@
-//! The fused transport-edge endpoint: trailing-slash trim, request scope, body
-//! cap, request timeout and default response headers, in that order, in one layer.
+//! The fused transport-edge endpoint: trailing-slash trim, request scope, the
+//! body's wrapper, the request deadline and default response headers, in that
+//! order, in one layer.
 //!
-//! Every answer is stamped with the default headers: a `413` or `503` the edge
-//! produces, and an `Err` escaping the inner tree, which the edge renders as a
-//! problem document first. The normalizer for a raw-text error a handler
+//! The edge reads no body: it wraps one ([`Capped`]) and the extractor that
+//! needs it reads it, after routing and the guards, so a refused request is
+//! answered before a byte of its body is taken — and `Expect: 100-continue` is
+//! never answered `100` for it, since hyper writes that on the first read.
+//!
+//! Every answer is stamped with the default headers: a `408`, `413` or `503` the
+//! edge produces, and an `Err` escaping the inner tree, which the edge renders as
+//! a problem document first. The normalizer for a raw-text error a handler
 //! answered with runs on the edge itself when it is outermost (`normalize`).
 
 use std::borrow::Cow;
@@ -12,23 +18,24 @@ use std::net::IpAddr;
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use futures_util::StreamExt;
+use http_body_util::combinators::BoxBody;
 use nest_rs_core::{Container, RequestContinuation, RequestScope};
-use poem::error::ReadBodyError;
 use poem::http::uri::{PathAndQuery, Uri};
-use poem::http::{HeaderName, HeaderValue, StatusCode};
+use poem::http::{HeaderName, HeaderValue, StatusCode, Version, header};
 use poem::web::headers::{ContentLength, HeaderMapExt};
 use poem::{Body, Endpoint, IntoResponse, PathPattern, Request, Response, Result};
+use tokio::time::Instant;
 
 use tracing::Instrument;
 
 use crate::access_log::{AccessLog, Unanswered};
+use crate::capped::{Capped, Overrun, Verdict};
 use crate::client_ip::ClientOrigin;
 use crate::drain::Drain;
+use crate::error::ResponseError;
 use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
 use crate::{response_body, trace_context};
@@ -52,10 +59,6 @@ async fn rendered(err: poem::Error) -> Response {
     resp
 }
 
-fn bare(status: StatusCode) -> Response {
-    Response::builder().status(status).finish()
-}
-
 /// What a request that outran its budget is answered with: `503`, not `504`, since
 /// RFC 9110 §15.6.5 scopes `504` to a gateway and this server is the origin (§15.6.4).
 fn timed_out(timeout: Duration) -> Response {
@@ -70,32 +73,17 @@ fn timed_out(timeout: Duration) -> Response {
         .finish()
 }
 
-/// What a body past the cap fails the stream with; the caller gets the edge's
-/// `413` instead ([`CapExceeded`]).
-fn body_cap_exceeded() -> String {
-    format!(
-        "request body exceeded the configured cap ({})",
-        nest_rs_config::var_name("http", "MAX_BODY_BYTES"),
-    )
-}
-
-/// Set by [`capped`] past the cap and read by the edge once the inner tree has
-/// returned, so the cap answers `413` whatever the reading extractor made of it.
-type CapExceeded = Arc<AtomicBool>;
-
-/// The cap, enforced on the bytes that actually arrive: poem's `Compression`
-/// decompresses the body and leaves `Content-Length` describing the compressed bytes.
-fn capped(body: Body, limit: usize, exceeded: CapExceeded) -> Body {
-    let mut seen: usize = 0;
-    Body::from_bytes_stream(body.into_bytes_stream().map(move |chunk| {
-        let chunk = chunk?;
-        seen = seen.saturating_add(chunk.len());
-        if seen > limit {
-            exceeded.store(true, Ordering::Relaxed);
-            return Err(std::io::Error::other(body_cap_exceeded()));
-        }
-        Ok(chunk)
-    }))
+/// What a body read that stopped is answered with: `413` past the cap, `408`
+/// past the gap bound. The `408` closes an HTTP/1 connection, as RFC 9110
+/// §15.5.9 asks — the unread rest leaves it unusable; HTTP/2 ends that stream
+/// alone and forbids the header (RFC 9113 §8.2.2).
+fn refused(overrun: Overrun, version: Version) -> Response {
+    let mut resp = crate::poem_bridge::response_to_poem(overrun.error().as_response());
+    if matches!(overrun, Overrun::Gap(_)) && version < Version::HTTP_2 {
+        resp.headers_mut()
+            .insert(header::CONNECTION, HeaderValue::from_static("close"));
+    }
+    resp
 }
 
 /// The path without its trailing slashes, or `None` when already canonical.
@@ -147,6 +135,8 @@ pub(crate) struct EdgeEndpoint<E> {
     /// `None`: body readers fall back to their own default
     /// ([`current_body_limit`](crate::current_body_limit)).
     body_limit: Option<usize>,
+    /// The gap a body may leave between two frames once something reads it.
+    body_read_timeout: Duration,
     /// Stamped with replace semantics: the framework value wins over a handler's.
     headers: Vec<(HeaderName, HeaderValue)>,
     /// The edge is outermost (no CORS or compression) and runs the problem
@@ -174,6 +164,7 @@ impl<E> EdgeEndpoint<E> {
         container: Container,
         timeout: Option<Duration>,
         body_limit: Option<usize>,
+        body_read_timeout: Duration,
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
         counts_body: bool,
@@ -195,6 +186,7 @@ impl<E> EdgeEndpoint<E> {
             shared_scope,
             timeout,
             body_limit,
+            body_read_timeout,
             headers,
             normalize,
             counts_body,
@@ -217,9 +209,35 @@ where
     E: Endpoint,
     E::Output: IntoResponse,
 {
+    /// Wrap a body that is not empty in [`Capped`], counted where its declared
+    /// length cannot be trusted; the verdict the edge answers from, if it
+    /// wrapped one. Nothing is read.
+    fn wrap_body(&self, req: &mut Request, declared: bool) -> Option<Verdict> {
+        let body = req.take_body();
+        if body.is_empty() {
+            req.set_body(body);
+            return None;
+        }
+        let limit = self.body_limit.filter(|_| !declared || self.counts_body);
+        let verdict = Verdict::default();
+        let capped = Capped::new(
+            body.into(),
+            limit,
+            self.body_read_timeout,
+            Arc::clone(&verdict),
+        );
+        req.set_body(Body::from(BoxBody::new(capped)));
+        Some(verdict)
+    }
+
     /// The inner tree, under the context `call` built and installs again
-    /// around the response body.
-    async fn handle(&self, mut req: Request, continuation: &RequestContinuation) -> Response {
+    /// around the response body, and the budget counted from `arrival`.
+    async fn handle(
+        &self,
+        mut req: Request,
+        continuation: &RequestContinuation,
+        arrival: Instant,
+    ) -> Response {
         // The router matches exactly: `/kitchen/` would 404 before any guard runs.
         trim_trailing_slash(&mut req);
 
@@ -228,41 +246,23 @@ where
         let caller_uri = req.uri().clone();
         req.extensions_mut().insert(CallerUri(caller_uri));
 
-        // Body cap. A declared length is a claim, counted only where an
-        // outer layer can falsify it (`counts_body`); with none declared, buffer up to the cap.
-        let mut exceeded: Option<CapExceeded> = None;
-        if let Some(limit) = self.body_limit {
-            let declared = req
-                .headers()
-                .typed_get::<ContentLength>()
-                .map(|ContentLength(declared)| declared as usize);
-            if declared.is_some_and(|declared| declared > limit) {
-                return self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE));
-            }
-            let body = req.take_body();
-            if body.is_empty() {
-                req.set_body(body);
-            } else if declared.is_some() {
-                if self.counts_body {
-                    let flag = CapExceeded::default();
-                    req.set_body(capped(body, limit, Arc::clone(&flag)));
-                    exceeded = Some(flag);
-                } else {
-                    req.set_body(body);
-                }
-            } else {
-                match body.into_bytes_limit(limit).await {
-                    Ok(bytes) => req.set_body(bytes),
-                    Err(ReadBodyError::PayloadTooLarge) => {
-                        return self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE));
-                    }
-                    Err(err) => return self.finish(rendered(err.into()).await),
-                }
-            }
+        // A declared length past the cap is refused unread. Below it, a length is
+        // a claim hyper's decoder holds the body to, unless an outer layer can
+        // falsify it (`counts_body`).
+        let version = req.version();
+        let declared = req
+            .headers()
+            .typed_get::<ContentLength>()
+            .map(|ContentLength(declared)| declared);
+        if let Some(limit) = self.body_limit
+            && declared.is_some_and(|declared| declared > limit as u64)
+        {
+            return self.finish(refused(Overrun::Cap(limit), version));
         }
+        let verdict = self.wrap_body(&mut req, declared.is_some());
 
-        // The timer arms on the first `Pending`: a timeout only fires at an await
-        // point anyway, so a synchronous response skips the timer wheel.
+        // The deadline arms on the first `Pending`: a timeout only fires at an
+        // await point anyway, so a synchronous response skips the timer wheel.
         let inner = continuation.scope(self.inner.call(req));
         let result = match self.timeout {
             Some(timeout) => {
@@ -274,7 +274,7 @@ where
                 .await;
                 match first {
                     Some(result) => result,
-                    None => match tokio::time::timeout(timeout, &mut inner).await {
+                    None => match tokio::time::timeout_at(arrival + timeout, &mut inner).await {
                         Ok(result) => result,
                         Err(_) => {
                             tracing::warn!(target: crate::target::HTTP, ?timeout, "request timed out");
@@ -285,8 +285,8 @@ where
             }
             None => inner.await,
         };
-        if exceeded.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            return self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE));
+        if let Some(overrun) = verdict.and_then(|verdict| verdict.get().copied()) {
+            return self.finish(refused(overrun, version));
         }
         let resp = match result {
             Ok(out) => out.into_response(),
@@ -304,6 +304,9 @@ where
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Response> {
+        // One instant for the budget and the line: a body that trickles counts
+        // against the request it belongs to.
+        let arrival = Instant::now();
         // Resolved once so the context, the echoed header and the access line agree
         // on one id; the origin first, because the id's gate reads it.
         let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
@@ -313,7 +316,9 @@ where
         // `actor_id` field the authn guard records into.
         let span = trace_context::request_span(&req, &correlation, origin, user_agent);
         let method = req.method().clone();
-        let log = self.access_log.then(|| AccessLog::open(&req, user_agent));
+        let log = self
+            .access_log
+            .then(|| AccessLog::open(&req, user_agent, arrival.into_std()));
         // Filled by the router's endpoint, for a request dropped before it answers.
         let matched = MatchedRoute::default();
         req.extensions_mut().insert(matched.clone());
@@ -332,7 +337,8 @@ where
         // done before a streaming body is written. See `raw_body::with_body_limit`.
         let resp = crate::raw_body::with_body_limit(
             self.body_limit,
-            self.handle(req, &continuation).instrument(span.clone()),
+            self.handle(req, &continuation, arrival)
+                .instrument(span.clone()),
         )
         .await;
         // Before the normalizer, which builds a fresh response without the
@@ -362,12 +368,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use futures_util::StreamExt;
     use nest_rs_core::current_request_scope;
     use poem::EndpointExt;
     use poem::handler;
     use poem::test::TestClient;
 
     use super::*;
+
+    /// The gap bound the edges below hold a body to.
+    const GAP: Duration = Duration::from_secs(30);
 
     fn edge<E>(
         inner: E,
@@ -380,6 +390,7 @@ mod tests {
             Container::builder().build(),
             timeout,
             body_limit,
+            GAP,
             headers,
             false,
             false,
@@ -398,6 +409,7 @@ mod tests {
             Container::builder().build(),
             None,
             body_limit,
+            GAP,
             headers,
             true,
             false,
@@ -530,8 +542,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn undeclared_length_body_is_buffered_and_capped() {
-        // No Content-Length forces the buffered path.
+    async fn an_undeclared_length_body_is_capped_as_its_reader_takes_it() {
+        // No Content-Length: the wrapper counts what arrives.
         let ep = edge(echo_len, None, Some(8), Vec::new());
         let resp = TestClient::new(ep)
             .post("/")
@@ -629,6 +641,68 @@ mod tests {
         resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
         resp.assert_header("x-content-type-options", "nosniff");
         resp.assert_content_type("application/problem+json");
+    }
+
+    /// Reads its body to the end and answers `200` whatever the read made of
+    /// it: the edge's answer must not depend on how a reader takes a failure.
+    #[handler]
+    async fn swallows_read_errors(body: Body) -> &'static str {
+        let mut frames = body.into_bytes_stream();
+        while frames.next().await.is_some() {}
+        "read"
+    }
+
+    /// One frame, then nothing for ever.
+    fn stalling() -> Body {
+        Body::from_bytes_stream(
+            futures_util::stream::iter([Ok::<_, std::io::Error>(&b"part"[..])])
+                .chain(futures_util::stream::pending()),
+        )
+    }
+
+    fn post(version: Version, body: Body) -> Request {
+        Request::builder()
+            .method(poem::http::Method::POST)
+            .version(version)
+            .body(body)
+    }
+
+    #[tokio::test]
+    async fn a_body_past_the_cap_answers_413_whatever_its_reader_made_of_it() {
+        let ep = edge(swallows_read_errors, None, Some(8), nosniff());
+        let resp = ep
+            .call(post(Version::HTTP_11, Body::from(vec![0u8; 64])))
+            .await
+            .expect("the edge answers");
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_body_answers_408_closing_an_http1_connection() {
+        let ep = edge(swallows_read_errors, None, Some(1024), nosniff());
+        let resp = ep
+            .call(post(Version::HTTP_11, stalling()))
+            .await
+            .expect("the edge answers");
+        assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(resp.headers()[header::CONNECTION], "close");
+        assert_eq!(resp.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            resp.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_body_on_http2_answers_408_without_a_connection_header() {
+        let ep = edge(swallows_read_errors, None, Some(1024), Vec::new());
+        let resp = ep
+            .call(post(Version::HTTP_2, stalling()))
+            .await
+            .expect("the edge answers");
+        assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+        assert!(resp.headers().get(header::CONNECTION).is_none());
     }
 
     fn failing() -> impl Endpoint<Output = Response> {

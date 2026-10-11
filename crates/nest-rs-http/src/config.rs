@@ -89,6 +89,13 @@ const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
 /// hyper's own head default, and Kestrel's `RequestHeadersTimeout`.
 pub(crate) const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Under the default request timeout: that budget starts at the request's
+/// arrival, before any wait on its body, so a gap as long could never fire
+/// first, and a body that stops arriving would be answered the budget's `503`
+/// rather than `408`. Counted between two reads, as nginx's
+/// `client_body_timeout` is.
+pub(crate) const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// nginx's `keepalive_timeout`, above the 60 s idle of AWS's load balancer and
 /// of nginx's upstream connections, so the balancer closes first.
 pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(75);
@@ -110,6 +117,22 @@ const HEADER_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
         why: "a head is a few hundred bytes, so a client taking five minutes over one is holding \
               the connection rather than sending it, and a deadline that long no longer bounds \
               what a slow head holds",
+    },
+);
+
+const BODY_READ_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "BODY_READ_TIMEOUT_SECS",
+    "HttpConfig::body_read_timeout",
+    Floor::Units(Bound {
+        count: 1,
+        why: "a shorter bound fails an upload on a slow network between two of its packets, and \
+              `0` is no off switch: a body that stops arriving would hold its request, its task \
+              and its place under the connection cap for as long as the client likes",
+    }),
+    Bound {
+        count: 3600,
+        why: "a body that has sent nothing for an hour has stopped, and a bound that long is a \
+              unit slip more often than a choice (`30000` meant as milliseconds is eight hours)",
     },
 );
 
@@ -215,16 +238,20 @@ pub struct HttpConfig {
     /// One literal path: a template's `{` `}`, or a `:`, `*` or `<` the router
     /// reads as a parameter, fails the boot.
     pub global_prefix: Option<String>,
-    /// Transport-wide cap on the request body size, for every extractor; a
-    /// per-route [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit)
-    /// can pin a tighter one. `None` ⇒ the default (2 MiB); there is no off.
-    /// Read from `<PREFIX>_HTTP__MAX_BODY_BYTES`; `0` fails the boot.
+    /// Transport-wide cap on the request body size, for every reader — an
+    /// extractor, a guard, a global pipe — counted as the body is read, after
+    /// routing and the guards: the edge reads nothing, and refuses only a
+    /// declared `Content-Length` past it. A per-route
+    /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit) can
+    /// pin a tighter one. `None` ⇒ the default (2 MiB); there is no off. Read
+    /// from `<PREFIX>_HTTP__MAX_BODY_BYTES`; `0` fails the boot.
     #[validate(range(min = 1, message = "must be at least 1 byte"))]
     pub max_body_bytes: Option<usize>,
-    /// Wall-clock budget for a single request; a handler exceeding it is
-    /// aborted with `503 Service Unavailable` and a `Retry-After`. `None` ⇒ no
-    /// timeout. Read from `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, whole seconds
-    /// from 1 to 3600 or `0` for no timeout — refused outside, from the
+    /// Wall-clock budget for a single request, counted from its arrival, so the
+    /// reading of its body counts against it; a request still running past it
+    /// is aborted with `503 Service Unavailable` and a `Retry-After`. `None` ⇒
+    /// no timeout. Read from `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`, whole
+    /// seconds from 1 to 3600 or `0` for no timeout — refused outside, from the
     /// environment and from the pinned struct alike; defaults to 30 seconds.
     /// Off in code is `None`; a pinned zero is refused.
     pub request_timeout: Option<Duration>,
@@ -323,6 +350,21 @@ pub struct HttpConfig {
     /// — refused outside, from the environment and from the pinned struct alike;
     /// defaults to 60 seconds.
     pub send_timeout: Duration,
+    /// How long a request body may go without a byte once something reads it.
+    /// Past it the read fails and the request is answered `408 Request
+    /// Timeout` — on HTTP/1 with `Connection: close`, since the unread rest
+    /// leaves the connection unusable; on HTTP/2 its stream alone ends.
+    /// Counted between two frames, so an upload that keeps sending is never
+    /// cut by it; the whole request is
+    /// [`request_timeout`](Self::request_timeout)'s, the one bound on a body
+    /// when that is off. Kept under it, since that budget counts from the
+    /// request's arrival: at or past it, a body that stops arriving is answered
+    /// the budget's `503` first.
+    ///
+    /// Read from `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS`, whole seconds from 1
+    /// to 3600 — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 10 seconds.
+    pub body_read_timeout: Duration,
 }
 
 impl Default for HttpConfig {
@@ -351,6 +393,7 @@ impl Default for HttpConfig {
             header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             send_timeout: DEFAULT_SEND_TIMEOUT,
+            body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
         }
     }
 }
@@ -375,13 +418,14 @@ impl HttpConfig {
         )
     }
 
-    /// The three connection deadlines, each held to the range its variable is,
+    /// The four connection deadlines, each held to the range its variable is,
     /// for a config that never met the environment.
     pub(crate) fn deadlines(&self) -> Result<crate::server::Deadlines> {
         let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
         let check = |bounds: DurationBounds, value| bounds.check(namespace, bounds.field(), value);
         Ok(crate::server::Deadlines {
             header_read: check(HEADER_READ_TIMEOUT, self.header_read_timeout)?,
+            body_read: check(BODY_READ_TIMEOUT, self.body_read_timeout)?,
             idle: check(IDLE_TIMEOUT, self.idle_timeout)?,
             send: check(SEND_TIMEOUT, self.send_timeout)?,
         })
@@ -462,6 +506,7 @@ impl Config for HttpConfig {
                 .value,
             idle_timeout: IDLE_TIMEOUT.read(env, base.idle_timeout)?.value,
             send_timeout: SEND_TIMEOUT.read(env, base.send_timeout)?.value,
+            body_read_timeout: BODY_READ_TIMEOUT.read(env, base.body_read_timeout)?.value,
         })
     }
 }
@@ -607,6 +652,7 @@ mod tests {
             ("HEADER_READ_TIMEOUT_SECS", SECRET.to_owned()),
             ("IDLE_TIMEOUT_SECS", SECRET.to_owned()),
             ("SEND_TIMEOUT_SECS", SECRET.to_owned()),
+            ("BODY_READ_TIMEOUT_SECS", SECRET.to_owned()),
         ] {
             figment::Jail::expect_with(|jail| {
                 jail.create_file("value", &content)?;
@@ -1034,9 +1080,10 @@ mod tests {
     }
 
     #[test]
-    fn the_connection_deadlines_default_to_30_75_and_60_seconds() {
+    fn the_connection_deadlines_default_to_30_10_75_and_60_seconds() {
         let defaults = HttpConfig::default();
         assert_eq!(defaults.header_read_timeout, Duration::from_secs(30));
+        assert_eq!(defaults.body_read_timeout, Duration::from_secs(10));
         assert_eq!(defaults.idle_timeout, Duration::from_secs(75));
         assert_eq!(defaults.send_timeout, Duration::from_secs(60));
     }
@@ -1046,12 +1093,18 @@ mod tests {
 
     /// Each deadline's key, the field pinning it, its ceiling in seconds, and
     /// its slot.
-    const DEADLINES: [(&str, &str, u64, Slot); 3] = [
+    const DEADLINES: [(&str, &str, u64, Slot); 4] = [
         (
             "HEADER_READ_TIMEOUT_SECS",
             "HttpConfig::header_read_timeout",
             300,
             |config| &mut config.header_read_timeout,
+        ),
+        (
+            "BODY_READ_TIMEOUT_SECS",
+            "HttpConfig::body_read_timeout",
+            3600,
+            |config| &mut config.body_read_timeout,
         ),
         (
             "IDLE_TIMEOUT_SECS",

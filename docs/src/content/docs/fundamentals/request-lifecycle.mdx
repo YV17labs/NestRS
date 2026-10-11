@@ -53,7 +53,10 @@ site differs:
 
 Global guards are **pooled** globally but **execute** post-routing at the
 `RouteShaper`, because a guard reads `#[public]` route data that only exists
-after routing — they do **not** run "before routing".
+after routing — they do **not** run "before routing". Nothing the framework
+runs before them reads the request body: the transport wraps it, and whatever
+reads it first — a guard, the pipe pool, an extractor — reads it under
+[the body cap and its gap bound](/http/configuration/#request-body-size-limit).
 
 Two ways to be transport-wide, deliberately distinct: `use_*_global` adds to
 the **pool** (TypeId-deduped against narrower scopes); `#[interceptor]` is

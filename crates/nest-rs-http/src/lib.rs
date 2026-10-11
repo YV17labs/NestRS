@@ -16,6 +16,7 @@ mod access_log;
 mod allow;
 mod body;
 mod boot_check;
+mod capped;
 pub mod challenge;
 mod client_ip;
 mod config;

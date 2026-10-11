@@ -307,6 +307,100 @@ impl Guard for ApiKeyGuard {
 }
 ```
 
+## Read the body in a guard
+
+A guard may read the request body when its decision depends on it — a webhook
+whose signature *is* its credential. Nothing has read the body before the
+guards run, so a guard that refuses has taken none of it; one that reads it
+reads under the transport's cap and its gap bound like any extractor
+([Request-body size limit](/http/configuration/#request-body-size-limit)), and
+sets the bytes back for the handler. This one checks a
+[Standard Webhooks](https://www.standardwebhooks.com/) signature with a
+constant-time compare and a five-minute replay window:
+
+```rust title="crates/features/src/upstream/guard.rs"
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use aws_lc_rs::hmac;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use nest_rs::guards::prelude::*;
+use nest_rs::http::{RawBody, current_body_limit};
+
+use crate::upstream::UpstreamConfig;
+
+#[injectable]
+pub struct WebhookSignature {
+    #[inject]
+    config: Arc<UpstreamConfig>,
+}
+
+impl Layer for WebhookSignature {}
+
+#[async_trait]
+impl Guard for WebhookSignature {
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+        if self.config.webhook_secret.is_empty() {
+            return Err(Denial::internal("no webhook secret is configured"));
+        }
+        let header = |name| req.headers().get(name).and_then(|v| v.to_str().ok());
+        let (Some(id), Some(sent_at), Some(signatures)) = (
+            header("webhook-id"),
+            header("webhook-timestamp").and_then(|t| t.parse::<u64>().ok()),
+            header("webhook-signature"),
+        ) else {
+            return Err(Denial::unauthorized("an unsigned webhook"));
+        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        if now.abs_diff(sent_at) > 5 * 60 {
+            return Err(Denial::unauthorized("a webhook outside the replay window"));
+        }
+        let id = id.to_owned();
+        let tags: Vec<Vec<u8>> = signatures
+            .split(' ')
+            .filter_map(|s| s.strip_prefix("v1,"))
+            .filter_map(|s| STANDARD.decode(s).ok())
+            .collect();
+
+        let limit = current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT);
+        let body = req
+            .take_body()
+            .into_bytes_limit(limit)
+            .await
+            .map_err(|error| {
+                Denial::unauthorized(format!("an unreadable webhook body: {error}"))
+            })?;
+        let key = hmac::Key::new(hmac::HMAC_SHA256, self.config.webhook_secret.as_bytes());
+        let signed = [id.as_bytes(), b".", sent_at.to_string().as_bytes(), b".", &body].concat();
+        if !tags.iter().any(|tag| hmac::verify(&key, &signed, tag).is_ok()) {
+            return Err(Denial::unauthorized("a webhook signature that does not verify"));
+        }
+        req.set_body(body);
+        Ok(())
+    }
+}
+
+impl HttpGuard for WebhookSignature {}
+```
+
+`hmac::verify` compares in constant time, and the guard fails closed without a
+secret: anyone can sign with an empty key. The route binds the guard and
+declares itself public to the authentication guard, since the signature stands
+in for a token:
+
+```rust title="crates/features/src/upstream/http/controller.rs"
+#[post("/webhooks")]
+#[use_guards(WebhookSignature)]
+#[public]
+async fn receive(&self, body: RawBody) -> Result<()> {
+    self.svc.receive(&body).await
+}
+```
+
+A body past the cap answers `413` and one that stops arriving `408`, whatever
+the guard made of the failed read; a refusal is the guard's own `401`, logged
+at `warn` like any denial.
+
 ## Declare on the provider
 
 The Layer System dedups every layer by

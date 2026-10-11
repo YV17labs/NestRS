@@ -129,11 +129,13 @@ states the parts.
 
 ## Limits
 
-- The [`max_body_bytes` cap](/http/configuration/) gates **every** body,
-  `Multipart` included. A direct upload larger than the cap answers `413 Payload Too Large` before a
-byte reaches your handler, and the default cap is **2 MiB** — so a 3 MiB
-upload fails out of the box. Raising the ceiling is
-`<PREFIX>_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
+- The [`max_body_bytes` cap](/http/configuration/#request-body-size-limit)
+  gates **every** body, `Multipart` included. An upload declaring a length past
+  the cap — a browser's form does — is answered `413 Payload Too Large` unread;
+  one that declares none is cut at the cap as it is read, and answered `413`
+  too. The default cap is **2 MiB** — so a 3 MiB upload fails out of the box.
+  Raising the ceiling is `<PREFIX>_HTTP__MAX_BODY_BYTES`, not a compensating
+  control in your code.
   The admin gate and rate limit the demo binds are defence in depth, not the
   size bound.
 - Streaming bounds **memory**, not the request: the part is still read through
@@ -141,6 +143,14 @@ upload fails out of the box. Raising the ceiling is
   what lets a large file through; streaming is what keeps the process from
   holding it. For very large media the presigned PUT still wins — it avoids
   proxying the bytes through the server at all.
+- A long upload runs against the [request timeout](/http/configuration/#request-timeout),
+  `30` seconds by default and counted from the request's arrival, its body's
+  reading included: an upload slower than that is answered `503` part-way. A
+  transport taking large files over slow links turns the budget off
+  (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0`) or raises it — there is no budget per
+  route yet. `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (`10` seconds) never cuts an
+  upload that keeps sending: it counts the gap between two of its packets, and
+  is the one bound left on a body once the budget is off.
 
 ## Going further
 

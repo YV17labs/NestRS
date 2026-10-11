@@ -141,36 +141,42 @@ DTO, `Piped<P, Header<T>>` pipes it.
 
 ## `RawBody` — exact bytes, with a size cap
 
-Some handlers — webhook signatures (Stripe, GitHub), proxied protobuf
-bodies — need the exact byte string before any parsing. `RawBody` reads
-the whole body into [`Bytes`](https://docs.rs/bytes), capped at
-`RawBody::DEFAULT_LIMIT` (2 MiB). Past the cap the extractor returns
-`413 Payload Too Large` — never silently truncates, never buffers
-unbounded memory.
+Some handlers need the exact byte string before any parsing — a proxied
+protobuf body, a document stored as it was sent. `RawBody` reads the whole body
+into [`Bytes`](https://docs.rs/bytes), capped at the transport's
+`max_body_bytes` (`RawBody::DEFAULT_LIMIT`, 2 MiB, by default). Past the cap the
+request is answered `413 Payload Too Large` — never silently truncated, never
+buffered unbounded. Like every extractor it reads after the guards, so a
+refused request never had its body read.
 
-```rust title="crates/features/src/notify/http/controller.rs"
-use nest_rs::http::{ClientIp, RawBody};
+```rust title="crates/features/src/posts/http/controller.rs"
+use nest_rs::http::RawBody;
 use nest_rs::http::poem::Result;
+use nest_rs::http::poem::web::Path;
+use uuid::Uuid;
 
-#[post("/webhooks/stripe")]
-async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
-    verify_stripe_signature(&body, /* ... */)?;
-    self.svc.handle_event(&body).await?;
-    Ok("ok")
+#[put("/{id}/source")]
+async fn replace_source(&self, id: Path<Uuid>, body: RawBody) -> Result<()> {
+    self.svc.replace_source(*id, body.into_inner()).await
 }
 ```
 
+A webhook's signature is a credential, so it is verified in a guard that reads
+the same bytes and hands them on, never in the handler — see
+[Read the body in a guard](/fundamentals/guards/#read-the-body-in-a-guard).
+
 For a tighter cap on a specific route, take the body manually:
 
-```rust title="crates/features/src/notify/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::RawBody;
 use nest_rs::http::poem::{Result, RequestBody};
+use nest_rs::http::poem::web::Path;
+use uuid::Uuid;
 
-#[post("/webhooks/small")]
-async fn small(&self, mut body: RequestBody) -> Result<&'static str> {
+#[put("/{id}/summary")]
+async fn replace_summary(&self, id: Path<Uuid>, mut body: RequestBody) -> Result<()> {
     let raw = RawBody::extract_with_limit(&mut body, 16 * 1024).await?;
-    self.svc.handle_small(&raw).await?;
-    Ok("ok")
+    self.svc.replace_summary(*id, raw.into_inner()).await
 }
 ```
 

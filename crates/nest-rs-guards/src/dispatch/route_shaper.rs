@@ -12,6 +12,8 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Layer};
+use nest_rs_http::BodyError;
+use nest_rs_http::poem::error::ReadBodyError;
 use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
 use nest_rs_pipes::GlobalPipe;
 use serde_json::Value;
@@ -226,6 +228,20 @@ pub(super) fn log_effective_chain<L: Layer + ?Sized>(
     );
 }
 
+/// Whether the transport's body wrapper ended this read — past the cap, or no
+/// frame within its gap. The client did, and the edge answers it, `413` or
+/// `408`, whatever this read returns.
+fn stopped_by_the_edge(err: &ReadBodyError) -> bool {
+    let ReadBodyError::Io(err) = err else {
+        return false;
+    };
+    matches!(
+        err.get_ref()
+            .and_then(|inner| inner.downcast_ref::<BodyError>()),
+        Some(BodyError::TooLarge { .. } | BodyError::Stalled { .. })
+    )
+}
+
 /// Read the JSON body, run every pipe in order, write the rewritten body
 /// back into the request. No-op when the body is missing / not JSON / no
 /// pipe rejects.
@@ -246,7 +262,7 @@ async fn apply_body_pipes(
     let body = req.take_body();
     let bytes = match body.into_bytes_limit(limit).await {
         Ok(b) => b,
-        Err(nest_rs_http::poem::error::ReadBodyError::PayloadTooLarge) => {
+        Err(ReadBodyError::PayloadTooLarge) => {
             return Err(nest_rs_http::poem::Error::from_status(
                 nest_rs_http::poem::http::StatusCode::PAYLOAD_TOO_LARGE,
             ));
@@ -254,7 +270,9 @@ async fn apply_body_pipes(
         Err(err) => {
             // The body is consumed and cannot be restored: fail rather than run
             // the handler with every global pipe skipped.
-            tracing::warn!(target: nest_rs_core::target::LAYERS, error = %nest_rs_core::error_message(&err), "global pipe: failed to read body");
+            if !stopped_by_the_edge(&err) {
+                tracing::warn!(target: nest_rs_core::target::LAYERS, error = %nest_rs_core::error_message(&err), "global pipe: failed to read body");
+            }
             return Err(err.into());
         }
     };

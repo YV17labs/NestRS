@@ -63,6 +63,7 @@ Real env always wins over the `.env` cascade.
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
 | `max_concurrent_connections` | `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` (`1`–`1048576`) | `10 000` | `HttpConfig { max_concurrent_connections: 50_000, ..Default::default() }` |
 | `header_read_timeout` | `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS` (seconds, `1`–`300`) | `30 s` | `HttpConfig { header_read_timeout: Duration::from_secs(10), ..Default::default() }` |
+| `body_read_timeout` | `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (seconds, `1`–`3600`) | `10 s` | `HttpConfig { body_read_timeout: Duration::from_secs(15), ..Default::default() }` |
 | `idle_timeout` | `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS` (seconds, `1`–`3600`) | `75 s` | `HttpConfig { idle_timeout: Duration::from_secs(620), ..Default::default() }` |
 | `send_timeout` | `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (seconds, `1`–`3600`) | `60 s` | `HttpConfig { send_timeout: Duration::from_secs(120), ..Default::default() }` |
 | `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
@@ -239,9 +240,15 @@ build time — it tracks the framework, not your app version.
 
 ## Request-body size limit
 
-`RawBody` (and every extractor built on it) accepts at most
-`max_body_bytes` — `2 MiB` by default, so a runaway upload can't exhaust
-memory before a handler ever sees it. Raise or lower it globally:
+Whatever reads a request body — an extractor such as `Json<T>` or `RawBody`, a
+[guard](/fundamentals/guards/#read-the-body-in-a-guard), a global pipe — reads at
+most `max_body_bytes`: `2 MiB` by default, so a runaway upload can't exhaust
+memory. The transport itself reads no body. It is read by whoever needs it,
+after routing and the guards, so a refused request is answered before a byte of
+its body is taken, and a refused client that sent `Expect: 100-continue` is
+never told to go ahead. Only a declared `Content-Length` past the cap is
+refused up front, unread. Past the cap a read fails and the request is answered
+`413`, whatever the reader made of the failure. Raise or lower it globally:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__MAX_BODY_BYTES=4194304   # 4 MiB
@@ -254,8 +261,11 @@ everything else.
 ## Request timeout
 
 `request_timeout` bounds how long one request may run, so a slow or stuck
-request can't tie up a connection indefinitely. Default `30` seconds;
-`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
+request can't tie up a connection indefinitely. It counts from the request's
+arrival, so a body that trickles in a byte at a time counts against it; one
+that stops arriving altogether is answered sooner, `408`, by
+[the body-read deadline](#connection-deadlines). Default
+`30` seconds; `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
 spelling every duration ceiling uses, so `0` never means "zero seconds":
 
 ```bash title=".env.production" frame="terminal"
@@ -319,10 +329,13 @@ using it gives its place under the cap back. Each is a `<PREFIX>_HTTP__` key:
 | The first request head | `HEADER_READ_TIMEOUT_SECS`, `30` s from accept — a TLS handshake and HTTP/2's preface inside it | closed |
 | Idle, nothing in flight | `IDLE_TIMEOUT_SECS`, `75` s from the last answer's end | HTTP/1 closed, HTTP/2 sent `GOAWAY` |
 | A later HTTP/1 head | `HEADER_READ_TIMEOUT_SECS` from its first byte, or the idle deadline if sooner | closed |
+| A request body that stops arriving | `BODY_READ_TIMEOUT_SECS`, `10` s from its last frame, once something reads it | answered `408 Request Timeout` (RFC 9110 §15.5.9) — HTTP/1 with `Connection: close`, HTTP/2 that stream alone |
 | A write the peer takes nothing of | `SEND_TIMEOUT_SECS`, `60` s from the write that started waiting | dropped — on HTTP/2, a stream the peer grants no window is reset and its connection serves on |
 
-A request in flight has no connection deadline: [its own budget](#request-timeout)
-bounds the handler, and the send deadline bounds a response — an event stream or
+A request in flight has no other connection deadline: [its own budget](#request-timeout)
+bounds the handler and the reading of its body, the body-read deadline a body
+that stops arriving — the one bound on it when the budget is off, as for a long
+upload — and the send deadline bounds a response — an event stream or
 a WebSocket included — whose peer stops reading. That one runs only while a write
 waits, from the moment it starts waiting, so a slow reader that keeps taking
 bytes is never cut. Each cut files one `warn`, `the peer took nothing within the
@@ -336,6 +349,7 @@ its range fails the boot naming the variable, set in the environment or pinned:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__HEADER_READ_TIMEOUT_SECS=10
+NESTRS_HTTP__BODY_READ_TIMEOUT_SECS=15
 NESTRS_HTTP__IDLE_TIMEOUT_SECS=620
 NESTRS_HTTP__SEND_TIMEOUT_SECS=120
 ```

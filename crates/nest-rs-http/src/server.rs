@@ -68,12 +68,14 @@ const PHASE_GRACE: Duration = Duration::from_secs(1);
 /// What a response body is once it leaves poem.
 type ResponseBody = BoxBody<Bytes, io::Error>;
 
-/// What each connection's phases and writes are held to: the three
-/// [`HttpConfig`](crate::HttpConfig) deadlines.
+/// What each connection's phases and writes are held to: the four
+/// [`HttpConfig`](crate::HttpConfig) deadlines, the body's held by the edge.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Deadlines {
     /// The first head from accept, and on HTTP/1 a later head from its first byte.
     pub(crate) header_read: Duration,
+    /// A request body waiting for its next frame once something reads it.
+    pub(crate) body_read: Duration,
     /// A kept-alive connection waiting for its next request.
     pub(crate) idle: Duration,
     /// A write waiting on a peer that takes nothing.
@@ -84,6 +86,7 @@ impl Default for Deadlines {
     fn default() -> Self {
         Self {
             header_read: crate::config::DEFAULT_HEADER_READ_TIMEOUT,
+            body_read: crate::config::DEFAULT_BODY_READ_TIMEOUT,
             idle: crate::config::DEFAULT_IDLE_TIMEOUT,
             send: crate::config::DEFAULT_SEND_TIMEOUT,
         }

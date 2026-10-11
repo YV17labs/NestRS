@@ -48,8 +48,9 @@ nest-rs-filters.workspace = true
 
 [dev-dependencies]
 # Async unit tests drain a poem `Response` body (`into_bytes().await`) to assert
-# the RFC-9457 `problem+json` denial rendering.
-tokio.workspace = true
+# the RFC-9457 `problem+json` denial rendering. `test-util` pauses time, so a
+# body that stops arriving meets the edge's gap without the suite waiting it out.
+tokio = { workspace = true, features = ["test-util"] }
 # `LogCapture`, to assert the denial `warn` a status assertion cannot see — a
 # gateway-scope denial once rendered 401 while logging nothing. Dev-dep cycle,
 # the same one `nest-rs-graphql` and `nest-rs-ws` already carry.
@@ -57,6 +58,11 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # A request body that fails *mid-stream* is the one shape `Body::from_bytes`
 # cannot make, and it is the shape the global-pipe read failure needs.
 futures-util.workspace = true
+# The body-reading guard the docs teach for a webhook verifies an HMAC-SHA256
+# (aws-lc-rs, the workspace's crypto backend) over base64 signatures, as
+# Standard Webhooks spells them.
+aws-lc-rs.workspace = true
+base64.workspace = true
 
 [lints]
 workspace = true

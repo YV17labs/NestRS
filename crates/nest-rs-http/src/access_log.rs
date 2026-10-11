@@ -32,15 +32,16 @@ pub(crate) struct AccessLog {
 
 impl AccessLog {
     /// Snapshot what only the *request* can answer, before it is consumed.
-    /// `user_agent` is the one the operation span read.
-    pub(crate) fn open(req: &Request, user_agent: Option<&str>) -> Self {
+    /// `user_agent` is the one the operation span read; `start` is the instant
+    /// the request arrived, which its budget counts from too.
+    pub(crate) fn open(req: &Request, user_agent: Option<&str>, start: Instant) -> Self {
         Self {
             method: req.method().clone(),
             uri: req.uri().clone(),
             // Owned: the `HeaderValue`'s bytes are a slice of hyper's shared read
             // buffer, which holding would pin until the response body ends.
             user_agent: user_agent.map(str::to_owned),
-            start: Instant::now(),
+            start,
         }
     }
 
@@ -154,7 +155,7 @@ mod tests {
 
     fn held() -> (AccessLog, RequestContinuation) {
         let req = Request::builder().uri_str("/reports").finish();
-        let log = AccessLog::open(&req, Some("curl/8"));
+        let log = AccessLog::open(&req, Some("curl/8"), Instant::now());
         let continuation = RequestContinuation::new(None, Correlation::minted(None));
         (log, continuation)
     }

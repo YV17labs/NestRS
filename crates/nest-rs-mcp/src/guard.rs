@@ -1,5 +1,6 @@
 //! Per-operation guard the MCP endpoint runs before each streamable-HTTP request.
 
+use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -16,9 +17,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Authenticates an MCP HTTP request before the streamable handler runs. Bind
 /// with `providers = [MyBridge as dyn McpOperationGuard]`.
 ///
-/// A registered guard replaces the fallback that runs the global guard pool,
-/// and owns the endpoint's chain. It gates the HTTP request, and never stands
-/// in for an operation's own `Guard::check_mcp` chain.
+/// A registered guard adds to the global guard pool, which always runs at the
+/// request. It gates the HTTP request, and never stands in for an operation's
+/// own `Guard::check_mcp` chain.
 pub trait McpOperationGuard: Send + Sync + 'static {
     /// Gate the operation: inspect/mutate `req` and return `Err` to reject it
     /// before the handler runs.
@@ -41,8 +42,20 @@ pub trait McpOperationGuard: Send + Sync + 'static {
     ) -> BoxFuture<'a, OperationOutcome> {
         inner
     }
+
+    /// The guards [`before`](Self::before) runs itself, by type. The global pool
+    /// leaves each of them to this guard, so a guard listed in both runs once.
+    fn covers(&self) -> &[TypeId] {
+        &[]
+    }
 }
 
-/// Factory slot for the fallback [`McpOperationGuard`], running the global guard
-/// pool in band; a fn pointer, as `use_guards_global` seeds it before the container exists.
-pub struct FallbackMcpGuard(pub fn(&Container) -> Arc<dyn McpOperationGuard>);
+/// Factory slot for the global guard pool's in-band runner, seeded by
+/// `use_guards_global` for a non-empty pool before the container exists. It
+/// takes the registered [`McpOperationGuard`], if any, and returns the one
+/// guard the endpoint runs: the pool, with that guard in it.
+pub struct FallbackMcpGuard(pub PoolRunnerFactory);
+
+/// Builds the pool's runner around the registered guard.
+type PoolRunnerFactory =
+    fn(&Container, Option<Arc<dyn McpOperationGuard>>) -> Arc<dyn McpOperationGuard>;

@@ -384,9 +384,9 @@ writes that edge's module once auth exists, and `g http` / `g graphql` on a
 Two edges answer differently, by design. A **scheduled** tick is system work:
 `SeaOrmDatabaseModule`'s job context installs the executor with no ability, so `Repo`
 runs unscoped and there is nothing to declare. **MCP** gates at the endpoint,
-through the app's `dyn McpOperationGuard`, else the global guard pool, else
-deny-all — so an `/mcp` endpoint with no bridge registered answers 401 to every
-tool call.
+through the global guard pool with the app's `dyn McpOperationGuard` added to
+it, either alone, else deny-all — so an `/mcp` endpoint with neither answers 401
+to every tool call.
 
 **`AuthzAbility` is the whole policy, and it grants nothing until you say so.** A
 freshly scaffolded resource answers 403 on every route until a rule names its

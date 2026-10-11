@@ -62,9 +62,9 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// implemented by `nest_rs_authz::graphql`'s `GraphqlAbilityBridge`.
 ///
 /// Bind with `providers = [MyBridge as dyn GraphqlOperationGuard]`. `/graphql`
-/// is `EdgePosture::Exempt` at the HTTP edge, so this seam is the **only**
-/// place guards run on GraphQL operations: with none registered the endpoint
-/// falls back to the global guard pool, and a registered guard replaces it.
+/// is `EdgePosture::Exempt` at the HTTP edge, so the request's guards run here,
+/// in band: the global guard pool always runs, and a registered guard adds to
+/// it, never replaces it.
 pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// Attach per-request state to the poem request before seeds forward it.
     /// Return `Err(Response)` to reject the operation before parsing.
@@ -74,12 +74,23 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// duration. It scopes both one HTTP operation and one graphql-ws socket,
     /// hence a `()` future rather than a `Response`.
     fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()>;
+
+    /// The guards [`before`](Self::before) runs itself, by type. The global pool
+    /// leaves each of them to this guard, so a guard listed in both runs once.
+    fn covers(&self) -> &[TypeId] {
+        &[]
+    }
 }
 
-/// Factory slot for the fallback [`GraphqlOperationGuard`], seeded by
-/// `nest-rs-guards`' `use_guards_global` so a missing authz bridge still leaves
-/// operations gated by the global pool.
-pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperationGuard>);
+/// Factory slot for the global guard pool's in-band runner, seeded by
+/// `nest-rs-guards`' `use_guards_global` for a non-empty pool. It takes the
+/// registered [`GraphqlOperationGuard`], if any, and returns the one guard the
+/// endpoint runs: the pool, with that guard in it.
+pub struct FallbackOperationGuard(pub PoolRunnerFactory);
+
+/// Builds the pool's runner around the registered guard.
+type PoolRunnerFactory =
+    fn(&Container, Option<Arc<dyn GraphqlOperationGuard>>) -> Arc<dyn GraphqlOperationGuard>;
 
 /// Bridge slot for global pipes on GraphQL operation **variables**, seeded by
 /// `nest-rs-guards`' `use_pipes_global` with a fold of every
@@ -114,33 +125,33 @@ pub(crate) struct ContextEndpoint<E> {
 
 impl OperationBridge {
     pub(crate) fn new(container: Container) -> Self {
-        let op_guard = match container.get_dyn::<dyn GraphqlOperationGuard>() {
-            Some(guard) => {
+        let bridge = container.get_dyn::<dyn GraphqlOperationGuard>();
+        let op_guard = match (container.get::<FallbackOperationGuard>(), bridge) {
+            (Some(pool), bridge) => {
+                tracing::debug!(
+                    target: crate::TARGET,
+                    mode = "global_guard_pool",
+                    bridge = bridge.is_some(),
+                    "graphql operations gated",
+                );
+                Some((pool.0)(&container, bridge))
+            }
+            (None, Some(bridge)) => {
                 tracing::debug!(
                     target: crate::TARGET,
                     mode = "operation_guard",
                     "graphql operations gated",
                 );
-                Some(guard)
+                Some(bridge)
             }
-            None => match container.get::<FallbackOperationGuard>() {
-                Some(factory) => {
-                    tracing::debug!(
-                        target: crate::TARGET,
-                        mode = "global_guard_pool",
-                        "graphql operations gated",
-                    );
-                    Some((factory.0)(&container))
-                }
-                None => {
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        mode = "unguarded",
-                        "no operation guard registered — graphql operations run unguarded",
-                    );
-                    None
-                }
-            },
+            (None, None) => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    mode = "unguarded",
+                    "no operation guard registered — graphql operations run unguarded",
+                );
+                None
+            }
         };
         // Without `ReachableProviders`, owner-keyed seeds are skipped: fail-closed.
         let reachable = container.get::<ReachableProviders>();

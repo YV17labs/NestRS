@@ -177,10 +177,10 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                     )
                 }),
             ));
-            // Guards run in-band per operation, never at the HTTP edge (`Exempt`).
-            // The in-band chain reads `Public` so `AuthnGuard` admits an anonymous
-            // request to the resolver gates while a present bearer is still verified.
-            let method = poem::EndpointExt::data(method, ::nest_rs_http::Public);
+            // Guards run in band, never at the HTTP edge (`Exempt`). `InBand` lets
+            // `AuthnGuard` admit an anonymous request to the operations' own gates
+            // while a presented bearer is still verified.
+            let method = poem::EndpointExt::data(method, nest_rs_core::Posture::InBand);
             route.nest(options.path.as_str(), ::nest_rs_http::matched(method))
         })
         .exempt()

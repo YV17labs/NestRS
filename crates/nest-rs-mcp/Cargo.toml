@@ -38,7 +38,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 nest-rs-core = { path = "../nest-rs-core" }
-# The fallback-guard tests drive `use_guards_global` onto `/mcp` through
+# The global-pool tests drive `use_guards_global` onto `/mcp` through
 # `GlobalPoolMcpGuard`, which lives behind guards' `mcp` feature. Dev-dep cycle
 # (guards/mcp depends on this crate) is allowed by Cargo, same as
 # nest-rs-graphql ↔ nest-rs-guards.

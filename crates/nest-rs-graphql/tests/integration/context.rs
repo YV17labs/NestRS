@@ -113,6 +113,25 @@ mod an_unguarded_schema_announces_itself {
             .await
             .expect("an unguarded schema boots — that is the point");
 
+        assert_unguarded(&app, &logs).await;
+    }
+
+    /// An empty pool gates nothing, so it is announced as no pool at all.
+    #[tokio::test]
+    async fn with_an_empty_global_pool_too() {
+        let logs = LogCapture::install();
+        let app = TestApp::builder()
+            .module::<OpenModule>()
+            .use_guards_global([])
+            .build()
+            .await
+            .expect("an unguarded schema boots under an empty pool");
+
+        assert_unguarded(&app, &logs).await;
+        logs.expect_none("nest_rs::graphql", "graphql operations gated");
+    }
+
+    async fn assert_unguarded(app: &TestApp, logs: &LogCapture) {
         let resp = app
             .http()
             .post("/graphql")
@@ -121,14 +140,10 @@ mod an_unguarded_schema_announces_itself {
             .await;
         resp.assert_status_is_ok();
 
-        let event = logs
-            .find(
-                "nest_rs::graphql",
-                "no operation guard registered — graphql operations run unguarded",
-            )
-            .into_iter()
-            .next()
-            .expect("the boot announces an unguarded schema");
+        let event = logs.expect_one(
+            "nest_rs::graphql",
+            "no operation guard registered — graphql operations run unguarded",
+        );
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("mode").as_deref(), Some("unguarded"));
     }

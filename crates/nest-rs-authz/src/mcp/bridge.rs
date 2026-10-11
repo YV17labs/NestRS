@@ -3,6 +3,7 @@
 //! Authenticate MCP HTTP requests with the same guard chain controllers use,
 //! then install the caller's ambient [`Ability`] for the operation's duration.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
@@ -13,7 +14,9 @@ use poem::{Request, Result};
 use crate::{Ability, run_ability_chain, with_ability};
 
 /// Runs `A` then `G` on each MCP HTTP request and scopes the operation to the
-/// resulting ability. Inject it as `dyn McpOperationGuard`.
+/// resulting ability. Inject it as `dyn McpOperationGuard`; it joins the app's
+/// global guard pool, never replaces it, and a pooled `A` or `G` runs once,
+/// here.
 ///
 /// It gates the *request*, so it neither runs nor excuses an operation's own
 /// `check_mcp` chain: a guard declared on a `#[tool]` — or in the app-wide pool
@@ -25,6 +28,10 @@ pub struct McpAbilityBridge<A: Guard, G: Guard> {
     auth: Arc<A>,
     #[inject]
     ability: Arc<G>,
+}
+
+impl<A: Guard, G: Guard> McpAbilityBridge<A, G> {
+    const COVERS: [TypeId; 2] = [TypeId::of::<A>(), TypeId::of::<G>()];
 }
 
 impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
@@ -64,5 +71,9 @@ impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
             };
             with_ability(ability, inner).await
         })
+    }
+
+    fn covers(&self) -> &[TypeId] {
+        &Self::COVERS
     }
 }

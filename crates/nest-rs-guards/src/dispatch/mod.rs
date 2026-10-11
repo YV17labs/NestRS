@@ -27,7 +27,7 @@ mod denial_convert;
 mod graphql_chain;
 #[cfg(feature = "mcp")]
 mod mcp_chain;
-// The two in-band fallback operation guards, one per `Exempt`-edge transport,
+// The pool runners on `/graphql` and `/mcp`, one per `Exempt`-edge transport,
 // over the pool they share.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 mod global_pool;

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
-use nest_rs_core::Container;
+use nest_rs_authz::{Ability, AbilityBuilder, AbilityFactory, AbilityGuard, Action};
+use nest_rs_core::{Container, Posture};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_testing::LogCapture;
 use poem::Request;
@@ -73,6 +73,25 @@ async fn a_route_reached_with_no_actor_warns_that_no_authn_guard_ran() {
         "the event names the expected actor type, got {:?}",
         event.fields,
     );
+}
+
+/// An anonymous request to an in-band endpoint (`/graphql`) gets the visitor
+/// ability, which each operation's own gate then reads.
+#[tokio::test]
+async fn an_in_band_request_with_no_actor_gets_the_visitor_ability() {
+    let guard = guard_over(WellFormed);
+    let mut req = Request::builder().finish();
+    req.extensions_mut().insert(Posture::InBand);
+
+    guard
+        .check_http(&mut req)
+        .await
+        .expect("an anonymous in-band request is left to its operations' gates");
+    let ability = req
+        .extensions()
+        .get::<Arc<Ability>>()
+        .expect("the visitor ability is attached");
+    assert!(ability.is_visitor());
 }
 
 #[tokio::test]

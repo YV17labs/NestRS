@@ -17,20 +17,33 @@ use crate::guard::{FallbackMcpGuard, McpOperationGuard};
 use crate::guards::deny_all;
 use crate::propagate::PropagatingHandler;
 
-/// The operation guard an MCP mount runs, in preference order: the app's
-/// registered `dyn McpOperationGuard` (the authz bridge), else the global guard
-/// pool through its fallback slot, else deny-all.
+/// The operation guard an MCP mount runs: the global guard pool, through its
+/// fallback slot, with the app's registered `dyn McpOperationGuard` (the authz
+/// bridge) added to it; the registered guard alone when the pool is empty; else
+/// deny-all.
 pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGuard> {
-    let (guard, mode) = match container.get_dyn::<dyn McpOperationGuard>() {
-        Some(guard) => (guard, "operation_guard"),
-        None => match container.get::<FallbackMcpGuard>() {
-            Some(fallback) => ((fallback.0)(container), "global_guard_pool"),
-            // `deny_all` says the fail-closed posture itself, at `warn`.
-            None => return deny_all(),
-        },
-    };
-    tracing::debug!(target: crate::TARGET, mode, "mcp operations gated");
-    guard
+    let bridge = container.get_dyn::<dyn McpOperationGuard>();
+    match (container.get::<FallbackMcpGuard>(), bridge) {
+        (Some(pool), bridge) => {
+            tracing::debug!(
+                target: crate::TARGET,
+                mode = "global_guard_pool",
+                bridge = bridge.is_some(),
+                "mcp operations gated",
+            );
+            (pool.0)(container, bridge)
+        }
+        (None, Some(bridge)) => {
+            tracing::debug!(
+                target: crate::TARGET,
+                mode = "operation_guard",
+                "mcp operations gated",
+            );
+            bridge
+        }
+        // `deny_all` says the fail-closed posture itself, at `warn`.
+        (None, None) => deny_all(),
+    }
 }
 
 /// Everything one `#[mcp]` mount needs beyond the handler itself: who gates an

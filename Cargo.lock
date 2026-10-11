@@ -3281,6 +3281,7 @@ dependencies = [
  "async-trait",
  "figment",
  "futures-util",
+ "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-exception-filters",

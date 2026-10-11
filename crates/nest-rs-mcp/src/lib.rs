@@ -45,11 +45,11 @@
 //! Notifications and `subscriptions/listen` are the exceptions, documented on
 //! [`McpToolContext::around`].
 //!
-//! The endpoint guard is, in the order [`resolve_operation_guard`] mounts: the
-//! app's registered [`McpOperationGuard`], else the global guard pool through
-//! its fallback slot, else **deny-all**. Without a registered
-//! [`McpToolContext`] a `Repo`-backed body fails closed (`Repo::conn` errors;
-//! `scope_for` denies every row).
+//! The endpoint guard is what [`resolve_operation_guard`] mounts: the global
+//! guard pool with the app's registered [`McpOperationGuard`] in it, the
+//! registered guard alone when the pool is empty, else **deny-all**. Without a
+//! registered [`McpToolContext`] a `Repo`-backed body fails closed
+//! (`Repo::conn` errors; `scope_for` denies every row).
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

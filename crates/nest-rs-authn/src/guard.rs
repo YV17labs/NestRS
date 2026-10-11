@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use nest_rs_core::trace_context::field;
-use nest_rs_core::{Container, ContainerBuilder, Discoverable, Layer, Net, ProviderResidency};
+use nest_rs_core::{
+    Container, ContainerBuilder, Discoverable, Layer, Net, Posture, ProviderResidency,
+};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, RejectedCredential, async_trait};
@@ -23,7 +25,9 @@ const TRANSPORT: &str = "http";
 /// The authentication guard: runs a [`Strategy`] on the request, attaches the
 /// resulting principal, and records `actor_id` on the span. Generic over the
 /// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
-/// `#[public]` route it authenticates opportunistically but never rejects.
+/// `#[public]` route it authenticates opportunistically but never rejects, and
+/// on an in-band endpoint (`/graphql`) it admits an anonymous request while
+/// still refusing a credential that does not verify.
 ///
 /// It waits for the strategy no longer than [`AUTHENTICATE_TIMEOUT`]: a
 /// strategy silent past it is denied on every route, `#[public]` included. So
@@ -127,14 +131,17 @@ impl<S: Strategy> Layer for AuthnGuard<S> {}
 ///
 /// On a `#[public]` route the guard authenticates opportunistically: it attaches
 /// the principal when a token verifies and otherwise continues anonymously (a
-/// rejected credential logged at `warn`). [`AuthError::Unavailable`] and a
-/// strategy silent past [`AUTHENTICATE_TIMEOUT`] are not absorbed: the
+/// rejected credential logged at `warn`). On `Posture::InBand` it admits a
+/// request carrying no credential, left to each operation's own gate, and
+/// refuses one whose credential does not verify. [`AuthError::Unavailable`] and
+/// a strategy silent past [`AUTHENTICATE_TIMEOUT`] are not absorbed: the
 /// credential was never evaluated, so the request fails closed with a 503.
 #[async_trait]
 impl<S: Strategy> Guard for AuthnGuard<S> {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let strategy = std::any::type_name::<S>();
-        let is_public = Reflector::new(req).is_public();
+        let posture = Reflector::new(req).posture();
+        let is_public = posture == Posture::Public;
         // Nothing was decided about the credential: the same 503 as an
         // unreachable store, on every route. The bound already logged it.
         let Some(outcome) = self.authenticate(strategy, req).await else {
@@ -177,6 +184,10 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
             }
             Err(AuthError::MissingCredentials) if is_public => {
                 tracing::debug!(target: crate::TARGET, strategy, "anonymous request on a public route");
+                Ok(())
+            }
+            Err(AuthError::MissingCredentials) if posture == Posture::InBand => {
+                tracing::debug!(target: crate::TARGET, strategy, "anonymous request on an in-band endpoint");
                 Ok(())
             }
             Err(error) if is_public => {

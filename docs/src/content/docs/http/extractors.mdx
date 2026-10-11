@@ -355,10 +355,11 @@ transports.
 
 `#[public]` is shorthand for `#[meta(Public)]` — it attaches the
 framework's only universal route marker. Guards read it through
-`HandlerMetadata::is_public()` and decide whether to honor it. The
-framework itself does *not* act on the marker — `AuthnGuard`, for
-example, still runs the strategy on a `#[public]` route, but lets an
-anonymous request through instead of returning `401`.
+`HandlerMetadata::posture()`, which answers `Posture::Public` for it, and
+decide whether to honor it. The framework itself does *not* act on the
+marker — `AuthnGuard`, for example, still runs the strategy on a `#[public]`
+route, but lets an anonymous request through instead of returning `401`.
+It admits one on `/graphql`, `Posture::InBand`, the same way.
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 #[post("/login")]

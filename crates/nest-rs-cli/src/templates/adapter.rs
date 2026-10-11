@@ -293,10 +293,11 @@ pub struct {{event}} {
 
 pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
-//! Security: the MCP endpoint gates through the app's `dyn McpOperationGuard`,
-//! else the global guard pool (`use_guards_global`), else deny-all. Wire your
-//! app's `McpAbilityBridge` (`features::authz::mcp`) as `dyn McpOperationGuard`
-//! so callers are authenticated and the ambient `Ability` is installed.
+//! Security: the MCP endpoint gates through the global guard pool
+//! (`use_guards_global`) with the app's `dyn McpOperationGuard` added to it,
+//! either alone, else deny-all. Wire your app's `McpAbilityBridge`
+//! (`features::authz::mcp`) as `dyn McpOperationGuard` so callers are
+//! authenticated and the ambient `Ability` is installed.
 //!
 //! Every operation then declares its own posture, exactly as a `#[query]` or an
 //! HTTP verb does:

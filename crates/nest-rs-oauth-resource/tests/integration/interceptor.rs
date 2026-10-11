@@ -211,7 +211,7 @@ struct McpStepUpServer;
 
 #[tokio::test]
 async fn an_mcp_scope_denial_carries_the_same_challenge() {
-    // `/mcp` gates in-band, through `FallbackMcpGuard`, whose refusal is a poem `Err`.
+    // `/mcp` runs the global pool in band, and its refusal is a poem `Err`.
     let app = TestApp::builder()
         .module::<McpStepUpServer>()
         .use_guards_global([guard::<TokenTooNarrow>()])

@@ -1,5 +1,6 @@
-//! `src/guard.rs` + the guard half of `src/endpoint.rs`: registered bridge →
-//! global pool → deny-all, and `around` crossing rmcp's spawned dispatch.
+//! `src/guard.rs` + the guard half of `src/endpoint.rs`: the global pool with a
+//! registered bridge in it → the bridge alone → deny-all, and `around` crossing
+//! rmcp's spawned dispatch.
 
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use nest_rs_mcp::{
     McpOperationGuard, OperationOutcome, ServerHandler, endpoint, mcp, tool, tool_handler,
     tool_router,
 };
-use nest_rs_testing::{TestApp, mcp::call_tool};
+use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
 use poem::http::StatusCode;
 use poem::test::TestClient;
@@ -209,7 +210,7 @@ impl Guard for DenyEverythingGuard {
 impl HttpGuard for DenyEverythingGuard {}
 
 #[module(providers = [PoolTool, DenyEverythingGuard, AllowAllMcpGuard as dyn McpOperationGuard])]
-struct BridgeWinsModule;
+struct BridgedModule;
 
 #[module(providers = [PoolTool])]
 struct NoPoolModule;
@@ -244,19 +245,46 @@ async fn a_global_throttler_guard_rate_limits_mcp() {
 }
 
 #[tokio::test]
-async fn a_registered_guard_replaces_the_global_pool_fallback() {
+async fn a_registered_guard_adds_to_the_global_pool() {
+    let logs = LogCapture::install();
     let app = TestApp::builder()
-        .module::<BridgeWinsModule>()
+        .module::<BridgedModule>()
         .use_guards_global([guard::<DenyEverythingGuard>()])
         .build()
         .await
         .expect("boots");
 
+    app.http()
+        .post("/mcp")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    let gated = logs.expect_one("nest_rs::mcp", "mcp operations gated");
+    assert_eq!(gated.field("mode").as_deref(), Some("global_guard_pool"));
+    assert_eq!(gated.field("bridge").as_deref(), Some("true"));
+}
+
+#[tokio::test]
+async fn a_registered_guard_runs_alone_without_a_pool() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<BridgedModule>().await.expect("boots");
+
     let resp = app.http().post("/mcp").send().await;
     assert_ne!(
         resp.0.status(),
         StatusCode::FORBIDDEN,
-        "the registered guard owns the chain; the global pool must not also run",
+        "with no global pool the registered guard decides alone",
+    );
+    assert_ne!(resp.0.status(), StatusCode::UNAUTHORIZED);
+
+    // The line the MCP docs print for an app with the bridge alone.
+    let gated = logs.expect_one("nest_rs::mcp", "mcp operations gated");
+    assert_eq!(gated.field("mode").as_deref(), Some("operation_guard"));
+    assert_eq!(
+        gated.field("bridge"),
+        None,
+        "the mode already says the bridge runs alone: {gated:?}",
     );
 }
 

@@ -31,9 +31,10 @@ pub struct AssistantModule;
 ```
 
 With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
-endpoint's guard, so the closed default is replaced, not silenced (a registered
-bridge also replaces the global-pool fallback: it runs the same guards itself,
-so nothing runs twice). Tools then
+endpoint's guard, so the closed default is replaced, not silenced. It joins the
+app's global guard pool rather than replacing it: every guard listed in
+`use_guards_global(...)` still runs at the request, and one the bridge runs
+itself runs once. Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.
 A tool that lists users gets only the users the caller is allowed to see — same

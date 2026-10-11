@@ -56,7 +56,7 @@ graphql = [
 # data context that makes `Repo` work inside a tool body is
 # `nest_rs_seaorm::McpDataContext`, behind that crate's `mcp` feature.
 # `nest-rs-guards/mcp` is forwarded for the same reason the GraphQL binding
-# forwards `nest-rs-guards/graphql`: it is what seeds the in-band fallback
+# forwards `nest-rs-guards/graphql`: it is what seeds the pool's in-band runner
 # (`GlobalPoolMcpGuard`) so `use_guards_global` reaches `/mcp`.
 mcp = [
     "dep:nest-rs-mcp",

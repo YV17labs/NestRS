@@ -141,34 +141,29 @@ pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
 }
 
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, ()> { /* ... */ }
-    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, Response>)
-        -> BoxFuture<'a, Response> { /* ... */ }
+    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> { /* ... */ }
+    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> { /* ... */ }
+    fn covers(&self) -> &[TypeId] { /* A and G */ }
 }
 ```
 
 `before` runs the same HTTP guard chain (`AuthnGuard`, then
-`AbilityGuard`) on the GraphQL request. `/graphql` carries the `Public`
-marker — one endpoint, posture declared per operation — so an anonymous
-caller is admitted here and takes the ability guard's *visitor* branch.
-The line is held one step later, by the operation's own posture:
-`#[authorize(...)]` refuses an ability with no principal behind it
-(`UNAUTHENTICATED`), whatever `define_visitor` granted, and only
-`#[public]` operations read those grants.
-`around` installs the resulting ability via `with_ability` for the
-duration of the operation. The marker itself is a
-`dyn GraphqlResolverGuard` that fails closed if `Arc<Ability>` is
-absent from the operation's data:
+`AbilityGuard`) on the GraphQL request. `/graphql` is **in band**
+(`Posture::InBand`) — one endpoint, posture declared per operation — so a
+caller with no credential is admitted here and takes the ability guard's
+*visitor* branch, while a bearer that does not verify is refused with
+`401 invalid_token`. The line is held one step later, by the operation's own
+posture: `#[authorize(...)]` refuses an ability with no principal behind it
+(`UNAUTHENTICATED`), whatever `define_visitor` granted, and only `#[public]`
+operations read those grants. `around` installs the resulting ability via
+`with_ability` for the duration of the operation.
 
-```rust title="nest_rs::authz::graphql::GraphqlAbilityBridge"
-async fn check(&self, ctx: &Context<'_>) -> Result<()> {
-    match ctx.data_opt::<Arc<Ability>>() {
-        Some(_) => Ok(()),
-        None => Err(Error::new("unauthenticated")
-            .extend_with(|_, e| e.set("code", "UNAUTHENTICATED"))),
-    }
-}
-```
+**The bridge joins the global guard pool, never replaces it.** The endpoint runs
+every guard the app lists in `use_guards_global(...)` at the request, bridge or
+not, so an API-key or IP allow-list guard gates `/graphql` as it gates every
+route. `covers()` names the guards the bridge runs itself: the bridge runs where
+the pool lists the first of them, and the pool skips them, so an `AuthnGuard`
+listed in both runs once.
 
 The bridge also registers a `LoaderScope` as `dyn BatchContext` so
 dataloaders that fan out across batches snapshot the ability + pool
@@ -300,25 +295,24 @@ pass-through), so an existing guard is unaffected. The split is the same one
 `McpToolContext` uses — capture on the request, install inside the dispatch — so
 the two seams in the crate have one shape.
 
-**With no bridge registered** the endpoint falls back to the global guard pool
-(`use_guards_global(...)`) rather than going straight to deny-all — so a global
-`ThrottlerGuard` rate-limits tool calls, exactly as it does on `/graphql`. With
-no pool either, `/mcp` stays deny-all: the fallback only ever widens what the
-app declared, and unlike `/graphql` the MCP endpoint carries no `Public` marker,
-so a pooled `AuthnGuard` still refuses an anonymous tool call.
+**The global guard pool always runs** at the request (`use_guards_global(...)`),
+the bridge inside it exactly as on `/graphql` — so a global `ThrottlerGuard`
+rate-limits tool calls, and a guard listed in both runs once. With no pool the
+bridge runs alone; with neither, `/mcp` stays deny-all. `/mcp` carries no
+`Posture::InBand` (its requests read `Gated`), so a pooled `AuthnGuard` still
+refuses an anonymous tool call.
 
 What that endpoint runs is `check_http` — it holds a request, not an operation.
 A pooled guard's `check_mcp` runs in the **per-operation chain**, which folds
-the pool whether or not a bridge is registered, so a global guard written
-against MCP gates every tool call even when the bridge already authenticated the
-caller who sent it.
+the pool too, so a global guard written against MCP gates every tool call even
+when the bridge already authenticated the caller who sent it.
 
-That fallback is compiled in by `nest-rs-guards`' **`mcp` feature**, which
-`nestrs g mcp` turns on. Without it there is nothing to fall back *to*: the boot
-line stays `no operation guard registered — mcp endpoint is deny-all
-mode="deny_all"` and a pooled guard is never consulted. Fail-closed either way —
-check the boot line for `mode="global_guard_pool"` when the pool is what you
-meant to gate with.
+The pool's runner is compiled in by `nest-rs-guards`' **`mcp` feature**, which
+`nestrs g mcp` turns on. Without it the pool never reaches `/mcp`: the bridge
+runs alone, or with none the boot line stays `no operation guard registered —
+mcp endpoint is deny-all mode="deny_all"`. Fail-closed either way — check the
+boot line for `mode="global_guard_pool"` when the pool is what you meant to gate
+with.
 
 ## Public handlers — opt out per transport
 

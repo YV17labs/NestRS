@@ -108,6 +108,39 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
     );
 }
 
+/// A request to an in-band endpoint, stamped as `/graphql` stamps it: its
+/// operations each declare their own posture.
+fn in_band_request() -> Request {
+    let mut req = crate::request(&[]);
+    req.extensions_mut().insert(nest_rs_core::Posture::InBand);
+    req
+}
+
+#[tokio::test]
+async fn an_in_band_request_admits_an_anonymous_caller() {
+    let guard = AuthnGuard::new(Arc::new(FailWith));
+    guard
+        .check_http(&mut in_band_request())
+        .await
+        .expect("no credential on an in-band endpoint is left to its operations' gates");
+}
+
+/// No operation of an in-band request has declared itself public yet, so a
+/// credential the caller presented is verified rather than set aside.
+#[tokio::test]
+async fn an_in_band_request_still_verifies_a_presented_credential() {
+    let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::InvalidSignature)));
+    let denial = guard
+        .check_http(&mut in_band_request())
+        .await
+        .expect_err("a rejected credential is refused on an in-band endpoint");
+    assert_eq!(denial.http_status(), 401);
+    assert_eq!(
+        denial.bearer_error(),
+        Some(nest_rs_http::challenge::INVALID_TOKEN)
+    );
+}
+
 #[tokio::test]
 async fn unreachable_store_fails_closed_even_on_a_public_route() {
     // The credential was never evaluated, so serving the caller as anonymous
@@ -424,13 +457,16 @@ async fn a_route_is_refused_at_the_bound() {
 }
 
 mod graphql {
-    use nest_rs_core::module;
+    use async_trait::async_trait;
+    use nest_rs_authn::{AuthError, AuthnGuard, Strategy};
+    use nest_rs_core::{injectable, module};
     use nest_rs_graphql::async_graphql::Result as GraphqlResult;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_guards::guard;
     use nest_rs_http::HttpModule;
     use nest_rs_testing::{LogCapture, TestApp};
-    use poem::http::StatusCode;
+    use poem::Request;
+    use poem::http::{StatusCode, header};
 
     use super::{
         REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
@@ -455,10 +491,10 @@ mod graphql {
     )]
     struct StalledGraphqlModule;
 
-    /// The GraphQL POST is authenticated by the global pool's fallback, which
-    /// marks the request `#[public]` so an anonymous caller reaches the
-    /// resolvers' own gates. A strategy that never answered is not that caller,
-    /// and the POST is refused at the bound rather than served anonymously.
+    /// The GraphQL POST is authenticated by the global pool, in band: an
+    /// anonymous caller reaches the resolvers' own gates. A strategy that never
+    /// answered is not that caller, and the POST is refused at the bound rather
+    /// than served anonymously.
     #[tokio::test(start_paused = true)]
     async fn the_graphql_post_is_refused_at_the_bound() {
         let logs = LogCapture::install();
@@ -482,6 +518,74 @@ mod graphql {
         let body = refused.0.into_body().into_string().await.expect("a body");
         assert!(!body.contains(REACHED), "the resolver never ran: {body}");
         assert_the_strategy_was_waited_out(&logs);
+    }
+
+    /// Authenticates `Bearer good`, refuses any other bearer, and reports a
+    /// request carrying none as missing credentials.
+    #[injectable]
+    #[derive(Default)]
+    struct BearerStrategy;
+
+    #[async_trait]
+    impl Strategy for BearerStrategy {
+        type Principal = &'static str;
+
+        async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError> {
+            match req.headers().get(header::AUTHORIZATION) {
+                None => Err(AuthError::MissingCredentials),
+                Some(bearer) if bearer == "Bearer good" => Ok("ada"),
+                Some(_) => Err(AuthError::InvalidToken),
+            }
+        }
+    }
+
+    type BearerAuthn = AuthnGuard<BearerStrategy>;
+
+    #[module(
+        imports = [GraphqlModule::for_root(None)],
+        providers = [BearerStrategy, BearerAuthn, TickResolver],
+    )]
+    struct BearerGraphqlModule;
+
+    /// `/graphql` is in band: an anonymous caller reaches a `#[public]` query,
+    /// while a bearer the caller presented is still verified, and a bad one is
+    /// refused before any operation runs.
+    #[tokio::test]
+    async fn the_graphql_post_admits_an_anonymous_caller_and_refuses_a_bad_bearer() {
+        let app = TestApp::builder()
+            .module::<BearerGraphqlModule>()
+            .use_guards_global([guard::<BearerAuthn>()])
+            .build()
+            .await
+            .expect("a resolver under a pooled AuthnGuard boots");
+        let tick = serde_json::json!({ "query": "{ tick }" });
+
+        let anonymous = app.http().post("/graphql").body_json(&tick).send().await;
+        anonymous.assert_status(StatusCode::OK);
+        let body = anonymous.0.into_body().into_string().await.expect("a body");
+        assert!(body.contains(REACHED), "the public query answered: {body}");
+
+        let forged = app
+            .http()
+            .post("/graphql")
+            .header(header::AUTHORIZATION, "Bearer forged")
+            .body_json(&tick)
+            .send()
+            .await;
+        forged.assert_status(StatusCode::UNAUTHORIZED);
+        let challenge = forged
+            .0
+            .headers()
+            .get(header::WWW_AUTHENTICATE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            challenge.contains(r#"error="invalid_token""#),
+            "the refusal names RFC 6750's code: {challenge}"
+        );
+        let body = forged.0.into_body().into_string().await.expect("a body");
+        assert!(!body.contains(REACHED), "the resolver never ran: {body}");
     }
 }
 
@@ -520,7 +624,7 @@ mod mcp {
     struct StalledMcpModule;
 
     /// The MCP POST is authenticated in the endpoint's `before`, by the global
-    /// pool's fallback, ahead of any operation — so the bound refuses the
+    /// pool run in band, ahead of any operation — so the bound refuses the
     /// request before rmcp has opened a stream.
     #[tokio::test(start_paused = true)]
     async fn the_mcp_post_is_refused_at_the_bound() {

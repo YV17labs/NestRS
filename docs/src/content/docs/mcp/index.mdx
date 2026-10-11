@@ -32,8 +32,8 @@ cargo add nest-rs --features mcp
 ```
 
 The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
-surface that gates it — including the fallback operation guard that lets a
-registered global pool gate `/mcp` instead of the endpoint staying deny-all.
+surface that gates it — including the runner that lets a registered global
+pool gate `/mcp` instead of the endpoint staying deny-all.
 None of that is a line you write.
 
 `rmcp` is not a dependency either, and it is not an import: `#[tools]` emits
@@ -74,11 +74,11 @@ nobody thought about does not compile, rather than shipping ungated to a model.
 [Authorization](/mcp/authorization/) covers the other form.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
-default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
-none registered it falls back to the global guard pool
-(`App::builder().use_guards_global(...)`), and with no pool either it is
-**deny-all** — every request answers `401`, so a schema-added tool can never
-leak unauthenticated.
+default**. The endpoint runs the global guard pool
+(`App::builder().use_guards_global(...)`) with the app's
+`dyn McpOperationGuard` added to it, either one alone when the other is
+missing, and with neither it is **deny-all** — every request answers `401`, so
+a schema-added tool can never leak unauthenticated.
 
 Which posture you got is in the boot line: `mode="deny_all"` with nothing
 registered, `mode="global_guard_pool"` once a pool is.
@@ -98,8 +98,9 @@ use crate::hello::tool::HelloTool;
 pub struct HelloModule;
 ```
 
-`#[mcp]` mounts it on the existing HTTP transport — same port, same CORS, no
-second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
+`AllowAllMcpGuard` opens what the app's own pool admits, never past it: a
+pooled guard still runs first. `#[mcp]` mounts it on the existing HTTP
+transport — same port, same CORS, no second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
 tool called `hello` and can invoke it. (To authenticate instead of opening it,
 see [Authorization](/mcp/authorization/).)
 

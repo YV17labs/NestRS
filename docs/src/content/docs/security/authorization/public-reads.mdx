@@ -127,17 +127,17 @@ way. On WebSockets the visitor ability is captured at the upgrade and
 frozen for the connection, like any other.
 
 **On GraphQL the operation's posture, not the endpoint, holds the
-line.** `/graphql` is one `#[public]`-marked endpoint, so the anonymous
-caller always reaches the resolvers carrying the visitor ability. An
+line.** `/graphql` is one in-band endpoint (`Posture::InBand`), so a caller
+with no credential always reaches the resolvers carrying the visitor
+ability, and one whose bearer does not verify is refused at the request. An
 operation declared `#[authorize(...)]` refuses it for want of a
 principal (`UNAUTHENTICATED`) before consulting a single grant — which
 is what keeps the sentence above true on that transport: a visitor grant
 opens the `#[public]` operations on that entity and no others.
 
-**MCP refuses anonymous callers by design.** The `/mcp` endpoint carries
-no `Public` marker, so an unauthenticated tool call is denied before the
-factory is consulted. `define_visitor` does not open it, and adding the
-marker there is not the supported path.
+**MCP refuses anonymous callers by design.** `/mcp` carries no
+`Posture::InBand` (its requests read `Gated`), so an unauthenticated tool
+call is denied before the factory is consulted. `define_visitor` does not open it.
 
 **A malformed visitor rule denies the request.** A rule whose relation
 predicate cannot be lowered fails ability construction, and the guard

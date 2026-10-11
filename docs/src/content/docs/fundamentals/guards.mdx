@@ -288,6 +288,25 @@ a token is present but not reject anonymous callers; `AuthzGuard` may
 still apply visitor rules). Marking a route public does not strip its
 guards; it tells them to relax.
 
+A guard reads it as a posture. `/graphql` is `Posture::InBand` — each
+operation declares its own — so a guard that lets anonymous callers through
+admits both:
+
+```rust title="crates/features/src/posts/guard.rs"
+use nest_rs::guards::prelude::*;
+use nest_rs::http::Reflector;
+
+#[async_trait]
+impl Guard for ApiKeyGuard {
+    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
+        if matches!(Reflector::new(req).posture(), Posture::Public | Posture::InBand) {
+            return Ok(());
+        }
+        // ...standard policy...
+    }
+}
+```
+
 ## Declare on the provider
 
 The Layer System dedups every layer by
@@ -381,7 +400,9 @@ The three multiplexed transports need one thing on top: a **bridge** above the
 resolver, the gateway and the tool, because their per-operation context does
 not carry the poem request. The bridge re-runs the HTTP chain once and
 re-installs the ambient `Ability` for the operation; below it you bind ordinary
-guards as usual. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`,
+guards as usual. On `/graphql` and `/mcp` the bridge joins the global pool
+rather than replacing it: every pooled guard still runs, and one the bridge
+runs itself runs once. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`,
 `AuthzMcpModule`, `forward_principal!`, and what each one gates — lives on
 [Authorization on GraphQL, WS & MCP](/security/authorization/per-transport-bridges/),
 with the connection-vs-message split on

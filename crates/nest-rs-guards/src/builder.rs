@@ -50,28 +50,31 @@ impl AppBuilderGuardsExt for AppBuilder {
         let collected: Vec<GuardSpec> = specs.into_iter().collect();
         // `GuardSpecs` feeds each route's `RouteShaper`, after routing so a guard
         // sees `#[public]`. Surfaces without a shaper get a single-site executor:
-        // `SelfMountGuardWrap` at a `Guarded` self-mount's edge, and a fallback on
-        // `/graphql` and `/mcp` when no bridge is registered, so a forgotten
-        // bridge never leaves operations unguarded.
+        // `SelfMountGuardWrap` at a `Guarded` self-mount's edge, and the pool's
+        // runner on `/graphql` and `/mcp`, which a registered bridge joins rather
+        // than replaces.
         let active = !collected.is_empty();
         #[cfg_attr(
             not(any(feature = "graphql", feature = "mcp")),
             expect(
                 unused_mut,
-                reason = "only the graphql / mcp fallback op-guards reassign `builder`"
+                reason = "only the graphql / mcp pool runners reassign `builder`"
             )
         )]
         let mut builder = self.provide(GuardSpecs(collected));
+        // Each runner is seeded only for a non-empty pool, so an endpoint without
+        // one says its own posture: `/graphql` unguarded at `warn`, `/mcp`
+        // deny-all — or the registered bridge alone.
         #[cfg(feature = "graphql")]
         {
-            builder = builder.provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory));
+            if active {
+                builder =
+                    builder.provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory));
+            }
             // `_service` / `_entities` resolve above the merged root, out of the
             // resolver-site chain's reach. Seeded even for an empty pool.
             builder = builder.provide(FederationGate(GlobalPoolFederationGuard::factory));
         }
-        // MCP's no-guard default is deny-all, not pass-through, so the fallback
-        // is seeded only for a non-empty pool: it may widen `/mcp` to exactly
-        // what the app opted into, never to "open".
         #[cfg(feature = "mcp")]
         if active {
             builder = builder.provide(FallbackMcpGuard(GlobalPoolMcpGuard::factory));

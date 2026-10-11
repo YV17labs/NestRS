@@ -40,8 +40,8 @@ tracing.workspace = true
 [dev-dependencies]
 # The discovery-flow proof boots a real app and walks 401 → metadata → AS.
 nest-rs-testing = { path = "../nest-rs-testing" }
-# `mcp` brings `GlobalPoolMcpGuard`, the fallback that folds the global guard
-# pool in-band on `/mcp`. Without it a `use_guards_global` denial never reaches
+# `mcp` brings `GlobalPoolMcpGuard`, which runs the global guard pool in band
+# on `/mcp`. Without it a `use_guards_global` denial never reaches
 # the MCP endpoint and the step-up parity test silently proves nothing. `ws`
 # brings `GuardAsWsMessageCheck`, which the test gateway's `#[messages]` expands
 # to; without it `cargo nextest run -p nest-rs-oauth-resource` does not compile.

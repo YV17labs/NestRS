@@ -108,8 +108,8 @@ sea-orm-migration = { workspace = true, optional = true }
 nest-rs-testing = { path = ".", features = ["orm", "tls"] }
 # `transport_parity` boots one module serving both `Exempt`-edge transports to
 # pin that they answer one app wiring identically. That is cross-crate wiring
-# (guards' fallbacks × graphql × mcp), so it lives here rather than in any
-# single surface crate — and dev-deps let it enable the two fallback features
+# (guards' pool runners × graphql × mcp), so it lives here rather than in any
+# single surface crate — and dev-deps let it enable the two runners' features
 # without them reaching a consumer of the harness.
 # `ws` rides here too, not in `[dependencies]`: it is the `ws_gateway_guards`
 # test that drives `GuardAsWsMessageCheck`, and `guards/ws` pulls `nest-rs-ws`
@@ -118,6 +118,9 @@ nest-rs-testing = { path = ".", features = ["orm", "tls"] }
 # no-op.
 nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp", "ws"] }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
+# `transport_parity` registers the two authz bridges, whose `covers()` is what
+# keeps a guard listed both in the pool and in a bridge running once.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "mcp"] }
 # `destructured_args` and `transport_parity` name `nest_rs_graphql` directly.
 # Without this the suite compiles only under `--workspace`, where feature
 # unification lends it `nest-rs-testing/graphql` from a crate two directories

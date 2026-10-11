@@ -8,6 +8,8 @@
 
 use std::any::Any;
 
+use nest_rs_core::Posture;
+
 /// Typed read access to whatever metadata was attached to the current handler.
 pub trait HandlerMetadata {
     /// Returns the attached value of type `M`, or `None` when nothing of
@@ -19,11 +21,24 @@ pub trait HandlerMetadata {
     fn is_public(&self) -> bool {
         self.get::<Public>().is_some()
     }
+
+    /// Who may call the handler: the [`Posture`] its mount stamped
+    /// (`Posture::InBand` on `/graphql`), else `Public` under the [`Public`]
+    /// marker, else `Gated`.
+    fn posture(&self) -> Posture {
+        match self.get::<Posture>() {
+            Some(stamped) => *stamped,
+            None if self.is_public() => Posture::Public,
+            None => Posture::Gated,
+        }
+    }
 }
 
 /// Marker attached as handler metadata when a handler is `#[public]`. The
 /// framework does **not** act on it — guards read it through
-/// [`HandlerMetadata::is_public`] and decide whether to honor it.
+/// [`HandlerMetadata::posture`] and decide whether to honor it. An
+/// authentication guard admits an anonymous caller on `Posture::InBand` too,
+/// the posture of `/graphql`, whose operations each declare their own.
 ///
 /// ```
 /// # use nest_rs_guards::prelude::*;
@@ -34,7 +49,7 @@ pub trait HandlerMetadata {
 /// # impl Guard for ApiKeyGuard {
 /// // In a guard:
 /// async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-///     if Reflector::new(req).is_public() {
+///     if matches!(Reflector::new(req).posture(), Posture::Public | Posture::InBand) {
 ///         return Ok(());
 ///     }
 ///     // ...standard policy...
@@ -45,8 +60,11 @@ pub trait HandlerMetadata {
 /// # async fn main() -> anyhow::Result<()> {
 /// # let mut public = HttpRequest::default();
 /// # public.extensions_mut().insert(Public);
+/// # let mut in_band = HttpRequest::default();
+/// # in_band.extensions_mut().insert(Posture::InBand);
 ///
 /// assert!(ApiKeyGuard.check_http(&mut public).await.is_ok());
+/// assert!(ApiKeyGuard.check_http(&mut in_band).await.is_ok());
 /// assert!(ApiKeyGuard.check_http(&mut HttpRequest::default()).await.is_err());
 /// # Ok(())
 /// # }
@@ -62,3 +80,33 @@ pub struct Public;
 /// mapped status is a success.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MappedError;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Reflector;
+    use poem::Request;
+
+    #[test]
+    fn a_stamped_posture_is_read_as_stamped() {
+        let mut req = Request::default();
+        req.extensions_mut().insert(Posture::InBand);
+        assert_eq!(Reflector::new(&req).posture(), Posture::InBand);
+        assert!(!Reflector::new(&req).is_public());
+    }
+
+    #[test]
+    fn the_public_marker_reads_as_public() {
+        let mut req = Request::default();
+        req.extensions_mut().insert(Public);
+        assert_eq!(Reflector::new(&req).posture(), Posture::Public);
+    }
+
+    #[test]
+    fn a_handler_declaring_nothing_is_gated() {
+        assert_eq!(
+            Reflector::new(&Request::default()).posture(),
+            Posture::Gated
+        );
+    }
+}

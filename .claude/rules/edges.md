@@ -202,10 +202,12 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   pool runs. **An `Exempt` endpoint guard checks the request; the site checks the
   operation**: `check_http` once per request, `check_mcp` / `check_graphql` once
   per operation, and neither stands in for the other.
-- **`/graphql` and `/mcp` stay fail-secure under `Exempt`** through a fallback
-  operation guard running the global pool in band unless a bridge replaces it.
-  GraphQL's `Public` marker lets `AuthnGuard` admit anonymous operations to
-  resolver gates; `/mcp` has none, and its no-pool tail is deny-all.
+- **`/graphql` and `/mcp` stay fail-secure under `Exempt`**: the global pool
+  always runs at the request, in band, and a bridge adds its guards to it, never
+  replaces it — each guard once, the bridge where the pool lists the first guard
+  it covers. GraphQL's `InBand` posture lets `AuthnGuard` admit anonymous
+  operations to resolver gates; `/mcp` has none, and with neither pool nor
+  bridge it is deny-all (`.claude/decisions/bridge-joins-the-pool.md`).
 - **A mapped error never commits**: a route-site filter mapping a handler `Err`
   tags it `MappedError`, and `DbContext` rolls back whatever status it maps to.
 - **The global site takes no capability bound**, by decision: a global guard

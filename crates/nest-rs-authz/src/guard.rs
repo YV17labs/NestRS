@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Layer, injectable};
+use nest_rs_core::{Layer, Posture, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, async_trait};
@@ -40,7 +40,8 @@ fn deny_unscoped(refusal: Refusal<'_>) {
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
 /// `F::Actor` is read from request extensions; its absence on a non-public
 /// route is a `500` (an authn guard must run first). On a `#[public]`
-/// route the guard builds an Ability for the anonymous (visitor) actor —
+/// route, and on an in-band endpoint (`/graphql`) whose operations gate
+/// themselves, the guard builds an Ability for the anonymous (visitor) actor —
 /// see the dev's `AbilityFactory` to define visitor rules.
 ///
 /// `AuthzGuard` is not a framework type: an app aliases it once at its authz
@@ -69,8 +70,13 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
                 self.factory.define(actor, &mut builder);
                 Some(builder.build())
             }
-            // `#[public]`: no authenticated actor, so the factory's visitor branch decides.
-            None if Reflector::new(req).is_public() => {
+            // `#[public]` or in band: no authenticated actor, so the factory's
+            // visitor branch decides.
+            None if matches!(
+                Reflector::new(req).posture(),
+                Posture::Public | Posture::InBand
+            ) =>
+            {
                 // No credential, so no scopes — `Some(empty)`, not `None`: a
                 // scope-gated visitor rule is withheld, never granted to everyone.
                 let mut builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));

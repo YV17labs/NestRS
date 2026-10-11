@@ -98,7 +98,8 @@ impl GuardSpecs {
     /// Resolve every spec into the composed global chain — deduped and
     /// priority-ordered through the same `compose_chain` as every other
     /// Layer System site — for the single-site consumers that run the global
-    /// pool on their own (the self-mount edge wrap, the fallback operation guards).
+    /// pool on their own (the self-mount edge wrap, the pool runners on
+    /// `/graphql` and `/mcp`).
     pub fn resolve_chain(
         &self,
         container: &Container,

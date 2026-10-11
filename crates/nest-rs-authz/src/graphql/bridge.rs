@@ -1,6 +1,7 @@
 //! [`GraphqlAbilityBridge`] — per-operation bridge that authenticates and
 //! installs the ambient [`Ability`], the GraphQL analog of `AbilityGuard` + `Authorize`.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
@@ -11,13 +12,18 @@ use poem::{Request, Response};
 use crate::{Ability, run_ability_chain, with_ability};
 
 /// Runs the controllers' guard chain (`A` then `G`) on the GraphQL request and
-/// scopes the operation to the resulting ability.
+/// scopes the operation to the resulting ability. It joins the app's global
+/// guard pool, never replaces it: a pooled `A` or `G` runs once, here.
 #[injectable]
 pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
     #[inject]
     auth: Arc<A>,
     #[inject]
     ability: Arc<G>,
+}
+
+impl<A: Guard, G: Guard> GraphqlAbilityBridge<A, G> {
+    const COVERS: [TypeId; 2] = [TypeId::of::<A>(), TypeId::of::<G>()];
 }
 
 impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
@@ -31,12 +37,16 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 
     fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            // `None` only on a mount without the `Public` marker; `Repo` then
-            // fails its reads closed.
+            // `None` only when `G` attached no ability; `Repo` then fails its
+            // reads closed.
             match req.extensions().get::<Arc<Ability>>().cloned() {
                 Some(ability) => with_ability(ability, inner).await,
                 None => inner.await,
             }
         })
+    }
+
+    fn covers(&self) -> &[TypeId] {
+        &Self::COVERS
     }
 }

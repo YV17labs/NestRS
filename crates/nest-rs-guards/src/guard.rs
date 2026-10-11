@@ -61,9 +61,9 @@ impl PrincipalClaim {
 /// this guard has work to do; the rest inherit `Ok(())` defaults — a
 /// no-op means "doesn't apply to this transport," not "skip security."
 ///
-/// `#[public]` is not a framework skip: each guard reads the
-/// [`Public`](nest_rs_http::Public) marker and decides. See the crate-level docs
-/// for templates.
+/// `#[public]` is not a framework skip: each guard reads the handler's posture
+/// ([`HandlerMetadata::posture`](nest_rs_http::HandlerMetadata::posture)) and
+/// decides. See the crate-level docs for templates.
 #[async_trait]
 pub trait Guard: Layer {
     /// HTTP request entry. Default = no-op (this guard doesn't apply to HTTP).

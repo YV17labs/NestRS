@@ -9,9 +9,12 @@ use std::any::{Any, TypeId, type_name};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use parking_lot::Mutex;
+use tokio::task::futures::TaskLocalFuture;
 
 use crate::Container;
 use crate::ambient::{Continuation, Entries};
@@ -102,12 +105,77 @@ pub(crate) fn current_correlation_with<T>(
     current_request_ctx(|ctx| ctx.correlation.as_ref().map(read)).flatten()
 }
 
-/// Run `fut` with `added` merged into what the running unit carries, in one
-/// install — none when every value is already the one carried.
-pub(crate) async fn install<F: Future>(added: Entries, fut: F) -> F::Output {
-    match extended(added) {
-        Some(ctx) => REQUEST_CTX.scope(ctx, fut).await,
-        None => fut.await,
+/// Run `fut` with what `added` returns merged into what the running unit
+/// carries where `fut` first runs, in one install — none when every value is
+/// already the one carried.
+pub(crate) fn install<F: Future>(
+    added: impl FnOnce() -> Entries,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    Install::new(move || extended(added()), fut)
+}
+
+pin_project_lite::pin_project! {
+    /// `fut` under the context `derive` returns at its first poll, so an install
+    /// built as another's argument merges into what the outer one installed.
+    ///
+    /// Not an `async fn`: one keeps `fut` beside the future it builds from it,
+    /// and a debug build copies `fut` into a poll frame that stays on the stack
+    /// while `fut` runs — one more copy for every install nested around it.
+    #[project = InstallProj]
+    #[project_replace = InstallOwned]
+    enum Install<D, F> {
+        Unpolled { derive: D, fut: F },
+        Scoped { #[pin] fut: TaskLocalFuture<Arc<RequestCtx>, F> },
+        Unchanged { #[pin] fut: F },
+        Deriving,
+    }
+}
+
+impl<D, F> Install<D, F>
+where
+    D: FnOnce() -> Option<Arc<RequestCtx>>,
+    F: Future,
+{
+    fn new(derive: D, fut: F) -> Self {
+        Self::Unpolled { derive, fut }
+    }
+
+    /// Derive the context and move `fut` under it, in a frame of its own: the
+    /// copies of `fut` this makes are off the stack before `fut` is polled.
+    #[inline(never)]
+    fn start(mut self: Pin<&mut Self>) {
+        if let InstallOwned::Unpolled { derive, fut } =
+            self.as_mut().project_replace(Self::Deriving)
+        {
+            self.set(match derive() {
+                Some(ctx) => Self::Scoped {
+                    fut: REQUEST_CTX.scope(ctx, fut),
+                },
+                None => Self::Unchanged { fut },
+            });
+        }
+    }
+}
+
+impl<D, F> Future for Install<D, F>
+where
+    D: FnOnce() -> Option<Arc<RequestCtx>>,
+    F: Future,
+{
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        if let InstallProj::Unpolled { .. } = self.as_mut().project() {
+            self.as_mut().start();
+        }
+        match self.project() {
+            InstallProj::Scoped { fut } => fut.poll(cx),
+            InstallProj::Unchanged { fut } => fut.poll(cx),
+            InstallProj::Unpolled { .. } | InstallProj::Deriving => {
+                unreachable!("an install is polled again after deriving its context panicked")
+            }
+        }
     }
 }
 
@@ -155,21 +223,25 @@ pub fn current_request_scope() -> Option<Arc<RequestScope>> {
 /// ([`Correlation`](crate::Correlation)). Opened inside another unit, the new
 /// one is nested in it: it carries what the outer unit carries, and a batch
 /// they share carries the outer unit's values alone.
-pub async fn with_request_scope<F: Future>(
+pub fn with_request_scope<F: Future>(
     scope: Option<Arc<RequestScope>>,
     correlation: crate::Correlation,
     fut: F,
-) -> F::Output {
-    let ctx = match current_request_ctx(Arc::clone) {
-        Some(outer) => RequestCtx {
-            scope,
-            correlation: Some(correlation),
-            ambient: outer.ambient.clone(),
-            parent: Some(outer),
+) -> impl Future<Output = F::Output> {
+    Install::new(
+        move || {
+            Some(Arc::new(match current_request_ctx(Arc::clone) {
+                Some(outer) => RequestCtx {
+                    scope,
+                    correlation: Some(correlation),
+                    ambient: outer.ambient.clone(),
+                    parent: Some(outer),
+                },
+                None => RequestCtx::opened(scope, correlation),
+            }))
         },
-        None => RequestCtx::opened(scope, correlation),
-    };
-    REQUEST_CTX.scope(Arc::new(ctx), fut).await
+        fut,
+    )
 }
 
 /// The ambient request context, held so work that continues the unit after the
@@ -196,8 +268,8 @@ impl RequestContinuation {
     }
 
     /// Run `fut` under this context.
-    pub async fn scope<F: Future>(&self, fut: F) -> F::Output {
-        REQUEST_CTX.scope(Arc::clone(&self.0), fut).await
+    pub fn scope<F: Future>(&self, fut: F) -> impl Future<Output = F::Output> + use<F> {
+        REQUEST_CTX.scope(Arc::clone(&self.0), fut)
     }
 
     /// Run `f` under this context — `current_trace_id()`, `current_actor_id()`
@@ -250,15 +322,12 @@ impl TaskContext {
 
     /// Wrap `fut` so it runs under the captured span and request context — what
     /// goes to `spawn`, which starts with neither.
-    pub async fn carry<F: Future>(self, fut: F) -> F::Output {
+    pub fn carry<F: Future>(self, fut: F) -> impl Future<Output = F::Output> {
         let Self { span, request } = self;
-        let carried = async move {
-            match request {
-                Some(request) => request.scope(fut).await,
-                None => fut.await,
-            }
-        };
-        tracing::Instrument::instrument(carried, span).await
+        tracing::Instrument::instrument(
+            Install::new(move || request.map(|request| request.0), fut),
+            span,
+        )
     }
 }
 
@@ -391,6 +460,111 @@ mod tests {
         continuation.enter(|| {
             assert_eq!(crate::current_actor_id().as_deref(), Some("alice-42"));
         });
+    }
+
+    /// Bytes a unit holds across an await: enough that a copy of it shows.
+    const HELD: usize = 32 * 1024;
+
+    /// What an install may add around the unit it runs, its own fields and
+    /// frames, never a second copy of the unit.
+    const INSTALL_OVERHEAD: usize = 1024;
+
+    /// Where the stack stands in the frame that calls it.
+    #[inline(never)]
+    fn stack_mark() -> usize {
+        let mark = 0u8;
+        std::hint::black_box(&mark) as *const u8 as usize
+    }
+
+    /// A unit holding [`HELD`] bytes across an await, answering where the
+    /// stack stood once it resumed.
+    async fn heavy() -> usize {
+        let held = [0u8; HELD];
+        tokio::task::yield_now().await;
+        std::hint::black_box(&held);
+        stack_mark()
+    }
+
+    struct Marker;
+    impl crate::AmbientValue for Marker {}
+
+    struct Other;
+    impl crate::AmbientValue for Other {}
+
+    fn pending_other() -> crate::ambient::Pending {
+        let mut pending = crate::ambient::Pending::default();
+        pending.attach(Arc::new(Other));
+        pending
+    }
+
+    #[test]
+    fn an_install_holds_the_unit_it_runs_once() {
+        let alone = std::mem::size_of_val(&heavy());
+        let continuation = RequestContinuation::new(None, crate::Correlation::minted(None));
+        let installed = [
+            (
+                "with_request_scope",
+                std::mem::size_of_val(&with_request_scope(
+                    None,
+                    crate::Correlation::minted(None),
+                    heavy(),
+                )),
+            ),
+            (
+                "with_ambient",
+                std::mem::size_of_val(&crate::with_ambient(Arc::new(Marker), heavy())),
+            ),
+            (
+                "install_pending",
+                std::mem::size_of_val(&crate::ambient::install_pending(pending_other(), heavy())),
+            ),
+            (
+                "RequestContinuation::scope",
+                std::mem::size_of_val(&continuation.scope(heavy())),
+            ),
+            (
+                "TaskContext::carry",
+                std::mem::size_of_val(&TaskContext::current().carry(heavy())),
+            ),
+        ];
+        for (installer, size) in installed {
+            assert!(
+                size < alone + INSTALL_OVERHEAD,
+                "{installer} weighs {size} bytes around a {alone}-byte unit",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_installs_reach_no_deeper_than_bare_task_local_scopes() {
+        let opened = || Arc::new(RequestCtx::opened(None, crate::Correlation::minted(None)));
+        let bare = REQUEST_CTX
+            .scope(
+                opened(),
+                REQUEST_CTX.scope(
+                    opened(),
+                    REQUEST_CTX.scope(opened(), REQUEST_CTX.scope(opened(), heavy())),
+                ),
+            )
+            .await;
+
+        let continuation = RequestContinuation::new(None, crate::Correlation::minted(None));
+        let installed = with_request_scope(
+            None,
+            crate::Correlation::minted(None),
+            crate::with_ambient(
+                Arc::new(Marker),
+                crate::ambient::install_pending(pending_other(), continuation.scope(heavy())),
+            ),
+        )
+        .await;
+
+        let deeper = bare.saturating_sub(installed);
+        assert!(
+            deeper < 4 * INSTALL_OVERHEAD,
+            "four installs reach {deeper} bytes deeper than four bare scopes around a \
+             {HELD}-byte unit",
+        );
     }
 
     #[test]

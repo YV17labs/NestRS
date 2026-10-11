@@ -122,31 +122,52 @@ pub fn current_executor_scope() -> Option<ExecutorScope> {
     nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.scope)
 }
 
-/// Install `executor` without tagging a scope: it keeps the scope already
-/// installed, and an untagged one is **fail-closed** like a request — only
-/// [`with_job_executor`] grants unscoped reads.
-pub async fn with_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    install(executor, current_executor_scope(), fut).await
+/// Install `executor` without tagging a scope: it keeps the scope installed
+/// where `fut` runs, and an untagged one is **fail-closed** like a request —
+/// only [`with_job_executor`] grants unscoped reads.
+pub fn with_executor<F: Future>(
+    executor: Arc<dyn Executor>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    nest_rs_core::__private::with_ambient_from(
+        move || {
+            Arc::new(AmbientExecutor {
+                executor,
+                scope: current_executor_scope(),
+            })
+        },
+        fut,
+    )
 }
 
 /// Install `executor` and tag the scope as a request — the path on which a
 /// `Repo` fails closed when no ambient authorization context is present.
-pub async fn with_request_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    install(executor, Some(ExecutorScope::Request), fut).await
+pub fn with_request_executor<F: Future>(
+    executor: Arc<dyn Executor>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    install(executor, ExecutorScope::Request, fut)
 }
 
 /// Install `executor` and tag the scope as a worker job — the path on
 /// which a `Repo` runs unscoped (no principal ⇒ system work).
-pub async fn with_job_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    install(executor, Some(ExecutorScope::Job), fut).await
+pub fn with_job_executor<F: Future>(
+    executor: Arc<dyn Executor>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    install(executor, ExecutorScope::Job, fut)
 }
 
-async fn install<F: Future>(
+fn install<F: Future>(
     executor: Arc<dyn Executor>,
-    scope: Option<ExecutorScope>,
+    scope: ExecutorScope,
     fut: F,
-) -> F::Output {
-    nest_rs_core::with_ambient(Arc::new(AmbientExecutor { executor, scope }), fut).await
+) -> impl Future<Output = F::Output> {
+    let ambient = AmbientExecutor {
+        executor,
+        scope: Some(scope),
+    };
+    nest_rs_core::with_ambient(Arc::new(ambient), fut)
 }
 
 #[cfg(test)]
@@ -304,6 +325,45 @@ mod tests {
             .await;
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn an_untagged_install_built_as_an_argument_keeps_the_scope_it_runs_under() {
+        let untagged = with_executor(Arc::new(OnPool), async {
+            assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
+            assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+        });
+        with_job_executor(stub(), untagged).await;
+    }
+
+    #[test]
+    fn an_install_holds_the_unit_it_runs_once() {
+        let heavy = || async {
+            let held = [0u8; 32 * 1024];
+            tokio::task::yield_now().await;
+            std::hint::black_box(&held);
+        };
+        let alone = std::mem::size_of_val(&heavy());
+        let installed = [
+            (
+                "with_executor",
+                std::mem::size_of_val(&with_executor(stub(), heavy())),
+            ),
+            (
+                "with_request_executor",
+                std::mem::size_of_val(&with_request_executor(stub(), heavy())),
+            ),
+            (
+                "with_job_executor",
+                std::mem::size_of_val(&with_job_executor(stub(), heavy())),
+            ),
+        ];
+        for (installer, size) in installed {
+            assert!(
+                size < alone + 1024,
+                "{installer} weighs {size} bytes around a {alone}-byte unit",
+            );
+        }
     }
 
     /// A boundary's transaction, reduced to a place to keep held work.

@@ -156,7 +156,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
-    pub use crate::ambient::{Pending, install_pending};
+    pub use crate::ambient::{Pending, install_pending, with_ambient_from};
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::container::__private::{
         collect_dynamic_import, enter_import, leave_import, refuse_site, register_dynamic_import,

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::future::Either;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{
     Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
@@ -151,17 +152,13 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
                     let serving = serve_connection(
                         gateway, server, guards, wiring, limits, socket, going_away,
                     );
-                    let _ = sockets
-                        .run(async move {
-                            match carried {
-                                Some(carried) => carried.scope(serving).await,
-                                None => {
-                                    nest_rs_core::with_request_scope(None, connection, serving)
-                                        .await
-                                }
-                            }
-                        })
-                        .await;
+                    let serving = match carried {
+                        Some(carried) => Either::Left(carried.scope(serving)),
+                        None => Either::Right(nest_rs_core::with_request_scope(
+                            None, connection, serving,
+                        )),
+                    };
+                    let _ = sockets.run(serving).await;
                 }
             })
             .into_response())

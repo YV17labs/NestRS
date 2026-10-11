@@ -19,8 +19,8 @@ pub fn current_ability() -> Option<Arc<Ability>> {
 }
 
 /// Run `fut` with `ability` installed as the ambient capability set.
-pub async fn with_ability<F: Future>(ability: Arc<Ability>, fut: F) -> F::Output {
-    nest_rs_core::with_ambient(ability, fut).await
+pub fn with_ability<F: Future>(ability: Arc<Ability>, fut: F) -> impl Future<Output = F::Output> {
+    nest_rs_core::with_ambient(ability, fut)
 }
 
 #[cfg(test)]
@@ -36,6 +36,21 @@ mod tests {
                 .build()
                 .expect("an empty rule set builds"),
         )
+    }
+
+    #[test]
+    fn an_install_holds_the_unit_it_runs_once() {
+        let heavy = || async {
+            let held = [0u8; 32 * 1024];
+            tokio::task::yield_now().await;
+            std::hint::black_box(&held);
+        };
+        let alone = std::mem::size_of_val(&heavy());
+        let size = std::mem::size_of_val(&with_ability(ability(), heavy()));
+        assert!(
+            size < alone + 1024,
+            "with_ability weighs {size} bytes around a {alone}-byte unit",
+        );
     }
 
     #[tokio::test]

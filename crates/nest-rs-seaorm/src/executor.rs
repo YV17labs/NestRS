@@ -103,7 +103,7 @@ impl LazyTransaction {
     /// escaped.
     fn hold(&self, work: Deferred) {
         let work: Deferred = match RequestContinuation::capture(Continuation::Commit) {
-            Some(carried) => Box::pin(async move { carried.scope(work).await }),
+            Some(carried) => Box::pin(carried.scope(work)),
             None => Box::pin(with_executor(Executor::Pool(self.pool.clone()), work)),
         };
         let refused = {
@@ -562,20 +562,23 @@ pub fn current_executor() -> Option<Executor> {
 
 /// Install `executor` without tagging a scope: with no ambient ability `Repo`
 /// denies every row, as on a request; only [`with_job_executor`] is unscoped.
-pub async fn with_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
-    nest_rs_database::with_executor(Arc::new(executor), fut).await
+pub fn with_executor<F: Future>(executor: Executor, fut: F) -> impl Future<Output = F::Output> {
+    nest_rs_database::with_executor(Arc::new(executor), fut)
 }
 
 /// Install `executor` tagged as a **request** scope, so `Repo` applies the
 /// ambient ability's `WHERE` (fail-closed with no ability, like any request).
-pub async fn with_request_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
-    nest_rs_database::with_request_executor(Arc::new(executor), fut).await
+pub fn with_request_executor<F: Future>(
+    executor: Executor,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    nest_rs_database::with_request_executor(Arc::new(executor), fut)
 }
 
 /// Install `executor` tagged as a **job** scope — the one unscoped path, for
 /// system work (cron, queue) that has no principal to scope to.
-pub async fn with_job_executor<F: Future>(executor: Executor, fut: F) -> F::Output {
-    nest_rs_database::with_job_executor(Arc::new(executor), fut).await
+pub fn with_job_executor<F: Future>(executor: Executor, fut: F) -> impl Future<Output = F::Output> {
+    nest_rs_database::with_job_executor(Arc::new(executor), fut)
 }
 
 #[cfg(test)]
@@ -620,6 +623,36 @@ mod tests {
     #[test]
     fn a_pool_has_nothing_to_step_out_of() {
         assert!(nest_rs_database::Executor::non_transactional(&pool()).is_none());
+    }
+
+    #[test]
+    fn an_install_holds_the_unit_it_runs_once() {
+        let heavy = || async {
+            let held = [0u8; 32 * 1024];
+            tokio::task::yield_now().await;
+            std::hint::black_box(&held);
+        };
+        let alone = std::mem::size_of_val(&heavy());
+        let installed = [
+            (
+                "with_executor",
+                std::mem::size_of_val(&with_executor(pool(), heavy())),
+            ),
+            (
+                "with_request_executor",
+                std::mem::size_of_val(&with_request_executor(pool(), heavy())),
+            ),
+            (
+                "with_job_executor",
+                std::mem::size_of_val(&with_job_executor(pool(), heavy())),
+            ),
+        ];
+        for (installer, size) in installed {
+            assert!(
+                size < alone + 1024,
+                "{installer} weighs {size} bytes around a {alone}-byte unit",
+            );
+        }
     }
 
     #[tokio::test]

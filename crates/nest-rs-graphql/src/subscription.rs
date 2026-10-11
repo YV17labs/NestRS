@@ -16,6 +16,7 @@ use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, ClientMessage, WebSocketProto
 use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{Data, Executor};
 use async_graphql_poem::GraphQLProtocol;
+use futures_util::future::Either;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, Stream, StreamExt};
 use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
@@ -265,17 +266,13 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                     None => guarded,
                 };
                 // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
-                let _ = sockets
-                    .run(async move {
-                        match carried {
-                            Some(carried) => carried.scope(served).await,
-                            None => {
-                                nest_rs_core::with_request_scope(None, correlation, served).await
-                            }
-                        }
-                    })
-                    .instrument(span)
-                    .await;
+                let served = match carried {
+                    Some(carried) => Either::Left(carried.scope(served)),
+                    None => {
+                        Either::Right(nest_rs_core::with_request_scope(None, correlation, served))
+                    }
+                };
+                let _ = sockets.run(served).instrument(span).await;
                 if let Some(ended) = ended {
                     line.settle(ended);
                 }

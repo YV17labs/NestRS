@@ -75,10 +75,27 @@ pub fn ambient<T: AmbientValue>() -> Option<Arc<T>> {
 
 /// Run `fut` with `value` added to what the running unit carries, replacing
 /// the `T` it carried for `fut` alone.
-pub async fn with_ambient<T: AmbientValue, F: Future>(value: Arc<T>, fut: F) -> F::Output {
-    let mut added = Entries::default();
-    added.set(Entry::of(value));
-    request_scope::install(added, fut).await
+pub fn with_ambient<T: AmbientValue, F: Future>(
+    value: Arc<T>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    with_ambient_from(move || value, fut)
+}
+
+/// [`with_ambient`] with the value `make` returns where `fut` first runs, so it
+/// can read what the unit carries there.
+pub fn with_ambient_from<T: AmbientValue, F: Future>(
+    make: impl FnOnce() -> Arc<T>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    request_scope::install(
+        move || {
+            let mut added = Entries::default();
+            added.set(Entry::of(make()));
+            added
+        },
+        fut,
+    )
 }
 
 /// When the running unit must end by, on tokio's clock, the clock
@@ -237,8 +254,8 @@ impl fmt::Debug for Pending {
 }
 
 /// Run `fut` with everything `pending` recorded made ambient, in one install.
-pub async fn install_pending<F: Future>(pending: Pending, fut: F) -> F::Output {
-    request_scope::install(pending.0, fut).await
+pub fn install_pending<F: Future>(pending: Pending, fut: F) -> impl Future<Output = F::Output> {
+    request_scope::install(move || pending.0, fut)
 }
 
 #[cfg(test)]
@@ -313,6 +330,24 @@ mod tests {
             assert_eq!(ambient::<Tenant>().as_deref(), Some(&Tenant("outer")));
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn an_install_built_as_an_argument_merges_into_what_runs_around_it() {
+        let correlation = Correlation::minted(None);
+        let trace = correlation.trace_id();
+        let inner = with_ambient(Arc::new(Handle::Transaction), async {
+            (current_trace_id(), ambient::<Tenant>(), ambient::<Handle>())
+        });
+        let unit = with_request_scope(
+            None,
+            correlation,
+            with_ambient(Arc::new(Tenant("acme")), inner),
+        );
+        let (seen, tenant, handle) = unit.await;
+        assert_eq!(seen, Some(trace));
+        assert_eq!(tenant.as_deref(), Some(&Tenant("acme")));
+        assert_eq!(handle.as_deref(), Some(&Handle::Transaction));
     }
 
     #[tokio::test]

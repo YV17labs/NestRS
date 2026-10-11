@@ -3091,6 +3091,7 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "figment",
  "futures-util",
  "nest-rs-config",
  "nest-rs-core",

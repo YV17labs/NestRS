@@ -103,6 +103,9 @@ async-trait.workspace = true
 # authority's certificate, and the dial to Valkey behind it. Already in the
 # tree through `redis`'s rustls support.
 tokio-rustls.workspace = true
+# `figment::Jail` declares a profile for the one config branch that reads the
+# process environment rather than a `ConfigService`: `Config::defaults`.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

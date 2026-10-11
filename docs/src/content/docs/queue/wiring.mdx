@@ -36,7 +36,9 @@ is the server it is supported and tested on, never Redis itself; see
 server, Sentinel or a Cluster — and every binding runs on each: see
 [Valkey topologies](/queue/topologies/).
 
-`RedisModule::for_root(None)` reads `<PREFIX>_REDIS__URL` from the environment;
+`RedisModule::for_root(None)` reads `<PREFIX>_REDIS__URL` from the environment,
+and fails the boot naming it when it is unset — unless the process declares a
+development or test profile, whose default is `redis://127.0.0.1/`;
 `RedisModule::for_root(RedisConfig { url, .. })` supplies that URL as the
 **base** the environment overlays — so a deployment setting `<PREFIX>_REDIS__URL`
 still wins, field by field ([the dual-path rule](/configuration/#the-dual-path-rule)).

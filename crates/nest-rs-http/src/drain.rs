@@ -118,7 +118,8 @@ impl Drain {
 
 /// One accepted socket, counted open until it is dropped, whose write fails
 /// `TimedOut` once the peer has taken nothing for `send_timeout`. Vectored
-/// writes are forwarded too: hyper uses them when the socket offers them.
+/// writes are forwarded too: rustls writes its records with them, and HTTP/2
+/// when the socket offers them.
 pub(crate) struct DrainSocket<Io> {
     inner: Io,
     drain: Arc<Drain>,

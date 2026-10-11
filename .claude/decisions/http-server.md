@@ -76,3 +76,42 @@ Lands with `feat/accept-loop` (the loop) and `feat/http-vocabulary` (the
 types), then the branches that move the transport, the routes and each edge
 onto them; `refactor/retire-replaced-contracts-and-poem` takes poem off the
 public surface.
+
+## 2026-10-11 — one write per HTTP/1 flush, a body handed over 64 KiB at a time, and `TCP_NODELAY` stays
+
+The accept loop hands hyper a socket that takes vectored writes, so hyper's
+automatic strategy sent each HTTP/1 response as one `writev(2)` of separate
+slices — head and body, three more per chunk of a streamed body — where poem's
+server, whose boxed socket hid vectored writes, had copied them into one
+buffer. A same-session bisect of the bench put about 4.5 % of the JSON route's
+throughput and 11 to 15 % of its p99 on the loop. The loop sets hyper's
+`writev(false)`: what a flush sends is one buffer and one `write(2)`, as under
+poem — a small response leaves in one flush, a streamed one in a flush per
+chunk it waits on, and a buffer the socket takes in parts in several writes.
+Over TLS rustls no longer gathers the slices into a vector on each write.
+HTTP/2 keeps h2's own choice.
+
+The copy has a price poem's server paid as well: hyper copies a body frame
+whole into the connection's write buffer, which keeps its capacity until the
+connection closes. A body handed over as one large frame — a static file
+embedded in the binary, uncompressed by default — would hold its size on every
+keep-alive connection that served it, up to the connection cap times the
+largest such body, and any client can drive that. So a response body hands
+hyper at most 64 KiB of a frame at a time, split without a copy, on HTTP/1 as
+on HTTP/2, where the same piece keeps a stream's send deadline: the write
+buffer stays within its 64 KiB cap plus one piece. Measured on hyper 1.12 with
+the loop's settings, an idle keep-alive connection held about 66 KB after a
+4 MiB one-frame response on the automatic strategy, 4.25 MB with
+`writev(false)` alone, and 123 KB with the pieces. Each body byte is still
+copied once, as under poem.
+
+`TCP_NODELAY` stays. A response leaving in one flush never meets Nagle's
+algorithm, so dropping it saves one call per connection, and it would let a
+stream's next chunk — an event, a frame — wait on the acknowledgement of the
+previous one (a delayed ACK, up to 40 ms on Linux).
+
+Refused: a socket wrapper of our own that coalesces small vectored writes and
+passes large ones through. It would keep a large frame uncopied, at the price
+of a mechanism over every socket to maintain; hyper's switch restores the
+write poem's server made, and the pieces the body already cut for HTTP/2 bound
+its copy.

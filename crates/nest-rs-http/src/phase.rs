@@ -21,6 +21,12 @@ use tokio::time::Instant;
 
 use crate::window::Window;
 
+/// The most of a frame a response body hands hyper at once. hyper copies an
+/// HTTP/1 frame whole into the connection's write buffer, which keeps its
+/// capacity until the connection closes, and hands h2 one whole as soon as the
+/// stream's window has room for a byte of it (`window.rs`).
+pub(crate) const PIECE: usize = 64 * 1024;
+
 /// What an HTTP/2 client sends first (RFC 9113 §3.4).
 const H2_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -188,14 +194,17 @@ impl Drop for InFlight {
     }
 }
 
-/// A response body whose request stays in flight until its last frame.
+/// A response body whose request stays in flight until its last frame, handed
+/// to hyper at most a [`PIECE`] at a time, split without a copy.
 ///
-/// `size_hint` and `is_end_stream` are forwarded: hyper frames the response
-/// from them. On HTTP/2 the body hands its stream's [`Window`] a piece at a
-/// time.
+/// `size_hint` and `is_end_stream` count what is held back of a frame: hyper
+/// frames the response from them. On HTTP/2 each piece is handed to the
+/// stream's [`Window`].
 pub(crate) struct PhasedBody<B> {
     inner: B,
     in_flight: InFlight,
+    /// What is left of a frame larger than a piece.
+    rest: Option<Bytes>,
     window: Option<Window>,
 }
 
@@ -204,6 +213,7 @@ impl<B> PhasedBody<B> {
         Self {
             inner,
             in_flight,
+            rest: None,
             window,
         }
     }
@@ -218,15 +228,10 @@ impl<B: Body<Data = Bytes> + Unpin> Body for PhasedBody<B> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, B::Error>>> {
         let this = self.get_mut();
-        let Some(window) = &mut this.window else {
-            let polled = Pin::new(&mut this.inner).poll_frame(cx);
-            if let Poll::Ready(None) = polled {
-                this.in_flight.end();
-            }
-            return polled;
-        };
-        window.came_back();
-        let data = match window.rest() {
+        if let Some(window) = &mut this.window {
+            window.came_back();
+        }
+        let mut data = match this.rest.take() {
             Some(rest) => rest,
             None => match Pin::new(&mut this.inner).poll_frame(cx) {
                 Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
@@ -240,16 +245,22 @@ impl<B: Body<Data = Bytes> + Unpin> Body for PhasedBody<B> {
                 polled => return polled,
             },
         };
-        Poll::Ready(Some(Ok(Frame::data(window.hand(data)))))
+        if data.len() > PIECE {
+            this.rest = Some(data.split_off(PIECE));
+        }
+        if let Some(window) = &mut this.window {
+            window.handed();
+        }
+        Poll::Ready(Some(Ok(Frame::data(data))))
     }
 
     fn is_end_stream(&self) -> bool {
-        self.window.as_ref().is_none_or(|window| window.held() == 0) && self.inner.is_end_stream()
+        self.rest.is_none() && self.inner.is_end_stream()
     }
 
     fn size_hint(&self) -> SizeHint {
         let hint = self.inner.size_hint();
-        let held = self.window.as_ref().map_or(0, Window::held) as u64;
+        let held = self.rest.as_ref().map_or(0, Bytes::len) as u64;
         if held == 0 {
             return hint;
         }
@@ -553,5 +564,43 @@ mod tests {
             0,
             "a body never polled ends at its drop"
         );
+    }
+
+    /// The pieces a body of one frame larger than two pieces is handed in,
+    /// each checked against what the body still counts in its size and end.
+    async fn pieces(window: Option<Window>) -> Vec<usize> {
+        let (phases, _) = accepted();
+        let size = 2 * PIECE + 1;
+        let frame = Bytes::from(vec![0_u8; size]);
+        let start = frame.as_ptr();
+        let mut body = PhasedBody::new(Full::new(frame), phases.request(), window);
+        let (mut pieces, mut handed) = (Vec::new(), 0);
+        while let Some(frame) = body.frame().await {
+            let piece = frame.expect("no error").into_data().expect("data");
+            assert_eq!(
+                piece.as_ptr(),
+                start.wrapping_add(handed),
+                "split, not copied"
+            );
+            handed += piece.len();
+            pieces.push(piece.len());
+            let held = size - handed;
+            assert_eq!(body.size_hint().exact(), Some(held as u64));
+            assert_eq!(body.is_end_stream(), held == 0, "{held} bytes held back");
+        }
+        pieces
+    }
+
+    /// HTTP/1 has no window; an HTTP/2 stream's task has one.
+    #[tokio::test]
+    async fn a_frame_larger_than_a_piece_is_handed_a_piece_at_a_time_on_either_protocol() {
+        assert_eq!(pieces(None).await, [PIECE, PIECE, 1], "HTTP/1");
+        let http2 = crate::window::within(
+            async { pieces(Some(Window::current().expect("a stream task"))).await },
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("ends on its own");
+        assert_eq!(http2, [PIECE, PIECE, 1], "HTTP/2");
     }
 }

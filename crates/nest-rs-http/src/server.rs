@@ -219,9 +219,9 @@ async fn join_all(connections: &mut JoinSet<()>) {
 }
 
 /// The settings every connection is served with: hyper's timer, the HTTP/2
-/// limits, the HTTP/1 buffer, and each HTTP/2 stream held to `send_timeout`.
-/// hyper's head deadline is off: [`Phases`] holds the head, the idle spell and
-/// the version sniff before both.
+/// limits, the HTTP/1 buffer and its one write per flush, and each HTTP/2
+/// stream held to `send_timeout`. hyper's head deadline is off: [`Phases`]
+/// holds the head, the idle spell and the version sniff before both.
 fn builder(send_timeout: Duration) -> auto::Builder<Contained> {
     let mut builder = auto::Builder::new(Contained { send_timeout });
     builder
@@ -229,7 +229,10 @@ fn builder(send_timeout: Duration) -> auto::Builder<Contained> {
         .timer(TokioTimer::new())
         .header_read_timeout(None)
         .keep_alive(true)
-        .max_buf_size(MAX_HTTP1_BUFFER);
+        .max_buf_size(MAX_HTTP1_BUFFER)
+        // The socket takes vectored writes, so hyper would `writev(2)` the head
+        // and each body chunk apart: dearer for a small response than the copy.
+        .writev(false);
     builder
         .http2()
         .timer(TokioTimer::new())
@@ -560,12 +563,192 @@ impl AcceptBackoff {
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::task::Context;
+
     use nest_rs_testing::LogCapture;
+    use poem::EndpointExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf};
 
     use super::*;
+    use crate::phase::PIECE;
 
     /// `EMFILE` on Linux and macOS alike.
     const EMFILE: i32 = 24;
+
+    /// One write a [`Recorded`] socket was handed.
+    #[derive(Debug, PartialEq)]
+    enum Written {
+        Plain(Bytes),
+        Vectored(Vec<Bytes>),
+    }
+
+    /// A socket that offers vectored writes, as a TCP stream does, and keeps
+    /// every write it is handed.
+    struct Recorded {
+        inner: DuplexStream,
+        writes: Arc<Mutex<Vec<Written>>>,
+    }
+
+    impl Recorded {
+        fn record(&self, written: Written) {
+            self.writes.lock().expect("unpoisoned").push(written);
+        }
+    }
+
+    impl AsyncRead for Recorded {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for Recorded {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.record(Written::Plain(Bytes::copy_from_slice(buf)));
+            Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_write_vectored(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bufs: &[io::IoSlice<'_>],
+        ) -> Poll<io::Result<usize>> {
+            self.record(Written::Vectored(
+                bufs.iter().map(|buf| Bytes::copy_from_slice(buf)).collect(),
+            ));
+            Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
+        }
+
+        fn is_write_vectored(&self) -> bool {
+            true
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    /// One HTTP/1.1 request answered by `endpoint` over a [`Recorded`] socket
+    /// under the connection's whole stack: what the peer read, and every write.
+    async fn answered_by(
+        endpoint: impl Endpoint<Output = Response> + 'static,
+    ) -> (Bytes, Vec<Written>) {
+        let deadlines = Deadlines::default();
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let socket = Arc::new(Drain::default()).socket(
+            Recorded {
+                inner: server,
+                writes: Arc::clone(&writes),
+            },
+            Arc::new(Semaphore::new(1))
+                .try_acquire_owned()
+                .expect("a free place"),
+            deadlines.send,
+        );
+        let connection = Connection {
+            peer: SocketAddr::from(([127, 0, 0, 1], 50_000)),
+            local: SocketAddr::from(([127, 0, 0, 1], 3_000)),
+            accepted: Instant::now(),
+            deadlines,
+            endpoint: Arc::new(endpoint.boxed()),
+            builder: Arc::new(builder(deadlines.send)),
+            shutdown: CancellationToken::new(),
+        };
+        let served = tokio::spawn(connection.serve(socket, None));
+        client
+            .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+            .await
+            .expect("the request is sent");
+        let mut response = Vec::new();
+        client
+            .read_to_end(&mut response)
+            .await
+            .expect("the response is read to its close");
+        served.await.expect("the connection ends");
+        let writes = std::mem::take(&mut *writes.lock().expect("unpoisoned"));
+        (Bytes::from(response), writes)
+    }
+
+    /// The bench's JSON route: a body serialized into a buffer of its own.
+    #[tokio::test]
+    async fn an_http1_response_leaves_in_one_write_on_a_socket_that_offers_vectored_ones() {
+        const BODY: &[u8] = br#"{"message":"Hello World"}"#;
+        let endpoint = poem::endpoint::make_sync(|_| {
+            Response::builder()
+                .content_type("application/json")
+                .body(BODY.to_vec())
+        });
+        let (response, writes) = answered_by(endpoint).await;
+        assert!(response.ends_with(BODY), "{response:?}");
+        assert_eq!(
+            writes,
+            [Written::Plain(response)],
+            "the head and the body leave in one write, as one buffer",
+        );
+    }
+
+    /// An event stream's shape: chunks of unknown total length.
+    #[tokio::test]
+    async fn a_streamed_http1_response_writes_each_chunk_with_its_framing_as_one_buffer() {
+        let endpoint = poem::endpoint::make_sync(|_| {
+            let events = ["data: one\n\n", "data: two\n\n"]
+                .map(|event| Ok::<_, io::Error>(Bytes::from_static(event.as_bytes())));
+            Response::builder().body(poem::Body::from_bytes_stream(futures_util::stream::iter(
+                events,
+            )))
+        });
+        let (response, writes) = answered_by(endpoint).await;
+        assert!(
+            response.ends_with(b"\r\ndata: two\n\n\r\n0\r\n\r\n"),
+            "{response:?}"
+        );
+        let written: Vec<u8> = writes
+            .iter()
+            .flat_map(|written| match written {
+                Written::Plain(bytes) => bytes.iter().copied(),
+                Written::Vectored(_) => panic!("a chunk is split from its size line: {writes:?}"),
+            })
+            .collect();
+        assert_eq!(written, response, "every byte the peer read was recorded");
+    }
+
+    /// A static file's shape: a body handed over as one frame, which hyper
+    /// copies whole into a write buffer whose capacity the connection keeps.
+    #[tokio::test]
+    async fn a_large_http1_body_reaches_the_write_buffer_a_piece_at_a_time() {
+        let body = Bytes::from(vec![b'x'; 4 * 1024 * 1024]);
+        let endpoint = {
+            let body = body.clone();
+            poem::endpoint::make_sync(move |_| Response::builder().body(body.clone()))
+        };
+        let (response, writes) = answered_by(endpoint).await;
+        assert!(response.ends_with(&body), "the body arrives whole");
+        let largest = writes
+            .iter()
+            .map(|written| match written {
+                Written::Plain(bytes) => bytes.len(),
+                Written::Vectored(slices) => slices.iter().map(Bytes::len).sum(),
+            })
+            .max();
+        assert!(
+            largest <= Some(MAX_HTTP1_BUFFER + PIECE),
+            "hyper buffers at most its cap and one piece, here {largest:?}",
+        );
+    }
 
     #[test]
     fn running_out_of_descriptors_backs_off_doubling_to_a_second_with_one_warn() {

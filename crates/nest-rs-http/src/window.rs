@@ -6,10 +6,10 @@
 //! (`PipeToSendStream`), so a peer that reads its connection but grants a
 //! stream no window parks it with no write waiting on the socket, where the
 //! connection's send deadline is held (`drain.rs`). And hyper hands h2 a whole
-//! frame as soon as the window has room for a byte of it, so a body hands
-//! HTTP/2 at most [`PIECE`] bytes at a time: the rest stays the stream's, in
-//! flight and under this deadline, never in h2's buffer once the stream's task
-//! is done and its connection counts idle.
+//! frame as soon as the window has room for a byte of it, so a body hands it
+//! at most a [`PIECE`](crate::phase::PIECE) at a time: the rest stays the
+//! stream's, in flight and under this deadline, never in h2's buffer once the
+//! stream's task is done and its connection counts idle.
 
 use std::future::Future;
 use std::pin::{Pin, pin};
@@ -18,11 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use bytes::Bytes;
 use tokio::time::{Instant, Sleep};
-
-/// The most a body hands HTTP/2 at once.
-const PIECE: usize = 64 * 1024;
 
 tokio::task_local! {
     /// The running stream task's wait, for the body its request answers.
@@ -51,8 +47,6 @@ pub(crate) struct Window {
     wait: Arc<WindowWait>,
     handed: u64,
     waiting: bool,
-    /// What is left of a frame larger than a piece.
-    rest: Option<Bytes>,
 }
 
 impl Window {
@@ -62,7 +56,6 @@ impl Window {
             wait: Arc::clone(wait),
             handed: 0,
             waiting: false,
-            rest: None,
         })
         .ok()
     }
@@ -74,27 +67,14 @@ impl Window {
         }
     }
 
-    /// What is left of the last frame, to hand before the body is polled.
-    pub(crate) fn rest(&mut self) -> Option<Bytes> {
-        self.rest.take()
-    }
-
-    /// The bytes held back from the body's frames.
-    pub(crate) fn held(&self) -> usize {
-        self.rest.as_ref().map_or(0, Bytes::len)
-    }
-
-    /// Hand `data` over, a piece at a time: the piece to send now.
-    pub(crate) fn hand(&mut self, mut data: Bytes) -> Bytes {
-        if data.len() > PIECE {
-            self.rest = Some(data.split_off(PIECE));
-        }
+    /// The body handed hyper a frame: it waits on the window until hyper comes
+    /// back.
+    pub(crate) fn handed(&mut self) {
         self.handed += 1;
         self.waiting = true;
         self.wait
             .state
             .store((self.handed << 1) | 1, Ordering::Relaxed);
-        data
     }
 }
 
@@ -141,10 +121,10 @@ mod tests {
     /// for `parked`, then hands another and waits on it forever.
     async fn parked_twice(parked: Duration) {
         let mut window = Window::current().expect("inside a stream task");
-        window.hand(Bytes::from_static(b"first"));
+        window.handed();
         tokio::time::sleep(parked).await;
         window.came_back();
-        window.hand(Bytes::from_static(b"second"));
+        window.handed();
         std::future::pending::<()>().await;
     }
 
@@ -163,7 +143,7 @@ mod tests {
     async fn a_stream_waiting_on_its_body_rather_than_the_window_is_never_cut() {
         let stream = async {
             let mut window = Window::current().expect("inside a stream task");
-            window.hand(Bytes::from_static(b"taken"));
+            window.handed();
             window.came_back();
             std::future::pending::<()>().await;
         };
@@ -172,24 +152,6 @@ mod tests {
                 .await
                 .is_err(),
             "a body slow to produce is no peer slow to read",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_frame_larger_than_a_piece_is_handed_a_piece_at_a_time() {
-        let stream = async {
-            let mut window = Window::current().expect("inside a stream task");
-            let mut pieces = vec![window.hand(Bytes::from(vec![0_u8; 2 * PIECE + 1])).len()];
-            assert_eq!(window.held(), PIECE + 1, "the rest is held back");
-            while let Some(rest) = window.rest() {
-                pieces.push(window.hand(rest).len());
-            }
-            assert_eq!(window.held(), 0);
-            pieces
-        };
-        assert_eq!(
-            within(stream, SEND).await.expect("ends on its own"),
-            [PIECE, PIECE, 1]
         );
     }
 

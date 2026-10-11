@@ -1,8 +1,13 @@
 //! [`AppLifecycle`] — where a running [`App`](crate::App) stands and why it
 //! stops, injectable by any provider; only the kernel moves it.
 
+use std::future::Future;
+
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+
+use crate::app::BootStep;
+use crate::error::BootInterruptedError;
 
 /// Where the app stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -204,6 +209,45 @@ impl AppLifecycle {
     pub(crate) fn serving(&self) -> CancellationToken {
         self.stop.child_token()
     }
+
+    /// Await `step`'s future unless a stop is asked first: the boot step is
+    /// then dropped where it waits, and the boot returns the interruption.
+    pub(crate) async fn boot<T>(
+        &self,
+        step: BootStep,
+        future: impl Future<Output = T>,
+    ) -> Result<T, BootInterruptedError> {
+        crate::way_down::boot_step(Some(&step));
+        let outcome = tokio::select! {
+            biased;
+            cause = self.stopped() => Err(cause),
+            done = future => Ok(done),
+        };
+        crate::way_down::boot_step(None);
+        outcome.map_err(|cause| {
+            tracing::warn!(
+                target: crate::target::APP,
+                signal = cause.signal(),
+                ?cause,
+                step = %step,
+                "shutdown signal received during the boot: stopping it",
+            );
+            BootInterruptedError { cause, step }
+        })
+    }
+
+    /// Why the app stops, once it does.
+    async fn stopped(&self) -> StopCause {
+        let mut stand = self.stand.subscribe();
+        loop {
+            if let Stand::Draining(cause) = *stand.borrow_and_update() {
+                return cause;
+            }
+            if stand.changed().await.is_err() {
+                return std::future::pending().await;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -277,5 +321,68 @@ mod tests {
         assert!(!other.is_cancelled());
         assert!(!lifecycle.stopping().is_cancelled());
         assert_eq!(lifecycle.state(), AppState::Starting);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_boot_step_waiting_when_the_stop_is_asked_is_dropped_and_named() {
+        let logs = LogCapture::install();
+        let lifecycle = std::sync::Arc::new(AppLifecycle::new());
+        let booting = tokio::spawn({
+            let lifecycle = std::sync::Arc::clone(&lifecycle);
+            async move {
+                lifecycle
+                    .boot(
+                        BootStep::Factory {
+                            type_name: "app::Pool",
+                        },
+                        std::future::pending::<()>(),
+                    )
+                    .await
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        lifecycle.drain(StopCause::Terminate);
+
+        let interrupted = booting
+            .await
+            .ok()
+            .and_then(Result::err)
+            .map(|interrupted| (interrupted.cause, interrupted.step.to_string()));
+        assert_eq!(
+            interrupted,
+            Some((
+                StopCause::Terminate,
+                "the factory for `app::Pool`".to_owned()
+            ))
+        );
+        let line = logs.expect_one(
+            crate::target::APP,
+            "shutdown signal received during the boot: stopping it",
+        );
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("signal").as_deref(), Some("SIGTERM"));
+        assert_eq!(
+            line.field("step").as_deref(),
+            Some("the factory for `app::Pool`")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_boot_step_already_stopped_never_starts() {
+        let lifecycle = AppLifecycle::new();
+        lifecycle.drain(StopCause::Interrupt);
+        let started = std::sync::atomic::AtomicBool::new(false);
+
+        let outcome = lifecycle
+            .boot(
+                BootStep::Configure {
+                    transport: "Http".to_owned(),
+                },
+                async { started.store(true, std::sync::atomic::Ordering::SeqCst) },
+            )
+            .await;
+
+        assert!(outcome.is_err());
+        assert!(!started.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

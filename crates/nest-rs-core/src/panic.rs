@@ -194,7 +194,7 @@ fn report(contained: bool, subscribed: bool) -> Report {
 
 /// Whether an event emitted on this thread now reaches a subscriber: `false`
 /// before one is installed, and inside a scoped one's own dispatch.
-fn subscribed() -> bool {
+pub(crate) fn subscribed() -> bool {
     !tracing::dispatcher::get_default(|dispatch| dispatch.is::<tracing::subscriber::NoSubscriber>())
 }
 

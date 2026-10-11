@@ -21,13 +21,13 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
-    InitFailedError, LateFactoryError, UnregisteredModuleError, UnresolvedFactoryError,
+    FactoryFailedError, InitFailedError, LateFactoryError, UnregisteredModuleError,
+    UnresolvedFactoryError,
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
 use crate::net::check_budgets;
 use crate::transport::{Transport, TransportContribution};
-use crate::way_down::{WayDown, watch_signals};
 
 /// Entry point for a nestrs application. Builds the container from a root
 /// [`Module`] and runs every transport its imports contribute concurrently
@@ -45,6 +45,50 @@ enum Init {
     NotRun,
     Done,
     Failed,
+}
+
+/// The step of the boot a stop interrupted.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum BootStep {
+    /// An async factory, building its type.
+    Factory {
+        /// The type the factory builds.
+        type_name: &'static str,
+    },
+    /// A transport's [`configure`](Transport::configure).
+    Configure {
+        /// The transport, as its module names it.
+        transport: String,
+    },
+    /// An init lifecycle hook.
+    InitHook {
+        /// The init phase it runs in.
+        phase: LifecyclePhase,
+        /// The host provider's name.
+        provider: &'static str,
+        /// The hook method's name.
+        method: &'static str,
+        /// `module_path!()` at the `#[hooks]` site.
+        origin: &'static str,
+    },
+}
+
+impl std::fmt::Display for BootStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Factory { type_name } => write!(f, "the factory for `{type_name}`"),
+            Self::Configure { transport } => {
+                write!(f, "the `configure` of transport `{transport}`")
+            }
+            Self::InitHook {
+                phase,
+                provider,
+                method,
+                ..
+            } => write!(f, "lifecycle hook {provider}::{method} ({phase:?})"),
+        }
+    }
 }
 
 /// Fail the boot if any unkeyed provider was registered twice, rather than let
@@ -118,7 +162,7 @@ impl App {
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
-        let lifecycle = Arc::new(AppLifecycle::new());
+        let lifecycle = booting();
         // `collect` runs first so a module queuing a factory is refused below.
         let root = std::any::type_name::<M>();
         let builder = Container::builder()
@@ -186,8 +230,10 @@ impl App {
     /// `OnApplicationBootstrap`) against the built container, without serving.
     ///
     /// They run once per app: a later `init` or [`run`](Self::run) skips them,
-    /// and after an init that failed or was dropped before it finished, both
-    /// return [`InitFailedError`] without running a hook.
+    /// and after an init that failed, was interrupted, or was dropped before it
+    /// finished, both return [`InitFailedError`] without running a hook. A stop
+    /// asked while a hook waits drops it there and returns
+    /// [`BootInterruptedError`](crate::BootInterruptedError).
     pub async fn init(&self) -> Result<()> {
         let mut init = self.init.lock().await;
         match *init {
@@ -204,8 +250,18 @@ impl App {
     }
 
     async fn init_phases(&self) -> Result<()> {
-        run_phase(&self.container, LifecyclePhase::OnModuleInit).await?;
-        run_phase(&self.container, LifecyclePhase::OnApplicationBootstrap).await
+        run_phase(
+            &self.container,
+            &self.lifecycle,
+            LifecyclePhase::OnModuleInit,
+        )
+        .await?;
+        run_phase(
+            &self.container,
+            &self.lifecycle,
+            LifecyclePhase::OnApplicationBootstrap,
+        )
+        .await
     }
 
     /// Configure each transport against the container, run the init lifecycle
@@ -217,7 +273,9 @@ impl App {
     ///
     /// A site a transport composes as it configures — a route, a gateway — that
     /// could not compose (a layer it declares resolves to no provider, a
-    /// misordered guard chain) fails the boot here, before any hook runs.
+    /// misordered guard chain) fails the boot here, before any hook runs; a
+    /// stop asked while a transport configures or an init hook waits stops the
+    /// boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
     /// Once the transports have stopped, the shutdown hooks run within
     /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
     /// fails or panics is reported and the rest still run.
@@ -232,6 +290,9 @@ impl App {
             version = env!("CARGO_PKG_VERSION"),
             "nestrs starting",
         );
+        if !crate::way_down::watched() {
+            crate::way_down::watch_app(&self.lifecycle);
+        }
 
         let mut transports: Vec<(&'static str, Box<dyn Transport>)> = Vec::new();
         for contribution in Discovery::new(&self.container).meta::<TransportContribution>() {
@@ -244,8 +305,13 @@ impl App {
             transports.push((contribution.meta.name, transport));
         }
 
-        for (_, transport) in transports.iter_mut() {
-            transport.configure(&self.container).await?;
+        for (name, transport) in transports.iter_mut() {
+            let step = BootStep::Configure {
+                transport: (*name).to_owned(),
+            };
+            self.lifecycle
+                .boot(step, transport.configure(&self.container))
+                .await??;
         }
         // A site composed at `configure` (a route, a gateway) refuses here, its
         // mount having no `Result` to fail with.
@@ -265,8 +331,6 @@ impl App {
         );
 
         self.init().await?;
-        let way_down = Arc::new(WayDown::default());
-        watch_signals(&self.lifecycle, Arc::clone(&way_down));
 
         let names: Vec<&'static str> = transports.iter().map(|(name, _)| *name).collect();
         self.lifecycle.turn_ready(&names.join(", "));
@@ -279,7 +343,7 @@ impl App {
             ));
             serving.insert(task.id(), name);
         }
-        way_down.transports(still_serving(&serving));
+        crate::way_down::transports(still_serving(&serving));
 
         let mut first_err: Option<anyhow::Error> = None;
         while let Some(res) = join.join_next_with_id().await {
@@ -288,7 +352,7 @@ impl App {
                 Err(join_err) => join_err.id(),
             };
             let transport = serving.remove(&ended).unwrap_or("<unknown>");
-            way_down.transports(still_serving(&serving));
+            crate::way_down::transports(still_serving(&serving));
             match res.map(|(_, served)| served) {
                 Ok(Ok(Ok(()))) => {}
                 Ok(Ok(Err(e))) => {
@@ -326,8 +390,9 @@ impl App {
                 }
             }
         }
-        // Every transport ended with no stop asked: the shutdown hooks still
-        // find the app draining, so a loop one of them joins has stopped.
+        // When every transport ended on its own, no stop was asked yet: the
+        // shutdown hooks must still find the app draining, or a loop one of
+        // them joins on `stopping()` would hold it to the budget.
         self.lifecycle.drain(StopCause::TransportFailed);
 
         // The three phases share one deadline, which `way_down::__main` reads too.
@@ -338,15 +403,22 @@ impl App {
             LifecyclePhase::BeforeApplicationShutdown,
             LifecyclePhase::OnApplicationShutdown,
         ] {
-            run_phase_lenient(&self.container, phase, deadline, &way_down).await;
+            run_phase_lenient(&self.container, phase, deadline).await;
         }
-        way_down.exit();
+        crate::way_down::exit();
 
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
         }
     }
+}
+
+/// A new app's lifecycle, its boot begun: the process's signals now reach it.
+fn booting() -> Arc<AppLifecycle> {
+    let lifecycle = Arc::new(AppLifecycle::new());
+    crate::way_down::booting(&lifecycle);
+    lifecycle
 }
 
 struct ModuleHooks {
@@ -529,12 +601,15 @@ impl AppBuilder {
     }
 
     /// Run the four phases, then the wiring step, and return the assembled
-    /// [`App`]. Propagates the first factory error, and the first wiring's
-    /// ([`WiringFailedError`](crate::WiringFailedError)).
+    /// [`App`]. Propagates the first factory error, named
+    /// ([`FactoryFailedError`]), and the first wiring's
+    /// ([`WiringFailedError`](crate::WiringFailedError)); a stop asked while a
+    /// factory waits drops it there and returns
+    /// [`BootInterruptedError`](crate::BootInterruptedError).
     pub async fn build(self) -> Result<App> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
-        let lifecycle = Arc::new(AppLifecycle::new());
+        let lifecycle = booting();
         let AppBuilder {
             mut builder,
             modules,
@@ -575,7 +650,12 @@ impl AppBuilder {
             };
             let queued = pending.remove(index);
             if !builder.contains(queued.id()) {
-                let register = (queued.factory)(builder.snapshot()).await?;
+                let type_name = queued.name;
+                let factory = (queued.factory)(builder.snapshot());
+                let register = lifecycle
+                    .boot(BootStep::Factory { type_name }, factory)
+                    .await?
+                    .map_err(|source| FactoryFailedError { type_name, source })?;
                 builder = register(builder);
             }
             for derive in queued.derives {
@@ -1237,7 +1317,7 @@ mod tests {
             Ok(_) => panic!("the factory's own error must surface"),
             Err(e) => e,
         };
-        assert!(err.to_string().contains("import FirstModule"), "{err}");
+        assert!(format!("{err:#}").contains("import FirstModule"), "{err:#}");
     }
 
     struct FirstAfterSecond;
@@ -1281,7 +1361,7 @@ mod tests {
             Ok(_) => panic!("a failing factory must abort the build"),
             Err(e) => e,
         };
-        assert!(err.to_string().contains("connection refused"));
+        assert!(format!("{err:#}").contains("connection refused"), "{err:#}");
     }
 
     // Module owning its provider's factory via `collect` (the `SeaOrmDatabaseModule`

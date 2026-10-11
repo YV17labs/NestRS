@@ -103,7 +103,7 @@ mod way_down;
 mod wiring;
 
 pub use access::{Composition, ProviderOrder, ReachableProviders};
-pub use app::{App, AppBuilder};
+pub use app::{App, AppBuilder, BootStep};
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use budget::Budget;
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
@@ -115,10 +115,11 @@ pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
-    AccessGraphError, BudgetPastNetError, ContestedDeclarationError, DecodeError,
-    DuplicateProviderError, FactoryCycleError, InitFailedError, KeyedDependencyError,
-    LateFactoryError, MissingDependencyError, ProviderCycleError, ScopeViolationError,
-    UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
+    AccessGraphError, BootInterruptedError, BudgetPastNetError, ContestedDeclarationError,
+    DecodeError, DuplicateProviderError, FactoryCycleError, FactoryFailedError, InitFailedError,
+    KeyedDependencyError, LateFactoryError, MissingDependencyError, ProviderCycleError,
+    ScopeViolationError, UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError,
+    WiringFailedError,
 };
 pub use error_message::{boxed_error, error_message};
 pub use handler::{Handler, Posture, Reflector};
@@ -229,6 +230,10 @@ pub use nest_rs_core_macros::hooks;
 /// Before the runtime exists it installs the process panic hook: a panic no
 /// unit of work contains is one `error` on `nest_rs::app`, its payload
 /// redacted by [`panic_message`], never Rust's default line on stderr.
+///
+/// Before `main` runs it installs the `SIGINT` / `SIGTERM` handlers, so the
+/// first signal stops the boot at its next await or drains the serving app,
+/// and one received before any app exists exits at once with 130 / 143.
 ///
 /// ```
 /// # use nest_rs_core::{App, module};

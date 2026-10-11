@@ -1,10 +1,18 @@
 //! The way down: from the signal that asks a process to stop to the moment it
 //! exits.
 //!
-//! The first `SIGINT` or `SIGTERM` asks for a graceful stop; one received once
-//! the way down has begun exits at once (130 / 143) after one `error` line
-//! naming what it abandons — the runtime owns the handlers by then, so the
-//! operating system's default action no longer runs.
+//! The kernel owns the signals from `main`'s first line: `#[nest_rs::main]`
+//! installs the `SIGINT` / `SIGTERM` handlers before it polls `main`, so the
+//! operating system's default action never runs. The first signal turns every
+//! app the process booted [`Draining`](crate::AppState::Draining), with the
+//! signal as its [`StopCause`]: a boot stops at its next await, naming the step
+//! it waited on, and a serving app winds down. A signal before any app began
+//! its boot exits at once (130 / 143) after one `error` line, on stderr while
+//! no subscriber can take it. One received once the way down has begun — a
+//! second signal, or a first after a transport failed — exits at once after
+//! one `error` line naming what it abandons. An app run outside
+//! `#[nest_rs::main]`, as a `#[tokio::test]` runs it, installs the same
+//! handlers for its own run.
 //!
 //! Dropping a tokio runtime waits for every blocking task still running, so
 //! [`main`] tears it down within what the shutdown hooks left of
@@ -12,20 +20,25 @@
 //! returns or panics.
 
 use std::future::Future;
+use std::io::Write as _;
 use std::panic::AssertUnwindSafe;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
+use crate::app::BootStep;
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::lifecycle::LifecyclePhase;
 
-/// Where the way down stands, for the line a signal received during it files.
-#[derive(Default)]
-pub(crate) struct WayDown(Mutex<Step>);
+/// Where the way down stands, for the line a signal exiting at once files —
+/// process-wide, as the signals are.
+static WAY_DOWN: Mutex<Step> = Mutex::new(Step::Main);
 
-/// What the way down is waiting on.
-#[derive(Default)]
+/// What the process is waiting on.
 enum Step {
+    /// `main`, before any app began its boot.
+    Main,
+    /// An app's boot, waiting on this step; `None` between two.
+    Boot(Option<BootStep>),
     /// The transports, which these have not returned from yet.
     Transports(Vec<&'static str>),
     /// One shutdown hook.
@@ -36,71 +49,147 @@ enum Step {
     },
     /// [`App::run`](crate::App::run) has returned; what remains is `main`'s
     /// locals dropping and the runtime's teardown.
-    #[default]
     Exit,
 }
 
-impl WayDown {
-    fn set(&self, step: Step) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = step;
-    }
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
-    pub(crate) fn transports(&self, running: Vec<&'static str>) {
-        self.set(Step::Transports(running));
-    }
+fn set(step: Step) {
+    *locked(&WAY_DOWN) = step;
+}
 
-    pub(crate) fn hook(&self, phase: LifecyclePhase, provider: &'static str, method: &'static str) {
-        self.set(Step::Hook {
-            phase,
-            provider,
-            method,
-        });
-    }
+/// Record the boot step an app waits on, `None` once it is done.
+pub(crate) fn boot_step(step: Option<&BootStep>) {
+    set(Step::Boot(step.cloned()));
+}
 
-    pub(crate) fn exit(&self) {
-        self.set(Step::Exit);
-    }
+pub(crate) fn transports(running: Vec<&'static str>) {
+    set(Step::Transports(running));
+}
 
-    fn exit_at_once(&self, signal: Received) -> ! {
-        let code = signal.exit_code();
-        {
-            let step = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-            match &*step {
-                Step::Transports(running) => tracing::error!(
-                    target: crate::target::APP,
-                    signal = signal.name(),
-                    exit_code = code,
-                    step = "transports",
-                    transports = running.join(", ").as_str(),
-                    "shutdown signal received on the way down: exiting at once, abandoning what \
-                     still runs",
-                ),
-                Step::Hook {
-                    phase,
-                    provider,
-                    method,
-                } => tracing::error!(
-                    target: crate::target::APP,
-                    signal = signal.name(),
-                    exit_code = code,
-                    step = "shutdown hooks",
-                    ?phase,
-                    provider,
-                    method,
-                    "shutdown signal received on the way down: exiting at once, abandoning what \
-                     still runs",
-                ),
-                Step::Exit => tracing::error!(
-                    target: crate::target::APP,
-                    signal = signal.name(),
-                    exit_code = code,
-                    step = "exit",
-                    "shutdown signal received on the way down: exiting at once, abandoning what \
-                     still runs",
-                ),
-            }
+pub(crate) fn hook(phase: LifecyclePhase, provider: &'static str, method: &'static str) {
+    set(Step::Hook {
+        phase,
+        provider,
+        method,
+    });
+}
+
+pub(crate) fn exit() {
+    set(Step::Exit);
+}
+
+/// Exit now, after one `error` naming what the process abandons.
+fn exit_at_once(signal: Received) -> ! {
+    let code = signal.exit_code();
+    let signal = signal.name();
+    {
+        let step = locked(&WAY_DOWN);
+        match &*step {
+            Step::Main => before_any_app(signal, code),
+            Step::Boot(None) => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "boot",
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
+            Step::Boot(Some(BootStep::Factory { type_name })) => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "boot",
+                type_name,
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
+            Step::Boot(Some(BootStep::Configure { transport })) => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "boot",
+                transport = transport.as_str(),
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
+            Step::Boot(Some(BootStep::InitHook {
+                phase,
+                provider,
+                method,
+                origin,
+            })) => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "boot",
+                ?phase,
+                provider,
+                method,
+                origin,
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
+            Step::Transports(running) => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "transports",
+                transports = running.join(", ").as_str(),
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
+            Step::Hook {
+                phase,
+                provider,
+                method,
+            } => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "shutdown hooks",
+                ?phase,
+                provider,
+                method,
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
+            Step::Exit => tracing::error!(
+                target: crate::target::APP,
+                signal,
+                exit_code = code,
+                step = "exit",
+                "shutdown signal received on the way down: exiting at once, abandoning what still \
+                 runs",
+            ),
         }
-        std::process::exit(code)
+    }
+    std::process::exit(code)
+}
+
+/// The line a signal before any app files: no subscriber may exist yet, so it
+/// goes to stderr when none can take it, as the panic hook's does.
+fn before_any_app(signal: &'static str, code: i32) {
+    if crate::panic::subscribed() {
+        tracing::error!(
+            target: crate::target::APP,
+            signal,
+            exit_code = code,
+            step = "main",
+            "shutdown signal received before the app started: exiting at once",
+        );
+    } else {
+        let line = format!(
+            "nestrs: shutdown signal received before the app started: exiting at once \
+             signal=\"{signal}\" exit_code={code} step=\"main\"\n"
+        );
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "stderr is the last channel: a write it refuses has nowhere left to be said"
+        )]
+        let _ = std::io::stderr().write_all(line.as_bytes());
     }
 }
 
@@ -148,21 +237,35 @@ struct Signals {
 }
 
 impl Signals {
-    fn install() -> std::io::Result<Self> {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            Ok(Self {
-                interrupt: signal(SignalKind::interrupt())?,
-                terminate: signal(SignalKind::terminate())?,
+    /// Installed where they are created: a signal before a task first polls
+    /// them would meet the OS default action and kill the process silently.
+    fn install() -> Option<Self> {
+        Self::open()
+            .inspect_err(|error| {
+                tracing::warn!(
+                    target: crate::target::APP,
+                    error = %crate::error_message(error),
+                    "failed to install the shutdown signal handlers; the process stops only when \
+                     a transport does",
+                );
             })
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(Self {
-                ctrl_c: tokio::signal::windows::ctrl_c()?,
-            })
-        }
+            .ok()
+    }
+
+    #[cfg(unix)]
+    fn open() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn open() -> std::io::Result<Self> {
+        Ok(Self {
+            ctrl_c: tokio::signal::windows::ctrl_c()?,
+        })
     }
 
     /// The next stop signal; pending forever once the runtime shuts the
@@ -186,23 +289,84 @@ impl Signals {
     }
 }
 
-/// Watch for the signals that stop the process: the first turns the app
-/// draining; one received once it drains exits at once.
-///
-/// The handlers are installed here, not in the spawned task: a signal before
-/// its first poll would meet the OS default action and kill the process silently.
-pub(crate) fn watch_signals(lifecycle: &Arc<AppLifecycle>, way_down: Arc<WayDown>) {
-    let mut signals = match Signals::install() {
-        Ok(signals) => signals,
-        Err(error) => {
-            tracing::warn!(
-                target: crate::target::APP,
-                error = %crate::error_message(&error),
-                "failed to install the shutdown signal handlers; the process stops only when a \
-                 transport does",
-            );
-            return;
+/// The apps this process booted, for the watcher `#[nest_rs::main]` runs.
+struct Process {
+    /// Every app whose boot began, while it lives.
+    apps: Vec<Weak<AppLifecycle>>,
+    /// The first signal, once it reached an app: an app booting after it
+    /// starts draining.
+    asked: Option<StopCause>,
+    /// Whether the watcher runs, so an app's run installs no handlers of its own.
+    watched: bool,
+}
+
+static PROCESS: Mutex<Process> = Mutex::new(Process {
+    apps: Vec::new(),
+    asked: None,
+    watched: false,
+});
+
+/// An app's boot begins: the process's signals now reach it.
+pub(crate) fn booting(lifecycle: &Arc<AppLifecycle>) {
+    set(Step::Boot(None));
+    let asked = {
+        let mut process = locked(&PROCESS);
+        process.apps.retain(|app| app.strong_count() > 0);
+        process.apps.push(Arc::downgrade(lifecycle));
+        process.asked
+    };
+    if let Some(cause) = asked {
+        lifecycle.drain(cause);
+    }
+}
+
+/// Whether `#[nest_rs::main]`'s watcher runs.
+pub(crate) fn watched() -> bool {
+    locked(&PROCESS).watched
+}
+
+/// The watcher `#[nest_rs::main]` runs, until its runtime is torn down.
+struct Watching;
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        locked(&PROCESS).watched = false;
+    }
+}
+
+/// Watch the process's signals for every app it boots: the first drains them
+/// — or exits at once when none was left to drain — and the next exits at once.
+fn watch_process() -> Option<Watching> {
+    let mut signals = Signals::install()?;
+    locked(&PROCESS).watched = true;
+    tokio::spawn(async move {
+        let first = signals.next().await;
+        let apps: Vec<Arc<AppLifecycle>> = {
+            let mut process = locked(&PROCESS);
+            let apps: Vec<_> = process.apps.iter().filter_map(Weak::upgrade).collect();
+            if !apps.is_empty() {
+                process.asked = Some(first.cause());
+            }
+            apps
+        };
+        let mut drained = false;
+        for app in &apps {
+            drained |= app.drain(first.cause());
         }
+        if !drained {
+            exit_at_once(first);
+        }
+        let second = signals.next().await;
+        exit_at_once(second);
+    });
+    Some(Watching)
+}
+
+/// Watch the process's signals for one app's run, outside `#[nest_rs::main]`:
+/// the first drains it, unless it already is; the next exits at once.
+pub(crate) fn watch_app(lifecycle: &Arc<AppLifecycle>) {
+    let Some(mut signals) = Signals::install() else {
+        return;
     };
     let app = Arc::downgrade(lifecycle);
     let stopping = lifecycle.stopping();
@@ -210,13 +374,13 @@ pub(crate) fn watch_signals(lifecycle: &Arc<AppLifecycle>, way_down: Arc<WayDown
         tokio::select! {
             signal = signals.next() => {
                 if !app.upgrade().is_some_and(|app| app.drain(signal.cause())) {
-                    way_down.exit_at_once(signal);
+                    exit_at_once(signal);
                 }
             }
             () = stopping.cancelled() => {}
         }
         let signal = signals.next().await;
-        way_down.exit_at_once(signal);
+        exit_at_once(signal);
     });
 }
 
@@ -246,8 +410,9 @@ fn teardown_budget() -> Duration {
 }
 
 /// What `#[nest_rs::main]` expands to: install the process panic hook, run the
-/// process steps while no runtime exists, build the runtime, run `main` on it,
-/// and tear it down within what remains of the shutdown hooks' budget.
+/// process steps while no runtime exists, build the runtime, install the
+/// signal handlers on it, run `main` on it, and tear it down within what
+/// remains of the shutdown hooks' budget.
 ///
 /// The runtime is what `#[tokio::main]` builds; only its teardown is bounded.
 pub fn main<T, F: Future<Output = T>>(main: F) -> T {
@@ -263,6 +428,10 @@ pub fn main<T, F: Future<Output = T>>(main: F) -> T {
         .unwrap_or_else(|error| {
             panic!("#[nest_rs::main] could not build the tokio runtime `main` runs on: {error}")
         });
+    let watching = {
+        let _entered = runtime.enter();
+        watch_process()
+    };
     // Caught so a panicking `main` gets the same bounded teardown: unwinding
     // past it would drop the runtime, which waits on blocking work unbounded.
     let ran = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(main)));
@@ -279,6 +448,7 @@ pub fn main<T, F: Future<Output = T>>(main: F) -> T {
              waits for it",
         );
     }
+    drop(watching);
     ran.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 

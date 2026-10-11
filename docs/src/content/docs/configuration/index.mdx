@@ -343,11 +343,16 @@ impl PostsService {
 
 ## Run it
 
-A bad value fails the boot before any port opens:
+A bad value fails the boot before any port opens. The config is built by
+a factory, so the first line names its type and the variable comes just
+below:
 
 ```bash frame="terminal"
 $ NESTRS_POSTS__PAGE_SIZE=lots nestrs run dev api
-Error: invalid value for NESTRS_POSTS__PAGE_SIZE: invalid digit found in string
+Error: the factory for `features::posts::config::PostsConfig` failed
+
+Caused by:
+    invalid value for NESTRS_POSTS__PAGE_SIZE: invalid digit found in string
 ```
 
 A violated `#[validate]` rule aborts the same way after the load,

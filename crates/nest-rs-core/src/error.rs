@@ -168,8 +168,31 @@ pub struct FactoryCycleError {
     pub type_names: Vec<&'static str>,
 }
 
-/// The app's init phases failed, or were dropped before they finished, on an
-/// earlier call: they do not run again, so neither
+/// A factory failed, so the boot ends before any provider is built from it:
+/// named by the type it would have built, its cause the factory's own error.
+#[derive(Debug, Error)]
+#[error("the factory for `{type_name}` failed")]
+pub struct FactoryFailedError {
+    /// The type the factory would have built.
+    pub type_name: &'static str,
+    /// What the factory failed with.
+    #[source]
+    pub source: anyhow::Error,
+}
+
+/// A stop was asked while the boot waited on one of its steps: the step was
+/// dropped where it waited, and the app never served.
+#[derive(Debug, Error)]
+#[error("the boot was stopped by {cause:?} during {step}")]
+pub struct BootInterruptedError {
+    /// Why the app stops.
+    pub cause: crate::StopCause,
+    /// The step the stop interrupted.
+    pub step: crate::BootStep,
+}
+
+/// The app's init phases failed, were interrupted, or were dropped before they
+/// finished, on an earlier call: they do not run again, so neither
 /// [`App::init`](crate::App::init) nor [`App::run`](crate::App::run) proceeds.
 #[derive(Debug, Error)]
 #[error("the app's init failed earlier: it does not run again")]
@@ -1072,5 +1095,59 @@ mod decode_error_tests {
     fn a_validator_rule_with_its_own_message_is_left_to_its_author() {
         let text = "password: must be at least 32 characters";
         assert!(matches!(DecodeError::redact(text, None), Cow::Borrowed(_)));
+    }
+}
+
+#[cfg(test)]
+mod boot_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn an_interruption_names_its_cause_and_its_step() {
+        let factory = BootInterruptedError {
+            cause: crate::StopCause::Terminate,
+            step: crate::BootStep::Factory {
+                type_name: "app::Pool",
+            },
+        };
+        assert_eq!(
+            factory.to_string(),
+            "the boot was stopped by Terminate during the factory for `app::Pool`"
+        );
+        let configure = BootInterruptedError {
+            cause: crate::StopCause::Interrupt,
+            step: crate::BootStep::Configure {
+                transport: "HttpTransport".to_owned(),
+            },
+        };
+        assert_eq!(
+            configure.to_string(),
+            "the boot was stopped by Interrupt during the `configure` of transport `HttpTransport`"
+        );
+        let hook = BootInterruptedError {
+            cause: crate::StopCause::Terminate,
+            step: crate::BootStep::InitHook {
+                phase: crate::LifecyclePhase::OnModuleInit,
+                provider: "CacheWarmer",
+                method: "warm",
+                origin: "app::cache",
+            },
+        };
+        assert_eq!(
+            hook.to_string(),
+            "the boot was stopped by Terminate during lifecycle hook CacheWarmer::warm (OnModuleInit)"
+        );
+    }
+
+    #[test]
+    fn a_failed_factory_is_named_and_says_its_cause_after_it() {
+        let failed = FactoryFailedError {
+            type_name: "app::Pool",
+            source: anyhow::anyhow!("connection refused"),
+        };
+        assert_eq!(
+            crate::error_message(&failed),
+            "the factory for `app::Pool` failed: connection refused"
+        );
     }
 }

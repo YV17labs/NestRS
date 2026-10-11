@@ -87,6 +87,10 @@ pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
 /// the shutdown hooks' budget, abandoning and logging a blocking task still
 /// running rather than waiting on it.
 ///
+/// It installs the `SIGINT` / `SIGTERM` handlers before the body runs, so the
+/// first signal stops the boot at its next await or drains the serving app,
+/// and one received before any app exists exits at once with 130 / 143.
+///
 /// Takes no argument. The app's manifest needs no `tokio` line for it.
 #[proc_macro_attribute]
 pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {

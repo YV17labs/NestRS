@@ -320,7 +320,9 @@ and the teardown in `way_down.rs`'s `//!`:
   of their budget, so blocking work left behind is named and abandoned rather
   than holding the exit (no `#[tokio::main]`, held by `clippy.toml`).
 - **A signal received on the way down exits at once**, after one `error` naming
-  what it abandons; the handlers are installed before any transport serves.
+  what it abandons; the handlers are installed by `#[nest_rs::main]` before
+  `main` runs, and a signal during the boot stops it at its next await, naming
+  the step.
 - **The grace period holds the sum.** A test in `nest-rs-testing` sums every
   framework transport's `stop_bound`, the hooks' budget and the flush under a
   Kubernetes pod's default grace, and fails the day one stops fitting.

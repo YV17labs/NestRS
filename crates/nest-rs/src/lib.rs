@@ -9,7 +9,9 @@ pub use nest_rs_core as core;
 
 /// The binary's entry point: `#[nest_rs::main] async fn main()`. It builds the
 /// runtime, runs the app on it, and ends the process within the shutdown
-/// budget — see [`core::main`].
+/// budget. Its `SIGINT` / `SIGTERM` handlers are installed before `main` runs,
+/// so the first signal stops the boot or drains the app, and one received
+/// before any app exists exits at once with 130 / 143 — see [`core::main`].
 pub use nest_rs_core::main;
 
 #[cfg(feature = "http")]

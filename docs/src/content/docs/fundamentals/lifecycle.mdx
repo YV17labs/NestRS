@@ -320,12 +320,45 @@ abandoning what still runs — said at `warn` when it waited out a bound — whe
 work it left behind gets all five seconds. The app's manifest needs no `tokio`
 line for it.
 
+**The signals are the kernel's from `main`'s first line.**
+`#[nest_rs::main]` installs the `SIGINT` / `SIGTERM` handlers before it runs
+`main`, so the operating system's default action — a silent kill — never runs,
+whatever the process is doing when the signal lands:
+
+- **Before any app begins its boot** — a `main` still reading its
+  arguments, a migration tool that boots none — the process exits at once
+  with the code a shell gives a process that signal killed (130 for
+  `SIGINT`, 143 for `SIGTERM`), after one `error` on `nest_rs::app`,
+  `shutdown signal received before the app started: exiting at once`, with
+  `step="main"`. No subscriber may exist yet, so the line goes to stderr
+  when none can take it.
+- **During the boot** — a factory opening its pool, a transport
+  configuring, an init hook warming a cache — the boot stops at its next
+  await: the step it waits on is dropped there, one `warn` names it
+  (`shutdown signal received during the boot: stopping it`, with `signal`
+  and `step`), and `build()`, `init()` or `run()` returns
+  `BootInterruptedError`, so `main` exits 1 through `anyhow`, after the
+  telemetry flush. A step that blocks its thread cannot be dropped; a second
+  signal is the way out.
+- **While it serves**, the app turns `Draining` and the way down above
+  begins.
+
+A factory that fails ends the boot naming the type it would have built — a
+`FactoryFailedError` whose source is the factory's own error:
+
+```text frame="terminal"
+Error: the factory for `app::Pool` failed
+
+Caused by:
+    connection refused
+```
+
 **A second signal exits at once.** One `SIGINT` or `SIGTERM` starts the way
 down; another received during it — a second `Ctrl-C`, an orchestrator repeating
-its `SIGTERM`, a signal after a failing transport began the way down — exits
-immediately, with the code a shell gives a process that signal killed (130 for
-`SIGINT`, 143 for `SIGTERM`), after one `error` on `nest_rs::app` naming what it
-abandons:
+its `SIGTERM`, a signal after a failing transport began the way down, one while
+a boot step blocks its thread — exits immediately, with the same 130 or 143,
+after one `error` on `nest_rs::app` naming what it abandons (`step` is `boot`,
+`transports`, `shutdown hooks` or `exit`, beside what it waited on):
 
 ```text frame="terminal"
 ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase=OnModuleDestroy provider="CacheService" method="flush"

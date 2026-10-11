@@ -137,9 +137,9 @@ mod tests {
         };
         let refused = format!("{refused:#}");
         assert!(
-            refused.starts_with("SeaOrmDatabaseModule: no `SeaOrmConfig` in the container")
+            refused.contains(": SeaOrmDatabaseModule: no `SeaOrmConfig` in the container")
                 && refused.contains("`SeaOrmModule::for_root(None)`"),
-            "{refused}"
+            "the factory's own sentence, after the one naming it: {refused}"
         );
     }
 

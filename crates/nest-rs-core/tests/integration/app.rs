@@ -266,3 +266,40 @@ async fn the_boot_line_files_the_longest_stop_bound_beside_the_hooks_budget() {
         Some(SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string()),
     );
 }
+
+struct Pool;
+
+#[tokio::test]
+async fn a_factory_that_fails_is_named_and_its_cause_kept_in_the_chain() {
+    let Err(refused) = App::builder()
+        .provide_factory::<Pool, _, _>(|_| async {
+            Err(anyhow!("connection refused by the database host"))
+        })
+        .build()
+        .await
+    else {
+        panic!("a failing factory fails the boot");
+    };
+
+    let failed = refused
+        .downcast_ref::<nest_rs_core::FactoryFailedError>()
+        .unwrap_or_else(|| panic!("not the factory refusal: {refused:#}"));
+    assert_eq!(failed.type_name, std::any::type_name::<Pool>());
+    assert_eq!(
+        refused.to_string(),
+        format!("the factory for `{}` failed", std::any::type_name::<Pool>()),
+    );
+    assert!(
+        refused
+            .chain()
+            .any(|cause| cause.to_string() == "connection refused by the database host"),
+        "{refused:#}"
+    );
+    assert_eq!(
+        nest_rs_core::error_message(refused.as_ref()),
+        format!(
+            "the factory for `{}` failed: connection refused by the database host",
+            std::any::type_name::<Pool>()
+        ),
+    );
+}

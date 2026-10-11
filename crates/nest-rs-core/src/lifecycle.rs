@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use crate::app::BootStep;
+use crate::app_lifecycle::AppLifecycle;
 use crate::container::Container;
 use crate::panic;
-use crate::way_down::WayDown;
 
 /// How long the shutdown hooks may run, all of them together, before what still
 /// waits is abandoned.
@@ -114,8 +115,13 @@ fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: Lifecyc
     );
 }
 
-/// Init-phase runner: aborts on the first error or panic.
-pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> anyhow::Result<()> {
+/// Init-phase runner: aborts on the first error or panic, and at a stop asked
+/// while a hook waits.
+pub(crate) async fn run_phase(
+    container: &Container,
+    lifecycle: &AppLifecycle,
+    phase: LifecyclePhase,
+) -> anyhow::Result<()> {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
@@ -128,7 +134,16 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
             method = hook.method,
             "running lifecycle hook",
         );
-        match panic::contain((hook.run)(container)).await {
+        let step = BootStep::InitHook {
+            phase,
+            provider: hook.provider,
+            method: hook.method,
+            origin: hook.origin,
+        };
+        match lifecycle
+            .boot(step, panic::contain((hook.run)(container)))
+            .await?
+        {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 return Err(err.context(format!(
@@ -163,14 +178,13 @@ pub(crate) async fn run_phase_lenient(
     container: &Container,
     phase: LifecyclePhase,
     deadline: Instant,
-    way_down: &WayDown,
 ) {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
             report_inert_hook(container, hook, phase);
             continue;
         }
-        way_down.hook(phase, hook.provider, hook.method);
+        crate::way_down::hook(phase, hook.provider, hook.method);
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
         // it still runs once.
@@ -255,9 +269,13 @@ mod tests {
                 hits: AtomicUsize::new(0),
             })
             .build();
-        run_phase(&container, LifecyclePhase::OnModuleInit)
-            .await
-            .unwrap();
+        run_phase(
+            &container,
+            &AppLifecycle::new(),
+            LifecyclePhase::OnModuleInit,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             container
                 .get::<Probe>()
@@ -271,9 +289,13 @@ mod tests {
     #[tokio::test]
     async fn phase_with_no_hooks_is_a_noop() {
         let container = Container::builder().build();
-        run_phase(&container, LifecyclePhase::OnApplicationShutdown)
-            .await
-            .unwrap();
+        run_phase(
+            &container,
+            &AppLifecycle::new(),
+            LifecyclePhase::OnApplicationShutdown,
+        )
+        .await
+        .unwrap();
     }
 
     struct Unreachable;
@@ -297,14 +319,17 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_hook_is_skipped_by_both_runners() {
         let container = Container::builder().build();
-        run_phase(&container, LifecyclePhase::BeforeApplicationShutdown)
-            .await
-            .expect("a skipped hook must not fail the phase");
+        run_phase(
+            &container,
+            &AppLifecycle::new(),
+            LifecyclePhase::BeforeApplicationShutdown,
+        )
+        .await
+        .expect("a skipped hook must not fail the phase");
         run_phase_lenient(
             &container,
             LifecyclePhase::BeforeApplicationShutdown,
             Instant::now() + SHUTDOWN_HOOKS_TIMEOUT,
-            &WayDown::default(),
         )
         .await;
     }

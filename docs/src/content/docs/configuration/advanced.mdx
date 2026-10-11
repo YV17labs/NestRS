@@ -171,25 +171,35 @@ $ NESTRS_OAUTH__CLIENTS='[{"client_id":"web","client_secret":"...","payload":{"o
 2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="OAuthController" method="POST" path="/token" handler="token"
 ```
 
-A bad value fails the boot before any port opens:
+A bad value fails the boot before any port opens, naming the config's
+factory first and the variable below it:
 
 ```bash frame="terminal"
 $ NESTRS_OAUTH__DEFAULT_ORG_ID=not-a-uuid nestrs run dev auth
-Error: invalid value for NESTRS_OAUTH__DEFAULT_ORG_ID: invalid character: found `n` at 0
+Error: the factory for `features::oauth::config::OAuthConfig` failed
+
+Caused by:
+    invalid value for NESTRS_OAUTH__DEFAULT_ORG_ID: invalid character: found `n` at 0
 ```
 
 A failed validation runs after the load:
 
 ```bash frame="terminal"
 $ nestrs run dev auth   # no clients configured
-Error: configuration validation failed for 'oauth'
-  - clients: at_least_one_client
+Error: the factory for `features::oauth::config::OAuthConfig` failed
+
+Caused by:
+    configuration validation failed for 'oauth'
+      - clients: at_least_one_client
 ```
 
 ```bash frame="terminal"
 $ NESTRS_OAUTH__CLIENTS='[{"client_id":"web",…,"scopes":["admin"]}]' nestrs run dev auth
-Error: configuration validation failed for 'oauth'
-  - clients[web].scopes: unknown_scope
+Error: the factory for `features::oauth::config::OAuthConfig` failed
+
+Caused by:
+    configuration validation failed for 'oauth'
+      - clients[web].scopes: unknown_scope
 ```
 
 A refusal line says the field and the rule's code, never the rule's

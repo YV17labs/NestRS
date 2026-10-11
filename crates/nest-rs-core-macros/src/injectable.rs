@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::Expr;
+use syn::{Expr, ItemStruct};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
@@ -11,25 +11,30 @@ use nest_rs_codegen::{
 };
 
 pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
-    let scope = match parse_injectable_scope(args.into()) {
-        Ok(s) => s,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let mut item = match parse_provider_host(input.into()) {
-        Ok(item) => item,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let expanded = parse_injectable_scope(args.into()).and_then(|scope| {
+        let item = parse_provider_host(input.into())?;
+        provider(item, scope, quote!(builder))
+    });
+    match expanded {
+        Ok(expanded) => expanded.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
+/// `item` as a provider of `scope`; a singleton's registration ends with
+/// `then`, an expression of the `builder` it was provided into.
+pub(crate) fn provider(
+    mut item: ItemStruct,
+    scope: InjectableScope,
+    then: TokenStream2,
+) -> syn::Result<TokenStream2> {
     let InjectableBody {
         ctor,
         dep_keys,
         dep_names,
         opt_keys,
         keyed_dep_keys,
-    } = match build_injectable_body(&mut item) {
-        Ok(body) => body,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    } = build_injectable_body(&mut item)?;
 
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
@@ -62,7 +67,8 @@ pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
                 ) -> ::nest_rs_core::ContainerBuilder {
                     let __snapshot = builder.snapshot();
                     let __value = Self::from_container(&__snapshot);
-                    builder.provide(__value)
+                    let builder = builder.provide(__value);
+                    #then
                 }
             },
         ),
@@ -96,7 +102,7 @@ pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
         ),
     };
 
-    quote! {
+    Ok(quote! {
         #item
 
         impl #impl_generics #name #ty_generics #where_clause {
@@ -117,12 +123,11 @@ pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         #singleton_marker
-    }
-    .into()
+    })
 }
 
 #[derive(Clone, Copy)]
-enum InjectableScope {
+pub(crate) enum InjectableScope {
     Singleton,
     Request,
     Transient,

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use nest_rs_core::{Continuation, RequestContinuation};
 use nest_rs_database::Deferred;
 
 use crate::error::CommitError;
@@ -93,26 +94,18 @@ impl LazyTransaction {
         }
     }
 
-    /// Keep `work` for after the commit, to run on the **pool** under the
-    /// boundary's scope and the caller's ability.
+    /// Keep `work` for after the commit, to run under what the caller carries
+    /// into a [`Commit`](Continuation::Commit): the **pool** under the
+    /// boundary's scope, the caller's ability, every value that crosses.
     ///
-    /// Captures the pool, never this `LazyTransaction`: a held `Arc` to the
-    /// boundary would make every boundary that held work read as escaped.
+    /// The capture holds the pool, never this `LazyTransaction`: a held `Arc`
+    /// to the boundary would make every boundary that held work read as
+    /// escaped.
     fn hold(&self, work: Deferred) {
-        let scope = nest_rs_database::current_executor_scope();
-        let ability = nest_rs_authz::current_ability();
-        let pool = Executor::Pool(self.pool.clone());
-        let work: Deferred = Box::pin(async move {
-            let work: Deferred = match ability {
-                Some(ability) => Box::pin(nest_rs_authz::with_ability(ability, work)),
-                None => work,
-            };
-            match scope {
-                Some(ExecutorScope::Request) => with_request_executor(pool, work).await,
-                Some(ExecutorScope::Job) => with_job_executor(pool, work).await,
-                None => with_executor(pool, work).await,
-            }
-        });
+        let work: Deferred = match RequestContinuation::capture(Continuation::Commit) {
+            Some(carried) => Box::pin(async move { carried.scope(work).await }),
+            None => Box::pin(with_executor(Executor::Pool(self.pool.clone()), work)),
+        };
         let refused = {
             let mut held = self
                 .after_commit
@@ -537,6 +530,16 @@ impl nest_rs_database::Executor for Executor {
             Executor::Pool(_) | Executor::Txn(_) => Some(work),
         }
     }
+
+    /// A caller's own [`Txn`](Executor::Txn) names no pool, so a continuation
+    /// leaving it runs without an executor.
+    fn __pool(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
+        match self {
+            Executor::Pool(pool) => Some(Arc::new(Executor::Pool(pool.clone()))),
+            Executor::Lazy(lazy) => Some(Arc::new(Executor::Pool(lazy.pool.clone()))),
+            Executor::Txn(_) => None,
+        }
+    }
 }
 
 /// The SeaORM `Executor` installed in the ambient task-local for this
@@ -599,6 +602,19 @@ mod tests {
         let handle = nest_rs_database::Executor::non_transactional(&lazy)
             .expect("an unopened lazy transaction can step out");
         assert!(matches!(as_seaorm(&handle), Executor::Pool(_)));
+    }
+
+    #[test]
+    fn a_continuation_leaves_a_transaction_for_the_pool_it_was_opened_on() {
+        let lazy = Executor::Lazy(Arc::new(LazyTransaction::new(
+            DatabaseConnection::default(),
+            "test",
+        )));
+        for handle in [lazy, pool()] {
+            let continued = nest_rs_database::Executor::__pool(&handle)
+                .expect("a pool or a lazy transaction names its pool");
+            assert!(matches!(as_seaorm(&continued), Executor::Pool(_)));
+        }
     }
 
     #[test]

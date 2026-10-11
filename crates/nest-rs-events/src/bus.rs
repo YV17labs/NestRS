@@ -5,6 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use nest_rs_core::Continuation;
 use nest_rs_core::tracing::Instrument;
 use parking_lot::RwLock;
 
@@ -53,7 +54,10 @@ impl EventBus {
     /// Inside a unit of work holding a transaction, the dispatch waits for it
     /// through [`nest_rs_database::after_commit`]: it runs on commit, outside
     /// the transaction, and is dropped unrun on rollback or failure. With no
-    /// transaction it runs before `emit` returns.
+    /// transaction it runs before `emit` returns. Either way each listener
+    /// runs under what the emitter carries into a commit — its ability, the
+    /// pool rather than a transaction, a package's values — as a child of its
+    /// trace.
     ///
     /// A slow listener delays the ones after it and the emitter: work that must
     /// not block belongs on the queue. A panicking listener is caught, logged at
@@ -73,9 +77,16 @@ impl EventBus {
         let event_name = std::any::type_name::<E>();
         // Outside the loop: one emit is one trace, even with nothing ambient.
         let cause = nest_rs_core::Correlation::inherited();
+        let carried = nest_rs_core::RequestContinuation::capture(Continuation::Commit);
         nest_rs_database::after_commit(async move {
-            for Listener { name, run } in listeners {
-                dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
+            let dispatch = async move {
+                for Listener { name, run } in listeners {
+                    dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
+                }
+            };
+            match carried {
+                Some(carried) => carried.scope(dispatch).await,
+                None => dispatch.await,
             }
         })
         .await;
@@ -99,8 +110,7 @@ async fn dispatch_one(
         event = event,
         listener = listener,
     );
-    // No request scope, but `current_trace_id()` must answer inside a listener.
-    let continuation = nest_rs_core::RequestContinuation::new(None, correlation);
+    let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
     let line = DispatchLine {
         event,
         listener,
@@ -109,10 +119,11 @@ async fn dispatch_one(
         started: std::time::Instant::now(),
         filed: false,
     };
-    let outcome = continuation
-        .scope(nest_rs_core::panic::contain(fut))
-        .instrument(span)
-        .await;
+    // Nested, never a fresh context, which would drop what the emit carried.
+    let outcome =
+        nest_rs_core::with_request_scope(None, correlation, nest_rs_core::panic::contain(fut))
+            .instrument(span)
+            .await;
     match outcome {
         Ok(()) => line.file(nest_rs_core::operation_log::OK),
         Err(payload) => {

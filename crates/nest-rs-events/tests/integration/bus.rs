@@ -325,3 +325,90 @@ async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_serve
         ]
     );
 }
+
+/// A package's value, carried by the emitter.
+#[derive(Debug)]
+struct Tenant(&'static str);
+
+impl nest_rs_core::AmbientValue for Tenant {}
+
+#[injectable]
+#[derive(Default)]
+struct TenantProbe {
+    seen: std::sync::Mutex<Vec<Option<&'static str>>>,
+}
+
+#[injectable]
+struct TenantListeners {
+    #[inject]
+    probe: Arc<TenantProbe>,
+}
+
+#[derive(Clone)]
+struct TenantTouched;
+
+#[listeners]
+impl TenantListeners {
+    #[on_event]
+    async fn on_touched(&self, _event: TenantTouched) {
+        let tenant = nest_rs_core::ambient::<Tenant>().map(|tenant| tenant.0);
+        self.probe
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(tenant);
+    }
+}
+
+#[module(imports = [EventsModule], providers = [TenantProbe, TenantListeners])]
+struct TenantEventsModule;
+
+async fn tenant_booted() -> (App, Arc<EventBus>, Arc<TenantProbe>) {
+    let app = App::new::<TenantEventsModule>().expect("boots");
+    let bus = app
+        .container()
+        .get::<EventBus>()
+        .expect("the bus is provided");
+    let probe = app
+        .container()
+        .get::<TenantProbe>()
+        .expect("the probe is provided");
+    (app, bus, probe)
+}
+
+fn seen(probe: &TenantProbe) -> Vec<Option<&'static str>> {
+    probe
+        .seen
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+#[tokio::test]
+async fn a_listener_reads_a_value_its_emitter_carried() {
+    let (_app, bus, probe) = tenant_booted().await;
+
+    nest_rs_core::with_ambient(Arc::new(Tenant("acme")), bus.emit(TenantTouched)).await;
+
+    assert_eq!(seen(&probe), [Some("acme")]);
+}
+
+#[tokio::test]
+async fn a_listener_held_for_the_commit_still_reads_what_its_emitter_carried() {
+    let (_app, bus, probe) = tenant_booted().await;
+    let transaction = Arc::new(OpenTransaction::default());
+
+    nest_rs_core::with_ambient(
+        Arc::new(Tenant("acme")),
+        nest_rs_database::with_request_executor(transaction.clone(), bus.emit(TenantTouched)),
+    )
+    .await;
+    assert!(seen(&probe).is_empty(), "held until the commit");
+
+    transaction.commit().await;
+    assert_eq!(
+        seen(&probe),
+        [Some("acme")],
+        "the value crossed into the commit with the event",
+    );
+}

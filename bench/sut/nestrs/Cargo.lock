@@ -1628,7 +1628,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "tokio",
  "tracing",
 ]
 
@@ -1706,7 +1705,7 @@ dependencies = [
 name = "nest-rs-database"
 version = "7.0.0"
 dependencies = [
- "tokio",
+ "nest-rs-core",
 ]
 
 [[package]]

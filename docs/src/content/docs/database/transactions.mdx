@@ -55,7 +55,8 @@ the request fails — an event announces a fact, and a write that did not land i
 not one. The same holds at every boundary that settles a transaction: a
 WebSocket message, an MCP operation, a queue attempt, a scheduled tick. The
 listeners run outside the transaction they waited for, on the pool, with the
-caller's scope and ability; the response leaves once they have.
+caller's scope, ability and every value the emitter carries; the response
+leaves once they have.
 
 A `push`, a WebSocket broadcast and a storage write do **not** wait, and
 cannot: each answers its caller — a receipt, `UniqueKeyHeld`, a send failure,

@@ -9,8 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 A policy is a function from a principal to an `Ability`. The function
 runs per request — `AbilityFactory::define` is called once after
-authn, the returned `Ability` lives in the request's task-local and
-extensions. This page covers the builder API: subjects, actions,
+authn, the returned `Ability` lives in the request's extensions and its
+ambient context. This page covers the builder API: subjects, actions,
 conditional rules, restricted fields, denials.
 
 Predicates compile through a single `Predicate` AST that lowers to

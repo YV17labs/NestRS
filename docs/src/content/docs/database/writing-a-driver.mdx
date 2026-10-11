@@ -6,9 +6,9 @@ sidebar:
 ---
 
 The [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database)
-crate is a seam: an object-safe `Executor` trait, two `tokio::task_local!`s,
-and the install helpers that thread "the request's current handle, optionally
-inside a transaction" across every layer. The seam names no store and no
+crate is a seam: an object-safe `Executor` trait, and the install helpers
+that keep "the request's current handle, optionally inside a transaction" in
+the request's ambient context, which carries it across every layer. The seam names no store and no
 query API — a handle is a handle. The same scaffold fits a SQL pool, a
 document-store client, a key-value session, a graph driver, an in-memory
 map. This page gives you the **shape** of a driver, not its implementation:
@@ -48,7 +48,7 @@ collapses to a single variant — the seam absorbs that too.
 ```rust title="crates/yourdb/src/executor.rs"
 use std::any::Any;
 
-/// Your driver's handle, threaded through the framework's task-local.
+/// Your driver's handle, carried in the request's ambient context.
 /// The framework only reaches it via the trait; the variants are yours.
 #[derive(Clone)]
 pub enum Executor {
@@ -94,15 +94,21 @@ trait's default hands the work back to run at once — right for a handle with
 no transaction, and wrong for one with: a driver that leaves it out dispatches
 every event emitted inside a transaction before that transaction has landed,
 and announces writes a rollback then undoes. Run the held work on your
-non-transactional handle, under the scope and the ability it was registered
-under (`current_executor_scope()`, and your authorization context), and
-contain a panic in it — the commit already stood.
+non-transactional handle, under what the unit carries into its commit —
+`nest_rs::core::RequestContinuation::capture(Continuation::Commit)`, taken
+where the work is registered: the scope, the ability, every value that
+crosses — and contain a panic in it — the commit already stood.
+
+The other continuations — a streaming body, a DataLoader batch — reach the
+pool through the first-party driver alone: under another driver they run
+with no executor, so a read there fails closed rather than borrowing a
+transaction that has settled.
 
 ## Step 2 — The request interceptor
 
 This is the centerpiece. The interceptor classifies the HTTP method,
-installs the right executor in the task-local, and on the way out commits
-or rolls back. The framework owns the task-local install, the `Arc`
+installs the right executor in the ambient context, and on the way out
+commits or rolls back. The framework owns the install, the `Arc`
 lifecycle, and the response branching. The five numbered comments mark the
 five places you write store-specific code.
 
@@ -341,7 +347,7 @@ impl DynamicModule for YourDbSetup {
 
 ## A query helper (sketch)
 
-Services don't touch the task-local directly — they call a small helper
+Services don't read the ambient context directly — they call a small helper
 your driver ships. The helper reads the current executor, downcasts to
 your enum, and hands the caller a store-native handle.
 
@@ -378,13 +384,13 @@ access graph and module wiring, structured observability under
   `worker.rs`, and `module.rs` whenever a placeholder above needs a
   concrete shape.
 - [`crates/nest-rs-database/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-database/README.md) —
-  the trait contract, the task-local seam, the install helpers in detail.
+  the trait contract, the ambient seam, the install helpers in detail.
 - [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
   an analogous worker-side integration on the queue runtime, for a second
   read on the `JobContext` pattern.
 
 ## Going further
 
-- [Repo and executor](/database/repo-and-executor/) — the executor and task-local your driver installs.
+- [Repo and executor](/database/repo-and-executor/) — the ambient executor your driver installs.
 - [Transactions](/database/transactions/) — the commit/rollback boundary the interceptor drives.
 - [Database](/database/) — the module an app imports to pick a driver.

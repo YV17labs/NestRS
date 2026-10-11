@@ -4,9 +4,11 @@
 use std::any::Any;
 use std::fmt;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use tokio::time::Instant;
 
+use crate::ambient::{AmbientValue, Pending};
 use crate::handler::{Handler, Reflector};
 use crate::operation_log::{Edge, Unit};
 
@@ -22,6 +24,8 @@ pub struct UnitContext<'a> {
     view: &'a mut (dyn UnitView + 'static),
     peer: Option<Peer>,
     deadline: Option<Instant>,
+    /// What the running stage attached, made ambient once it has passed.
+    pending: Pending,
 }
 
 impl<'a> UnitContext<'a> {
@@ -102,6 +106,21 @@ impl<'a> UnitContext<'a> {
         let view: &mut dyn Any = &mut *self.view;
         view.downcast_mut()
     }
+
+    /// Make `value` ambient for the rest of this unit and every continuation
+    /// its type lets it cross: recorded now, installed once the running stage
+    /// has passed, so a denied unit installs nothing.
+    pub fn attach<T: AmbientValue>(&mut self, value: T) {
+        self.pending.attach(Arc::new(value));
+    }
+
+    /// The `T` this unit carries: attached earlier in this stage, else
+    /// ambient.
+    pub fn ambient<T: AmbientValue>(&self) -> Option<Arc<T>> {
+        self.pending
+            .get::<T>()
+            .or_else(crate::ambient::ambient::<T>)
+    }
 }
 
 impl fmt::Debug for UnitContext<'_> {
@@ -110,6 +129,7 @@ impl fmt::Debug for UnitContext<'_> {
             .field("handler", self.handler)
             .field("peer", &self.peer)
             .field("deadline", &self.deadline)
+            .field("pending", &self.pending)
             .finish_non_exhaustive()
     }
 }
@@ -152,7 +172,14 @@ pub fn new_unit_context<'a>(
         view,
         peer,
         deadline,
+        pending: Pending::default(),
     }
+}
+
+/// What the running stage attached, taken for its install once the stage has
+/// passed.
+pub fn take_pending(cx: &mut UnitContext<'_>) -> Pending {
+    std::mem::take(&mut cx.pending)
 }
 
 #[cfg(test)]
@@ -233,6 +260,42 @@ mod tests {
             Some("edited")
         );
         assert_eq!((cx.peer(), cx.deadline()), (None, None));
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Author(&'static str);
+
+    impl crate::AmbientValue for Author {}
+
+    #[tokio::test]
+    async fn an_attachment_is_read_at_once_and_ambient_only_once_installed() {
+        let mut view = SocketView { event: "send" };
+        let mut cx = new_unit_context(&SEND, &mut view, None, None);
+        assert!(cx.ambient::<Author>().is_none());
+
+        cx.attach(Author("alice"));
+        assert_eq!(
+            cx.ambient::<Author>().as_deref(),
+            Some(&Author("alice")),
+            "the stage reads what it attached",
+        );
+        assert!(crate::ambient::<Author>().is_none(), "not ambient yet");
+
+        let pending = take_pending(&mut cx);
+        let installed =
+            crate::ambient::install_pending(pending, async { crate::ambient::<Author>() }).await;
+        assert_eq!(installed.as_deref(), Some(&Author("alice")));
+        assert!(cx.ambient::<Author>().is_none(), "taken, so installed once");
+    }
+
+    #[tokio::test]
+    async fn the_context_reads_what_the_unit_already_carries() {
+        let mut view = SocketView { event: "send" };
+        let seen = crate::with_ambient(Arc::new(Author("bob")), async {
+            new_unit_context(&SEND, &mut view, None, None).ambient::<Author>()
+        })
+        .await;
+        assert_eq!(seen.as_deref(), Some(&Author("bob")));
     }
 
     #[test]

@@ -3,12 +3,14 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nest_rs_core::{AmbientValue, Continuation};
+
 /// Work held until the ambient unit of work commits — what [`after_commit`]
 /// hands an [`Executor`] to keep.
 pub type Deferred = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
-/// An ambient handle to a unit of database work, installed in the
-/// task-local for the lifetime of a request or a worker job.
+/// An ambient handle to a unit of database work, installed in the ambient
+/// context for the lifetime of a request or a worker job.
 ///
 /// An ORM-specific `Repo` recovers its concrete handle via
 /// [`Executor::as_any`]. A downcast miss (mismatched `Module` + `Repo`) is
@@ -39,6 +41,15 @@ pub trait Executor: Any + Send + Sync + 'static {
     /// itself; a driver whose boundaries settle a transaction overrides it.
     fn after_commit(&self, work: Deferred) -> Option<Deferred> {
         Some(work)
+    }
+
+    /// A handle on the pool this executor draws from, outside any transaction:
+    /// what a continuation that can outlive the transaction runs on (a
+    /// streaming body, a DataLoader batch, after-commit work). `None` when there
+    /// is none to give, and the continuation then runs without an executor.
+    #[doc(hidden)]
+    fn __pool(&self) -> Option<Arc<dyn Executor>> {
+        None
     }
 }
 
@@ -74,42 +85,68 @@ pub enum ExecutorScope {
     Job,
 }
 
-tokio::task_local! {
-    static EXECUTOR: Arc<dyn Executor>;
-    static EXECUTOR_SCOPE: ExecutorScope;
+/// The executor a unit runs on and the scope it was installed under, as one
+/// value of the ambient context.
+struct AmbientExecutor {
+    executor: Arc<dyn Executor>,
+    scope: Option<ExecutorScope>,
+}
+
+impl AmbientValue for AmbientExecutor {
+    /// A continuation that can outlive the transaction runs on the pool — a
+    /// body is polled after the commit, a batch serves every field, held work
+    /// runs once the transaction is gone; one that opens its own unit (a task,
+    /// a connection's next message, a job) gets none, so a detached write
+    /// cannot run outside a unit of work.
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        match into {
+            Continuation::Body | Continuation::Batch | Continuation::Commit => {
+                Some(Arc::new(Self {
+                    executor: self.executor.__pool()?,
+                    scope: self.scope,
+                }))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The installed ambient executor, or `None` outside any scope. An
 /// ORM-specific `Repo` calls this and downcasts via [`Executor::as_any`].
 pub fn current_executor() -> Option<Arc<dyn Executor>> {
-    EXECUTOR.try_with(Arc::clone).ok()
+    nest_rs_core::ambient::<AmbientExecutor>().map(|ambient| Arc::clone(&ambient.executor))
 }
 
 /// The installed ambient executor scope, or `None` outside any scope.
 pub fn current_executor_scope() -> Option<ExecutorScope> {
-    EXECUTOR_SCOPE.try_with(Clone::clone).ok()
+    nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.scope)
 }
 
-/// Install `executor` without tagging a scope. An untagged scope is
-/// **fail-closed** like a request: only [`with_job_executor`] grants unscoped reads.
+/// Install `executor` without tagging a scope: it keeps the scope already
+/// installed, and an untagged one is **fail-closed** like a request — only
+/// [`with_job_executor`] grants unscoped reads.
 pub async fn with_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    EXECUTOR.scope(executor, fut).await
+    install(executor, current_executor_scope(), fut).await
 }
 
 /// Install `executor` and tag the scope as a request — the path on which a
 /// `Repo` fails closed when no ambient authorization context is present.
 pub async fn with_request_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    EXECUTOR
-        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Request, fut))
-        .await
+    install(executor, Some(ExecutorScope::Request), fut).await
 }
 
 /// Install `executor` and tag the scope as a worker job — the path on
 /// which a `Repo` runs unscoped (no principal ⇒ system work).
 pub async fn with_job_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    EXECUTOR
-        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Job, fut))
-        .await
+    install(executor, Some(ExecutorScope::Job), fut).await
+}
+
+async fn install<F: Future>(
+    executor: Arc<dyn Executor>,
+    scope: Option<ExecutorScope>,
+    fut: F,
+) -> F::Output {
+    nest_rs_core::with_ambient(Arc::new(AmbientExecutor { executor, scope }), fut).await
 }
 
 #[cfg(test)]
@@ -185,6 +222,86 @@ mod tests {
         with_request_executor(stub(), async {
             let e = current_executor().expect("installed");
             assert!(e.as_any().is::<StubExecutor>());
+        })
+        .await;
+    }
+
+    /// A transaction that knows the pool it was opened on.
+    struct OnPool;
+
+    impl Executor for OnPool {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn __pool(&self) -> Option<Arc<dyn Executor>> {
+            Some(stub())
+        }
+    }
+
+    fn crossing(executor: Arc<dyn Executor>, into: Continuation) -> Option<Arc<AmbientExecutor>> {
+        Arc::new(AmbientExecutor {
+            executor,
+            scope: Some(ExecutorScope::Request),
+        })
+        .carry(into)
+    }
+
+    #[test]
+    fn a_task_carries_no_executor() {
+        assert!(crossing(Arc::new(OnPool), Continuation::Task).is_none());
+    }
+
+    #[test]
+    fn a_continuation_that_opens_its_own_unit_carries_no_executor() {
+        for into in [
+            Continuation::Task,
+            Continuation::Connection,
+            Continuation::Envelope,
+        ] {
+            assert!(crossing(Arc::new(OnPool), into).is_none(), "{into:?}");
+        }
+    }
+
+    #[test]
+    fn a_continuation_that_can_outlive_the_transaction_steps_down_to_its_pool() {
+        for into in [
+            Continuation::Body,
+            Continuation::Batch,
+            Continuation::Commit,
+        ] {
+            let carried = crossing(Arc::new(OnPool), into).expect("the pool crosses");
+            assert!(
+                carried.executor.as_any().is::<StubExecutor>(),
+                "{into:?} runs on the pool, never the transaction",
+            );
+            assert_eq!(
+                carried.scope,
+                Some(ExecutorScope::Request),
+                "{into:?} keeps the tag"
+            );
+        }
+    }
+
+    #[test]
+    fn an_executor_with_no_pool_to_give_crosses_nowhere() {
+        for into in [
+            Continuation::Body,
+            Continuation::Batch,
+            Continuation::Commit,
+        ] {
+            assert!(crossing(stub(), into).is_none(), "{into:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_untagged_install_keeps_the_scope_already_installed() {
+        with_request_executor(stub(), async {
+            with_executor(Arc::new(OnPool), async {
+                assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+            })
+            .await;
         })
         .await;
     }

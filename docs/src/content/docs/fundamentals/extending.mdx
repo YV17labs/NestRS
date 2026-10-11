@@ -132,8 +132,9 @@ all. Nothing else needs either.
 ## Worked example — a different ORM
 
 `nest-rs-database` ships only the seam: the `Executor` trait, the `ExecutorScope`
-tag, and the task-local plumbing that carries "the current handle on a unit of
-work" across the framework. Its own module docs carry the contract:
+tag, and the installers that keep "the current handle on a unit of work" in the
+request's ambient context, which carries it across the framework. Its own
+module docs carry the contract:
 
 1. Implement `Executor` on the type representing your handle — a pool, a
    transaction, or an enum forwarding to either.
@@ -147,6 +148,56 @@ Step 3 is deliberate. `Repo`, `CrudService` and `Bind` couple tightly to SeaORM'
 `EntityTrait` and `Model` — that coupling is where their leverage comes from, and
 a generic abstraction over them would lose most of it. Your integration ships its
 own row-level-filter equivalent rather than inheriting one.
+
+## Worked example — a value every unit carries
+
+A package that needs a per-request value — a tenant, a locale, a set of
+feature flags — makes it ambient rather than asking every edge to pass it
+along. Its type says how far it travels:
+
+```rust title="crates/yourpkg/src/locale.rs"
+use nest_rs::core::AmbientValue;
+
+pub struct Locale(pub String);
+
+impl AmbientValue for Locale {}
+```
+
+Implementing `AmbientValue` is the line that lets it travel. By default the
+value crosses every place the unit continues — a streaming body, a DataLoader
+batch, a task handed to `TaskContext`, work held for the commit and the
+listeners of an event the unit emits, a socket's next messages — and never
+into a job's envelope: a job is system work, run later and elsewhere. A value
+that must not outlive the unit says where it stops:
+
+```rust title="crates/yourpkg/src/budget.rs"
+use std::sync::Arc;
+use nest_rs::core::{AmbientValue, Continuation};
+
+pub struct QueryBudget(pub u32);
+
+impl AmbientValue for QueryBudget {
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        (into == Continuation::Batch).then_some(self)
+    }
+}
+```
+
+Your layer adds the value around the unit, and anything the unit calls reads
+it back:
+
+```rust title="crates/yourpkg/src/interceptor.rs"
+async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
+    let locale = Arc::new(Locale(negotiated(&req)));
+    with_ambient(locale, next.run(req)).await
+}
+
+// anywhere the request reaches, its body and its batches included
+let locale = ambient::<Locale>();
+```
+
+Reading is not deciding: a service may read who the caller is this way, as it
+reads a `Ctx<T>`, but an authorization decision still belongs in a guard.
 
 ## Worked example — a social provider
 

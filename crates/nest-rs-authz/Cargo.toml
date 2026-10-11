@@ -99,8 +99,6 @@ sea-orm = { workspace = true, features = ["with-chrono"] }
 # Response masking serializes a model then strips disallowed keys.
 serde.workspace = true
 serde_json.workspace = true
-# The ambient request `Ability` is carried in a `tokio::task_local!`.
-tokio.workspace = true
 tracing.workspace = true
 # `AbilityBuilder::build` returns a typed error when a rule's relation
 # predicate is malformed (the `Deny` sentinel).

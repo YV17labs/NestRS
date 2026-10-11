@@ -78,13 +78,15 @@ deep on each.
   (`list`/`page`/`access`/`create`/`update`/`delete`); controllers,
   resolvers, and gateways delegate, never touch `Repo` directly.
 - **[Executor](/database/repo-and-executor/)** — the SeaORM connection
-  installed per request in a `task_local!` (pool on safe routes, a
+  installed per request in the ambient context (pool on safe routes, a
   transaction on mutations); `Repo` reads it back through
   `Repo::<E>::conn()`.
-- **[Ambient context](/database/repo-and-executor/)** — the pair of
-  request-scoped `task_local!`s the framework installs (executor +
-  ability) so singletons can read per-request state without an
-  argument on every method.
+- **[Ambient context](/fundamentals/extending/#worked-example--a-value-every-unit-carries)** —
+  the values a unit of work carries for the code it calls (the executor,
+  the ability, a package's own), so singletons read per-request state
+  without an argument on every method; each value's `AmbientValue::carry`
+  says how far it travels — into a streaming body, a DataLoader batch, a
+  spawned task, after-commit work, a socket's next messages.
 - **[Bind (extractor)](/security/authorization/by-id-binding/)** —
   parses the id from the URL, calls `Service::access(id)` through the
   ambient ability, returns the loaded + authorized entity (404

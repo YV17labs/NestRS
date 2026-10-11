@@ -8,11 +8,13 @@
 use std::any::{Any, TypeId, type_name};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
 use crate::Container;
+use crate::ambient::{Continuation, Entries};
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
@@ -24,8 +26,63 @@ pub(crate) struct RequestCtx {
     /// one only `Scoped<T>` goes without.
     scope: Option<Arc<RequestScope>>,
     /// What this unit of work is filed under — its id, and who, once
-    /// authentication has resolved anyone.
-    pub(crate) correlation: crate::Correlation,
+    /// authentication has resolved anyone. `None` where values were added with
+    /// no unit running.
+    pub(crate) correlation: Option<crate::Correlation>,
+    /// What the unit carries for the code it calls.
+    pub(crate) ambient: Entries,
+    /// The unit this one runs nested in — a GraphQL field inside its request —
+    /// so a batch they share carries the outer unit's values alone.
+    parent: Option<Arc<RequestCtx>>,
+}
+
+impl RequestCtx {
+    fn opened(scope: Option<Arc<RequestScope>>, correlation: crate::Correlation) -> Self {
+        Self {
+            scope,
+            correlation: Some(correlation),
+            ambient: Entries::default(),
+            parent: None,
+        }
+    }
+
+    /// The outermost unit this one is nested in, itself when it is not.
+    fn unit_root(self: &Arc<Self>) -> &Arc<Self> {
+        let mut unit = self;
+        while let Some(parent) = &unit.parent {
+            unit = parent;
+        }
+        unit
+    }
+
+    /// What crosses into `into`: never the nested unit's own values on a
+    /// `Batch`, never the DI scope where the continuation opens its own, and
+    /// each value through its `carry`. Flat, so nothing it did not carry stays
+    /// reachable through a parent.
+    fn captured(self: &Arc<Self>, into: Continuation) -> Arc<Self> {
+        let unit = match into {
+            Continuation::Batch => self.unit_root(),
+            _ => self,
+        };
+        let scope = match into {
+            Continuation::Batch | Continuation::Connection | Continuation::Envelope => None,
+            _ => unit.scope.clone(),
+        };
+        let ambient = unit.ambient.carried(into);
+        let same_scope = match (&scope, &unit.scope) {
+            (Some(kept), Some(held)) => Arc::ptr_eq(kept, held),
+            (kept, held) => kept.is_none() && held.is_none(),
+        };
+        if ambient.is_none() && same_scope && unit.parent.is_none() {
+            return Arc::clone(unit);
+        }
+        Arc::new(Self {
+            scope,
+            correlation: unit.correlation.clone(),
+            ambient: ambient.unwrap_or_else(|| unit.ambient.clone()),
+            parent: None,
+        })
+    }
 }
 
 tokio::task_local! {
@@ -38,37 +95,90 @@ pub(crate) fn current_request_ctx<T>(read: impl FnOnce(&Arc<RequestCtx>) -> T) -
     REQUEST_CTX.try_with(read).ok()
 }
 
+/// Read the running unit's correlation, or `None` where no unit is running.
+pub(crate) fn current_correlation_with<T>(
+    read: impl FnOnce(&crate::Correlation) -> T,
+) -> Option<T> {
+    current_request_ctx(|ctx| ctx.correlation.as_ref().map(read)).flatten()
+}
+
+/// Run `fut` with `added` merged into what the running unit carries, in one
+/// install — none when every value is already the one carried.
+pub(crate) async fn install<F: Future>(added: Entries, fut: F) -> F::Output {
+    match extended(added) {
+        Some(ctx) => REQUEST_CTX.scope(ctx, fut).await,
+        None => fut.await,
+    }
+}
+
+/// The running context with `added` merged in, or `None` when it would change
+/// nothing.
+fn extended(added: Entries) -> Option<Arc<RequestCtx>> {
+    if added.is_empty() {
+        return None;
+    }
+    let Some(current) = current_request_ctx(Arc::clone) else {
+        return Some(Arc::new(RequestCtx {
+            scope: None,
+            correlation: None,
+            ambient: added,
+            parent: None,
+        }));
+    };
+    if added.iter().all(|entry| current.ambient.holds(entry)) {
+        return None;
+    }
+    let mut ambient = current.ambient.clone();
+    for entry in added.iter() {
+        ambient.set(entry.clone());
+    }
+    Some(Arc::new(RequestCtx {
+        scope: current.scope.clone(),
+        correlation: current.correlation.clone(),
+        ambient,
+        parent: current.parent.clone(),
+    }))
+}
+
 /// The current request's [`RequestScope`], installed by the transport edge.
 /// `None` off the request task (or before the edge — a transport wiring bug).
 pub fn current_request_scope() -> Option<Arc<RequestScope>> {
     current_request_ctx(|ctx| ctx.scope.clone()).flatten()
 }
 
-/// Run `fut` under an ambient request context — the transport edges' installer,
-/// and the seam for driving handlers outside a transport (in-process test
-/// harnesses, a transport's mirror of the edge).
+/// Run `fut` as a unit of work — the transport edges' installer, and the seam
+/// for driving handlers outside a transport (in-process test harnesses, a
+/// transport's mirror of the edge).
 ///
 /// `scope` is optional — an edge may have no container to open one over — and
 /// `correlation` is not: whoever accepts a unit of work decides its identity
-/// ([`Correlation`](crate::Correlation)).
-pub async fn with_request_scope<F: std::future::Future>(
+/// ([`Correlation`](crate::Correlation)). Opened inside another unit, the new
+/// one is nested in it: it carries what the outer unit carries, and a batch
+/// they share carries the outer unit's values alone.
+pub async fn with_request_scope<F: Future>(
     scope: Option<Arc<RequestScope>>,
     correlation: crate::Correlation,
     fut: F,
 ) -> F::Output {
-    RequestContinuation::new(scope, correlation)
-        .scope(fut)
-        .await
+    let ctx = match current_request_ctx(Arc::clone) {
+        Some(outer) => RequestCtx {
+            scope,
+            correlation: Some(correlation),
+            ambient: outer.ambient.clone(),
+            parent: Some(outer),
+        },
+        None => RequestCtx::opened(scope, correlation),
+    };
+    REQUEST_CTX.scope(Arc::new(ctx), fut).await
 }
 
-/// The ambient request context, held so work that continues the **same** unit
-/// after the future that accepted it has returned — a streaming response body,
-/// written after the handler with its task-locals unwound — can re-install it.
+/// The ambient request context, held so work that continues the unit after the
+/// future that accepted it has returned — a streaming response body, written
+/// after the handler with its task-locals unwound — can re-install it.
 ///
-/// It carries the request's scope, so it is sound only for the same request: a
-/// continuation outliving it (a WebSocket after its upgrade) inherits the
-/// [`Correlation`](crate::Correlation) alone and opens its own scope through
-/// [`with_request_scope`].
+/// One the edge [builds](Self::new) carries the unit's scope and identity; one
+/// [captured](Self::capture) carries what crosses the continuation it was
+/// captured for, and nothing else.
 #[derive(Clone)]
 pub struct RequestContinuation(Arc<RequestCtx>);
 
@@ -76,18 +186,17 @@ impl RequestContinuation {
     /// Build the context an edge is about to install — [`scope`](Self::scope)
     /// around the handler, [`enter`](Self::enter) around the body.
     pub fn new(scope: Option<Arc<RequestScope>>, correlation: crate::Correlation) -> Self {
-        Self(Arc::new(RequestCtx { scope, correlation }))
+        Self(Arc::new(RequestCtx::opened(scope, correlation)))
     }
 
-    /// Capture whatever context is ambient, to re-install around work that
-    /// continues this same unit on another task; `None` off a request task.
-    pub fn current() -> Option<Self> {
-        current_request_ctx(|ctx| Self(Arc::clone(ctx)))
+    /// Capture what the running unit carries into `into`, to re-install around
+    /// the work that continues it there; `None` where no unit is running.
+    pub fn capture(into: Continuation) -> Option<Self> {
+        current_request_ctx(|ctx| Self(ctx.captured(into)))
     }
 
-    /// Run `fut` under this context — the async installer every edge reaches
-    /// through [`with_request_scope`].
-    pub async fn scope<F: std::future::Future>(&self, fut: F) -> F::Output {
+    /// Run `fut` under this context.
+    pub async fn scope<F: Future>(&self, fut: F) -> F::Output {
         REQUEST_CTX.scope(Arc::clone(&self.0), fut).await
     }
 
@@ -96,6 +205,11 @@ impl RequestContinuation {
     /// handler. Synchronous, since a body's `poll` is not a future.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         REQUEST_CTX.sync_scope(Arc::clone(&self.0), f)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -113,11 +227,18 @@ pub struct TaskContext {
 }
 
 impl TaskContext {
-    /// Capture whatever span and request context are ambient right now.
+    /// Capture the span, and what the running unit carries into a task that
+    /// may outlive it: [`capture`](Self::capture) for a
+    /// [`Task`](Continuation::Task).
     pub fn current() -> Self {
+        Self::capture(Continuation::Task)
+    }
+
+    /// Capture the span, and what the running unit carries into `into`.
+    pub fn capture(into: Continuation) -> Self {
         Self {
             span: tracing::Span::current(),
-            request: RequestContinuation::current(),
+            request: RequestContinuation::capture(into),
         }
     }
 
@@ -129,7 +250,7 @@ impl TaskContext {
 
     /// Wrap `fut` so it runs under the captured span and request context — what
     /// goes to `spawn`, which starts with neither.
-    pub async fn carry<F: std::future::Future>(self, fut: F) -> F::Output {
+    pub async fn carry<F: Future>(self, fut: F) -> F::Output {
         let Self { span, request } = self;
         let carried = async move {
             match request {

@@ -68,6 +68,7 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 pub mod access;
+mod ambient;
 mod answer;
 pub mod app;
 mod app_lifecycle;
@@ -105,6 +106,7 @@ mod way_down;
 mod wiring;
 
 pub use access::{Composition, ProviderOrder, ReachableProviders};
+pub use ambient::{AmbientValue, Continuation, Deadline, ambient, with_ambient};
 pub use app::{App, AppBuilder, BootStep};
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
 pub use budget::Budget;
@@ -154,6 +156,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::access::__private::{ModuleDescriptor, ProviderDescriptor};
+    pub use crate::ambient::{Pending, install_pending};
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::container::__private::{
         collect_dynamic_import, enter_import, leave_import, refuse_site, register_dynamic_import,
@@ -177,7 +180,7 @@ pub mod __private {
     };
     pub use crate::transport::__private::TransportContribution;
     pub use crate::type_name::short_type_name;
-    pub use crate::unit_context::new_unit_context;
+    pub use crate::unit_context::{new_unit_context, take_pending};
     pub use crate::way_down::main;
 
     pub use schemars;

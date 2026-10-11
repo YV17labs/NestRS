@@ -27,7 +27,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 use crate::env_prefix::EnvPrefix;
 use crate::line_safe::{LineSafe, forges};
-use crate::request_scope::current_request_ctx;
+use crate::request_scope::current_correlation_with;
 use crate::trace_context::{Correlation, field};
 
 /// The tails of the framework-wide logging variables, joined with the
@@ -131,7 +131,7 @@ fn dimmed(
 /// Run `write` against the current correlation, borrowed: `current_actor_id`
 /// would allocate a `String` per event.
 fn with_current_correlation(write: impl FnOnce(&Correlation) -> fmt::Result) -> fmt::Result {
-    current_request_ctx(|ctx| write(&ctx.correlation)).unwrap_or(Ok(()))
+    current_correlation_with(write).unwrap_or(Ok(()))
 }
 
 /// Render an event's own fields, `duration_ms` padded to

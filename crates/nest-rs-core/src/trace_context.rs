@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 
 use uuid::Uuid;
 
-use crate::request_scope::current_request_ctx;
+use crate::request_scope::current_correlation_with;
 
 /// The identifier of one distributed operation — 16 bytes, spelled as 32
 /// lowercase hex characters on the wire.
@@ -475,23 +475,23 @@ impl Correlation {
 /// The trace this task is serving; `None` only where no edge opened one, such
 /// as a task spawned outside the framework.
 pub fn current_trace_id() -> Option<TraceId> {
-    current_request_ctx(|ctx| ctx.correlation.trace_id)
+    current_correlation_with(|correlation| correlation.trace_id)
 }
 
 /// The unit of work this task is running.
 pub fn current_span_id() -> Option<SpanId> {
-    current_request_ctx(|ctx| ctx.correlation.span_id)
+    current_correlation_with(|correlation| correlation.span_id)
 }
 
 /// The header value to send to whatever this unit of work calls next, for an
 /// application to set on its own outbound client.
 pub fn current_traceparent() -> Option<TraceParent> {
-    current_request_ctx(|ctx| ctx.correlation.traceparent())
+    current_correlation_with(Correlation::traceparent)
 }
 
 /// The `tracestate` to forward beside it, when the caller sent one.
 pub fn current_tracestate() -> Option<TraceState> {
-    current_request_ctx(|ctx| ctx.correlation.tracestate.clone())
+    current_correlation_with(|correlation| correlation.tracestate.clone())
 }
 
 /// Who this unit of work is being served for — **`None` for an anonymous
@@ -501,7 +501,7 @@ pub fn current_tracestate() -> Option<TraceState> {
 /// an authorization input: what a caller may do is the ambient `Ability`,
 /// decided in a guard.
 pub fn current_actor_id() -> Option<String> {
-    current_request_ctx(|ctx| ctx.correlation.actor_id().map(str::to_owned)).flatten()
+    current_correlation_with(|correlation| correlation.actor_id().map(str::to_owned)).flatten()
 }
 
 /// The one gate on the write-once actor slot, passed by both writers: an empty
@@ -524,7 +524,7 @@ pub(crate) mod __private {
     use std::sync::atomic::Ordering;
 
     use super::{Correlation, SpanId, TraceFlags, TraceId};
-    use crate::request_scope::current_request_ctx;
+    use crate::request_scope::current_correlation_with;
 
     /// Record the sampling decision an installed sampler made, leaving the
     /// reserved bits as they arrived.
@@ -542,13 +542,13 @@ pub(crate) mod __private {
     ///
     /// A second call is ignored, and an empty actor is refused.
     pub fn set_actor_id(actor_id: &str) {
-        current_request_ctx(|ctx| super::set_actor(&ctx.correlation.shared, actor_id));
+        current_correlation_with(|correlation| super::set_actor(&correlation.shared, actor_id));
     }
 
     /// The current unit of work's correlation, for an edge that has to carry it
     /// across a boundary the task-local cannot cross.
     pub fn current_correlation() -> Option<Correlation> {
-        current_request_ctx(|ctx| ctx.correlation.clone())
+        current_correlation_with(Correlation::clone)
     }
 
     tokio::task_local! {

@@ -161,11 +161,7 @@ impl Jwks {
                 nest_rs_core::error_message(&error)
             ))
         })?;
-        let endpoint = format!(
-            "the JWK Set at {}{}",
-            url.origin().ascii_serialization(),
-            url.path()
-        );
+        let endpoint = format!("the JWK Set at {}", nest_rs_config::endpoint_shown(uri));
         Ok(Self {
             inner: Arc::new(Inner {
                 url,

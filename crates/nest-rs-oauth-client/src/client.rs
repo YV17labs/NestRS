@@ -7,7 +7,6 @@ use std::time::Duration;
 use aws_lc_rs::constant_time::verify_slices_are_equal;
 use nest_rs_config::{ConfigError, Namespaced};
 use oauth2::basic::{BasicClient, BasicErrorResponse};
-use oauth2::url::Url;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, TokenResponse,
@@ -80,8 +79,9 @@ const USERINFO_ENDPOINT: &str = "userinfo endpoint";
 /// verified emails, say — which no standard names.
 const PROVIDER_ENDPOINT: &str = "endpoint";
 
-/// A provider endpoint as a failed call's sentence names it: origin and path only,
-/// since a query or userinfo part may carry an API key and the sentence is logged.
+/// A provider endpoint as a failed call's sentence names it, through
+/// [`endpoint_shown`](nest_rs_config::endpoint_shown): a query or userinfo part
+/// may carry an API key, and the sentence is logged.
 struct Endpoint<'a> {
     role: &'static str,
     url: &'a str,
@@ -89,12 +89,12 @@ struct Endpoint<'a> {
 
 impl fmt::Display for Endpoint<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the OAuth provider's {} (", self.role)?;
-        match Url::parse(self.url) {
-            Ok(url) => write!(f, "{}{}", url.origin().ascii_serialization(), url.path())?,
-            Err(_) => f.write_str("an address that does not parse")?,
-        }
-        f.write_str(")")
+        write!(
+            f,
+            "the OAuth provider's {} ({})",
+            self.role,
+            nest_rs_config::endpoint_shown(self.url)
+        )
     }
 }
 

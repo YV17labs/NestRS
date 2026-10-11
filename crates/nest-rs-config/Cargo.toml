@@ -42,6 +42,10 @@ nest-rs-config-macros.workspace = true
 # the framework opens trusts them by default — read once, PEM.
 rustls-native-certs.workspace = true
 base64.workspace = true
+# `endpoint_shown`: a URL a sentence names is parsed by the WHATWG parser every
+# HTTP client of the framework dials through (reqwest's), so what is shown is
+# the address dialled, its userinfo, query and fragment left out.
+url.workspace = true
 # `tls` feature: `ClientTls` judges the material a TLS client presents with
 # rustls's own parsers and checks, the ones the libraries it is handed to run.
 rustls = { workspace = true, optional = true }

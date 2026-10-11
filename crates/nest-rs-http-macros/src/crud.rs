@@ -66,9 +66,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             Paginate::None => parse_quote! {
                 #[get("/")]
                 #[api(summary = #summary)]
+                #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
                 ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<::std::vec::Vec<#output>>> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
@@ -84,9 +84,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
                 #[api(summary = #summary, response = ::std::vec::Vec<#output>)]
                 // Read by `#[routes]` to declare the `Link` in the document.
                 #[crud_next_link]
+                #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
                     // Read through `caller_path`: the router strips a global prefix off `uri()`.
                     __req: &::nest_rs_http::poem::Request,
                     __page: ::nest_rs_http::poem::web::Query<::nest_rs_seaorm::PageParams>,
@@ -122,9 +122,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         generated.push(parse_quote! {
             #[get("/{id}")]
             #[api(summary = #summary)]
+            #[authorize(::nest_rs_authz::Read, #entity)]
             async fn get(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
                 __id: ::nest_rs_http::poem::web::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
             ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
                 #id_v7_check
@@ -163,9 +163,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[crud_location]
             // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(201)]
+            #[authorize(::nest_rs_authz::Create, #entity)]
             async fn create(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
                 // Read through `caller_path`: the router strips a global prefix off
                 // `uri()`, and `original_uri()` is populated on the hyper path only.
                 __req: &::nest_rs_http::poem::Request,
@@ -203,9 +203,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[patch("/{id}")]
             #[api(summary = #summary)]
             #[crud_write]
+            #[authorize(::nest_rs_authz::Update, #entity)]
             async fn update(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
                 __id: ::nest_rs_http::poem::web::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
                 __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#update>>,
             ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
@@ -247,9 +247,9 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             #[crud_write]
             // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(204)]
+            #[authorize(::nest_rs_authz::Delete, #entity)]
             async fn delete(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
                 __id: ::nest_rs_http::poem::web::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
             ) -> ::nest_rs_http::poem::Result<()> {
                 #id_v7_check
@@ -346,6 +346,23 @@ mod tests {
             !whole.contains("crud_next_link"),
             "a full collection sends no cursor: {whole}",
         );
+    }
+
+    // An attribute, never a parameter: `#[routes]` runs the class gate with the
+    // guards, outside the route's own layers.
+    #[test]
+    fn every_op_declares_its_posture_with_authorize() {
+        let out = generated_methods(quote! {
+            service = svc, entity = E, output = Thing, create = CreateThing,
+            update = UpdateThing
+        });
+        for action in ["Read", "Create", "Update", "Delete"] {
+            assert!(
+                out.contains(&format!("# [authorize (:: nest_rs_authz :: {action} , E)]")),
+                "{action}: {out}",
+            );
+        }
+        assert!(!out.contains("Authorize <"), "no posture parameter: {out}");
     }
 
     #[test]

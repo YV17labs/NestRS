@@ -1,9 +1,10 @@
 //! [`RouteShaper`] — the HTTP per-route shaper. A generic endpoint the
 //! `#[routes]` macro wraps around each route at mount time. Orchestrates the
 //! request-side layer families — guards and pipes — at the route scope,
-//! deduplicating against the global chain by `TypeId`. The response-side
-//! families (exception-filters, filters, interceptors) wrap the endpoint
-//! *inside* the shaper — see [`route_layers`](crate::dispatch::route_layers).
+//! deduplicating against the global chain by `TypeId`, and runs the route's
+//! class gate between them. The response-side families (exception-filters,
+//! filters, interceptors) wrap the endpoint *inside* the shaper — see
+//! [`route_layers`](crate::dispatch::route_layers).
 
 use std::any::TypeId;
 
@@ -12,6 +13,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::layer_chain::LayerSite;
 use nest_rs_core::{Container, Layer};
+use nest_rs_http::__private::GateFn;
 use nest_rs_http::BodyError;
 use nest_rs_http::poem::error::ReadBodyError;
 use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
@@ -25,8 +27,8 @@ use crate::dispatch::scoped_spec::{
 use crate::dispatch::validate::validate_guard_chain;
 use crate::{Denial, Guard};
 
-/// HTTP per-route shaper: the deduped guard + pipe chains, wrapped around the
-/// route's inner endpoint.
+/// HTTP per-route shaper: the deduped guard chain, the route's class gates and
+/// the deduped pipe chain, wrapped around the route's inner endpoint.
 ///
 /// Built by [`wrap_route_shaper`] at mount, resolving the global + per-route
 /// chain eagerly so a broken chain surfaces at boot; dedups by `TypeId` and
@@ -34,6 +36,7 @@ use crate::{Denial, Guard};
 /// [`Public`](nest_rs_http::Public) marker themselves.
 pub struct RouteShaper<E> {
     guards: Vec<ResolvedLayer<dyn Guard>>,
+    gates: Vec<GateFn>,
     pipes: Vec<ResolvedLayer<dyn GlobalPipe>>,
     inner: E,
 }
@@ -53,6 +56,15 @@ where
             }
         }
 
+        // After the guards, whose ability it reads; before the pipes, so a
+        // refused caller pays for no validation; and outside every route-scoped
+        // interceptor and filter, so none answers or maps what it refuses.
+        for gate in &self.gates {
+            if let Some(refusal) = gate(&req) {
+                return Ok(refusal);
+            }
+        }
+
         if !self.pipes.is_empty() {
             // Boxed on purpose: inlining `apply_body_pipes`' large state machine
             // would bloat every route's future, which poem boxes per request.
@@ -64,15 +76,16 @@ where
 }
 
 /// One HTTP route as `#[routes]` mounts it: shaped when the composed guard
-/// **or** pipe chain is non-empty, bare (untouched) when both are empty, and
-/// refused when its chains did not compose.
+/// chain, its class gates **or** its pipe chain is non-empty, bare (untouched)
+/// when all three are empty, and refused when its chains did not compose.
 ///
 /// The bare arm is not an access decision: the boot's unguarded-route scan
 /// warns independently.
 pub enum ShapedRoute<E> {
-    /// Both chains empty — the endpoint passes through untouched.
+    /// No guard, gate or pipe — the endpoint passes through untouched.
     Bare(E),
-    /// At least one guard or pipe — the shaper runs before the inner endpoint.
+    /// At least one guard, gate or pipe — the shaper runs before the inner
+    /// endpoint.
     Shaped(RouteShaper<E>),
     /// The route's chains did not compose: the boot fails on the refusal it
     /// filed, and a server that never read it answers an opaque `500`.
@@ -101,8 +114,9 @@ pub(crate) fn refused_route() -> Response {
 }
 
 /// Compose the route's guard / pipe chains and wrap `endpoint` in a
-/// [`RouteShaper`] — or return it untouched when both chains are empty.
-/// Emitted by `#[routes]` for every handler.
+/// [`RouteShaper`] running them around the route's class `gates` — or return
+/// it untouched when all three are empty. Emitted by `#[routes]` for every
+/// handler, `gates` selected by type from what the route declares.
 ///
 /// A declared layer that does not resolve, or a method scope that orders an
 /// authorization guard before the authentication guard whose principal it
@@ -122,6 +136,7 @@ pub fn wrap_route_shaper<E>(
     controller_pipes: Vec<ScopedPipeSpec>,
     method_pipes: Vec<ScopedPipeSpec>,
     no_pipes: bool,
+    gates: Vec<GateFn>,
 ) -> ShapedRoute<E>
 where
     E: Endpoint<Output = Response> + 'static,
@@ -149,11 +164,12 @@ where
             return ShapedRoute::Refused;
         }
     };
-    if guards.is_empty() && pipes.is_empty() {
+    if guards.is_empty() && gates.is_empty() && pipes.is_empty() {
         return ShapedRoute::Bare(endpoint);
     }
     ShapedRoute::Shaped(RouteShaper {
         guards,
+        gates,
         pipes,
         inner: endpoint,
     })
@@ -375,6 +391,7 @@ mod tests {
                 controller_pipes,
                 method_pipes,
                 false,
+                Vec::new(),
             );
             assert!(
                 matches!(route, ShapedRoute::Refused),
@@ -481,5 +498,44 @@ mod tests {
             nest_rs_http::poem::http::StatusCode::PAYLOAD_TOO_LARGE,
         );
         logs.expect_none("nest_rs::layers", "global pipe: failed to read body");
+    }
+
+    /// The endpoint inside holds the route's own interceptors and filters, so a
+    /// gate answering before it answers before them.
+    #[tokio::test]
+    async fn a_route_gate_alone_shapes_the_route_and_answers_before_the_endpoint() {
+        fn refuse_unless_admitted(req: &Request) -> Option<Response> {
+            (!req.headers().contains_key("x-admitted"))
+                .then(|| Response::builder().status(StatusCode::FORBIDDEN).finish())
+        }
+
+        let container = Container::default();
+        let route = wrap_route_shaper(
+            &container,
+            nest_rs_http::poem::endpoint::make_sync(|_| {
+                Response::builder().body("the handler ran")
+            }),
+            "get /gated",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            vec![refuse_unless_admitted as GateFn],
+        );
+        assert!(
+            matches!(route, ShapedRoute::Shaped(_)),
+            "a gate alone shapes the route"
+        );
+
+        let refused = route.call(Request::default()).await.expect("answers");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let admitted = route
+            .call(Request::builder().header("x-admitted", "").finish())
+            .await
+            .expect("answers");
+        assert_eq!(admitted.status(), StatusCode::OK);
     }
 }

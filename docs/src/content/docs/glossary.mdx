@@ -57,11 +57,11 @@ deep on each.
   `#[use_exception_filters(...)]`. Only fires when the error matches
   `Self::Exception`.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
-  macro emits when that type appears in a handler signature; runs
-  response masking after a 2xx. Innermost per-route layer, just outside
+  macro emits when a route declares `#[authorize(A, S)]` or takes that type
+  as a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
   the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
 - **RouteShaper** — the per-route orchestrator inside `nest-rs-guards`;
-  runs guards and body pipes on the way in. The response-side families
+  runs guards, the `#[authorize]` class gate and body pipes on the way in. The response-side families
   wrap the endpoint outside it, not within. Documented on
   [Guards](/fundamentals/guards/).
 - **[Reflector](/http/extractors/)** — the request-time reader that

@@ -151,8 +151,9 @@ which is the limit (`.claude/decisions/mask-provenance.md`).
 on every edge; the decorator emits the gate and the mask, and that is what
 makes posture greppable:
 
-- **HTTP** (`#[routes]`) — the `Authorize<A, E>` extractor `#[crud]` also
-  emits, plus the response shaper. A masked-out key is omitted.
+- **HTTP** (`#[routes]`, which `#[crud]` emits under) — `Authorize<A, E>`'s
+  class gate, run with the guards, plus the response shaper. A masked-out key
+  is omitted.
 - **GraphQL** (`#[operations]`) — the class gate and a mask around the
   returned value; `unmasked` keeps the gate and leaves masking to the body,
   for a shape the round-trip cannot see through (a cursor connection). A

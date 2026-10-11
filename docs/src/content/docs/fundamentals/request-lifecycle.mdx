@@ -66,8 +66,8 @@ the **pool** (TypeId-deduped against narrower scopes); `#[interceptor]` is
 ## Nesting order
 
 Per route, innermost → outermost: **handler → ability shaper → exception-filter
-pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool → pipe
-pool) → `#[meta]`/`#[public]` route data**. At the transport edge
+pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool →
+`#[authorize]` class gate → pipe pool)**. At the transport edge
 (innermost → outermost band): **routing → DbContext (−10) → global filter pool
 (50) → error resolution (70) → global interceptor pool (90) → infra
 `#[interceptor]` (100)**. The error-resolution band is what makes a global
@@ -78,7 +78,10 @@ so every stage above logs under one `trace_id` — see
 [Correlation](/fundamentals/correlation/).
 
 Interceptors sit outside filters; exception-filters sit closest to the handler
-— at both sites. `Layer::priority` orders entries *within* a site, never across
+— at both sites. The route's `#[authorize]` class gate runs with its guards,
+after the ability guard and before any interceptor or filter the route declares:
+a caching interceptor never answers a caller the gate refuses, and a filter never
+sees the refusal. `Layer::priority` orders entries *within* a site, never across
 sites: a handler-scope guard at `-10` still runs after every global and
 controller guard.
 

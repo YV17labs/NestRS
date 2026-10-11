@@ -104,8 +104,10 @@ pub struct UsersController {
 ```
 
 Order matters: `AuthnGuard` attaches the principal; `AuthzGuard` reads
-it and builds the `Ability`. Every handler downstream sees an ambient
-`Ability` it does not have to thread.
+it and builds the `Ability`. The route's `#[authorize]` class gate runs
+right after them, before any interceptor or filter the route declares, so
+nothing the route binds answers a caller the gate refuses. Every handler
+downstream sees an ambient `Ability` it does not have to thread.
 
 ## Three places the framework reads it
 

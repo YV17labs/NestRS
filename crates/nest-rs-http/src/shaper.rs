@@ -36,6 +36,12 @@ pub trait ResponseShaping: Send + 'static {
 ///
 /// `#[routes]` arms this by *type*: see the module docs.
 pub trait RouteResponseShaper {
+    /// The class gate a route declaring this type runs: the response refusing
+    /// the request, or `None` to admit it. It runs with the route's guards,
+    /// before any interceptor or filter the route declares, so a layer that
+    /// answers on the handler's behalf never answers a caller it refuses.
+    const GATE: Option<fn(&Request) -> Option<Response>> = None;
+
     /// Snapshot what the shaper needs off the request before the handler takes
     /// ownership of it, or `None` to leave this request's response untouched.
     fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>>;
@@ -44,6 +50,9 @@ pub trait RouteResponseShaper {
 /// The armed capture step, erased to a plain function pointer so a route's
 /// shaper can be *selected* by the compiler and *carried* by a value.
 pub type CaptureFn = fn(&Request) -> Option<Box<dyn ResponseShaping>>;
+
+/// A route's class gate, as [`RouteResponseShaper::GATE`] declares it.
+pub type GateFn = fn(&Request) -> Option<Response>;
 
 /// Asks the compiler whether `T` is a [`RouteResponseShaper`].
 ///
@@ -71,6 +80,11 @@ impl<T: RouteResponseShaper> ShaperProbe<T> {
     pub fn select(&self) -> Option<CaptureFn> {
         Some(T::capture)
     }
+
+    /// The class gate the armed type declares.
+    pub fn gate(&self) -> Option<GateFn> {
+        T::GATE
+    }
 }
 
 /// The fallback arm of the selection: every type that is not a
@@ -79,10 +93,17 @@ impl<T: RouteResponseShaper> ShaperProbe<T> {
 pub trait UnshapedProbe {
     /// No shaper for this parameter.
     fn select(&self) -> Option<CaptureFn>;
+
+    /// No class gate for this parameter.
+    fn gate(&self) -> Option<GateFn>;
 }
 
 impl<T> UnshapedProbe for &ShaperProbe<T> {
     fn select(&self) -> Option<CaptureFn> {
+        None
+    }
+
+    fn gate(&self) -> Option<GateFn> {
         None
     }
 }
@@ -106,6 +127,26 @@ macro_rules! __shaper_of {
         )]
         let __nestrs_probe = &$crate::__private::ShaperProbe::<$ty>::new();
         __nestrs_probe.select()
+    }};
+}
+
+/// The class gate one parameter type declares, or `None`; selected like
+/// [`__shaper_of`](crate::__shaper_of), by the same two probe arms.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __gate_of {
+    ($ty:ty) => {{
+        #[allow(
+            unused_imports,
+            reason = "the trait is in scope for autoref specialisation, which no lint sees"
+        )]
+        use $crate::__private::UnshapedProbe as _;
+        #[allow(
+            clippy::needless_borrow,
+            reason = "the extra borrow is what orders the two probe arms"
+        )]
+        let __nestrs_probe = &$crate::__private::ShaperProbe::<$ty>::new();
+        __nestrs_probe.gate()
     }};
 }
 
@@ -335,6 +376,33 @@ mod tests {
         resp.assert_status_is_ok();
         resp.assert_text("seen:OK").await;
         assert!(RAN.load(Ordering::SeqCst), "the handler ran");
+    }
+
+    struct Gated;
+
+    impl RouteResponseShaper for Gated {
+        const GATE: Option<GateFn> = Some(|req| {
+            (!req.headers().contains_key("x-pass")).then(|| StatusCode::FORBIDDEN.into_response())
+        });
+
+        fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+            None
+        }
+    }
+
+    #[test]
+    fn the_probe_selects_a_gate_by_type_and_nothing_else() {
+        let gate = __gate_of!(Gated).expect("a type declaring a gate selects it");
+        let refused = gate(&Request::default()).expect("no `x-pass`, refused");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let admitted = Request::builder().header("x-pass", "").finish();
+        assert!(gate(&admitted).is_none());
+
+        assert!(
+            __gate_of!(Shout).is_none(),
+            "a shaper declares no gate unless it says so"
+        );
+        assert!(__gate_of!(NotAShaper).is_none());
     }
 
     #[tokio::test]

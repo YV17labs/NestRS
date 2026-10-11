@@ -33,10 +33,12 @@ struct RouteHandler {
     filters: Vec<Path>,
     /// `#[use_interceptors]` paths on the method.
     interceptors: Vec<Path>,
-    /// Every declared parameter type, in order: arming a shaper is type-directed.
-    param_types: Vec<Type>,
-    /// A parameter *spelled* `Authorize<..>` / `Bind<..>`, kept only so one not
-    /// implementing the shaper trait is a spanned compile error.
+    /// The type `#[authorize]` declares, then every parameter type, in order:
+    /// arming a shaper and selecting a class gate are type-directed.
+    probe_types: Vec<Type>,
+    /// The type `#[authorize]` declares, or a parameter *spelled*
+    /// `Authorize<..>` / `Bind<..>`, kept so one not implementing the shaper
+    /// trait is a spanned compile error.
     named_shaper: Option<Type>,
     /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
@@ -208,8 +210,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
 
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
-        // Before the `#[authorize]` insert below, whose wrapper-only parameter is
-        // never forwarded.
         let arg_idents = match normalize_forwarded_args(&mut inputs) {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
@@ -243,12 +243,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        if let Some(spec) = &authorize {
-            match authorize_param(spec, &inputs) {
-                Ok(param) => inputs.insert(0, param),
-                Err(err) => return err.to_compile_error().into(),
-            }
-        }
+        // Probed like a parameter and never extracted: the gate runs with the
+        // guards, outside the route's own layers.
+        let authorize_ty = match authorize.as_ref().map(|spec| authorize_type(spec, &inputs)) {
+            Some(Ok(ty)) => Some(ty),
+            Some(Err(err)) => return err.to_compile_error().into(),
+            None => None,
+        };
         let return_type = match &method.sig.output {
             ReturnType::Default => quote! { () },
             ReturnType::Type(_, ty) => quote! { #ty },
@@ -480,10 +481,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        // The compiler selects the arming parameter, so this crate needs no authz
+        // The compiler selects the arming type, so this crate needs no authz
         // dependency and a renamed import still arms.
-        let param_types = param_types(&inputs);
-        let shaper_selection = shaper_selection(&param_types);
+        let probe_types: Vec<Type> = authorize_ty
+            .iter()
+            .cloned()
+            .chain(param_types(&inputs))
+            .collect();
+        let shaper_selection = shaper_selection(&probe_types);
 
         let handler = RouteHandler {
             verb: verb_ident.clone(),
@@ -493,8 +498,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             guards,
             filters,
             interceptors,
-            param_types: param_types.clone(),
-            named_shaper: named_shaper_type(&inputs),
+            probe_types,
+            named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
             metas,
             is_public,
@@ -1043,9 +1048,9 @@ fn malformed_authorize(attr: &Attribute) -> syn::Error {
     )
 }
 
-/// The extractor `#[authorize(Action, Entity)]` desugars to, the same one
-/// `#[crud]` emits.
-fn authorize_param(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<FnArg> {
+/// The type `#[authorize(Action, Entity)]` declares, the same one `#[crud]`
+/// writes: probed for its class gate and its shaper, never extracted.
+fn authorize_type(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<Type> {
     if let Some(param) = inputs.iter().find(|arg| is_authorize_param(arg)) {
         return Err(syn::Error::new_spanned(
             param,
@@ -1055,7 +1060,7 @@ fn authorize_param(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<FnArg>
     }
     let AuthorizeSpec { action, entity } = spec;
     Ok(syn::parse_quote! {
-        __nestrs_authz: ::nest_rs_authz::http::Authorize<#action, #entity>
+        ::nest_rs_authz::http::Authorize<#action, #entity>
     })
 }
 
@@ -1077,6 +1082,26 @@ fn param_types(inputs: &[FnArg]) -> Vec<Type> {
             FnArg::Receiver(_) => None,
         })
         .collect()
+}
+
+/// The route's class gates, selected by type after name resolution like its
+/// shaper: every probed type whose `RouteResponseShaper` declares one.
+fn gate_selection(probe_types: &[Type]) -> TokenStream2 {
+    if probe_types.is_empty() {
+        return quote! { ::std::vec::Vec::new() };
+    }
+    quote! {{
+        let mut __nestrs_gates: ::std::vec::Vec<::nest_rs_http::__private::GateFn> =
+            ::std::vec::Vec::new();
+        #(
+            if let ::core::option::Option::Some(__nestrs_gate) =
+                ::nest_rs_http::__gate_of!(#probe_types)
+            {
+                __nestrs_gates.push(__nestrs_gate);
+            }
+        )*
+        __nestrs_gates
+    }}
 }
 
 /// The route's response shaper, selected by type after name resolution: the
@@ -1126,8 +1151,9 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 }
 
 /// Build one routed handler. Layout, inner → outer: shaper (mask) →
-/// exception filters → filters → interceptors → `RouteShaper` (guards + pipes)
-/// → metadata. Global filters and interceptors run at the transport edge.
+/// exception filters → filters → interceptors → `RouteShaper` (guards, then
+/// the class gates, then pipes) → metadata. Global filters and interceptors run
+/// at the transport edge.
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let RouteHandler {
         verb: _,
@@ -1139,7 +1165,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         guards,
         filters,
         interceptors,
-        param_types,
+        probe_types,
         named_shaper,
         has_extractors,
         metas,
@@ -1158,7 +1184,8 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     };
     // The run-time probe catches a masking extractor reached indirectly (nested,
     // or a hand-rolled `FromRequest`), which no scan of the signature can see.
-    let shaper_selection = shaper_selection(param_types);
+    let shaper_selection = shaper_selection(probe_types);
+    let gate_selection = gate_selection(probe_types);
     let named_shaper_assert = match named_shaper {
         Some(ty) => quote! {
             const _: fn() = || {
@@ -1224,6 +1251,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
             <#self_ty>::__nestrs_controller_pipe_specs(),
             #method_pipe_specs,
             #no_pipes_flag,
+            #gate_selection,
         )
     };
 

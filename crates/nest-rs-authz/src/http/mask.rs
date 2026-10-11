@@ -1,5 +1,6 @@
-//! `Authorize<A, S>` as a [`RouteResponseShaper`] does two things keyed on the
-//! ability the guard attached:
+//! `Authorize<A, S>` as a [`RouteResponseShaper`] declares the route's class
+//! gate, run with its guards, and does two things keyed on the ability the
+//! guard attached:
 //!
 //! 1. Wraps the handler in [`with_ability`] so the data layer scopes every
 //!    query via `current_ability()` — no hand-written filter.
@@ -27,7 +28,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::authorize::Authorize;
+use super::authorize::{Authorize, class_gate};
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker, WireModelDefaults, with_ability};
 
@@ -37,9 +38,11 @@ where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,
 {
+    const GATE: Option<fn(&Request) -> Option<Response>> = Some(class_gate::<A, S>);
+
     fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>> {
-        // A missing ability means the extractor already rejected with 500, so
-        // there is nothing to shape.
+        // A missing ability means the class gate already answered 500, so there
+        // is nothing to shape.
         let ability = req.extensions().get::<Arc<Ability>>().cloned()?;
         Some(Box::new(AbilityShaping::<S>::new(ability, A::ACTION)))
     }

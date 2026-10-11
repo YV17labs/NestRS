@@ -100,7 +100,7 @@ const TRACING_SUBSCRIBER: Dep = Dep {
 };
 
 /// The crates a resource port (DB-backed CRUD + HTTP) needs; `authz` because
-/// `#[crud]` emits `Authorize<…>` parameters.
+/// `#[crud]` declares its posture through `Authorize<…>`.
 pub(super) fn resource_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE]
 }

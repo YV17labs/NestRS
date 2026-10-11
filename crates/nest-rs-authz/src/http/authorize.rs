@@ -1,12 +1,12 @@
-//! [`Authorize<A, S>`] — route-level access gate as a poem extractor.
+//! [`Authorize<A, S>`] — the route-level class gate for action `A` on
+//! subject `S`, and the type that arms the route's response mask.
 
 use std::any::TypeId;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use nest_rs_guards::{Denial, denial_to_http_error};
-use poem::http::StatusCode;
-use poem::{Error, FromRequest, Request, RequestBody, Result};
+use nest_rs_guards::{Denial, denial_to_http_error, denial_to_http_response};
+use poem::{FromRequest, Request, RequestBody, Response, Result};
 
 use crate::gate::{Refusal, transport};
 use crate::{Ability, ActionMarker, Subject};
@@ -14,9 +14,10 @@ use crate::{Ability, ActionMarker, Subject};
 /// Enforcement plumbing for action `A` on subject `S`: 403 unless the
 /// request-scoped [`Ability`] grants it; 500 when the ability is missing
 /// (wiring bug, not a client error). Class-level only — the per-row filter and
-/// response mask enforce conditions. Its presence in a handler signature is
-/// also what makes `#[routes]` install the response shaper (automatic masking
-/// + ambient ability).
+/// response mask enforce conditions. A route declaring it — through
+/// `#[authorize(A, S)]` or as a handler parameter — runs this gate with its
+/// guards, before any interceptor or filter the route declares, and installs
+/// the response shaper (automatic masking + ambient ability).
 ///
 /// # Don't write this — write `#[authorize(Action, Entity)]`
 ///
@@ -105,10 +106,12 @@ use crate::{Ability, ActionMarker, Subject};
 /// # }
 /// ```
 ///
-/// `#[routes]` desugars that to this extractor as the handler's first
-/// parameter; written by hand it works, but is not a posture declaration. An
-/// extractor reached indirectly (nested, or run by a hand-rolled `FromRequest`)
-/// is backstopped by the HTTP edge's masking probe, which fails the route closed.
+/// `#[routes]` reads that as this type without a parameter. Written by hand as a
+/// handler parameter — on a `#[public]` route, whose posture is the opposite
+/// one — it gates and arms the same way, and checks again as it is extracted.
+/// An extractor reached indirectly (nested, or run by a hand-rolled
+/// `FromRequest`) is backstopped by the HTTP edge's masking probe, which fails
+/// the route closed.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>
@@ -118,43 +121,52 @@ where
 {
     async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
         nest_rs_http::__private::MaskProbe::mark();
-        let ability = req.extensions().get::<Arc<Ability>>().ok_or_else(|| {
-            // A wiring bug, and the response body is an opaque problem+json: log
-            // it or the developer sees a 500 with nothing to grep for.
-            tracing::error!(
-                target: crate::TARGET,
-                action = ?A::ACTION,
-                subject = std::any::type_name::<S>(),
-                path = %req.original_uri().path(),
-                hint = "bind the ability guard (#[use_guards(AuthnGuard, AuthzGuard)]) \
-                        and import AuthzModule in this feature's module.rs",
-                "missing request Ability — route is authorized but no ability guard ran",
-            );
-            Error::from_string(
-                "missing request `Ability` — is the ability guard applied to this route?",
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
-        if ability.can_class(A::ACTION, TypeId::of::<S>()) {
-            return Ok(Authorize(PhantomData));
-        }
-        let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
-        if missing.is_empty() {
-            crate::gate::warn_denied(Refusal {
-                reason: Some(crate::gate::reason::NO_CLASS_GRANT),
-                ..Refusal::of::<A, S>(transport::HTTP)
-            });
-            return Err(denial_to_http_error(Denial::forbidden("forbidden")));
-        }
-        // A token that verified but is too narrow: the discovery interceptor turns
-        // the scopes into the RFC 6750 `insufficient_scope` challenge.
+        decide::<A, S>(req).map_err(denial_to_http_error)?;
+        Ok(Authorize(PhantomData))
+    }
+}
+
+/// The class gate a route declaring `Authorize<A, S>` runs before its own
+/// layers: the denial's response, or `None` when the ability grants `A` on `S`.
+pub(crate) fn class_gate<A: ActionMarker, S: Subject>(req: &Request) -> Option<Response> {
+    decide::<A, S>(req).err().map(denial_to_http_response)
+}
+
+/// Whether the request's [`Ability`] grants `A` on the class `S`, each refusal
+/// filed once.
+fn decide<A: ActionMarker, S: Subject>(req: &Request) -> std::result::Result<(), Denial> {
+    let Some(ability) = req.extensions().get::<Arc<Ability>>() else {
+        // A wiring bug, and the response body is an opaque problem+json: log it
+        // or the developer sees a 500 with nothing to grep for.
+        tracing::error!(
+            target: crate::TARGET,
+            action = ?A::ACTION,
+            subject = std::any::type_name::<S>(),
+            path = %req.original_uri().path(),
+            hint = "bind the ability guard (#[use_guards(AuthnGuard, AuthzGuard)]) \
+                    and import AuthzModule in this feature's module.rs",
+            "missing request Ability — route is authorized but no ability guard ran",
+        );
+        return Err(Denial::internal(
+            "missing request `Ability` — is the ability guard applied to this route?",
+        ));
+    };
+    if ability.can_class(A::ACTION, TypeId::of::<S>()) {
+        return Ok(());
+    }
+    let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
+    if missing.is_empty() {
         crate::gate::warn_denied(Refusal {
-            reason: Some(crate::gate::reason::INSUFFICIENT_SCOPE),
+            reason: Some(crate::gate::reason::NO_CLASS_GRANT),
             ..Refusal::of::<A, S>(transport::HTTP)
         });
-        Err(denial_to_http_error(Denial::insufficient_scope(
-            missing,
-            "forbidden",
-        )))
+        return Err(Denial::forbidden("forbidden"));
     }
+    // A token that verified but is too narrow: the discovery interceptor turns
+    // the scopes into the RFC 6750 `insufficient_scope` challenge.
+    crate::gate::warn_denied(Refusal {
+        reason: Some(crate::gate::reason::INSUFFICIENT_SCOPE),
+        ..Refusal::of::<A, S>(transport::HTTP)
+    });
+    Err(Denial::insufficient_scope(missing, "forbidden"))
 }

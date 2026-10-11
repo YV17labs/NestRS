@@ -135,13 +135,17 @@ nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
+# The class gate's order is proved against a route-scoped filter, which sees
+# every error its route returns.
+nest-rs-filters = { path = "../nest-rs-filters" }
 # The `ws` mirror suites declare a real `#[gateway]`, whose expansion names
 # `::nest_rs_ws::` paths at the call site.
 nest-rs-ws = { path = "../nest-rs-ws" }
 # The `ws` module's example writes `#[expose]`, whose expansion implements this
 # crate's `WireModelDefaults`. Path-only: seaorm depends on this crate, and only
 # a versionless dev-edge keeps that from being a cycle a publish cannot order.
-nest-rs-seaorm = { path = "../nest-rs-seaorm" }
+# `http`, for the class gate's order on a `#[crud]` controller.
+nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http"] }
 nest-rs-testing = { path = "../nest-rs-testing" }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.

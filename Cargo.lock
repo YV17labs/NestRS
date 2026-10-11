@@ -2581,6 +2581,7 @@ dependencies = [
  "async-graphql",
  "nest-rs-authz",
  "nest-rs-core",
+ "nest-rs-filters",
  "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",

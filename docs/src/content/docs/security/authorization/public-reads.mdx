@@ -57,7 +57,8 @@ with no credential, and it tells `AuthzGuard` to build the ability from
 `define_visitor` instead of `define`.
 
 `Authorize<Read, post::Entity>` is the enforcement plumbing that
-posture needs: it installs the ambient ability the data layer reads and
+posture needs: it runs the class gate against the visitor's grant, right
+after the guards, installs the ambient ability the data layer reads and
 arms the response mask. This is the one route shape where you write the
 extractor by hand — `#[authorize(...)]` and `#[public]` declare opposite
 postures, so the decorator form is a compile error here.

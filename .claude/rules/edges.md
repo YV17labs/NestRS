@@ -182,7 +182,10 @@ transport-wide**: `use_*_global` is the app-listed pool; `#[interceptor]` is
 infrastructure a module import brings (`DbContext`, tracing), off the pool.
 
 - **A denial is an `Ok(4xx)` response, never an `Err`**: filters do not see it,
-  global interceptors observe it. A guard may attach context (`Ctx<T>`), and
+  global interceptors observe it. **The posture's class gate runs with the
+  guards**, after them and before any scoped interceptor or filter, however the
+  route spells it: a layer that answers for the handler never answers a caller
+  the posture refuses. A guard may attach context (`Ctx<T>`), and
   per-handler metadata is `#[meta(EXPR)]` read through `Reflector`.
 - **Boot is fail-secure.** An unresolvable global spec fails the boot naming the
   type, at the kernel's wiring step (`provide_wiring`), in every app whatever it

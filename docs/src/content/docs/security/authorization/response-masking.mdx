@@ -17,8 +17,8 @@ rather than shipping unmasked. The route never calls `mask` itself.
 ## Declare it — `#[authorize]`
 
 `#[authorize(Read, user::Entity)]` declares the route's posture, and
-`#[routes]` desugars it to the `Authorize<A, S>` extractor as the handler's
-first parameter — the extractor that arms the shaper:
+`#[routes]` reads it as the type `Authorize<A, S>`, which gates the route and
+arms the shaper:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::authz::Read;
@@ -34,12 +34,12 @@ async fn list(&self) -> Result<Json<Vec<User>>> {
 the `Model` → `User` conversion lives there, so the handler declares a posture
 and delegates.
 
-The extractor it desugars to, `Authorize<Read, user::Entity>`, does two
-things:
+That type, `Authorize<Read, user::Entity>`, does two things:
 
-1. **Class-level gate.** On extraction, refuses with 403 unless the
-   ability's `can_class(Read, TypeId::of::<user::Entity>())` is
-   true.
+1. **Class-level gate.** Right after the route's guards, refuses with 403
+   unless the ability's `can_class(Read, TypeId::of::<user::Entity>())` is
+   true — before any interceptor or filter the route declares, so a cache
+   never answers the caller it refuses.
 2. **Shaper trigger.** The `RouteResponseShaper` impl wraps the
    handler in `with_ability(ability, inner)` (so `Repo::scoped`
    reads the right ability) and runs `mask_entity_response::<user::Entity>`

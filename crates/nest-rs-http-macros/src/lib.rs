@@ -51,10 +51,10 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Per-method attributes (all consumed; no imports needed):
 ///
-/// - `#[authorize(Action, Entity)]` — the route's authz posture. Desugars to
-///   the `nest_rs_authz::http::Authorize<A, E>` extractor as the handler's
-///   first parameter: class gate before the body, response masking after it.
-///   Mutually exclusive with `#[public]`.
+/// - `#[authorize(Action, Entity)]` — the route's authz posture: the class
+///   gate of `nest_rs_authz::http::Authorize<A, E>`, run with the guards and
+///   before any interceptor or filter the route declares, and its response
+///   masking. Mutually exclusive with `#[public]`.
 /// - `#[public]` — the route is reachable anonymously; global guards still run
 ///   and read the marker.
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.

@@ -242,7 +242,7 @@ pub mod __private {
     pub use crate::matched::matched_template;
     pub use crate::response::IntoResult;
     pub use crate::route_template::poem_pattern;
-    pub use crate::shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+    pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
 
     pub use serde;
     pub use validator;
@@ -334,7 +334,7 @@ pub use nest_rs_http_macros::routes;
 /// re-emitted under [`#[routes]`](macro@routes).
 ///
 /// Each route delegates to the service's `nest_rs_seaorm::CrudService` and
-/// declares `Authorize<Action, Entity>`.
+/// declares its posture with `#[authorize(Action, Entity)]`.
 pub use nest_rs_http_macros::crud;
 
 /// `#[interceptor]` — mounts a struct implementing

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use nest_rs_config::{Config, ConfigService};
+use nest_rs_config::{Config, ConfigError, ConfigService};
 use nest_rs_core::{Container, injectable, inventory};
 
 use crate::provider::SocialProvider;
@@ -74,7 +74,11 @@ where
             config
         }
     };
-    config.validate()?;
+    // `validator`'s own `Display` lists each rule's parameters, the rejected
+    // value among them.
+    config
+        .validate()
+        .map_err(|errors| anyhow::Error::new(ConfigError::validation(C::NAMESPACE, errors)))?;
     Ok(Some(Arc::new(make(config)?)))
 }
 
@@ -332,6 +336,33 @@ mod tests {
             panic!("a half-configured provider must abort boot");
         };
         assert!(err.to_string().contains("client_secret"), "{err}");
+    }
+
+    /// A pinned config's refusal names the field and its rule, never the
+    /// value `validator` lists among the rule's parameters.
+    #[test]
+    fn a_pinned_config_failing_validation_is_refused_without_its_value() {
+        let container = Container::builder()
+            .provide(StubConfig {
+                client_id: "s3cr3t-id".into(),
+                client_secret: String::new(),
+            })
+            .build();
+        let Err(err) = resolve(&container) else {
+            panic!("a half-configured provider must abort boot");
+        };
+        assert!(
+            matches!(
+                err.downcast_ref::<ConfigError>(),
+                Some(ConfigError::Validation { namespace, .. }) if *namespace == <StubConfig as nest_rs_config::Namespaced>::NAMESPACE
+            ),
+            "{err:#}"
+        );
+        // `install` formats the error itself into the boot's sentence.
+        let sentence = err.to_string();
+        assert!(sentence.contains("client_secret: length"), "{sentence}");
+        assert!(!sentence.contains("value"), "{sentence}");
+        assert!(!sentence.contains("s3cr3t"), "{sentence}");
     }
 
     #[test]

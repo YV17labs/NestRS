@@ -5,6 +5,7 @@ use std::fmt;
 use std::time::Duration;
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
+use nest_rs_config::{ConfigError, Namespaced};
 use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::url::Url;
 use oauth2::{
@@ -14,7 +15,7 @@ use oauth2::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use validator::{Validate, ValidationErrors};
 
 use crate::config::OAuthClientConfig;
 use nest_rs_authn::AuthError;
@@ -203,6 +204,14 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
     }
 }
 
+/// `validator`'s own `Display` lists each rule's parameters, the rejected value
+/// among them; [`ConfigError::validation`] says the field and the rule alone.
+fn invalid(errors: ValidationErrors) -> AuthError {
+    AuthError::Failed(
+        ConfigError::validation(<OAuthClientConfig as Namespaced>::NAMESPACE, errors).to_string(),
+    )
+}
+
 fn backend() -> reqwest::ClientBuilder {
     reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
@@ -235,9 +244,7 @@ impl OAuthClient {
     /// Builds a client from a validated `config`; its backend follows no redirect
     /// (an SSRF risk in a token exchange, per `oauth2`) and bounds every call.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
-        config
-            .validate()
-            .map_err(|err| AuthError::Failed(format!("invalid OAuth2 config: {err}")))?;
+        config.validate().map_err(invalid)?;
         let http = backend()
             .build()
             .map_err(|e| AuthError::Failed(e.to_string()))?;
@@ -257,20 +264,21 @@ impl OAuthClient {
         >,
         AuthError,
     > {
-        let parse = |s: &str, error: oauth2::url::ParseError| {
-            AuthError::Failed(format!("invalid OAuth URL: {s}: {error}"))
+        // `url::ParseError` says why in a fixed sentence; the URL itself may
+        // carry userinfo, and the sentence is logged.
+        let parse = |field: &'static str| {
+            move |error: oauth2::url::ParseError| {
+                AuthError::Failed(format!(
+                    "OAuthClientConfig::{field} does not parse as a URL: {error}"
+                ))
+            }
         };
         Ok(BasicClient::new(ClientId::new(config.client_id.clone()))
             .set_client_secret(ClientSecret::new(config.client_secret.clone()))
-            .set_auth_uri(
-                AuthUrl::new(config.auth_url.clone()).map_err(|e| parse(&config.auth_url, e))?,
-            )
-            .set_token_uri(
-                TokenUrl::new(config.token_url.clone()).map_err(|e| parse(&config.token_url, e))?,
-            )
+            .set_auth_uri(AuthUrl::new(config.auth_url.clone()).map_err(parse("auth_url"))?)
+            .set_token_uri(TokenUrl::new(config.token_url.clone()).map_err(parse("token_url"))?)
             .set_redirect_uri(
-                RedirectUrl::new(config.redirect_url.clone())
-                    .map_err(|e| parse(&config.redirect_url, e))?,
+                RedirectUrl::new(config.redirect_url.clone()).map_err(parse("redirect_url"))?,
             ))
     }
 
@@ -492,21 +500,61 @@ mod tests {
         OAuthClient::basic_client(&valid_config()).expect("basic_client builds");
     }
 
+    /// The URL may carry userinfo, and the sentence is logged: it names the
+    /// field and the parser's fixed reason, never the value.
     #[test]
-    fn basic_client_rejects_malformed_auth_url() {
+    fn basic_client_refuses_a_malformed_url_naming_its_field_and_not_its_value() {
         let mut config = valid_config();
+        config.auth_url = "https://u:s3cr3t@idp:99999/x".into();
+        let Err(AuthError::Failed(msg)) = OAuthClient::basic_client(&config) else {
+            panic!("expected Failed");
+        };
+        assert_eq!(
+            msg, "OAuthClientConfig::auth_url does not parse as a URL: invalid port number",
+            "{msg}"
+        );
+
         config.auth_url = "not a url".into();
         let Err(AuthError::Failed(msg)) = OAuthClient::basic_client(&config) else {
             panic!("expected Failed");
         };
         assert!(
-            msg.contains("not a url"),
-            "error names the offending value: {msg}"
+            msg.contains("relative URL without a base") && !msg.contains("not a url"),
+            "{msg}"
         );
+    }
+
+    /// A rule failing on a value `validator` would list among its parameters.
+    fn always_refused(_: &str) -> Result<(), validator::ValidationError> {
+        Err(validator::ValidationError::new("refused"))
+    }
+
+    #[derive(Validate)]
+    struct Probe {
+        #[validate(custom(function = "always_refused"))]
+        client_secret: String,
+    }
+
+    /// `validator`'s `Display` prints a failed rule's parameters, the rejected
+    /// value among them; the refusal says the field and the rule alone.
+    #[test]
+    fn a_validation_failure_says_the_field_and_the_rule_and_never_the_value() {
+        let errors = Probe {
+            client_secret: "s3cr3t".into(),
+        }
+        .validate()
+        .expect_err("the rule refuses every value");
         assert!(
-            msg.contains("relative URL without a base"),
-            "and the parser's reason, which the value alone does not say: {msg}"
+            errors.to_string().contains("s3cr3t"),
+            "the probe quotes: {errors}"
         );
+
+        let AuthError::Failed(sentence) = invalid(errors) else {
+            panic!("a refused config is a failed authentication setup");
+        };
+        assert!(sentence.contains("client_secret: refused"), "{sentence}");
+        assert!(!sentence.contains("s3cr3t"), "{sentence}");
+        assert!(!sentence.contains("value"), "{sentence}");
     }
 
     #[test]

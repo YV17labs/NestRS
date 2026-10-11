@@ -645,18 +645,18 @@ impl AppBuilder {
                 .into());
             };
             let queued = pending.remove(index);
-            let mut steps = Vec::with_capacity(1 + queued.derives.len());
-            if !builder.contains(queued.id()) {
+            let output = if builder.contains(queued.id()) {
+                None
+            } else {
                 let type_name = queued.name;
                 let factory = (queued.factory)(builder.snapshot());
                 let register = lifecycle
                     .boot(&BootStep::Factory { type_name }, factory)
                     .await?
                     .map_err(|source| FactoryFailedError { type_name, source })?;
-                steps.push(register);
-            }
-            steps.extend(queued.derives);
-            builder = builder.install(queued.queued_by, steps);
+                Some(register)
+            };
+            builder = builder.install(queued.queued_by, output.into_iter().chain(queued.derives));
             check_budgets(&builder, &reached, Some(&queued.provides))?;
         }
         // Seeded after register, yet global infrastructure for the access graph.

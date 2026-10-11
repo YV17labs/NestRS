@@ -254,11 +254,10 @@ fn classify(
     let mut unreached = None;
     for module in descriptors {
         if module.providers.iter().any(|p| (p.provider)() == host) {
-            if !composition.reaches((module.module)()) {
-                unreached.get_or_insert(module.name);
-            } else {
+            if composition.reaches((module.module)()) {
                 return InertHost::Unknown;
             }
+            unreached.get_or_insert(module.name);
         }
     }
     if held {

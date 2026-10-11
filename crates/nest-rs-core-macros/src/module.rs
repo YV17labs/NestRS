@@ -1,6 +1,6 @@
 use nest_rs_codegen::last_segment_ident;
 use proc_macro::TokenStream;
-use quote::{quote, quote_spanned};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -382,7 +382,7 @@ fn group_providers(bindings: &[ProviderBinding]) -> syn::Result<Vec<ProviderGrou
             ProviderBinding::Concrete(p) => (p, None),
             ProviderBinding::Dyn { provider, trait_ty } => (provider, Some(&**trait_ty)),
         };
-        let spelled = written(quote!(#provider));
+        let spelled = written(provider);
         let Some((_, group)) = groups.iter_mut().find(|(seen, _)| *seen == spelled) else {
             let group = match trait_ty {
                 None => ProviderGroup::Concrete(provider),
@@ -394,31 +394,24 @@ fn group_providers(bindings: &[ProviderBinding]) -> syn::Result<Vec<ProviderGrou
             groups.push((spelled, group));
             continue;
         };
-        let refused = match (group, trait_ty) {
-            (ProviderGroup::Concrete(_), None) => Some(format!(
-                "{site}: `{spelled}` is listed twice — a provider is listed once"
-            )),
-            (ProviderGroup::Concrete(_), Some(trait_ty)) => Some(beside(&site, &spelled, trait_ty)),
-            (ProviderGroup::Dyn { traits, .. }, None) => Some(beside(&site, &spelled, traits[0])),
-            (ProviderGroup::Dyn { traits, .. }, Some(trait_ty)) => {
-                let bound = written(quote!(#trait_ty));
-                if traits.iter().any(|seen| written(quote!(#seen)) == bound) {
-                    Some(format!(
-                        "{site}: `{spelled} as {bound}` is listed twice — a provider is listed \
-                         once"
-                    ))
-                } else {
-                    traits.push(trait_ty);
-                    None
-                }
+        let message = match (group, trait_ty) {
+            (ProviderGroup::Dyn { traits, .. }, Some(trait_ty))
+                if !traits.iter().any(|seen| written(seen) == written(trait_ty)) =>
+            {
+                traits.push(trait_ty);
+                continue;
             }
+            (ProviderGroup::Concrete(_), None) | (ProviderGroup::Dyn { .. }, Some(_)) => format!(
+                "{site}: `{}` is listed twice — a provider is listed once",
+                written(binding)
+            ),
+            (ProviderGroup::Concrete(_), Some(trait_ty)) => beside(&site, &spelled, trait_ty),
+            (ProviderGroup::Dyn { traits, .. }, None) => beside(&site, &spelled, traits[0]),
         };
-        if let Some(message) = refused {
-            let error = syn::Error::new_spanned(binding.tokens(), message);
-            match &mut refusal {
-                Some(first) => first.combine(error),
-                None => refusal = Some(error),
-            }
+        let error = syn::Error::new_spanned(binding, message);
+        match &mut refusal {
+            Some(first) => first.combine(error),
+            None => refusal = Some(error),
         }
     }
     match refusal {
@@ -432,13 +425,14 @@ fn beside(site: &str, provider: &str, trait_ty: &Type) -> String {
     format!(
         "{site}: `{provider}` is listed beside `{provider} as {}`, which already holds it under \
          its own type — remove the bare entry",
-        written(quote!(#trait_ty))
+        written(trait_ty)
     )
 }
 
-/// Tokens as a developer wrote them: `crate::Store`, `dyn Cache`.
-fn written(tokens: proc_macro2::TokenStream) -> String {
+/// Tokens as a developer wrote them: `crate::Store`, `Store as dyn Cache`.
+fn written(tokens: &impl ToTokens) -> String {
     tokens
+        .to_token_stream()
         .to_string()
         .replace(" :: ", "::")
         .replace(":: ", "::")
@@ -452,12 +446,12 @@ enum ProviderBinding {
     Dyn { provider: Path, trait_ty: Box<Type> },
 }
 
-impl ProviderBinding {
-    /// The entry as written, for a refusal's span.
-    fn tokens(&self) -> proc_macro2::TokenStream {
+/// The entry as written, for a refusal's words and span.
+impl ToTokens for ProviderBinding {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         match self {
-            Self::Concrete(p) => quote!(#p),
-            Self::Dyn { provider, trait_ty } => quote!(#provider as #trait_ty),
+            Self::Concrete(p) => p.to_tokens(tokens),
+            Self::Dyn { provider, trait_ty } => tokens.extend(quote!(#provider as #trait_ty)),
         }
     }
 }

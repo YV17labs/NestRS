@@ -4,6 +4,7 @@
 
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -538,8 +539,8 @@ impl ContainerBuilder {
         name: &'static str,
         value: Arc<T>,
     ) -> Self {
-        let key = ProviderKey::named::<T>(name);
-        if self.providers.contains_key(&key) {
+        let replaced = self.providers.insert(ProviderKey::named::<T>(name), value);
+        if replaced.is_some() {
             tracing::warn!(
                 target: crate::target::CONTAINER,
                 provider = std::any::type_name::<T>(),
@@ -547,7 +548,6 @@ impl ContainerBuilder {
                 "keyed provider override",
             );
         }
-        self.providers.insert(key, value);
         self
     }
 
@@ -576,14 +576,14 @@ impl ContainerBuilder {
     /// not route here.
     fn record<T: ?Sized + 'static>(&mut self, scope: ProviderScope) {
         let second = (self.registration_origin(), scope);
-        match self.origins.get(&TypeId::of::<T>()) {
-            Some(&first) => self.duplicates.push(DuplicateProvider {
+        match self.origins.entry(TypeId::of::<T>()) {
+            Entry::Occupied(first) => self.duplicates.push(DuplicateProvider {
                 type_name: std::any::type_name::<T>(),
-                first,
+                first: *first.get(),
                 second,
             }),
-            None => {
-                self.origins.insert(TypeId::of::<T>(), second);
+            Entry::Vacant(slot) => {
+                slot.insert(second);
             }
         }
     }

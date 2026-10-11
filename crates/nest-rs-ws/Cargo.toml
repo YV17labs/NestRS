@@ -63,6 +63,9 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["ws"] }
 # `test-util` (not part of tokio's `full`) pauses time while nothing reads a
 # socket, so a lifetime ceiling or a shutdown window costs the suite nothing.
 tokio = { workspace = true, features = ["test-util"] }
+# A global interceptor wraps the upgrade, which is how a suite puts a value in
+# what the upgrade carries into its connection.
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 
 [lints]
 workspace = true

@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::{Container, Correlation, RequestContinuation, RequestScope, operation_log};
+use nest_rs_core::{
+    Container, Continuation, Correlation, RequestContinuation, RequestScope, operation_log,
+};
 use nest_rs_http::DetachedWork;
 use nest_rs_pipes::PipeError;
 use tracing::Instrument;
@@ -124,6 +126,9 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let gateway = Arc::clone(&self.gateway);
         let server = Arc::clone(&self.server);
         let guards = Arc::clone(&self.guards);
+        // What the upgrade carries into its connection: never its scope, never
+        // its transaction.
+        let carried = RequestContinuation::capture(Continuation::Connection);
         let wiring = DispatchWiring {
             ambient,
             data_pipe: self.data_pipe.clone(),
@@ -138,18 +143,24 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
         let sockets = self.sockets.clone();
         Ok(ws
             .on_upgrade(move |socket| {
-                // Installed once for the whole task; a per-message install wins inside it.
+                // Installed once for the whole task; each hook and message is a
+                // unit nested in it, so it carries what the connection carries.
                 let connection = wiring.connection.clone();
                 let going_away = sockets.going_away();
                 async move {
+                    let serving = serve_connection(
+                        gateway, server, guards, wiring, limits, socket, going_away,
+                    );
                     let _ = sockets
-                        .run(nest_rs_core::with_request_scope(
-                            None,
-                            connection,
-                            serve_connection(
-                                gateway, server, guards, wiring, limits, socket, going_away,
-                            ),
-                        ))
+                        .run(async move {
+                            match carried {
+                                Some(carried) => carried.scope(serving).await,
+                                None => {
+                                    nest_rs_core::with_request_scope(None, connection, serving)
+                                        .await
+                                }
+                            }
+                        })
                         .await;
                 }
             })

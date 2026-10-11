@@ -2090,3 +2090,83 @@ async fn a_per_message_rate_limit_carries_its_reason_and_its_wait() {
     assert_eq!(reply["data"]["errors"]["retryAfterSeconds"], 7, "{reply}");
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+/// Who the upgrade was for, read back by every unit the socket runs.
+#[derive(Debug)]
+struct Caller(&'static str);
+
+impl nest_rs_core::AmbientValue for Caller {}
+
+/// Adds the caller around the upgrade request, as a guard's attachment does.
+#[injectable]
+#[derive(Default)]
+struct CallerInterceptor;
+
+impl Layer for CallerInterceptor {}
+
+#[async_trait]
+impl nest_rs_interceptors::Interceptor for CallerInterceptor {
+    async fn intercept(
+        &self,
+        req: HttpRequest,
+        next: nest_rs_interceptors::Next<'_>,
+    ) -> poem::Result<poem::Response> {
+        nest_rs_core::with_ambient(std::sync::Arc::new(Caller("alice")), next.run(req)).await
+    }
+}
+
+/// The caller the connect hook read, `None` until it ran.
+static CONNECTED_AS: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+fn caller() -> &'static str {
+    nest_rs_core::ambient::<Caller>().map_or("nobody", |caller| caller.0)
+}
+
+#[gateway(path = "/caller")]
+pub(crate) struct CallerGateway;
+
+#[messages]
+impl CallerGateway {
+    #[subscribe_message("whoami")]
+    #[public]
+    async fn whoami(&self, _ask: String) -> String {
+        caller().to_owned()
+    }
+
+    #[on_connect]
+    async fn joined(&self) {
+        *CONNECTED_AS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(caller());
+    }
+}
+
+#[module(imports = [WsModule], providers = [CallerInterceptor, CallerGateway])]
+struct CallerModule;
+
+#[tokio::test]
+async fn every_unit_of_a_socket_reads_what_its_upgrade_carried() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<CallerModule>()
+        .use_interceptors_global([nest_rs_interceptors::interceptor::<CallerInterceptor>()])
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+
+    let mut socket = app.socket("/caller").connect().await;
+    for _ in 0..2 {
+        socket.send("whoami", serde_json::json!("?")).await;
+        let reply = socket.next_envelope().await;
+        assert_eq!(
+            reply["data"], "alice",
+            "a message reads the caller long after the upgrade returned",
+        );
+    }
+    assert_eq!(
+        *CONNECTED_AS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some("alice"),
+        "the connect hook reads it too",
+    );
+}

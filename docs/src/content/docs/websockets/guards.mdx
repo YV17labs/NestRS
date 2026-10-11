@@ -203,9 +203,10 @@ guard type. The gateway struct binds
 `#[use_guards(AuthnGuard, AuthzGuard)]`; both run once on the upgrade
 (an HTTP `GET`) and are access-graph-validated like any HTTP binding:
 omit `AuthzWsModule` and those guards are unreachable, so boot fails.
-Because the upgrade's task-locals unwind before message handlers run,
+Because the upgrade has returned before message handlers run,
 `WsDataContext` — the `SocketContext` bridge `AuthzWsModule` provides
-— re-seeds the executor and ability around each message. Binding
+— installs the executor and ability around each message; every other
+value the upgrade carried crosses into the connection on its own. Binding
 `AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
 through `check_ws_message`: it denies, fail-closed, when no ambient
 ability is present.

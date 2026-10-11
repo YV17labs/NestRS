@@ -43,12 +43,23 @@ is one grep per method name.
 `Repo::scoped(Action::Delete)` and deletes row by row through `Repo::delete`,
 bounded per run — the demo's notifications purge is the shape.
 
-## Two request-scoped `task_local!`s
+## The ambient context
 
-Singletons have no other way to read per-request state: the **executor**
-(`nest-rs-database` owns the seam and the `Executor` trait, `nest-rs-seaorm`
-the pool-or-transaction implementation) and the **ability**
-(`nest-rs-authz`).
+Singletons read per-request state from core's one ambient context, never from
+a task-local of their own: the **executor** (`nest-rs-database` owns the seam
+and the `Executor` trait, `nest-rs-seaorm` the pool-or-transaction
+implementation) and the **ability** (`nest-rs-authz`) are two of its values,
+and a package adds its own by implementing `AmbientValue`, whose `carry` says
+how far the value travels (`.claude/decisions/ambient-carry.md`).
+
+**A continuation that can outlive the transaction never holds it.** Where a
+unit continues after the future that accepted it, the executor steps down to
+the pool — a streaming body, a DataLoader batch, work held for the commit and
+an emitted event's listeners — and is dropped on a task handed to
+`TaskContext`, a connection's next message and a job's envelope, where a write
+opens a unit of its own. The ability crosses everywhere but a job's envelope.
+One exception is planned: a mutation operation's batches will run on the
+operation's own transaction, joined before the field's savepoint settles.
 
 **The executor** is installed by the `DbContext` interceptor, in the innermost
 transport band, so it covers controllers and self-mounted surfaces alike. A
@@ -68,8 +79,9 @@ Only the unit of work holding the transaction knows whether its writes
 landed. `nest_rs_database::after_commit(work)` hands work to the ambient
 executor; every edge settles through `LazyTransaction::finalize`, which runs
 it once the transaction committed (or the boundary succeeded with nothing to
-roll back) and drops it on every other outcome. Held work runs on the pool,
-under the scope and ability it was registered with. A panic in it is contained
+roll back) and drops it on every other outcome. Held work runs under what its
+unit carried into the commit: the pool, the scope, the ability and every
+value that crosses. A panic in it is contained
 and logged at `error` — the commit already stood, and an unwind would turn it
 into a failed attempt a queue replays.
 
@@ -167,8 +179,9 @@ dependency cycle.** What they guarantee:
   ability, with or without a data context. WS has no bridge: a gateway's
   upgrade already ran the chain, and only the ability is re-installed per
   message.
-- **A dataloader batch** runs off-task under `LoaderScope`, which snapshots the
-  ability and a pool executor.
+- **A dataloader batch** runs off-task under what its request carries into a
+  batch — the request's values, never one field's, and the pool — captured
+  where a field asks the loader; nothing is bound for it.
 - **WS and MCP data contexts share one dispatch path**, so their
   commit/rollback semantics cannot drift: a read-only message or tool opens
   no transaction, a writing one commits on success and rolls back on the

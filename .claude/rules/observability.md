@@ -76,12 +76,14 @@ The edge owes propagation at every boundary it crosses.
   handler returns.** A streaming body — `#[sse]`, a download, anything over a
   `Stream` — is polled after the handler, with the edge's task-locals unwound,
   so the HTTP edge re-installs the request (`RequestContinuation`) around every
-  body poll, at the body, for every streaming response — **whatever the access
-  log is set to**: a primitive true for short responses and false for long ones
-  is absent exactly where a long operation needs it.
+  body poll, at the body, for every streaming response — what the handler ran
+  under when a route returned one, captured as its `Body` continuation —
+  **whatever the access log is set to**: a primitive true for short responses
+  and false for long ones is absent exactly where a long operation needs it.
 - **A continuation that outlives its request inherits identity, never
-  resources.** A socket opened by an upgrade takes the upgrade's trace and actor
-  and nothing else; pinning the request's scope for the socket's life is the
+  resources.** A socket opened by an upgrade takes the upgrade's trace, actor
+  and the ambient values that cross a `Connection`, never its scope or its
+  transaction; pinning the request's scope for the socket's life is the
   defect. Where the framework dispatches inside the connection, the operation is
   the unit and the connection a field (`ws.message` carries `ws.connection_id`);
   where it cannot see one, the connection is the unit (`graphql.subscription`).

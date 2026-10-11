@@ -81,3 +81,34 @@ propagates), .NET's `AsyncLocal`, Node's `AsyncLocalStorage` (NestJS's CLS).
 **Status (2026-10-10): decided, not landed.** It lands with
 `feat/ambient-context`, which also turns the DataLoader's lazy capture into
 the eager `Batch` one; it appends an entry here where it departs.
+
+**2026-10-11 — landed, with four departures.** The map, the six
+continuations and the carry of every framework value ship as decided: a
+WebSocket gateway and a graphql-ws socket capture their upgrade for
+`Connection`, a DataLoader spawner captures for `Batch` where a field asks
+the loader, a route captures for `Body` where it returns a streaming body,
+and `after_commit` and `EventBus::emit` capture for `Commit`. Where it
+departs:
+
+- **No guard attaches yet.** Today's HTTP guard has no context to attach
+  through, and making `AbilityGuard`'s ability ambient on every guarded route
+  would let a route that never armed the mask read rows; the guard contract
+  decides the two together. Until it lands the ability is ambient where
+  today's seams install it — the `Authorize` and `Bind` shapers, the GraphQL
+  and MCP bridges, `WsDataContext` per message — and every continuation
+  carries it from there. `UnitContext::attach` and the install of what a
+  stage attached are built, with no caller yet.
+- **The pool a continuation runs on is the executor's own** until the
+  unit-of-work port: the first-party driver hands it out through a hidden
+  trait item; under another driver a continuation runs with no executor, and
+  its reads fail closed.
+- **A graphql-ws socket keeps installing its own pool executor** — the
+  upgrade's capture drops the request's — as the socket's unit, until the port
+  opens one per operation.
+- **A nested unit is any unit opened inside another** (`with_request_scope`
+  while one runs): it inherits its parent's values and records the parent, so
+  a batch captured inside it carries the outermost unit's values and
+  identity. A capture is flat and holds no parent, so nothing a continuation
+  does not carry stays reachable through it; `RequestContinuation::current`,
+  which cloned the running context whole, transaction included, gave way to
+  `RequestContinuation::capture`.

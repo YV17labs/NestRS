@@ -918,8 +918,8 @@ mod tests {
         );
     }
 
-    /// The imperative mount it guarded is gone: the variable changes nothing,
-    /// and the boot names it as a key no config reads.
+    /// A set `FAIL_SECURE_STRICT` changes nothing, and the boot names it as a
+    /// key no config reads.
     #[test]
     fn the_fail_secure_strict_variable_is_no_longer_read() {
         let var = nest_rs_config::var_name("http", "FAIL_SECURE_STRICT");

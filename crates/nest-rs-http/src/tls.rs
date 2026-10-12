@@ -41,7 +41,7 @@ enum TlsSource {
 }
 
 /// TLS material for the HTTP transport: a PEM certificate chain and private
-/// key, [`HttpConfig::tls`](crate::HttpConfig::tls).
+/// key, set on [`HttpConfig::tls`](crate::HttpConfig::tls).
 ///
 /// ```
 /// # use nest_rs_config::ConfigService;

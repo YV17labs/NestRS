@@ -47,7 +47,7 @@ pub fn take_meta(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Expr>> {
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
 )]
 fn meta_value(attr: &Attribute) -> syn::Result<Expr> {
-    let refused = || {
+    attr.parse_args::<Expr>().map_err(|_| {
         syn::Error::new_spanned(
             attr,
             takes_value(
@@ -56,9 +56,7 @@ fn meta_value(attr: &Attribute) -> syn::Result<Expr> {
                 "one value as an expression, e.g. `#[meta(Throttle::per_minute(10))]`",
             ),
         )
-    };
-    let list = attr.meta.require_list().map_err(|_| refused())?;
-    syn::parse2::<Expr>(list.tokens.clone()).map_err(|_| refused())
+    })
 }
 
 /// The type a value's expression names by its own path, as written: a tuple

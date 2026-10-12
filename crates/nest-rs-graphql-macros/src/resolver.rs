@@ -781,16 +781,12 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
         let mut deleg_attrs = delegated_attrs(&method.attrs);
-        let mut address = lower_camel(&method.sig.ident.unraw().to_string());
+        let mut field = lower_camel(&method.sig.ident.unraw().to_string());
         if !is_entity {
-            let field = match graphql_name(&method.attrs)? {
-                Some(name) => name,
-                None => {
-                    let field = lower_camel(&method.sig.ident.unraw().to_string());
-                    name_the_field(&mut deleg_attrs, &field)?;
-                    field
-                }
-            };
+            match graphql_name(&method.attrs)? {
+                Some(name) => field = name,
+                None => name_the_field(&mut deleg_attrs, &field)?,
+            }
             let (identity, key) = if is_field {
                 let parent = field_parent_label(&method.sig);
                 (
@@ -801,7 +797,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 let root = nest_rs_codegen::key_as_written(verb_attr.path());
                 (format!("{root} {field}"), format!("#[{root}] {field}"))
             };
-            address = field;
             declared.declare(
                 Collision::Marker,
                 "field",
@@ -896,7 +891,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     self_ty: &self_ty,
                     host_name: &base,
                     method: &method_name,
-                    address: quote!(#address),
+                    address: quote!(#field),
                     posture: if is_public {
                         nest_rs_codegen::SitePosture::Public
                     } else {

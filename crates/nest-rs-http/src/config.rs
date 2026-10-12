@@ -423,29 +423,25 @@ impl HttpConfig {
     /// [`request_timeout`](Self::request_timeout), held to the range its
     /// variable is, for a config that never met the environment.
     pub(crate) fn request_budget(&self) -> Result<Option<Duration>> {
-        let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
         self.request_timeout
-            .map(|budget| REQUEST_TIMEOUT.check(namespace, REQUEST_TIMEOUT.field(), budget))
+            .map(|budget| in_range(REQUEST_TIMEOUT, budget))
             .transpose()
     }
 
     /// [`shutdown_timeout`](Self::shutdown_timeout), held to the range its
     /// variable is, for a config that never met the environment.
     pub(crate) fn shutdown_window(&self) -> Result<Duration> {
-        let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
-        SHUTDOWN_TIMEOUT.check(namespace, SHUTDOWN_TIMEOUT.field(), self.shutdown_timeout)
+        in_range(SHUTDOWN_TIMEOUT, self.shutdown_timeout)
     }
 
     /// The four connection deadlines, each held to the range its variable is,
     /// for a config that never met the environment.
     pub(crate) fn deadlines(&self) -> Result<crate::server::Deadlines> {
-        let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
-        let check = |bounds: DurationBounds, value| bounds.check(namespace, bounds.field(), value);
         Ok(crate::server::Deadlines {
-            header_read: check(HEADER_READ_TIMEOUT, self.header_read_timeout)?,
-            body_read: check(BODY_READ_TIMEOUT, self.body_read_timeout)?,
-            idle: check(IDLE_TIMEOUT, self.idle_timeout)?,
-            send: check(SEND_TIMEOUT, self.send_timeout)?,
+            header_read: in_range(HEADER_READ_TIMEOUT, self.header_read_timeout)?,
+            body_read: in_range(BODY_READ_TIMEOUT, self.body_read_timeout)?,
+            idle: in_range(IDLE_TIMEOUT, self.idle_timeout)?,
+            send: in_range(SEND_TIMEOUT, self.send_timeout)?,
         })
     }
 
@@ -601,6 +597,16 @@ fn outside_connection_range(count: usize) -> Option<(&'static str, &'static str,
     } else {
         None
     }
+}
+
+/// `value`, set in code, refused under the variable `bounds` reads when it is
+/// outside that variable's range.
+fn in_range(bounds: DurationBounds, value: Duration) -> Result<Duration> {
+    bounds.check(
+        <HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
+        bounds.field(),
+        value,
+    )
 }
 
 fn optional(read: Option<nest_rs_config::BoundedDuration>) -> Option<Duration> {

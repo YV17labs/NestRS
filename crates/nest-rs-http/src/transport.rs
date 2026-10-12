@@ -887,39 +887,21 @@ mod tests {
     /// variables are, for a config that never met the environment.
     #[test]
     fn a_built_config_holds_its_shutdown_window_and_request_budget_to_their_ranges() {
-        for (config, key, field) in [
-            (
-                crate::HttpConfig {
-                    shutdown_timeout: Duration::MAX,
-                    ..Default::default()
-                },
-                "SHUTDOWN_TIMEOUT_SECS",
-                "HttpConfig::shutdown_timeout",
-            ),
-            (
-                crate::HttpConfig {
-                    shutdown_timeout: Duration::ZERO,
-                    ..Default::default()
-                },
-                "SHUTDOWN_TIMEOUT_SECS",
-                "HttpConfig::shutdown_timeout",
-            ),
-            (
-                crate::HttpConfig {
-                    request_timeout: Some(Duration::ZERO),
-                    ..Default::default()
-                },
-                "REQUEST_TIMEOUT_SECS",
-                "HttpConfig::request_timeout",
-            ),
-            (
-                crate::HttpConfig {
-                    request_timeout: Some(Duration::MAX),
-                    ..Default::default()
-                },
-                "REQUEST_TIMEOUT_SECS",
-                "HttpConfig::request_timeout",
-            ),
+        const WINDOW: (&str, &str) = ("SHUTDOWN_TIMEOUT_SECS", "HttpConfig::shutdown_timeout");
+        const BUDGET: (&str, &str) = ("REQUEST_TIMEOUT_SECS", "HttpConfig::request_timeout");
+        let window = |shutdown_timeout| crate::HttpConfig {
+            shutdown_timeout,
+            ..Default::default()
+        };
+        let budget = |budget| crate::HttpConfig {
+            request_timeout: Some(budget),
+            ..Default::default()
+        };
+        for (config, (key, field)) in [
+            (window(Duration::MAX), WINDOW),
+            (window(Duration::ZERO), WINDOW),
+            (budget(Duration::ZERO), BUDGET),
+            (budget(Duration::MAX), BUDGET),
         ] {
             let refused = HttpTransport::from_config(&config)
                 .err()

@@ -455,21 +455,18 @@ mod tests {
                     (issuers(&[uri]), "AUTHORIZATION_SERVERS"),
                 ] {
                     let read = config.metadata_in(environment);
-                    match environment.is_deployed() {
-                        false => {
-                            read.expect("loopback http serves local development");
-                        }
-                        true => {
-                            let refused = read.expect_err("a deployment speaks https").to_string();
-                            assert!(
-                                refused.contains(&nest_rs_config::var_name(
-                                    OAuthResourceConfig::NAMESPACE,
-                                    setting
-                                )) && refused.contains("https"),
-                                "{environment:?} {uri}: {refused}"
-                            );
-                        }
+                    if !environment.is_deployed() {
+                        read.expect("loopback http serves local development");
+                        continue;
                     }
+                    let refused = read.expect_err("a deployment speaks https").to_string();
+                    assert!(
+                        refused.contains(&nest_rs_config::var_name(
+                            OAuthResourceConfig::NAMESPACE,
+                            setting
+                        )) && refused.contains("https"),
+                        "{environment:?} {uri}: {refused}"
+                    );
                 }
             }
         }
@@ -543,15 +540,11 @@ mod tests {
                 .into_metadata()
                 .expect("a trailing slash is discouraged, never refused");
 
-            let event = logs
-                .find(
-                    crate::TARGET,
-                    "resource URI ends in a trailing slash; clients are told to prefer the \
-                     form without one",
-                )
-                .into_iter()
-                .next()
-                .expect("the discouraged form reports itself");
+            let event = logs.expect_one(
+                crate::TARGET,
+                "resource URI ends in a trailing slash; clients are told to prefer the form \
+                 without one",
+            );
             assert_eq!(event.level, "warn");
             assert_eq!(
                 event.field("uri").as_deref(),

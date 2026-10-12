@@ -21,10 +21,8 @@ use crate::headless::HeadlessApp;
 
 /// The config the app's own `HttpModule::for_root(cfg)` resolved, or the one a
 /// suite seeded; the defaults when there is neither.
-fn http_config(container: &Container) -> HttpConfig {
-    container
-        .get::<HttpConfig>()
-        .map_or_else(HttpConfig::default, |cfg| (*cfg).clone())
+fn http_config(container: &Container) -> Arc<HttpConfig> {
+    container.get::<HttpConfig>().unwrap_or_default()
 }
 
 type TestEndpoint = BoxEndpoint<'static, Response>;
@@ -222,7 +220,7 @@ impl TestAppBuilder {
     pub async fn build_ws(self) -> Result<crate::ws::WsApp> {
         let app = self.inner.build().await?;
         let config = http_config(app.container());
-        crate::ws::serve(HeadlessApp::new(app), config).await
+        crate::ws::serve(HeadlessApp::new(app), &config).await
     }
 
     /// Boot without an HTTP surface, for queue workers and schedulers; drive

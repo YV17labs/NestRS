@@ -150,12 +150,11 @@ pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: Http
         .await
         .expect("module boots");
     let port = free_port();
-    let mut transport = HttpTransport::from_config(&HttpConfig {
+    let mut transport = crate::built(&HttpConfig {
         host: "127.0.0.1".into(),
         port,
         ..config
-    })
-    .expect("the config builds a transport");
+    });
     transport
         .configure(app.container())
         .await

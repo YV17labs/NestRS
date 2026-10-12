@@ -94,12 +94,12 @@ fn reserve_addr() -> Result<SocketAddr> {
 
 /// Serve `app` on the transport `config` describes, at a reserved local
 /// address in place of its own.
-pub(crate) async fn serve(app: HeadlessApp, config: HttpConfig) -> Result<WsApp> {
+pub(crate) async fn serve(app: HeadlessApp, config: &HttpConfig) -> Result<WsApp> {
     let addr = reserve_addr()?;
     let transport = HttpTransport::from_config(&HttpConfig {
         host: addr.ip().to_string(),
         port: addr.port(),
-        ..config
+        ..config.clone()
     })?;
     let handle = app.spawn_transport(transport).await?;
     app.init().await?;

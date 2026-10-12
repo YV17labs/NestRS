@@ -7,11 +7,11 @@ use nest_rs::authz::Action;
 use nest_rs::core::{error_message, hooks, injectable};
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, Deletable, Executor, Repo, ServiceError, Updatable,
-    live_condition,
+    Creatable, CreateModel, CrudService, DbOutcome, Deletable, Executor, Repo, ServiceError,
+    Updatable, live_condition,
 };
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, Set, SqlErr,
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, Set,
 };
 use uuid::Uuid;
 use validator::Validate;
@@ -92,7 +92,7 @@ impl UsersService {
         let active = prepare_new_user(input, org_id, None)?;
         let user = match self.create_from_active(active).await {
             Ok(user) => user,
-            Err(e) if is_unique_violation(&e) => {
+            Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict => {
                 return Err(ServiceError::conflict(
                     "a user with this email already exists",
                 ));
@@ -176,7 +176,7 @@ impl UsersService {
                 );
                 Ok(())
             }
-            Err(e) if is_unique_violation(&e) => Ok(()),
+            Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict => Ok(()),
             Err(e) => Err(social_store_unavailable(identity.provider, e)),
         }
     }
@@ -206,7 +206,7 @@ impl UsersService {
                 tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
                 user
             }
-            Err(e) if is_unique_violation(&e) => find_by_email(email, conn)
+            Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict => find_by_email(email, conn)
                 .await
                 .map_err(|e| social_store_unavailable(identity.provider, e))?
                 .ok_or_else(|| social_store_unavailable(identity.provider, e))?,
@@ -271,7 +271,7 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
 fn social_store_unavailable(provider: &str, err: DbErr) -> AuthError {
     tracing::error!(target: crate::users::TARGET, provider, error = %error_message(&err), "social identity store unreachable");
     AuthError::Unavailable {
-        detail: err.to_string(),
+        detail: error_message(&err),
         retry_after: None,
     }
 }
@@ -291,14 +291,10 @@ fn redact_email(email: &str) -> String {
     }
 }
 
-fn is_unique_violation(err: &DbErr) -> bool {
-    matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
-}
-
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
     tracing::error!(target: crate::users::TARGET, identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
     AuthError::Unavailable {
-        detail: err.to_string(),
+        detail: error_message(&err),
         retry_after: None,
     }
 }

@@ -162,14 +162,14 @@ There is nothing to bind for it.
 
 Without an executor — `SeaOrmDatabaseModule` not imported — `Repo` finds none
 and **every relation field fails before a single statement reaches the
-database**: the operation answers `database error` on each relation path,
-scalars resolve normally, and the query log stays empty. Without the bridge
-there is no ability, and `Repo` denies every row, saying so at `warn` on
-`nest_rs::orm`.
+database**: the operation answers `internal error` under the `INTERNAL` code
+on each relation path, scalars resolve normally, and the query log stays
+empty. Without the bridge there is no ability, and `Repo` denies every row,
+saying so at `warn` on `nest_rs::orm`.
 
 The missing executor is logged — `error` on `nest_rs::orm`, naming the entity
 and every binding that installs an executor — because the wire form of
-`ServiceError::Db` is the constant `database error` and carries nothing an
+`ServiceError::Db` is the opaque `internal error` and carries nothing an
 operator can act on.
 
 ## Fanout-aware complexity

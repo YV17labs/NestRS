@@ -187,8 +187,8 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
     assert!(
         event
             .field("error")
-            .is_some_and(|e| e.contains("bind_probe_table_that_does_not_exist")),
-        "…and carries the driver's own message, which is the half the client \
+            .is_some_and(|e| e.contains("database error 42P01")),
+        "…and carries the database's SQLSTATE, which is the half the client \
          never sees, got {:?}",
         event.fields,
     );

@@ -158,7 +158,9 @@ A dead-lettered job leaves one entry on the queue's
 `nestrs:queue:{<queue>}:dead` stream: its `job` id, its `record` as stored, and
 the `reason` — the sentence the `job dead-lettered` line carries: the failure
 and every cause beneath it, a `.context(…)` included, with any decode failure
-said without its value:
+said without its value and a database error by its SQLSTATE and the names the
+server reported (`database error 22P02`), never by the server's message, which
+quotes the input it refused:
 
 ```bash frame="terminal"
 $ valkey-cli XRANGE 'nestrs:queue:{audio}:dead' - +

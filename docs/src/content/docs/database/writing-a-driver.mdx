@@ -31,6 +31,8 @@ A driver implements the seam rather than consuming it, so it takes `database` wi
 - A request interceptor that wraps mutating handlers in a transaction.
 - A `JobContext` that installs a handle per job attempt and settles it —
   transactional by default, non-transactional on `transactional = false`.
+- A `SafeLink` that says your store's errors without the values its server
+  quotes.
 
 A driver lives in a `nest-rs-<technology>` crate that depends on
 `nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-interceptors`,
@@ -351,6 +353,36 @@ impl DynamicModule for YourDbSetup {
     }
 }
 ```
+
+## Step 5 — Say your errors without their values
+
+A database server words its refusal around the input it refused —
+`invalid input syntax for type uuid: "…"` — and a driver's error repeats that
+sentence in its own `Display` and in its causes. Every framework log line, a
+dead letter's reason and a client's error frame read an error chain through
+`nest_rs::core::error_message`, which asks each `SafeLink` about a link before
+its `Display`: submit one, and your errors are said your way everywhere.
+
+```rust title="crates/yourdb/src/error.rs"
+use std::error::Error;
+
+use nest_rs::core::SafeLink;
+
+nest_rs::core::inventory::submit! { SafeLink::new(say) }
+
+fn say(link: &(dyn Error + 'static)) -> Option<String> {
+    let err = link.downcast_ref::<YourDbError>()?;
+    // Your code: the error's kind and server code, the schema names it carries.
+    Some(format!("yourdb error {}", err.code()))
+}
+```
+
+A link your sayer claims is said by its sentence alone, and nothing below it
+is read, so a cause repeating the server's message never reaches a line.
+Keep identifiers — a code, a constraint, a table, a column — which are schema
+an operator searches for, and drop every message. `nest-rs-seaorm` says a
+`DbErr` as `database error 23505 on constraint "users_email_key", table
+"users"`.
 
 ## A query helper (sketch)
 

@@ -71,7 +71,7 @@ pub mod ws;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
-pub use error::{CommitError, ServiceError};
+pub use error::{CommitError, DbOutcome, ServiceError};
 pub use executor::{
     Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
     current_executor_scope, with_executor, with_job_executor, with_request_executor,
@@ -102,6 +102,8 @@ pub mod __private {
 
     #[cfg(feature = "http")]
     pub use crate::error::crud_error;
+    #[cfg(feature = "graphql")]
+    pub use crate::error::graphql_crud_error;
 
     // What `#[expose]` and `#[wire_enum]` emit, so an entity crate declares
     // none of these; each derive carries a `crate = ` override pointing here.

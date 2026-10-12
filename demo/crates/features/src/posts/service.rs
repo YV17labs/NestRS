@@ -84,7 +84,10 @@ impl PostsService {
             &conn,
         )
         .await
-        .map_err(ServiceError::from)?;
+        .map_err(|err| match ServiceError::from(err) {
+            ServiceError::Conflict(_) => PostError::AlreadyPublished { id: post_id },
+            other => PostError::Service(other),
+        })?;
 
         tracing::debug!(
             target: crate::posts::TARGET,

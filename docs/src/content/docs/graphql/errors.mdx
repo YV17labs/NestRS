@@ -167,6 +167,14 @@ impl PostsResolver {
 }
 ```
 
+A `DbErr` turned into a `ServiceError` by `?` is classified on the way: a
+unique violation becomes `Conflict`, a row a write found gone `NotFound`, any
+other failure `Db`, whose chain is filed by its SQLSTATE, never by the
+server's message. A `#[crud]` operation answers the same classes, and a
+mutation whose statement the database refused on the request's transaction
+answers a `500` instead
+([When the database refuses](/database/crud/#when-the-database-refuses)).
+
 A body that mixes failures keeps `async_graphql::Result` and uses `?`:
 `ServiceError` converts into `async_graphql::Error` through the same
 `ToProblem`, the one conversion `nest-rs-seaorm` writes for it.

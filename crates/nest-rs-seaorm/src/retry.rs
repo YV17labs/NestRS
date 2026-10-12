@@ -369,8 +369,8 @@ mod tests {
         assert!(
             exhausted
                 .field("error")
-                .is_some_and(|e| e.contains("serialize")),
-            "the last error is what an operator needs, got {:?}",
+                .is_some_and(|e| e.contains("database error 40001")),
+            "the last error, by its SQLSTATE, is what an operator needs, got {:?}",
             exhausted.fields,
         );
     }

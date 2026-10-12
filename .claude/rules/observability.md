@@ -129,9 +129,10 @@ field or the enclosing span carries, and no two layers emit the same event.
 **A value is described, never quoted** — in a line, an error or a reply
 (`.claude/decisions/payload-never-quoted.md`): a URL is shown through
 `nest_rs_config::endpoint_shown`, a `validator` failure through
-`ConfigError::validation`, a serde failure through `DecodeError`; no sentence
-formats a raw `ValidationErrors`, a serde error or a configured string. Held by
-review: no lint reads a `Display`.
+`ConfigError::validation`, a serde failure through `DecodeError`, a driver's
+error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
+serde error, a driver's error or a configured string. Held by review: no lint
+reads a `Display`.
 
 Three deviations from OpenTelemetry's log data model, each deliberate:
 

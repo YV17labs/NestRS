@@ -49,14 +49,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let parse_id: TokenStream2 = quote! {
         let __id = ::nest_rs_seaorm::graphql::parse_v7(&id)?;
     };
-    // Every call below yields a `DbErr`, whose `Display` is already the opaque wire string.
-    let gql_err: TokenStream2 = quote! {
-        |__e| ::nest_rs_graphql::async_graphql::Error::new(::std::string::ToString::to_string(&__e))
+    let crud_error: TokenStream2 = quote! {
+        ::nest_rs_seaorm::__private::graphql_crud_error
     };
     let forbidden: TokenStream2 = quote! {
-        ::nest_rs_graphql::async_graphql::Error::new("forbidden")
+        ::nest_rs_authz::graphql::forbidden()
     };
-    // `pipe_error`, not `gql_err`: a stringified `PipeError` names no field.
     let validate_input: TokenStream2 = quote! {
         {
             use ::nest_rs_graphql::__private::MaybeValidateFallback as _;
@@ -91,7 +89,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         __after,
                     )
                     .await
-                    .map_err(#gql_err)?;
+                    .map_err(#crud_error)?;
                     ::core::result::Result::Ok(
                         __page.items.iter().map(#output::from).collect(),
                     )
@@ -105,7 +103,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
                     let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
                         .await
-                        .map_err(#gql_err)?;
+                        .map_err(#crud_error)?;
                     ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
                 }
             },
@@ -128,7 +126,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     __id,
                 )
                 .await
-                .map_err(#gql_err)?
+                .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => ::core::result::Result::Ok(
                         ::core::option::Option::Some(#output::from(&__m)),
@@ -155,7 +153,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 #validate_input
                 let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
                     .await
-                    .map_err(#gql_err)?;
+                    .map_err(#crud_error)?;
                 ::core::result::Result::Ok(#output::from(&__row))
             }
         });
@@ -180,7 +178,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     __id,
                 )
                 .await
-                .map_err(#gql_err)?
+                .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
@@ -189,7 +187,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                             input,
                         )
                         .await
-                        .map_err(#gql_err)?;
+                        .map_err(#crud_error)?;
                         ::core::result::Result::Ok(::core::option::Option::Some(
                             #output::from(&__row),
                         ))
@@ -218,12 +216,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     __id,
                 )
                 .await
-                .map_err(#gql_err)?
+                .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
                             .await
-                            .map_err(#gql_err)?;
+                            .map_err(#crud_error)?;
                         ::core::result::Result::Ok(true)
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),

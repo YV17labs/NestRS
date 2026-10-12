@@ -358,7 +358,12 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         )
         .send()
         .await;
-    conflict.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    conflict.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        conflict.json().await.value().object().get("type").string(),
+        "https://nestrs.dev/problems/post-already-published",
+        "the publication the database refused reads as the one the service refuses",
+    );
 
     let got = app
         .http()
@@ -377,5 +382,51 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         publication_count(&db, id).await,
         1,
         "the rolled-back publish added no audit row",
+    );
+}
+
+#[tokio::test]
+async fn two_concurrent_publishes_of_one_post_answer_once_and_conflict_once() {
+    let (db, app, bearer, org_id) = boot().await;
+
+    let created = app
+        .http()
+        .post("/posts")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .body_json(&json!({ "title": "Race", "body": "Twice" }))
+        .send()
+        .await;
+    created.assert_status_is_ok();
+    let id_str = created
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+    let id = Uuid::parse_str(&id_str).expect("valid post uuid");
+
+    let publish = || {
+        app.http()
+            .post(format!("/posts/{id_str}/publish"))
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", admin_bearer(org_id)),
+            )
+            .send()
+    };
+    let (first, second) = tokio::join!(publish(), publish());
+    let mut statuses = [first.0.status(), second.0.status()];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "one publish lands and the other conflicts, never a 500",
+    );
+    assert_eq!(
+        publication_count(&db, id).await,
+        1,
+        "the conflicting publish wrote no second audit row",
     );
 }

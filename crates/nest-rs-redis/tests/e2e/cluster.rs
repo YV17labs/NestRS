@@ -44,6 +44,18 @@ async fn assign(slot: u16, id: &str) {
     .await;
 }
 
+/// The Cluster's slot table, held by this test alone until the lock drops.
+/// Valkey refuses an atomic migration on a node holding a slot in a manual
+/// one, and any `SETSLOT` on a node running an atomic one — [`assign`] sends
+/// it to every primary — so the tests moving a slot take turns; nextest runs
+/// each in a process of its own, hence a file lock.
+fn holding_the_slots() -> std::fs::File {
+    let lock = std::fs::File::create(std::env::temp_dir().join("nestrs-e2e-cluster-slots.lock"))
+        .expect("the slot table's lock file");
+    lock.lock().expect("the slot table's lock");
+    lock
+}
+
 /// How many `ASKING` the node at `addr` has run since it started.
 async fn askings(addr: &str) -> u64 {
     let stats: String = redis::cmd("INFO")
@@ -97,6 +109,7 @@ struct MovedModule;
 /// (`TRYAGAIN`), which is why the pushes come after it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queue_runs_on_while_its_slot_moves_to_another_node() {
+    let _slots = holding_the_slots();
     let queue = <MovedQueue as Queue>::NAME;
     crate::forget(queue).await;
     let slot = slot_of(queue).await;
@@ -208,6 +221,7 @@ struct AskedModule;
 /// (`TRYAGAIN`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_blocked_read_follows_the_ask_of_a_slot_being_moved() {
+    let _slots = holding_the_slots();
     let queue = <AskedQueue as Queue>::NAME;
     crate::forget(queue).await;
     let slot = slot_of(queue).await;
@@ -347,6 +361,7 @@ const PUSHES_AFTER: u64 = 10;
 /// key by key does — every job runs once, and Valkey denies the user nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queue_runs_on_through_an_atomic_migration_of_its_slot() {
+    let _slots = holding_the_slots();
     let queue = <AtomicQueue as Queue>::NAME;
     crate::forget(queue).await;
     let slot = slot_of(queue).await;

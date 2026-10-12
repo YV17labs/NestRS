@@ -79,3 +79,18 @@ framework follows them. The Sentinel servers are numbered, never named for the
 role a failover swaps. A Cluster node keeps nothing across a start, which may
 move every peer's address, so each start forms the Cluster afresh, and no slot
 a test left migrating outlives it.
+
+**2026-10-12, the known flake's refusal closed:** `CLUSTER MIGRATESLOTS`
+refused was the Cluster suite's three tests that move a slot meeting each
+other, and it failed two runs in a row on a 7.0 branch that changed neither
+the suite nor the binding. Valkey excludes the two kinds of migration both
+ways, on every node either touches: a node holding a slot in a manual
+`SETSLOT … MIGRATING` or `IMPORTING` refuses to start or to accept an atomic
+migration, and a node running an atomic one refuses every `SETSLOT`, the
+`SETSLOT NODE` a test sends every primary to hand a slot over included. Each
+of those tests touches two of the three primaries, so any two can refuse each
+other; a retry around the one refusal seen would have left the others. They
+now take turns on a file lock, since nextest runs each test in a process of
+its own. The other failure recorded above, a job counted twice in CI, is not
+one this race produces — every collision ends in a refusal, never a second
+delivery — and stays as recorded.

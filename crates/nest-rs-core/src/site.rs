@@ -66,7 +66,7 @@ pub struct GlobalLayers {
     pub exception_filters: bool,
     /// The handler stage's app-wide interceptors: the app's, then the
     /// modules'.
-    pub interceptors: bool,
+    pub handler_stage: bool,
 }
 
 impl GlobalLayers {
@@ -74,14 +74,14 @@ impl GlobalLayers {
     pub const ALL: Self = Self {
         unit_stage: true,
         exception_filters: true,
-        interceptors: true,
+        handler_stage: true,
     };
 
     /// None: only what the site's decorators bound.
     pub const NONE: Self = Self {
         unit_stage: false,
         exception_filters: false,
-        interceptors: false,
+        handler_stage: false,
     };
 }
 
@@ -244,7 +244,7 @@ impl UnitChains {
         };
 
         let mut global_interceptors = Vec::new();
-        if global.interceptors {
+        if global.handler_stage {
             global_interceptors.extend(resolve_global_layers::<GlobalInterceptors>(container));
             global_interceptors.extend(resolve_all(
                 container,
@@ -723,7 +723,7 @@ mod tests {
             &declared(
                 SiteLayers::default,
                 GlobalLayers {
-                    interceptors: false,
+                    handler_stage: false,
                     ..GlobalLayers::ALL
                 },
             ),

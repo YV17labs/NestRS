@@ -133,6 +133,49 @@ async fn the_transport_is_told_whether_repeating_the_attempt_could_help() {
     );
 }
 
+/// A context refusing a transaction policy it cannot honour: it answers why
+/// without running the job.
+struct RefusingContext;
+
+impl JobContext for RefusingContext {
+    fn scope<'a>(
+        &'a self,
+        _transaction: JobTransaction,
+        _inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async {
+            JobSettlement::Unhonoured(Unhonoured::deterministic(
+                "this driver does not support the job's transaction policy",
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_context_refusing_the_job_fails_it_without_running_it() {
+    let ctx: Arc<dyn JobContext> = Arc::new(RefusingContext);
+    let ran = std::sync::atomic::AtomicBool::new(false);
+    let outcome = run_in_job_context(
+        Some(&ctx),
+        JobTransaction::PerAttempt,
+        async {
+            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok("the job's own success")
+        },
+        Result::is_ok,
+        Err,
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        Err(Unhonoured::deterministic(
+            "this driver does not support the job's transaction policy"
+        )),
+    );
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 /// A contract-breaking impl: returns without ever driving `inner`, so the job
 /// never runs.
 struct BrokenContext;

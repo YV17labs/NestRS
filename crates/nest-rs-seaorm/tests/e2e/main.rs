@@ -11,6 +11,7 @@
 
 mod harness;
 
+mod atomic;
 mod create;
 mod database;
 mod error;

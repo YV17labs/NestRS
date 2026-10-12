@@ -5,12 +5,13 @@ use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DbErr, EntityName, EntityTrait,
-    IntoActiveModel, PrimaryKeyTrait, QueryFilter, TransactionTrait,
+    IntoActiveModel, PrimaryKeyTrait, QueryFilter,
 };
 
 use nest_rs_authz::{Action, ActionMarker};
+use nest_rs_database::atomic;
 
-use crate::executor::Executor;
+use crate::error::AtomicDbError;
 use crate::page::Page;
 use crate::repo::{Repo, pk_condition, scope_for};
 
@@ -31,6 +32,9 @@ pub trait UpdateModel<E: EntityTrait> {
 
 /// Outcome of an authorized by-id load: 200/403/404 on REST, data/forbidden/null
 /// on GraphQL.
+///
+/// Exhaustive on purpose: found, denied or missing is the whole answer to a
+/// load by id, so a caller matches all three and never needs a `_` arm.
 pub enum Access<M> {
     /// The row exists and the ability grants the action — carries the row.
     Found(M),
@@ -376,30 +380,15 @@ pub trait Creatable: CrudService {
         active: <Self::Entity as EntityTrait>::ActiveModel,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
-        // A local transaction (a SAVEPOINT inside the request's): a swallowed
-        // `RecordNotInserted` must not leave the row to commit with the request.
-        let local = match Repo::<Self::Entity>::conn()? {
-            Executor::Pool(pool) => pool.begin().await?,
-            Executor::Txn(txn) => txn.begin().await?,
-            Executor::Lazy(lazy) => lazy.begin_nested().await?,
-        };
-        match insert_in_scope::<Self::Entity, _>(active, entity, &local).await {
-            Ok(model) => {
-                local.commit().await?;
-                Ok(model)
-            }
-            Err(err) => {
-                if let Err(rollback_err) = local.rollback().await {
-                    tracing::error!(
-                        target: crate::target::ORM,
-                        entity,
-                        error = %nest_rs_core::error_message(&rollback_err),
-                        "rollback of the create SAVEPOINT/transaction failed",
-                    );
-                }
-                Err(err)
-            }
-        }
+        Repo::<Self::Entity>::conn()?;
+        // A swallowed `RecordNotInserted` must not leave the row to commit with
+        // the request.
+        atomic(async move {
+            let conn = Repo::<Self::Entity>::conn()?;
+            Ok::<_, AtomicDbError>(insert_in_scope::<Self::Entity, _>(active, entity, &conn).await?)
+        })
+        .await
+        .map_err(DbErr::from)
     }
 }
 

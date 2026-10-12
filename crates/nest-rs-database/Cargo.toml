@@ -15,6 +15,7 @@ categories = ["database"]
 # The ambient executor and its scope are one value of the kernel's ambient
 # context, which carries them across every continuation by their own rule.
 nest-rs-core.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

@@ -22,6 +22,7 @@ const ESCAPED: &str =
 const POISONED: &str =
     "a statement failed inside the job's transaction, so nothing it wrote could be committed";
 const COMMIT_FAILED: &str = "the job's transaction could not be committed";
+const UNSUPPORTED_POLICY: &str = "this driver does not support the job's transaction policy";
 
 /// Installs the request-less executor around a worker job. Bound to
 /// `dyn JobContext` by [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
@@ -62,10 +63,7 @@ impl JobContext for WorkerDbContext {
                     // The job swallowed a failed statement and returned `Ok`:
                     // nothing it wrote could land.
                     FinalizeOutcome::Poisoned { retryable } => {
-                        JobSettlement::Unhonoured(Unhonoured {
-                            reason: POISONED,
-                            retryable,
-                        })
+                        JobSettlement::Unhonoured(Unhonoured::new(POISONED, retryable))
                     }
                     // A commit lost mid-`COMMIT` may have landed, so only a
                     // serialization failure or a deadlock is replayed.
@@ -78,12 +76,13 @@ impl JobContext for WorkerDbContext {
                             retryable,
                             "job transaction commit failed",
                         );
-                        JobSettlement::Unhonoured(Unhonoured {
-                            reason: COMMIT_FAILED,
-                            retryable,
-                        })
+                        JobSettlement::Unhonoured(Unhonoured::new(COMMIT_FAILED, retryable))
                     }
                 }
+            }),
+            // A policy this driver does not know is refused before the job runs.
+            _ => Box::pin(async {
+                JobSettlement::Unhonoured(Unhonoured::deterministic(UNSUPPORTED_POLICY))
             }),
         }
     }

@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use nest_rs_core::{AmbientValue, Continuation};
 
+use crate::atomic::AtomicBlock;
+
 /// Work held until the ambient unit of work commits — what [`after_commit`]
 /// hands an [`Executor`] to keep.
 pub type Deferred = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -59,6 +61,15 @@ pub trait Executor: Any + Send + Sync + 'static {
     fn __pool(&self) -> Option<Arc<dyn Executor>> {
         None
     }
+
+    /// Open an atomic block on this executor — a savepoint of its transaction,
+    /// or a transaction of its own on a pool — or `None` when the driver offers
+    /// none, and [`atomic`](fn@crate::atomic) answers
+    /// [`AtomicError::Unsupported`](crate::AtomicError::Unsupported). Opening
+    /// sends nothing: the block's first statement does.
+    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        None
+    }
 }
 
 /// Run `work` once the ambient unit of work has committed — or at once, when
@@ -85,7 +96,22 @@ where
 
 /// Whether the ambient executor belongs to a request or a worker job, which
 /// decides how a `Repo` treats a missing ambient ability.
+///
+/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm —
+/// and fails closed there, as a request does:
+///
+/// ```compile_fail,E0004
+/// use nest_rs_database::ExecutorScope;
+///
+/// fn unscoped(scope: ExecutorScope) -> bool {
+///     match scope {
+///         ExecutorScope::Request => false,
+///         ExecutorScope::Job => true,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutorScope {
     /// A user request — a missing ambient ability is a bug, so `Repo` fails closed.
     Request,

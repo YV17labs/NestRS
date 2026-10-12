@@ -1,5 +1,5 @@
-//! SeaORM for nestrs — the adapter that wraps `sea_orm`, whose URL scheme picks
-//! the engine (postgres, mysql, sqlite). One substrate and its bindings:
+//! SeaORM for nestrs — the adapter that wraps `sea_orm` over PostgreSQL, the
+//! one engine it supports, as CI runs it. One substrate and its bindings:
 //!
 //! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
 //!   and opens the one `sea_orm::DatabaseConnection` every binding shares.
@@ -11,6 +11,8 @@
 //!
 //! Services query through [`Repo`]: every call runs on the ambient executor and
 //! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability).
+//! [`nest_rs_database::atomic`] runs a block inside a [`Savepoint`] of that
+//! executor's transaction, or a transaction of its own on the pool.
 //! An entity crosses the wire through [`macro@expose`], and a column's enum
 //! through [`macro@wire_enum`].
 //!
@@ -41,6 +43,7 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+mod atomic;
 mod config;
 mod database;
 #[cfg(any(feature = "ws", feature = "mcp"))]
@@ -51,11 +54,13 @@ mod module;
 mod page;
 mod repo;
 pub mod retry;
+mod savepoint;
 mod service;
 mod slug;
 mod soft_delete;
 pub mod target;
 mod time;
+mod turn;
 mod worker;
 
 #[cfg(feature = "graphql")]
@@ -79,6 +84,7 @@ pub use executor::{
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
 pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
+pub use savepoint::Savepoint;
 pub use service::{
     Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,
     model_uuid,

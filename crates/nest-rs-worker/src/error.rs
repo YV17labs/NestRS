@@ -8,7 +8,18 @@ use std::time::Duration;
 /// A context answers from what the database reported, never from a guess: a
 /// serialization failure or a deadlock is retryable; a constraint violation is
 /// not, nor a commit whose outcome is *unknown*, which may have landed.
+///
+/// It can grow within 7.x: read its fields, and build one through a
+/// constructor, never a literal:
+///
+/// ```compile_fail,E0639
+/// let why = nest_rs_worker::Unhonoured {
+///     reason: "the job's transaction could not be committed",
+///     retryable: false,
+/// };
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Unhonoured {
     /// What the context could not do, as the sentence the transport reports;
     /// the database's own error is logged by the context that saw it.
@@ -18,20 +29,19 @@ pub struct Unhonoured {
 }
 
 impl Unhonoured {
+    /// A failure whose retryability was read off what the backend said.
+    pub const fn new(reason: &'static str, retryable: bool) -> Self {
+        Self { reason, retryable }
+    }
+
     /// A failure a retry could clear.
     pub const fn retryable(reason: &'static str) -> Self {
-        Self {
-            reason,
-            retryable: true,
-        }
+        Self::new(reason, true)
     }
 
     /// A failure a retry would only repeat.
     pub const fn deterministic(reason: &'static str) -> Self {
-        Self {
-            reason,
-            retryable: false,
-        }
+        Self::new(reason, false)
     }
 }
 
@@ -45,10 +55,21 @@ impl std::error::Error for Unhonoured {}
 
 /// An attempt of a worker job that did not end within its timeout, and was cut
 /// there. Retryable: the next attempt may meet an answer the first waited on.
+///
+/// It can grow within 7.x: read its field, and build one through
+/// [`JobTimedOut::new`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct JobTimedOut {
     /// The timeout the attempt ran past.
     pub timeout: Duration,
+}
+
+impl JobTimedOut {
+    /// The attempt ran past `timeout`.
+    pub const fn new(timeout: Duration) -> Self {
+        Self { timeout }
+    }
 }
 
 impl std::fmt::Display for JobTimedOut {

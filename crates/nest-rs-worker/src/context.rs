@@ -13,7 +13,22 @@ use crate::error::Unhonoured;
 
 /// How one job attempt's data-layer work is settled, declared on the job's
 /// decorator (`transactional = …`).
+///
+/// It can grow within 7.x, so a driver's `match` keeps a `_` arm that refuses
+/// the job, answering [`Unhonoured::deterministic`]:
+///
+/// ```compile_fail,E0004
+/// use nest_rs_worker::JobTransaction;
+///
+/// fn opens_one(transaction: JobTransaction) -> bool {
+///     match transaction {
+///         JobTransaction::PerAttempt => true,
+///         JobTransaction::Pool => false,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JobTransaction {
     /// **The default.** One transaction per attempt, opened on the job's first
     /// data-layer touch, committed when the job returns `Ok` and rolled back
@@ -26,14 +41,16 @@ pub enum JobTransaction {
     Pool,
 }
 
-/// What the context could do with a finished job — read by
-/// [`run_in_job_context`] and by nothing else.
+/// What the context could do with a job — read by [`run_in_job_context`] and
+/// by nothing else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum JobSettlement {
     /// The job's outcome stands: committed, rolled back, or nothing to settle.
     Settled,
-    /// The job reported success and the context could **not** honour it: the
-    /// attempt becomes the failure the [`Unhonoured`] describes.
+    /// The job reported success and the context could **not** honour it, or
+    /// the context could not run it at all: the attempt becomes the failure the
+    /// [`Unhonoured`] describes.
     Unhonoured(Unhonoured),
 }
 
@@ -49,9 +66,12 @@ pub trait JobContext: Send + Sync + 'static {
     /// # Contract
     ///
     /// An impl **must** poll `inner` to completion before returning — normally
-    /// by `.await`ing it inside whatever ambient it installs. One that does not
-    /// fails that job: [`run_in_job_context`] logs an error on `nest_rs::worker`
-    /// and unwinds into the transport's per-job boundary.
+    /// by `.await`ing it inside whatever ambient it installs — or refuse the
+    /// job without polling it, answering [`JobSettlement::Unhonoured`] (a
+    /// `transaction` it does not support). One that returns
+    /// [`JobSettlement::Settled`] for a job it never ran fails that job:
+    /// [`run_in_job_context`] logs an error on `nest_rs::worker` and unwinds
+    /// into the transport's per-job boundary.
     fn scope<'a>(
         &'a self,
         transaction: JobTransaction,
@@ -95,20 +115,19 @@ pub async fn run_in_job_context<T: Send>(
                     }),
                 )
                 .await;
-            match out {
-                Some(value) => match settlement {
-                    JobSettlement::Settled => value,
-                    // Only reachable when the job reported success — a context
-                    // never withholds a failure the job already declared.
-                    JobSettlement::Unhonoured(why) => unhonoured(why),
-                },
+            match (out, settlement) {
+                (Some(value), JobSettlement::Settled) => value,
+                // Ran: only reachable when the job reported success — a context
+                // never withholds a failure the job already declared. Not run:
+                // the context refused the job.
+                (_, JobSettlement::Unhonoured(why)) => unhonoured(why),
                 // A broken `JobContext::scope` never ran the job, and no `T` can be
                 // synthesized: unwind into the transport's per-job boundary.
                 #[expect(
                     clippy::panic,
                     reason = "a JobContext that returns without running the job breaks its contract; the job's own catch_unwind turns this into a dead letter"
                 )]
-                None => {
+                (None, JobSettlement::Settled) => {
                     tracing::error!(
                         target: TARGET,
                         job_context = ::std::any::type_name::<dyn JobContext>(),

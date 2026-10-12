@@ -6,6 +6,7 @@
 //! error by its SQLSTATE and the names the server reported, never by the
 //! server's message, which quotes the input it refused.
 
+use nest_rs_database::AtomicError;
 use sea_orm::sqlx::error::DatabaseError;
 use sea_orm::sqlx::postgres::PgDatabaseError;
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
@@ -106,6 +107,55 @@ impl From<DbErr> for ServiceError {
             }
             DbOutcome::NotFound => Self::NotFound("not found".into()),
             DbOutcome::Internal => Self::Db(err),
+        }
+    }
+}
+
+/// An atomic block that could not keep its promise: a database refusal by its
+/// [`DbOutcome`], anything else an opaque [`Internal`](ServiceError::Internal).
+impl From<AtomicError> for ServiceError {
+    fn from(err: AtomicError) -> Self {
+        match err {
+            AtomicError::Database(source) => match source.downcast::<DbErr>() {
+                Ok(db) => Self::from(*db),
+                Err(other) => Self::Internal(nest_rs_core::error_message(&*other)),
+            },
+            other => Self::Internal(other.to_string()),
+        }
+    }
+}
+
+/// A failure inside an atomic block whose body speaks the driver's own
+/// [`DbErr`], folded back into one: `DbErr` cannot take an `AtomicError`
+/// itself.
+pub(crate) enum AtomicDbError {
+    Db(DbErr),
+    Atomic(AtomicError),
+}
+
+impl From<DbErr> for AtomicDbError {
+    fn from(err: DbErr) -> Self {
+        Self::Db(err)
+    }
+}
+
+impl From<AtomicError> for AtomicDbError {
+    fn from(err: AtomicError) -> Self {
+        Self::Atomic(err)
+    }
+}
+
+impl From<AtomicDbError> for DbErr {
+    fn from(err: AtomicDbError) -> Self {
+        match err {
+            AtomicDbError::Db(err) => err,
+            AtomicDbError::Atomic(AtomicError::Database(source)) => {
+                match source.downcast::<DbErr>() {
+                    Ok(db) => *db,
+                    Err(other) => DbErr::Custom(nest_rs_core::error_message(&*other)),
+                }
+            }
+            AtomicDbError::Atomic(other) => DbErr::Custom(other.to_string()),
         }
     }
 }
@@ -704,6 +754,63 @@ mod tests {
             table: Some("users"),
             message: "duplicate key value violates unique constraint: (email)=(ada@example.com)",
         })
+    }
+
+    #[test]
+    fn an_atomic_block_the_database_refused_is_classified_like_its_dberr() {
+        let conflict = ServiceError::from(AtomicError::Database(Box::new(taken_email())));
+        assert!(
+            matches!(conflict, ServiceError::Conflict(_)),
+            "{conflict:?}"
+        );
+
+        let opaque = ServiceError::from(AtomicError::Database(Box::new(bad_uuid())));
+        let ServiceError::Db(err) = opaque else {
+            panic!("an unclassified refusal stays a database error: {opaque:?}");
+        };
+        assert!(!error_message(&err).contains("secret-123"));
+    }
+
+    #[test]
+    fn every_other_atomic_failure_is_internal_and_says_its_own_sentence() {
+        for (err, said) in [
+            (
+                AtomicError::Poisoned { retryable: false },
+                "a statement failed inside the atomic block; nothing it wrote stands",
+            ),
+            (
+                AtomicError::Escaped,
+                "the atomic block's executor outlived it",
+            ),
+            (
+                AtomicError::Unsupported,
+                "no ambient executor offers an atomic block",
+            ),
+        ] {
+            let ServiceError::Internal(detail) = ServiceError::from(err) else {
+                panic!("an atomic failure is opaque to the client");
+            };
+            assert_eq!(detail, said);
+        }
+    }
+
+    #[test]
+    fn an_atomic_block_over_a_dberr_body_answers_a_dberr() {
+        let refused = DbErr::from(AtomicDbError::Atomic(AtomicError::Database(Box::new(
+            DbErr::RecordNotUpdated,
+        ))));
+        assert!(matches!(refused, DbErr::RecordNotUpdated), "{refused:?}");
+
+        let poisoned = DbErr::from(AtomicDbError::Atomic(AtomicError::Poisoned {
+            retryable: true,
+        }));
+        assert!(
+            matches!(&poisoned, DbErr::Custom(said) if said.contains("inside the atomic block")),
+            "{poisoned:?}"
+        );
+
+        let own = DbErr::from(AtomicDbError::Db(DbErr::RecordNotInserted));
+        assert!(matches!(own, DbErr::RecordNotInserted));
     }
 
     pub(super) fn bad_uuid() -> DbErr {

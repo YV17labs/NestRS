@@ -141,7 +141,7 @@ impl nest_rs_database::Executor for OpenTransaction {
             Some(nest_rs_database::ExecutorScope::Job) => {
                 Box::pin(nest_rs_database::with_job_executor(pool, work))
             }
-            None => Box::pin(nest_rs_database::with_executor(pool, work)),
+            _ => Box::pin(nest_rs_database::with_executor(pool, work)),
         };
         let work: nest_rs_database::Deferred =
             match nest_rs_core::RequestContinuation::capture(nest_rs_core::Continuation::Commit) {

@@ -2700,6 +2700,7 @@ name = "nest-rs-database"
 version = "7.0.0"
 dependencies = [
  "nest-rs-core",
+ "thiserror 2.0.21",
  "tokio",
 ]
 

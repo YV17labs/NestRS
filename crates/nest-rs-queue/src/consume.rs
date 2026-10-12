@@ -744,9 +744,9 @@ async fn run(
             .await
             {
                 Ok(caught) => caught,
-                Err(_) => Ok(Err(JobError::retry(nest_rs_worker::JobTimedOut {
+                Err(_) => Ok(Err(JobError::retry(nest_rs_worker::JobTimedOut::new(
                     timeout,
-                }))),
+                )))),
             },
         ),
         Input::Refused(refused) => Ok(Ok(Err(refused))),

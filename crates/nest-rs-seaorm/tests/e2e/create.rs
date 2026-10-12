@@ -278,15 +278,13 @@ async fn a_create_whose_undo_cannot_be_issued_says_so() {
         "a create whose insert never landed is an error, whatever happened to the undo",
     );
 
-    let event = logs.expect_one(
-        nest_rs_seaorm::target::ORM,
-        "rollback of the create SAVEPOINT/transaction failed",
-    );
+    let event = logs.expect_one(nest_rs_seaorm::target::ORM, "transaction rollback failed");
     assert_eq!(event.level, "error");
-    assert!(
-        event.field("entity").is_some_and(|e| e.contains("gadget")),
-        "the event names the entity, since the error the caller propagates is \
-         the insert's and mentions no boundary at all, got {:?}",
+    assert_eq!(
+        event.field("transport").as_deref(),
+        Some("atomic"),
+        "the event names the atomic block whose undo failed, since the error the \
+         caller propagates is the insert's and mentions no boundary at all, got {:?}",
         event.fields,
     );
     assert!(

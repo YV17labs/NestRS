@@ -8,9 +8,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use nest_rs_core::{Continuation, RequestContinuation};
-use nest_rs_database::Deferred;
+use nest_rs_database::{AtomicBlock, Deferred};
 
+use crate::atomic::AtomicExecutor;
 use crate::error::CommitError;
+use crate::savepoint::Savepoint;
+use crate::turn::Turn;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, ExecResult,
     QueryResult, Statement, TransactionTrait,
@@ -19,10 +22,16 @@ use sea_orm::{
 pub use nest_rs_database::ExecutorScope;
 pub use nest_rs_database::current_executor_scope;
 
+/// The label an atomic block's own transaction logs under: it serves no edge.
+pub(crate) const ATOMIC: &str = "atomic";
+
 /// The connection a request's queries run against: the shared pool, the
-/// per-request [`DatabaseTransaction`], or a transaction opened lazily on
-/// first use. Cheap to clone.
+/// per-request [`DatabaseTransaction`], a transaction opened lazily on first
+/// use, or the savepoint an atomic block opened inside one. Cheap to clone.
+///
+/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum Executor {
     /// The shared connection pool — safe (read) methods and system/job work run
     /// here, outside any transaction.
@@ -37,15 +46,21 @@ pub enum Executor {
     /// A transaction opened on **first data-layer touch**. Installed by the
     /// HTTP `DbContext` for mutating methods, so a request a guard denies (or
     /// one that never queries) costs no `BEGIN`/`ROLLBACK` round-trip at all.
+    /// An [`atomic`](fn@nest_rs_database::atomic) block on the pool, or inside a
+    /// caller's [`Txn`](Executor::Txn), runs on one of its own.
     Lazy(Arc<LazyTransaction>),
+    /// The savepoint an [`atomic`](fn@nest_rs_database::atomic) block opened
+    /// inside a [`Lazy`](Executor::Lazy) transaction or another block's
+    /// savepoint, sent with the block's first statement.
+    Savepoint(Arc<Savepoint>),
 }
 
-/// The deferred-`BEGIN` state behind [`Executor::Lazy`]: the pool to open on,
-/// and the transaction once something touched the data layer. Concurrent
-/// first touches race through a [`tokio::sync::OnceCell`], so exactly one
+/// The deferred-`BEGIN` state behind [`Executor::Lazy`]: what to open on, and
+/// the transaction once something touched the data layer. Concurrent first
+/// touches race through a [`tokio::sync::OnceCell`], so exactly one
 /// transaction opens per request.
 pub struct LazyTransaction {
-    pool: DatabaseConnection,
+    opener: Opener,
     /// The edge this boundary serves, named by every event it emits.
     transport: &'static str,
     cell: tokio::sync::OnceCell<Arc<DatabaseTransaction>>,
@@ -58,40 +73,99 @@ pub struct LazyTransaction {
     /// Postgres aborts the transaction on the first failed statement, and a
     /// `COMMIT` on an aborted transaction *succeeds* while rolling back: without
     /// this, a boundary swallowing a `DbErr` would report writes that never
-    /// landed. A nested transaction's statements run on their own handle and
-    /// never reach here; opening one does.
+    /// landed. An atomic block's statements poison the block, never this
+    /// boundary; its `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` poison it.
     poisoned: AtomicU8,
     /// The work [`after_commit`](nest_rs_database::after_commit) handed this
     /// boundary: run by [`finalize`](Self::finalize) once the transaction has
     /// committed, dropped unrun when it has not. `None` once settling begins, so
     /// an escaped handle's late registration is refused.
     after_commit: Mutex<Option<Vec<Deferred>>>,
+    /// Held by an open atomic block from its `SAVEPOINT` until it settles.
+    turn: Turn,
+}
+
+/// What a [`LazyTransaction`] sends its `BEGIN` on.
+enum Opener {
+    /// A transaction of its own on the pool.
+    Pool(DatabaseConnection),
+    /// A savepoint nested in a transaction the caller opened, through sea-orm's
+    /// own nesting: an atomic block inside an [`Executor::Txn`].
+    Caller(Arc<DatabaseTransaction>),
 }
 
 /// No statement on this transaction has failed.
-const POISON_CLEAN: u8 = 0;
+pub(crate) const POISON_CLEAN: u8 = 0;
 /// One failed on something a re-run would hit again — a constraint violation, a
 /// type error, a missing relation.
-const POISON_DETERMINISTIC: u8 = 1;
+pub(crate) const POISON_DETERMINISTIC: u8 = 1;
 /// One failed on something a fresh attempt could clear
 /// ([`is_transient_failure`]) — a serialization conflict, a deadlock, or the
 /// connection going away before anything could be committed.
 ///
 /// [`is_transient_failure`]: crate::retry::is_transient_failure
-const POISON_TRANSIENT: u8 = 2;
+pub(crate) const POISON_TRANSIENT: u8 = 2;
 
 impl LazyTransaction {
     /// A lazy transaction over `pool` — nothing is opened yet. `transport` names
     /// the edge for every event this boundary emits.
     pub fn new(pool: DatabaseConnection, transport: &'static str) -> Self {
+        Self::opening(Opener::Pool(pool), transport)
+    }
+
+    /// An atomic block inside a caller's own transaction: its `BEGIN` is a
+    /// `SAVEPOINT` there, its commit a `RELEASE`.
+    pub(crate) fn nested_in(caller: Arc<DatabaseTransaction>, transport: &'static str) -> Self {
+        Self::opening(Opener::Caller(caller), transport)
+    }
+
+    fn opening(opener: Opener, transport: &'static str) -> Self {
         Self {
-            pool,
+            opener,
             transport,
             cell: tokio::sync::OnceCell::new(),
             settled: std::sync::atomic::AtomicBool::new(false),
             poisoned: AtomicU8::new(POISON_CLEAN),
             after_commit: Mutex::new(Some(Vec::new())),
+            turn: Turn::new(),
         }
+    }
+
+    /// The pool this boundary draws from; a caller's transaction names none.
+    pub(crate) fn pool(&self) -> Option<&DatabaseConnection> {
+        match &self.opener {
+            Opener::Pool(pool) => Some(pool),
+            Opener::Caller(_) => None,
+        }
+    }
+
+    pub(crate) fn backend(&self) -> DbBackend {
+        match &self.opener {
+            Opener::Pool(pool) => pool.get_database_backend(),
+            Opener::Caller(caller) => caller.get_database_backend(),
+        }
+    }
+
+    fn support_returning(&self) -> bool {
+        match &self.opener {
+            Opener::Pool(pool) => pool.support_returning(),
+            Opener::Caller(caller) => caller.support_returning(),
+        }
+    }
+
+    fn is_mock_connection(&self) -> bool {
+        match &self.opener {
+            Opener::Pool(pool) => pool.is_mock_connection(),
+            Opener::Caller(caller) => caller.is_mock_connection(),
+        }
+    }
+
+    pub(crate) fn transport(&self) -> &'static str {
+        self.transport
+    }
+
+    pub(crate) fn turn(&self) -> &Turn {
+        &self.turn
     }
 
     /// Keep `work` for after the commit, to run under what the caller carries
@@ -102,48 +176,35 @@ impl LazyTransaction {
     /// to the boundary would make every boundary that held work read as
     /// escaped.
     fn hold(&self, work: Deferred) {
-        let work: Deferred = match RequestContinuation::capture(Continuation::Commit) {
-            Some(carried) => Box::pin(carried.scope(work)),
-            None => Box::pin(with_executor(Executor::Pool(self.pool.clone()), work)),
-        };
-        let refused = {
-            let mut held = self
-                .after_commit
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            match held.as_mut() {
-                Some(held) => {
-                    held.push(work);
-                    None
-                }
-                None => Some(work),
-            }
-        };
-        if let Some(work) = refused {
-            drop(work);
-            tracing::warn!(
-                target: crate::target::ORM,
-                transport = self.transport,
-                outcome = "discarded",
-                "after-commit work registered on a boundary that has already settled; \
-                 it will not run",
-            );
-        }
+        self.adopt(vec![held_for_commit(work, self.pool())]);
+    }
+
+    /// Keep work already captured for its commit — an atomic block's, released
+    /// into this boundary.
+    pub(crate) fn adopt(&self, work: Vec<Deferred>) {
+        adopt_into(&self.after_commit, self.transport, work);
     }
 
     /// The held work, taken for settling — after which nothing more is held.
     fn take_after_commit(&self) -> Vec<Deferred> {
-        self.after_commit
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .unwrap_or_default()
+        take_held(&self.after_commit)
+    }
+
+    /// Run one statement on the request's transaction, in its turn.
+    async fn run<'a, T, F, Fut>(&'a self, statement: F) -> Result<T, DbErr>
+    where
+        F: FnOnce(&'a DatabaseTransaction) -> Fut,
+        Fut: Future<Output = Result<T, DbErr>> + 'a,
+    {
+        let _turn = self.turn.for_statement().await?;
+        self.run_unturned(statement).await
     }
 
     /// Run one statement on the request's transaction, poisoning the boundary
     /// on **either** failure: a `?` on `txn_ref` would let a failed `BEGIN`
-    /// escape the flag.
-    async fn run<'a, T, F, Fut>(&'a self, statement: F) -> Result<T, DbErr>
+    /// escape the flag. The turn is the caller's: an atomic block sends its
+    /// `SAVEPOINT` here while it holds it.
+    pub(crate) async fn run_unturned<'a, T, F, Fut>(&'a self, statement: F) -> Result<T, DbErr>
     where
         F: FnOnce(&'a DatabaseTransaction) -> Fut,
         Fut: Future<Output = Result<T, DbErr>> + 'a,
@@ -158,9 +219,20 @@ impl LazyTransaction {
     async fn txn_ref(&self) -> Result<&DatabaseTransaction, DbErr> {
         Ok(self
             .cell
-            .get_or_try_init(|| async { self.pool.begin().await.map(Arc::new) })
+            .get_or_try_init(|| async {
+                match &self.opener {
+                    Opener::Pool(pool) => pool.begin().await,
+                    Opener::Caller(caller) => caller.begin().await,
+                }
+                .map(Arc::new)
+            })
             .await?
             .as_ref())
+    }
+
+    /// The transaction a data-layer touch opened, if any.
+    pub(crate) fn opened(&self) -> Option<&DatabaseTransaction> {
+        self.cell.get().map(AsRef::as_ref)
     }
 
     /// The transaction, if a data-layer touch opened one — consumed by
@@ -179,33 +251,13 @@ impl LazyTransaction {
     /// said about it. **The first failure wins**: everything after it fails
     /// with `25P02`, which says nothing about why.
     fn poison<T>(&self, result: Result<T, DbErr>) -> Result<T, DbErr> {
-        if let Err(err) = &result {
-            // A statement, not a `COMMIT`: nothing is durable yet, so the broad
-            // predicate is safe here.
-            let verdict = if crate::retry::is_transient_failure(err) {
-                POISON_TRANSIENT
-            } else {
-                POISON_DETERMINISTIC
-            };
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "the first failure's verdict stands; a later one finds the slot taken"
-            )]
-            let _ = self.poisoned.compare_exchange(
-                POISON_CLEAN,
-                verdict,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
-        }
-        result
+        record_failure(&self.poisoned, result)
     }
 
-    /// Force the request transaction open (if a data-layer touch has not
-    /// already) and start a **SAVEPOINT** on it, through [`run`](Self::run) so
-    /// a refused `SAVEPOINT` poisons the boundary.
-    pub(crate) async fn begin_nested(&self) -> Result<DatabaseTransaction, DbErr> {
-        self.run(|txn| txn.begin()).await
+    /// Leave the boundary unable to commit, whatever a statement says next: an
+    /// atomic block left its savepoint in a state nothing can vouch for.
+    pub(crate) fn poison_deterministic(&self) {
+        poison_once(&self.poisoned, POISON_DETERMINISTIC);
     }
 
     /// Settle the boundary's lazily opened transaction: commit on `success`,
@@ -339,13 +391,7 @@ impl Drop for LazyTransaction {
     /// so the row locks stay held until the statement drains server-side: the
     /// event is what the framework owes.
     fn drop(&mut self) {
-        let held = self
-            .after_commit
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map_or(0, Vec::len);
-        report_discarded(self.transport, held);
+        report_discarded(self.transport, still_held(&mut self.after_commit));
         if self.settled.load(Ordering::Relaxed) || self.cell.get().is_none() {
             return;
         }
@@ -353,10 +399,95 @@ impl Drop for LazyTransaction {
     }
 }
 
+/// `work`, wrapped to run under what its unit carries into a
+/// [`Commit`](Continuation::Commit), captured here where it is registered: the
+/// boundary's pool under the scope read here, the ability, every value that
+/// crosses. With nothing to capture it runs on `pool`, or bare without one.
+pub(crate) fn held_for_commit(work: Deferred, pool: Option<&DatabaseConnection>) -> Deferred {
+    match (RequestContinuation::capture(Continuation::Commit), pool) {
+        (Some(carried), _) => Box::pin(carried.scope(work)),
+        (None, Some(pool)) => Box::pin(with_executor(Executor::Pool(pool.clone()), work)),
+        (None, None) => work,
+    }
+}
+
+/// Keep captured `work` in `held`, or refuse it once settling took the list.
+pub(crate) fn adopt_into(
+    held: &Mutex<Option<Vec<Deferred>>>,
+    transport: &'static str,
+    work: Vec<Deferred>,
+) {
+    let refused = {
+        let mut held = held.lock().unwrap_or_else(PoisonError::into_inner);
+        match held.as_mut() {
+            Some(held) => {
+                held.extend(work);
+                None
+            }
+            None => Some(work),
+        }
+    };
+    if let Some(work) = refused.filter(|work| !work.is_empty()) {
+        drop(work);
+        tracing::warn!(
+            target: crate::target::ORM,
+            transport,
+            outcome = "discarded",
+            "after-commit work registered on a boundary that has already settled; \
+             it will not run",
+        );
+    }
+}
+
+/// The held work, taken for settling — after which nothing more is held.
+pub(crate) fn take_held(held: &Mutex<Option<Vec<Deferred>>>) -> Vec<Deferred> {
+    held.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or_default()
+}
+
+/// How much work `held` still keeps, read as its holder is dropped.
+pub(crate) fn still_held(held: &mut Mutex<Option<Vec<Deferred>>>) -> usize {
+    held.get_mut()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map_or(0, Vec::len)
+}
+
+/// Record in `flag` that a statement failed, and what the database said about
+/// it: the first failure wins, since everything after it fails with `25P02`.
+pub(crate) fn record_failure<T>(flag: &AtomicU8, result: Result<T, DbErr>) -> Result<T, DbErr> {
+    if let Err(err) = &result {
+        // A statement, not a `COMMIT`: nothing is durable yet, so the broad
+        // predicate is safe here.
+        let verdict = if crate::retry::is_transient_failure(err) {
+            POISON_TRANSIENT
+        } else {
+            POISON_DETERMINISTIC
+        };
+        poison_once(flag, verdict);
+    }
+    result
+}
+
+/// Set `flag` to `verdict` unless an earlier failure already set it.
+pub(crate) fn poison_once(flag: &AtomicU8, verdict: u8) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the first failure's verdict stands; a later one finds the slot taken"
+    )]
+    let _ = flag.compare_exchange(POISON_CLEAN, verdict, Ordering::Relaxed, Ordering::Relaxed);
+}
+
 /// Run the boundary's after-commit work when it `committed`, or drop it. A
 /// panic is contained: unwinding would turn a committed attempt into a failed
 /// one a queue replays.
-async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, committed: bool) {
+pub(crate) async fn settle_after_commit(
+    transport: &'static str,
+    held: Vec<Deferred>,
+    committed: bool,
+) {
     if !committed {
         report_discarded(transport, held.len());
         return;
@@ -374,7 +505,7 @@ async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, commi
 }
 
 /// `debug`: the expected consequence of a rollback the edge already reports.
-fn report_discarded(transport: &'static str, discarded: usize) {
+pub(crate) fn report_discarded(transport: &'static str, discarded: usize) {
     if discarded > 0 {
         tracing::debug!(
             target: crate::target::ORM,
@@ -411,7 +542,26 @@ fn report_abandoned(transport: &'static str) {
 }
 
 /// How [`LazyTransaction::finalize`] settled the boundary's transaction.
+///
+/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm —
+/// one that fails the boundary, since only the arms it names are known to have
+/// kept what the boundary wrote:
+///
+/// ```compile_fail,E0004
+/// use nest_rs_seaorm::FinalizeOutcome;
+///
+/// fn kept(outcome: FinalizeOutcome) -> bool {
+///     match outcome {
+///         FinalizeOutcome::NoTransaction | FinalizeOutcome::Committed => true,
+///         FinalizeOutcome::RolledBack
+///         | FinalizeOutcome::Escaped
+///         | FinalizeOutcome::CommitFailed(_)
+///         | FinalizeOutcome::Poisoned { .. } => false,
+///     }
+/// }
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum FinalizeOutcome {
     /// Nothing ever touched the data layer — no `BEGIN` was issued.
     NoTransaction,
@@ -449,7 +599,8 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.get_database_backend(),
             Executor::Txn(t) => t.get_database_backend(),
-            Executor::Lazy(l) => l.pool.get_database_backend(),
+            Executor::Lazy(l) => l.backend(),
+            Executor::Savepoint(s) => s.backend(),
         }
     }
 
@@ -458,6 +609,7 @@ impl ConnectionTrait for Executor {
             Executor::Pool(c) => c.execute_raw(stmt).await,
             Executor::Txn(t) => t.execute_raw(stmt).await,
             Executor::Lazy(l) => l.run(|txn| txn.execute_raw(stmt)).await,
+            Executor::Savepoint(s) => s.run(|txn| txn.execute_raw(stmt)).await,
         }
     }
 
@@ -466,6 +618,7 @@ impl ConnectionTrait for Executor {
             Executor::Pool(c) => c.execute_unprepared(sql).await,
             Executor::Txn(t) => t.execute_unprepared(sql).await,
             Executor::Lazy(l) => l.run(|txn| txn.execute_unprepared(sql)).await,
+            Executor::Savepoint(s) => s.run(|txn| txn.execute_unprepared(sql)).await,
         }
     }
 
@@ -474,6 +627,7 @@ impl ConnectionTrait for Executor {
             Executor::Pool(c) => c.query_one_raw(stmt).await,
             Executor::Txn(t) => t.query_one_raw(stmt).await,
             Executor::Lazy(l) => l.run(|txn| txn.query_one_raw(stmt)).await,
+            Executor::Savepoint(s) => s.run(|txn| txn.query_one_raw(stmt)).await,
         }
     }
 
@@ -482,6 +636,7 @@ impl ConnectionTrait for Executor {
             Executor::Pool(c) => c.query_all_raw(stmt).await,
             Executor::Txn(t) => t.query_all_raw(stmt).await,
             Executor::Lazy(l) => l.run(|txn| txn.query_all_raw(stmt)).await,
+            Executor::Savepoint(s) => s.run(|txn| txn.query_all_raw(stmt)).await,
         }
     }
 
@@ -489,7 +644,8 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.support_returning(),
             Executor::Txn(t) => t.support_returning(),
-            Executor::Lazy(l) => l.pool.support_returning(),
+            Executor::Lazy(l) => l.support_returning(),
+            Executor::Savepoint(s) => s.root().support_returning(),
         }
     }
 
@@ -497,7 +653,8 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.is_mock_connection(),
             Executor::Txn(t) => t.is_mock_connection(),
-            Executor::Lazy(l) => l.pool.is_mock_connection(),
+            Executor::Lazy(l) => l.is_mock_connection(),
+            Executor::Savepoint(s) => s.root().is_mock_connection(),
         }
     }
 }
@@ -512,19 +669,24 @@ impl nest_rs_database::Executor for Executor {
     /// the data.
     fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
         match self {
-            Executor::Lazy(lazy) if !lazy.is_opened() => {
-                Some(Arc::new(Executor::Pool(lazy.pool.clone())))
-            }
+            Executor::Lazy(lazy) if !lazy.is_opened() => lazy
+                .pool()
+                .map(|pool| Arc::new(Executor::Pool(pool.clone())) as Arc<_>),
             _ => None,
         }
     }
 
-    /// A lazy transaction holds the work for its boundary to settle; a pool and
-    /// a caller's [`Txn`](Executor::Txn) hand it back to run at once.
+    /// A lazy transaction or a block's savepoint holds the work for its
+    /// settling; a pool and a caller's [`Txn`](Executor::Txn) hand it back to
+    /// run at once.
     fn after_commit(&self, work: Deferred) -> Option<Deferred> {
         match self {
             Executor::Lazy(lazy) => {
                 lazy.hold(work);
+                None
+            }
+            Executor::Savepoint(block) => {
+                block.hold(work);
                 None
             }
             Executor::Pool(_) | Executor::Txn(_) => Some(work),
@@ -532,13 +694,38 @@ impl nest_rs_database::Executor for Executor {
     }
 
     /// A caller's own [`Txn`](Executor::Txn) names no pool, so a continuation
-    /// leaving it runs without an executor.
+    /// leaving it, or a block inside it, runs without an executor.
     fn __pool(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-        match self {
-            Executor::Pool(pool) => Some(Arc::new(Executor::Pool(pool.clone()))),
-            Executor::Lazy(lazy) => Some(Arc::new(Executor::Pool(lazy.pool.clone()))),
+        let pool = match self {
+            Executor::Pool(pool) => Some(pool),
+            Executor::Lazy(lazy) => lazy.pool(),
+            Executor::Savepoint(block) => block.root().pool(),
             Executor::Txn(_) => None,
-        }
+        }?;
+        Some(Arc::new(Executor::Pool(pool.clone())))
+    }
+
+    /// A block on the pool is a transaction of its own; inside a caller's
+    /// [`Txn`](Executor::Txn), a savepoint sea-orm nests there; inside a lazy
+    /// transaction or another block, a savepoint of its own sent on the same
+    /// connection.
+    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        let block = match self {
+            Executor::Pool(pool) => {
+                AtomicExecutor::own(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC)))
+            }
+            Executor::Txn(caller) => AtomicExecutor::own(Arc::new(LazyTransaction::nested_in(
+                Arc::clone(caller),
+                ATOMIC,
+            ))),
+            Executor::Lazy(lazy) => {
+                AtomicExecutor::savepoint(Arc::new(Savepoint::in_boundary(Arc::clone(lazy))))
+            }
+            Executor::Savepoint(block) => {
+                AtomicExecutor::savepoint(Arc::new(Savepoint::in_block(Arc::clone(block))))
+            }
+        };
+        Some(Arc::new(block))
     }
 }
 

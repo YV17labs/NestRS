@@ -1411,9 +1411,7 @@ impl Runner {
         // would skip every later one for as long as the process lives.
         let outcome = match tokio::time::timeout(task.timeout, run).await {
             Ok(caught) => caught,
-            Err(_) => Ok(Err(anyhow::Error::new(JobTimedOut {
-                timeout: task.timeout,
-            }))),
+            Err(_) => Ok(Err(anyhow::Error::new(JobTimedOut::new(task.timeout)))),
         };
         line.file(match &outcome {
             Ok(Ok(())) => nest_rs_core::operation_log::OK,

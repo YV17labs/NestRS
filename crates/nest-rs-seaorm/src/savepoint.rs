@@ -3,17 +3,20 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nest_rs_database::{AtomicError, Deferred};
-use sea_orm::{ConnectionTrait, DatabaseTransaction, DbBackend, DbErr, Statement};
+use sea_orm::{ConnectionTrait, DatabaseTransaction, DbErr, Statement};
 
 use crate::executor::{
-    LazyTransaction, POISON_CLEAN, POISON_TRANSIENT, adopt_into, held_for_commit, record_failure,
-    report_discarded, still_held, take_held,
+    LazyTransaction, POISON_CLEAN, POISON_DETERMINISTIC, POISON_TRANSIENT, adopt_into,
+    held_for_commit, poison_once, record_failure, report_discarded, still_held, take_held,
 };
 use crate::turn::Turn;
 
 /// What a statement on a block that already settled is refused with.
-const OUTLIVED: &str = "the atomic block this executor belongs to has settled; nothing more \
-     runs on it";
+fn outlived() -> DbErr {
+    DbErr::Custom(
+        "the atomic block this executor belongs to has settled; nothing more runs on it".to_owned(),
+    )
+}
 
 /// The savepoint an [`atomic`](fn@nest_rs_database::atomic) block opened inside a
 /// [`LazyTransaction`] or another block's savepoint.
@@ -40,7 +43,7 @@ pub struct Savepoint {
 }
 
 /// The unit an atomic block sits in.
-pub(crate) enum Enclosing {
+enum Enclosing {
     Boundary(Arc<LazyTransaction>),
     Block(Arc<Savepoint>),
 }
@@ -78,10 +81,6 @@ impl Savepoint {
         }
     }
 
-    pub(crate) fn backend(&self) -> DbBackend {
-        self.root().backend()
-    }
-
     fn transport(&self) -> &'static str {
         self.root().transport()
     }
@@ -102,10 +101,10 @@ impl Savepoint {
     /// Keep `work` until the block settles, captured here for the commit that
     /// will run it.
     pub(crate) fn hold(&self, work: Deferred) {
-        self.adopt(vec![held_for_commit(work, self.root().pool())]);
+        self.adopt([held_for_commit(work, self.root().pool())]);
     }
 
-    fn adopt(&self, work: Vec<Deferred>) {
+    fn adopt(&self, work: impl IntoIterator<Item = Deferred>) {
         adopt_into(&self.after_commit, self.transport(), work);
     }
 
@@ -139,14 +138,12 @@ impl Savepoint {
     /// once first.
     async fn open(&self) -> Result<&DatabaseTransaction, DbErr> {
         if self.settled.load(Ordering::Acquire) {
-            return Err(DbErr::Custom(OUTLIVED.to_owned()));
+            return Err(outlived());
         }
         self.opened
             .get_or_try_init(|| self.send_savepoint())
             .await?;
-        self.root()
-            .opened()
-            .ok_or_else(|| DbErr::Custom(OUTLIVED.to_owned()))
+        self.root().opened().ok_or_else(outlived)
     }
 
     /// Take the enclosing unit's turn for as long as the block is open, and
@@ -157,7 +154,8 @@ impl Savepoint {
             self.enclosing.turn().for_block(self.address()).await?;
             self.holds_turn.store(true, Ordering::Release);
         }
-        let statement = self.statement(format!("SAVEPOINT {}", self.name()));
+        let statement =
+            Statement::from_string(self.root().backend(), format!("SAVEPOINT {}", self.name()));
         let mut unsettled = Unsettled::armed(&self.enclosing, self.transport());
         let sent = self
             .enclosing
@@ -172,10 +170,6 @@ impl Savepoint {
 
     fn name(&self) -> String {
         format!("nestrs_atomic_{}", self.depth)
-    }
-
-    fn statement(&self, sql: String) -> Statement {
-        Statement::from_string(self.backend(), sql)
     }
 
     fn give_back_turn(&self) {
@@ -206,7 +200,7 @@ impl Savepoint {
             let mut unsettled = Unsettled::armed(&self.enclosing, transport);
             let sent = match self.root().opened() {
                 Some(txn) => txn.execute_unprepared(&sql).await,
-                None => Err(DbErr::Custom(OUTLIVED.to_owned())),
+                None => Err(outlived()),
             };
             unsettled.disarm();
             self.give_back_turn();
@@ -276,13 +270,11 @@ impl Enclosing {
     fn poison_deterministic(&self) {
         match self {
             Enclosing::Boundary(boundary) => boundary.poison_deterministic(),
-            Enclosing::Block(block) => {
-                crate::executor::poison_once(&block.poisoned, crate::executor::POISON_DETERMINISTIC)
-            }
+            Enclosing::Block(block) => poison_once(&block.poisoned, POISON_DETERMINISTIC),
         }
     }
 
-    fn adopt(&self, work: Vec<Deferred>) {
+    fn adopt(&self, work: impl IntoIterator<Item = Deferred>) {
         match self {
             Enclosing::Boundary(boundary) => boundary.adopt(work),
             Enclosing::Block(block) => block.adopt(work),

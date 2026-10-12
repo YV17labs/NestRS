@@ -8,8 +8,8 @@
 //! streaming body, a DataLoader batch and after-commit work as the pool, and
 //! to no task, so a detached write cannot run outside a unit of work —
 //! [`after_commit`], the one way an effect waits for that unit of work to
-//! commit, and [`atomic`](fn@atomic), a savepoint of that unit that rolls back alone. It
-//! is what every ORM integration plugs into — not an ORM itself.
+//! commit, and [`atomic`](fn@atomic), a savepoint of that unit that rolls back
+//! alone. It is what every ORM integration plugs into — not an ORM itself.
 //! The non-HTTP side is wired through `nest_rs_worker::JobContext`, which a
 //! worker transport (`#[scheduled]`, `#[processor]`) resolves before each job.
 //!

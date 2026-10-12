@@ -61,9 +61,7 @@ where
 {
     // Not an `async fn`: its state would keep `work` beside the future built
     // from it, and nested blocks would weigh twice their size at every level.
-    Atomic {
-        state: State::Unopened(work),
-    }
+    Atomic::Unopened(work)
 }
 
 /// Why an atomic block could not keep its promise.
@@ -108,15 +106,7 @@ pub trait AtomicBlock: Executor {
 }
 
 /// What [`atomic`](fn@atomic) returns.
-struct Atomic<'a, F, T, E> {
-    state: State<'a, F, T, E>,
-}
-
-// `work` is never pinned in place: it moves into a box of its own on the first
-// poll, so the future stays movable whatever `work` is.
-impl<F, T, E> Unpin for Atomic<'_, F, T, E> {}
-
-enum State<'a, F, T, E> {
+enum Atomic<'a, F, T, E> {
     /// Not polled yet: the block is opened where it first runs.
     Unopened(F),
     /// The work runs with the block installed. `work` is declared first so a
@@ -133,6 +123,10 @@ enum State<'a, F, T, E> {
     },
     Done,
 }
+
+// `work` is never pinned in place: it moves into a box of its own on the first
+// poll, so the future stays movable whatever `work` is.
+impl<F, T, E> Unpin for Atomic<'_, F, T, E> {}
 
 /// How the block's work ended.
 enum Ended<T, E> {
@@ -151,24 +145,24 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         loop {
-            match std::mem::replace(&mut this.state, State::Done) {
-                State::Unopened(work) => {
+            match std::mem::replace(this, Atomic::Done) {
+                Atomic::Unopened(work) => {
                     let Some(block) = current_executor().and_then(|executor| executor.atomic())
                     else {
                         return Poll::Ready(Err(AtomicError::Unsupported.into()));
                     };
                     let installed: Arc<dyn Executor> = block.clone();
-                    this.state = State::Running {
+                    *this = Atomic::Running {
                         work: Box::pin(with_executor(installed, work)),
                         block,
                     };
                 }
-                State::Running { mut work, block } => {
+                Atomic::Running { mut work, block } => {
                     // Caught to settle the block, then resumed as it was: a
                     // unit around this one still contains and reports it.
                     let ended = match catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(cx))) {
                         Ok(Poll::Pending) => {
-                            this.state = State::Running { work, block };
+                            *this = Atomic::Running { work, block };
                             return Poll::Pending;
                         }
                         Ok(Poll::Ready(result)) => Ended::Returned(result),
@@ -176,14 +170,14 @@ where
                     };
                     drop(work);
                     let ok = matches!(ended, Ended::Returned(Ok(_)));
-                    this.state = State::Settling {
+                    *this = Atomic::Settling {
                         settle: block.settle(ok),
                         ended,
                     };
                 }
-                State::Settling { mut settle, ended } => {
+                Atomic::Settling { mut settle, ended } => {
                     let Poll::Ready(settled) = settle.as_mut().poll(cx) else {
-                        this.state = State::Settling { settle, ended };
+                        *this = Atomic::Settling { settle, ended };
                         return Poll::Pending;
                     };
                     return match ended {
@@ -194,7 +188,7 @@ where
                         }),
                     };
                 }
-                State::Done => return Poll::Pending,
+                Atomic::Done => return Poll::Pending,
             }
         }
     }

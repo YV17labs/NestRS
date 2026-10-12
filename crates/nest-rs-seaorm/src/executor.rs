@@ -23,7 +23,7 @@ pub use nest_rs_database::ExecutorScope;
 pub use nest_rs_database::current_executor_scope;
 
 /// The label an atomic block's own transaction logs under: it serves no edge.
-pub(crate) const ATOMIC: &str = "atomic";
+const ATOMIC: &str = "atomic";
 
 /// The connection a request's queries run against: the shared pool, the
 /// per-request [`DatabaseTransaction`], a transaction opened lazily on first
@@ -176,12 +176,12 @@ impl LazyTransaction {
     /// to the boundary would make every boundary that held work read as
     /// escaped.
     fn hold(&self, work: Deferred) {
-        self.adopt(vec![held_for_commit(work, self.pool())]);
+        self.adopt([held_for_commit(work, self.pool())]);
     }
 
     /// Keep work already captured for its commit — an atomic block's, released
     /// into this boundary.
-    pub(crate) fn adopt(&self, work: Vec<Deferred>) {
+    pub(crate) fn adopt(&self, work: impl IntoIterator<Item = Deferred>) {
         adopt_into(&self.after_commit, self.transport, work);
     }
 
@@ -415,7 +415,7 @@ pub(crate) fn held_for_commit(work: Deferred, pool: Option<&DatabaseConnection>)
 pub(crate) fn adopt_into(
     held: &Mutex<Option<Vec<Deferred>>>,
     transport: &'static str,
-    work: Vec<Deferred>,
+    work: impl IntoIterator<Item = Deferred>,
 ) {
     let refused = {
         let mut held = held.lock().unwrap_or_else(PoisonError::into_inner);
@@ -427,8 +427,7 @@ pub(crate) fn adopt_into(
             None => Some(work),
         }
     };
-    if let Some(work) = refused.filter(|work| !work.is_empty()) {
-        drop(work);
+    if refused.map_or(0, |work| work.into_iter().count()) > 0 {
         tracing::warn!(
             target: crate::target::ORM,
             transport,
@@ -600,7 +599,7 @@ impl ConnectionTrait for Executor {
             Executor::Pool(c) => c.get_database_backend(),
             Executor::Txn(t) => t.get_database_backend(),
             Executor::Lazy(l) => l.backend(),
-            Executor::Savepoint(s) => s.backend(),
+            Executor::Savepoint(s) => s.root().backend(),
         }
     }
 

@@ -22,8 +22,9 @@ pub struct InjectableBody {
     /// Human-readable label for each entry in `dep_keys`, in the same order.
     pub dep_names: Vec<TokenStream2>,
     /// `TypeId` of each `#[inject] Option<Arc<…>>`. Kept apart from `dep_keys`
-    /// — optionals must not gate the register fixpoint, but are still used to
-    /// order a consumer after an optional provider the same module supplies.
+    /// — an optional gates the register fixpoint only while a provider of the
+    /// same module would supply it, and the access graph lets one no reached
+    /// module provides be absent.
     pub opt_keys: Vec<TokenStream2>,
     /// Human-readable label for each entry in `opt_keys`, in the same order.
     pub opt_names: Vec<TokenStream2>,
@@ -37,8 +38,8 @@ pub struct InjectableBody {
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
 /// `from_container` constructor. `Arc<dyn Trait>` resolves via `get_dyn`,
-/// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency
-/// (lenient, excluded from `dependencies`/`injected`). An `#[inject]` field
+/// `Arc<Concrete>` via `get`. `Option<Arc<…>>` is an optional dependency,
+/// reported apart from `dependencies`/`injected`. An `#[inject]` field
 /// that is neither errors; a non-`#[inject]` field falls back to
 /// `Default::default()`.
 pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBody> {
@@ -132,8 +133,9 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 }
 
                 // Optional `#[inject] Option<Arc<…>>`: lenient resolution,
-                // out of `dependencies`/`injected` so a missing provider
-                // neither stalls the register fixpoint nor fails access check.
+                // out of `dependencies`/`injected` so a provider no reached
+                // module supplies neither stalls the register fixpoint nor
+                // fails the access check.
                 if let Some(opt_inner) = nth_generic_type(field_ty, "Option", 0) {
                     let Some(arc_inner_ty) = arc_inner(opt_inner) else {
                         return Err(syn::Error::new_spanned(

@@ -83,15 +83,21 @@ pub async fn dispatch<T: Tail>(
     }
 }
 
-/// The guard stage, then the class gate.
+/// The guard stage, then the class gate. A refused unit keeps nothing they
+/// attached.
 async fn pass_gates(cx: &mut UnitContext<'_>, chains: &UnitChains) -> Result<(), Failure> {
-    if let Some(stage) = &chains.guard_stage {
-        stage.check(cx).await?;
+    let passed = match &chains.guard_stage {
+        Some(stage) => stage.check(cx).await,
+        None => Ok(()),
     }
-    if let Some(gate) = chains.class_gate {
-        gate(cx)?;
+    .and_then(|()| match chains.class_gate {
+        Some(gate) => gate(cx),
+        None => Ok(()),
+    });
+    if passed.is_err() {
+        drop(take_pending(cx));
     }
-    Ok(())
+    passed
 }
 
 /// Everything inside the unit stage: the guards and the gate, then, with what
@@ -204,10 +210,36 @@ mod tests {
     }
 
     async fn run<T: Tail>(chains: &UnitChains, tail: &mut T) -> (Outcome, Vec<String>) {
+        let (outcome, steps, _) = run_then_read(chains, tail).await;
+        (outcome, steps)
+    }
+
+    /// Run one unit: what it came to, what ran, and what the edge reads
+    /// ambient once `dispatch` returned.
+    async fn run_then_read<T: Tail>(
+        chains: &UnitChains,
+        tail: &mut T,
+    ) -> (Outcome, Vec<String>, Option<Arc<Attached>>) {
         let mut view = TrailView::new();
         let mut cx = new_unit_context(&SEND, &mut view, None, None);
         let outcome = dispatch(&mut cx, chains, tail).await;
-        (outcome, view.steps())
+        let read = cx.ambient::<Attached>();
+        (outcome, view.steps(), read)
+    }
+
+    /// A site whose guards and gate are all it runs.
+    fn gate_only(guard_stage: GuardStageFactory, class_gate: Option<ClassGate>) -> UnitChains {
+        let chains = composed(
+            &Container::default(),
+            &SiteDeclaration {
+                layers: SiteLayers::default,
+                global: GlobalLayers::ALL,
+                guard_stage: Some(guard_stage),
+                class_gate,
+            },
+        );
+        assert_eq!(chains.shape(), Shape::GateOnly);
+        chains
     }
 
     #[tokio::test]
@@ -395,7 +427,7 @@ mod tests {
         async fn call(&mut self, cx: &mut UnitContext<'_>) -> Outcome {
             record(
                 cx,
-                format!("inside next: {:?}", crate::ambient::<Attached>()),
+                format!("in the handler: {:?}", crate::ambient::<Attached>()),
             );
             Ok(settled())
         }
@@ -425,7 +457,7 @@ mod tests {
         assert_eq!(
             steps,
             [
-                "inside next: Some(Attached(\"by the interceptor\"))",
+                "in the handler: Some(Attached(\"by the interceptor\"))",
                 "after next: None",
             ],
         );
@@ -448,7 +480,30 @@ mod tests {
         }
     }
 
-    /// Writes what is ambient once the rest of the unit ran.
+    fn attaching_and_admitting(
+        _: &Container,
+        _: &Handler,
+    ) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError> {
+        Ok(Some(Arc::new(AttachingGuards(true))))
+    }
+
+    fn attaching_and_denying(
+        _: &Container,
+        _: &Handler,
+    ) -> Result<Option<Arc<dyn GuardStage>>, UnresolvedLayerError> {
+        Ok(Some(Arc::new(AttachingGuards(false))))
+    }
+
+    /// The class gate, writing `gate refused`, attaching `Attached("by the
+    /// gate")` and refusing.
+    fn refusing_gate(cx: &mut UnitContext<'_>) -> Result<(), Failure> {
+        record(cx, "gate refused");
+        cx.attach(Attached("by the gate"));
+        Err(Failure::from(Refused))
+    }
+
+    /// Writes what the unit carries once the rest of it ran: attached and
+    /// still pending, or ambient.
     struct Outside;
     impl Layer for Outside {}
 
@@ -456,48 +511,135 @@ mod tests {
     impl Interceptor for Outside {
         async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
             let outcome = next.run(cx).await;
-            record(
-                cx,
-                format!("after next: {:?}", crate::ambient::<Attached>()),
-            );
+            record(cx, format!("after next: {:?}", cx.ambient::<Attached>()));
             outcome
         }
     }
 
-    fn at_the_unit_stage(admit: bool) -> UnitChains {
+    fn at_the_unit_stage(
+        guard_stage: GuardStageFactory,
+        class_gate: Option<ClassGate>,
+    ) -> UnitChains {
         let builder = ContainerBuilder::default().provide(Outside);
         let container = register_interceptor::<Outside>(builder, InterceptorStage::Unit).build();
-        let guard_stage: GuardStageFactory = if admit {
-            |_, _| Ok(Some(Arc::new(AttachingGuards(true))))
-        } else {
-            |_, _| Ok(Some(Arc::new(AttachingGuards(false))))
-        };
         composed(
             &container,
             &SiteDeclaration {
                 layers: SiteLayers::default,
                 global: GlobalLayers::ALL,
                 guard_stage: Some(guard_stage),
-                class_gate: None,
+                class_gate,
             },
         )
     }
 
     #[tokio::test]
     async fn what_the_guards_attach_is_ambient_past_them_and_never_outside_or_when_denied() {
-        for (admit, expected) in [
+        let refused: Option<ClassGate> = Some(refusing_gate);
+        for (guard_stage, class_gate, admitted, expected) in [
             (
+                attaching_and_admitting as GuardStageFactory,
+                None,
                 true,
                 vec![
-                    "inside next: Some(Attached(\"by a guard\"))",
+                    "in the handler: Some(Attached(\"by a guard\"))",
                     "after next: None",
                 ],
             ),
-            (false, vec!["after next: None"]),
+            (attaching_and_denying, None, false, vec!["after next: None"]),
+            (
+                attaching_and_admitting,
+                refused,
+                false,
+                vec!["gate refused", "after next: None"],
+            ),
         ] {
-            let (outcome, steps) = run(&at_the_unit_stage(admit), &mut Reading).await;
-            assert_eq!(outcome.is_ok(), admit);
-            assert_eq!(steps, expected, "admitted: {admit}");
+            let chains = at_the_unit_stage(guard_stage, class_gate);
+            let (outcome, steps, read) = run_then_read(&chains, &mut Reading).await;
+            assert_eq!(outcome.is_ok(), admitted);
+            assert_eq!(steps, expected);
+            assert!(
+                read.is_none(),
+                "the edge reads nothing past the unit: {expected:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_gate_only_site_makes_what_its_guards_attach_ambient_in_its_tail_alone() {
+        let refused: Option<ClassGate> = Some(refusing_gate);
+        for (guard_stage, class_gate, admitted, expected) in [
+            (
+                attaching_and_admitting as GuardStageFactory,
+                None,
+                true,
+                vec!["in the handler: Some(Attached(\"by a guard\"))"],
+            ),
+            (attaching_and_denying, None, false, vec![]),
+            (
+                attaching_and_admitting,
+                refused,
+                false,
+                vec!["gate refused"],
+            ),
+        ] {
+            let (outcome, steps, read) =
+                run_then_read(&gate_only(guard_stage, class_gate), &mut Reading).await;
+            assert_eq!(outcome.is_ok(), admitted);
+            assert_eq!(steps, expected);
+            assert!(
+                read.is_none(),
+                "the edge reads nothing past the unit: {expected:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_gate_only_site_denied_by_its_guards_runs_no_tail_and_answers_the_denial() {
+        let (outcome, steps) = run(
+            &gate_only(denying, Some(recording_gate)),
+            &mut RecordingTail::ok(),
+        )
+        .await;
+        assert_eq!(steps, ["guards"], "no gate, no handler");
+        let failure = outcome.expect_err("the unit was denied");
+        assert!(failure.is_answered(), "the guard stage answered it");
+        assert!(failure.find::<Refused>().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_class_gate_refusal_reaches_the_unit_stage_and_runs_nothing_after_it() {
+        let container = every_stage();
+        let layered = composed(
+            &container,
+            &SiteDeclaration {
+                layers: bound_on_the_host_and_method,
+                global: GlobalLayers::ALL,
+                guard_stage: Some(admitting),
+                class_gate: Some(refusing_gate),
+            },
+        );
+        assert_eq!(layered.shape(), Shape::Layered);
+        let gated = gate_only(admitting, Some(refusing_gate));
+        for (chains, expected) in [
+            (
+                &layered,
+                vec!["unit in", "guards", "gate refused", "unit out"],
+            ),
+            (&gated, vec!["guards", "gate refused"]),
+        ] {
+            let (outcome, steps, read) = run_then_read(chains, &mut RecordingTail::failing()).await;
+            assert_eq!(
+                steps,
+                expected,
+                "no handler-stage interceptor, no filter, no handler on a {:?} site",
+                chains.shape(),
+            );
+            assert!(
+                outcome.is_err_and(|failure| failure.find::<Refused>().is_some()),
+                "the gate's refusal is what the unit came to",
+            );
+            assert!(read.is_none(), "a refused unit installs nothing");
         }
     }
 
@@ -536,18 +678,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_gate_only_site_runs_its_guards_and_gate_inline_before_the_tail() {
-        let container = Container::default();
-        let chains = composed(
-            &container,
-            &SiteDeclaration {
-                layers: SiteLayers::default,
-                global: GlobalLayers::ALL,
-                guard_stage: Some(admitting),
-                class_gate: Some(recording_gate),
-            },
-        );
-        assert_eq!(chains.shape(), Shape::GateOnly);
-        let (outcome, steps) = run(&chains, &mut RecordingTail::ok()).await;
+        let (outcome, steps) = run(
+            &gate_only(admitting, Some(recording_gate)),
+            &mut RecordingTail::ok(),
+        )
+        .await;
         assert!(outcome.is_ok());
         assert_eq!(steps, ["guards", "gate", "handler"]);
     }

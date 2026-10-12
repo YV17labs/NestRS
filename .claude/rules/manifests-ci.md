@@ -39,9 +39,17 @@ paths:
   reported upstream.
 - **Every third-party requirement is `major.minor`** (`"1.53"`, `"=2.0"`), in
   every manifest the repo owns or the CLI generates: the minor is the floor we
-  build against, the patch is the publisher's. The majors that surface in the
-  macros' output move only with a nestrs major. Exact pins (`=`) say why at the
+  build against, the patch is the publisher's. Exact pins (`=`) say why at the
   pin; never bump one casually.
+- **A dependency is public or private, as Cargo names them**
+  (`decisions/public-dependencies.md` lists the public ones). A public
+  dependency's major — a `0.x`'s minor — moves only with a nestrs major, and
+  its pin says `public`; a private one is wrapped: its types appear in no
+  tier-1 signature, field, error variant or re-export, and no tier-1 type
+  implements its traits. Held by review. **A vulnerability fixed only in a
+  public dependency's next major waits for nestrs's**: its `deny.toml` reason
+  covers what an app can reach, not only what the framework builds, and the
+  page an app reaches it from says what not to build.
 - **The framework requires itself in lockstep**: every `nest-rs-*` entry of
   the root `[workspace.dependencies]` is `=` the release, and a framework crate
   links a sibling only through `{ workspace = true }` — macro expansions and

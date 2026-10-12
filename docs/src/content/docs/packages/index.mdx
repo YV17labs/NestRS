@@ -210,7 +210,9 @@ Crates **your own code names**. A job payload deriving `serde::Serialize`, an
 indicator returning `anyhow::Result`, an entity written against `sea-orm` — those
 are yours, and hiding them behind a re-export would cost you their feature flags
 and a truthful `cargo tree`. No Rust framework hides them; NestRS does not
-either.
+either. Name each at a requirement compatible with the framework's: the
+libraries NestRS's own API is written in keep one major for the whole 7.x line
+([Third-party libraries](/semver/#third-party-libraries)).
 
 **GraphQL** used to be the one exception, and no longer is: `#[operations]` wraps
 async-graphql's `#[Object]`, but it now pins that expansion to the framework's

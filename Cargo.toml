@@ -13,12 +13,13 @@ repository = "https://github.com/YV17labs/NestRS"
 homepage = "https://nestrs.dev"
 
 [workspace.dependencies]
-# poem, sea-orm, async-graphql, rmcp, inventory, validator and schemars appear
-# in the code the macros emit: their majors move only with a nestrs major.
-tokio = { version = "1.53", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt", "io"] }
+# `public`: a public dependency, whose types reach the public API, so its major
+# (a 0.x's minor) moves only with a nestrs major; every other library is private
+# and wrapped (.claude/decisions/public-dependencies.md).
+tokio = { version = "1.53", features = ["full"] }  # public
+tokio-util = { version = "0.7", features = ["rt", "io"] }  # public
 
-tracing = "0.1"
+tracing = "0.1"  # public
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 opentelemetry = "0.33"
@@ -29,7 +30,7 @@ opentelemetry-appender-tracing = "0.33"
 tracing-opentelemetry = "0.34"
 
 thiserror = "2.0"
-anyhow = "1.0"
+anyhow = "1.0"  # public
 
 jsonwebtoken = { version = "11.1", features = ["aws_lc_rs"] }
 # Past the 12-month bar (5.0.0, 2025-01-21): no release by 2027-01-31 and the
@@ -37,8 +38,8 @@ jsonwebtoken = { version = "11.1", features = ["aws_lc_rs"] }
 oauth2 = { version = "5.0", default-features = false }
 base64 = "0.23"
 
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }  # public
+serde_json = "1.0"  # public
 
 # Past the 12-month bar (0.10.19, 2024-05-17), and test-only (`Jail`): no
 # release by 2027-01-31 and the suites stop mutating the process environment.
@@ -47,49 +48,49 @@ figment = "0.10"
 # Past the 12-month bar (3.1.12, 2025-07-28): 4.0 (poem-web/poem#1200) at its
 # release, or none by 2027-01-31 and `.claude/decisions/http-server.md` applies.
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "compression", "multipart", "sse"] }
-rustls = "0.23"
+rustls = "0.23"  # public in nest-rs-testing alone
 rustls-native-certs = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
 
 object_store = { version = "0.14", features = ["aws"] }
-http = "1.5"
+http = "1.5"  # public
 
-http-body = "1.1"
+http-body = "1.1"  # public
 http-body-util = "0.1"
 hyper = { version = "1.12", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 h2 = "0.4"
 
-bytes = "1.12"
-futures-util = "0.3"
+bytes = "1.12"  # public
+futures-util = "0.3"  # public
 pin-project-lite = "0.2"
 
 tokio-tungstenite = "0.30"
 
-async-trait = "0.1"
+async-trait = "0.1"  # public
 
 # Past the 12-month bar (0.12.5, 2025-10-03): std's non-poisoning locks
 # (rust-lang/rust#134645) at their stabilisation, or no release by 2027-04-03 and
 # `std::sync` takes its place under one poisoning policy.
 parking_lot = "0.12"
 
-# `=`: nest-rs-graphql reads async-graphql's registry internals.
+# Public. `=`: nest-rs-graphql reads async-graphql's registry internals.
 # `custom-error-conversion` removes the blanket `From<T: Display>` into its
 # error: a `?` in a resolver body would otherwise ship a foreign error's
 # sentence before the wrapper could answer it opaquely.
 async-graphql = { version = "=7.2.1", default-features = false, features = ["custom-error-conversion", "dataloader", "playground"] }
 async-graphql-poem = "=7.2.1"
-inventory = "0.3"
+inventory = "0.3"  # public
 
 argon2 = "0.6"
 getrandom = "0.4"
-validator = { version = "0.21", features = ["derive"] }
-uuid = { version = "1.27", features = ["v4", "v7", "serde"] }
+validator = { version = "0.21", features = ["derive"] }  # public
+uuid = { version = "1.27", features = ["v4", "v7", "serde"] }  # public
 url = "2.5"
 
-# `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed bump,
-# both pins together.
+# Public. `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed
+# bump, both pins together.
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio"] }
 # Named for its feature alone: sea-orm's `runtime-tokio-rustls` selects sqlx's
@@ -102,17 +103,17 @@ trybuild = "1.0"
 
 flate2 = "1.1"
 
-rmcp = { version = "3.5", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
-schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
+rmcp = { version = "3.5", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
+schemars = { version = "1.2", features = ["uuid1", "chrono04"] }  # public
 
 croner = { version = "4.0", default-features = false }
-chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }  # public
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat"] }
 # The one zone database: `#[cron(tz)]` is checked against it and the scheduler
 # reads it, never the host's zoneinfo, so the two cannot disagree.
 jiff-tzdb = "0.1"
 
-# `=`: nest-rs-redis opens each Cluster node through
+# Public. `=`: nest-rs-redis opens each Cluster node through
 # `ClusterClient::get_async_generic_connection`, which is `#[doc(hidden)]`.
 # `cluster-async` brings crc16 0.4 (2018), the slot checksum, finished and
 # without an advisory; it leaves with `redis`.
@@ -131,21 +132,22 @@ redis = { version = "=1.7", default-features = false, features = [
 clap = { version = "4.6", features = ["derive", "env"] }
 toml_edit = "0.25"
 
-syn = { version = "3.0", features = ["full"] }
+syn = { version = "3.0", features = ["full"] }  # public
 quote = "1.0"
-proc-macro2 = "1.0"
+proc-macro2 = "1.0"  # public
 proc-macro-crate = "3.5"
 
 tempfile = "3.27"
-tokio-rustls = "0.26"
+tokio-rustls = "0.26"  # public in nest-rs-testing alone
 libc = "0.2"
 
 # The embedded source of `nest-rs-static-files`: a folder compiled into the
 # binary. `debug-embed` embeds in a debug build too, so what a test serves is
 # what a release serves, and the mode reading the folder at runtime never runs.
-rust-embed = { version = "8.13", features = ["debug-embed"] }
+rust-embed = { version = "8.13", features = ["debug-embed"] }  # public
 
-# `=`: macro expansions call #[doc(hidden)] items semver does not cover.
+# `=`: macro expansions and sibling crates call `__private`, which semver does
+# not cover.
 nest-rs-core = { version = "=7.0.0", path = "crates/nest-rs-core" }
 nest-rs-authn = { version = "=7.0.0", path = "crates/nest-rs-authn" }
 nest-rs-throttler = { version = "=7.0.0", path = "crates/nest-rs-throttler" }

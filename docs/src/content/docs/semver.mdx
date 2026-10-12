@@ -75,6 +75,39 @@ change in any release. It stays safe only because every `nest-rs-*` crate
 requires its siblings at exactly its own version. Never name it — not
 directly, and not as `nest_rs::<concern>::__private` either.
 
+## Third-party libraries
+
+Some libraries are part of what you write: you derive their traits, write
+their attributes and name their types in your own signatures. In Cargo's
+words, they are NestRS's public dependencies. Their majors are NestRS's — no
+7.x release moves one — and you may name each in your manifest, at a
+requirement compatible with the framework's:
+
+| Library, at the major 7.x holds | Where you write it |
+|---|---|
+| `async-graphql` 7 | a resolver: its derives and `Context` |
+| `rmcp` 3 | an MCP tool: its model types are the MCP schema |
+| `sea-orm` 2, `sea-orm-migration` 2 | an entity, a `Repo` query, a migration |
+| `validator` 0.21 | `#[validate(…)]` on a DTO or a config |
+| `schemars` 1 | `#[derive(JsonSchema)]` |
+| `redis` 1 | your own commands on a `RedisConnection` |
+| `rust-embed` 8 | `#[derive(Embed)]` for static files |
+| `inventory` 0.3 | a package's registrations |
+| `futures-util` 0.3 | an `#[sse]` route's stream |
+| `async-trait` 0.1 | your implementation of a NestRS async trait |
+| `tokio` 1, `tokio-util` 0.7, `tracing` 0.1, `serde` 1, `serde_json` 1, `anyhow` 1, `uuid` 1, `chrono` 0.4, `http` 1, `http-body` 1, `bytes` 1 | everywhere: the ecosystem's foundations |
+| `syn` 3, `proc-macro2` 1 | a decorator crate built on `nest-rs-codegen` |
+| `tokio-rustls` 0.26, `rustls` 0.23 | a test dialing a `nest_rs::testing` double |
+
+For a `0.x` library the minor is the major: `validator` stays on 0.21 for the
+whole line. Every other library NestRS builds on is a private dependency, and
+NestRS wraps it: none of its types appears in a public signature, so its next
+major reaches you as a NestRS minor or patch.
+
+A vulnerability fixed only in one of these libraries' next major ships with
+NestRS's next major. Until then, the page you would reach the affected API from
+says what not to build, as [Dataloaders](/database/dataloaders/) does.
+
 ## Writing a package
 
 A package — a driver, a guard, a decorator crate — depends on the umbrella, at

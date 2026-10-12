@@ -140,7 +140,8 @@ pub mod prelude {
         http_code, interceptor, redirect, response_header, routes,
     };
 
-    // poem's extractors on purpose: poem's major is tied to nestrs's (root `Cargo.toml`).
+    // poem's extractors until the HTTP edge's API stops naming poem
+    // (`.claude/decisions/public-dependencies.md`).
     #[cfg(feature = "http")]
     pub use nest_rs_http::poem::web::{Json, Path, Query};
 

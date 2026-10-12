@@ -14,7 +14,7 @@ unmaintained = "all"
 unsound = "all"
 unused-ignored-advisory = "deny"
 ignore = [
-    { id = "RUSTSEC-2026-0253", reason = "async-graphql 7.2.1 reaches LruCache::pop only through its dataloader cache factory and persisted-queries store, which nestrs never builds; fixed in async-graphql 8, still a release candidate" },
+    { id = "RUSTSEC-2026-0253", reason = "async-graphql 7.2.1 calls lru's LruCache::pop only from the storage of its dataloader::LruCache cache factory: nestrs never builds one, and the dataloaders page tells apps, which reach it through nest_rs::graphql::async_graphql, not to; fixed in async-graphql 8, still a release candidate, and a public dependency's major waits for nestrs's" },
 ]
 
 [licenses]

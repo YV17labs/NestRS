@@ -131,7 +131,10 @@ Claims a clone of this repository lets you check:
 build on — your code, your configuration, the names your log filters and
 alerts match — and the [semver policy](https://nestrs.dev/semver/) says
 exactly what that covers. Every `nest-rs-*` crate publishes at the same version
-in lockstep, so one NestRS version names exactly one compatible resolution.
+in lockstep, so one NestRS version names exactly one compatible resolution —
+down to the third-party libraries you write in your own code (`sea-orm`,
+`async-graphql`, `rmcp`, `validator`, `schemars`), whose majors move only with
+a NestRS major.
 
 Coming from the previous major? [`changelog/7.0.md`](changelog/7.0.md) lists what moved:
 an edge is now **two** decorators — `#[resolver]` / `#[mcp]` on the struct,

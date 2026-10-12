@@ -110,7 +110,10 @@ Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `chore`,
 ## Adding a dependency
 
 A new third-party crate is a maintainer's decision: propose it in the issue
-first. It needs a published release within about the last twelve months.
+first. It needs a published release within about the last twelve months. A
+crate whose types would reach the public API is either one of the libraries
+whose majors are NestRS's, or it is wrapped so that none of its types do — see
+[Third-party libraries](https://nestrs.dev/semver/#third-party-libraries).
 
 ## Code of Conduct
 

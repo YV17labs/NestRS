@@ -417,26 +417,20 @@ async fn a_field_whose_request_is_dropped_files_its_line_cancelled() {
     assert_field_span_failed(&logs, "slow", nest_rs_core::operation_log::CANCELLED);
 }
 
-/// async-graphql does not catch a resolver that unwinds.
+/// async-graphql does not catch a resolver that unwinds: the field files
+/// `panic` and resumes it, and the HTTP edge answers the request as it answers
+/// a handler that unwound.
 #[tokio::test]
 async fn a_field_that_panics_files_its_line_panic() {
-    use nest_rs_graphql::async_graphql::futures_util::FutureExt;
-
     let logs = LogCapture::install();
     let app = boot().await;
 
-    let unwound = std::panic::AssertUnwindSafe(
-        app.http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ explode }" }))
-            .send(),
-    )
-    .catch_unwind()
-    .await;
-    assert!(
-        unwound.is_err(),
-        "the panic unwinds the request, as a handler's does over HTTP"
-    );
+    app.http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ explode }" }))
+        .send()
+        .await
+        .assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let filed = lines(&logs);
     assert_eq!(filed.len(), 1, "one line for the field: {filed:#?}");
@@ -469,20 +463,15 @@ fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
 /// A field that unwinds tears its siblings down with it; only it files `panic`.
 #[tokio::test]
 async fn a_field_torn_down_by_a_sibling_that_panics_files_cancelled() {
-    use nest_rs_graphql::async_graphql::futures_util::FutureExt;
-
     let logs = LogCapture::install();
     let app = boot().await;
 
-    let unwound = std::panic::AssertUnwindSafe(
-        app.http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ slow explode }" }))
-            .send(),
-    )
-    .catch_unwind()
-    .await;
-    assert!(unwound.is_err(), "the panic unwinds the request");
+    app.http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ slow explode }" }))
+        .send()
+        .await
+        .assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
 
     let filed = lines(&logs);
     let outcome = |operation: &str| {

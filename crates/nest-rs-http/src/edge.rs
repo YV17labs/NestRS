@@ -8,10 +8,12 @@
 //! never answered `100` for it, since hyper writes that on the first read.
 //!
 //! Every answer is stamped with the default headers: a `408`, `413` or `503` the
-//! edge produces, and an `Err` escaping the inner tree, which the edge renders as
-//! a problem document first. The normalizer for a raw-text error a handler
-//! answered with runs on the edge itself when it is outermost (`normalize`).
+//! edge produces, an `Err` escaping the inner tree, which the edge renders as a
+//! problem document first, and the opaque `500` it answers a handler that
+//! unwound. The normalizer for a raw-text error a handler answered with runs on
+//! the edge itself when it is outermost (`normalize`).
 
+use std::any::Any;
 use std::borrow::Cow;
 use std::future::{Future, poll_fn};
 use std::net::IpAddr;
@@ -38,6 +40,7 @@ use crate::drain::Drain;
 use crate::error::ResponseError;
 use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
+use crate::problem::ProblemDetails;
 use crate::{response_body, trace_context};
 
 /// The route template poem's router matched, as it was declared; `None` when
@@ -202,6 +205,26 @@ impl<E> EdgeEndpoint<E> {
         }
         resp
     }
+
+    /// What a request whose handler unwound is answered: the opaque `500`
+    /// every `5xx` answers, the panic said once inside the request.
+    fn unwound(
+        &self,
+        payload: &(dyn Any + Send),
+        continuation: &RequestContinuation,
+        span: &tracing::Span,
+    ) -> Response {
+        continuation.enter(|| {
+            span.in_scope(|| {
+                nest_rs_core::contained_panic!(
+                    target: crate::target::HTTP,
+                    payload,
+                    "a handler panicked; answered 500",
+                );
+            });
+        });
+        self.finish(ProblemDetails::internal().into_response())
+    }
 }
 
 impl<E> EdgeEndpoint<E>
@@ -335,15 +358,29 @@ where
 
         // The cap wraps the continuation, not part of it: its readers are extractors,
         // done before a streaming body is written. See `raw_body::with_body_limit`.
-        let resp = crate::raw_body::with_body_limit(
+        let answer = crate::raw_body::with_body_limit(
             self.body_limit,
-            self.handle(req, &continuation, arrival)
-                .instrument(span.clone()),
+            nest_rs_core::panic::contain(
+                self.handle(req, &continuation, arrival)
+                    .instrument(span.clone()),
+            ),
         )
         .await;
-        // Before the normalizer, which builds a fresh response without the
-        // matched template.
-        trace_context::name_route(&span, &method, matched_route(&resp).as_deref());
+        let (resp, outcome) = match answer {
+            Ok(resp) => {
+                // Before the normalizer, which builds a fresh response without the
+                // matched template.
+                trace_context::name_route(&span, &method, matched_route(&resp).as_deref());
+                (resp, None)
+            }
+            Err(payload) => {
+                trace_context::name_route(&span, &method, matched.route().as_deref());
+                (
+                    self.unwound(payload.as_ref(), &continuation, &span),
+                    Some(nest_rs_core::operation_log::PANIC),
+                )
+            }
+        };
         let mut resp = match self.normalize {
             true => crate::problem::normalize_error_response(resp).await,
             false => resp,
@@ -360,6 +397,7 @@ where
             continuation,
             span,
             log,
+            outcome,
             resp,
             &self.drain,
         ))
@@ -457,20 +495,27 @@ mod tests {
         panic!("the handler panicked");
     }
 
-    /// Past an await, so the panic unwinds through the edge's state rather than a drop.
+    /// Past an await, so the panic unwinds out of a poll rather than a first call.
     #[tokio::test]
-    async fn a_handler_that_panics_files_its_line_panic() {
-        use futures_util::FutureExt;
-
+    async fn a_handler_panic_answers_500_and_files_its_line_panic() {
         let logs = nest_rs_testing::LogCapture::install();
-        let ep = edge(panics_after_waiting, None, None, Vec::new());
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let unwound = std::panic::AssertUnwindSafe(TestClient::new(ep).get("/").send())
-            .catch_unwind()
-            .await;
-        std::panic::set_hook(previous);
-        assert!(unwound.is_err(), "the panic reached the caller");
+        let ep = edge(panics_after_waiting, None, None, nosniff());
+        let resp = TestClient::new(ep).get("/").send().await;
+        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        resp.assert_content_type("application/problem+json");
+        resp.assert_header("x-content-type-options", "nosniff");
+        assert!(
+            resp.0.headers().contains_key("traceresponse"),
+            "the caller can still name the trace: {:?}",
+            resp.0.headers(),
+        );
+        let body = resp
+            .0
+            .into_body()
+            .into_string()
+            .await
+            .expect("the document is text");
+        assert!(!body.contains("the handler panicked"), "{body}");
 
         let line = logs.expect_one(
             nest_rs_core::operation_log::TARGET,
@@ -481,7 +526,84 @@ mod tests {
             Some(nest_rs_core::operation_log::PANIC),
             "{line:#?}"
         );
-        assert_eq!(line.field("status"), None);
+        assert_eq!(line.field("status").as_deref(), Some("500"), "{line:#?}");
+        let errors: Vec<_> = logs
+            .events()
+            .into_iter()
+            .filter(|event| event.level == "error")
+            .collect();
+        assert_eq!(errors.len(), 1, "one event says the panic: {errors:#?}");
+        assert_eq!(errors[0].target, crate::target::HTTP);
+        assert_eq!(
+            errors[0].field(nest_rs_core::panic::FIELD).as_deref(),
+            Some("the handler panicked"),
+        );
+    }
+
+    #[tokio::test]
+    async fn with_the_access_log_off_the_span_still_says_the_request_panicked() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let container = Container::builder()
+            .provide(crate::HttpConfig {
+                access_log: false,
+                ..crate::HttpConfig::default()
+            })
+            .build();
+        let ep = EdgeEndpoint::new(
+            panics_after_waiting,
+            container,
+            None,
+            None,
+            GAP,
+            Vec::new(),
+            false,
+            false,
+            Arc::default(),
+        );
+        let resp = TestClient::new(ep).get("/").send().await;
+        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        resp.0
+            .into_body()
+            .into_string()
+            .await
+            .expect("the document is read to its end");
+
+        logs.expect_none(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        );
+        let span = logs.expect_span(crate::target::HTTP, crate::unit::REQUEST.name());
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some(nest_rs_core::operation_log::PANIC),
+            "{span:#?}"
+        );
+    }
+
+    #[handler]
+    fn panics_over_a_decode_failure() -> &'static str {
+        let parsed: u64 = serde_json::from_str(r#""sk_live_51HsecretTOKEN""#).expect("a number");
+        if parsed == 0 { "zero" } else { "some" }
+    }
+
+    #[tokio::test]
+    async fn the_logged_payload_is_redacted() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let ep = edge(panics_over_a_decode_failure, None, None, Vec::new());
+        let resp = TestClient::new(ep).get("/").send().await;
+        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+        let said = logs
+            .events()
+            .into_iter()
+            .find(|event| event.level == "error")
+            .and_then(|event| event.field(nest_rs_core::panic::FIELD))
+            .expect("the panic is said");
+        assert!(!said.contains("sk_live"), "{said}");
+        assert!(
+            said.contains("expected u64"),
+            "what failed is still said: {said}"
+        );
     }
 
     #[tokio::test]

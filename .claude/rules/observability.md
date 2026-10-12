@@ -175,11 +175,11 @@ one stopped first — by its caller, by the server at the shutdown signal, by th
 shutdown window, with its worker — and `outcome = panic` for one that unwound.
 No handler's return carries either, so the line is held by a guard dropped with
 the unit's future (code that must notice a stop can miss it), and a panic is
-contained where the unit is dispatched, unless the edge's transport takes the
-connection (an HTTP/2 stream) down with it, as HTTP's does — no unit contains
-that unwind, so the process hook files its payload, redacted. Where a client
-waits, the unwind is answered: an MCP internal error, a WS error frame with the
-socket kept, `1011` on a socket whose connect hook or subscription unwound.
+contained where the unit is dispatched. Where a client waits, the unwind is
+answered: HTTP answers it `500` with an opaque problem document and keeps the
+connection, and a body already streaming ends; MCP answers an internal error, WS
+an error frame with the socket kept, or `1011` on a socket whose connect hook or
+subscription unwound.
 
 - **`panic` names the unit that unwound, never one torn down by it.** A guard may
   read an unwind in progress (`std::thread::panicking()`) only where nothing but

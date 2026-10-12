@@ -1,7 +1,8 @@
 //! The accept loop over real loopback sockets: the connection cap, an upgraded
 //! socket holding its place under it, the HTTP/1 head cap, HTTP/2 by prior
-//! knowledge, a connection or an HTTP/2 stream task that panics, and the
-//! deadline each phase of a connection carries.
+//! knowledge, and the deadline each phase of a connection carries. A task that
+//! panics outside the edge is `src/server.rs`'s own: the edge contains every
+//! handler (`edge.rs`).
 
 use std::time::Duration;
 
@@ -16,8 +17,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::transport::{
-    PATIENCE, Serving, after, ask, connect, read_head, read_to_end, request, serve_module,
-    small_window, still_open,
+    PATIENCE, Serving, after, ask, connect, read_answer, read_head, read_to_end, request,
+    serve_module, small_window, still_open,
 };
 
 /// The line the loop files when the cap holds a connection back.
@@ -66,12 +67,6 @@ impl ServerController {
     async fn slow(&self) -> &'static str {
         tokio::time::sleep(SLOW).await;
         "slow"
-    }
-
-    #[get("/panic")]
-    #[public]
-    async fn panics(&self) -> &'static str {
-        panic!("the handler panicked")
     }
 
     #[get("/large")]
@@ -220,91 +215,6 @@ async fn h2_by_prior_knowledge_on_plaintext_reads_the_stream_cap() {
     cancel.cancel();
 }
 
-/// A panic in a connection's task drops that connection, is filed once, and
-/// leaves the server accepting.
-#[tokio::test]
-async fn a_panic_in_a_connection_is_contained_and_the_server_keeps_serving() {
-    let report = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        if info.payload().downcast_ref::<&str>() != Some(&"the handler panicked") {
-            report(info);
-        }
-    }));
-    let logs = LogCapture::install();
-    let (port, cancel) = serve(HttpConfig::default()).await;
-
-    let mut panicked = request(port, "/server/panic").await;
-    assert_eq!(read_to_end(&mut panicked).await, "", "nothing was answered");
-    let line = logs.expect_one(nest_rs_http::target::HTTP, "a connection task panicked");
-    assert_eq!(line.level, "error");
-    assert_eq!(
-        line.field(nest_rs_core::panic::FIELD).as_deref(),
-        Some("the handler panicked"),
-    );
-
-    let mut after = request(port, "/server/ping").await;
-    let head = tokio::time::timeout(PATIENCE, read_head(&mut after))
-        .await
-        .expect("the server still answers");
-    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
-    cancel.cancel();
-}
-
-/// A panic in one HTTP/2 stream's task resets that stream alone, is filed
-/// once, and the connection keeps serving its other streams.
-#[tokio::test]
-async fn a_panic_in_an_http2_stream_resets_it_and_its_connection_keeps_serving() {
-    let report = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        if info.payload().downcast_ref::<&str>() != Some(&"the handler panicked") {
-            report(info);
-        }
-    }));
-    let logs = LogCapture::install();
-    let (port, cancel) = serve(HttpConfig::default()).await;
-    let (client, connection) = h2::client::handshake(connect(port).await)
-        .await
-        .expect("the HTTP/2 preface is accepted");
-    let connection = tokio::spawn(connection);
-    let get = |path: &str| {
-        poem::http::Request::get(format!("http://127.0.0.1:{port}{path}"))
-            .body(())
-            .expect("a request")
-    };
-
-    let mut client = client.ready().await.expect("a stream can open");
-    let (panicked, _) = client
-        .send_request(get("/server/panic"), true)
-        .expect("sent");
-    let reset = tokio::time::timeout(PATIENCE, panicked)
-        .await
-        .expect("the stream ends")
-        .expect_err("a stream whose task panicked is not answered");
-    assert_eq!(reset.reason(), Some(h2::Reason::CANCEL), "{reset}");
-    let line = logs.expect_one(nest_rs_http::target::HTTP, "an HTTP/2 stream task panicked");
-    assert_eq!(line.level, "error");
-    assert_eq!(
-        line.field(nest_rs_core::panic::FIELD).as_deref(),
-        Some("the handler panicked"),
-    );
-
-    let mut client = client
-        .ready()
-        .await
-        .expect("the connection opens another stream");
-    let (after, _) = client
-        .send_request(get("/server/ping"), true)
-        .expect("sent");
-    let response = tokio::time::timeout(PATIENCE, after)
-        .await
-        .expect("the stream ends")
-        .expect("answered on the same connection");
-    assert_eq!(response.status(), 200);
-    assert!(!connection.is_finished(), "the connection keeps serving");
-    logs.expect_none(nest_rs_http::target::HTTP, "a connection task panicked");
-    cancel.cancel();
-}
-
 /// A round trip on a fresh connection: every connection opened before it has
 /// been accepted, since the loop takes them from the backlog in order.
 async fn accepted(port: u16) {
@@ -315,21 +225,9 @@ async fn accepted(port: u16) {
 /// Read one answer to `/server/ping` or `/server/hello` off a kept-alive
 /// connection, its body included: the body the route answers.
 async fn answer(stream: &mut TcpStream) -> String {
-    let head = tokio::time::timeout(PATIENCE, read_head(stream))
-        .await
-        .expect("answered");
+    let (head, body) = read_answer(stream).await;
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
-    let length: usize = head
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase()
-                .strip_prefix("content-length:")
-                .map(|value| value.trim().parse().expect("a length"))
-        })
-        .expect("a sized body");
-    let mut body = vec![0_u8; length];
-    stream.read_exact(&mut body).await.expect("the body");
-    String::from_utf8(body).expect("text")
+    body
 }
 
 /// The server's deadlines, every other setting at its default.

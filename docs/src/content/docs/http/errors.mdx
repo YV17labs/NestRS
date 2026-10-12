@@ -186,6 +186,12 @@ instead — its status, its `detail` on a `4xx`, its `code` as an extension
 member and its `Retry-After` — the same contract GraphQL, WebSockets and MCP
 answer it by (`ProblemDetails::from_problem` builds the document).
 
+A handler that panics answers that same opaque `500`, with nothing of the panic
+in it, and its connection serves the next request. The panic is filed once at
+`error` on `nest_rs::http` with where it happened, and the request's line says
+`outcome="panic"` (see [Logs](/opentelemetry/logs/#every-unit-of-work-files-one-line)).
+A streaming body that panics mid-flow cannot be finished, so it ends there.
+
 The two `ResponseError` types convert into `poem::Error`, so `?`
 propagates them through a `poem::Result` handler. `AuthError` implements
 `IntoResponse` rather than `ResponseError`: it is returned as a handler's

@@ -167,9 +167,11 @@ two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.
 
-Every one carries `duration_ms`, and every one but an answered HTTP request
-carries `outcome` (`ok` / `error` / `panic` / `cancelled`) — a request has
-`status`, which says how it ended more precisely than four words could.
+Every one carries `duration_ms`, and every one carries `outcome` (`ok` /
+`error` / `panic` / `cancelled`) but an HTTP request its handler answered to
+the end: that one has `status` instead, which says how it ended more precisely
+than four words could. A request whose handler unwound, or whose body was
+stopped or unwound, carries `outcome` beside its `status`.
 `cancelled` is a unit stopped before it settled — its caller gave up on it, the
 server ended it at the shutdown signal because it had no end of its own, or the
 shutdown window closed on it — and `panic` one that unwound. Neither comes with
@@ -177,9 +179,9 @@ a handler's return, so every edge builds both, and every edge files them:
 
 | Edge | `cancelled` | `panic` |
 |---|---|---|
-| HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — over HTTP/1 its connection goes with it (`a connection task panicked`), over HTTP/2 its stream is reset and the connection keeps serving (`an HTTP/2 stream task panicked`); one `error` on `nest_rs::http` files it beside [the process hook's](#a-panic-is-said-once-without-its-value), and the server keeps accepting |
+| HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — answered an opaque `500` (`status=500`), its connection kept (`a handler panicked; answered 500`); a body that unwound as it was written — ended there, its `status` and the `bytes` written (`a response body panicked; it ended unfinished`) |
 | WebSocket | a message or a hook still running when the window closes | a handler (its client gets an error frame), a hook (`#[on_connect]` closes the socket `1011`) |
-| GraphQL | a root field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a root field (over HTTP, the request unwinds too); a subscription (the socket closes `1011`) |
+| GraphQL | a root field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a root field (over HTTP, its request is answered `500`); a subscription (the socket closes `1011`) |
 | MCP | an operation its client cancelled or the window stopped; a `subscriptions/listen` at the signal | a tool or a notification — its client gets an internal error |
 | Queue | an attempt its worker stopped, a drain whose window closed included | an attempt whose handler unwound |
 | Events | a listener dropped with its emitter | a listener, contained; the next one runs |
@@ -199,7 +201,9 @@ with serde's quoted values cut, and where it happened under `panic_location`
 (`file:line:col`).
 
 A panic no unit catches — a task your code spawned, a value a cancelled unit
-drops, `main` itself — is one `error` on `nest_rs::app`, written by the hook:
+drops, `main` itself, or one your own code caught with `catch_unwind` inside a
+unit and never raised again — is one `error` on `nest_rs::app`, written by the
+hook:
 
 ```text frame="terminal"
 ERROR nest_rs::app: panicked where no unit of work contains it thread="tokio-rt-worker" panic=called `Result::unwrap()` on an `Err` value: Error("invalid type: a string, expected u64", line: 1, column: 24) panic_location=src/billing/service.rs:42:61

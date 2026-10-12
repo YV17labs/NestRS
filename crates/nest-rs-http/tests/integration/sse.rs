@@ -1,6 +1,6 @@
-//! `#[sse]` on a running route: the media type, the frames, the ceiling, and a
-//! peer that stops reading. Its compile-time refusals are trybuild snapshots in
-//! `nest-rs-macro-hygiene`.
+//! `#[sse]` on a running route: the media type, the frames, the ceiling, a peer
+//! that stops reading, and a stream that unwinds. Its compile-time refusals are
+//! trybuild snapshots in `nest-rs-macro-hygiene`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,7 +16,10 @@ use nest_rs_testing::LogCapture;
 use tokio::io::AsyncWriteExt;
 
 use crate::boot;
-use crate::transport::{PATIENCE, Serving, after, read_head, request, serve_module, small_window};
+use crate::transport::{
+    PATIENCE, Serving, after, connect, read_head, read_to_end, request, serve_module, small_window,
+    still_open,
+};
 
 #[controller(path = "/feed")]
 struct FeedController;
@@ -200,6 +203,205 @@ async fn a_peer_that_stops_reading_an_event_stream_is_cut_at_the_send_deadline()
         "the peer took nothing within the send deadline; it is cut off",
     );
     assert_eq!(cut.level, "warn");
+    cancel.cancel();
+}
+
+#[controller(path = "/flaky")]
+struct FlakyFeedController;
+
+#[routes]
+impl FlakyFeedController {
+    /// One event, then a panic as the stream is polled for the next — after
+    /// one wait, so the event is on the wire first.
+    #[sse("/events")]
+    #[public]
+    async fn events(&self) -> SseStream {
+        let mut polls = 0;
+        SseStream::new(stream::poll_fn(move |cx| {
+            polls += 1;
+            match polls {
+                1 => std::task::Poll::Ready(Some(SseEvent::message("one"))),
+                2 => {
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                }
+                _ => panic!("the stream panicked"),
+            }
+        }))
+    }
+
+    /// A stream with nothing to say, open on another connection meanwhile.
+    #[sse("/quiet")]
+    #[public]
+    async fn quiet(&self) -> SseStream {
+        SseStream::new(stream::pending())
+    }
+
+    /// An ordinary answer, asked on the connection a stream unwound on.
+    #[get("/ping")]
+    #[public]
+    async fn ping(&self) -> &'static str {
+        "pong"
+    }
+}
+
+#[module(providers = [FlakyFeedController])]
+struct FlakyFeedModule;
+
+/// The body's one sentence for a stream it contained.
+const ENDED: &str = "a response body panicked; it ended unfinished";
+
+/// A stream that unwinds ends its own body — over HTTP/1 the connection under
+/// it, whose framing cannot be finished — files its line `panic`, and touches
+/// no other connection.
+#[tokio::test]
+async fn a_stream_that_panics_ends_its_body_and_files_panic() {
+    let logs = LogCapture::install();
+    let Serving { port, cancel, .. } = serve_module::<FlakyFeedModule>(HttpConfig::default()).await;
+    let mut quiet = request(port, "/flaky/quiet").await;
+    let head = tokio::time::timeout(PATIENCE, read_head(&mut quiet))
+        .await
+        .expect("the quiet stream opens");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+
+    let mut flaky = request(port, "/flaky/events").await;
+    let head = tokio::time::timeout(PATIENCE, read_head(&mut flaky))
+        .await
+        .expect("the flaky stream opens");
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let rest = read_to_end(&mut flaky).await;
+    assert!(rest.contains("data: one"), "the event before it: {rest:?}");
+    assert!(
+        !rest.ends_with("0\r\n\r\n"),
+        "never framed as a stream that ended: {rest:?}"
+    );
+
+    assert!(
+        still_open(&mut quiet).await,
+        "the other connection serves on"
+    );
+    let said = logs.expect_one(nest_rs_http::target::HTTP, ENDED);
+    assert_eq!(
+        said.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the stream panicked")
+    );
+    let lines: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST.name(),
+        )
+        .into_iter()
+        .filter(|line| line.field("path").as_deref() == Some("/flaky/events"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert_eq!(
+        lines[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{:#?}",
+        lines[0]
+    );
+    assert_eq!(lines[0].field("status").as_deref(), Some("200"));
+    logs.expect_none(nest_rs_http::target::HTTP, "a connection task panicked");
+    cancel.cancel();
+}
+
+#[nest_rs_core::main]
+async fn read_the_flaky_feed() -> String {
+    let Serving { port, cancel, .. } = serve_module::<FlakyFeedModule>(HttpConfig::default()).await;
+    let mut flaky = request(port, "/flaky/events").await;
+    let head = tokio::time::timeout(PATIENCE, read_head(&mut flaky))
+        .await
+        .expect("the flaky stream opens");
+    let rest = read_to_end(&mut flaky).await;
+    cancel.cancel();
+    head + &rest
+}
+
+/// The body contains its stream's unwind under the process hook
+/// `#[nest_rs::main]` installs: its one event says where the stream panicked,
+/// and the hook stays quiet.
+#[test]
+fn a_stream_that_panics_is_said_once_where_it_panicked() {
+    // `install` would see nothing: the server answers on the worker threads.
+    let logs = LogCapture::install_global();
+
+    let served = read_the_flaky_feed();
+    // Rust's own hook back, so an assertion failing below prints.
+    drop(std::panic::take_hook());
+
+    assert!(served.contains("data: one"), "{served:?}");
+    logs.expect_none(
+        nest_rs_core::target::APP,
+        "panicked where no unit of work contains it",
+    );
+    let said = logs.expect_one(nest_rs_http::target::HTTP, ENDED);
+    assert_eq!(
+        said.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the stream panicked")
+    );
+    let location = said
+        .field(nest_rs_core::panic::LOCATION_FIELD)
+        .unwrap_or_default();
+    assert!(
+        location.contains("tests/integration/sse.rs:"),
+        "where it panicked: {said:#?}"
+    );
+}
+
+/// Over HTTP/2 a stream that unwinds resets its own stream, and the connection
+/// opens the next one.
+#[tokio::test]
+async fn a_stream_that_panics_over_http2_resets_its_stream_alone() {
+    let logs = LogCapture::install();
+    let Serving { port, cancel, .. } = serve_module::<FlakyFeedModule>(HttpConfig::default()).await;
+    let (client, connection) = h2::client::handshake(connect(port).await)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    let connection = tokio::spawn(connection);
+    let get = |path: &str| {
+        poem::http::Request::get(format!("http://127.0.0.1:{port}{path}"))
+            .body(())
+            .expect("a request")
+    };
+
+    let mut ready = client.clone().ready().await.expect("a stream can open");
+    let (answer, _) = ready
+        .send_request(get("/flaky/events"), true)
+        .expect("sent");
+    let response = tokio::time::timeout(PATIENCE, answer)
+        .await
+        .expect("the head arrives")
+        .expect("the stream opens");
+    assert_eq!(response.status(), 200);
+    let mut body = response.into_body();
+    let mut served = Vec::new();
+    let reset = loop {
+        match tokio::time::timeout(PATIENCE, body.data())
+            .await
+            .expect("the stream ends")
+        {
+            Some(Ok(chunk)) => served.extend_from_slice(&chunk),
+            Some(Err(reset)) => break reset,
+            None => panic!("finished as a stream that ended: {served:?}"),
+        }
+    };
+    let served = String::from_utf8_lossy(&served);
+    assert!(
+        served.contains("data: one"),
+        "the event before it: {served:?}"
+    );
+    assert_eq!(reset.reason(), Some(h2::Reason::INTERNAL_ERROR), "{reset}");
+
+    let mut ready = client.clone().ready().await.expect("a stream can open");
+    let (answer, _) = ready.send_request(get("/flaky/ping"), true).expect("sent");
+    let response = tokio::time::timeout(PATIENCE, answer)
+        .await
+        .expect("the stream ends")
+        .expect("answered on the same connection");
+    assert_eq!(response.status(), 200);
+    assert!(!connection.is_finished(), "the connection keeps serving");
+    logs.expect_one(nest_rs_http::target::HTTP, ENDED);
+    logs.expect_none(nest_rs_http::target::HTTP, "an HTTP/2 stream task panicked");
     cancel.cancel();
 }
 

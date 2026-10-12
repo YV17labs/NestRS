@@ -1,14 +1,14 @@
 //! The transport edge (`src/edge.rs`) through the whole composed stack rather
-//! than the layer alone: path normalization, and a handler that unwinds.
+//! than the layer alone: path normalization, and a handler that unwinds — in
+//! process, and over real sockets for the connection it leaves serving.
 
-use std::panic::AssertUnwindSafe;
-
-use futures_util::FutureExt as _;
 use nest_rs_core::module;
 use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
-use nest_rs_http::{controller, routes};
+use nest_rs_http::{HttpConfig, controller, routes};
 use nest_rs_testing::LogCapture;
 use poem::http::StatusCode;
+
+use crate::transport::{PATIENCE, Serving, ask, connect, read_answer, request, serve_module};
 
 #[controller(path = "/kitchen")]
 struct KitchenController;
@@ -105,42 +105,55 @@ impl OvenController {
     async fn bake(&self) -> &'static str {
         panic!("the oven caught fire")
     }
+
+    #[get("/timer")]
+    async fn timer(&self) -> &'static str {
+        "ding"
+    }
 }
 
 #[module(providers = [OvenController])]
 struct OvenModule;
 
+/// What the panic message says, which no answer may carry.
+const FIRE: &str = "the oven caught fire";
+
+/// The edge's one sentence for a handler it contained.
+const ANSWERED: &str = "a handler panicked; answered 500";
+
 #[nest_rs_core::main]
-async fn ask_the_oven() -> bool {
+async fn ask_the_oven() -> (StatusCode, String) {
     let client = crate::boot::<OvenModule>().await;
-    AssertUnwindSafe(client.get("/oven").send())
-        .catch_unwind()
-        .await
-        .is_err()
+    let resp = client.get("/oven").send().await;
+    let status = resp.0.status();
+    let body = resp.0.into_body().into_string().await.unwrap_or_default();
+    (status, body)
 }
 
-/// No unit contains a handler's unwind, so the process hook files it beside the
-/// request's `outcome = panic` line.
+/// The edge contains a handler's unwind under the process hook
+/// `#[nest_rs::main]` installs: one event says it, the request's line files
+/// `panic` with the `500` it answered, and the hook stays quiet.
 #[test]
-fn a_handler_that_panics_is_filed_by_the_process_hook_beside_its_line() {
+fn a_handler_that_panics_is_answered_500_and_said_once_beside_its_line() {
     let logs = LogCapture::install();
 
-    let unwound = ask_the_oven();
+    let (status, body) = ask_the_oven();
     // Rust's own hook back, so an assertion failing below prints.
     drop(std::panic::take_hook());
 
-    assert!(unwound, "the panic reached the caller");
-
-    let hook = logs.expect_one(
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!body.contains(FIRE), "{body}");
+    logs.expect_none(
         nest_rs_core::target::APP,
         "panicked where no unit of work contains it",
     );
-    assert_eq!(hook.level, "error");
-    assert_eq!(hook.field(FIELD).as_deref(), Some("the oven caught fire"));
-    let location = hook.field(LOCATION_FIELD).unwrap_or_default();
+    let said = logs.expect_one(nest_rs_http::target::HTTP, ANSWERED);
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field(FIELD).as_deref(), Some(FIRE));
+    let location = said.field(LOCATION_FIELD).unwrap_or_default();
     assert!(
         location.contains("tests/integration/edge.rs:"),
-        "where it panicked: {hook:#?}"
+        "where it panicked: {said:#?}"
     );
     let line = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
@@ -151,4 +164,75 @@ fn a_handler_that_panics_is_filed_by_the_process_hook_beside_its_line() {
         Some(nest_rs_core::operation_log::PANIC),
         "{line:#?}"
     );
+    assert_eq!(line.field("status").as_deref(), Some("500"), "{line:#?}");
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(
+        span.field("http.route").as_deref(),
+        Some("/oven"),
+        "{span:#?}"
+    );
+    assert_eq!(
+        span.field("http.response.status_code").as_deref(),
+        Some("500")
+    );
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "the span says what the line says: {span:#?}"
+    );
+}
+
+/// A panic answers its own request and leaves the connection it came on
+/// serving the next one: keep-alive is the client's, not the handler's.
+#[tokio::test]
+async fn a_panic_leaves_the_keep_alive_connection_serving() {
+    let logs = LogCapture::install();
+    let Serving { port, cancel, .. } = serve_module::<OvenModule>(HttpConfig::default()).await;
+
+    let mut stream = request(port, "/oven").await;
+    let (head, body) = read_answer(&mut stream).await;
+    assert!(head.starts_with("HTTP/1.1 500"), "{head}");
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-type: application/problem+json"),
+        "{head}"
+    );
+    assert!(!body.contains(FIRE), "{body}");
+
+    ask(&mut stream, "/oven/timer").await;
+    let (head, body) = read_answer(&mut stream).await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, "ding");
+    logs.expect_none(nest_rs_http::target::HTTP, "a connection task panicked");
+    cancel.cancel();
+}
+
+/// Over HTTP/2 the panicking stream is answered rather than reset, and the
+/// connection opens the next one.
+#[tokio::test]
+async fn a_panic_answers_its_http2_stream_500_and_the_connection_keeps_serving() {
+    let logs = LogCapture::install();
+    let Serving { port, cancel, .. } = serve_module::<OvenModule>(HttpConfig::default()).await;
+    let (client, connection) = h2::client::handshake(connect(port).await)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    let connection = tokio::spawn(connection);
+    let get = |path: &str| {
+        poem::http::Request::get(format!("http://127.0.0.1:{port}{path}"))
+            .body(())
+            .expect("a request")
+    };
+
+    for (path, status) in [("/oven", 500), ("/oven/timer", 200)] {
+        let mut ready = client.clone().ready().await.expect("a stream can open");
+        let (answer, _) = ready.send_request(get(path), true).expect("sent");
+        let response = tokio::time::timeout(PATIENCE, answer)
+            .await
+            .expect("the stream ends")
+            .expect("answered, never reset");
+        assert_eq!(response.status(), status, "{path}");
+    }
+    assert!(!connection.is_finished(), "the connection keeps serving");
+    logs.expect_none(nest_rs_http::target::HTTP, "an HTTP/2 stream task panicked");
+    cancel.cancel();
 }

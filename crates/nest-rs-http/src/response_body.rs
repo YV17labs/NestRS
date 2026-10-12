@@ -15,11 +15,13 @@
 //!
 //! A body marked [`OpenEndedBody`] is ended cleanly at the shutdown signal; any
 //! other gets the window and is cut at its close. Either way its line files
-//! `outcome = cancelled`.
+//! `outcome = cancelled`. A body whose poll unwinds ends there, with an error —
+//! the framing cannot be finished, so HTTP/1 closes its connection and HTTP/2
+//! resets its stream alone — and its line files `outcome = panic`.
 
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::io::Error as IoError;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -29,6 +31,7 @@ use http_body_util::combinators::BoxBody;
 use poem::{Body, Response};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
+use nest_rs_core::operation_log::{CANCELLED, PANIC};
 use nest_rs_core::{Continuation, RequestContinuation};
 
 use crate::access_log::AccessLog;
@@ -69,7 +72,8 @@ pub(crate) fn continue_body(mut resp: Response) -> Response {
 
 /// Attach the request to its own response body, and file the access line when
 /// the body ends: under what the handler ran under when it returned a
-/// streaming body, under `continuation` otherwise.
+/// streaming body, under `continuation` otherwise. `outcome` is the unit's when
+/// it did not settle before answering — a handler the edge caught unwinding.
 ///
 /// A body with nothing left to write — a `204`, a `304` — is handed back
 /// untouched, and the line is filed here.
@@ -77,6 +81,7 @@ pub(crate) fn carry(
     continuation: RequestContinuation,
     span: tracing::Span,
     log: Option<AccessLog>,
+    outcome: Option<&'static str>,
     resp: Response,
     drain: &Arc<Drain>,
 ) -> Response {
@@ -88,9 +93,14 @@ pub(crate) fn carry(
         .map_or(continuation, |body| body.0);
     if body.is_empty() {
         span.record("http.response.body.size", 0);
-        if let Some(log) = log {
+        match log {
             // Inside the context, outside the span — see `Carried::file`.
-            continuation.enter(|| log.emit(&span, status, 0, None));
+            Some(log) => continuation.enter(|| log.emit(&span, status, 0, outcome)),
+            None => {
+                if let Some(outcome) = outcome {
+                    nest_rs_core::operation_log::record_outcome(&span, outcome);
+                }
+            }
         }
         return Response::from_parts(parts, body);
     }
@@ -107,7 +117,8 @@ pub(crate) fn carry(
         drain: Arc::clone(drain),
         going_away,
         reached_end: false,
-        ended_at_signal: false,
+        outcome,
+        ended: false,
     };
     Response::from_parts(parts, Body::from(PoemBody::new(carried)))
 }
@@ -137,8 +148,12 @@ struct Carried {
     going_away: Option<Pin<Box<WaitForCancellationFutureOwned>>>,
     /// The inner body yielded its last frame.
     reached_end: bool,
-    /// The signal ended an [`OpenEndedBody`].
-    ended_at_signal: bool,
+    /// How the unit ended when it did not settle: the handler's unwind the
+    /// edge answered, this body's own, or the signal ending an [`OpenEndedBody`].
+    outcome: Option<&'static str>,
+    /// The body ended before its inner one did — at the signal, or on a poll
+    /// that unwound — and polls it no more.
+    ended: bool,
 }
 
 impl Carried {
@@ -148,8 +163,8 @@ impl Carried {
         self.span.record("http.response.body.size", self.counted);
         let counted = self.counted;
         let outcome = self
-            .stopped_unsettled()
-            .then_some(nest_rs_core::operation_log::CANCELLED);
+            .outcome
+            .or_else(|| self.cut_at_the_window().then_some(CANCELLED));
         match self.pending.take() {
             // The context, not the span: the line is nobody's child event.
             Some(pending) => self.continuation.enter(|| {
@@ -165,14 +180,30 @@ impl Carried {
         }
     }
 
-    /// The transport stopped this body before it ended on its own, at the
-    /// signal or at the window's close.
+    /// The transport cut this body at the window's close, before it ended on
+    /// its own.
     ///
     /// Never inferred from a drop alone: hyper drops a body it never writes (a
     /// `HEAD` answer, a `204`) without polling it.
-    fn stopped_unsettled(&self) -> bool {
-        self.ended_at_signal
-            || (!self.reached_end && !self.inner.is_end_stream() && self.drain.is_past_bound())
+    fn cut_at_the_window(&self) -> bool {
+        !self.reached_end && !self.inner.is_end_stream() && self.drain.is_past_bound()
+    }
+
+    /// End the body at a poll that unwound: the panic said once, inside the
+    /// request, and the line filed `panic` with what was written.
+    fn unwound(&mut self, payload: &(dyn std::any::Any + Send)) {
+        self.continuation.enter(|| {
+            self.span.in_scope(|| {
+                nest_rs_core::contained_panic!(
+                    target: crate::target::HTTP,
+                    payload,
+                    "a response body panicked; it ended unfinished",
+                );
+            });
+        });
+        self.ended = true;
+        self.outcome = Some(PANIC);
+        self.file();
     }
 }
 
@@ -185,8 +216,8 @@ impl HttpBody for Carried {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
-        // A body that said `None` must not hand out the stream's next event.
-        if this.ended_at_signal {
+        // A body that ended must not hand out the stream's next event.
+        if this.ended {
             return Poll::Ready(None);
         }
         // Checked before the stream, so an end is not raced by one more event.
@@ -194,7 +225,8 @@ impl HttpBody for Carried {
             && going_away.as_mut().poll(cx).is_ready()
         {
             this.going_away = None;
-            this.ended_at_signal = true;
+            this.ended = true;
+            this.outcome.get_or_insert(CANCELLED);
             this.file();
             return Poll::Ready(None);
         }
@@ -208,26 +240,36 @@ impl HttpBody for Carried {
                 ..
             } = &mut *this;
             let _entered = span.enter();
-            continuation.enter(|| Pin::new(&mut *inner).poll_frame(cx))
+            continuation.enter(|| {
+                // Contained, so the process hook leaves the panic to this body.
+                let frame = pin!(nest_rs_core::panic::contain(poll_fn(|cx| {
+                    Pin::new(&mut *inner).poll_frame(cx)
+                })));
+                frame.poll(cx)
+            })
         };
         match polled {
-            Poll::Ready(Some(Ok(frame))) => {
+            Poll::Ready(Ok(Some(Ok(frame)))) => {
                 if let Some(data) = frame.data_ref() {
                     this.counted += data.len() as u64;
                 }
                 Poll::Ready(Some(Ok(frame)))
             }
-            terminal @ Poll::Ready(_) => {
+            Poll::Ready(Ok(terminal)) => {
                 this.reached_end = true;
                 this.file();
-                terminal
+                Poll::Ready(terminal)
+            }
+            Poll::Ready(Err(payload)) => {
+                this.unwound(payload.as_ref());
+                Poll::Ready(Some(Err(IoError::other("the response body panicked"))))
             }
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn is_end_stream(&self) -> bool {
-        self.ended_at_signal || self.inner.is_end_stream()
+        self.ended || self.inner.is_end_stream()
     }
 
     fn size_hint(&self) -> SizeHint {
@@ -261,6 +303,7 @@ mod tests {
             RequestContinuation::new(None, Correlation::minted(None)),
             tracing::Span::none(),
             None,
+            None,
             response,
             drain,
         );
@@ -281,5 +324,68 @@ mod tests {
         assert!(body.frame().await.is_none(), "ended at the signal");
         assert!(body.is_end_stream());
         assert!(body.frame().await.is_none(), "and stays ended");
+    }
+
+    /// One event, then a panic on the next poll: a stream that unwinds mid-flow.
+    fn panics_after_one_event() -> Response {
+        let mut sent = false;
+        let events = futures_util::stream::poll_fn(move |_| {
+            assert!(!std::mem::replace(&mut sent, true), "the stream panicked");
+            Poll::Ready(Some(Ok::<_, IoError>(Bytes::from_static(b"data: one\n\n"))))
+        });
+        Response::builder().body(Body::from_bytes_stream(events))
+    }
+
+    #[tokio::test]
+    async fn a_body_that_panics_ends_with_an_error_and_files_its_line_panic() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let request = poem::Request::builder().uri_str("/feed").finish();
+        let carried = carry(
+            RequestContinuation::new(None, Correlation::minted(None)),
+            tracing::Span::none(),
+            Some(AccessLog::open(&request, None, std::time::Instant::now())),
+            None,
+            panics_after_one_event(),
+            &Arc::new(Drain::default()),
+        );
+        let mut body: PoemBody = carried.into_body().into();
+
+        assert!(
+            matches!(body.frame().await, Some(Ok(_))),
+            "the first event flows"
+        );
+        let ended = body.frame().await;
+        let Some(Err(error)) = ended else {
+            panic!("the panic ends the body with an error, got {ended:?}");
+        };
+        assert!(!error.to_string().contains("stream panicked"), "{error}");
+        assert!(body.frame().await.is_none(), "nothing is polled past it");
+        drop(body);
+
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        );
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::PANIC),
+            "{line:#?}"
+        );
+        assert_eq!(line.field("status").as_deref(), Some("200"));
+        assert_eq!(
+            line.field("bytes").as_deref(),
+            Some("11"),
+            "what was written"
+        );
+        let errors: Vec<_> = logs
+            .events()
+            .into_iter()
+            .filter(|event| event.level == "error")
+            .collect();
+        assert_eq!(errors.len(), 1, "one event says the panic: {errors:#?}");
+        assert_eq!(
+            errors[0].field(nest_rs_core::panic::FIELD).as_deref(),
+            Some("the stream panicked"),
+        );
     }
 }

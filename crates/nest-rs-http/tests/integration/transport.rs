@@ -247,6 +247,25 @@ pub(crate) async fn read_head(stream: &mut (impl AsyncRead + Unpin)) -> String {
     String::from_utf8(head).expect("the head is text")
 }
 
+/// One answer off a kept-alive connection, read whole: its head, and the body
+/// its `Content-Length` sizes.
+pub(crate) async fn read_answer(stream: &mut TcpStream) -> (String, String) {
+    let head = tokio::time::timeout(PATIENCE, read_head(stream))
+        .await
+        .expect("answered");
+    let length: usize = head
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(|value| value.trim().parse().expect("a length"))
+        })
+        .expect("a sized body");
+    let mut body = vec![0_u8; length];
+    stream.read_exact(&mut body).await.expect("the body");
+    (head, String::from_utf8(body).expect("text"))
+}
+
 /// Let `span` pass on the paused clock — every deadline the server armed
 /// inside it fires — then hand the clock back. The socket is then read on the
 /// real clock: a loopback byte can land after the paused one has moved on.

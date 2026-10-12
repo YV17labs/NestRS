@@ -6,11 +6,13 @@
 //!
 //! A request dropped before it answers — by the shutdown window or a client's
 //! reset — files its line [`CANCELLED`] through [`Unanswered`], with no `status`
-//! and no `bytes`; one that panics files
-//! [`PANIC`](nest_rs_core::operation_log::PANIC). An HTTP/1.1 half-close is
-//! not an abandonment: hyper runs the handler to its end.
+//! and no `bytes`. A handler that unwinds is answered `500` by the edge, and its
+//! line files [`PANIC`] with that `status`, as does a body that unwinds as it is
+//! written, with what it wrote. An HTTP/1.1 half-close is not an abandonment:
+//! hyper runs the handler to its end.
 //!
 //! [`CANCELLED`]: nest_rs_core::operation_log::CANCELLED
+//! [`PANIC`]: nest_rs_core::operation_log::PANIC
 
 use std::time::Instant;
 
@@ -49,7 +51,9 @@ impl AccessLog {
     ///
     /// An answer that ran to its end carries no `outcome`: its `status` says it.
     /// A body the transport stopped carries
-    /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+    /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED), and the answer to
+    /// an unwind, or a body that unwound,
+    /// [`PANIC`](nest_rs_core::operation_log::PANIC).
     pub(crate) fn emit(
         self,
         span: &tracing::Span,
@@ -88,7 +92,8 @@ impl AccessLog {
 /// What a request owes if it ends before it answers, held while it runs: its
 /// span named for the route it matched and recorded failed, and its line filed
 /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) — or
-/// [`PANIC`](nest_rs_core::operation_log::PANIC) if it unwinds instead.
+/// [`PANIC`](nest_rs_core::operation_log::PANIC) if an unwind the edge does not
+/// contain takes it down.
 ///
 /// Declared after everything it borrows, so a dropped request drops it first.
 pub(crate) struct Unanswered<'a> {

@@ -72,6 +72,7 @@ mod ambient;
 mod answer;
 pub mod app;
 mod app_lifecycle;
+mod backoff;
 mod budget;
 pub mod container;
 pub(crate) mod cycle_guard;
@@ -109,6 +110,7 @@ pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use ambient::{AmbientValue, Continuation, Deadline, ambient, with_ambient};
 pub use app::{App, AppBuilder, BootStep};
 pub use app_lifecycle::{AppLifecycle, AppState, StopCause};
+pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
 pub use container::{
     Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey, ProviderScope,
@@ -134,7 +136,7 @@ pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT};
 pub use module::{Collecting, DynamicModule, Module, Registering};
-pub use net::Net;
+pub use net::{Net, Unanswered, within};
 pub use opaque::{OPAQUE_CLIENT_MESSAGE, UNAVAILABLE_CLIENT_MESSAGE};
 pub use operation_log::Edge;
 pub use panic::panic_message;

@@ -1,14 +1,17 @@
 //! Covers `src/net.rs` — the boot refuses every budget at or past a net that
-//! reaches it, and only those.
+//! reaches it, and only those; and a panic [`within`] contains is the port's to
+//! file, once.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use nest_rs_core::panic::{FIELD, LOCATION_FIELD};
 use nest_rs_core::{
     App, Budget, BudgetPastNetError, Collecting, ContainerBuilder, Module, Net, Registering,
-    injectable, module,
+    Unanswered, contained_panic, injectable, module, within,
 };
+use nest_rs_testing::LogCapture;
 
 /// A resource that waits what it holds for an answer.
 struct Pool(Duration);
@@ -380,4 +383,41 @@ async fn two_budgets_of_one_resource_are_each_held() {
             .await,
     );
     assert_eq!(refused.resource, "the test pool");
+}
+
+/// A port waiting on a backend that panics, under the process hook
+/// `#[nest_rs::main]` installs, filing what `within` hands it.
+#[nest_rs_core::main]
+async fn wait_on_a_backend_that_panics() {
+    let Err(Unanswered::Panicked(payload)) = within(Duration::from_secs(1), async {
+        panic!("the backend unwound");
+    })
+    .await
+    else {
+        panic!("the unwind is the answer");
+    };
+    contained_panic!(
+        target: "nest_rs::fixture",
+        payload.as_ref(),
+        "backend panicked; denying",
+    );
+}
+
+#[test]
+fn a_panic_within_contains_is_filed_once_by_the_port_saying_where() {
+    let logs = LogCapture::install();
+
+    wait_on_a_backend_that_panics();
+    crate::rust_panic_hook();
+
+    let events = logs.events();
+    assert_eq!(events.len(), 1, "the port's line alone: {events:#?}");
+    let line = &events[0];
+    assert_eq!(line.message, "backend panicked; denying");
+    assert_eq!(line.field(FIELD).as_deref(), Some("the backend unwound"));
+    assert!(
+        line.field(LOCATION_FIELD)
+            .is_some_and(|at| at.contains("tests/integration/net.rs:")),
+        "where it panicked: {line:#?}"
+    );
 }

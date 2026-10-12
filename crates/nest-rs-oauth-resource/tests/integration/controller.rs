@@ -69,10 +69,12 @@ fn authn() -> AuthnConfig {
 }
 
 fn resource() -> OAuthResourceConfig {
-    OAuthResourceConfig::default()
-        .with_resource(RESOURCE)
-        .with_authorization_servers([ISSUER])
-        .with_scopes_supported([SCOPE])
+    OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec![ISSUER.into()],
+        scopes_supported: vec![SCOPE.into()],
+        ..Default::default()
+    }
 }
 
 #[module(

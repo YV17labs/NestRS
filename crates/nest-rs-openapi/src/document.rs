@@ -1672,7 +1672,10 @@ mod tests {
     fn global_prefix_is_declared_as_a_normalized_server_base_url() {
         for raw in ["api", "/api", "api/", "/api/"] {
             let container = Container::builder()
-                .provide(HttpConfig::default().with_global_prefix(raw))
+                .provide(HttpConfig {
+                    global_prefix: Some(raw.into()),
+                    ..HttpConfig::default()
+                })
                 .build();
             let doc = build_document(
                 &container,

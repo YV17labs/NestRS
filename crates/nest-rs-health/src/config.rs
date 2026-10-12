@@ -73,18 +73,6 @@ impl Default for HealthConfig {
 }
 
 impl HealthConfig {
-    /// Pin the per-indicator ceiling in code.
-    pub fn with_indicator_timeout(mut self, ceiling: Duration) -> Self {
-        self.indicator_timeout_ms = as_millis(ceiling);
-        self
-    }
-
-    /// Pin the probe-wide deadline in code.
-    pub fn with_probe_deadline(mut self, deadline: Duration) -> Self {
-        self.probe_deadline_ms = as_millis(deadline);
-        self
-    }
-
     /// [`indicator_timeout_ms`](Self::indicator_timeout_ms) as a [`Duration`].
     pub fn indicator_timeout(&self) -> Duration {
         Duration::from_millis(self.indicator_timeout_ms)
@@ -128,9 +116,10 @@ mod tests {
 
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
-        let pinned = HealthConfig::default()
-            .with_indicator_timeout(Duration::from_millis(120))
-            .with_probe_deadline(Duration::from_millis(300));
+        let pinned = HealthConfig {
+            indicator_timeout_ms: 120,
+            probe_deadline_ms: 300,
+        };
         let cfg = HealthConfig::from_env(
             &ConfigService::with_vars("health", [("PROBE_DEADLINE_MS", "450")]),
             pinned,
@@ -222,7 +211,10 @@ mod tests {
         }
         let pinned = HealthConfig::from_env(
             &ConfigService::with_vars("health", []),
-            HealthConfig::default().with_probe_deadline(Duration::MAX),
+            HealthConfig {
+                probe_deadline_ms: u64::MAX,
+                ..HealthConfig::default()
+            },
         )
         .expect_err("a pinned deadline past a minute")
         .to_string();

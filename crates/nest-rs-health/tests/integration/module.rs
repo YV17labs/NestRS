@@ -21,11 +21,10 @@ mod for_root {
     use std::time::Duration;
 
     fn pinned_health() -> nest_rs_health::HealthSetup {
-        HealthModule::for_root(
-            HealthConfig::default()
-                .with_indicator_timeout(Duration::from_millis(120))
-                .with_probe_deadline(Duration::from_millis(250)),
-        )
+        HealthModule::for_root(HealthConfig {
+            indicator_timeout_ms: 120,
+            probe_deadline_ms: 250,
+        })
     }
 
     #[module(imports = [pinned_health()])]

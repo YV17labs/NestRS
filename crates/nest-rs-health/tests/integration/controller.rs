@@ -84,7 +84,10 @@ mod under_a_global_prefix {
     use nest_rs_testing::{LogCapture, TestApp};
 
     fn prefixed_http() -> nest_rs_http::HttpSetup {
-        HttpModule::for_root(HttpConfig::default().with_global_prefix("/api/v1"))
+        HttpModule::for_root(HttpConfig {
+            global_prefix: Some("/api/v1".into()),
+            ..HttpConfig::default()
+        })
     }
 
     #[module(imports = [prefixed_http(), HealthModule])]

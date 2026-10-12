@@ -37,20 +37,20 @@ fn authn() -> nest_rs_authn::AuthnSetup {
 }
 
 fn discovery() -> nest_rs_oauth_resource::OAuthResourceSetup {
-    OAuthResourceModule::for_root(
-        OAuthResourceConfig::default()
-            .with_resource(RESOURCE)
-            .with_authorization_servers(["https://auth.example.com"]),
-    )
+    OAuthResourceModule::for_root(OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec!["https://auth.example.com".into()],
+        ..Default::default()
+    })
 }
 
 fn scoped_resource_server() -> nest_rs_oauth_resource::OAuthResourceSetup {
-    OAuthResourceModule::for_root(
-        OAuthResourceConfig::default()
-            .with_resource(RESOURCE)
-            .with_authorization_servers(["https://auth.example.com"])
-            .with_scopes_supported(["posts:read", REQUIRED]),
-    )
+    OAuthResourceModule::for_root(OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec!["https://auth.example.com".into()],
+        scopes_supported: vec!["posts:read".into(), REQUIRED.into()],
+        ..Default::default()
+    })
 }
 
 #[module(imports = [authn(), discovery()], providers = [EchoTool])]
@@ -226,12 +226,12 @@ async fn an_mcp_scope_denial_carries_the_same_challenge() {
 
 /// A deployment advertising `posts:read` alone while the guard demands `posts:write`.
 fn drifted_resource_server() -> nest_rs_oauth_resource::OAuthResourceSetup {
-    OAuthResourceModule::for_root(
-        OAuthResourceConfig::default()
-            .with_resource(RESOURCE)
-            .with_authorization_servers(["https://auth.example.com"])
-            .with_scopes_supported(["posts:read"]),
-    )
+    OAuthResourceModule::for_root(OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec!["https://auth.example.com".into()],
+        scopes_supported: vec!["posts:read".into()],
+        ..Default::default()
+    })
 }
 
 #[module(

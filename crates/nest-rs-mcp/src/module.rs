@@ -143,7 +143,10 @@ mod tests {
     use super::*;
 
     fn pinned_mcp() -> McpSetup {
-        McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"]))
+        McpModule::for_root(McpConfig {
+            allowed_hosts: vec!["mcp.example.com".into()],
+            ..McpConfig::default()
+        })
     }
 
     #[module(imports = [pinned_mcp()])]

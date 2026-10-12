@@ -71,11 +71,13 @@ mod tests {
     use crate::config::OAuthResourceConfig;
 
     fn metadata() -> ProtectedResourceMetadata {
-        OAuthResourceConfig::default()
-            .with_resource("https://api.example.com")
-            .with_authorization_servers(["https://auth.example.com"])
-            .into_metadata()
-            .expect("valid config")
+        OAuthResourceConfig {
+            resource: Some("https://api.example.com".into()),
+            authorization_servers: vec!["https://auth.example.com".into()],
+            ..Default::default()
+        }
+        .into_metadata()
+        .expect("valid config")
     }
 
     fn authn_with_audience(audience: Option<&str>) -> AuthnConfig {

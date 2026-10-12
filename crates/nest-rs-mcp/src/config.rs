@@ -96,15 +96,6 @@ impl Default for McpConfig {
 }
 
 impl McpConfig {
-    /// Pin the `Host` allowlist in code — the deployment's own hostnames.
-    pub fn with_allowed_hosts(
-        mut self,
-        hosts: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        self.allowed_hosts = hosts.into_iter().map(Into::into).collect();
-        self
-    }
-
     /// Translate into the SDK's config; the mount fills in `session_store` and
     /// `cancellation_token`.
     pub(crate) fn to_server_config(&self) -> StreamableHttpServerConfig {
@@ -168,7 +159,10 @@ mod tests {
 
     #[test]
     fn env_overlays_the_pinned_base_per_field() {
-        let pinned = McpConfig::default().with_allowed_hosts(["mcp.example.com"]);
+        let pinned = McpConfig {
+            allowed_hosts: vec!["mcp.example.com".into()],
+            ..McpConfig::default()
+        };
         let cfg = McpConfig::from_env(
             &ConfigService::with_vars("mcp", [("JSON_RESPONSE", "true")]),
             pinned,

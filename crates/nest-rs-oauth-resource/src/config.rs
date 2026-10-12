@@ -58,30 +58,6 @@ impl Config for OAuthResourceConfig {
 }
 
 impl OAuthResourceConfig {
-    /// Pin the canonical resource URI in code.
-    pub fn with_resource(mut self, resource: impl Into<String>) -> Self {
-        self.resource = Some(resource.into());
-        self
-    }
-
-    /// Pin the authorization server issuer list in code.
-    pub fn with_authorization_servers(
-        mut self,
-        servers: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        self.authorization_servers = servers.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Pin the advertised scope set in code.
-    pub fn with_scopes_supported(
-        mut self,
-        scopes: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        self.scopes_supported = scopes.into_iter().map(Into::into).collect();
-        self
-    }
-
     /// Validate the deployment's identity and freeze it into the document the
     /// well-known endpoint serves.
     pub fn into_metadata(self) -> Result<ProtectedResourceMetadata, AuthError> {

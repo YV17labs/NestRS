@@ -162,9 +162,10 @@ async fn an_oversized_message_is_rejected_and_closes_the_socket() {
 async fn the_socket_lifetime_ceiling_closes_the_socket() {
     let (_db, builder) = boot_builder().await;
     let app = builder
-        .provide(
-            nest_rs::ws::WsConfig::default().with_max_connection(std::time::Duration::from_secs(1)),
-        )
+        .provide(nest_rs::ws::WsConfig {
+            max_connection: Some(std::time::Duration::from_secs(1)),
+            ..Default::default()
+        })
         .build_ws()
         .await
         .expect("LiveModule serves on a real port");

@@ -466,20 +466,6 @@ impl HttpConfig {
             MAX_CONCURRENT_CONNECTIONS,
         )
     }
-
-    /// Pin the global prefix in code; empty or `"/"` collapse to `None`.
-    pub fn with_global_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.global_prefix = Some(prefix.into());
-        self
-    }
-
-    /// Pin the [`RawBody`] byte cap in code. Applies to every
-    /// extractor invocation that does not pick its own limit via
-    /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit).
-    pub fn with_max_body_bytes(mut self, n: usize) -> Self {
-        self.max_body_bytes = Some(n);
-        self
-    }
 }
 
 impl Config for HttpConfig {
@@ -856,7 +842,10 @@ mod tests {
 
     #[test]
     fn a_pinned_field_survives_a_silent_environment() {
-        let pinned = HttpConfig::default().with_global_prefix("/pinned");
+        let pinned = HttpConfig {
+            global_prefix: Some("/pinned".into()),
+            ..Default::default()
+        };
         let cfg = HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned)
             .expect("the overlay resolves");
         assert_eq!(
@@ -870,18 +859,6 @@ mod tests {
     fn default_constants_do_not_drift() {
         assert_eq!(DEFAULT_HOST, "0.0.0.0");
         assert_eq!(DEFAULT_PORT, 3000);
-    }
-
-    #[test]
-    fn with_global_prefix_pins_in_code() {
-        let cfg = HttpConfig::default().with_global_prefix("/api");
-        assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
-    }
-
-    #[test]
-    fn with_max_body_bytes_pins_in_code() {
-        let cfg = HttpConfig::default().with_max_body_bytes(64);
-        assert_eq!(cfg.max_body_bytes, Some(64));
     }
 
     #[test]

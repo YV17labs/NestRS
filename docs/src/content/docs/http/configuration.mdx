@@ -58,8 +58,8 @@ Real env always wins over the `.env` cascade.
 | `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
 | `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
 | `server_header` | `<PREFIX>_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
-| `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` (one literal path: `{` `}` or `:` `*` `<` fail the boot) | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
-| `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
+| `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` (one literal path: `{` `}` or `:` `*` `<` fail the boot) | unset ⇒ no prefix | `HttpConfig { global_prefix: Some("/api".into()), ..Default::default() }` |
+| `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig { max_body_bytes: Some(4 * 1024 * 1024), ..Default::default() }` |
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `20 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
 | `max_concurrent_connections` | `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` (`1`–`1048576`) | `10 000` | `HttpConfig { max_concurrent_connections: 50_000, ..Default::default() }` |
 | `header_read_timeout` | `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS` (seconds, `1`–`300`) | `30 s` | `HttpConfig { header_read_timeout: Duration::from_secs(10), ..Default::default() }` |
@@ -197,14 +197,17 @@ environment:
 NESTRS_HTTP__GLOBAL_PREFIX=/api
 ```
 
-or pin it in code with `with_global_prefix`:
+or pin it in code:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
-    HttpModule::for_root(HttpConfig::default().with_global_prefix("/api")),
+    HttpModule::for_root(HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..Default::default()
+    }),
 ])]
 pub struct ApiModule;
 ```

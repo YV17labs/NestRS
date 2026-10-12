@@ -48,14 +48,6 @@ impl Default for WsConfig {
     }
 }
 
-impl WsConfig {
-    /// Pin the socket-lifetime ceiling in code.
-    pub fn with_max_connection(mut self, ttl: Duration) -> Self {
-        self.max_connection = Some(ttl);
-        self
-    }
-}
-
 impl Config for WsConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let max_connection = MAX_CONNECTION
@@ -100,12 +92,6 @@ mod tests {
             WsConfig::default().max_connection,
             Some(Duration::from_secs(4 * 60 * 60)),
         );
-    }
-
-    #[test]
-    fn with_max_connection_pins_the_ceiling_in_code() {
-        let cfg = WsConfig::default().with_max_connection(Duration::from_secs(600));
-        assert_eq!(cfg.max_connection, Some(Duration::from_secs(600)));
     }
 
     #[test]
@@ -179,7 +165,10 @@ mod tests {
         for pinned in [Duration::MAX, Duration::ZERO] {
             let refused = WsConfig::from_env(
                 &ConfigService::with_vars("ws", []),
-                WsConfig::default().with_max_connection(pinned),
+                WsConfig {
+                    max_connection: Some(pinned),
+                    ..WsConfig::default()
+                },
             )
             .expect_err("a pinned ceiling outside the range")
             .to_string();

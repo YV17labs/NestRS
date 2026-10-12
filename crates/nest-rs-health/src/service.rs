@@ -508,9 +508,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn indicators_run_concurrently_so_the_probe_costs_the_slowest_one() {
         let container = Container::builder().build();
-        let config = HealthConfig::default()
-            .with_indicator_timeout(Duration::from_secs(30))
-            .with_probe_deadline(Duration::from_secs(60));
+        let config = HealthConfig {
+            indicator_timeout_ms: 30_000,
+            probe_deadline_ms: 60_000,
+        };
         let slow: IndicatorRun = |_| {
             Box::pin(async {
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -541,9 +542,10 @@ mod tests {
     async fn the_probe_deadline_bounds_a_check_that_would_outlive_the_kubelet() {
         let logs = nest_rs_testing::LogCapture::install();
         let container = Container::builder().build();
-        let config = HealthConfig::default()
-            .with_indicator_timeout(Duration::from_secs(300))
-            .with_probe_deadline(Duration::from_millis(900));
+        let config = HealthConfig {
+            indicator_timeout_ms: 300_000,
+            probe_deadline_ms: 900,
+        };
         let entries = [
             entry("fast", |_| Box::pin(async { Ok(()) })),
             entry("hang", |_| {
@@ -584,7 +586,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_report_is_ordered_by_name_not_by_completion() {
         let container = Container::builder().build();
-        let config = HealthConfig::default().with_probe_deadline(Duration::from_secs(60));
+        let config = HealthConfig {
+            probe_deadline_ms: 60_000,
+            ..HealthConfig::default()
+        };
         let entries = [
             entry("zulu", |_| Box::pin(async { Ok(()) })),
             entry("alpha", |_| {

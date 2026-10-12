@@ -44,9 +44,10 @@ mod tests {
     }
 
     fn pinned_ws() -> WsSetup {
-        WsModule::for_root(
-            WsConfig::default().with_max_connection(std::time::Duration::from_secs(42)),
-        )
+        WsModule::for_root(WsConfig {
+            max_connection: Some(std::time::Duration::from_secs(42)),
+            ..WsConfig::default()
+        })
     }
 
     #[module(imports = [pinned_ws()])]

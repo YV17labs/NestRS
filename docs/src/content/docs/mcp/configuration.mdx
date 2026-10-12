@@ -13,7 +13,10 @@ on the defaults.
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [
     HttpModule::for_root(None),
-    McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    McpModule::for_root(McpConfig {
+        allowed_hosts: vec!["mcp.example.com".into()],
+        ..Default::default()
+    }),
 ])]
 pub struct AssistantModule;
 ```
@@ -24,7 +27,10 @@ out when you need both:
 
 ```rust title="apps/api/src/module.rs"
 McpModule::for_root(McpOptions {
-    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    config: Some(McpConfig {
+        allowed_hosts: vec!["mcp.example.com".into()],
+        ..Default::default()
+    }),
     server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
 }),
 ```

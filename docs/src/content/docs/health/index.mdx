@@ -151,14 +151,14 @@ rather than their sum, and adding a fifth indicator does not move the
 response's worst case.
 
 ```rust title="apps/api/src/module.rs"
-use std::time::Duration;
 use nest_rs::core::module;
 use nest_rs::health::{HealthConfig, HealthModule};
 
 #[module(imports = [
-    HealthModule::for_root(
-        HealthConfig::default().with_probe_deadline(Duration::from_millis(400)),
-    ),
+    HealthModule::for_root(HealthConfig {
+        probe_deadline_ms: 400,
+        ..Default::default()
+    }),
 ])]
 pub struct ApiModule;
 ```

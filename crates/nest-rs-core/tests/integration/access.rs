@@ -9,6 +9,8 @@ use nest_rs_core::{
     ProviderScope, ReachableProviders, Registering, ScopeViolationError, injectable, module,
 };
 
+use crate::refused_on_both_paths;
+
 struct AbsentDep;
 
 #[expect(
@@ -618,13 +620,7 @@ struct MixedScopeCycleRoot;
 
 /// The cycle booting `M` fails with, on both paths, each the same.
 async fn cycle_of<M: nest_rs_core::Module>() -> ProviderCycleError {
-    let Err(sync) = App::new::<M>() else {
-        panic!("a cycle no request could resolve boots on `App::new`");
-    };
-    let Err(built) = App::builder().module::<M>().build().await else {
-        panic!("a cycle no request could resolve boots on `App::builder()`");
-    };
-    let [sync, built] = [sync, built].map(|refused| {
+    let [sync, built] = refused_on_both_paths::<M>().await.map(|refused| {
         refused
             .downcast::<ProviderCycleError>()
             .unwrap_or_else(|refused| panic!("not the cycle refusal: {refused:#}"))

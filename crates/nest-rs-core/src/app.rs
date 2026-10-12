@@ -197,11 +197,11 @@ fn check_unbuilt_providers(
         return Ok(());
     };
     let (module, module_name) = stall.module;
-    let keys: Vec<TypeId> = stall.missing.iter().map(|(key, _)| *key).collect();
+    let (keys, missing): (Vec<TypeId>, _) = stall.missing.iter().copied().unzip();
     Err(UnbuiltProviderError {
         module: module_name,
         provider: stall.provider,
-        missing: stall.missing.iter().map(|(_, name)| *name).collect(),
+        missing,
         cause: unbuilt_cause(reached, module, &keys),
     }
     .into())

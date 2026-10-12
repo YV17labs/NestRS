@@ -195,10 +195,7 @@ pub(crate) fn validate_access_graph(
         let mut closure_keys = HashSet::new();
         for import_id in reachable(&[*module_id], &by_id) {
             if let Some(imported) = by_id.get(&import_id) {
-                for p in imported.providers {
-                    closure_keys.insert((p.provides)());
-                    closure_keys.extend((p.also_provides)().into_iter().map(|(key, _)| key));
-                }
+                closure_keys.extend(imported.providers.iter().flat_map(provided_keys));
             }
         }
 
@@ -394,11 +391,7 @@ impl<'a> ProviderGraph<'a> {
                     nodes.push((*module, p));
                     nodes.len() - 1
                 });
-                node_of.extend(
-                    std::iter::once((p.provides)())
-                        .chain((p.also_provides)().into_iter().map(|(key, _)| key))
-                        .map(|key| (key, node)),
-                );
+                node_of.extend(provided_keys(p).map(|key| (key, node)));
             }
         }
         let edges = nodes
@@ -453,7 +446,11 @@ fn provider_name(provider: &ProviderDescriptor) -> &'static str {
 /// The first cycle a depth-first walk from `start` closes, as the nodes from
 /// the one it returns to, that one repeated last; `done` marks the nodes no
 /// cycle passes through, across calls.
-fn cycle_from(start: usize, edges: &[Vec<usize>], done: &mut [bool]) -> Option<Vec<usize>> {
+pub(crate) fn cycle_from(
+    start: usize,
+    edges: &[Vec<usize>],
+    done: &mut [bool],
+) -> Option<Vec<usize>> {
     if done[start] {
         return None;
     }
@@ -494,7 +491,13 @@ pub(crate) fn unbuilt_cause(
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         reached.iter().map(|d| ((d.module)(), *d)).collect();
     for key in missing {
-        for owner in reached.iter().filter(|d| provides(d, *key)) {
+        let owners = reached.iter().filter(|d| {
+            d.providers
+                .iter()
+                .flat_map(provided_keys)
+                .any(|k| k == *key)
+        });
+        for owner in owners {
             let owner_id = (owner.module)();
             if owner_id == stalled {
                 continue;
@@ -519,12 +522,11 @@ pub(crate) fn unbuilt_cause(
     UnbuiltCause::RegisteredLater
 }
 
-/// Whether one of `module`'s providers registers `key`.
-fn provides(module: &ModuleDescriptor, key: TypeId) -> bool {
-    module
-        .providers
-        .iter()
-        .any(|p| (p.provides)() == key || (p.also_provides)().iter().any(|(also, _)| *also == key))
+/// Every key `provider` registers: its own, then each it registers on its
+/// module's behalf.
+fn provided_keys(provider: &ProviderDescriptor) -> impl Iterator<Item = TypeId> {
+    std::iter::once((provider.provides)())
+        .chain((provider.also_provides)().into_iter().map(|(key, _)| key))
 }
 
 /// The shortest import path from `from` to `to`, both included, along

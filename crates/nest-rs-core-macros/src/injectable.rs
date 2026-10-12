@@ -58,15 +58,18 @@ pub(crate) fn provider(
         matches!(scope, InjectableScope::Singleton),
     );
 
-    let (dependencies, dependency_names, optional_dependencies, register_fn) = match scope {
+    let (
+        dependencies,
+        dependency_names,
+        optional_dependencies,
+        optional_dependency_names,
+        register_fn,
+    ) = match scope {
         InjectableScope::Singleton => (
             dependencies_method(&dep_keys),
             dependency_names_method(&dep_names),
-            {
-                let keys = optional_dependencies_method(&opt_keys);
-                let names = optional_dependency_names_method(&opt_names);
-                quote! { #keys #names }
-            },
+            optional_dependencies_method(&opt_keys),
+            optional_dependency_names_method(&opt_names),
             quote! {
                 fn register(
                     builder: ::nest_rs_core::ContainerBuilder,
@@ -82,6 +85,7 @@ pub(crate) fn provider(
             dependencies_method(&[]),
             dependency_names_method(&[]),
             optional_dependencies_method(&[]),
+            optional_dependency_names_method(&[]),
             quote! {
                 fn register(
                     builder: ::nest_rs_core::ContainerBuilder,
@@ -96,6 +100,7 @@ pub(crate) fn provider(
             dependencies_method(&[]),
             dependency_names_method(&[]),
             optional_dependencies_method(&[]),
+            optional_dependency_names_method(&[]),
             quote! {
                 fn register(
                     builder: ::nest_rs_core::ContainerBuilder,
@@ -120,6 +125,7 @@ pub(crate) fn provider(
             #dependencies
             #dependency_names
             #optional_dependencies
+            #optional_dependency_names
             #injected
             #injected_names
             #injected_keyed

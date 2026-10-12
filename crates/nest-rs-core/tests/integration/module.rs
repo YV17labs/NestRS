@@ -13,6 +13,8 @@ use nest_rs_core::{
     UnbuiltProviderError, injectable, module,
 };
 
+use crate::refused_on_both_paths;
+
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 
 struct Installed(usize);
@@ -217,17 +219,6 @@ async fn a_module_imported_in_a_register_alone_fails_the_boot_naming_what_it_ope
         .downcast_ref::<LateFactoryError>()
         .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
     assert!(late.type_name.ends_with("Opened"), "{late:?}");
-}
-
-/// The boot of `M` on both paths, each expected to fail.
-async fn refused_on_both_paths<M: Module>() -> [anyhow::Error; 2] {
-    let Err(sync) = App::new::<M>() else {
-        panic!("`App::new` boots {}", std::any::type_name::<M>());
-    };
-    let Err(built) = App::builder().module::<M>().build().await else {
-        panic!("`App::builder()` boots {}", std::any::type_name::<M>());
-    };
-    [sync, built]
 }
 
 #[injectable]

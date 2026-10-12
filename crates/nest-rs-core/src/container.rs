@@ -1297,7 +1297,7 @@ pub(crate) mod __private {
     use std::sync::PoisonError;
 
     use super::{Container, ContainerBuilder, ImportSite};
-    use crate::access::labelled;
+    use crate::access::{cycle_from, labelled};
     use crate::layer_chain::__private::SiteChains;
     use crate::module::{Collecting, DynamicModule, Registering};
 
@@ -1488,29 +1488,26 @@ pub(crate) mod __private {
 
     /// The first cycle among the `cyclic` providers, in the order each waits on
     /// the next, its first provider repeated last: walked from the first of
-    /// them along each one's first wait on another, until a provider repeats.
+    /// them along each one's waits on the others, in order.
     fn cycle_chain(
         stalled: &[StalledProvider],
         waits: &[Vec<(TypeId, &'static str)>],
         cyclic: &[bool],
     ) -> Option<Vec<&'static str>> {
-        let next = |i: usize| {
-            waits[i].iter().find_map(|(id, _)| {
-                (0..stalled.len()).find(|j| cyclic[*j] && stalled[*j].provides.contains(id))
-            })
+        let provider_on_cycle = |id: &TypeId| {
+            (0..stalled.len()).find(|j| cyclic[*j] && stalled[*j].provides.contains(id))
         };
-        let mut walked: Vec<usize> = vec![cyclic.iter().position(|on_cycle| *on_cycle)?];
-        loop {
-            let at = *walked.last()?;
-            let to = next(at)?;
-            if let Some(start) = walked.iter().position(|seen| *seen == to) {
-                let mut chain: Vec<&'static str> =
-                    walked[start..].iter().map(|i| stalled[*i].name).collect();
-                chain.push(stalled[to].name);
-                return Some(chain);
-            }
-            walked.push(to);
-        }
+        let edges: Vec<Vec<usize>> = waits
+            .iter()
+            .map(|wait| {
+                wait.iter()
+                    .filter_map(|(id, _)| provider_on_cycle(id))
+                    .collect()
+            })
+            .collect();
+        let start = cyclic.iter().position(|on_cycle| *on_cycle)?;
+        let cycle = cycle_from(start, &edges, &mut vec![false; stalled.len()])?;
+        Some(cycle.into_iter().map(|i| stalled[i].name).collect())
     }
 
     /// Which of `stalled` wait on each other in a cycle — or on one that does:

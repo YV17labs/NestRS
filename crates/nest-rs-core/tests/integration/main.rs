@@ -32,8 +32,19 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use nest_rs_core::{Container, Transport};
+use nest_rs_core::{App, Container, Module, Transport};
 use tokio_util::sync::CancellationToken;
+
+/// The boot of `M` on both paths, each expected to fail.
+pub(crate) async fn refused_on_both_paths<M: Module>() -> [anyhow::Error; 2] {
+    let Err(sync) = App::new::<M>() else {
+        panic!("`App::new` boots {}", std::any::type_name::<M>());
+    };
+    let Err(built) = App::builder().module::<M>().build().await else {
+        panic!("`App::builder()` boots {}", std::any::type_name::<M>());
+    };
+    [sync, built]
+}
 
 /// A transport whose `serve` fails at once, as if its listener broke.
 pub(crate) struct Failing;

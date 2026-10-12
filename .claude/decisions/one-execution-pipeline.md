@@ -114,7 +114,10 @@ yet; the app's two lists are reached through `__private` until
   rather than a box: a `Bare` site runs its tail inline and allocates nothing,
   a `GateOnly` one boxes its guard stage alone, and only a `Layered` one boxes
   the tail, since `Next` must hold it erased. What is instantiated per tail is
-  the shape switch; the stages are written once, behind the box.
+  the shape switch; the stages are written once, behind the box. The switch
+  is a future of its own, never an `async fn`, as the ambient installs are: a
+  debug build would size its one resume frame for every arm's copy of the
+  tail and keep it on the stack while the tail runs.
 - **What a site folds of the app-wide layers is three switches**
   (`GlobalLayers`: the unit stage, the app's exception filters, the handler
   stage's app-wide interceptors), not one "nested" flag: a GraphQL root field

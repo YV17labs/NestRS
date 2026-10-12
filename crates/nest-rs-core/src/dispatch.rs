@@ -9,6 +9,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, ready};
 
 use crate::ambient::install_pending;
 use crate::container::Container;
@@ -64,23 +65,98 @@ pub type ClassGate = for<'b> fn(&mut UnitContext<'b>) -> Result<(), Failure>;
 /// A `Bare` site runs the tail alone and allocates nothing; a `GateOnly` one
 /// runs the guard stage and the gate inline before it; a `Layered` one runs
 /// every stage, holding the tail behind one box.
-pub async fn dispatch<T: Tail>(
-    cx: &mut UnitContext<'_>,
-    chains: &UnitChains,
-    tail: &mut T,
-) -> Outcome {
+pub fn dispatch<'a, 'u, T: Tail>(
+    cx: &'a mut UnitContext<'u>,
+    chains: &'a UnitChains,
+    tail: &'a mut T,
+) -> impl Future<Output = Outcome> + Send {
     match chains.shape() {
-        Shape::Bare => tail.call(cx).await,
-        Shape::GateOnly => {
-            pass_gates(cx, chains).await?;
-            install_pending(take_pending(cx), tail.call(cx)).await
-        }
-        Shape::Layered => {
-            Next::new(&chains.unit_stage, Rest::Unit { chains, tail })
-                .run(cx)
-                .await
+        Shape::Bare => Dispatch::Bare {
+            tail: tail.call(cx),
+        },
+        Shape::GateOnly => Dispatch::Gating {
+            gates: gates_passed(cx, chains, tail),
+            then: gated::<T>,
+        },
+        Shape::Layered => Dispatch::Layered {
+            stages: Next::new(&chains.unit_stage, Rest::Unit { chains, tail }).run(cx),
+        },
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// [`dispatch`]'s future, one variant per shape.
+    ///
+    /// Not an `async fn`: a debug build reserves every arm's copy of the tail
+    /// in one poll frame, which stays on the stack while the tail runs. A
+    /// `GateOnly` site builds its tail in a frame of its own once the gates
+    /// passed, as the ambient context's `Install` does.
+    #[project = DispatchProj]
+    #[project_replace = DispatchOwned]
+    enum Dispatch<F, G, C, I, L> {
+        Bare { #[pin] tail: F },
+        Gating { #[pin] gates: G, then: fn(C) -> I },
+        Gated { #[pin] tail: I },
+        Layered { #[pin] stages: L },
+        Building,
+    }
+}
+
+impl<F, G, C, I, L> Dispatch<F, G, C, I, L> {
+    /// Build the tail of a `GateOnly` site from what its gates handed back, in
+    /// a frame of its own: the copies of the tail this makes are off the stack
+    /// before it is polled.
+    #[inline(never)]
+    fn start(mut self: Pin<&mut Self>, passed: C) {
+        if let DispatchOwned::Gating { then, .. } = self.as_mut().project_replace(Self::Building) {
+            self.set(Self::Gated { tail: then(passed) });
         }
     }
+}
+
+impl<F, G, C, I, L> Future for Dispatch<F, G, C, I, L>
+where
+    F: Future<Output = Outcome>,
+    G: Future<Output = Result<C, Failure>>,
+    I: Future<Output = Outcome>,
+    L: Future<Output = Outcome>,
+{
+    type Output = Outcome;
+
+    fn poll(mut self: Pin<&mut Self>, task: &mut Context<'_>) -> Poll<Outcome> {
+        if let DispatchProj::Gating { gates, .. } = self.as_mut().project() {
+            match ready!(gates.poll(task)) {
+                Ok(passed) => self.as_mut().start(passed),
+                Err(refused) => return Poll::Ready(Err(refused)),
+            }
+        }
+        match self.project() {
+            DispatchProj::Bare { tail } => tail.poll(task),
+            DispatchProj::Gated { tail } => tail.poll(task),
+            DispatchProj::Layered { stages } => stages.poll(task),
+            DispatchProj::Gating { .. } | DispatchProj::Building => {
+                unreachable!("a dispatch is polled again after building its tail panicked")
+            }
+        }
+    }
+}
+
+/// A `GateOnly` site's guard stage and class gate, handing back what its tail
+/// is built from once they passed.
+async fn gates_passed<'a, 'u, T>(
+    cx: &'a mut UnitContext<'u>,
+    chains: &UnitChains,
+    tail: &'a mut T,
+) -> Result<(&'a mut UnitContext<'u>, &'a mut T), Failure> {
+    pass_gates(cx, chains).await?;
+    Ok((cx, tail))
+}
+
+/// A `GateOnly` site's tail, with what its guards attached made ambient.
+fn gated<'a, 'u, T: Tail>(
+    (cx, tail): (&'a mut UnitContext<'u>, &'a mut T),
+) -> impl Future<Output = Outcome> {
+    install_pending(take_pending(cx), tail.call(cx))
 }
 
 /// The guard stage, then the class gate. A refused unit keeps nothing they
@@ -128,6 +204,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::ambient::Pending;
     use crate::container::ContainerBuilder;
     use crate::exception_filter::GlobalExceptionFilters;
     use crate::interceptor::__private::{InterceptorStage, register_interceptor};
@@ -654,11 +731,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_bare_site_runs_its_tail_alone_and_allocates_nothing() {
-        let container = Container::default();
+    fn bare() -> UnitChains {
         let chains = composed(
-            &container,
+            &Container::default(),
             &SiteDeclaration {
                 layers: SiteLayers::default,
                 global: GlobalLayers::ALL,
@@ -667,6 +742,12 @@ mod tests {
             },
         );
         assert_eq!(chains.shape(), Shape::Bare);
+        chains
+    }
+
+    #[test]
+    fn a_bare_site_runs_its_tail_alone_and_allocates_nothing() {
+        let chains = bare();
         let mut view = TrailView::new();
         let mut cx = new_unit_context(&SEND, &mut view, None, None);
         let mut tail = Counted::default();
@@ -687,41 +768,119 @@ mod tests {
         assert_eq!(steps, ["guards", "gate", "handler"]);
     }
 
-    /// A tail holding this many bytes across an await.
+    /// Bytes a tail holds across an await: enough that a copy of it shows.
     const HELD: usize = 32 * 1024;
 
-    /// What the pipeline may add around the tail: its own state, never a second
-    /// copy of the tail.
+    /// What the pipeline may add around the tail, its own state and frames,
+    /// never a second copy of the tail.
     const DISPATCH_OVERHEAD: usize = 1024;
 
-    struct Heavy;
+    /// Where the stack stands in the frame that calls it.
+    #[inline(never)]
+    fn stack_mark() -> usize {
+        let mark = 0u8;
+        std::hint::black_box(&mark) as *const u8 as usize
+    }
 
-    impl Tail for Heavy {
+    /// A tail holding `N` bytes across an await, marking where the stack stood
+    /// once it resumed.
+    #[derive(Default)]
+    struct Heavy<const N: usize> {
+        resumed_at: usize,
+    }
+
+    impl<const N: usize> Tail for Heavy<N> {
         async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
-            let held = [0u8; HELD];
+            let held = [0u8; N];
             tokio::task::yield_now().await;
             std::hint::black_box(&held);
+            self.resumed_at = stack_mark();
             Ok(settled())
         }
     }
 
+    /// How much deeper a [`Heavy`] tail resumes when `chains` dispatch it than
+    /// when it is awaited alone, from the same frame.
+    async fn deeper_than_alone<const N: usize>(chains: &UnitChains) -> usize {
+        let mut view = TrailView::new();
+        let mut cx = new_unit_context(&SEND, &mut view, None, None);
+        let mut tail = Heavy::<N>::default();
+        assert!(tail.call(&mut cx).await.is_ok());
+        let alone = tail.resumed_at;
+        assert!(dispatch(&mut cx, chains, &mut tail).await.is_ok());
+        alone.saturating_sub(tail.resumed_at)
+    }
+
+    #[tokio::test]
+    async fn a_bare_dispatch_resumes_its_tail_no_deeper_than_awaited_alone() {
+        let deeper = deeper_than_alone::<HELD>(&bare()).await;
+        assert!(
+            deeper < DISPATCH_OVERHEAD,
+            "a bare dispatch resumes a {HELD}-byte tail {deeper} bytes deeper than alone",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gate_only_dispatch_resumes_its_tail_no_deeper_than_awaited_alone() {
+        let deeper = deeper_than_alone::<HELD>(&gate_only(admitting, Some(recording_gate))).await;
+        assert!(
+            deeper < DISPATCH_OVERHEAD,
+            "a gate-only dispatch resumes a {HELD}-byte tail {deeper} bytes deeper than alone",
+        );
+
+        let mut view = TrailView::new();
+        let mut cx = new_unit_context(&SEND, &mut view, None, None);
+        let mut tail = Heavy::<HELD>::default();
+        let mut attached = Pending::default();
+        attached.attach(Arc::new(Attached("by a guard")));
+        assert!(install_pending(attached, tail.call(&mut cx)).await.is_ok());
+        let installed = tail.resumed_at;
+        let chains = gate_only(attaching_and_admitting, Some(recording_gate));
+        assert!(dispatch(&mut cx, &chains, &mut tail).await.is_ok());
+        let deeper = installed.saturating_sub(tail.resumed_at);
+        assert!(
+            deeper < DISPATCH_OVERHEAD,
+            "a gate-only dispatch resumes a {HELD}-byte tail {deeper} bytes deeper than the \
+             install of what its guards attached",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_layered_dispatch_reaches_as_deep_whatever_its_tail_holds() {
+        let container = ContainerBuilder::default()
+            .provide(Declining)
+            .provide(GlobalExceptionFilters(vec![
+                exception_filter::<Declining>().0,
+            ]))
+            .build();
+        let chains = composed(
+            &container,
+            &SiteDeclaration {
+                layers: SiteLayers::default,
+                global: GlobalLayers::ALL,
+                guard_stage: None,
+                class_gate: None,
+            },
+        );
+        assert_eq!(chains.shape(), Shape::Layered);
+        let held = deeper_than_alone::<HELD>(&chains).await;
+        let twice = deeper_than_alone::<{ 2 * HELD }>(&chains).await;
+        // The stages' own frames are a fixed cost; the tail sits behind its box.
+        assert!(
+            held < HELD && held.abs_diff(twice) < DISPATCH_OVERHEAD,
+            "a layered dispatch resumes a {HELD}-byte tail {held} bytes deeper than alone, \
+             and one twice that size {twice} bytes deeper",
+        );
+    }
+
     #[test]
     fn a_dispatch_holds_the_tail_it_runs_once() {
-        let container = Container::default();
-        for guard_stage in [None, Some(admitting as GuardStageFactory)] {
-            let chains = composed(
-                &container,
-                &SiteDeclaration {
-                    layers: SiteLayers::default,
-                    global: GlobalLayers::ALL,
-                    guard_stage,
-                    class_gate: None,
-                },
-            );
+        for chains in [bare(), gate_only(admitting, None)] {
             let mut view = TrailView::new();
             let mut cx = new_unit_context(&SEND, &mut view, None, None);
-            let alone = std::mem::size_of_val(&Heavy.call(&mut cx));
-            let dispatched = std::mem::size_of_val(&dispatch(&mut cx, &chains, &mut Heavy));
+            let alone = std::mem::size_of_val(&Heavy::<HELD>::default().call(&mut cx));
+            let dispatched =
+                std::mem::size_of_val(&dispatch(&mut cx, &chains, &mut Heavy::<HELD>::default()));
             assert!(
                 dispatched < alone + DISPATCH_OVERHEAD,
                 "a {:?} dispatch weighs {dispatched} bytes around a {alone}-byte tail",
@@ -733,16 +892,7 @@ mod tests {
     #[test]
     fn a_dispatch_is_send_whatever_its_shape() {
         fn send<T: Send>(_: &T) {}
-        let container = Container::default();
-        let chains = composed(
-            &container,
-            &SiteDeclaration {
-                layers: SiteLayers::default,
-                global: GlobalLayers::ALL,
-                guard_stage: None,
-                class_gate: None,
-            },
-        );
+        let chains = bare();
         let mut view = TrailView::new();
         let mut cx = new_unit_context(&SEND, &mut view, None, None);
         send(&dispatch(&mut cx, &chains, &mut RecordingTail::ok()));

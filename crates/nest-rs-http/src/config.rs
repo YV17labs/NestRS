@@ -178,6 +178,9 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 10_000;
 /// The key of [`HttpConfig::max_concurrent_connections`].
 const MAX_CONCURRENT_CONNECTIONS: &str = "MAX_CONCURRENT_CONNECTIONS";
 
+/// The key of [`HttpConfig::version_header`].
+const VERSION_HEADER: &str = "VERSION_HEADER";
+
 const CONNECTIONS_FLOOR: Bound = Bound {
     count: 1,
     why: "a cap of none binds the port and never accepts a connection",
@@ -226,7 +229,8 @@ pub struct HttpConfig {
     pub versioning: ApiVersioning,
     /// The header [`ApiVersioning::Header`] reads. Defaults to
     /// `X-API-Version`; read from `<PREFIX>_HTTP__VERSION_HEADER`. Ignored by the
-    /// other two strategies.
+    /// other two strategies, but a value that is no HTTP header name fails the
+    /// boot under any, from the environment and from the pinned struct alike.
     pub version_header: String,
     /// The version served to a caller that states none. `None` (the default)
     /// leaves such a request on the unversioned routes. Read from
@@ -402,12 +406,20 @@ impl Default for HttpConfig {
 
 impl HttpConfig {
     /// The version selector this configuration describes, or `None` under the
-    /// URI strategy, which routing resolves. The header name is validated at
-    /// boot ([`Config::from_env`]).
-    pub(crate) fn version_selector(&self) -> Option<VersionSelector> {
-        let header = HeaderName::from_bytes(self.version_header.as_bytes()).ok()?;
+    /// URI strategy, which routing resolves;
+    /// [`version_header`](Self::version_header) is refused as its variable is,
+    /// whatever the strategy, for a config that never met the environment.
+    pub(crate) fn version_selector(&self) -> Result<Option<VersionSelector>> {
+        let header = header_name(
+            nest_rs_config::var_name(
+                <Self as nest_rs_config::Namespaced>::NAMESPACE,
+                VERSION_HEADER,
+            ),
+            &self.version_header,
+            "",
+        )?;
         let selector = VersionSelector::new(self.versioning, header, self.default_version.clone());
-        selector.rewrites().then_some(selector)
+        Ok(selector.rewrites().then_some(selector))
     }
 
     /// [`max_concurrent_connections`](Self::max_concurrent_connections), held to
@@ -613,14 +625,31 @@ fn optional(read: Option<nest_rs_config::BoundedDuration>) -> Option<Duration> {
     read.map(|read| read.value)
 }
 
-/// The header the [`ApiVersioning::Header`] strategy reads, validated at boot.
+/// The header the [`ApiVersioning::Header`] strategy reads, refused from either
+/// side when it is no HTTP header name.
 fn version_header(env: &ConfigService, base: String) -> Result<String> {
-    let Some(raw) = env.setting("VERSION_HEADER")? else {
+    let Some(raw) = env.setting(VERSION_HEADER)? else {
+        header_name(env.var_name(VERSION_HEADER), &base, "is not set, and ")?;
         return Ok(base);
     };
     match HeaderName::from_bytes(raw.value.as_bytes()) {
         Ok(_) => Ok(raw.value),
         Err(_) => Err(raw.refuse("is not a valid HTTP header name")),
+    }
+}
+
+/// `name`, [`HttpConfig::version_header`] set in code, refused under `var` when
+/// it is no HTTP header name, and never quoted; `lead` opens the sentence with
+/// what is known of the variable.
+fn header_name(var: String, name: &str, lead: &str) -> Result<HeaderName> {
+    match HeaderName::from_bytes(name.as_bytes()) {
+        Ok(header) => Ok(header),
+        Err(_) => Err(nest_rs_config::ConfigError::parse(
+            var,
+            format!(
+                "{lead}`HttpConfig::version_header` set in code is not a valid HTTP header name"
+            ),
+        )),
     }
 }
 
@@ -1084,6 +1113,43 @@ mod tests {
         )
         .expect("the variable overrides the pin");
         assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
+    }
+
+    /// Refused whatever the strategy and never quoted, while the variable is
+    /// silent and by the selector a config built in code describes; a set
+    /// variable overrides the pin.
+    #[test]
+    fn a_pinned_version_header_that_is_no_header_name_is_refused_naming_the_field() {
+        let var = nest_rs_config::var_name("http", "VERSION_HEADER");
+        for versioning in [ApiVersioning::Header, ApiVersioning::Uri] {
+            let pinned = HttpConfig {
+                versioning,
+                version_header: "X S3cr3t".into(),
+                ..Default::default()
+            };
+            for refused in [
+                HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                    .expect_err("refused")
+                    .to_string(),
+                pinned.version_selector().expect_err("refused").to_string(),
+            ] {
+                assert!(refused.contains(&var), "{versioning:?}: {refused}");
+                assert!(
+                    refused.contains("HttpConfig::version_header"),
+                    "{versioning:?}: {refused}"
+                );
+                assert!(!refused.contains("S3cr3t"), "{versioning:?}: {refused}");
+            }
+        }
+        let read = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("VERSION_HEADER", "X-Version")]),
+            HttpConfig {
+                version_header: "X Version".into(),
+                ..Default::default()
+            },
+        )
+        .expect("the variable overrides the pin");
+        assert_eq!(read.version_header, "X-Version");
     }
 
     #[test]

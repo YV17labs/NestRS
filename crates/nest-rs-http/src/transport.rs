@@ -320,7 +320,7 @@ impl HttpTransport {
             security_headers: cfg.security_headers.clone(),
             compression: cfg.compression,
             // `None` is the URI strategy: the version is already in the mount path.
-            version_selector: cfg.version_selector(),
+            version_selector: cfg.version_selector()?,
             detached: Vec::new(),
             drain: Arc::default(),
             endpoint: None,
@@ -919,6 +919,31 @@ mod tests {
         })
         .expect("`None` turns the budget off");
         assert_eq!(off.request_timeout, None);
+    }
+
+    /// A config built in code naming no header is refused, never served the
+    /// URI strategy in place of the header one it declares.
+    #[test]
+    fn a_built_config_holds_its_version_header_to_a_header_name() {
+        let header = |version_header: &str| crate::HttpConfig {
+            versioning: crate::ApiVersioning::Header,
+            version_header: version_header.into(),
+            ..Default::default()
+        };
+        let refused = HttpTransport::from_config(&header("X Version"))
+            .err()
+            .expect("an invalid header never reaches the transport")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("http", "VERSION_HEADER")),
+            "{refused}"
+        );
+        assert!(refused.contains("HttpConfig::version_header"), "{refused}");
+        let served = HttpTransport::from_config(&header("X-Version")).expect("a header name");
+        assert!(
+            served.version_selector.is_some(),
+            "the header strategy rewrites"
+        );
     }
 
     #[test]

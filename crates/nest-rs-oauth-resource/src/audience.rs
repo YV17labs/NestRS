@@ -9,6 +9,7 @@ use nest_rs_authn::AuthnConfig;
 use nest_rs_config::Namespaced;
 use nest_rs_core::{hooks, injectable};
 
+use crate::config::OAuthResourceConfig;
 use crate::metadata::ProtectedResourceMetadata;
 
 /// Runs the confused-deputy check once wiring is complete.
@@ -32,7 +33,10 @@ impl AudienceBinding {
 
 /// The confused-deputy check, run once at boot.
 /// A mismatch with the resource (RFC 8707) only warns: some authorization servers
-/// mint an opaque audience by policy.
+/// mint an opaque audience by policy. Both are named by their settings: the
+/// resource is shown only through
+/// [`endpoint_shown`](nest_rs_config::endpoint_shown), which alters the very
+/// form they are compared in.
 fn require_audience_binding(
     authn: Option<&AuthnConfig>,
     metadata: &ProtectedResourceMetadata,
@@ -43,21 +47,22 @@ fn require_audience_binding(
              AuthnModule::for_root(..) alongside it"
         );
     };
+    let audience_variable = nest_rs_config::var_name(AuthnConfig::NAMESPACE, "AUDIENCE");
+    let resource_variable = nest_rs_config::var_name(OAuthResourceConfig::NAMESPACE, "RESOURCE");
     let audience = authn.audience.as_deref().map(str::trim).unwrap_or_default();
     if audience.is_empty() {
         anyhow::bail!(
-            "{} is required when OAuthResourceModule is imported: \
-             without it this server accepts any token its issuer signed, including one minted \
-             for another service. Set it to `{}`",
-            nest_rs_config::var_name(AuthnConfig::NAMESPACE, "AUDIENCE"),
-            metadata.resource(),
+            "{audience_variable} is required when OAuthResourceModule is imported: without it \
+             this server accepts any token its issuer signed, including one minted for another \
+             service. Set it to the advertised resource identifier, \
+             `OAuthResourceConfig::resource` ({resource_variable})",
         );
     }
     if audience != metadata.resource() {
         tracing::warn!(
             target: crate::TARGET,
-            audience,
-            resource = metadata.resource(),
+            audience_variable = audience_variable.as_str(),
+            resource_variable = resource_variable.as_str(),
             "token audience differs from the advertised resource identifier — a client \
              following RFC 8707 will request `resource` and receive a token this server rejects",
         );
@@ -68,7 +73,6 @@ fn require_audience_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::OAuthResourceConfig;
 
     fn metadata() -> ProtectedResourceMetadata {
         OAuthResourceConfig {
@@ -97,9 +101,9 @@ mod tests {
     }
 
     /// A mismatch is a `warn`, not a refusal: some authorization servers mint an
-    /// opaque audience by policy.
+    /// opaque audience by policy. It names the two settings, echoing neither.
     #[test]
-    fn a_mismatched_audience_boots_and_says_which_two_values_disagree() {
+    fn a_mismatched_audience_boots_and_names_the_two_settings_that_disagree() {
         let logs = nest_rs_testing::LogCapture::install();
         require_audience_binding(
             Some(&authn_with_audience(Some("some-opaque-audience"))),
@@ -114,13 +118,19 @@ mod tests {
         );
         assert_eq!(event.level, "warn");
         assert_eq!(
-            event.field("audience").as_deref(),
-            Some("some-opaque-audience")
+            event.field("audience_variable"),
+            Some(nest_rs_config::var_name(AuthnConfig::NAMESPACE, "AUDIENCE")),
         );
         assert_eq!(
-            event.field("resource").as_deref(),
-            Some("https://api.example.com"),
+            event.field("resource_variable"),
+            Some(nest_rs_config::var_name(
+                OAuthResourceConfig::NAMESPACE,
+                "RESOURCE"
+            )),
         );
+        for value in ["some-opaque-audience", "api.example.com"] {
+            assert!(!format!("{event:?}").contains(value), "{event:?}");
+        }
     }
 
     #[test]
@@ -151,9 +161,14 @@ mod tests {
             "got: {text}",
         );
         assert!(
-            text.contains("https://api.example.com"),
+            text.contains("OAuthResourceConfig::resource")
+                && text.contains(&nest_rs_config::var_name(
+                    OAuthResourceConfig::NAMESPACE,
+                    "RESOURCE"
+                )),
             "the error must say what to set it to: {text}",
         );
+        assert!(!text.contains("api.example.com"), "{text}");
     }
 
     #[test]

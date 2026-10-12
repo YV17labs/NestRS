@@ -51,7 +51,7 @@ impl OAuthResourceController {
                 tracing::error!(
                     target: crate::TARGET,
                     %error,
-                    resource = self.metadata.resource(),
+                    resource = nest_rs_config::endpoint_shown(self.metadata.resource()).as_str(),
                     "protected resource metadata failed to serialize",
                 );
                 Response::builder()

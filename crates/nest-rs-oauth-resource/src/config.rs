@@ -12,16 +12,25 @@ const BEARER_METHOD_HEADER: &str = "header";
 /// lists them — RFC 6750 §2.1, §2.2, §2.3.
 const BEARER_METHODS_DEFINED: [&str; 3] = [BEARER_METHOD_HEADER, "body", "query"];
 
+/// Why a URI the document publishes is refused for carrying userinfo.
+const USERINFO: &str = "it carries userinfo, which RFC 9110 §4.2.4 forbids a sender to generate \
+                        in an http or https URI, and the document would publish it — name the \
+                        host alone";
+
 /// Identity of this deployment as an OAuth 2.1 protected resource (namespace
 /// `oauth__resource`).
 #[config(namespace = "oauth__resource")]
 #[derive(Clone, Debug, Default)]
 pub struct OAuthResourceConfig {
     /// The canonical URI clients name in their RFC 8707 `resource` parameter, and
-    /// the `aud` tokens must carry: absolute, no fragment, no trailing slash. Required.
+    /// the `aud` tokens must carry. Required, and refused at boot unless absolute
+    /// with a host, free of userinfo and fragment, and `https` — plain `http` only
+    /// on loopback under a declared development or test `<PREFIX>_ENV`; a
+    /// trailing slash is legal, and warned.
     pub resource: Option<String>,
     /// Issuers of the authorization servers that mint tokens for this resource; at
-    /// least one is required (RFC 9728 §2).
+    /// least one is required (RFC 9728 §2), each held to
+    /// [`resource`](Self::resource)'s rules.
     pub authorization_servers: Vec<String>,
     /// The minimal scope set, advertised in the metadata document and the
     /// `WWW-Authenticate` challenge; empty omits both.
@@ -31,11 +40,14 @@ pub struct OAuthResourceConfig {
     pub bearer_methods_supported: Vec<String>,
     /// Human-readable name for a consent screen.
     pub resource_name: Option<String>,
-    /// URL of developer documentation for this resource.
+    /// URL of developer documentation for this resource; one carrying userinfo
+    /// fails the boot, since the document publishes it.
     pub resource_documentation: Option<String>,
-    /// RFC 9728 §2 `resource_policy_uri`: how the resource's data may be used.
+    /// RFC 9728 §2 `resource_policy_uri`: how the resource's data may be used;
+    /// one carrying userinfo fails the boot, since the document publishes it.
     pub resource_policy_uri: Option<String>,
-    /// RFC 9728 §2 `resource_tos_uri`: the terms of service.
+    /// RFC 9728 §2 `resource_tos_uri`: the terms of service; one carrying
+    /// userinfo fails the boot, since the document publishes it.
     pub resource_tos_uri: Option<String>,
 }
 
@@ -59,7 +71,8 @@ impl Config for OAuthResourceConfig {
 
 impl OAuthResourceConfig {
     /// Validate the deployment's identity and freeze it into the document the
-    /// well-known endpoint serves.
+    /// well-known endpoint serves; the process's `<PREFIX>_ENV` decides whether
+    /// plain `http` on loopback is accepted.
     pub fn into_metadata(self) -> Result<ProtectedResourceMetadata, AuthError> {
         self.metadata_in(Environment::from_env())
     }
@@ -135,6 +148,19 @@ impl OAuthResourceConfig {
             self.bearer_methods_supported
         };
 
+        for (uri, key) in [
+            (&self.resource_documentation, "RESOURCE_DOCUMENTATION"),
+            (&self.resource_policy_uri, "RESOURCE_POLICY_URI"),
+            (&self.resource_tos_uri, "RESOURCE_TOS_URI"),
+        ] {
+            if uri.as_deref().is_some_and(carries_userinfo) {
+                return Err(AuthError::Failed(format!(
+                    "{} is not a URL the document may publish: {USERINFO}",
+                    nest_rs_config::spellings(Self::NAMESPACE, key),
+                )));
+            }
+        }
+
         Ok(ProtectedResourceMetadata::new(
             resource.to_owned(),
             authorization_servers,
@@ -175,29 +201,34 @@ fn authority_of(rest: &str) -> &str {
     rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
-/// Whether an authority holding no userinfo names loopback. `[::1]` holds
-/// colons, so an IP-literal's port is whatever follows its `]`.
-fn is_loopback_authority(authority: &str) -> bool {
-    let host = match authority.strip_prefix('[') {
-        Some(rest) => match rest.split_once(']') {
-            Some((inner, _)) => inner,
-            None => return false,
-        },
+/// Whether `uri` has an authority carrying userinfo (RFC 3986 §3.2.1).
+fn carries_userinfo(uri: &str) -> bool {
+    uri.split_once("://")
+        .is_some_and(|(_, rest)| authority_of(rest).contains('@'))
+}
+
+/// The host of an authority holding no userinfo, without its port: `[::1]`
+/// holds colons, so an IP-literal's port is whatever follows its `]`. Empty
+/// when the authority names none, or leaves an IP-literal unclosed.
+fn host_of(authority: &str) -> &str {
+    match authority.strip_prefix('[') {
+        Some(literal) => literal.split_once(']').map_or("", |(inner, _)| inner),
         None => authority.split(':').next().unwrap_or(authority),
-    };
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    match host.parse::<std::net::IpAddr>() {
-        Ok(addr) => addr.is_loopback(),
-        Err(_) => false,
     }
 }
 
-/// The MCP authorization spec's canonical-URI rules: absolute, with a scheme,
-/// no userinfo, no fragment, and `https` but on loopback outside a deployment;
-/// a trailing slash is legal but discouraged, so it only warns. A refusal names
-/// `setting` and never the URI, and a log line shows it through
+/// Whether `host` names loopback.
+fn is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|addr| addr.is_loopback())
+}
+
+/// The MCP authorization spec's canonical-URI rules: absolute, with a scheme
+/// and a host, no userinfo, no fragment, and `https` but on loopback outside a
+/// deployment; a trailing slash is legal but discouraged, so it only warns. A
+/// refusal names `setting` and never the URI, and a log line shows it through
 /// [`endpoint_shown`](nest_rs_config::endpoint_shown).
 fn validate_canonical_uri(
     uri: &str,
@@ -206,23 +237,21 @@ fn validate_canonical_uri(
 ) -> Result<(), AuthError> {
     let refused =
         |why: &str| AuthError::Failed(format!("{setting} is not a canonical resource URI: {why}"));
+    if carries_userinfo(uri) {
+        return Err(refused(USERINFO));
+    }
     let Some((scheme, rest)) = uri.split_once("://") else {
         return Err(refused(
             "it has no scheme (expected something like https://api.example.com)",
         ));
     };
-    if scheme.is_empty() || rest.is_empty() {
-        return Err(refused("scheme and authority are both required"));
+    // RFC 9110 §4.2.2: an https URI with an empty host is invalid, and the
+    // challenge's metadata URL is built on it.
+    let host = host_of(authority_of(rest));
+    if scheme.is_empty() || host.is_empty() {
+        return Err(refused("a scheme and a host are both required"));
     }
-    let authority = authority_of(rest);
-    // The document publishes it, and a credential there would be published too.
-    if authority.contains('@') {
-        return Err(refused(
-            "it carries userinfo, which RFC 9110 §4.2.4 forbids a sender to generate in an \
-             http or https URI — name the host alone",
-        ));
-    }
-    let local = !environment.is_deployed() && is_loopback_authority(authority);
+    let local = !environment.is_deployed() && is_loopback(host);
     if !scheme.eq_ignore_ascii_case("https") && !local {
         return Err(refused(&format!(
             "RFC 9728 §1.2 requires the https scheme; plain http is accepted only on localhost, \
@@ -431,6 +460,109 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// The document publishes these too, so a credential in one is refused as
+    /// in the resource: by its setting, with neither half shown.
+    #[test]
+    fn userinfo_in_a_published_description_url_is_refused_and_never_shown() {
+        const URL: &str = "https://admin:s3cr3t@docs.example.com/api";
+        for (config, setting) in [
+            (
+                OAuthResourceConfig {
+                    resource_documentation: Some(URL.into()),
+                    ..valid()
+                },
+                "RESOURCE_DOCUMENTATION",
+            ),
+            (
+                OAuthResourceConfig {
+                    resource_policy_uri: Some(URL.into()),
+                    ..valid()
+                },
+                "RESOURCE_POLICY_URI",
+            ),
+            (
+                OAuthResourceConfig {
+                    resource_tos_uri: Some(URL.into()),
+                    ..valid()
+                },
+                "RESOURCE_TOS_URI",
+            ),
+        ] {
+            let logs = nest_rs_testing::LogCapture::install();
+            let refused = config.into_metadata().expect_err(setting).to_string();
+            assert!(refused.contains("userinfo"), "{refused}");
+            assert!(
+                refused.contains(&nest_rs_config::var_name(
+                    OAuthResourceConfig::NAMESPACE,
+                    setting
+                )),
+                "{refused}"
+            );
+            for half in ["admin", "s3cr3t"] {
+                assert!(!refused.contains(half), "{refused}");
+                for event in logs.events() {
+                    assert!(
+                        !format!("{event:?}").contains(half),
+                        "a log line carries the credential: {event:?}"
+                    );
+                }
+            }
+        }
+        let published = serde_json::to_value(
+            OAuthResourceConfig {
+                resource_documentation: Some("https://docs.example.com/api".into()),
+                resource_policy_uri: Some("https://docs.example.com/policy".into()),
+                resource_tos_uri: Some("https://docs.example.com/terms".into()),
+                ..valid()
+            }
+            .into_metadata()
+            .expect("no userinfo"),
+        )
+        .expect("the document serializes");
+        assert_eq!(
+            published["resource_documentation"],
+            "https://docs.example.com/api"
+        );
+        assert_eq!(
+            published["resource_policy_uri"],
+            "https://docs.example.com/policy"
+        );
+        assert_eq!(
+            published["resource_tos_uri"],
+            "https://docs.example.com/terms"
+        );
+    }
+
+    /// RFC 9110 §4.2.2: an https URI names a host, the one the challenge's
+    /// metadata URL is built on. Refused for the resource and an issuer alike.
+    #[test]
+    fn a_uri_naming_no_host_is_refused() {
+        for uri in [
+            "https:///api",
+            "https://:8443/api",
+            "https://?tenant=a",
+            "https://[]/api",
+        ] {
+            for (config, setting) in [
+                (resource(uri), "RESOURCE"),
+                (issuers(&[uri]), "AUTHORIZATION_SERVERS"),
+            ] {
+                let refused = config
+                    .metadata_in(Environment::Development)
+                    .expect_err("no host")
+                    .to_string();
+                assert!(refused.contains("a host"), "{uri}: {refused}");
+                assert!(
+                    refused.contains(&nest_rs_config::var_name(
+                        OAuthResourceConfig::NAMESPACE,
+                        setting
+                    )),
+                    "{uri}: {refused}"
+                );
             }
         }
     }

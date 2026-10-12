@@ -247,9 +247,9 @@ NESTRS_AUTHN__AUDIENCE=https://api.example.com
 NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
 
-The resource and each issuer are absolute `https` URIs, with no userinfo
-and no fragment; anything else fails the boot, naming the variable and never
-the value. Plain `http` is spared on `localhost`, `127.0.0.1` or `[::1]` in a
+The resource and each issuer are absolute `https` URIs naming a host, with
+no userinfo and no fragment; anything else fails the boot, naming the variable
+and never the value. Plain `http` is spared on `localhost`, `127.0.0.1` or `[::1]` in a
 declared development or test profile (`<PREFIX>_ENV`) alone, so a local loop
 runs without a certificate while staging and production speak `https`,
 loopback included.
@@ -265,6 +265,9 @@ description of itself. Each is omitted from the served JSON when unset, as
 | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
 | `<PREFIX>_OAUTH__RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
 | `<PREFIX>_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
+
+The documentation, policy and terms URLs are published as they are set, so
+one carrying userinfo fails the boot as the resource does.
 
 §2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
 naming the fact that makes it impossible here: nothing signs a response, so
@@ -324,7 +327,7 @@ app that pins no audience. What pinning adds is the token that carries no
 `aud` at all: without a pinned audience such a token is accepted, and a
 resource server cannot afford that. RFC 8707 makes the resource
 identifier *be* the audience — keep the two strings identical, and the
-framework warns at boot when they drift.
+framework warns at boot when they drift, naming both variables.
 
 ## Going further
 

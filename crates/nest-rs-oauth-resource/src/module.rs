@@ -15,7 +15,7 @@
 
 use std::any::TypeId;
 
-use nest_rs_config::ConfigModule;
+use nest_rs_config::{ConfigModule, endpoint_shown};
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Registering, module};
 
 use crate::audience::AudienceBinding;
@@ -63,22 +63,53 @@ impl DynamicModule for OAuthResourceSetup {
         builder.provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig,), _, _>(
             |container| async move {
                 let config = ConfigModule::resolved::<OAuthResourceConfig>(&container)?;
-                let metadata = (*config)
-                    .clone()
-                    .into_metadata()
-                    .map_err(anyhow::Error::new)?;
-                tracing::debug!(
-                    target: crate::TARGET,
-                    resource = metadata.resource(),
-                    authorization_servers = metadata.authorization_servers().len(),
-                    "protected resource metadata resolved",
-                );
-                Ok(metadata)
+                frozen((*config).clone())
             },
         )
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.import::<OAuthResourceHost>()
+    }
+}
+
+/// The document `config` describes, said once at `debug` with the resource as
+/// [`endpoint_shown`] shows it.
+fn frozen(config: OAuthResourceConfig) -> anyhow::Result<ProtectedResourceMetadata> {
+    let metadata = config.into_metadata().map_err(anyhow::Error::new)?;
+    tracing::debug!(
+        target: crate::TARGET,
+        resource = endpoint_shown(metadata.resource()).as_str(),
+        authorization_servers = metadata.authorization_servers().len(),
+        "protected resource metadata resolved",
+    );
+    Ok(metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The resource is shown as `endpoint_shown` shows it: its query never.
+    #[test]
+    fn the_resolved_document_is_said_without_the_resource_query() {
+        let logs = nest_rs_testing::LogCapture::install();
+        frozen(OAuthResourceConfig {
+            resource: Some("https://api.example.com/tenants?key=s3cr3t".into()),
+            authorization_servers: vec!["https://auth.example.com".into()],
+            ..Default::default()
+        })
+        .expect("a valid identity");
+
+        let event = logs.expect_one(crate::TARGET, "protected resource metadata resolved");
+        assert_eq!(
+            event.field("resource").as_deref(),
+            Some("https://api.example.com/tenants")
+        );
+        assert!(
+            !format!("{:?}", logs.events()).contains("s3cr3t"),
+            "{:?}",
+            logs.events()
+        );
     }
 }

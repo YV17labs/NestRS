@@ -253,14 +253,14 @@ is refused too.)
 
 | Key | Meaning |
 |---|---|
-| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`: `https`, no userinfo, no fragment, plain `http` on loopback in a development or test profile alone. **Required** under the module |
+| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`: `https`, a host, no userinfo, no fragment, plain `http` on loopback in a development or test profile alone. **Required** under the module |
 | `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it, each held to `RESOURCE`'s rules. **At least one required** |
 | `SCOPES_SUPPORTED` | comma-separated minimal scope set, advertised in the metadata document and the `WWW-Authenticate` challenge |
 | `BEARER_METHODS_SUPPORTED` | how a token may be presented — defaults to `header`, the only form accepted |
 | `RESOURCE_NAME` | human-readable name for a consent screen |
-| `RESOURCE_DOCUMENTATION` | URL of developer documentation for this resource |
-| `RESOURCE_POLICY_URI` | URL of this resource's privacy policy, advertised in the metadata document |
-| `RESOURCE_TOS_URI` | URL of this resource's terms of service, advertised in the metadata document |
+| `RESOURCE_DOCUMENTATION` | URL of developer documentation for this resource; userinfo fails the boot |
+| `RESOURCE_POLICY_URI` | URL of this resource's privacy policy, advertised in the metadata document; userinfo fails the boot |
+| `RESOURCE_TOS_URI` | URL of this resource's terms of service, advertised in the metadata document; userinfo fails the boot |
 
 ## `mcp` — `<PREFIX>_MCP__*`
 

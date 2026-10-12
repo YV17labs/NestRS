@@ -197,6 +197,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                                 builder,
                                 ::std::any::TypeId::of::<#name>(),
                                 #name_str,
+                                ::std::any::TypeId::of::<#provider>(),
                                 #name_lit,
                                 &__optional,
                                 &<#provider as ::nest_rs_core::Discoverable>::optional_dependency_names(),

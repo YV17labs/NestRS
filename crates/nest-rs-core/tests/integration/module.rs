@@ -476,7 +476,7 @@ async fn a_provider_cycle_is_refused_beside_a_provider_waiting_outside_its_modul
             .downcast_ref::<ProviderCycleError>()
             .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
         assert_eq!(cycle.module, "CycleBesideAStallModule");
-        assert_eq!(cycle.type_names, ["Drafts", "Reviews"]);
+        assert_eq!(cycle.chain, ["Drafts", "Reviews", "Drafts"]);
     }
 }
 

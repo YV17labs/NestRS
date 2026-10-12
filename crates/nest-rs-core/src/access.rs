@@ -10,13 +10,13 @@
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 
-use crate::container::ProviderKey;
+use crate::container::{ProviderKey, ProviderScope};
 use crate::error::{
     AccessError, AccessGraphError, KeyedDependencyError, MissingDependencyError,
-    ScopeViolationError, UnbuiltCause,
+    ProviderCycleError, ScopeViolationError, UnbuiltCause,
 };
 
-pub(crate) use self::__private::ModuleDescriptor;
+pub(crate) use self::__private::{ModuleDescriptor, ProviderDescriptor};
 
 /// How a boot error names a dependency whose provider reported no label.
 pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
@@ -322,6 +322,163 @@ pub(crate) fn validate_keyed_access_graph(
         }
     }
     Ok(())
+}
+
+/// The first cycle among the request-scoped and transient providers the roots
+/// reach — each in `scopes` — in the order each waits on the next, through
+/// what it injects, optionally or not: both resolve through the request's
+/// scope when it is built. Walked depth-first in declaration order, so the
+/// same app names the same chain. A factory registered by hand has no
+/// descriptor, and its cycle is left to the panic at first resolution.
+pub(crate) fn scoped_cycle(
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    scopes: &HashMap<TypeId, ProviderScope>,
+) -> Option<ProviderCycleError> {
+    let graph = ProviderGraph::new(descriptors, roots, |p| scopes.contains_key(&(p.provides)()));
+    let cycle = graph.first_cycle(0..graph.nodes.len())?;
+    let scope = scopes[&(graph.nodes[cycle[0]].1.provides)()];
+    Some(graph.cycle_error(&cycle, scope))
+}
+
+/// The first cycle among the singletons the roots reach that one of `waiting`
+/// — a provider by a key it registers — waits on, at any depth, through what
+/// each injects, optionally or not. Singletons of one module are ordered, and
+/// a cycle among them refused, by the register phase; across modules importing
+/// each other, one module registers before the other's providers exist, so
+/// the cycle shows only as a provider never built or built without an
+/// optional dependency, from which the walk starts.
+pub(crate) fn singleton_cycle(
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    scopes: &HashMap<TypeId, ProviderScope>,
+    waiting: &[TypeId],
+) -> Option<ProviderCycleError> {
+    let graph = ProviderGraph::new(descriptors, roots, |p| {
+        !scopes.contains_key(&(p.provides)())
+    });
+    let starts = waiting
+        .iter()
+        .filter_map(|key| graph.node_of.get(key).copied());
+    let cycle = graph.first_cycle(starts)?;
+    Some(graph.cycle_error(&cycle, ProviderScope::Singleton))
+}
+
+/// The providers the roots reach that a filter keeps, one node per provider
+/// type with its module, in declaration order, and an edge from each to the
+/// node registering what it injects, optionally or not.
+struct ProviderGraph<'a> {
+    nodes: Vec<(&'a ModuleDescriptor, &'a ProviderDescriptor)>,
+    node_of: HashMap<TypeId, usize>,
+    edges: Vec<Vec<usize>>,
+}
+
+impl<'a> ProviderGraph<'a> {
+    fn new(
+        descriptors: &[&'a ModuleDescriptor],
+        roots: &[TypeId],
+        keep: impl Fn(&ProviderDescriptor) -> bool,
+    ) -> Self {
+        let by_id: HashMap<TypeId, &ModuleDescriptor> =
+            descriptors.iter().map(|d| ((d.module)(), *d)).collect();
+        let mut nodes: Vec<(&ModuleDescriptor, &ProviderDescriptor)> = Vec::new();
+        let mut node_of = HashMap::new();
+        let mut node_of_provider: HashMap<TypeId, usize> = HashMap::new();
+        for module in reachable_in_order(roots, &by_id)
+            .iter()
+            .filter_map(|id| by_id.get(id))
+        {
+            for p in module.providers.iter().filter(|p| keep(p)) {
+                // `Foo as dyn A, Foo as dyn B` is two descriptors of one provider.
+                let node = *node_of_provider.entry((p.provider)()).or_insert_with(|| {
+                    nodes.push((*module, p));
+                    nodes.len() - 1
+                });
+                node_of.extend(
+                    std::iter::once((p.provides)())
+                        .chain((p.also_provides)().into_iter().map(|(key, _)| key))
+                        .map(|key| (key, node)),
+                );
+            }
+        }
+        let edges = nodes
+            .iter()
+            .map(|(_, p)| {
+                (p.injects)()
+                    .into_iter()
+                    .chain((p.injects_optional)())
+                    .filter_map(|key| node_of.get(&key).copied())
+                    .collect()
+            })
+            .collect();
+        Self {
+            nodes,
+            node_of,
+            edges,
+        }
+    }
+
+    /// The first cycle a walk from each of `starts`, in turn, closes.
+    fn first_cycle(&self, mut starts: impl Iterator<Item = usize>) -> Option<Vec<usize>> {
+        let mut done = vec![false; self.nodes.len()];
+        starts.find_map(|start| cycle_from(start, &self.edges, &mut done))
+    }
+
+    /// `cycle` refused, named by its first provider's module.
+    fn cycle_error(&self, cycle: &[usize], scope: ProviderScope) -> ProviderCycleError {
+        ProviderCycleError {
+            module: self.nodes[cycle[0]].0.name,
+            scope,
+            chain: cycle
+                .iter()
+                .map(|i| provider_name(self.nodes[*i].1))
+                .collect(),
+        }
+    }
+}
+
+/// A provider by its own type, as its module lists it — `Foo` for a `Foo as
+/// dyn Trait` binding, whose descriptor is named for the trait.
+fn provider_name(provider: &ProviderDescriptor) -> &'static str {
+    let own = (provider.provider)();
+    if (provider.provides)() == own {
+        return provider.name;
+    }
+    (provider.also_provides)()
+        .into_iter()
+        .find(|(key, _)| *key == own)
+        .map_or(provider.name, |(_, label)| label)
+}
+
+/// The first cycle a depth-first walk from `start` closes, as the nodes from
+/// the one it returns to, that one repeated last; `done` marks the nodes no
+/// cycle passes through, across calls.
+fn cycle_from(start: usize, edges: &[Vec<usize>], done: &mut [bool]) -> Option<Vec<usize>> {
+    if done[start] {
+        return None;
+    }
+    let mut path = vec![start];
+    let mut next_edge = vec![0usize];
+    while let Some(&at) = path.last() {
+        let edge = next_edge.last_mut()?;
+        let Some(&to) = edges[at].get(*edge) else {
+            done[at] = true;
+            path.pop();
+            next_edge.pop();
+            continue;
+        };
+        *edge += 1;
+        if let Some(on_path) = path.iter().position(|seen| *seen == to) {
+            let mut cycle = path[on_path..].to_vec();
+            cycle.push(to);
+            return Some(cycle);
+        }
+        if !done[to] {
+            path.push(to);
+            next_edge.push(0);
+        }
+    }
+    None
 }
 
 /// Why `missing`, absent when the module `stalled` built its providers, was

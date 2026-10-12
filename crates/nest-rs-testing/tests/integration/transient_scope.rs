@@ -1,10 +1,10 @@
 //! `#[injectable(scope = transient)]`: a fresh instance on **every** resolution,
-//! able to depend on singletons, and a cycle diagnostic at first resolution.
+//! able to depend on singletons, and a cycle refused at boot.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use nest_rs_core::{App, RequestScope, injectable, module};
+use nest_rs_core::{App, ProviderCycleError, ProviderScope, RequestScope, injectable, module};
 
 #[injectable]
 #[derive(Default)]
@@ -75,8 +75,6 @@ async fn a_transient_injecting_a_request_scoped_provider_resolves_through_the_sc
     );
 }
 
-// Transients report no register-phase dependencies, so the boot cannot see
-// this cycle.
 #[injectable(scope = transient)]
 struct Cyclic {
     #[inject]
@@ -86,9 +84,14 @@ struct Cyclic {
 #[module(providers = [Cyclic])]
 struct CyclicModule;
 
-#[tokio::test]
-#[should_panic(expected = "transient provider cycle")]
-async fn self_referential_transient_panics_at_resolution() {
-    let app = App::new::<CyclicModule>().expect("boots — the cycle is lazy, not a boot error");
-    let _ = app.container().get::<Cyclic>();
+#[test]
+fn a_self_referential_transient_fails_the_boot() {
+    let Err(refused) = App::new::<CyclicModule>() else {
+        panic!("a transient building itself would panic at its first resolution");
+    };
+    let cycle = refused
+        .downcast_ref::<ProviderCycleError>()
+        .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
+    assert_eq!(cycle.scope, ProviderScope::Transient);
+    assert_eq!(cycle.chain, ["Cyclic", "Cyclic"]);
 }

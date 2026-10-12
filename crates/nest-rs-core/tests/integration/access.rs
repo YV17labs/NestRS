@@ -5,8 +5,8 @@ use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, ReachableProviders,
-    Registering, ScopeViolationError, injectable, module,
+    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, ProviderCycleError,
+    ProviderScope, ReachableProviders, Registering, ScopeViolationError, injectable, module,
 };
 
 struct AbsentDep;
@@ -414,10 +414,11 @@ fn providers_waiting_on_each_other_fail_the_boot_naming_the_cycle() {
         panic!("two providers waiting on each other cannot both be built");
     };
     let cycle = refused
-        .downcast_ref::<nest_rs_core::ProviderCycleError>()
+        .downcast_ref::<ProviderCycleError>()
         .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
     assert_eq!(cycle.module, "CycleModule");
-    assert_eq!(cycle.type_names, ["CycleLeft", "CycleRight"]);
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["CycleLeft", "CycleRight", "CycleLeft"]);
 }
 
 trait Ledger: Send + Sync {}
@@ -541,4 +542,275 @@ fn an_optional_dependency_no_reached_module_provides_is_absent() {
         .expect("`MailerModule` is linked but another app's: the capability is absent here");
     let notifier = app.container().get::<Notifier>().expect("built without it");
     assert!(notifier.mailer.is_none());
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct DraftView {
+    #[inject]
+    review: Arc<ReviewView>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct ReviewView {
+    #[inject]
+    draft: Arc<DraftView>,
+}
+
+#[module(providers = [DraftView, ReviewView])]
+struct RequestCycleModule;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = transient)]
+struct SlugDraft {
+    #[inject]
+    slug: Arc<SlugCheck>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = transient)]
+struct SlugCheck {
+    #[inject]
+    draft: Option<Arc<SlugDraft>>,
+}
+
+#[module(providers = [SlugDraft, SlugCheck])]
+struct TransientCycleModule;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct Visit {
+    #[inject]
+    tracker: Arc<VisitTracker>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = transient)]
+struct VisitTracker {
+    #[inject]
+    visit: Arc<Visit>,
+}
+
+#[module(providers = [Visit, VisitTracker])]
+struct MixedScopeCycleModule;
+
+#[module(imports = [MixedScopeCycleModule])]
+struct MixedScopeCycleRoot;
+
+/// The cycle booting `M` fails with, on both paths, each the same.
+async fn cycle_of<M: nest_rs_core::Module>() -> ProviderCycleError {
+    let Err(sync) = App::new::<M>() else {
+        panic!("a cycle no request could resolve boots on `App::new`");
+    };
+    let Err(built) = App::builder().module::<M>().build().await else {
+        panic!("a cycle no request could resolve boots on `App::builder()`");
+    };
+    let [sync, built] = [sync, built].map(|refused| {
+        refused
+            .downcast::<ProviderCycleError>()
+            .unwrap_or_else(|refused| panic!("not the cycle refusal: {refused:#}"))
+    });
+    assert_eq!(sync.to_string(), built.to_string());
+    sync
+}
+
+#[tokio::test]
+async fn request_scoped_providers_waiting_on_each_other_fail_the_boot() {
+    let cycle = cycle_of::<RequestCycleModule>().await;
+    assert_eq!(cycle.module, "RequestCycleModule");
+    assert_eq!(cycle.scope, ProviderScope::Request);
+    assert_eq!(cycle.chain, ["DraftView", "ReviewView", "DraftView"]);
+}
+
+#[tokio::test]
+async fn transient_providers_waiting_on_each_other_fail_the_boot_an_optional_edge_included() {
+    let cycle = cycle_of::<TransientCycleModule>().await;
+    assert_eq!(cycle.scope, ProviderScope::Transient);
+    assert_eq!(cycle.chain, ["SlugDraft", "SlugCheck", "SlugDraft"]);
+}
+
+#[tokio::test]
+async fn a_cycle_across_the_request_and_transient_scopes_fails_the_boot() {
+    let cycle = cycle_of::<MixedScopeCycleRoot>().await;
+    assert_eq!(cycle.module, "MixedScopeCycleModule");
+    assert_eq!(cycle.scope, ProviderScope::Request);
+    assert_eq!(cycle.chain, ["Visit", "VisitTracker", "Visit"]);
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct AuthorsService {
+    #[inject]
+    books: Arc<BooksService>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct BooksService {
+    #[inject]
+    authors: Arc<AuthorsService>,
+}
+
+#[module(imports = [BooksModule], providers = [AuthorsService])]
+struct AuthorsModule;
+
+#[module(imports = [AuthorsModule], providers = [BooksService])]
+struct BooksModule;
+
+#[tokio::test]
+async fn singletons_waiting_on_each_other_across_an_import_cycle_fail_the_boot_as_a_provider_cycle()
+{
+    let cycle = cycle_of::<AuthorsModule>().await;
+    assert_eq!(
+        cycle.module, "BooksModule",
+        "registered first, it stalled first"
+    );
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(
+        cycle.chain,
+        ["BooksService", "AuthorsService", "BooksService"]
+    );
+    let cycle = cycle_of::<BooksModule>().await;
+    assert_eq!(cycle.module, "AuthorsModule");
+    assert_eq!(
+        cycle.chain,
+        ["AuthorsService", "BooksService", "AuthorsService"]
+    );
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Editor {
+    #[inject]
+    desk: Option<Arc<ReviewDesk>>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ReviewDesk {
+    #[inject]
+    editor: Arc<Editor>,
+}
+
+#[module(imports = [ReviewDeskModule], providers = [Editor])]
+struct EditorModule;
+
+#[module(imports = [EditorModule], providers = [ReviewDesk])]
+struct ReviewDeskModule;
+
+#[tokio::test]
+async fn a_singleton_cycle_across_modules_through_an_optional_dependency_fails_the_boot_from_either_root()
+ {
+    let cycle = cycle_of::<EditorModule>().await;
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["ReviewDesk", "Editor", "ReviewDesk"]);
+    let cycle = cycle_of::<ReviewDeskModule>().await;
+    assert_eq!(
+        cycle.module, "EditorModule",
+        "built without its optional, then the other"
+    );
+    assert_eq!(cycle.chain, ["Editor", "ReviewDesk", "Editor"]);
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Tagger {
+    #[inject]
+    classifier: Option<Arc<Classifier>>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Classifier {
+    #[inject]
+    tagger: Option<Arc<Tagger>>,
+}
+
+#[module(imports = [ClassifierModule], providers = [Tagger])]
+struct TaggerModule;
+
+#[module(imports = [TaggerModule], providers = [Classifier])]
+struct ClassifierModule;
+
+#[tokio::test]
+async fn singletons_holding_each_other_optionally_across_modules_fail_the_boot_as_a_provider_cycle()
+{
+    let cycle = cycle_of::<TaggerModule>().await;
+    assert_eq!(cycle.module, "ClassifierModule");
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["Classifier", "Tagger", "Classifier"]);
+}
+
+trait Pricing: Send + Sync {}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Catalog {
+    #[inject]
+    pricing: Arc<dyn Pricing>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct PriceList {
+    #[inject]
+    catalog: Arc<Catalog>,
+}
+
+impl Pricing for PriceList {}
+
+#[module(imports = [PriceListModule], providers = [Catalog])]
+struct CatalogModule;
+
+#[module(imports = [CatalogModule], providers = [PriceList as dyn Pricing])]
+struct PriceListModule;
+
+#[tokio::test]
+async fn a_cycle_through_a_dyn_binding_names_the_provider_bound() {
+    let cycle = cycle_of::<CatalogModule>().await;
+    assert_eq!(cycle.module, "PriceListModule");
+    assert_eq!(cycle.chain, ["PriceList", "Catalog", "PriceList"]);
 }

@@ -42,9 +42,12 @@ framework half.
   request from the singleton root: it may inject singletons and other
   request-scoped providers (one instance each per request), never the reverse,
   and a handler reaches it through the edge's `Scoped<T>`. `scope = transient`
-  is rebuilt on every resolution; a transient cycle panics at first resolution
-  naming the chain — the one provider error not caught at boot. A singleton
-  injects neither (`ScopeViolationError`). **A type has one provider whatever
+  is rebuilt on every resolution. A singleton injects neither, optionally or
+  not (`ScopeViolationError`). Providers waiting on each other fail the boot
+  naming the chain, whatever their scope and whichever modules list them
+  (`ProviderCycleError`); a cycle among
+  factories registered by hand, which no module descriptor shows, panics at
+  first resolution naming it. **A type has one provider whatever
   its scope**: a second registration fails the boot naming both and their
   scopes (`DuplicateProviderError`) — never warned and replaced.
 - **Modules compose by type or by configured value** (`DynamicModule`), and a

@@ -43,8 +43,15 @@ remedy is more specific: a dependency outside the module's imports is also
 absent when the provider would have been built, so one fact is seen twice, and
 the access graph names the module to import. A cycle among one module's
 providers is still refused in the register phase that sees it, now also when
-another provider of the module waits on something outside it. A provider built
-without an optional dependency the boot registered afterwards
+another provider of the module waits on something outside it. A cycle among
+request-scoped and transient providers, which the register phase never orders,
+is refused at the seal right after the access graph, before any stall: no
+request could resolve it in any composition. A cycle among singletons of
+modules importing each other shows the register phase only a provider never
+built, or one built without an optional dependency, so it is walked from
+those next, and refused (`ProviderCycleError`) before either: their remedy, a
+module both import, would only lead to it. A provider built without an
+optional dependency the boot registered afterwards
 (`LateOptionalDependencyError`) reads after a provider never built: a missing
 provider is the larger hole, and both carry the same causes.
 

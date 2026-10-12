@@ -211,18 +211,21 @@ to make:
 module `UsersModule`: `UsersService` was never built — it needs `PostsService`, which nothing had registered when `UsersModule`'s providers were built; `UsersModule` and `PostsModule` import each other, so one registers before the other's providers exist: move what both need into a module both import
 ```
 
-Inside a module, two providers waiting on each other fail the boot by name
-(`ProviderCycleError`), and the error carries the remedy:
+When the providers also wait on each other — `PostsService` injecting
+`UsersService` back — no layout of modules can order them, and the boot names
+the cycle instead (`ProviderCycleError`). It does so whichever modules list
+them and whatever their scope, a request-scoped or transient cycle included,
+before any request would resolve it, and the error carries the remedy:
 
 ```text
-module `PostsModule`: dependency cycle among provider(s) ["PostsService", "UsersService"] — each waits on another provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete type
+module `PostsModule`: singleton provider cycle `PostsService` → `UsersService` → `PostsService` — break it by moving what both need into a third provider both inject, by passing the value as a method argument, or by publishing an event one side listens to
 ```
 
-That remedy is the point. A cycle is a design signal — two things that should
-meet at an interface are reaching for each other's concrete type. Injecting
-`Arc<dyn Trait>` puts the seam back, and the cycle disappears instead of being
-deferred. There is nothing to wrap in a thunk, and no runtime resolution order
-to reason about.
+That remedy is the point. A cycle is a design signal — each side owns half of
+what the other needs. Moving that half into a provider both inject, passing the
+value at the call, or turning one direction into an event removes the cycle
+instead of deferring it. There is nothing to wrap in a thunk, and no runtime
+resolution order to reason about.
 
 ## Other things you will reach for and not find
 

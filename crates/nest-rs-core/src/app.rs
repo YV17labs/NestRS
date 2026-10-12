@@ -12,11 +12,11 @@ use tokio::task::JoinSet;
 
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, provider_order,
-    reachable_descriptors, reachable_provider_ids, unbuilt_cause, validate_access_graph,
-    validate_keyed_access_graph,
+    reachable_descriptors, reachable_provider_ids, scoped_cycle, singleton_cycle, unbuilt_cause,
+    validate_access_graph, validate_keyed_access_graph,
 };
 use crate::app_lifecycle::{AppLifecycle, StopCause};
-use crate::container::ProviderKey;
+use crate::container::{AbsentOptional, ProviderKey, ProviderScope, Stall};
 use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
@@ -145,18 +145,55 @@ fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
     check_duplicate_providers(builder)
 }
 
+/// The providers `#[module]`s list that the register phase never built, in
+/// the order recorded. One whose keys are present by now — a test override
+/// replaced it — is no longer missing.
+fn unbuilt(builder: &ContainerBuilder) -> impl Iterator<Item = &Stall> {
+    builder
+        .stalls()
+        .iter()
+        .filter(|stall| !stall.provides.iter().any(|key| builder.contains(*key)))
+}
+
+/// The providers `#[module]`s built without an optional dependency the boot
+/// registered afterwards, each with the first such dependency.
+fn late_optionals(
+    builder: &ContainerBuilder,
+) -> impl Iterator<Item = (&AbsentOptional, (TypeId, &'static str))> {
+    builder.absent_optionals().iter().filter_map(|built| {
+        let late = built.absent.iter().find(|(key, _)| builder.contains(*key));
+        late.map(|late| (built, *late))
+    })
+}
+
+/// Fail the boot on the first cycle among singletons that a provider never
+/// built, or built without an optional dependency, waits on: across modules
+/// importing each other, which the register phase cannot see whole. Read
+/// before either is refused, whose remedy — a module both import — would only
+/// lead here.
+fn check_singleton_cycles(
+    builder: &ContainerBuilder,
+    descriptors: &[&ModuleDescriptor],
+    roots: &[TypeId],
+    scopes: &HashMap<TypeId, ProviderScope>,
+) -> Result<()> {
+    let waiting: Vec<TypeId> = unbuilt(builder)
+        .filter_map(|stall| stall.provides.first().copied())
+        .chain(late_optionals(builder).map(|(built, _)| built.provider.0))
+        .collect();
+    match singleton_cycle(descriptors, roots, scopes, &waiting) {
+        Some(cycle) => Err(cycle.into()),
+        None => Ok(()),
+    }
+}
+
 /// Fail the boot on the first provider a `#[module]` lists and the register
-/// phase never built, naming why what it injects was absent. One whose keys
-/// are present by now — a test override replaced it — is no longer missing.
+/// phase never built, naming why what it injects was absent.
 fn check_unbuilt_providers(
     builder: &ContainerBuilder,
     reached: &[&ModuleDescriptor],
 ) -> Result<()> {
-    let unbuilt = builder
-        .stalls()
-        .iter()
-        .find(|stall| !stall.provides.iter().any(|key| builder.contains(*key)));
-    let Some(stall) = unbuilt else {
+    let Some(stall) = unbuilt(builder).next() else {
         return Ok(());
     };
     let (module, module_name) = stall.module;
@@ -173,20 +210,17 @@ fn check_unbuilt_providers(
 /// Fail the boot on the first provider a `#[module]` built without an optional
 /// dependency the boot registered afterwards, naming why it was absent then.
 fn check_late_optionals(builder: &ContainerBuilder, reached: &[&ModuleDescriptor]) -> Result<()> {
-    for built in builder.absent_optionals() {
-        let late = built.absent.iter().find(|(key, _)| builder.contains(*key));
-        if let Some(&(key, dependency)) = late {
-            let (module, module_name) = built.module;
-            return Err(LateOptionalDependencyError {
-                module: module_name,
-                provider: built.provider,
-                dependency,
-                cause: unbuilt_cause(reached, module, &[key]),
-            }
-            .into());
-        }
+    let Some((built, (key, dependency))) = late_optionals(builder).next() else {
+        return Ok(());
+    };
+    let (module, module_name) = built.module;
+    Err(LateOptionalDependencyError {
+        module: module_name,
+        provider: built.provider.1,
+        dependency,
+        cause: unbuilt_cause(reached, module, &[key]),
     }
-    Ok(())
+    .into())
 }
 
 impl App {
@@ -732,9 +766,10 @@ impl AppBuilder {
 }
 
 /// The boot's last pass, shared by both paths: the access graph checked over
-/// what registered, then every provider the register phase never built or
-/// built before an optional dependency arrived, every budget against the nets
-/// reaching it, and the seeds the transports read.
+/// what registered, then a cycle among request-scoped and transient
+/// providers, one among singletons across modules, every provider the register
+/// phase never built or built before an optional dependency arrived, every
+/// budget against the nets reaching it, and the seeds the transports read.
 fn seal(
     builder: ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
@@ -752,9 +787,14 @@ fn seal(
     )
     .map_err(AccessError::into_anyhow)?;
     validate_keyed_access_graph(descriptors, &ids, global_keyed)?;
-    let reached = reachable_descriptors(descriptors, &ids);
+    let scopes = builder.dynamic_scopes();
+    if let Some(cycle) = scoped_cycle(descriptors, &ids, &scopes) {
+        return Err(cycle.into());
+    }
     // After the access graph, whose remedy names the owning module
     // (`.claude/decisions/boot-refusal-order.md`).
+    check_singleton_cycles(&builder, descriptors, &ids, &scopes)?;
+    let reached = reachable_descriptors(descriptors, &ids);
     check_unbuilt_providers(&builder, &reached)?;
     check_late_optionals(&builder, &reached)?;
     check_budgets(&builder, &reached, None)?;

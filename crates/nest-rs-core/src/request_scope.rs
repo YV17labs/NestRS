@@ -370,8 +370,8 @@ impl RequestScope {
             let _guard = CycleGuard::push(&SCOPED_BUILDING, id, type_name::<T>()).unwrap_or_else(
                 |Cycle { chain }| {
                     panic!(
-                        "request-scoped provider cycle: {chain} — break the cycle by injecting \
-                         `Arc<dyn Trait>` or picking a different scope"
+                        "{}",
+                        crate::error::cycle_panic_message(crate::ProviderScope::Request, &chain)
                     )
                 },
             );

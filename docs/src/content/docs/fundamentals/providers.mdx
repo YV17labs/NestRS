@@ -158,8 +158,8 @@ scopes, fresh instances are built. GraphQL resolvers reach them with
 `nest_rs::graphql::Scoped<T>` (from the async-graphql `&Context`), MCP
 tools with `nest_rs::mcp::Scoped<T>` — the same shape as HTTP's
 `Scoped<T>`. A request-scoped provider may itself inject another
-request-scoped provider (both share the per-request cache); a cycle
-panics at resolution with the named chain.
+request-scoped provider (both share the per-request cache); providers
+waiting on each other fail the boot, naming the chain (`ProviderCycleError`).
 
 <Aside type="caution">
 A `#[dataloader]` batch closure runs **off-task** (a spawned future)
@@ -170,8 +170,8 @@ ambient values instead: its trace, the caller's ability, the pool.
 
 **Transient** — rebuild on every `Scoped<T>` / `get::<T>()` extraction.
 Use for throw-away per-call state (a one-shot builder — never a
-correlation id, which the framework already carries). A transient must not depend on itself — cycles panic at
-resolution with a clear diagnostic.
+correlation id, which the framework already carries). A transient that
+depends on itself, directly or through others, fails the boot the same way.
 
 <Aside type="note">
 Most services in `posts/` are **singletons**. Reach for `request` or

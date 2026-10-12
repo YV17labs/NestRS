@@ -81,6 +81,16 @@ impl ProviderScope {
             Self::Transient => "transient",
         }
     }
+
+    /// How a provider of this scope reads before a noun: "a request-scoped
+    /// provider cycle".
+    pub(crate) fn as_adjective(self) -> &'static str {
+        match self {
+            Self::Singleton => "singleton",
+            Self::Request => "request-scoped",
+            Self::Transient => "transient",
+        }
+    }
 }
 
 /// A keyed `#[inject(key = "…")]` dependency reported by
@@ -397,12 +407,17 @@ pub(crate) fn build_transient(
     factory: &TransientFactory,
     scope: &RequestScope,
 ) -> AnyArc {
-    #[expect(clippy::panic, reason = "a provider cycle is a wiring defect, and building a transient has no Result to report it through")]
-    let _guard = CycleGuard::push(&TRANSIENT_BUILDING, id, type_name).unwrap_or_else(|Cycle { chain }| {
-        panic!(
-            "transient provider cycle: {chain} — break the cycle by injecting `Arc<dyn Trait>` or picking a different scope"
-        )
-    });
+    #[expect(
+        clippy::panic,
+        reason = "a provider cycle is a wiring defect, and building a transient has no Result to report it through"
+    )]
+    let _guard =
+        CycleGuard::push(&TRANSIENT_BUILDING, id, type_name).unwrap_or_else(|Cycle { chain }| {
+            panic!(
+                "{}",
+                crate::error::cycle_panic_message(ProviderScope::Transient, &chain)
+            )
+        });
     factory(scope)
 }
 
@@ -487,8 +502,8 @@ pub struct ContainerBuilder {
 pub(crate) struct AbsentOptional {
     /// The module listing it, by type and by name.
     pub(crate) module: (TypeId, &'static str),
-    /// The provider, as its module lists it.
-    pub(crate) provider: &'static str,
+    /// The provider, by its own type and as its module lists it.
+    pub(crate) provider: (TypeId, &'static str),
     /// The optional dependencies absent when it was built, each with its
     /// label.
     pub(crate) absent: Vec<(TypeId, &'static str)>,
@@ -1216,6 +1231,20 @@ impl ContainerBuilder {
             .collect()
     }
 
+    /// The scope of every unkeyed type registered as a request-scoped or
+    /// transient factory.
+    pub(crate) fn dynamic_scopes(&self) -> HashMap<TypeId, ProviderScope> {
+        self.scoped
+            .keys()
+            .map(|id| (*id, ProviderScope::Request))
+            .chain(
+                self.transient
+                    .keys()
+                    .map(|id| (*id, ProviderScope::Transient)),
+            )
+            .collect()
+    }
+
     /// Keyed provider identities registered so far — after the factory phase,
     /// the access graph's **global keyed** set.
     pub(crate) fn keyed_provider_keys(&self) -> HashSet<ProviderKey> {
@@ -1410,16 +1439,11 @@ pub(crate) mod __private {
             })
             .collect();
         let cyclic = waiting_in_a_cycle(&stalled, &waits, &pending);
-        let cycle: Vec<&'static str> = stalled
-            .iter()
-            .zip(&cyclic)
-            .filter(|(_, on_cycle)| **on_cycle)
-            .map(|(provider, _)| provider.name)
-            .collect();
-        if !cycle.is_empty() {
+        if let Some(chain) = cycle_chain(&stalled, &waits, &cyclic) {
             builder = builder.refuse(crate::ProviderCycleError {
                 module: module_name,
-                type_names: cycle,
+                scope: crate::ProviderScope::Singleton,
+                chain,
             });
         }
         let waits_outside = |i: &usize| waits[*i].iter().any(|(id, _)| !pending.contains(id));
@@ -1443,7 +1467,8 @@ pub(crate) mod __private {
         mut builder: ContainerBuilder,
         module: TypeId,
         module_name: &'static str,
-        provider: &'static str,
+        provider: TypeId,
+        provider_name: &'static str,
         optional_dependencies: &[TypeId],
         optional_dependency_names: &[&'static str],
     ) -> ContainerBuilder {
@@ -1454,11 +1479,38 @@ pub(crate) mod __private {
         if !absent.is_empty() {
             builder.absent_optionals.push(super::AbsentOptional {
                 module: (module, module_name),
-                provider,
+                provider: (provider, provider_name),
                 absent,
             });
         }
         builder
+    }
+
+    /// The first cycle among the `cyclic` providers, in the order each waits on
+    /// the next, its first provider repeated last: walked from the first of
+    /// them along each one's first wait on another, until a provider repeats.
+    fn cycle_chain(
+        stalled: &[StalledProvider],
+        waits: &[Vec<(TypeId, &'static str)>],
+        cyclic: &[bool],
+    ) -> Option<Vec<&'static str>> {
+        let next = |i: usize| {
+            waits[i].iter().find_map(|(id, _)| {
+                (0..stalled.len()).find(|j| cyclic[*j] && stalled[*j].provides.contains(id))
+            })
+        };
+        let mut walked: Vec<usize> = vec![cyclic.iter().position(|on_cycle| *on_cycle)?];
+        loop {
+            let at = *walked.last()?;
+            let to = next(at)?;
+            if let Some(start) = walked.iter().position(|seen| *seen == to) {
+                let mut chain: Vec<&'static str> =
+                    walked[start..].iter().map(|i| stalled[*i].name).collect();
+                chain.push(stalled[to].name);
+                return Some(chain);
+            }
+            walked.push(to);
+        }
     }
 
     /// Which of `stalled` wait on each other in a cycle — or on one that does:
@@ -2197,7 +2249,8 @@ mod tests {
             let cycle = refusal
                 .downcast_ref::<crate::ProviderCycleError>()
                 .unwrap_or_else(|| panic!("not the cycle: {refusal:#}"));
-            assert_eq!(cycle.type_names, ["First", "Second"]);
+            assert_eq!(cycle.chain, ["First", "Second", "First"]);
+            assert_eq!(cycle.scope, crate::ProviderScope::Singleton);
             assert_eq!(recorded(&builder), ["Third"]);
         }
 

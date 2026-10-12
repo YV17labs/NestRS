@@ -266,20 +266,46 @@ pub(crate) struct UncollectedImportError {
     pub(crate) site: String,
 }
 
-/// Providers of one module each wait on another of them, injected by its
-/// concrete type, so none can be built first. Raised by the register phase,
-/// since the access graph sees every dependency met.
+/// Providers waiting on each other, so none can be built first: singletons of
+/// one module, refused by the register phase that cannot order them, or
+/// request-scoped and transient providers, refused at the seal before a
+/// request would resolve them.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 #[error(
-    "module `{module}`: dependency cycle among provider(s) {type_names:?} — each waits on another \
-     provider in the same module; break it by injecting `Arc<dyn Trait>` instead of the concrete \
-     type"
+    "module `{module}`: {} provider cycle {} — {CYCLE_REMEDY}",
+    .scope.as_adjective(),
+    arrow_chain(.chain)
 )]
 pub struct ProviderCycleError {
-    /// The module whose providers wait on each other.
+    /// The module of the chain's first provider.
     pub module: &'static str,
-    /// The providers on the cycle.
-    pub type_names: Vec<&'static str>,
+    /// The scope of the chain's first provider.
+    pub scope: ProviderScope,
+    /// The providers in the order each waits on the next, the first repeated
+    /// last: `["A", "B", "A"]`.
+    pub chain: Vec<&'static str>,
+}
+
+/// The edit every provider cycle has, whichever scope and wherever it is
+/// caught.
+pub(crate) const CYCLE_REMEDY: &str = "break it by moving what both need into a third provider \
+     both inject, by passing the value as a method argument, or by publishing an event one side \
+     listens to";
+
+/// What a resolution that closes a cycle among providers registered by hand —
+/// which no descriptor shows the boot — panics with.
+pub(crate) fn cycle_panic_message(scope: ProviderScope, chain: &str) -> String {
+    format!(
+        "{} provider cycle: {chain} — {CYCLE_REMEDY}",
+        scope.as_adjective()
+    )
+}
+
+/// `` `A` → `B` → `A` ``.
+fn arrow_chain(chain: &[&str]) -> String {
+    let quoted: Vec<String> = chain.iter().map(|name| format!("`{name}`")).collect();
+    quoted.join(" → ")
 }
 
 /// A provider a `#[module]` lists that the register phase never built: what it
@@ -1227,6 +1253,39 @@ mod decode_error_tests {
 #[cfg(test)]
 mod boot_refusal_tests {
     use super::*;
+
+    #[test]
+    fn a_provider_cycle_names_its_chain_and_prescribes_an_edit_that_works() {
+        let cycle = ProviderCycleError {
+            module: "PostsModule",
+            scope: ProviderScope::Request,
+            chain: vec!["Drafts", "Reviews", "Drafts"],
+        };
+        assert_eq!(
+            cycle.to_string(),
+            "module `PostsModule`: request-scoped provider cycle `Drafts` → `Reviews` → `Drafts` \
+             — break it by moving what both need into a third provider both inject, by passing \
+             the value as a method argument, or by publishing an event one side listens to"
+        );
+        let sentences = [
+            cycle.to_string(),
+            ProviderCycleError {
+                scope: ProviderScope::Singleton,
+                ..cycle
+            }
+            .to_string(),
+            cycle_panic_message(ProviderScope::Transient, "A → B → A"),
+            cycle_panic_message(ProviderScope::Request, "A → B → A"),
+        ];
+        for sentence in sentences {
+            assert!(
+                !sentence.contains("dyn"),
+                "an `Arc<dyn Trait>` is a dependency gated like a concrete one, so injecting one \
+                 keeps the cycle: {sentence}"
+            );
+            assert!(sentence.ends_with(CYCLE_REMEDY), "{sentence}");
+        }
+    }
 
     #[test]
     fn a_provider_never_built_names_what_it_needed_and_the_edit_its_cause_has() {

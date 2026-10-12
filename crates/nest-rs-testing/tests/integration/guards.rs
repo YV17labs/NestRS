@@ -12,6 +12,8 @@ use poem::Request;
 use poem::http::StatusCode;
 use tokio::sync::Mutex;
 
+use crate::refused_wiring;
+
 /// Denies every request with `403 Forbidden`.
 #[injectable]
 #[derive(Default)]
@@ -530,19 +532,16 @@ struct PhasedGuardsModule;
 
 #[tokio::test]
 async fn a_global_pool_listing_authorization_first_fails_the_boot_of_an_app_serving_no_http() {
-    let Err(refused) = TestApp::builder()
+    let result = TestApp::builder()
         .module::<PhasedGuardsModule>()
         .use_guards_global([guard::<PolicyGuard>(), guard::<SessionGuard>()])
         .build_headless()
-        .await
-    else {
-        panic!("the app would boot with a pool that answers 500 wherever it runs");
-    };
-    let chain = format!("{refused:#}");
-    let wiring = refused
-        .downcast_ref::<nest_rs_core::WiringFailedError>()
-        .unwrap_or_else(|| panic!("the kernel's wiring step refuses it: {chain}"));
-    assert_eq!(wiring.registry, "nest_rs::guards::global", "{chain}");
+        .await;
+    let (registry, chain) = refused_wiring(
+        result,
+        "the app would boot with a pool that answers 500 wherever it runs",
+    );
+    assert_eq!(registry, "nest_rs::guards::global", "{chain}");
     assert!(
         chain.contains("PolicyGuard") && chain.contains("SessionGuard"),
         "the refusal names both guards: {chain}",

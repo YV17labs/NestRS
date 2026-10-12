@@ -540,6 +540,8 @@ macro_rules! forward_principal {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::__private::serde;
+
     use super::*;
 
     fn single(query: &str) -> BatchRequest {
@@ -607,8 +609,6 @@ mod tests {
     fn a_field_named_like_a_mutation_stays_read_only() {
         assert!(is_read_only(&mut single("{ mutationLog { id } }")));
     }
-
-    use nest_rs_core::__private::serde;
 
     /// Variables whose JSON form cannot be written.
     struct Unwritable;

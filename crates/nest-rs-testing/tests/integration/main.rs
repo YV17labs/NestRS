@@ -33,3 +33,21 @@ mod transient_scope;
 mod transport_parity;
 mod versioning_filters;
 mod ws_gateway_guards;
+
+use nest_rs_core::WiringFailedError;
+use nest_rs_testing::HeadlessApp;
+
+/// The wiring a headless boot refused with, and the chain it says.
+pub(crate) fn refused_wiring(
+    result: anyhow::Result<HeadlessApp>,
+    expectation: &str,
+) -> (&'static str, String) {
+    let Err(err) = result else {
+        panic!("{expectation}");
+    };
+    let chain = format!("{err:#}");
+    let wiring = err
+        .downcast_ref::<WiringFailedError>()
+        .unwrap_or_else(|| panic!("the kernel's wiring step refuses it: {chain}"));
+    (wiring.registry, chain)
+}

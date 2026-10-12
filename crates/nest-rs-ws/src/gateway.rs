@@ -696,7 +696,6 @@ async fn handle_text<G: Gateway>(
         }
     };
     let WsEnvelope { event, mut data } = envelope;
-    let pipes = &wiring.pipes;
     let event_ref = event.clone();
     let conn_id = client.id();
     let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
@@ -705,7 +704,7 @@ async fn handle_text<G: Gateway>(
             return WsReply::Error(frame);
         }
         // Guards see the raw value; global data pipes run after them.
-        for pipe in pipes.iter() {
+        for pipe in wiring.pipes.iter() {
             if let Err(err) = pipe.transform_ws_data(&event_ref, &mut data) {
                 return WsReply::pipe_error(&event_ref, "data", err);
             }

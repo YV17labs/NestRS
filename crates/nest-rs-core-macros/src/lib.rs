@@ -85,7 +85,10 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// deduplicated, and its expression is evaluated once. Providers register in
 /// dependency order, whatever their order in the list. A missing dependency
 /// fails the boot with a `MissingDependencyError` / `AccessGraphError`, a
-/// provider cycle with a `ProviderCycleError`.
+/// provider cycle with a `ProviderCycleError`, and a provider whose
+/// dependency nothing had registered yet when its module built it — across an
+/// import cycle, or registered later by a hand-written module — with an
+/// `UnbuiltProviderError`.
 ///
 /// Emits `impl Module` and a hidden link-time descriptor the boot's
 /// access-graph check reads.

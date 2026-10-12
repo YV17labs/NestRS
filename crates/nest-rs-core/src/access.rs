@@ -13,10 +13,13 @@ use std::collections::{HashMap, HashSet};
 use crate::container::ProviderKey;
 use crate::error::{
     AccessError, AccessGraphError, KeyedDependencyError, MissingDependencyError,
-    ScopeViolationError,
+    ScopeViolationError, UnbuiltCause,
 };
 
 pub(crate) use self::__private::ModuleDescriptor;
+
+/// How a boot error names a dependency whose provider reported no label.
+pub(crate) const UNNAMED_DEPENDENCY: &str = "<unnamed dependency>";
 
 /// `access` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
@@ -210,7 +213,7 @@ pub(crate) fn validate_access_graph(
                         return Err(ScopeViolationError {
                             module: desc.name,
                             consumer: p.name,
-                            dependency: names.get(i).copied().unwrap_or("<unnamed dependency>"),
+                            dependency: names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY),
                         }
                         .into());
                     }
@@ -237,7 +240,7 @@ pub(crate) fn validate_access_graph(
                 return Err(MissingDependencyError {
                     module: desc.name,
                     consumer: p.name,
-                    dependency: names.get(i).copied().unwrap_or("<unnamed dependency>"),
+                    dependency: names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY),
                 }
                 .into());
             }
@@ -276,6 +279,85 @@ pub(crate) fn validate_keyed_access_graph(
         }
     }
     Ok(())
+}
+
+/// Why `missing`, absent when the module `stalled` built its providers, was
+/// absent then though the same boot registered it: a module providing one of
+/// them reaches `stalled` through its imports — an import cycle, which
+/// `#[module]` breaks by registering one module before the other's providers
+/// exist — or, failing that, a registration made later in the boot.
+pub(crate) fn unbuilt_cause(
+    reached: &[&ModuleDescriptor],
+    stalled: TypeId,
+    missing: &[TypeId],
+) -> UnbuiltCause {
+    let by_id: HashMap<TypeId, &ModuleDescriptor> =
+        reached.iter().map(|d| ((d.module)(), *d)).collect();
+    for key in missing {
+        for owner in reached.iter().filter(|d| provides(d, *key)) {
+            let owner_id = (owner.module)();
+            if owner_id == stalled {
+                continue;
+            }
+            let (Some(there), Some(back)) = (
+                import_path(stalled, owner_id, &by_id),
+                import_path(owner_id, stalled, &by_id),
+            ) else {
+                continue;
+            };
+            // Both paths are shortest, yet may cross one module twice.
+            let mut seen = HashSet::new();
+            let modules = there
+                .iter()
+                .chain(&back[1..back.len() - 1])
+                .filter(|id| seen.insert(**id))
+                .filter_map(|id| by_id.get(id).map(|d| d.name))
+                .collect();
+            return UnbuiltCause::ImportCycle(modules);
+        }
+    }
+    UnbuiltCause::RegisteredLater
+}
+
+/// Whether one of `module`'s providers registers `key`.
+fn provides(module: &ModuleDescriptor, key: TypeId) -> bool {
+    module
+        .providers
+        .iter()
+        .any(|p| (p.provides)() == key || (p.also_provides)().iter().any(|(also, _)| *also == key))
+}
+
+/// The shortest import path from `from` to `to`, both included, along
+/// `imports = [...]`.
+fn import_path(
+    from: TypeId,
+    to: TypeId,
+    by_id: &HashMap<TypeId, &ModuleDescriptor>,
+) -> Option<Vec<TypeId>> {
+    let mut came_from: HashMap<TypeId, TypeId> = HashMap::new();
+    let mut queue = std::collections::VecDeque::from([from]);
+    while let Some(id) = queue.pop_front() {
+        if id == to {
+            let mut path = vec![to];
+            let mut at = to;
+            while let Some(previous) = came_from.get(&at) {
+                path.push(*previous);
+                at = *previous;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        let Some(desc) = by_id.get(&id) else {
+            continue;
+        };
+        for import in desc.imports.iter().map(|import| import()) {
+            if import != from && !came_from.contains_key(&import) {
+                came_from.insert(import, id);
+                queue.push_back(import);
+            }
+        }
+    }
+    None
 }
 
 /// BFS over `imports` from `roots`, returning every module `TypeId` reached

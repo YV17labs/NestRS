@@ -254,7 +254,10 @@ reachable only through `PostsHttpModule` — that is the point.
 3. **Factories** — the queue is awaited; outputs land in the container as
    global infrastructure.
 4. **Register** — every imported module builds its providers in
-   dependency order.
+   dependency order, its imports first. A provider whose dependency nothing
+   had registered yet — across an import cycle, or a type a hand-written
+   module registers later — fails the boot naming it and why
+   (`UnbuiltProviderError`).
 
 Sync-only apps skip collect/factories and call
 `App::new::<BlogModule>()` directly.

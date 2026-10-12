@@ -34,3 +34,18 @@ one.
 **Refused:** passing over the late refusal only when the same `collect`
 contested. An earlier late import's refusal would still have been read
 first.
+
+## 2026-10-12 — after the register phase, the access graph before a provider never built
+
+A provider a `#[module]` lists and the register phase could not build is now
+refused at the seal (`UnbuiltProviderError`), after the access graph, whose
+remedy is more specific: a dependency outside the module's imports is also
+absent when the provider would have been built, so one fact is seen twice, and
+the access graph names the module to import. A cycle among one module's
+providers is still refused in the register phase that sees it, now also when
+another provider of the module waits on something outside it.
+
+**Refused:** refusing the stall in the register phase, where `#[module]` sees
+it. Its cause — an import cycle, or a registration made later in the boot — is
+known only once every module has registered, and the access graph would then
+never be read first.

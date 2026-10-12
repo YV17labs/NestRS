@@ -58,6 +58,12 @@ pub trait Discoverable {
         Vec::new()
     }
 
+    /// Label for each [`optional_dependencies`](Discoverable::optional_dependencies)
+    /// entry, in the same order, so the boot can name one it waited on.
+    fn optional_dependency_names() -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Container keys this provider registers **besides itself**, each with the
     /// label a boot error should use for it — so the access graph attributes a
     /// singleton installed on the module's behalf (`nest-rs-ws`'s `WsServer<N>`)

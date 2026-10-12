@@ -201,6 +201,16 @@ defer one side of a cycle it cannot see until it runs. Rust does not offer the
 tie in the first place. Cargo refuses a dependency cycle **between crates**
 outright, so the layering you drew is the layering you get.
 
+Two modules of one crate may still import each other. That cycle is harmless
+until a provider crosses it: one of the two modules registers before the other's
+providers exist, so a provider injecting across the cycle has nothing to be
+built from. The boot refuses it by name (`UnbuiltProviderError`), with the edit
+to make:
+
+```text
+module `UsersModule`: `UsersService` was never built — it needs `PostsService`, which nothing had registered when `UsersModule`'s providers were built; `UsersModule` and `PostsModule` import each other, so one registers before the other's providers exist: move what both need into a module both import
+```
+
 Inside a module, two providers waiting on each other fail the boot by name
 (`ProviderCycleError`), and the error carries the remedy:
 

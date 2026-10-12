@@ -12,7 +12,7 @@ use tokio::task::JoinSet;
 
 use crate::access::{
     Composition, ModuleDescriptor, ProviderOrder, ReachableProviders, provider_order,
-    reachable_descriptors, reachable_provider_ids, validate_access_graph,
+    reachable_descriptors, reachable_provider_ids, unbuilt_cause, validate_access_graph,
     validate_keyed_access_graph,
 };
 use crate::app_lifecycle::{AppLifecycle, StopCause};
@@ -21,7 +21,7 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, UnregisteredModuleError, UnresolvedFactoryError,
+    LateFactoryError, UnbuiltProviderError, UnregisteredModuleError, UnresolvedFactoryError,
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
@@ -144,6 +144,31 @@ fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
     check_duplicate_providers(builder)
 }
 
+/// Fail the boot on the first provider a `#[module]` lists and the register
+/// phase never built, naming why what it injects was absent. One whose keys
+/// are present by now — a test override replaced it — is no longer missing.
+fn check_unbuilt_providers(
+    builder: &ContainerBuilder,
+    reached: &[&ModuleDescriptor],
+) -> Result<()> {
+    let unbuilt = builder
+        .stalls()
+        .iter()
+        .find(|stall| !stall.provides.iter().any(|key| builder.contains(*key)));
+    let Some(stall) = unbuilt else {
+        return Ok(());
+    };
+    let (module, module_name) = stall.module;
+    let keys: Vec<TypeId> = stall.missing.iter().map(|(key, _)| *key).collect();
+    Err(UnbuiltProviderError {
+        module: module_name,
+        provider: stall.provider,
+        missing: stall.missing.iter().map(|(_, name)| *name).collect(),
+        cause: unbuilt_cause(reached, module, &keys),
+    }
+    .into())
+}
+
 impl App {
     /// Build the container from the root module synchronously.
     ///
@@ -153,6 +178,7 @@ impl App {
     /// [`MissingDependencyError`](crate::MissingDependencyError),
     /// [`DuplicateProviderError`](crate::DuplicateProviderError),
     /// [`ProviderCycleError`](crate::ProviderCycleError),
+    /// [`UnbuiltProviderError`] for a provider the register phase never built,
     /// [`UnresolvedFactoryError`] for a module that queued an async factory, a
     /// module's own refusal ([`ContainerBuilder::refuse`]), and
     /// [`WiringFailedError`](crate::WiringFailedError) for a module's wiring that
@@ -684,8 +710,8 @@ impl AppBuilder {
 }
 
 /// The boot's last pass, shared by both paths: the access graph checked over
-/// what registered, every budget against the nets reaching it, then the seeds
-/// the transports read.
+/// what registered, then every provider the register phase never built, every
+/// budget against the nets reaching it, and the seeds the transports read.
 fn seal(
     builder: ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
@@ -703,7 +729,11 @@ fn seal(
     )
     .map_err(AccessError::into_anyhow)?;
     validate_keyed_access_graph(descriptors, &ids, global_keyed)?;
-    check_budgets(&builder, &reachable_descriptors(descriptors, &ids), None)?;
+    let reached = reachable_descriptors(descriptors, &ids);
+    // After the access graph, whose remedy names the owning module
+    // (`.claude/decisions/boot-refusal-order.md`).
+    check_unbuilt_providers(&builder, &reached)?;
+    check_budgets(&builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
     let reachable = ReachableProviders(reachable_provider_ids(&order, global));
     let composition = Composition::from_descriptors(descriptors, roots);

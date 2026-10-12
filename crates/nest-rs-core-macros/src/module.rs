@@ -132,8 +132,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     } else {
         let count = proc_macro2::Literal::usize_unsuffixed(groups.len());
-        // Per provider: its register attempt, the keys it provides, and a
-        // stall-time classification of why it is still pending.
+        // Per provider: its register attempt, the keys it provides, and what
+        // the stall reports of it.
         let parts: Vec<(
             proc_macro2::TokenStream,
             proc_macro2::TokenStream,
@@ -201,42 +201,29 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                         #( __pending_keys.push(#provided_keys); )*
                     }
                 };
-                let classify = quote! {
+                let stall = quote! {
                     if !__done[#idx] {
-                        let __deps = <#provider as ::nest_rs_core::Discoverable>::dependencies();
-                        let __dep_names =
-                            <#provider as ::nest_rs_core::Discoverable>::dependency_names();
-                        let mut __missing_ids: ::std::vec::Vec<::std::any::TypeId> =
-                            ::std::vec::Vec::new();
-                        let mut __missing_names: ::std::vec::Vec<&'static str> =
-                            ::std::vec::Vec::new();
-                        let mut __k = 0usize;
-                        while __k < __deps.len() {
-                            if !builder.contains(__deps[__k]) {
-                                __missing_ids.push(__deps[__k]);
-                                __missing_names.push(*__dep_names.get(__k).unwrap_or(&"?"));
-                            }
-                            __k += 1;
-                        }
-                        // A cycle when every missing dep is one a pending provider supplies.
-                        if !__missing_ids.is_empty()
-                            && __missing_ids.iter().all(|__id| __pending_keys.contains(__id))
-                        {
-                            __cyclic.push(#name_lit);
-                        } else {
-                            __unprovided.push(::std::format!(
-                                "{} (needs {})", #name_lit, __missing_names.join(", ")
-                            ));
-                        }
+                        __stalled.push(::nest_rs_core::__private::StalledProvider {
+                            name: #name_lit,
+                            provides: ::std::vec![ #(#provided_keys),* ],
+                            dependencies:
+                                <#provider as ::nest_rs_core::Discoverable>::dependencies(),
+                            dependency_names:
+                                <#provider as ::nest_rs_core::Discoverable>::dependency_names(),
+                            optional_dependencies:
+                                <#provider as ::nest_rs_core::Discoverable>::optional_dependencies(),
+                            optional_dependency_names:
+                                <#provider as ::nest_rs_core::Discoverable>::optional_dependency_names(),
+                        });
                     }
                 };
-                (step, key_push, classify)
+                (step, key_push, stall)
             })
             .collect();
 
         let steps = parts.iter().map(|p| &p.0);
         let key_pushes = parts.iter().map(|p| &p.1);
-        let classifies = parts.iter().map(|p| &p.2);
+        let stalls = parts.iter().map(|p| &p.2);
 
         quote! {
             #(#import_calls)*
@@ -252,18 +239,15 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     break;
                 }
                 if !__progressed {
-                    // A missing dependency is left to the access-graph check; a
-                    // cycle is invisible to it, so it is refused here.
-                    let mut __cyclic: ::std::vec::Vec<&'static str> = ::std::vec::Vec::new();
-                    let mut __unprovided: ::std::vec::Vec<::std::string::String> =
+                    let mut __stalled: ::std::vec::Vec<::nest_rs_core::__private::StalledProvider> =
                         ::std::vec::Vec::new();
-                    #(#classifies)*
-                    if __unprovided.is_empty() {
-                        builder = builder.refuse(::nest_rs_core::ProviderCycleError {
-                            module: #name_str,
-                            type_names: __cyclic,
-                        });
-                    }
+                    #(#stalls)*
+                    builder = ::nest_rs_core::__private::record_stall(
+                        builder,
+                        ::std::any::TypeId::of::<#name>(),
+                        #name_str,
+                        __stalled,
+                    );
                     break;
                 }
             }

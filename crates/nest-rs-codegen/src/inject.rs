@@ -25,6 +25,8 @@ pub struct InjectableBody {
     /// — optionals must not gate the register fixpoint, but are still used to
     /// order a consumer after an optional provider the same module supplies.
     pub opt_keys: Vec<TokenStream2>,
+    /// Human-readable label for each entry in `opt_keys`, in the same order.
+    pub opt_names: Vec<TokenStream2>,
     /// One `::nest_rs_core::KeyedDependency { … }` expression per
     /// `#[inject(key = "…")]` field, for the access-graph keyed check. Kept
     /// apart from `dep_keys`: a keyed dependency resolves via `get_keyed`, is
@@ -46,6 +48,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             dep_keys: Vec::new(),
             dep_names: Vec::new(),
             opt_keys: Vec::new(),
+            opt_names: Vec::new(),
             keyed_dep_keys: Vec::new(),
         }),
         Fields::Named(fields) => {
@@ -54,6 +57,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             let mut dep_keys = Vec::new();
             let mut dep_names = Vec::new();
             let mut opt_keys = Vec::new();
+            let mut opt_names = Vec::new();
             let mut keyed_dep_keys = Vec::new();
 
             for field in fields.named.iter_mut() {
@@ -138,6 +142,8 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                              (the optional-dependency form)",
                         ));
                     };
+                    let label = type_label(arc_inner_ty);
+                    opt_names.push(quote! { #label });
                     if matches!(arc_inner_ty, syn::Type::TraitObject(_)) {
                         field_inits.push(quote! {
                             #field_name: container.get_dyn::<#arc_inner_ty>()
@@ -190,6 +196,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 dep_keys,
                 dep_names,
                 opt_keys,
+                opt_names,
                 keyed_dep_keys,
             })
         }
@@ -526,6 +533,17 @@ pub fn optional_dependencies_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
     quote! {
         fn optional_dependencies() -> ::std::vec::Vec<::core::any::TypeId> {
             ::std::vec![ #(#opt_keys),* ]
+        }
+    }
+}
+
+/// `Discoverable::optional_dependency_names` — index-aligned with
+/// [`optional_dependencies_method`], so the boot can name an optional
+/// dependency a provider waited on.
+pub fn optional_dependency_names_method(opt_names: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn optional_dependency_names() -> ::std::vec::Vec<&'static str> {
+            ::std::vec![ #(#opt_names),* ]
         }
     }
 }

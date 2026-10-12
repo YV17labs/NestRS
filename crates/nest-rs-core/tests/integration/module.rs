@@ -1,12 +1,15 @@
 //! Covers `src/module.rs` — a dynamic import (`Foo::for_root(opts)`) is
-//! evaluated exactly once, and the value collected is the value registered.
+//! evaluated exactly once, and the value collected is the value registered —
+//! and the register phase `#[module]` runs: a provider it lists is built, or
+//! the boot refuses naming why.
 
 use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError, Module, Registering, module,
+    AccessGraphError, App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError, Module,
+    ProviderCycleError, Registering, UnbuiltCause, UnbuiltProviderError, injectable, module,
 };
 
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
@@ -213,4 +216,265 @@ async fn a_module_imported_in_a_register_alone_fails_the_boot_naming_what_it_ope
         .downcast_ref::<LateFactoryError>()
         .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
     assert!(late.type_name.ends_with("Opened"), "{late:?}");
+}
+
+/// The boot of `M` on both paths, each expected to fail.
+async fn refused_on_both_paths<M: Module>() -> [anyhow::Error; 2] {
+    let Err(sync) = App::new::<M>() else {
+        panic!("`App::new` boots {}", std::any::type_name::<M>());
+    };
+    let Err(built) = App::builder().module::<M>().build().await else {
+        panic!("`App::builder()` boots {}", std::any::type_name::<M>());
+    };
+    [sync, built]
+}
+
+#[injectable]
+#[derive(Default)]
+struct CrossingAService;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct CrossingBService {
+    #[inject]
+    a: Arc<CrossingAService>,
+}
+
+#[module(imports = [CrossingBModule], providers = [CrossingAService])]
+struct CrossingAModule;
+
+#[module(imports = [CrossingAModule], providers = [CrossingBService])]
+struct CrossingBModule;
+
+#[tokio::test]
+async fn a_provider_crossing_an_import_cycle_fails_the_boot_naming_the_cycle() {
+    for refused in refused_on_both_paths::<CrossingAModule>().await {
+        let unbuilt = refused
+            .downcast_ref::<UnbuiltProviderError>()
+            .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+        assert_eq!(unbuilt.module, "CrossingBModule");
+        assert_eq!(unbuilt.provider, "CrossingBService");
+        assert_eq!(unbuilt.missing, ["CrossingAService"]);
+        let UnbuiltCause::ImportCycle(modules) = &unbuilt.cause else {
+            panic!("not an import cycle: {unbuilt}");
+        };
+        assert_eq!(modules.len(), 2, "{unbuilt}");
+        for module in ["CrossingAModule", "CrossingBModule"] {
+            assert!(modules.contains(&module), "{unbuilt}");
+        }
+        assert!(
+            unbuilt
+                .to_string()
+                .contains("move what both need into a module both import"),
+            "{unbuilt}"
+        );
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct Atlas;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Cartographer {
+    #[inject]
+    atlas: Arc<Atlas>,
+}
+
+#[module(imports = [HubModule], providers = [Cartographer])]
+struct SurveyModule;
+
+#[module(imports = [AtlasModule, SurveyModule])]
+struct HubModule;
+
+#[module(imports = [HubModule], providers = [Atlas])]
+struct AtlasModule;
+
+#[tokio::test]
+async fn an_import_cycle_through_a_module_reached_from_both_sides_names_each_module_once() {
+    for refused in refused_on_both_paths::<AtlasModule>().await {
+        let unbuilt = refused
+            .downcast_ref::<UnbuiltProviderError>()
+            .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+        assert_eq!(
+            unbuilt.cause,
+            UnbuiltCause::ImportCycle(vec!["SurveyModule", "HubModule", "AtlasModule"]),
+            "{unbuilt}"
+        );
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct QuietAService;
+
+#[injectable]
+#[derive(Default)]
+struct QuietBService;
+
+#[module(imports = [QuietBModule], providers = [QuietAService])]
+struct QuietAModule;
+
+#[module(imports = [QuietAModule], providers = [QuietBService])]
+struct QuietBModule;
+
+#[tokio::test]
+async fn an_import_cycle_no_provider_crosses_boots() {
+    let app = App::new::<QuietAModule>().expect("no provider crosses the cycle");
+    assert!(app.container().get::<QuietBService>().is_some());
+    let app = App::builder()
+        .module::<QuietAModule>()
+        .build()
+        .await
+        .expect("no provider crosses the cycle");
+    assert!(app.container().get::<QuietAService>().is_some());
+}
+
+/// A type only a hand-written module registers, imperatively.
+struct Ledger;
+
+struct LedgerModule;
+
+impl Module for LedgerModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(Ledger)
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Bookkeeper {
+    #[inject]
+    ledger: Arc<Ledger>,
+}
+
+#[module(providers = [Bookkeeper])]
+struct BookkeepingModule;
+
+#[module(imports = [BookkeepingModule, LedgerModule])]
+struct LedgerAfterRoot;
+
+#[tokio::test]
+async fn a_provider_injecting_what_a_hand_written_module_registers_later_fails_the_boot() {
+    for refused in refused_on_both_paths::<LedgerAfterRoot>().await {
+        let unbuilt = refused
+            .downcast_ref::<UnbuiltProviderError>()
+            .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+        assert_eq!(unbuilt.module, "BookkeepingModule");
+        assert_eq!(unbuilt.provider, "Bookkeeper");
+        assert_eq!(unbuilt.missing, ["Ledger"]);
+        assert_eq!(unbuilt.cause, UnbuiltCause::RegisteredLater, "{unbuilt}");
+        assert!(
+            unbuilt
+                .to_string()
+                .contains("import that module in `BookkeepingModule`'s `imports`"),
+            "{unbuilt}"
+        );
+    }
+}
+
+#[module(imports = [LedgerModule], providers = [Bookkeeper])]
+struct ImportingBookkeepingModule;
+
+#[module(imports = [ImportingBookkeepingModule, LedgerModule])]
+struct LedgerImportedRoot;
+
+#[tokio::test]
+async fn a_module_importing_the_hand_written_one_builds_its_provider() {
+    let app = App::new::<LedgerImportedRoot>().expect("the import registers it first");
+    assert!(app.container().get::<Bookkeeper>().is_some());
+}
+
+#[injectable]
+#[derive(Default)]
+struct Archive;
+
+#[module(providers = [Archive])]
+struct ArchiveModule;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Archivist {
+    #[inject]
+    archive: Arc<Archive>,
+}
+
+#[module(providers = [Archivist])]
+struct ArchivistModule;
+
+#[module(imports = [BookkeepingModule, LedgerModule, ArchiveModule, ArchivistModule])]
+struct StallAndLeakRoot;
+
+#[tokio::test]
+async fn an_access_violation_is_refused_before_a_provider_never_built() {
+    for refused in refused_on_both_paths::<StallAndLeakRoot>().await {
+        let leak = refused
+            .downcast_ref::<AccessGraphError>()
+            .unwrap_or_else(|| panic!("not the access violation: {refused:#}"));
+        assert_eq!(leak.consumer, "Archivist");
+        assert_eq!(leak.owner, "ArchiveModule");
+    }
+}
+
+#[tokio::test]
+async fn a_test_override_of_a_provider_never_built_stands_in_for_it() {
+    let app = App::builder()
+        .module::<LedgerAfterRoot>()
+        .override_value(Bookkeeper {
+            ledger: Arc::new(Ledger),
+        })
+        .build()
+        .await
+        .expect("the override is the provider the test asked for");
+    assert!(app.container().get::<Bookkeeper>().is_some());
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Drafts {
+    #[inject]
+    reviews: Arc<Reviews>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Reviews {
+    #[inject]
+    drafts: Arc<Drafts>,
+}
+
+#[module(providers = [Drafts, Reviews, Bookkeeper])]
+struct CycleBesideAStallModule;
+
+#[module(imports = [CycleBesideAStallModule, LedgerModule])]
+struct CycleBesideAStallRoot;
+
+#[tokio::test]
+async fn a_provider_cycle_is_refused_beside_a_provider_waiting_outside_its_module() {
+    for refused in refused_on_both_paths::<CycleBesideAStallRoot>().await {
+        let cycle = refused
+            .downcast_ref::<ProviderCycleError>()
+            .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
+        assert_eq!(cycle.module, "CycleBesideAStallModule");
+        assert_eq!(cycle.type_names, ["Drafts", "Reviews"]);
+    }
 }

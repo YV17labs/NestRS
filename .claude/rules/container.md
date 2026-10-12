@@ -61,7 +61,9 @@ framework half.
   (`AccessGraphError`) on a provider injecting what its module neither owns,
   imports transitively, nor receives as global infrastructure. It governs
   `#[inject]` and the `#[use_*]` layer lists; `Container::get` at runtime is an
-  unchecked escape hatch.
+  unchecked escape hatch. **A provider a module lists is built, or the boot
+  refuses naming why** (`UnbuiltProviderError`, after the access graph): an
+  import cycle is tolerated while no provider waits across it.
 
 ## `for_root` — one seam, one value, no chain
 

@@ -474,6 +474,22 @@ pub struct ContainerBuilder {
     /// Dynamic imports (`Foo::for_root(opts)`) the collect phase constructed,
     /// keyed by import site so the register phase consumes the same value.
     dynamic_registrars: HashMap<DynamicImportSite, Registrar>,
+    /// The providers a `#[module]`'s register step could not build, root
+    /// causes first, for the seal to refuse.
+    stalls: Vec<Stall>,
+}
+
+/// A provider a `#[module]`'s register step could not build: what it waited
+/// on was absent when its module's providers were built.
+pub(crate) struct Stall {
+    /// The module listing it, by type and by name.
+    pub(crate) module: (TypeId, &'static str),
+    /// The provider, as its module lists it.
+    pub(crate) provider: &'static str,
+    /// Every key it would have registered.
+    pub(crate) provides: Vec<TypeId>,
+    /// What it waited on, each with its label.
+    pub(crate) missing: Vec<(TypeId, &'static str)>,
 }
 
 /// The boot phase a builder is in, which decides what
@@ -1141,6 +1157,12 @@ impl ContainerBuilder {
             .map(|&(_, name)| name)
     }
 
+    /// The providers a `#[module]` could not build, root causes first —
+    /// [`__private::record_stall`].
+    pub(crate) fn stalls(&self) -> &[Stall] {
+        &self.stalls
+    }
+
     /// Unkeyed provider keys registered so far — after the factory phase, the
     /// access graph's **global** set.
     pub(crate) fn provider_ids(&self) -> HashSet<TypeId> {
@@ -1221,6 +1243,7 @@ impl ContainerBuilder {
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use std::any::TypeId;
+    use std::collections::HashSet;
     use std::sync::PoisonError;
 
     use super::{Container, ContainerBuilder, ImportSite};
@@ -1315,6 +1338,128 @@ pub(crate) mod __private {
     /// Leave the import [`enter_import`] entered last.
     pub fn leave_import(builder: ContainerBuilder) -> ContainerBuilder {
         builder.leave_import()
+    }
+
+    /// A provider `#[module]`'s register step left unbuilt once nothing more
+    /// could progress, as its expansion reports it to [`record_stall`].
+    pub struct StalledProvider {
+        /// The provider, as its module lists it.
+        pub name: &'static str,
+        /// Every key it registers: its own type, and each trait it is bound as.
+        pub provides: Vec<TypeId>,
+        /// Its required dependencies.
+        pub dependencies: Vec<TypeId>,
+        /// The label of each of [`dependencies`](Self::dependencies), in order.
+        pub dependency_names: Vec<&'static str>,
+        /// Its optional dependencies, which it waits on while a sibling would
+        /// provide them.
+        pub optional_dependencies: Vec<TypeId>,
+        /// The label of each of
+        /// [`optional_dependencies`](Self::optional_dependencies), in order.
+        pub optional_dependency_names: Vec<&'static str>,
+    }
+
+    /// File what `module`'s register step could not build: a cycle among its
+    /// providers is refused now ([`ProviderCycleError`](crate::ProviderCycleError));
+    /// every other stalled provider is kept for the seal, which refuses it
+    /// once the access graph passes — those waiting on something no sibling
+    /// provides first, since the rest wait on them. `#[module]` emits it.
+    pub fn record_stall(
+        mut builder: ContainerBuilder,
+        module: TypeId,
+        module_name: &'static str,
+        stalled: Vec<StalledProvider>,
+    ) -> ContainerBuilder {
+        let pending: HashSet<TypeId> = stalled
+            .iter()
+            .flat_map(|provider| provider.provides.iter().copied())
+            .collect();
+        let waits: Vec<Vec<(TypeId, &'static str)>> = stalled
+            .iter()
+            .map(|provider| {
+                let required = labelled(&provider.dependencies, &provider.dependency_names)
+                    .filter(|(id, _)| !builder.contains(*id));
+                let optional = labelled(
+                    &provider.optional_dependencies,
+                    &provider.optional_dependency_names,
+                )
+                .filter(|(id, _)| !builder.contains(*id) && pending.contains(id));
+                required.chain(optional).collect()
+            })
+            .collect();
+        let cyclic = waiting_in_a_cycle(&stalled, &waits, &pending);
+        let cycle: Vec<&'static str> = stalled
+            .iter()
+            .zip(&cyclic)
+            .filter(|(_, on_cycle)| **on_cycle)
+            .map(|(provider, _)| provider.name)
+            .collect();
+        if !cycle.is_empty() {
+            builder = builder.refuse(crate::ProviderCycleError {
+                module: module_name,
+                type_names: cycle,
+            });
+        }
+        let waits_outside = |i: &usize| waits[*i].iter().any(|(id, _)| !pending.contains(id));
+        let off_cycle = (0..stalled.len()).filter(|i| !cyclic[*i]);
+        let (outside, inside): (Vec<usize>, Vec<usize>) = off_cycle.partition(waits_outside);
+        for i in outside.into_iter().chain(inside) {
+            builder.stalls.push(super::Stall {
+                module: (module, module_name),
+                provider: stalled[i].name,
+                provides: stalled[i].provides.clone(),
+                missing: waits[i].clone(),
+            });
+        }
+        builder
+    }
+
+    /// `ids` beside their labels, a missing label read as unnamed.
+    fn labelled<'a>(
+        ids: &'a [TypeId],
+        names: &'a [&'static str],
+    ) -> impl Iterator<Item = (TypeId, &'static str)> + 'a {
+        ids.iter().enumerate().map(|(i, id)| {
+            (
+                *id,
+                names
+                    .get(i)
+                    .copied()
+                    .unwrap_or(crate::access::UNNAMED_DEPENDENCY),
+            )
+        })
+    }
+
+    /// Which of `stalled` wait on each other in a cycle — or on one that does:
+    /// every one of their `waits` is a sibling's, and no sibling they wait on
+    /// waits on anything else.
+    fn waiting_in_a_cycle(
+        stalled: &[StalledProvider],
+        waits: &[Vec<(TypeId, &'static str)>],
+        pending: &HashSet<TypeId>,
+    ) -> Vec<bool> {
+        let mut cyclic: Vec<bool> = waits
+            .iter()
+            .map(|wait| !wait.is_empty() && wait.iter().all(|(id, _)| pending.contains(id)))
+            .collect();
+        loop {
+            let off: Vec<TypeId> = stalled
+                .iter()
+                .zip(&cyclic)
+                .filter(|(_, on_cycle)| !**on_cycle)
+                .flat_map(|(provider, _)| provider.provides.iter().copied())
+                .collect();
+            let mut changed = false;
+            for (on_cycle, wait) in cyclic.iter_mut().zip(waits) {
+                if *on_cycle && wait.iter().any(|(id, _)| off.contains(id)) {
+                    *on_cycle = false;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return cyclic;
+            }
+        }
     }
 }
 
@@ -1926,5 +2071,140 @@ mod tests {
             .get()
             .expect("different transient resolves after a sibling factory panicked");
         assert_eq!(resolved.0, "recovered");
+    }
+
+    mod stall {
+        use std::any::TypeId;
+
+        use super::super::__private::{StalledProvider, record_stall};
+        use super::super::{Container, ContainerBuilder};
+
+        struct Module;
+        struct Absent;
+        struct First;
+        struct Second;
+        struct Third;
+
+        fn stalled(
+            name: &'static str,
+            provides: TypeId,
+            waits: &[(TypeId, &'static str)],
+        ) -> StalledProvider {
+            StalledProvider {
+                name,
+                provides: vec![provides],
+                dependencies: waits.iter().map(|(id, _)| *id).collect(),
+                dependency_names: waits.iter().map(|(_, name)| *name).collect(),
+                optional_dependencies: Vec::new(),
+                optional_dependency_names: Vec::new(),
+            }
+        }
+
+        fn record(stalled: Vec<StalledProvider>) -> ContainerBuilder {
+            record_stall(
+                Container::builder(),
+                TypeId::of::<Module>(),
+                "Module",
+                stalled,
+            )
+        }
+
+        fn recorded(builder: &ContainerBuilder) -> Vec<&'static str> {
+            builder
+                .stalls()
+                .iter()
+                .map(|stall| stall.provider)
+                .collect()
+        }
+
+        #[test]
+        fn what_waits_outside_the_module_is_kept_before_what_waits_on_it() {
+            let mut builder = record(vec![
+                stalled(
+                    "First",
+                    TypeId::of::<First>(),
+                    &[(TypeId::of::<Second>(), "Second")],
+                ),
+                stalled(
+                    "Second",
+                    TypeId::of::<Second>(),
+                    &[(TypeId::of::<Absent>(), "Absent")],
+                ),
+            ]);
+            assert!(builder.take_refusal().is_none(), "no cycle among them");
+            assert_eq!(recorded(&builder), ["Second", "First"]);
+            assert_eq!(
+                builder.stalls()[0].missing,
+                [(TypeId::of::<Absent>(), "Absent")]
+            );
+            assert_eq!(
+                builder.stalls()[0].module,
+                (TypeId::of::<Module>(), "Module")
+            );
+        }
+
+        #[test]
+        fn providers_waiting_on_each_other_are_refused_whatever_else_stalls() {
+            let mut builder = record(vec![
+                stalled(
+                    "First",
+                    TypeId::of::<First>(),
+                    &[(TypeId::of::<Second>(), "Second")],
+                ),
+                stalled(
+                    "Second",
+                    TypeId::of::<Second>(),
+                    &[(TypeId::of::<First>(), "First")],
+                ),
+                stalled(
+                    "Third",
+                    TypeId::of::<Third>(),
+                    &[(TypeId::of::<Absent>(), "Absent")],
+                ),
+            ]);
+            let refusal = builder.take_refusal().expect("the cycle is refused");
+            let cycle = refusal
+                .downcast_ref::<crate::ProviderCycleError>()
+                .unwrap_or_else(|| panic!("not the cycle: {refusal:#}"));
+            assert_eq!(cycle.type_names, ["First", "Second"]);
+            assert_eq!(recorded(&builder), ["Third"]);
+        }
+
+        #[test]
+        fn an_optional_dependency_a_stalled_sibling_provides_is_waited_on() {
+            let mut waiting = stalled("First", TypeId::of::<First>(), &[]);
+            waiting.optional_dependencies = vec![TypeId::of::<Second>(), TypeId::of::<Absent>()];
+            waiting.optional_dependency_names = vec!["Second", "Absent"];
+            let mut builder = record(vec![
+                waiting,
+                stalled(
+                    "Second",
+                    TypeId::of::<Second>(),
+                    &[(TypeId::of::<Absent>(), "Absent")],
+                ),
+            ]);
+            assert!(builder.take_refusal().is_none());
+            assert_eq!(recorded(&builder), ["Second", "First"]);
+            assert_eq!(
+                builder.stalls()[1].missing,
+                [(TypeId::of::<Second>(), "Second")],
+                "an optional no sibling provides is no wait"
+            );
+        }
+
+        #[test]
+        fn a_dependency_without_a_label_is_named_unnamed() {
+            let mut unlabelled = stalled(
+                "First",
+                TypeId::of::<First>(),
+                &[(TypeId::of::<Absent>(), "Absent")],
+            );
+            unlabelled.dependency_names.clear();
+            let builder = record(vec![unlabelled]);
+            assert_eq!(
+                builder.stalls()[0].missing[0].1,
+                crate::access::UNNAMED_DEPENDENCY
+            );
+        }
     }
 }

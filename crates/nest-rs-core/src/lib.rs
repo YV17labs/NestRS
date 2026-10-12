@@ -145,8 +145,8 @@ pub use error::{
     AccessGraphError, BootInterruptedError, BudgetPastNetError, ContestedDeclarationError,
     DecodeError, DuplicateProviderError, FactoryCycleError, FactoryFailedError, InitFailedError,
     KeyedDependencyError, LateFactoryError, MissingDependencyError, ProviderCycleError,
-    ScopeViolationError, UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError,
-    WiringFailedError,
+    ScopeViolationError, UnbuiltCause, UnbuiltProviderError, UnregisteredModuleError,
+    UnresolvedFactoryError, UnresolvedLayerError, WiringFailedError,
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
@@ -185,8 +185,8 @@ pub mod __private {
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{use_exception_filters_global, use_interceptors_global};
     pub use crate::container::__private::{
-        collect_dynamic_import, enter_import, leave_import, refuse_site, register_dynamic_import,
-        site_chains, take_site_refusal,
+        StalledProvider, collect_dynamic_import, enter_import, leave_import, record_stall,
+        refuse_site, register_dynamic_import, site_chains, take_site_refusal,
     };
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::error_message::__private::find_in_chain;

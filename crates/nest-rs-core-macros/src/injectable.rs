@@ -7,7 +7,7 @@ use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_keyed_method, injected_method,
     injected_names_method, injected_optional_method, optional_dependencies_method,
-    parse_provider_host,
+    optional_dependency_names_method, parse_provider_host,
 };
 
 pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -33,6 +33,7 @@ pub(crate) fn provider(
         dep_keys,
         dep_names,
         opt_keys,
+        opt_names,
         keyed_dep_keys,
     } = build_injectable_body(&mut item)?;
 
@@ -60,7 +61,11 @@ pub(crate) fn provider(
         InjectableScope::Singleton => (
             dependencies_method(&dep_keys),
             dependency_names_method(&dep_names),
-            optional_dependencies_method(&opt_keys),
+            {
+                let keys = optional_dependencies_method(&opt_keys);
+                let names = optional_dependency_names_method(&opt_names);
+                quote! { #keys #names }
+            },
             quote! {
                 fn register(
                     builder: ::nest_rs_core::ContainerBuilder,

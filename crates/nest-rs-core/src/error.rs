@@ -282,6 +282,76 @@ pub struct ProviderCycleError {
     pub type_names: Vec<&'static str>,
 }
 
+/// A provider a `#[module]` lists that the register phase never built: what it
+/// injects was not registered yet when its module's providers were built.
+/// Raised once the access graph passes, which names a missing dependency's
+/// owner more precisely.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "module `{module}`: `{provider}` was never built — it needs {}, which nothing had registered \
+     when `{module}`'s providers were built; {}",
+    and_list(.missing),
+    unbuilt_clause(.cause, .module, .missing.len())
+)]
+pub struct UnbuiltProviderError {
+    /// The module listing the provider.
+    pub module: &'static str,
+    /// The provider never built.
+    pub provider: &'static str,
+    /// What it injects that was absent when it would have been built.
+    pub missing: Vec<&'static str>,
+    /// Why it was absent.
+    pub cause: UnbuiltCause,
+}
+
+/// Why a dependency was absent when its consumer's module built its providers,
+/// though the same boot registered it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnbuiltCause {
+    /// The modules of an import cycle, the consumer's first: one of them
+    /// registers before the other's providers exist.
+    ImportCycle(Vec<&'static str>),
+    /// Registered later in the boot, by a hand-written module or a `for_root`
+    /// the consumer's module does not import.
+    RegisteredLater,
+}
+
+/// What an [`UnbuiltCause`] says of `count` dependencies of a provider in
+/// `module`: the cause, then its edit.
+fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
+    match cause {
+        UnbuiltCause::ImportCycle(modules) if modules.len() == 2 => format!(
+            "{} import each other, so one registers before the other's providers exist: move \
+             what both need into a module both import",
+            and_list(modules)
+        ),
+        UnbuiltCause::ImportCycle(modules) => format!(
+            "{} import each other in a cycle, so one registers before another's providers \
+             exist: move what they need into a module they all import",
+            and_list(modules)
+        ),
+        UnbuiltCause::RegisteredLater => format!(
+            "a hand-written module or a `for_root` outside `{module}`'s imports registers {} \
+             later: import that module in `{module}`'s `imports`",
+            if count == 1 { "it" } else { "them" }
+        ),
+    }
+}
+
+/// `` `A` ``, `` `A` and `B` ``, `` `A`, `B` and `C` ``.
+fn and_list(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => format!("`{only}`"),
+        [init @ .., last] => {
+            let init: Vec<String> = init.iter().map(|name| format!("`{name}`")).collect();
+            format!("{} and `{last}`", init.join(", "))
+        }
+    }
+}
+
 /// A resource's [`Budget`](crate::Budget) at or past the [`Net`](crate::Net) of
 /// a port that waits on it: the port would cut a call the resource was still
 /// answering, replacing its cause with a bare timeout.
@@ -1136,6 +1206,48 @@ mod decode_error_tests {
 #[cfg(test)]
 mod boot_refusal_tests {
     use super::*;
+
+    #[test]
+    fn a_provider_never_built_names_what_it_needed_and_the_edit_its_cause_has() {
+        let cycle = UnbuiltProviderError {
+            module: "UsersModule",
+            provider: "UsersService",
+            missing: vec!["PostsService"],
+            cause: UnbuiltCause::ImportCycle(vec!["UsersModule", "PostsModule"]),
+        };
+        assert_eq!(
+            cycle.to_string(),
+            "module `UsersModule`: `UsersService` was never built — it needs `PostsService`, \
+             which nothing had registered when `UsersModule`'s providers were built; \
+             `UsersModule` and `PostsModule` import each other, so one registers before the \
+             other's providers exist: move what both need into a module both import"
+        );
+        let longer = UnbuiltProviderError {
+            cause: UnbuiltCause::ImportCycle(vec!["UsersModule", "PostsModule", "OrgsModule"]),
+            ..cycle
+        };
+        assert!(
+            longer.to_string().contains(
+                "`UsersModule`, `PostsModule` and `OrgsModule` import each other in a cycle, so \
+                 one registers before another's providers exist: move what they need into a \
+                 module they all import"
+            ),
+            "{longer}"
+        );
+        let later = UnbuiltProviderError {
+            module: "BillingModule",
+            provider: "Invoices",
+            missing: vec!["Ledger", "Clock"],
+            cause: UnbuiltCause::RegisteredLater,
+        };
+        assert_eq!(
+            later.to_string(),
+            "module `BillingModule`: `Invoices` was never built — it needs `Ledger` and `Clock`, \
+             which nothing had registered when `BillingModule`'s providers were built; a \
+             hand-written module or a `for_root` outside `BillingModule`'s imports registers \
+             them later: import that module in `BillingModule`'s `imports`"
+        );
+    }
 
     #[test]
     fn an_interruption_names_its_cause_and_its_step() {

@@ -193,9 +193,9 @@ window closes is interrupted — its `queue.job` line filed with
 reserve, due at once for another replica, so the orchestrator's `SIGKILL` never
 lands on a job the worker still holds. The window is
 `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, 20 seconds by default, which leaves the
-shutdown hooks' five and the telemetry flush's three inside Kubernetes' default
-30-second grace period; a window you raise needs the pod's grace period at least
-8.5 seconds above it
+shutdown hooks' five, the telemetry flush's three and the console's one inside
+Kubernetes' default 30-second grace period; a window you raise needs the pod's
+grace period at least 9.5 seconds above it
 ([the way down](/fundamentals/lifecycle/#the-way-down)).
 
 **The reserve is one Redis call long**: the connection's budget, or five seconds

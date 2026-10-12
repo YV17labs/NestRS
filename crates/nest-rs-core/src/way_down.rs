@@ -17,10 +17,13 @@
 //! Dropping a tokio runtime waits for every blocking task still running, so
 //! [`main`] tears it down within what the shutdown hooks left of
 //! [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT), whether `main`
-//! returns or panics.
+//! returns or panics. Every exit it controls — that end, the unwind, a signal
+//! exiting at once — then writes what the console still queues, within its own
+//! bound.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -127,7 +130,24 @@ fn exit_at_once(signal: Received) -> ! {
             Step::Exit => abandoning!(step = "exit"),
         }
     }
+    flush_console();
     std::process::exit(code)
+}
+
+/// Whether `#[nest_rs::main]` runs this process, and so owns its exits.
+static UNDER_MAIN: AtomicBool = AtomicBool::new(false);
+
+/// Whether `#[nest_rs::main]` runs this process: only then is the console
+/// queued, since only then is every exit one that writes what it queues.
+#[cfg(feature = "logging")]
+pub(crate) fn under_main() -> bool {
+    UNDER_MAIN.load(Ordering::Relaxed)
+}
+
+/// Write what the console still queues, within its bound.
+fn flush_console() {
+    #[cfg(feature = "logging")]
+    crate::logging::flush_console();
 }
 
 /// The line a signal before any app files: no subscriber may exist yet, so it
@@ -362,11 +382,12 @@ fn teardown_budget() -> Duration {
 
 /// What `#[nest_rs::main]` expands to: install the process panic hook, run the
 /// process steps while no runtime exists, build the runtime, install the
-/// signal handlers on it, run `main` on it, and tear it down within what
-/// remains of the shutdown hooks' budget.
+/// signal handlers on it, run `main` on it, tear it down within what remains
+/// of the shutdown hooks' budget, and write what the console still queues.
 ///
 /// The runtime is what `#[tokio::main]` builds; only its teardown is bounded.
 pub fn main<T, F: Future<Output = T>>(main: F) -> T {
+    UNDER_MAIN.store(true, Ordering::Relaxed);
     std::panic::set_hook(Box::new(crate::panic::hook));
     crate::process_start::run_all();
     #[expect(
@@ -400,6 +421,7 @@ pub fn main<T, F: Future<Output = T>>(main: F) -> T {
         );
     }
     drop(watching);
+    flush_console();
     ran.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 

@@ -305,6 +305,38 @@ of production. Turn it on in `.env.development` (next to `<PREFIX>_LOG=debug`) s
 it is live while developing and off everywhere else, or pin it explicitly with
 `OpenTelemetryConfig::with_log_source_location(true)`.
 
+## A console that stalls
+
+Under `#[nest_rs::main]` the console is written by a thread of its own,
+`nestrs-log`, through a queue of 16 384 lines (`CONSOLE_QUEUE_LINES`), so no
+task waits on stdout. It writes in batches: a line that wakes it waits up to
+2 ms for the lines filed after it, and they leave in one write, so a busy app
+pays one write for many lines. When stdout stops taking lines — a full pipe, a
+container log driver that stalled — the queue fills, and a line that finds it
+full is dropped rather than waited for: the app keeps answering. Once a
+second, while lines were dropped, one `warn` says how many since the process
+started:
+
+```text frame="terminal"
+ WARN nest_rs::app: log lines dropped while the console was stalled dropped=83617
+```
+
+That line takes the same queue; if it is dropped too, the next one carries the
+larger count. A line stdout refuses outright — its reader gone — is counted the
+same way, and the first refusal is said on stderr. Every exit
+`#[nest_rs::main]` controls — `main` returning, a panic leaving it, a second
+signal — waits until every line queued before it is written, within one second
+(`CONSOLE_FLUSH_TIMEOUT`, the last step of
+[the way down](/fundamentals/lifecycle/#the-way-down)); past it the rest is lost,
+and one line on stderr says so. A hard kill loses what was queued, as it would
+with any writer.
+
+A process that does not run on `#[nest_rs::main]` — a test binary — writes
+stdout directly, so a failing test keeps its last lines. A deployment that needs
+every line ships them through the [OTel logs bridge](#otel-logs-bridge), which
+the queue does not touch. A line your code prints itself with `println!` skips
+the queue, so it can appear before log lines filed earlier.
+
 ## Access log
 
 **The access log belongs to `nest-rs-http`, not to this crate.** Method, path,

@@ -1,9 +1,11 @@
 //! The way down, read across the crates that bound it: each transport's window,
-//! the kernel's shutdown-hooks budget, the telemetry flush. No crate owns the
-//! sum, so it is asserted here, where every one of them is reachable.
+//! the kernel's shutdown-hooks budget, the telemetry flush, the console's. No
+//! crate owns the sum, so it is asserted here, where every one of them is
+//! reachable.
 
 use std::time::Duration;
 
+use nest_rs_core::logging::CONSOLE_FLUSH_TIMEOUT;
 use nest_rs_core::{SHUTDOWN_HOOKS_TIMEOUT, Transport};
 use nest_rs_http::HttpTransport;
 use nest_rs_opentelemetry::FLUSH_TIMEOUT;
@@ -14,9 +16,9 @@ use nest_rs_schedule::Scheduler;
 const KUBERNETES_DEFAULT_GRACE: Duration = Duration::from_secs(30);
 
 /// The way down the documentation states, to the millisecond: the longest
-/// transport's stop, then the hooks' budget, then the flush. Pinned, so a moved
-/// constant sends its author to every page that quotes the figure.
-const STATED_WAY_DOWN: Duration = Duration::from_millis(28_500);
+/// transport's stop, then the hooks' budget, then the two flushes. Pinned, so a
+/// moved constant sends its author to every page that quotes the figure.
+const STATED_WAY_DOWN: Duration = Duration::from_millis(29_500);
 
 /// Every transport a module can contribute, at its defaults.
 fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
@@ -28,10 +30,11 @@ fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
 }
 
 /// The runtime's teardown adds nothing: `#[nest_rs::main]` holds it to what the
-/// hooks and the flush left of the hooks' budget.
+/// hooks and the telemetry flush left of the hooks' budget, then gives the
+/// console its own.
 #[test]
 fn the_default_shutdown_steps_sum_under_a_kubernetes_grace_period() {
-    let after = SHUTDOWN_HOOKS_TIMEOUT + FLUSH_TIMEOUT;
+    let after = SHUTDOWN_HOOKS_TIMEOUT + FLUSH_TIMEOUT + CONSOLE_FLUSH_TIMEOUT;
     for (transport, serving) in transports() {
         let way_down = serving.stop_bound() + after;
         assert!(

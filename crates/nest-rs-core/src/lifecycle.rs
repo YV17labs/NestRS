@@ -24,8 +24,9 @@ use crate::panic;
 /// | the shutdown hooks run | this budget, across all three phases | 5 s |
 /// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |
 /// | the runtime is torn down | what remains of this budget, under `#[nest_rs::main]` | nothing past it |
+/// | the console writes what it queues | `nest_rs_core::logging::CONSOLE_FLUSH_TIMEOUT`, under `#[nest_rs::main]` | 1 s |
 ///
-/// 28.5 s, under the kill: a process past its grace dies without a line.
+/// 29.5 s, under the kill: a process past its grace dies without a line.
 ///
 /// **Once it is spent, every later hook still starts**, polled once: one that
 /// finishes without waiting finishes, one that waits is abandoned at `warn`. A

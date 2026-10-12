@@ -5,7 +5,7 @@ use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::logging::{JsonFormat, LogSettings, TextFormat};
+use nest_rs_core::logging::{ConsoleWriter, JsonFormat, LogSettings, TextFormat};
 
 use crate::config::{LogFormat, OpenTelemetryConfig};
 use crate::error::OpenTelemetryError;
@@ -199,19 +199,22 @@ where
         // are absent here.
         LogFormat::Text => tracing_subscriber::fmt::layer()
             .event_format(TextFormat::new(source_location))
+            .with_writer(ConsoleWriter::get())
             .boxed(),
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
             .event_format(JsonFormat::new(source_location))
+            .with_writer(ConsoleWriter::get())
             .boxed(),
     }
 }
 
 /// How long the final telemetry flush may hold the exit, every provider at once.
 ///
-/// The last bounded step of the way down, after the transports' windows and the
-/// shutdown hooks' budget (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT` tabulates the
-/// sum, under the 30 s a Kubernetes pod is given before `SIGKILL`).
+/// A bounded step of the way down, after the transports' windows and the
+/// shutdown hooks' budget and before the console's last lines
+/// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT` tabulates the sum, under the 30 s a
+/// Kubernetes pod is given before `SIGKILL`).
 ///
 /// **The providers flush concurrently, each on a thread of its own**: the SDK's
 /// `shutdown` blocks up to five seconds per provider. What is still exporting at

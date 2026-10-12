@@ -17,6 +17,9 @@
 use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
+use std::io;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::field::{Field, Visit};
@@ -24,6 +27,7 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::field::VisitOutput;
 use tracing_subscriber::filter::{LevelParseError, ParseError};
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::{DefaultVisitor, JsonFields, Writer};
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
@@ -32,6 +36,7 @@ use tracing_subscriber::registry::LookupSpan;
 use crate::env_prefix::EnvPrefix;
 use crate::line_safe::{LineSafe, forges};
 use crate::request_scope::current_correlation_with;
+use crate::stderr_lines::write_stderr_line;
 use crate::trace_context::{Correlation, field};
 
 /// The tails of the framework-wide logging variables, joined with the
@@ -221,6 +226,375 @@ pub enum LogSettingsError {
         /// The variable.
         var: String,
     },
+}
+
+/// How many lines the console's queue holds under `#[nest_rs::main]`: a line
+/// that finds it full is dropped and counted. A few hundred bytes a line keeps
+/// it to single-digit MiB.
+pub const CONSOLE_QUEUE_LINES: usize = 16_384;
+
+/// How long the console's last lines may hold an exit `#[nest_rs::main]`
+/// controls — the last bounded step of the way down, which
+/// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT) tabulates.
+///
+/// What a stdout that stopped taking lines still holds past it is lost, and
+/// said in one line on stderr.
+pub const CONSOLE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How often the lines the console dropped are counted aloud.
+const DROP_REPORT_PERIOD: Duration = Duration::from_secs(1);
+
+/// How long the console's writer, woken by a line, lets the lines filed after
+/// it gather before writing them: a busy process pays one wake and one write a
+/// batch rather than a line.
+const BATCH_WINDOW: Duration = Duration::from_millis(2);
+
+/// The bytes a written batch's buffer keeps for the next: a burst's larger one
+/// is given back.
+const BATCH_BYTES_KEPT: usize = 1 << 20;
+
+/// The process's console, the writer every subscriber the framework ships
+/// writes its lines through.
+///
+/// Under `#[nest_rs::main]` it is stdout written in batches by one thread of
+/// its own (`nestrs-log`) through a queue of [`CONSOLE_QUEUE_LINES`]: a line
+/// that finds the queue full — a stdout nobody drains — is dropped and counted,
+/// never waited for, so no task stalls on the console. Once a second, while lines
+/// were dropped, one `warn` on [`APP`](crate::target::APP) says how many since
+/// the process started (`dropped`), and every exit `#[nest_rs::main]` controls
+/// waits until each line queued before it is written, within
+/// [`CONSOLE_FLUSH_TIMEOUT`]. Elsewhere — a test binary, a process that runs an
+/// `App` without it — it is stdout, written synchronously, so nothing queued is
+/// lost at an exit the kernel does not see.
+#[derive(Clone)]
+pub struct ConsoleWriter(Option<&'static Queue>);
+
+/// The process's console queue, opened on first use; `None` writes stdout
+/// directly.
+static CONSOLE: OnceLock<Option<Arc<Queue>>> = OnceLock::new();
+
+impl ConsoleWriter {
+    /// The process's writer; under `#[nest_rs::main]` its queue and its
+    /// thread start on first use.
+    pub fn get() -> Self {
+        Self(CONSOLE.get_or_init(open).as_deref())
+    }
+
+    fn queued(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+impl fmt::Debug for ConsoleWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mode = if self.queued() { "queued" } else { "direct" };
+        f.debug_tuple("ConsoleWriter").field(&mode).finish()
+    }
+}
+
+impl<'a> MakeWriter<'a> for ConsoleWriter {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl io::Write for ConsoleWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self.0 {
+            Some(queue) => {
+                queue.push(buf);
+                Ok(buf.len())
+            }
+            None => io::stdout().write(buf),
+        }
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        match self.0 {
+            Some(queue) => {
+                queue.push(buf);
+                Ok(())
+            }
+            None => io::stdout().write_all(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self.0 {
+            Some(_) => Ok(()),
+            None => io::stdout().flush(),
+        }
+    }
+}
+
+/// The console's queue under `#[nest_rs::main]`, shared by every line filed,
+/// its writer thread and the exits waiting on it.
+struct Queue {
+    state: Mutex<Queued>,
+    /// Wakes the writer waiting on an empty queue, or gathering a batch an
+    /// exit waits for.
+    arrived: Condvar,
+    /// Wakes an exit waiting on the writer.
+    wrote: Condvar,
+    capacity: usize,
+    /// How long a batch gathers once its first line woke the writer.
+    window: Duration,
+}
+
+/// Lines end to end, as the writer writes them: in one call.
+#[derive(Default)]
+struct Batch {
+    bytes: Vec<u8>,
+    /// Where each line ends in `bytes`.
+    ends: Vec<usize>,
+}
+
+impl Batch {
+    fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ends.is_empty()
+    }
+
+    fn push(&mut self, line: &[u8]) {
+        self.bytes.extend_from_slice(line);
+        self.ends.push(self.bytes.len());
+    }
+
+    /// Write every line to `out`; past a refusal, how many lines it did not
+    /// take whole.
+    fn write_to(&self, out: &mut impl io::Write) -> Result<(), (usize, io::Error)> {
+        let mut written = 0;
+        while written < self.bytes.len() {
+            match out.write(&self.bytes[written..]) {
+                Ok(0) => return Err((self.left_after(written), io::ErrorKind::WriteZero.into())),
+                Ok(taken) => written += taken,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err((self.left_after(written), error)),
+            }
+        }
+        Ok(())
+    }
+
+    /// How many lines end past the first `written` bytes.
+    fn left_after(&self, written: usize) -> usize {
+        self.len() - self.ends.partition_point(|&end| end <= written)
+    }
+
+    /// Empty it for the next batch, giving back what a burst grew it to.
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.ends.clear();
+        self.bytes.shrink_to(BATCH_BYTES_KEPT);
+    }
+}
+
+/// What the queue holds and how far the writer got, under one lock, so an exit
+/// waits for exactly the lines queued before it.
+#[derive(Default)]
+struct Queued {
+    lines: Batch,
+    /// Every line the queue took.
+    taken: u64,
+    /// Every line the writer is done with, written or refused.
+    done: u64,
+    /// Every line dropped: by a full queue, or refused by stdout.
+    dropped: u64,
+    /// Whether the writer waits for a line.
+    writer_idle: bool,
+    /// How many exits wait on the writer.
+    exits_waiting: usize,
+}
+
+impl Queue {
+    fn new(capacity: usize, window: Duration) -> Self {
+        Self {
+            state: Mutex::default(),
+            arrived: Condvar::new(),
+            wrote: Condvar::new(),
+            capacity,
+            window,
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, Queued> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Queue `line`, or drop and count it when the queue is full: it never
+    /// waits on stdout.
+    fn push(&self, line: &[u8]) {
+        let mut state = self.state();
+        if state.lines.len() >= self.capacity {
+            state.dropped += 1;
+            return;
+        }
+        state.lines.push(line);
+        state.taken += 1;
+        let wake = std::mem::take(&mut state.writer_idle);
+        drop(state);
+        if wake {
+            self.arrived.notify_one();
+        }
+    }
+
+    /// Move every queued line into the empty `batch`. On an empty queue, wait
+    /// for a line — at most `idle` when given —, then let the lines after it
+    /// gather for the queue's window, unless an exit waits for them.
+    fn take(&self, batch: &mut Batch, idle: Option<Duration>) {
+        let mut state = self.state();
+        if state.lines.is_empty() && idle != Some(Duration::ZERO) {
+            state.writer_idle = true;
+            state = match idle {
+                Some(idle) => {
+                    self.arrived
+                        .wait_timeout(state, idle)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+                None => self
+                    .arrived
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner),
+            };
+            state.writer_idle = false;
+            let gathered = Instant::now() + self.window;
+            while !state.lines.is_empty() && state.exits_waiting == 0 {
+                let left = gathered.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                state = self
+                    .arrived
+                    .wait_timeout(state, left)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0;
+            }
+        }
+        std::mem::swap(&mut state.lines, batch);
+    }
+
+    /// Count the `done` lines the writer handled, `refused` of them by stdout,
+    /// for the exits waiting on them. Returns the lines dropped so far.
+    fn settle(&self, done: u64, refused: u64) -> u64 {
+        let mut state = self.state();
+        state.done += done;
+        state.dropped += refused;
+        if done > 0 && state.exits_waiting > 0 {
+            self.wrote.notify_all();
+        }
+        state.dropped
+    }
+
+    /// The writer thread: write every queued batch to `out`, in order, and once
+    /// a period, while lines were dropped, file how many. The first line `out`
+    /// refuses is also said on stderr, since the count travels on `out`.
+    fn write_out(&self, mut out: impl io::Write) {
+        let mut batch = Batch::default();
+        let (mut dropped, mut said) = (0, 0);
+        let mut refusal_said = false;
+        let mut report_at = Instant::now() + DROP_REPORT_PERIOD;
+        loop {
+            let idle =
+                (dropped > said).then(|| report_at.saturating_duration_since(Instant::now()));
+            self.take(&mut batch, idle);
+            let refused = batch
+                .write_to(&mut out)
+                .err()
+                .map_or(0, |(refused, error)| {
+                    if !refusal_said {
+                        refusal_said = true;
+                        write_stderr_line(format_args!(
+                            "nestrs: stdout refused a console line, so each it refuses is dropped \
+                         and counted: {}",
+                            LineSafe(&crate::error_message(&error))
+                        ));
+                    }
+                    refused
+                });
+            dropped = self.settle(batch.len() as u64, refused as u64);
+            batch.clear();
+            if Instant::now() >= report_at {
+                report_at = Instant::now() + DROP_REPORT_PERIOD;
+                if dropped > said {
+                    said = dropped;
+                    tracing::warn!(
+                        target: crate::target::APP,
+                        dropped,
+                        "log lines dropped while the console was stalled",
+                    );
+                }
+            }
+        }
+    }
+
+    /// Wait until the writer is done with every line queued before this call,
+    /// at most `bound`; whether it was.
+    fn written_within(&self, bound: Duration) -> bool {
+        let deadline = Instant::now() + bound;
+        let mut state = self.state();
+        let queued = state.taken;
+        state.exits_waiting += 1;
+        // A batch still gathering is written at once.
+        self.arrived.notify_one();
+        let written = loop {
+            if state.done >= queued {
+                break true;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break false;
+            }
+            state = self
+                .wrote
+                .wait_timeout(state, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        };
+        state.exits_waiting -= 1;
+        written
+    }
+}
+
+fn open() -> Option<Arc<Queue>> {
+    if !crate::way_down::under_main() {
+        return None;
+    }
+    let queue = Arc::new(Queue::new(CONSOLE_QUEUE_LINES, BATCH_WINDOW));
+    let writer = Arc::clone(&queue);
+    let spawned = std::thread::Builder::new()
+        .name("nestrs-log".to_owned())
+        .spawn(move || writer.write_out(io::stdout()));
+    match spawned {
+        Ok(_) => Some(queue),
+        Err(error) => {
+            write_stderr_line(format_args!(
+                "nestrs: the console queue could not start, so stdout is written directly: {}",
+                LineSafe(&crate::error_message(&error))
+            ));
+            None
+        }
+    }
+}
+
+/// Wait until every line the console queued so far is written, at most
+/// [`CONSOLE_FLUSH_TIMEOUT`]: the exits `#[nest_rs::main]` controls call it
+/// last, and a line filed after it is not waited for. A line about the console
+/// itself goes to stderr, which its queue never holds.
+pub(crate) fn flush_console() {
+    let Some(queue) = CONSOLE.get().and_then(Option::as_deref) else {
+        return;
+    };
+    if !queue.written_within(CONSOLE_FLUSH_TIMEOUT) {
+        write_stderr_line(format_args!(
+            "nestrs: the console's last lines were abandoned after {} ms: stdout stopped taking them",
+            CONSOLE_FLUSH_TIMEOUT.as_millis()
+        ));
+    }
 }
 
 /// SGR sequences spelled out: tracing-subscriber's own `Style` is private.
@@ -696,7 +1070,9 @@ pub(crate) fn init_fallback() -> Result<()> {
         return Ok(());
     }
     let settings = LogSettings::from_env()?;
-    let builder = tracing_subscriber::fmt().with_env_filter(EnvFilter::new(&settings.filter));
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(&settings.filter))
+        .with_writer(ConsoleWriter::get());
     #[expect(
         clippy::let_underscore_must_use,
         reason = "an Err is a subscriber already installed, which the fallback steps aside for"
@@ -1361,6 +1737,238 @@ mod tests {
             .to_string();
         assert!(said.contains("a field filter does not parse"), "{said}");
         assert!(!said.contains("sk_live"), "{said}");
+    }
+
+    #[test]
+    fn a_process_outside_the_kernel_s_main_writes_its_console_directly() {
+        let console = ConsoleWriter::get();
+
+        assert!(!console.queued(), "a test binary is never queued");
+        assert_eq!(format!("{console:?}"), r#"ConsoleWriter("direct")"#);
+        flush_console();
+    }
+
+    /// A stdout that takes nothing until its gate is released, then every
+    /// write, each recorded whole; it says when its first write began.
+    struct GatedStdout {
+        gate: Option<std::sync::mpsc::Receiver<()>>,
+        began: Option<std::sync::mpsc::Sender<()>>,
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl io::Write for GatedStdout {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Some(began) = self.began.take() {
+                began.send(()).unwrap_or_default();
+            }
+            if let Some(gate) = self.gate.take() {
+                gate.recv().unwrap_or_default();
+            }
+            self.lines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(String::from_utf8_lossy(buf).into_owned());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A stdout whose reader went away.
+    struct ClosedStdout;
+
+    impl io::Write for ClosedStdout {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A queue of `capacity` lines, its writer thread writing to `out`.
+    fn queue_writing_to(capacity: usize, out: impl io::Write + Send + 'static) -> Arc<Queue> {
+        writing_to(Queue::new(capacity, BATCH_WINDOW), out)
+    }
+
+    /// `queue`, its writer thread writing to `out`.
+    fn writing_to(queue: Queue, out: impl io::Write + Send + 'static) -> Arc<Queue> {
+        let queue = Arc::new(queue);
+        let writer = Arc::clone(&queue);
+        std::thread::spawn(move || writer.write_out(out));
+        queue
+    }
+
+    #[test]
+    fn a_line_that_finds_the_queue_full_is_dropped_and_counted() {
+        let queue = Queue::new(2, BATCH_WINDOW);
+
+        for line in ["one\n", "two\n", "three\n"] {
+            queue.push(line.as_bytes());
+        }
+
+        let state = queue.state();
+        assert_eq!(state.lines.bytes, b"one\ntwo\n");
+        assert_eq!(state.lines.len(), 2);
+        assert_eq!((state.taken, state.dropped), (2, 1));
+    }
+
+    #[test]
+    fn the_lines_after_the_one_that_woke_the_writer_leave_with_it_once_an_exit_waits() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let queue = writing_to(
+            Queue::new(8, Duration::from_secs(600)),
+            GatedStdout {
+                gate: None,
+                began: None,
+                lines: Arc::clone(&written),
+            },
+        );
+        let idle_by = Instant::now() + Duration::from_secs(10);
+        while !queue.state().writer_idle {
+            assert!(Instant::now() < idle_by, "the writer waits for a line");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        queue.push(b"one\n");
+        // Time enough for a writer that would not gather to write `one` alone.
+        std::thread::sleep(Duration::from_millis(50));
+        queue.push(b"two\n");
+        queue.push(b"three\n");
+        let exit = Instant::now();
+
+        assert!(queue.written_within(Duration::from_secs(10)));
+        assert!(
+            exit.elapsed() < Duration::from_secs(5),
+            "the exit cut the window short: {:?}",
+            exit.elapsed()
+        );
+        let written = written.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(written, ["one\ntwo\nthree\n"]);
+    }
+
+    /// A stdout that takes `room` bytes, then refuses.
+    struct FillingStdout {
+        room: usize,
+    }
+
+    impl io::Write for FillingStdout {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.room == 0 {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            let taken = buf.len().min(self.room).min(3);
+            self.room -= taken;
+            Ok(taken)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_batch_stdout_refuses_midway_counts_each_line_it_did_not_take_whole() {
+        let mut batch = Batch::default();
+        for line in ["one\n", "two\n", "three\n"] {
+            batch.push(line.as_bytes());
+        }
+
+        let whole = batch.write_to(&mut FillingStdout { room: 4 });
+        let cut = batch.write_to(&mut FillingStdout { room: 6 });
+        let all = batch.write_to(&mut FillingStdout { room: 64 });
+
+        assert_eq!(whole.map_err(|(left, _)| left), Err(2), "`one` went whole");
+        assert_eq!(cut.map_err(|(left, _)| left), Err(2), "`two` was cut");
+        assert_eq!(all.map_err(|(left, _)| left), Ok(()));
+    }
+
+    #[test]
+    fn an_exit_waits_until_every_line_queued_before_it_is_written() {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let queue = queue_writing_to(
+            8,
+            GatedStdout {
+                gate: Some(gate),
+                began: None,
+                lines: Arc::clone(&written),
+            },
+        );
+        for line in ["one\n", "two\n", "three\n"] {
+            queue.push(line.as_bytes());
+        }
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(release);
+        });
+
+        assert!(
+            queue.written_within(Duration::from_secs(10)),
+            "stdout took every line inside the bound"
+        );
+        let written = written.lock().unwrap_or_else(|e| e.into_inner()).concat();
+        assert_eq!(written, "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn the_lines_filed_while_stdout_takes_a_write_leave_in_one_write() {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let (began, writing) = std::sync::mpsc::channel::<()>();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let queue = queue_writing_to(
+            8,
+            GatedStdout {
+                gate: Some(gate),
+                began: Some(began),
+                lines: Arc::clone(&written),
+            },
+        );
+        queue.push(b"one\n");
+        writing
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the writer took the first line");
+        for line in ["two\n", "three\n", "four\n"] {
+            queue.push(line.as_bytes());
+        }
+        drop(release);
+
+        assert!(queue.written_within(Duration::from_secs(10)));
+        let written = written.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(written, ["one\n", "two\nthree\nfour\n"]);
+    }
+
+    #[test]
+    fn an_exit_stops_waiting_at_its_bound() {
+        let (_never_released, gate) = std::sync::mpsc::channel::<()>();
+        let queue = queue_writing_to(
+            8,
+            GatedStdout {
+                gate: Some(gate),
+                began: None,
+                lines: Arc::default(),
+            },
+        );
+        queue.push(b"held\n");
+        let bound = Duration::from_millis(200);
+        let started = Instant::now();
+
+        assert!(!queue.written_within(bound), "stdout never took the line");
+        let took = started.elapsed();
+        assert!(took >= bound && took < Duration::from_secs(2), "{took:?}");
+    }
+
+    #[test]
+    fn a_line_stdout_refuses_is_dropped_and_counted_without_holding_an_exit() {
+        let queue = queue_writing_to(8, ClosedStdout);
+        queue.push(b"one\n");
+        queue.push(b"two\n");
+
+        assert!(queue.written_within(Duration::from_secs(10)));
+        let state = queue.state();
+        assert_eq!((state.taken, state.done, state.dropped), (2, 2, 2));
     }
 
     #[test]

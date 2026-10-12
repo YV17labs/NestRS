@@ -344,6 +344,10 @@ and the teardown in `way_down.rs`'s `//!`:
   may depend on.
 - **Telemetry flushes within a bound of the crate's own**, since the SDK's
   providers do not honour theirs.
+- **The console never holds the app or its exit.** Under `#[nest_rs::main]` it
+  is written through a bounded queue: a stalled stdout drops lines, counted
+  and reported at `warn`, and every exit the kernel controls writes what is
+  still queued within a bound of its own, the last on the way down.
 - **The runtime is torn down by `#[nest_rs::main]`** within what the hooks left
   of their budget, so blocking work left behind is named and abandoned rather
   than holding the exit (no `#[tokio::main]`, held by `clippy.toml`).
@@ -352,5 +356,5 @@ and the teardown in `way_down.rs`'s `//!`:
   `main` runs, and a signal during the boot stops it at its next await, naming
   the step.
 - **The grace period holds the sum.** A test in `nest-rs-testing` sums every
-  framework transport's `stop_bound`, the hooks' budget and the flush under a
-  Kubernetes pod's default grace, and fails the day one stops fitting.
+  framework transport's `stop_bound`, the hooks' budget and both flushes under
+  a Kubernetes pod's default grace, and fails the day one stops fitting.

@@ -17,8 +17,9 @@ const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 /// 15 seconds: under the 30–60 s idle timeout common to proxies and browsers.
 const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
-/// 20 seconds, plus 5 for the shutdown hooks and 3 for the telemetry flush
-/// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`): 28, under Kubernetes' default 30.
+/// 20 seconds, plus 5 for the shutdown hooks, 3 for the telemetry flush and 1
+/// for the console's (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`): 29, under
+/// Kubernetes' default 30.
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 /// The shutdown window's own default, so a request admitted just before a stop
 /// is answered inside the window.
@@ -315,7 +316,8 @@ pub struct HttpConfig {
     /// Read from `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
     /// 3600 — refused outside, from the environment and from the pinned struct
     /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
-    /// 8.5 seconds (`serve`'s unwind, the shutdown hooks and the telemetry flush).
+    /// 9.5 seconds (`serve`'s unwind, the shutdown hooks, the telemetry flush and
+    /// the console's).
     pub shutdown_timeout: Duration,
     /// How many connections the transport holds open at once, an upgraded
     /// socket counted until it closes. Past it a new connection waits in the

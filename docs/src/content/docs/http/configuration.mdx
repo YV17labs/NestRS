@@ -381,13 +381,14 @@ still answering `shutdown_timeout` to finish — `20` seconds by default. It is 
 first of the bounded steps on [the way down](/fundamentals/lifecycle/#the-way-down):
 the window, then half a second for what the transport stopped to unwind, then
 five seconds for the [shutdown hooks](/fundamentals/lifecycle/#ordering-and-failure),
-then three for the [telemetry flush](/opentelemetry/) — 28.5 seconds, under the
+then three for the [telemetry flush](/opentelemetry/), then one for the
+[console](/opentelemetry/logs/#a-console-that-stalls) — 29.5 seconds, under the
 `30` a Kubernetes pod gets between `SIGTERM` and `SIGKILL`. Raise the window
-together with the pod's grace period, keeping the eight and a half seconds after
+together with the pod's grace period, keeping the nine and a half seconds after
 it:
 
 ```bash title=".env.production" frame="terminal"
-NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside terminationGracePeriodSeconds: 64
+NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside terminationGracePeriodSeconds: 65
 ```
 
 Whole seconds from `1` to `3600`; anything outside fails the boot naming the

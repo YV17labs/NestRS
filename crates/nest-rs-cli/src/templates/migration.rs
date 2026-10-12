@@ -28,18 +28,17 @@ tracing-subscriber.workspace = true
 /// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use.
 pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
+use nest_rs::core::logging::{ConsoleWriter, LogSettings};
 use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
-    // `EnvPrefix::var` rather than a literal: this binary then reads the same
-    // log variable the apps do, including under a project's own prefix.
+    // The apps' log settings, read and refused as they are, and their console.
+    let log = LogSettings::from_env()?;
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env(nest_rs::core::EnvPrefix::var("LOG"))
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::new(&log.filter))
+        .with_writer(ConsoleWriter::get())
         .init();
 
     let conn = nest_rs::seaorm::connect_from_env().await?;

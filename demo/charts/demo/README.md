@@ -117,9 +117,9 @@ apps:
           stabilizationWindowSeconds: 600
 ```
 
-— and keep `terminationGracePeriodSeconds` at least 8.5s above
+— and keep `terminationGracePeriodSeconds` at least 9.5s above
 `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
-telemetry flush that follow the drain, raising both toward a job's
+telemetry and console flushes that follow the drain, raising both toward a job's
 length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
@@ -149,7 +149,8 @@ idempotent. Set it to 0 knowing that.
 The framework installs a SIGTERM handler and drains its transports, so
 `terminationGracePeriodSeconds` is the window it gets. The default 30s holds
 every app's way down at the framework's defaults — 20s for the HTTP window or the
-worker's drain, half a second after it, five for the shutdown hooks and three
-for the telemetry flush — `live`'s included: its sockets close with `1001 Going
-Away` at the signal, and their clients reconnect to a replica still serving.
-Raise an app's grace period with any window you raise, keeping 8.5s above it.
+worker's drain, half a second after it, five for the shutdown hooks, three
+for the telemetry flush and one for the console — `live`'s included: its
+sockets close with `1001 Going Away` at the signal, and their clients reconnect
+to a replica still serving. Raise an app's grace period with any window you
+raise, keeping 9.5s above it.

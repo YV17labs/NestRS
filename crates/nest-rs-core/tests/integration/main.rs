@@ -25,8 +25,8 @@ mod process_start;
 mod way_down;
 mod wiring;
 
-use std::io::{BufRead, BufReader, Read};
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Write as _};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -73,9 +73,12 @@ pub(crate) fn child_role() -> Option<String> {
 /// This test binary, re-run on `test` alone with `role`.
 pub(crate) struct ChildProcess {
     child: Child,
+    /// The child's stdout, while the parent leaves it unread.
+    unread: Option<ChildStdout>,
     lines: Receiver<String>,
     errors: Receiver<String>,
     seen: Vec<String>,
+    seen_errors: Vec<String>,
 }
 
 impl ChildProcess {
@@ -84,21 +87,76 @@ impl ChildProcess {
     }
 
     pub(crate) fn spawn_with(test: &str, role: &str, env: &[(String, String)]) -> Self {
+        let mut child = Self::start(test, role, env, Stdio::inherit());
+        child.read_stdout();
+        child
+    }
+
+    /// A child whose stdout fills and stays full until [`read_stdout`](Self::read_stdout),
+    /// and whose stdin is a pipe [`release`](Self::release) writes a line to.
+    pub(crate) fn spawn_unread(test: &str, role: &str, env: &[(String, String)]) -> Self {
+        Self::start(test, role, env, Stdio::piped())
+    }
+
+    fn start(test: &str, role: &str, env: &[(String, String)], stdin: Stdio) -> Self {
         let mut child = Command::new(std::env::current_exe().expect("the test binary"))
             .args(["--exact", test, "--nocapture"])
             .env(CHILD_ROLE, role)
             .envs(env.iter().map(|(name, value)| (name, value)))
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("the child starts");
-        let lines = read_lines(child.stdout.take().expect("the child's stdout"));
+        let unread = child.stdout.take();
         let errors = read_lines(child.stderr.take().expect("the child's stderr"));
+        // Nothing reads the child's stdout until `read_stdout` replaces this.
+        let (_, lines) = std::sync::mpsc::channel();
         Self {
             child,
+            unread,
             lines,
             errors,
             seen: Vec::new(),
+            seen_errors: Vec::new(),
+        }
+    }
+
+    /// Start reading the child's stdout.
+    pub(crate) fn read_stdout(&mut self) {
+        if let Some(stdout) = self.unread.take() {
+            self.lines = read_lines(stdout);
+        }
+    }
+
+    /// Write one line to the child's stdin, and close it.
+    pub(crate) fn release(&mut self) {
+        if let Some(mut stdin) = self.child.stdin.take() {
+            stdin.write_all(b"\n").expect("the child reads its stdin");
+        }
+    }
+
+    /// The first line the child prints on stderr containing `needle`, within
+    /// `bound`.
+    pub(crate) fn expect_stderr_line(&mut self, needle: &str, bound: Duration) -> String {
+        let deadline = Instant::now() + bound;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.errors.recv_timeout(left) {
+                Ok(line) => {
+                    self.seen_errors.push(line.clone());
+                    if line.contains(needle) {
+                        return line;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                    let _ = self.child.kill();
+                    panic!(
+                        "the child never printed {needle:?} on stderr; it printed {:#?}",
+                        self.seen_errors
+                    )
+                }
+            }
         }
     }
 
@@ -157,12 +215,11 @@ impl ChildProcess {
     }
 
     /// Every line the child printed on stderr; call it once the child exited.
-    pub(crate) fn stderr(&self) -> Vec<String> {
-        let mut printed = Vec::new();
+    pub(crate) fn stderr(&mut self) -> Vec<String> {
         while let Ok(line) = self.errors.recv_timeout(Duration::from_millis(500)) {
-            printed.push(line);
+            self.seen_errors.push(line);
         }
-        printed
+        std::mem::take(&mut self.seen_errors)
     }
 }
 

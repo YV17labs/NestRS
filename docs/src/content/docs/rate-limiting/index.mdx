@@ -336,7 +336,7 @@ defaults to `false`, so your store is handed pseudonyms and the boot asks for
 leave the process — another in-memory one — returns `true` and is handed each
 subject as it is. Your binding is a bare module that *declares*
 your store as the `dyn ThrottlerStore`
-(`provide_declared_factory_after::<Arc<dyn ThrottlerStore>, YourConnection, _, _>(BACKEND_REMEDY, …)`)
+(`provide_declared_factory_after::<Arc<dyn ThrottlerStore>, (YourConnection,), _, _>(BACKEND_REMEDY, …)`)
 so it supersedes the in-process default and contests a second vendor's by name.
 The trait is **async**, so a networked implementor awaits its round-trip
 directly — no `block_in_place` bridge occupying a runtime worker per check, and

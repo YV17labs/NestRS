@@ -20,10 +20,9 @@ impl Module for SeaOrmDatabaseModule {
             .fold(builder, ContainerBuilder::provide_meta);
         // Queued after the pool's and config's factories, so a missing one is
         // named before any later factory dials.
-        builder.provide_declared_factory_after_both::<
+        builder.provide_declared_factory_after::<
             Arc<dyn JobContext>,
-            DatabaseConnection,
-            SeaOrmConfig,
+            (DatabaseConnection, SeaOrmConfig),
             _,
             _,
         >(BACKEND_REMEDY, |container| async move {

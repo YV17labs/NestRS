@@ -343,7 +343,7 @@ impl DynamicModule for YourDbSetup {
             .provide_factory::</* YourHandle */, _, _>(|container| async move {
                 // Your code: build your pool / client from container.get::<YourConfig>().
             })
-            .provide_declared_factory_after::<Arc<dyn JobContext>, /* YourHandle */, _, _>(
+            .provide_declared_factory_after::<Arc<dyn JobContext>, (/* YourHandle */,), _, _>(
                 BACKEND_REMEDY,
                 |container| async move {
                     let worker = YourWorkerContext::from_container(&container);

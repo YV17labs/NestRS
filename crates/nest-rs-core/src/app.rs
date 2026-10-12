@@ -838,7 +838,7 @@ mod tests {
             builder
         }
         fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-            builder.provide_declared_factory_after::<Second, First, _, _>(
+            builder.provide_declared_factory_after::<Second, (First,), _, _>(
                 "one declaration",
                 |c| async move {
                     let first = c
@@ -878,7 +878,7 @@ mod tests {
             builder
         }
         fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-            builder.provide_declared_factory_after_both::<Third, First, Second, _, _>(
+            builder.provide_declared_factory_after::<Third, (First, Second), _, _>(
                 "one declaration",
                 |c| async move {
                     let first = c
@@ -903,11 +903,27 @@ mod tests {
         }
     }
 
+    /// Every order of `0..n`, for a boot that must not depend on `imports = [..]`.
+    fn every_order(n: usize) -> Vec<Vec<usize>> {
+        let Some(last) = n.checked_sub(1) else {
+            return vec![Vec::new()];
+        };
+        let mut orders = Vec::new();
+        for order in every_order(last) {
+            for at in 0..=order.len() {
+                let mut next = order.clone();
+                next.insert(at, last);
+                orders.push(next);
+            }
+        }
+        orders
+    }
+
     #[tokio::test]
     async fn a_factory_declared_after_two_others_runs_after_both_whatever_the_queue_order() {
-        for modules in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [2, 0, 1]] {
+        for modules in every_order(3) {
             let mut app = App::builder();
-            for module in modules {
+            for &module in &modules {
                 app = match module {
                     0 => app.module::<ThirdAfterBoth>(),
                     1 => app.module::<FirstModule>(),
@@ -916,6 +932,58 @@ mod tests {
             }
             let app = app.build().await.expect("the declared order is honoured");
             assert_eq!(app.container().get::<Third>().unwrap().0, 42, "{modules:?}");
+        }
+    }
+
+    struct ThirdModule;
+    impl Module for ThirdModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Third(100)) })
+        }
+    }
+
+    struct Fourth(u32);
+    struct FourthAfterThree;
+    impl Module for FourthAfterThree {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+            builder.provide_factory_after::<Fourth, (First, Second, Third), _, _>(|c| async move {
+                let read = |value: Option<u32>| value.ok_or_else(|| anyhow!("an input ran late"));
+                Ok(Fourth(
+                    read(c.get::<First>().map(|v| v.0))?
+                        + read(c.get::<Second>().map(|v| v.0))?
+                        + read(c.get::<Third>().map(|v| v.0))?,
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_factory_after_three_others_runs_after_all_three_in_every_order() {
+        for modules in every_order(4) {
+            let mut app = App::builder();
+            for &module in &modules {
+                app = match module {
+                    0 => app.module::<FourthAfterThree>(),
+                    1 => app.module::<FirstModule>(),
+                    2 => app.module::<SecondModule>(),
+                    _ => app.module::<ThirdModule>(),
+                };
+            }
+            let app = app
+                .build()
+                .await
+                .unwrap_or_else(|e| panic!("{modules:?}: {e:#}"));
+            assert_eq!(
+                app.container().get::<Fourth>().unwrap().0,
+                142,
+                "{modules:?}"
+            );
         }
     }
 
@@ -936,7 +1004,7 @@ mod tests {
             builder
         }
         fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-            builder.provide_factory_after::<ReadsPort, Arc<dyn Port>, _, _>(|c| async move {
+            builder.provide_factory_after::<ReadsPort, (Arc<dyn Port>,), _, _>(|c| async move {
                 let port = c
                     .get_dyn::<dyn Port>()
                     .ok_or_else(|| anyhow!("dyn Port must already be bound"))?;
@@ -969,6 +1037,57 @@ mod tests {
             .await
             .expect("the dyn key is a key the binding's entry provides");
         assert_eq!(app.container().get::<ReadsPort>().unwrap().0, 42);
+    }
+
+    #[derive(Clone)]
+    struct SummedPort(u32);
+    impl Port for SummedPort {
+        fn value(&self) -> u32 {
+            self.0
+        }
+    }
+    struct BindsSummedPortModule;
+    impl Module for BindsSummedPortModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+            builder.provide_factory_dyn_after::<SummedPort, dyn Port, (First, Second), _, _>(
+                |c| async move {
+                    let first = c
+                        .get::<First>()
+                        .ok_or_else(|| anyhow!("First runs first"))?;
+                    let second = c
+                        .get::<Second>()
+                        .ok_or_else(|| anyhow!("Second runs first"))?;
+                    Ok(SummedPort(first.0 + second.0))
+                },
+                |port| Arc::new(port) as Arc<dyn Port>,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dyn_binding_after_two_factories_runs_after_both_in_every_order() {
+        for modules in every_order(3) {
+            let mut app = App::builder();
+            for &module in &modules {
+                app = match module {
+                    0 => app.module::<BindsSummedPortModule>(),
+                    1 => app.module::<FirstModule>(),
+                    _ => app.module::<SecondModule>(),
+                };
+            }
+            let app = app
+                .build()
+                .await
+                .unwrap_or_else(|e| panic!("{modules:?}: {e:#}"));
+            assert_eq!(
+                app.container().get_dyn::<dyn Port>().map(|p| p.value()),
+                Some(42),
+                "{modules:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1372,7 +1491,7 @@ mod tests {
             builder
         }
         fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
-            builder.provide_declared_factory_after::<First, Second, _, _>(
+            builder.provide_declared_factory_after::<First, (Second,), _, _>(
                 "one declaration",
                 |_| async { Ok(First(0)) },
             )

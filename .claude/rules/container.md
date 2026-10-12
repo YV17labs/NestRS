@@ -22,6 +22,9 @@ framework half.
   (providers built from seeds and factory outputs). `main` holds only
   `App::builder().module::<AppModule>()` and its transports; a synchronous app
   keeps `App::new`.
+- **A factory comes in three kinds** — a default, a declaration, a dyn binding
+  — each with or without the factory outputs it reads, written as one tuple
+  (`FactoryInputs`, sealed): a new arity is an impl, never a new form.
 - **A `register` refuses, never panics**: what it cannot build it files with
   `ContainerBuilder::refuse` and returns, as a factory returns `Err`. So does a
   site a transport composes at `configure` (a route, a gateway) against the

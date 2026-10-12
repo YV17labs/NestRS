@@ -34,7 +34,7 @@ impl RedisQueueModule {
     /// connection, which the boot holds the connection's budget under.
     fn bind(builder: ContainerBuilder) -> ContainerBuilder {
         RedisConnection::netted(builder, "the queue port", BACKEND_TIMEOUT)
-            .provide_factory_after::<RedisQueueProducer, RedisConnection, _, _>(
+            .provide_factory_after::<RedisQueueProducer, (RedisConnection,), _, _>(
                 |container| async move {
                     let producer =
                         RedisQueueProducer::new(RedisConnection::of(&container, "RedisQueueModule")?);
@@ -42,7 +42,7 @@ impl RedisQueueModule {
                     Ok(producer)
                 },
             )
-            .provide_declared_factory_after::<Arc<dyn JobProducer>, RedisQueueProducer, _, _>(
+            .provide_declared_factory_after::<Arc<dyn JobProducer>, (RedisQueueProducer,), _, _>(
                 BACKEND_REMEDY,
                 |container| async move {
                     let producer = container.get::<RedisQueueProducer>().ok_or_else(|| {
@@ -51,7 +51,7 @@ impl RedisQueueModule {
                     Ok(producer as Arc<dyn JobProducer>)
                 },
             )
-            .provide_declared_factory_after_both::<BoundConsumer, RedisConnection, RedisQueueConfig, _, _>(
+            .provide_declared_factory_after::<BoundConsumer, (RedisConnection, RedisQueueConfig), _, _>(
                 BACKEND_REMEDY,
                 |container| async move {
                     let conn = RedisConnection::of(&container, "RedisQueueModule")?;

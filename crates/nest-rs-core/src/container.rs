@@ -14,6 +14,7 @@ use anyhow::Result;
 
 use crate::RequestScope;
 use crate::cycle_guard::{BuildStack, Cycle, CycleGuard};
+use crate::factory_inputs::FactoryInputs;
 use crate::layer_chain::__private::SiteChains;
 use crate::module::{Collecting, Module, Registering};
 
@@ -827,18 +828,20 @@ impl ContainerBuilder {
     }
 
     /// [`provide_factory`](Self::provide_factory) for a factory that reads
-    /// another factory's output — `After` — from its snapshot. The drain runs it
-    /// once `After` is present, wherever the two fall in `imports = [..]`.
-    pub fn provide_factory_after<T, After, F, Fut>(self, factory: F) -> Self
+    /// other factories' outputs from its snapshot — its [`FactoryInputs`], a
+    /// tuple: `provide_factory_after::<Client, (Pool,), _, _>`. The drain runs
+    /// it once each input is present, wherever the factories fall in
+    /// `imports = [..]`.
+    pub fn provide_factory_after<T, I, F, Fut>(self, factory: F) -> Self
     where
         T: Any + Send + Sync,
-        After: Any,
+        I: FactoryInputs,
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
             QueueSpec {
-                after: vec![TypeId::of::<After>()],
+                after: I::type_ids(),
                 ..QueueSpec::default()
             },
             factory,
@@ -847,48 +850,23 @@ impl ContainerBuilder {
     }
 
     /// [`provide_declared_factory`](Self::provide_declared_factory) for a
-    /// factory that reads another factory's output — `After` — from its
-    /// snapshot. See [`provide_factory_after`](Self::provide_factory_after).
-    pub fn provide_declared_factory_after<T, After, F, Fut>(
+    /// factory that reads other factories' outputs — its [`FactoryInputs`] —
+    /// from its snapshot. See [`provide_factory_after`](Self::provide_factory_after).
+    pub fn provide_declared_factory_after<T, I, F, Fut>(
         self,
         remedy: &'static str,
         factory: F,
     ) -> Self
     where
         T: Any + Send + Sync,
-        After: Any,
+        I: FactoryInputs,
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
             QueueSpec {
                 remedy: Some(remedy),
-                after: vec![TypeId::of::<After>()],
-                ..QueueSpec::default()
-            },
-            factory,
-            |builder, value| builder.provide(value),
-        )
-    }
-
-    /// [`provide_declared_factory_after`](Self::provide_declared_factory_after)
-    /// for a factory that reads two other factories' outputs, `A` and `B`.
-    pub fn provide_declared_factory_after_both<T, A, B, F, Fut>(
-        self,
-        remedy: &'static str,
-        factory: F,
-    ) -> Self
-    where
-        T: Any + Send + Sync,
-        A: Any,
-        B: Any,
-        F: FnOnce(Container) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<T>> + Send + 'static,
-    {
-        self.queue(
-            QueueSpec {
-                remedy: Some(remedy),
-                after: vec![TypeId::of::<A>(), TypeId::of::<B>()],
+                after: I::type_ids(),
                 ..QueueSpec::default()
             },
             factory,
@@ -897,9 +875,9 @@ impl ContainerBuilder {
     }
 
     /// [`provide_factory_dyn`](Self::provide_factory_dyn) for a factory that
-    /// reads another factory's output — `After` — from its snapshot. See
-    /// [`provide_declared_factory_after`](Self::provide_declared_factory_after).
-    pub fn provide_factory_dyn_after<T, D, After, F, Fut>(
+    /// reads other factories' outputs — its [`FactoryInputs`] — from its
+    /// snapshot. See [`provide_factory_after`](Self::provide_factory_after).
+    pub fn provide_factory_dyn_after<T, D, I, F, Fut>(
         self,
         factory: F,
         bind: fn(T) -> Arc<D>,
@@ -907,14 +885,14 @@ impl ContainerBuilder {
     where
         T: Any + Clone + Send + Sync,
         D: ?Sized + Send + Sync + 'static,
-        After: Any,
+        I: FactoryInputs,
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
             QueueSpec {
                 binds: Some(DynBinding::of(bind)),
-                after: vec![TypeId::of::<After>()],
+                after: I::type_ids(),
                 ..QueueSpec::default()
             },
             factory,

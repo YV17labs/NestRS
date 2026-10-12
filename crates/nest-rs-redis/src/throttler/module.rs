@@ -27,12 +27,12 @@ impl Module for RedisThrottlerModule {
         // Declared: it supersedes the port's in-memory default, and a second
         // vendor binding contests it by name (`BACKEND_REMEDY`).
         RedisConnection::netted(builder, "the rate limiter", nest_rs_throttler::HIT_TIMEOUT)
-            .provide_declared_factory_after::<Arc<dyn ThrottlerStore>, RedisConnection, _, _>(
-            nest_rs_throttler::BACKEND_REMEDY,
-            |container| async move {
-                let conn = RedisConnection::of(&container, "RedisThrottlerModule")?;
-                Ok(Arc::new(RedisThrottler::new(conn)) as Arc<dyn ThrottlerStore>)
-            },
-        )
+            .provide_declared_factory_after::<Arc<dyn ThrottlerStore>, (RedisConnection,), _, _>(
+                nest_rs_throttler::BACKEND_REMEDY,
+                |container| async move {
+                    let conn = RedisConnection::of(&container, "RedisThrottlerModule")?;
+                    Ok(Arc::new(RedisThrottler::new(conn)) as Arc<dyn ThrottlerStore>)
+                },
+            )
     }
 }

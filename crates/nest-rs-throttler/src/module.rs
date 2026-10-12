@@ -62,7 +62,7 @@ impl DynamicModule for ThrottlerSetup {
             Ok(resolve(&config))
         });
         // After the store, whose vendor factory may wait on a connection of its own.
-        builder.provide_factory_after::<ThrottlerGuard, Arc<dyn ThrottlerStore>, _, _>(
+        builder.provide_factory_after::<ThrottlerGuard, (Arc<dyn ThrottlerStore>,), _, _>(
             |container| async move {
                 #[expect(
                     clippy::expect_used,

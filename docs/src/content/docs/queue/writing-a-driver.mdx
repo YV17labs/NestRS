@@ -135,13 +135,13 @@ from the Redis binding, so each compiles and runs in the framework's suite.
 
    ```rust title="from nest-rs-redis's queue binding, abridged"
    builder
-       .provide_declared_factory_after::<Arc<dyn JobProducer>, RedisQueueProducer, _, _>(
+       .provide_declared_factory_after::<Arc<dyn JobProducer>, (RedisQueueProducer,), _, _>(
            BACKEND_REMEDY,
            |container| async move {
                // …
            },
        )
-       .provide_declared_factory_after_both::<BoundConsumer, RedisConnection, RedisQueueConfig, _, _>(
+       .provide_declared_factory_after::<BoundConsumer, (RedisConnection, RedisQueueConfig), _, _>(
            BACKEND_REMEDY,
            |container| async move {
                // …

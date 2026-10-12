@@ -94,6 +94,7 @@ pub mod env_prefix;
 pub mod error;
 pub mod error_message;
 mod exception_filter;
+mod factory_inputs;
 mod handler;
 mod identifier;
 mod interceptor;
@@ -149,6 +150,7 @@ pub use error::{
 };
 pub use error_message::{SafeLink, boxed_error, error_message};
 pub use exception_filter::{Catch, Caught, ExceptionFilter, ExceptionFilterSpec, exception_filter};
+pub use factory_inputs::FactoryInputs;
 pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
 pub use interceptor::{Interceptor, InterceptorSpec, Next, interceptor};

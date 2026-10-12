@@ -307,7 +307,7 @@ impl Module for OpeningModule {
             .provide_meta(pool_budget())
             .provide_meta(Net::over::<Pool>("the test port", NET))
             .provide_factory(|_| async { Ok(Pool(NET)) })
-            .provide_factory_after::<Dependent, Pool, _, _>(|_| async {
+            .provide_factory_after::<Dependent, (Pool,), _, _>(|_| async {
                 Err(anyhow!("the factory after the pool ran"))
             })
     }

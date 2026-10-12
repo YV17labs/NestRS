@@ -1,0 +1,41 @@
+error[E0277]: a factory's inputs are written as a tuple
+  --> tests/integration/diagnostics/core/factory_inputs_not_a_tuple.rs:16:46
+   |
+16 |             .provide_factory_after::<Client, Pool, _, _>(|_| async { Ok(Client) })
+   |              ---------------------           ^^^^ write `(Pool,)` for one input
+   |              |
+   |              required by a bound introduced by this call
+   |
+help: the trait `FactoryInputs` is not implemented for `Pool`
+  --> tests/integration/diagnostics/core/factory_inputs_not_a_tuple.rs:6:1
+   |
+ 6 | struct Pool;
+   | ^^^^^^^^^^^
+   = note: a factory reads up to four inputs: `(A,)`, `(A, B)`, `(A, B, C)` or `(A, B, C, D)`
+help: the following other types implement trait `FactoryInputs`
+  --> $WORKSPACE/crates/nest-rs-core/src/factory_inputs.rs
+   |
+   | impl<A: Any> FactoryInputs for (A,) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(A,)`
+...
+   | impl<A: Any, B: Any> FactoryInputs for (A, B) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(A, B)`
+...
+   | impl<A: Any, B: Any, C: Any> FactoryInputs for (A, B, C) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(A, B, C)`
+...
+   | impl<A: Any, B: Any, C: Any, D: Any> FactoryInputs for (A, B, C, D) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `(A, B, C, D)`
+note: required by a bound in `ContainerBuilder::provide_factory_after`
+  --> $WORKSPACE/crates/nest-rs-core/src/container.rs
+   |
+   |     pub fn provide_factory_after<T, I, F, Fut>(self, factory: F) -> Self
+   |            --------------------- required by a bound in this associated function
+...
+   |         I: FactoryInputs,
+   |            ^^^^^^^^^^^^^ required by this bound in `ContainerBuilder::provide_factory_after`
+help: use a unary tuple instead
+   |
+14 ~         (builder
+15 ~             .provide_factory(|_| async { Ok(Pool) }),)
+   |

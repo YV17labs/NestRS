@@ -5,6 +5,7 @@ use anyhow::Result;
 use nest_rs::authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
 use nest_rs::authz::Action;
 use nest_rs::core::{error_message, hooks, injectable};
+use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, DbOutcome, Deletable, Executor, Repo, ServiceError,
@@ -17,7 +18,9 @@ use uuid::Uuid;
 use validator::Validate;
 
 use super::entities::user as entity;
-use super::entities::user::{CreateUser, Entity as Users, UpdateUser, User, UserRole};
+use super::entities::user::{
+    CreateUser, Entity as Users, PasswordHash, UpdateUser, User, UserRole,
+};
 use super::entities::user_identity::{self, Entity as UserIdentities};
 
 const DEFAULT_ROLE: UserRole = UserRole::User;
@@ -109,7 +112,7 @@ impl UsersService {
         default_org_id: Uuid,
     ) -> Result<entity::Model, AuthError> {
         let conn =
-            Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, e))?;
+            Repo::<Users>::conn().map_err(|e| social_store_unavailable(identity.provider, &e))?;
 
         if let Some(user) = self.find_by_identity(identity, &conn).await? {
             return Ok(user);
@@ -127,13 +130,15 @@ impl UsersService {
 
         if let Some(user) = find_by_email(email, &conn)
             .await
-            .map_err(|e| social_store_unavailable(identity.provider, e))?
+            .map_err(|e| social_store_unavailable(identity.provider, &e))?
         {
-            self.link_identity(user.id, identity, &conn).await?;
+            self.link_identity(user.id, identity)
+                .await
+                .map_err(|e| social_store_unavailable(identity.provider, &e))?;
             return Ok(user);
         }
 
-        self.create_with_identity(identity, email, default_org_id, &conn)
+        self.create_with_identity(identity, email, default_org_id)
             .await
     }
 
@@ -147,7 +152,7 @@ impl UsersService {
             .filter(user_identity::Column::Subject.eq(identity.subject.clone()))
             .one(conn)
             .await
-            .map_err(|e| social_store_unavailable(identity.provider, e))?;
+            .map_err(|e| social_store_unavailable(identity.provider, &e))?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -155,18 +160,26 @@ impl UsersService {
             .filter(live_condition::<Users>())
             .one(conn)
             .await
-            .map_err(|e| social_store_unavailable(identity.provider, e))
+            .map_err(|e| social_store_unavailable(identity.provider, &e))
     }
 
     async fn link_identity(
         &self,
         user_id: Uuid,
         identity: &SocialIdentity,
-        conn: &Executor,
-    ) -> Result<(), AuthError> {
-        match Repo::<UserIdentities>::insert_unscoped(new_identity_active(user_id, identity), conn)
-            .await
-        {
+    ) -> Result<(), ServiceError> {
+        let linked = atomic(async {
+            let conn = Repo::<UserIdentities>::conn()?;
+            Ok::<_, ServiceError>(
+                Repo::<UserIdentities>::insert_unscoped(
+                    new_identity_active(user_id, identity),
+                    &conn,
+                )
+                .await?,
+            )
+        })
+        .await;
+        match linked {
             Ok(_) => {
                 tracing::debug!(
                     target: crate::users::TARGET,
@@ -176,8 +189,8 @@ impl UsersService {
                 );
                 Ok(())
             }
-            Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict => Ok(()),
-            Err(e) => Err(social_store_unavailable(identity.provider, e)),
+            Err(ServiceError::Conflict(_)) => Ok(()),
+            Err(e) => Err(e),
         }
     }
 
@@ -186,7 +199,6 @@ impl UsersService {
         identity: &SocialIdentity,
         email: &str,
         org_id: Uuid,
-        conn: &Executor,
     ) -> Result<entity::Model, AuthError> {
         let active = prepare_new_user(
             CreateUser {
@@ -201,20 +213,29 @@ impl UsersService {
             AuthError::Failed("identity resolution failed".into())
         })?;
 
-        let user = match Repo::<Users>::insert_unscoped(active, conn).await {
-            Ok(user) => {
-                tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
-                user
-            }
-            Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict => find_by_email(email, conn)
-                .await
-                .map_err(|e| social_store_unavailable(identity.provider, e))?
-                .ok_or_else(|| social_store_unavailable(identity.provider, e))?,
-            Err(e) => return Err(social_store_unavailable(identity.provider, e)),
-        };
-
-        self.link_identity(user.id, identity, conn).await?;
-        Ok(user)
+        atomic(async {
+            let inserted = atomic(async {
+                let conn = Repo::<Users>::conn()?;
+                Ok::<_, ServiceError>(Repo::<Users>::insert_unscoped(active, &conn).await?)
+            })
+            .await;
+            let user = match inserted {
+                Ok(user) => {
+                    tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
+                    user
+                }
+                Err(conflict @ ServiceError::Conflict(_)) => {
+                    find_by_email(email, &Repo::<Users>::conn()?)
+                        .await?
+                        .ok_or(conflict)?
+                }
+                Err(e) => return Err(e),
+            };
+            self.link_identity(user.id, identity).await?;
+            Ok(user)
+        })
+        .await
+        .map_err(|e| social_store_unavailable(identity.provider, &e))
     }
 }
 
@@ -268,10 +289,10 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
     }
 }
 
-fn social_store_unavailable(provider: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: crate::users::TARGET, provider, error = %error_message(&err), "social identity store unreachable");
+fn social_store_unavailable(provider: &str, err: &(dyn std::error::Error + 'static)) -> AuthError {
+    tracing::error!(target: crate::users::TARGET, provider, error = %error_message(err), "social identity store unreachable");
     AuthError::Unavailable {
-        detail: error_message(&err),
+        detail: error_message(err),
         retry_after: None,
     }
 }
@@ -332,7 +353,7 @@ pub(crate) fn verify_credentials(
         return Err(CredentialError);
     };
 
-    match verify_password(hash, password) {
+    match verify_password(hash.as_str(), password) {
         Ok(true) => Ok(user),
         Ok(false) => {
             tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "bad_password", "login failed");
@@ -354,7 +375,7 @@ pub(crate) fn active_for_new_user(
     active.org_id = Set(org_id);
     active.role = Set(DEFAULT_ROLE);
     if password_hash.is_some() {
-        active.password_hash = Set(password_hash);
+        active.password_hash = Set(password_hash.map(PasswordHash::from));
     }
     active
 }
@@ -577,7 +598,7 @@ mod tests {
             name: "ada".into(),
             email: "ada@example.com".into(),
             role: UserRole::User,
-            password_hash,
+            password_hash: password_hash.map(PasswordHash::from),
             created_at: now,
             updated_at: now,
             deleted_at: None,

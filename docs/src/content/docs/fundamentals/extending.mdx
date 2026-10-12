@@ -145,6 +145,9 @@ module docs carry the contract:
    transports.
 3. Provide your own query API that calls `current_executor` and downcasts to
    your concrete type.
+4. Optionally, override `Executor::atomic`, so `nest_rs::database::atomic` runs
+   a block on your store; without it the block refuses, fail-closed. The
+   [driver guide](/database/writing-a-driver/) shows the shape.
 
 Step 3 is deliberate. `Repo`, `CrudService` and `Bind` couple tightly to SeaORM's
 `EntityTrait` and `Model` — that coupling is where their leverage comes from, and

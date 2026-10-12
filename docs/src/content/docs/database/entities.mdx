@@ -151,6 +151,11 @@ response. Because exposure is opt-in, they stay off the wire by
 default, and a column a future migration adds never leaks until someone
 deliberately exposes it.
 
+The wire is not the only place a secret prints: sea-orm derives `Debug` for
+the `ActiveModel`, so a `Set` hash shows up in any `{:?}` of it. Give a secret
+column a value type whose `Debug` says nothing — the demo stores its hash as
+`PasswordHash`, a `DeriveValueType` over `String` that prints `<redacted>`.
+
 <Aside type="caution">
 Response masking reconstructs the full row from the wire body to apply
 `Ability::mask`, which needs a default for every unexposed column. The

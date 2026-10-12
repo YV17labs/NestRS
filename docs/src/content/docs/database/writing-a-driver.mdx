@@ -31,6 +31,7 @@ A driver implements the seam rather than consuming it, so it takes `database` wi
 - A request interceptor that wraps mutating handlers in a transaction.
 - A `JobContext` that installs a handle per job attempt and settles it —
   transactional by default, non-transactional on `transactional = false`.
+- Optionally, the atomic block `nest_rs::database::atomic` runs on.
 - A `SafeLink` that says your store's errors without the values its server
   quotes.
 
@@ -107,8 +108,10 @@ under, `nest_rs::database::current_executor_scope()`. The capture carries no
 executor of yours, and its scope goes with it, so re-install your
 non-transactional handle inside the capture under the scope you read:
 `with_request_executor`, `with_job_executor`, or `with_executor` when none was
-tagged. A job's held work installed untagged would fail closed like a request.
-Contain a panic in it: the commit already stood.
+tagged — and for any other: `ExecutorScope` can grow within 7.x, so your `match`
+keeps a `_` arm, and `with_executor` is the one that fails closed. A job's held
+work installed untagged would fail closed like a request. Contain a panic in
+it: the commit already stood.
 
 The other continuations — a streaming body, a DataLoader batch — reach the
 pool through the first-party driver alone: under another driver they run
@@ -264,6 +267,10 @@ impl JobContext for YourWorkerContext {
                         )),
                     }
                 }
+                // A policy this driver does not know: refuse the job unrun.
+                _ => JobSettlement::Unhonoured(Unhonoured::deterministic(
+                    "this driver does not support the job's transaction policy",
+                )),
             }
         })
     }
@@ -273,7 +280,10 @@ impl JobContext for YourWorkerContext {
 What your impl owes:
 
 - **Drive `inner` to completion.** It *is* the job. Returning without
-  awaiting it fails that one job loudly rather than silently skipping it.
+  awaiting it fails that one job loudly rather than silently skipping it —
+  unless you refuse the job outright with an `Unhonoured`, which is what the
+  `_` arm does: `JobTransaction` can grow within 7.x, and a policy you do not
+  know is one you cannot keep.
 - **Honour `JobTransaction::Pool`.** It is the developer's
   `transactional = false`, and ignoring it silently gives up the
   atomicity the default promises.
@@ -392,6 +402,60 @@ Keep identifiers — a code, a constraint, a table, a column — which are schem
 an operator searches for, and drop every message. `nest-rs-seaorm` says a
 `DbErr` as `database error 23505 on constraint "users_email_key", table
 "users"`.
+
+## Step 6 — Atomic blocks (optional)
+
+`nest_rs::database::atomic(work)` asks the ambient executor for a block through
+`Executor::atomic`. The default answers `None`, and `atomic` then refuses with
+`AtomicError::Unsupported` without running the work — fail-closed, so a driver
+that offers no block loses nothing but the feature. To offer one, return an
+`AtomicBlock`: an executor of yours that the block runs on, settled once.
+
+```rust title="crates/yourdb/src/executor.rs"
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use nest_rs::database::{AtomicBlock, AtomicError};
+
+impl nest_rs::database::Executor for Executor {
+    // … as_any, after_commit …
+
+    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        // Your code: a block nested in this handle's transaction — or a
+        // transaction of its own when this handle holds none.
+        Some(Arc::new(YourBlock::nested_in(self.clone())))
+    }
+}
+
+impl AtomicBlock for YourBlock {
+    fn settle(
+        self: Arc<Self>,
+        ok: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>> {
+        Box::pin(async move {
+            // Your code: release the savepoint and hand the held after-commit
+            // work to the enclosing handle when `ok`; roll it back and drop
+            // that work otherwise.
+            Ok(())
+        })
+    }
+}
+```
+
+What a block owes, in order of how badly it goes wrong without it:
+
+- **The enclosing unit waits for it.** A statement the unit issues while the
+  block is open must not land inside the block's savepoint, or it rolls back
+  with the block.
+- **A failure inside poisons the block, not the unit.** Work that returns `Ok`
+  over a failed statement settles as `AtomicError::Poisoned`.
+- **A refused `RELEASE` or `ROLLBACK TO`, or a block dropped before it
+  settled, leaves the unit unable to commit.** Nothing can vouch for what it
+  writes next.
+- **Nothing is sent before the first statement**, so a block that never
+  queries costs no round trip.
+
+`crates/nest-rs-seaorm/src/savepoint.rs` and `crates/nest-rs-seaorm/src/turn.rs` are the reference shape.
 
 ## A query helper (sketch)
 

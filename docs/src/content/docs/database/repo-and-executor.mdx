@@ -54,20 +54,24 @@ gateway route-model binding goes through.
 
 `Executor` is a SeaORM connection — the pool or the request's transaction —
 installed in the request's ambient context for the duration of the handler.
-Three variants:
+Four variants:
 
 ```rust title="nest_rs::seaorm::Executor"
+#[non_exhaustive]
 pub enum Executor {
     Pool(DatabaseConnection),
     Txn(Arc<DatabaseTransaction>),
     Lazy(Arc<LazyTransaction>),
+    Savepoint(Arc<Savepoint>),
 }
 ```
 
 `Lazy` is the one the framework installs wherever work may write: it defers
 `BEGIN` to the first data-layer touch, so a request a guard denies — or one
 that never queries — costs no round-trip at all. `Txn` is the eager handle,
-for a transaction something already opened.
+for a transaction something already opened. `Savepoint` is what an
+[atomic block](/database/transactions/#atomic-blocks) runs on inside a
+transaction. The enum can grow within 7.x, so a `match` on it keeps a `_` arm.
 
 `Repo::<E>::conn()` reads it back. Outside the scope it returns an error
 naming the bindings that install one — a service called with no ambient

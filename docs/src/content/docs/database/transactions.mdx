@@ -1,6 +1,6 @@
 ---
 title: Transactions
-description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus the retry primitive for serialization conflicts.
+description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus atomic blocks and the retry primitive for serialization conflicts.
 sidebar:
   order: 9
 ---
@@ -67,9 +67,67 @@ a job a later rollback leaves behind. When the work must follow the commit,
 emit an event and push from its listener — the demo's publish does exactly
 that.
 
+An [atomic block](#atomic-blocks) holds what is emitted inside it: when it
+keeps its writes, the events join the request's and wait for the request's
+commit; when it rolls back, they are dropped with its writes.
+
 The primitive underneath is `nest_rs::database::after_commit`, which the bus
 calls; a [database driver](/database/writing-a-driver/) implements it for its
 own transactions.
+
+## Atomic blocks
+
+A statement that fails inside a transaction aborts the whole transaction, so a
+service that expects a failure — a unique key a concurrent request may have
+just taken — runs that statement in `nest_rs::database::atomic`. The block is a
+savepoint inside the request's transaction: an error rolls back the block
+alone, and the request carries on and commits.
+
+```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
+let linked = atomic(async {
+    let conn = Repo::<UserIdentities>::conn()?;
+    Ok::<_, ServiceError>(
+        Repo::<UserIdentities>::insert_unscoped(
+            new_identity_active(user_id, identity),
+            &conn,
+        )
+        .await?,
+    )
+})
+.await;
+match linked {
+    Ok(_) => {
+        // …
+        Ok(())
+    }
+    Err(ServiceError::Conflict(_)) => Ok(()),
+    Err(e) => Err(e),
+}
+```
+
+- **`Ok` keeps the block's writes** in the request's transaction, which still
+  commits or rolls back as a whole.
+- **`Err`, a panic, or a failure the block swallowed** rolls the block back
+  and nothing else. A block that returns `Ok` over a failed statement answers
+  `AtomicError::Poisoned`, since nothing it wrote stands.
+- **On a safe route**, where the request runs on the pool, the block is a
+  transaction of its own, committed when it returns `Ok`. A block in a block
+  is a savepoint of its own and rolls back alone.
+- **Nothing is sent until the block's first statement**: a block that never
+  queries costs no round trip.
+
+The block's error type takes an `AtomicError` — `ServiceError` does, by the
+class of the database's refusal — so `?` works inside it. Read the block's
+executor through `Repo::conn()` inside it: the request waits while a block is
+open, since a statement of its own would land inside the savepoint, and a
+statement on an executor taken before the block is refused rather than left to
+wait for the block that holds it.
+
+<Aside type="caution">
+A block dropped before it settles — cancelled by a timeout or a `select!` —
+leaves its savepoint open, so the request can no longer commit: it answers
+`500`. Keep a deadline outside the block, around the work that may cancel it.
+</Aside>
 
 ## Why retrying belongs to the service, not the interceptor
 
@@ -221,6 +279,6 @@ explicitly (replay the work against a fresh snapshot). One way to do each.
 
 - [Database](/database/) — the slice that imports `SeaOrmDatabaseModule`.
 - [Repo and executor](/database/repo-and-executor/) — what the interceptor
-  installs, the escape-on-spawn fail-closed.
+  installs, the escape-on-spawn fail-closed, the savepoint a block runs on.
 - [Pagination](/database/pagination/) — the other knob the entity carries.
 - [Configuration](/configuration/) — the full `<PREFIX>_SEAORM__*` scheme.

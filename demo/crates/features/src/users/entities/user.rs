@@ -14,6 +14,34 @@ pub enum UserRole {
     Admin,
 }
 
+#[derive(Clone, PartialEq, Eq, DeriveValueType, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PasswordHash(String);
+
+impl PasswordHash {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for PasswordHash {
+    fn from(hash: String) -> Self {
+        Self(hash)
+    }
+}
+
+impl From<&str> for PasswordHash {
+    fn from(hash: &str) -> Self {
+        Self(hash.to_owned())
+    }
+}
+
+impl std::fmt::Debug for PasswordHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 #[expose(
     name = "User",
     service = super::super::service::UsersService,
@@ -40,7 +68,7 @@ pub struct Model {
     pub email: String,
     #[wire_default]
     pub role: UserRole,
-    pub password_hash: Option<String>,
+    pub password_hash: Option<PasswordHash>,
     #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]
@@ -161,6 +189,22 @@ mod tests {
                 "{printed}"
             );
             assert!(printed.contains("ada@example.com"), "{printed}");
+        }
+    }
+
+    #[test]
+    fn active_models_debug_redacts_the_password_hash() {
+        let active = ActiveModel {
+            password_hash: sea_orm::Set(Some("$argon2id$v=19$secret".into())),
+            ..Default::default()
+        };
+
+        for printed in [
+            format!("{active:?}"),
+            format!("{:?}", ActiveModelEx::from(active.clone())),
+        ] {
+            assert!(!printed.contains("argon2id"), "{printed}");
+            assert!(printed.contains("password_hash"), "{printed}");
         }
     }
 

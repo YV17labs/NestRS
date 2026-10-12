@@ -1,11 +1,15 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use features::orgs::ActiveModel as OrgActiveModel;
 use features::users::{ActiveModel as UserActiveModel, SocialIdentity, UserRole, UsersService};
 use nest_rs::authn::AuthError;
-use nest_rs::seaorm::{Executor, with_request_executor};
-use nest_rs::testing::EphemeralDatabase;
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, Set, Statement, Value};
+use nest_rs::seaorm::{Executor, FinalizeOutcome, LazyTransaction, with_request_executor};
+use nest_rs::testing::{EphemeralDatabase, wait_for};
+use sea_orm::{
+    ActiveModelTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, Set, Statement,
+    TransactionTrait, Value,
+};
 use uuid::Uuid;
 
 async fn seed_org(conn: &DatabaseConnection, id: Uuid) {
@@ -328,5 +332,128 @@ async fn concurrent_first_logins_resolve_to_a_single_user() {
         identity_count(conn.as_ref(), "github", "999").await,
         1,
         "exactly one identity row survives the race",
+    );
+}
+
+async fn a_statement_waits_on_a_lock(conn: &DatabaseConnection) -> bool {
+    count(
+        conn,
+        "SELECT COUNT(*) AS n FROM pg_stat_activity \
+         WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        [],
+    )
+    .await
+        > 0
+}
+
+async fn resolve_in_a_mutating_request(
+    conn: Arc<DatabaseConnection>,
+    identity: SocialIdentity,
+    org_id: Uuid,
+    rival: DatabaseTransaction,
+) -> (Result<features::users::Model, AuthError>, FinalizeOutcome) {
+    let request = Arc::new(LazyTransaction::new((*conn).clone(), "test"));
+    let resolving = tokio::spawn({
+        let (conn, request) = (Arc::clone(&conn), Arc::clone(&request));
+        async move {
+            with_request_executor(Executor::Lazy(request), async move {
+                UsersService::new(conn)
+                    .resolve_social_identity(&identity, org_id)
+                    .await
+            })
+            .await
+        }
+    });
+    wait_for(Duration::from_secs(10), || {
+        a_statement_waits_on_a_lock(&conn)
+    })
+    .await;
+    rival.commit().await.expect("the rival login commits");
+
+    let resolved = resolving.await.expect("the request joins");
+    (resolved, request.finalize(true).await)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mutating_request_linking_an_identity_a_rival_just_linked_commits() {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("ephemeral database");
+    let conn = db.connection();
+    let org_id = Uuid::now_v7();
+    seed_org(conn.as_ref(), org_id).await;
+    let carol = seed_user(conn.as_ref(), org_id, "carol@example.com").await;
+
+    let rival = conn.begin().await.expect("a rival login");
+    rival
+        .execute_raw(Statement::from_sql_and_values(
+            conn.get_database_backend(),
+            "INSERT INTO user_identity (id, user_id, provider, subject, created_at, updated_at) \
+             VALUES ($1, $2, 'github', '77', now(), now())",
+            [Value::from(Uuid::now_v7()), Value::from(carol)],
+        ))
+        .await
+        .expect("the rival links first");
+
+    let (resolved, settled) = resolve_in_a_mutating_request(
+        Arc::clone(&conn),
+        github("77", "carol@example.com", true),
+        org_id,
+        rival,
+    )
+    .await;
+
+    assert_eq!(resolved.expect("the login resolves").id, carol);
+    assert!(
+        matches!(settled, FinalizeOutcome::Committed),
+        "the conflict rolled back alone, so the request commits: {settled:?}",
+    );
+    assert_eq!(identity_count(conn.as_ref(), "github", "77").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mutating_request_provisioning_a_user_a_rival_just_created_links_it_and_commits() {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("ephemeral database");
+    let conn = db.connection();
+    let org_id = Uuid::now_v7();
+    seed_org(conn.as_ref(), org_id).await;
+
+    let rival = conn.begin().await.expect("a rival login");
+    let frank = UserActiveModel {
+        id: Set(Uuid::now_v7()),
+        org_id: Set(org_id),
+        name: Set("Frank".to_owned()),
+        email: Set("frank@example.com".to_owned()),
+        role: Set(UserRole::User),
+        password_hash: Set(None),
+        ..Default::default()
+    }
+    .insert(&rival)
+    .await
+    .expect("the rival provisions first")
+    .id;
+
+    let (resolved, settled) = resolve_in_a_mutating_request(
+        Arc::clone(&conn),
+        github("999", "frank@example.com", true),
+        org_id,
+        rival,
+    )
+    .await;
+
+    assert_eq!(resolved.expect("the login resolves").id, frank);
+    assert!(
+        matches!(settled, FinalizeOutcome::Committed),
+        "the conflict rolled back alone, so the request commits: {settled:?}",
+    );
+    assert_eq!(
+        users_with_email(conn.as_ref(), "frank@example.com").await,
+        1
+    );
+    assert_eq!(
+        identity_user_id(conn.as_ref(), "github", "999").await,
+        Some(frank),
     );
 }

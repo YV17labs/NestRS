@@ -107,6 +107,10 @@ writes. With nothing to wait for it dispatches before `emit` returns.
 - **Not waited for:** a transaction the caller opened itself (`Executor::Txn`,
   or one held privately like `retry_on_conflict`'s) — its commit is the
   caller's, so the caller emits after its own `commit`.
+- **Handed on:** an atomic block (`nest_rs_database::atomic`) hands its
+  after-commit work to the enclosing unit on release and drops it on
+  rollback; on the pool it is a transaction of its own and settles its work
+  like any boundary.
 - **Refused:** `JobProducer::push`, a WS broadcast, a storage write. Each is a
   call whose answer its caller reads — a receipt, `UniqueKeyHeld`, a send
   failure, an object key — and a deferred call would report `Ok` for work that

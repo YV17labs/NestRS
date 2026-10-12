@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
+use nest_rs_core::process_seed;
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster::{ClusterClient, ClusterClientBuilder};
 use redis::cluster_async::{ClusterConnection, Connect};
@@ -72,9 +73,11 @@ impl ClusterLink {
             endpoint: plan.listed.clone(),
             source,
         })?;
-        let connection = within_budget(budget, &plan.listed, |_| plan.prove(&client))
-            .await
-            .map_err(|gave_up| gave_up.into_error(&plan.listed, budget))?;
+        let connection = within_budget(budget, &plan.listed, process_seed(), |_| {
+            plan.prove(&client)
+        })
+        .await
+        .map_err(|gave_up| gave_up.into_error(&plan.listed, budget))?;
         Ok(Arc::new(Self { plan, connection }))
     }
 

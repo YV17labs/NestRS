@@ -2,12 +2,17 @@
 //!
 //! Exponential — one second after the first failure, doubling after each, never
 //! more than five minutes — and jittered to between 80% and 120% of that, so
-//! the jobs a shared outage failed together do not all come back together.
+//! the jobs a shared outage failed together do not all come back together:
+//! `nest_rs_core::Backoff`, the one policy every retry loop of the framework
+//! takes.
 //!
-//! The jitter is a hash of the job's id and the attempt number, never a random
+//! The jitter is drawn from the job's id and the attempt number, never a random
 //! draw, so every wait is reproducible.
 
+use std::num::NonZeroU32;
 use std::time::Duration;
+
+use nest_rs_core::Backoff;
 
 use crate::JobId;
 
@@ -17,37 +22,16 @@ const FIRST: Duration = Duration::from_secs(1);
 /// The longest wait before jitter, reached from the tenth attempt on.
 const CEILING: Duration = Duration::from_secs(5 * 60);
 
-/// The jitter's range, in thousandths of the unjittered wait: 800 to 1200.
-const JITTER_LOW_PERMILLE: u64 = 800;
-const JITTER_SPAN_PERMILLE: u64 = 400;
+/// A job's retries: one second, doubling to five minutes.
+const RETRY: Backoff = Backoff::new(FIRST, CEILING);
 
 /// How long to wait after attempt number `attempt` (1-based) of job `id` failed
 /// retryably, before the next attempt runs:
 /// `min(5 min, 1 s · 2^(attempt − 1))`, scaled by a jitter in `[0.8, 1.2]`
-/// derived from `(id, attempt)`.
+/// drawn from `(id, attempt)`.
 pub(crate) fn retry_after(id: &JobId, attempt: u32) -> Duration {
-    let first = FIRST.as_millis() as u64;
-    let ceiling = CEILING.as_millis() as u64;
-    // Past the ceiling long before the shift could overflow: 2^9 seconds is
-    // already more than five minutes.
-    let doublings = attempt.saturating_sub(1).min(16);
-    let unjittered = first.saturating_mul(1 << doublings).min(ceiling);
-    let permille = JITTER_LOW_PERMILLE + fnv1a(id, attempt) % (JITTER_SPAN_PERMILLE + 1);
-    Duration::from_millis(unjittered * permille / 1000)
-}
-
-/// FNV-1a over the id's bytes and the attempt number's — a hash fixed by its
-/// own specification, so the jitter does not move with the standard library's
-/// `DefaultHasher`, whose algorithm is explicitly unspecified.
-fn fnv1a(id: &JobId, attempt: u32) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    id.as_bytes()
-        .iter()
-        .chain(attempt.to_le_bytes().iter())
-        .fold(OFFSET_BASIS, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(PRIME)
-        })
+    let attempt = NonZeroU32::new(attempt).unwrap_or(NonZeroU32::MIN);
+    RETRY.wait(attempt, Backoff::seed(id.as_bytes()))
 }
 
 #[cfg(test)]

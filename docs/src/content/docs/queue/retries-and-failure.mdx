@@ -61,7 +61,11 @@ See [Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit)
 After attempt `n` fails, the job waits `min(5 min, 1 s · 2^(n − 1))` before
 attempt `n + 1`, scaled by a jitter between 0.8 and 1.2. The jitter is derived
 from the job's id and `n` rather than drawn, so jobs a shared outage failed
-together come back apart, and one job waits the same on every replay:
+together come back apart, and one job waits the same on every replay. It is the
+one retry policy the framework runs — `nest_rs::core::Backoff`, the shape of
+gRPC's connection backoff — and the worker's own calls to its backend, Redis's
+reconnections and `retry_on_conflict` wait on it too, each from a seed of its
+own:
 
 | After attempt | Wait before jitter | Wait |
 |---|---|---|

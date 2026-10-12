@@ -17,13 +17,14 @@ use std::sync::{Arc, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use nest_rs_config::ClientTls;
+use nest_rs_core::{Retries, process_seed};
 use redis::aio::MultiplexedConnection;
 use redis::{Cmd, ErrorKind, Pipeline, RedisConnectionInfo, Value};
 use tokio::sync::Notify;
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, GaveUp, Replies, answered, backoff_after, classify, demoted,
-    dial, node_client, spent, within_budget,
+    Attempt, GaveUp, RECONNECT, Replies, answered, classify, demoted, dial, node_client, spent,
+    within_budget,
 };
 use crate::error::{RedisError, SentinelMiss};
 use crate::url::{NodeAddr, SentinelUrl, listed};
@@ -100,11 +101,12 @@ impl SentinelLink {
             first: AtomicUsize::new(0),
             said: AtomicBool::new(false),
         });
-        let (connection, primary) = within_budget(budget, &sentinels.listed, |remaining| {
-            sentinels.resolve(remaining)
-        })
-        .await
-        .map_err(|gave_up| sentinels.gave_up(gave_up))?;
+        let (connection, primary) =
+            within_budget(budget, &sentinels.listed, process_seed(), |remaining| {
+                sentinels.resolve(remaining)
+            })
+            .await
+            .map_err(|gave_up| sentinels.gave_up(gave_up))?;
         Ok(Self::opened(sentinels, connection, primary))
     }
 
@@ -240,7 +242,7 @@ impl SentinelLink {
     }
 
     async fn reopen(link: Weak<Self>) {
-        let mut wait = FIRST_RETRY_BACKOFF;
+        let mut retries = Retries::new(RECONNECT, process_seed());
         loop {
             let Some(this) = link.upgrade() else {
                 return;
@@ -275,8 +277,7 @@ impl SentinelLink {
                 Err(failure) => this.sentinels.say(&failure),
             }
             drop(this);
-            tokio::time::sleep(wait).await;
-            wait = backoff_after(wait);
+            tokio::time::sleep(retries.next_wait()).await;
         }
     }
 }

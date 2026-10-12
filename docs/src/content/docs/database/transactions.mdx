@@ -155,7 +155,9 @@ so an event emitted inside it would not wait for it: emit once
 
 `retry_on_conflict` runs the closure up to `attempts` times, sleeping
 `initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
-defaults). A non-retryable error returns immediately; a retryable one is
+defaults), each sleep scaled by a jitter between 0.8 and 1.2 drawn per call —
+two transactions that conflicted with each other retry apart, not at one
+instant into the same conflict. A non-retryable error returns immediately; a retryable one is
 logged at `warn` and the closure re-runs from scratch — that's what makes
 the retry honest, the body re-opens a fresh transaction against a fresh
 snapshot.
@@ -167,12 +169,11 @@ The defaults are conservative on purpose:
 | `DEFAULT_RETRY_ATTEMPTS`  | 3                      |
 | `DEFAULT_INITIAL_BACKOFF` | 5 ms                   |
 | `MAX_RETRY_ATTEMPTS`      | 32 (hard ceiling)      |
-| Per-sleep cap             | 30 s                   |
+| Per-sleep cap             | 30 s, before jitter    |
 
-The hard ceiling and per-sleep cap exist because `1u32 << attempt`
-overflows at `attempt >= 32` (UB in debug, wraps to `0` in release —
-which would hot-spin). Pass `usize::MAX` and the function still terminates
-in bounded time.
+The two limits bound what a caller can ask for: no sleep goes past 30 s
+before jitter, however many attempts have failed, and no call makes more than
+32 attempts, so a call passing `usize::MAX` still ends in bounded time.
 
 <Aside type="caution">
 **This is a service primitive.** It lives in `nest_rs::seaorm::retry` and

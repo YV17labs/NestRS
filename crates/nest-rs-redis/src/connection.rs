@@ -12,9 +12,10 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nest_rs_config::{ClientTls, Namespaced};
+use nest_rs_core::{Backoff, Retries};
 use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 use redis::cluster_routing::Slot;
@@ -89,6 +90,11 @@ pub(crate) const FIRST_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 /// Ceiling for the doubling backoff, so a boot budget fits several attempts;
 /// every link's reopening backoff takes it too.
 pub(crate) const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+
+/// The wait between two attempts to open or reopen a link, jittered from a
+/// seed — every replica's own, so replicas that lost Valkey together do not
+/// dial it again together.
+pub(crate) const RECONNECT: Backoff = Backoff::new(FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF);
 
 /// The shortest the socket waits before it probes, or before it gives up on
 /// what it sent: the kernel counts the first in whole seconds and refuses zero.
@@ -340,10 +346,12 @@ pub(crate) enum GaveUp<E> {
 
 /// Run `attempt` until it opens a link, meets a refusal, or `budget` is spent
 /// between failures that may clear, each announced on `nest_rs::redis` naming
-/// `endpoint`. Each attempt is handed what is left of the budget.
+/// `endpoint`. Each attempt is handed what is left of the budget; the wait
+/// between two is [`RECONNECT`]'s, drawn from `seed`.
 pub(crate) async fn within_budget<T, E, F, Fut>(
     budget: Duration,
     endpoint: &str,
+    seed: u64,
     mut attempt: F,
 ) -> Result<T, GaveUp<E>>
 where
@@ -353,12 +361,12 @@ where
 {
     // The budget was held to its range, so an hour at most: no clock overflows
     // adding it.
-    let deadline = Instant::now() + budget;
-    let mut backoff = FIRST_RETRY_BACKOFF;
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut retries = Retries::new(RECONNECT, seed);
     let mut attempts = 0u32;
     let mut last = None;
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             break;
         }
@@ -398,12 +406,11 @@ where
                 last = Some(error);
             }
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if left.is_zero() {
             break;
         }
-        tokio::time::sleep(backoff.min(left)).await;
-        backoff = backoff_after(backoff);
+        tokio::time::sleep(retries.next_wait().min(left)).await;
     }
     Err(GaveUp::Spent { attempts, last })
 }
@@ -441,11 +448,6 @@ impl GaveUp<redis::RedisError> {
             Self::Spent { attempts, last } => spent(endpoint.to_owned(), budget, attempts, last),
         }
     }
-}
-
-/// The wait after `wait`: doubled, up to [`MAX_RETRY_BACKOFF`].
-pub(crate) fn backoff_after(wait: Duration) -> Duration {
-    (wait * 2).min(MAX_RETRY_BACKOFF)
 }
 
 /// A client of one host a topology names — a sentinel, the primary it names,
@@ -701,6 +703,8 @@ const _: () = {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
     use crate::testing::{
         CLIENT, SERVER, answer, config, dropping_then_refusing_listener, inline,
@@ -1117,6 +1121,54 @@ mod tests {
                 .to_string()
                 .contains("must be at most 3600 seconds"),
             "{from_env}"
+        );
+    }
+
+    /// When each attempt of a boot whose every dial is refused is made, under
+    /// `seed`, on a paused clock, and how the loop gave up.
+    async fn refused_dials(seed: u64, budget: Duration) -> (Vec<Duration>, RedisError) {
+        let started = tokio::time::Instant::now();
+        let mut made = Vec::new();
+        let gave_up = within_budget(budget, "127.0.0.1:9", seed, |_| {
+            made.push(started.elapsed());
+            async {
+                Err::<(), _>(Attempt::Failed(redis::RedisError::from(
+                    std::io::Error::from(std::io::ErrorKind::ConnectionRefused),
+                )))
+            }
+        })
+        .await
+        .expect_err("a dial refused every time never opens");
+        (made, gave_up.into_error("127.0.0.1:9", budget))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnects_climb_jittered_apart_for_two_seeds_then_fail_unreachable() {
+        let budget = Duration::from_secs(10);
+        let (one, refused) = refused_dials(1, budget).await;
+        let (other, _) = refused_dials(2, budget).await;
+
+        assert_ne!(one, other, "two replicas' loops come back apart");
+        for made in [&one, &other] {
+            let waits: Vec<Duration> = made.windows(2).map(|pair| pair[1] - pair[0]).collect();
+            for (failed, wait) in waits.iter().take(3).enumerate() {
+                let curve = FIRST_RETRY_BACKOFF * (1 << failed);
+                assert!(
+                    *wait >= curve.mul_f64(0.8) && *wait <= curve.mul_f64(1.2),
+                    "wait {failed}: {wait:?} against {curve:?} in {made:?}",
+                );
+            }
+            assert!(
+                waits
+                    .iter()
+                    .all(|wait| *wait <= MAX_RETRY_BACKOFF.mul_f64(1.2)),
+                "{waits:?}"
+            );
+            assert!(made.last().is_some_and(|last| *last < budget), "{made:?}");
+        }
+        assert!(
+            matches!(refused, RedisError::Unreachable { .. }),
+            "{refused}"
         );
     }
 

@@ -3,8 +3,11 @@
 //! A `DatabaseTransaction` is aborted past a conflict and cannot be replayed:
 //! wrap the whole programmatic transaction in [`retry_on_conflict`].
 
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use nest_rs_core::{Backoff, process_seed};
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
 
 /// SQLSTATE markers a transient conflict surfaces under across the
@@ -40,11 +43,16 @@ pub const MAX_RETRY_ATTEMPTS: usize = 32;
 pub const DEFAULT_RETRY_ATTEMPTS: usize = 3;
 
 /// Initial backoff before the first retry — 5 ms, doubled each retry
-/// (5 ms → 10 ms → 20 ms).
+/// (5 ms → 10 ms → 20 ms), each within a fifth either way.
 pub const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(5);
 
-/// Per-sleep ceiling, however many attempts have failed.
+/// Per-sleep ceiling before jitter, however many attempts have failed.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// How many [`retry_on_conflict`] calls this process made: two transactions
+/// that conflicted with each other retry apart, not at one instant into the
+/// same conflict.
+static CALLS: AtomicU64 = AtomicU64::new(0);
 
 /// Whether `err` is a transient conflict worth retrying, matched on the typed
 /// SQLSTATE, never the message text.
@@ -94,9 +102,10 @@ pub fn is_transient_failure(err: &DbErr) -> bool {
 }
 
 /// Run `op` up to `attempts` times, sleeping `initial_backoff << attempt`
-/// between tries when the previous attempt failed with a conflict
-/// recognized by [`is_retryable_conflict`]. A non-retryable error returns
-/// immediately; the last error after exhausting the budget is returned.
+/// between tries — jittered within a fifth either way, from a seed of its own
+/// per call — when the previous attempt failed with a conflict recognized by
+/// [`is_retryable_conflict`]. A non-retryable error returns immediately; the
+/// last error after exhausting the budget is returned.
 ///
 /// `attempts` is clamped to `[1, MAX_RETRY_ATTEMPTS]` so a caller passing
 /// `0` still runs the operation once and a caller passing `usize::MAX`
@@ -113,6 +122,7 @@ where
     Fut: std::future::Future<Output = Result<T, DbErr>>,
 {
     let attempts = attempts.clamp(1, MAX_RETRY_ATTEMPTS);
+    let seed = process_seed() ^ CALLS.fetch_add(1, Ordering::Relaxed);
     let mut attempt = 0;
     loop {
         match op().await {
@@ -139,16 +149,18 @@ where
                     error = %nest_rs_core::error_message(&err),
                     "transaction conflict — retrying",
                 );
-                tokio::time::sleep(backoff_for(initial_backoff, attempt - 1)).await;
+                tokio::time::sleep(backoff_for(initial_backoff, attempt, seed)).await;
             }
         }
     }
 }
 
-/// Saturating exponential backoff, capped at [`MAX_BACKOFF`].
-fn backoff_for(initial: Duration, attempt: usize) -> Duration {
-    let multiplier = 2u32.saturating_pow(attempt as u32);
-    initial.saturating_mul(multiplier).min(MAX_BACKOFF)
+/// The wait after failed attempt `failed` (1-based): `initial` doubling up to
+/// [`MAX_BACKOFF`], jittered from `seed` (`nest_rs_core::Backoff`).
+fn backoff_for(initial: Duration, failed: usize, seed: u64) -> Duration {
+    let failed =
+        NonZeroU32::new(u32::try_from(failed).unwrap_or(u32::MAX)).unwrap_or(NonZeroU32::MIN);
+    Backoff::new(initial, MAX_BACKOFF).wait(failed, seed)
 }
 
 #[cfg(test)]
@@ -420,37 +432,70 @@ mod tests {
         );
     }
 
-    #[test]
-    fn backoff_saturates_past_shift_overflow() {
-        let base = Duration::from_millis(5);
-        assert_eq!(backoff_for(base, 0), Duration::from_millis(5));
-        assert_eq!(backoff_for(base, 3), Duration::from_millis(40));
-        let big = backoff_for(base, 32);
+    /// Within a fifth of `min(MAX_BACKOFF, base · 2^(failed − 1))`.
+    fn assert_on_the_curve(base: Duration, failed: usize, wait: Duration) {
+        let curve = (1..failed).fold(base, |wait, _| wait.saturating_mul(2).min(MAX_BACKOFF));
         assert!(
-            big > Duration::ZERO,
-            "shift cap must not wrap to zero — that would hot-spin the retry loop",
+            wait >= curve.mul_f64(0.8) && wait <= curve.mul_f64(1.2),
+            "after {failed} failed: {wait:?} against {curve:?}",
         );
-        assert_eq!(
-            big, MAX_BACKOFF,
-            "large attempts cap at MAX_BACKOFF, not at base * u32::MAX",
-        );
-        let huge = backoff_for(base, 1_000);
-        let bigger = backoff_for(base, MAX_RETRY_ATTEMPTS);
-        assert_eq!(huge, MAX_BACKOFF);
-        assert_eq!(bigger, MAX_BACKOFF);
     }
 
     #[test]
-    fn backoff_never_exceeds_max_backoff() {
+    fn each_wait_doubles_within_a_fifth_up_to_the_ceiling() {
         let base = Duration::from_millis(5);
-        for attempt in 0..=MAX_RETRY_ATTEMPTS {
-            let b = backoff_for(base, attempt);
-            assert!(
-                b <= MAX_BACKOFF,
-                "attempt {attempt}: backoff {b:?} exceeds MAX_BACKOFF {MAX_BACKOFF:?}",
-            );
+        for failed in (1..=MAX_RETRY_ATTEMPTS).chain([1_000, usize::MAX]) {
+            assert_on_the_curve(base, failed.min(64), backoff_for(base, failed, 7));
         }
-        assert!(backoff_for(base, 31) <= MAX_BACKOFF);
-        assert!(backoff_for(base, 1_000_000) <= MAX_BACKOFF);
+        assert!(
+            backoff_for(base, usize::MAX, 7) > Duration::ZERO,
+            "a ceiling never wraps to zero — that would hot-spin the retry loop",
+        );
+    }
+
+    #[test]
+    fn two_calls_with_their_own_seeds_retry_apart() {
+        let base = Duration::from_millis(5);
+        let waits: std::collections::BTreeSet<Duration> = (0..32)
+            .map(|call| backoff_for(base, 1, process_seed() ^ call))
+            .collect();
+        assert!(waits.len() > 1, "{waits:?}");
+        for wait in waits {
+            assert_on_the_curve(base, 1, wait);
+        }
+        assert_eq!(backoff_for(base, 3, 11), backoff_for(base, 3, 11));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn calls_that_conflicted_together_retry_apart() {
+        // A whole second, so each jittered wait lands on the timer's millisecond.
+        let initial = Duration::from_secs(1);
+        let started = tokio::time::Instant::now();
+        let mut calls = tokio::task::JoinSet::new();
+        // Eight, not two: two seeds of their own still draw the same wait one
+        // time in 401.
+        for _ in 0..8 {
+            let mut conflicted = false;
+            calls.spawn(retry_on_conflict(2, initial, move || {
+                let first = !std::mem::replace(&mut conflicted, true);
+                async move {
+                    if first {
+                        Err(sqlx_db_err(Some("40001"), "could not serialize access"))
+                    } else {
+                        Ok(tokio::time::Instant::now())
+                    }
+                }
+            }));
+        }
+        let mut retried_at = std::collections::BTreeSet::new();
+        while let Some(call) = calls.join_next().await {
+            let retried = call.expect("the call ran").expect("the retry committed");
+            assert_on_the_curve(initial, 1, retried - started);
+            retried_at.insert(retried);
+        }
+        assert!(
+            retried_at.len() > 1,
+            "every call retried at one instant: {retried_at:?}"
+        );
     }
 }

@@ -11,12 +11,13 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
+use nest_rs_core::{Retries, process_seed};
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Cmd, ConnectionAddr, ConnectionInfo, Pipeline, Value};
 
 use crate::connection::{
-    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT_FACTOR, Replies, answered,
-    backoff_after, classify, demoted, dial, open_client, refused, within_budget,
+    Attempt, FIRST_RETRY_BACKOFF, MAX_RETRY_BACKOFF, RECONNECT, RECONNECT_FACTOR, Replies,
+    answered, classify, demoted, dial, open_client, refused, within_budget,
 };
 use crate::error::RedisError;
 use crate::{RedisTopology, tls};
@@ -48,7 +49,7 @@ impl StandaloneLink {
         let endpoint = info.addr().to_string();
         let client = client(info, tls, &endpoint, budget)?;
         let database = client.get_connection_info().redis_settings().db();
-        let manager = within_budget(budget, &endpoint, |_| {
+        let manager = within_budget(budget, &endpoint, process_seed(), |_| {
             prove(&client, budget, &endpoint, database)
         })
         .await
@@ -301,17 +302,14 @@ async fn prove(
     let mut kept = ConnectionManager::new_with_config(client.clone(), manager_config(budget))
         .await
         .map_err(classified)?;
-    let mut wait = FIRST_RETRY_BACKOFF;
+    let mut retries = Retries::new(RECONNECT, process_seed());
     loop {
         match redis::cmd("PING").query_async::<()>(&mut kept).await {
             Ok(()) => return Ok(kept),
             Err(error) if refused(&error) || ClientTls::negotiation_failed(&error) => {
                 return Err(classified(error));
             }
-            Err(_) => {
-                tokio::time::sleep(wait).await;
-                wait = backoff_after(wait);
-            }
+            Err(_) => tokio::time::sleep(retries.next_wait()).await,
         }
     }
 }

@@ -84,7 +84,10 @@ resolves to every sentinel, or list them.
 and closes its clients' connections: the connection's next command finds it
 closed, a timed-out or `READONLY` answer does the same, and the replacement is
 opened to the primary the sentinels name *then* — never reopened to the address
-it had, which is a replica now. A command sent meanwhile waits for the new
+it had, which is a replica now. Until one opens, the sentinels are asked again
+after a wait doubling from 250 ms to 2 s, each within a fifth either way and
+drawn per replica, so the replicas that lost the primary together do not all
+ask at one instant — the boot's attempts are spaced the same way. A command sent meanwhile waits for the new
 connection, within `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, and fails as a
 timeout past it; the line `redis connection follows the new primary the
 sentinels name`, at `warn` on `nest_rs::redis`, names the old and the new.

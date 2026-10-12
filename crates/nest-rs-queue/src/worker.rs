@@ -30,7 +30,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use nest_rs_core::{
-    Container, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message, within,
+    Backoff, Container, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message,
+    process_seed, within,
 };
 use serde_json::Value;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
@@ -51,28 +52,18 @@ use crate::{
 /// receive the backend blocks.
 const RECEIVE_WAIT: Duration = Duration::from_secs(1);
 
-/// The first wait after a call failed, doubling up to [`LONGEST_RETRY`].
-const FIRST_RETRY: Duration = Duration::from_millis(250);
-const LONGEST_RETRY: Duration = Duration::from_secs(5);
+/// The wait before a failed call is made again: 250 ms, doubling up to 5 s,
+/// each within a fifth either way, and the first again once a call answers.
+const CALL_RETRY: Backoff = Backoff::new(Duration::from_millis(250), Duration::from_secs(5));
 
-/// The wait before a failed call is made again: [`FIRST_RETRY`], doubling up
-/// to [`LONGEST_RETRY`], and the first again once a call answers.
-struct Backoff(Duration);
-
-impl Backoff {
-    const fn new() -> Self {
-        Self(FIRST_RETRY)
-    }
-
-    const fn reset(&mut self) {
-        self.0 = FIRST_RETRY;
-    }
-
-    fn wait(&mut self) -> Duration {
-        let wait = self.0;
-        self.0 = (wait * 2).min(LONGEST_RETRY);
-        wait
-    }
+/// A loop's retries of its calls on `queue`'s backend: drawn from this
+/// replica's seed and the queue, so neither two replicas nor two methods of
+/// one come back together after an outage they met together.
+fn call_retries(queue: &QueueName) -> Retries {
+    Retries::new(
+        CALL_RETRY,
+        process_seed() ^ Backoff::seed(queue.as_str().as_bytes()),
+    )
 }
 
 /// The least a drain keeps back from its window to hand cut jobs back in, when
@@ -460,7 +451,7 @@ impl<C: JobConsumer> Drop for Released<C> {
 impl<C: JobConsumer> MethodRun<C> {
     /// Ask for as many deliveries as permits are free, until the stop.
     async fn receive(self: Arc<Self>) {
-        let mut backoff = Backoff::new();
+        let mut retries = call_retries(&self.queue);
         loop {
             let first = tokio::select! {
                 biased;
@@ -492,7 +483,7 @@ impl<C: JobConsumer> MethodRun<C> {
                     deliveries,
                     throttled_for,
                 }) => {
-                    backoff.reset();
+                    retries.reset();
                     let stopped = self.shared.stop.is_cancelled();
                     if deliveries.len() > permits.len() {
                         tracing::error!(
@@ -533,7 +524,7 @@ impl<C: JobConsumer> MethodRun<C> {
                 }
                 Err(failed) => {
                     drop(permits);
-                    let wait = backoff.wait();
+                    let wait = retries.next_wait();
                     tracing::warn!(
                         target: TARGET,
                         queue = %self.queue,
@@ -577,7 +568,7 @@ impl<C: JobConsumer> MethodRun<C> {
 
     /// The backend's upkeep of the queue, as often as it asks, until the stop.
     async fn maintain(self: Arc<Self>) {
-        let mut backoff = Backoff::new();
+        let mut retries = call_retries(&self.queue);
         loop {
             let next = match answered(
                 Some(&self.queue),
@@ -589,11 +580,11 @@ impl<C: JobConsumer> MethodRun<C> {
             {
                 Ok(None) => return,
                 Ok(Some(next)) => {
-                    backoff.reset();
+                    retries.reset();
                     next
                 }
                 Err(failed) => {
-                    let wait = backoff.wait();
+                    let wait = retries.next_wait();
                     tracing::warn!(
                         target: TARGET,
                         queue = %self.queue,
@@ -615,7 +606,7 @@ impl<C: JobConsumer> MethodRun<C> {
     /// length after its last confirmation, every lease held renewed together
     /// when one falls due — until `until`, after the last delivery ended.
     async fn renew(self: Arc<Self>, until: CancellationToken) {
-        let mut backoff = Backoff::new();
+        let mut retries = call_retries(&self.queue);
         let mut not_before = Instant::now();
         loop {
             let due = self.next_renewal().map(|due| due.max(not_before));
@@ -649,7 +640,7 @@ impl<C: JobConsumer> MethodRun<C> {
                 };
                 match answer {
                     Ok(answers) => {
-                        backoff.reset();
+                        retries.reset();
                         not_before = Instant::now() + RENEWAL_SPACING;
                         if answers.len() != held.len() {
                             tracing::error!(
@@ -669,7 +660,7 @@ impl<C: JobConsumer> MethodRun<C> {
                         }
                     }
                     Err(failed) => {
-                        let wait = backoff.wait();
+                        let wait = retries.next_wait();
                         tracing::warn!(
                             target: TARGET,
                             queue = %self.queue,
@@ -923,7 +914,7 @@ impl<C: JobConsumer> MethodRun<C> {
         expected_loss: bool,
     ) {
         let job = self.settling(token);
-        let mut backoff = Backoff::new();
+        let mut retries = call_retries(&self.queue);
         let mut erred = false;
         loop {
             match answered(
@@ -963,7 +954,7 @@ impl<C: JobConsumer> MethodRun<C> {
                 }
                 Err(error) => {
                     erred = true;
-                    let wait = backoff.wait();
+                    let wait = retries.next_wait();
                     if Instant::now() + wait >= self.holds_until(token) {
                         tracing::error!(
                             target: TARGET,

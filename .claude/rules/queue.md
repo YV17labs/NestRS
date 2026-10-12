@@ -40,8 +40,9 @@ contract (`.claude/decisions/queue-redis-streams.md`).
   the capability that names it, so no driver changes behaviour under it.
 - **A job is named by the port.** The push mints a `JobId` (UUID v7) and seals it
   in the envelope; it keys everything kept about the job. A backend's own record
-  id reaches a line only as `backend_id`. The wait before a retry is jittered by
-  a hash of the id and the attempt, never a random draw, so it is reproducible.
+  id reaches a line only as `backend_id`. The wait before a retry is
+  `nest_rs_core::Backoff`'s, seeded by the job id — jittered by a hash of the id
+  and the attempt, never a random draw, so it is reproducible.
 - **A backend declares each capability it honours, one at a time** — never
   `Capabilities::ALL`, so one the port names later is not claimed before it is
   honoured — and the port refuses a declaration or a push option the backend

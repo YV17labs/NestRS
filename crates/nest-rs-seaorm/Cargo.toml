@@ -140,6 +140,9 @@ nest-rs-authn = { path = "../nest-rs-authn" }
 # The `executor` e2e emits under a caller's own transaction: the bus dispatches
 # through this crate's `after_commit`, and only a live `BEGIN` makes a `Txn`.
 nest-rs-events = { path = "../nest-rs-events" }
+# `test-util` (not part of tokio's `full`) pauses time, so the instant each
+# conflicting call retries at is read off the clock its backoff sleeps on.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

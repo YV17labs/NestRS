@@ -401,7 +401,7 @@ mod tests {
 
         #[test]
         fn a_config_no_factory_resolved_is_refused_naming_it() {
-            let empty = nest_rs_core::Container::builder().build();
+            let empty = Container::builder().build();
             let Err(refused) = ConfigModule::resolved::<SeamConfig>(&empty) else {
                 panic!("an empty container resolved no config");
             };
@@ -419,7 +419,7 @@ mod tests {
 
         #[test]
         fn a_resolved_config_is_the_one_the_container_holds() {
-            let container = nest_rs_core::Container::builder()
+            let container = Container::builder()
                 .provide(SeamConfig {
                     bucket: "held".into(),
                 })

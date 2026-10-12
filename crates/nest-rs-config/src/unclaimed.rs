@@ -568,7 +568,7 @@ mod tests {
         witness(&name);
         let known = LEDGER
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(PoisonError::into_inner)
             .known
             .contains(&name);
         assert!(known, "a read on a poisoned ledger is still witnessed");

@@ -905,7 +905,7 @@ mod tests {
         }
     }
 
-    /// Every order of `0..n`, for a boot that must not depend on `imports = [..]`.
+    /// Every order of `0..n`.
     fn every_order(n: usize) -> Vec<Vec<usize>> {
         let Some(last) = n.checked_sub(1) else {
             return vec![Vec::new()];
@@ -921,19 +921,29 @@ mod tests {
         orders
     }
 
+    /// A builder importing `modules` in each of their orders, beside that order
+    /// as indices into `modules`, for a boot that must not depend on
+    /// `imports = [..]`.
+    fn in_every_order(
+        modules: &[fn(AppBuilder) -> AppBuilder],
+    ) -> impl Iterator<Item = (Vec<usize>, AppBuilder)> + '_ {
+        every_order(modules.len()).into_iter().map(|order| {
+            let app = order
+                .iter()
+                .fold(App::builder(), |app, &at| modules[at](app));
+            (order, app)
+        })
+    }
+
     #[tokio::test]
     async fn a_factory_declared_after_two_others_runs_after_both_whatever_the_queue_order() {
-        for modules in every_order(3) {
-            let mut app = App::builder();
-            for &module in &modules {
-                app = match module {
-                    0 => app.module::<ThirdAfterBoth>(),
-                    1 => app.module::<FirstModule>(),
-                    _ => app.module::<SecondModule>(),
-                };
-            }
+        for (order, app) in in_every_order(&[
+            AppBuilder::module::<ThirdAfterBoth>,
+            AppBuilder::module::<FirstModule>,
+            AppBuilder::module::<SecondModule>,
+        ]) {
             let app = app.build().await.expect("the declared order is honoured");
-            assert_eq!(app.container().get::<Third>().unwrap().0, 42, "{modules:?}");
+            assert_eq!(app.container().get::<Third>().unwrap().0, 42, "{order:?}");
         }
     }
 
@@ -967,25 +977,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_factory_after_three_others_runs_after_all_three_in_every_order() {
-        for modules in every_order(4) {
-            let mut app = App::builder();
-            for &module in &modules {
-                app = match module {
-                    0 => app.module::<FourthAfterThree>(),
-                    1 => app.module::<FirstModule>(),
-                    2 => app.module::<SecondModule>(),
-                    _ => app.module::<ThirdModule>(),
-                };
-            }
+        for (order, app) in in_every_order(&[
+            AppBuilder::module::<FourthAfterThree>,
+            AppBuilder::module::<FirstModule>,
+            AppBuilder::module::<SecondModule>,
+            AppBuilder::module::<ThirdModule>,
+        ]) {
             let app = app
                 .build()
                 .await
-                .unwrap_or_else(|e| panic!("{modules:?}: {e:#}"));
-            assert_eq!(
-                app.container().get::<Fourth>().unwrap().0,
-                142,
-                "{modules:?}"
-            );
+                .unwrap_or_else(|e| panic!("{order:?}: {e:#}"));
+            assert_eq!(app.container().get::<Fourth>().unwrap().0, 142, "{order:?}");
         }
     }
 
@@ -1071,23 +1073,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_dyn_binding_after_two_factories_runs_after_both_in_every_order() {
-        for modules in every_order(3) {
-            let mut app = App::builder();
-            for &module in &modules {
-                app = match module {
-                    0 => app.module::<BindsSummedPortModule>(),
-                    1 => app.module::<FirstModule>(),
-                    _ => app.module::<SecondModule>(),
-                };
-            }
+        for (order, app) in in_every_order(&[
+            AppBuilder::module::<BindsSummedPortModule>,
+            AppBuilder::module::<FirstModule>,
+            AppBuilder::module::<SecondModule>,
+        ]) {
             let app = app
                 .build()
                 .await
-                .unwrap_or_else(|e| panic!("{modules:?}: {e:#}"));
+                .unwrap_or_else(|e| panic!("{order:?}: {e:#}"));
             assert_eq!(
                 app.container().get_dyn::<dyn Port>().map(|p| p.value()),
                 Some(42),
-                "{modules:?}"
+                "{order:?}"
             );
         }
     }
@@ -1316,23 +1314,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_dyn_factory_over_a_declared_type_supersedes_its_ports_default_in_every_order() {
-        let orders: [[u8; 3]; 6] = [
-            [0, 1, 2],
-            [0, 2, 1],
-            [1, 0, 2],
-            [1, 2, 0],
-            [2, 0, 1],
-            [2, 1, 0],
-        ];
-        for order in orders {
-            let mut app = App::builder();
-            for module in order {
-                app = match module {
-                    0 => app.module::<DefaultPortModule>(),
-                    1 => app.module::<DeclaresPortImplModule>(),
-                    _ => app.module::<BindsPortModule>(),
-                };
-            }
+        for (order, app) in in_every_order(&[
+            AppBuilder::module::<DefaultPortModule>,
+            AppBuilder::module::<DeclaresPortImplModule>,
+            AppBuilder::module::<BindsPortModule>,
+        ]) {
             let app = app
                 .build()
                 .await

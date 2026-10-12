@@ -2,7 +2,7 @@
 
 Authentication for NestRS: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthnGuard that establishes the caller's identity.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features authn

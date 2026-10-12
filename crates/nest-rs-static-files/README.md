@@ -2,7 +2,7 @@
 
 Static files and single-page apps for NestRS, from a directory or a folder embedded in the binary, served beside the API as the router's fallback.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features static-files

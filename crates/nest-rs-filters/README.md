@@ -2,7 +2,7 @@
 
 HTTP error-mapping filters for NestRS — one Layer System sub-trait that turns inner errors into responses, declared globally via `use_filters_global` or per-scope through `#[use_filters]`.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features filters

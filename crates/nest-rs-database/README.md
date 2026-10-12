@@ -2,7 +2,7 @@
 
 ORM-agnostic data-layer seam for NestRS: the ambient request/job Executor, carried by the kernel's ambient context, plus the object-safe Executor trait an ORM module implements. SeaORM is the first-party implementation (nest-rs-seaorm), and the trait is public so other stores can be written against it.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features database

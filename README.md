@@ -127,12 +127,11 @@ Claims a clone of this repository lets you check:
 
 ## Stability
 
-**NestRS is stable and ready for production.** The public API is frozen for the
-current major: breaking changes wait for the next one. Every `nest-rs-*` crate
-publishes at the same version in lockstep, so one NestRS version names exactly
-one compatible resolution — down to the third-party crates that surface in your
-own signatures (`poem`, `sea-orm`, `async-graphql`, `rmcp`, `schemars`), whose
-majors are tied to the NestRS major and frozen for the whole line.
+**NestRS is stable and ready for production.** No 7.x release breaks what you
+build on — your code, your configuration, the names your log filters and
+alerts match — and the [semver policy](https://nestrs.dev/semver/) says
+exactly what that covers. Every `nest-rs-*` crate publishes at the same version
+in lockstep, so one NestRS version names exactly one compatible resolution.
 
 Coming from the previous major? [`changelog/7.0.md`](changelog/7.0.md) lists what moved:
 an edge is now **two** decorators — `#[resolver]` / `#[mcp]` on the struct,

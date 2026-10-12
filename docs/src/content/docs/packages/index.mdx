@@ -137,8 +137,9 @@ profiles.
 
 **Internal macro crates** (`nest-rs-*-macros`, `nest-rs-codegen`) implement
 the decorators — you never add them as direct dependencies; the surface crate
-re-exports what you need. For a decorator index see
-[Decorators](/decorators/).
+re-exports what you need. A decorator crate of your own is the one exception:
+it depends on `nest-rs-codegen` ([Writing a package](/semver/#writing-a-package)).
+For a decorator index see [Decorators](/decorators/).
 
 **Your product's `features` crate** holds domain modules (entities, services,
 controllers per transport). It is workspace-local and not published to

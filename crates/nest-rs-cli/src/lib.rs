@@ -4,6 +4,8 @@
 //! call what the commands run — [`resolve_variable`] and [`cascade_refusals`]
 //! beside the loader they mirror. Nothing here is an install surface: the seam
 //! is only what a second caller needs, and the rest is hidden from the docs.
+//! Nor is any of it API: the semver policy covers the `nestrs` commands and
+//! flags, never this library.
 
 #![expect(
     clippy::print_stdout,

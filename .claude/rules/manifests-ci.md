@@ -45,12 +45,13 @@ paths:
 - **The framework requires itself in lockstep**: every `nest-rs-*` entry of
   the root `[workspace.dependencies]` is `=` the release, and a framework crate
   links a sibling only through `{ workspace = true }` — macro expansions and
-  sibling crates call `__private`, which semver does not cover. Bump them with
-  `[workspace.package] version`.
+  sibling crates call `__private`, which semver does not cover (*Semver*). Bump
+  them with `[workspace.package] version`.
 - **Intra-workspace dev-dependencies are path-only** (`{ path = "../nest-rs-x" }`),
   so publishing drags no test-only cycle; cargo strips them.
 - **A manifest that consumes the framework names the umbrella and nothing
-  else** — `nest-rs` with features. `nest-rs-macro-hygiene` compiles every
+  else** — `nest-rs` with features — but a `proc-macro` crate, which adds
+  `nest-rs-codegen` (*Semver*). `nest-rs-macro-hygiene` compiles every
   decorator behind that one line.
 
 ## Shipping a capability
@@ -132,6 +133,43 @@ hardened — actions pinned by SHA, a local action referenced `$/`
 permissions — held by zizmor's offline audits and actionlint in `just lint`
 (`decisions/workflow-lint.md`); an exception is a `# zizmor: ignore[…]` beside
 its reason.
+
+## Semver
+
+A 7.x release never breaks what a program or an operator matches
+(`decisions/semver-7x.md`); `docs/src/content/docs/semver.mdx` says it to
+readers, and the two move in one change.
+
+- **API**: every tier-1 item of a published crate — reachable through no
+  `__private`, `__`-prefixed or `#[doc(hidden)]` item — but `nest-rs-cli`'s
+  library, whose command line is API instead; every decorator key and its
+  meaning; every variable, its spellings and its default, and every `#[config]`
+  field name; the wire and storage formats (the queue envelope, the
+  problem-details body, the WebSocket envelope, every `nestrs:` key, every
+  header the framework reads or writes); span targets, unit names, the
+  operation line's fields and the words a field takes; the umbrella's features.
+  A refusal that turns a compiling program into a compile error, or a booting
+  app or configuration into a boot refusal, is a break. Prose is not API: a
+  compile error, a refusal or a log message is reworded in a patch.
+- **A minor adds**: a tier-1 item; a variant or field where the type is
+  `#[non_exhaustive]` or has a private field; a field to a `#[config]` struct or
+  a `Default` struct nested in one — documented as built with
+  `..Default::default()`, a complete literal not covered; a key, a variable, a
+  feature, a unit, a `nest_rs::prelude` name; a public dependency's minor; the
+  MSRV, named in the changelog. **A patch fixes** behaviour and tier 2, and never
+  raises the MSRV.
+- **Whether a security fix refusing a configuration that used to boot ships in
+  7.x is the owner's open question** (`decisions/semver-7x.md`): ask, never
+  decide it in a change.
+- **Tier 2 is outside semver**, safe only under the `=` pins: no third party
+  names it, even through `::nest_rs::<concern>::__private`.
+- **A package depends on `nest-rs = { version = "7.N", default-features =
+  false, features = [...] }`**, its tests on `nest-rs` with `testing`; a
+  `proc-macro` crate uses `nest-rs-codegen`'s root items alone and emits no
+  `__private` path.
+
+Held by the tiers, `#[non_exhaustive]`, and review of each change against this
+list.
 
 ## Release
 

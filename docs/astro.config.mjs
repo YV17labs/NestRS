@@ -258,6 +258,7 @@ export default defineConfig({
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'CLI', slug: 'cli' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
+            { label: 'Semver policy', slug: 'semver' },
             // Last in the group a returning reader opens first: the one page a
             // 6.x project follows to 7.0, beside the orientation it no longer
             // needs, rather than under Reference, three screens down.

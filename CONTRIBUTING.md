@@ -1,7 +1,9 @@
 # Contributing to NestRS
 
-First off — thank you. NestRS ships under a semver contract, so you are
-contributing to a codebase whose public API is frozen for the current major.
+First off — thank you. NestRS ships under a
+[semver policy](https://nestrs.dev/semver/), so a change that breaks what it
+covers — a public item, a decorator key, a variable, a wire format, a span
+target — waits for the next major.
 This guide is the shortest path from *I want to help* to *my change is merged*.
 
 New here? Browse the

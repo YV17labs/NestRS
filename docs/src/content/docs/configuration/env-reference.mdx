@@ -254,8 +254,8 @@ is refused too.)
 
 | Key | Meaning |
 |---|---|
-| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`. **Required** under the module |
-| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it. **At least one required** |
+| `RESOURCE` | this deployment's canonical resource URI — the value tokens must carry as `aud`: `https`, no userinfo, no fragment, plain `http` on loopback in a development or test profile alone. **Required** under the module |
+| `AUTHORIZATION_SERVERS` | comma-separated issuer identifiers allowed to mint tokens for it, each held to `RESOURCE`'s rules. **At least one required** |
 | `SCOPES_SUPPORTED` | comma-separated minimal scope set, advertised in the metadata document and the `WWW-Authenticate` challenge |
 | `BEARER_METHODS_SUPPORTED` | how a token may be presented — defaults to `header`, the only form accepted |
 | `RESOURCE_NAME` | human-readable name for a consent screen |

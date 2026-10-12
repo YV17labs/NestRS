@@ -247,6 +247,13 @@ NESTRS_AUTHN__AUDIENCE=https://api.example.com
 NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
 
+The resource and each issuer are absolute `https` URIs, with no userinfo
+and no fragment; anything else fails the boot, naming the variable and never
+the value. Plain `http` is spared on `localhost`, `127.0.0.1` or `[::1]` in a
+declared development or test profile (`<PREFIX>_ENV`) alone, so a local loop
+runs without a certificate while staging and production speak `https`,
+loopback included.
+
 Three optional members of the RFC 9728 document round out the deployment's
 description of itself. Each is omitted from the served JSON when unset, as
 §3.2 requires:

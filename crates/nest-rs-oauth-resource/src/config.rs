@@ -1,7 +1,7 @@
 //! [`OAuthResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
-use nest_rs_config::{Config, ConfigService, Namespaced, config};
+use nest_rs_config::{Config, ConfigService, Environment, Namespaced, config};
 
 use crate::metadata::ProtectedResourceMetadata;
 use nest_rs_authn::AuthError;
@@ -85,6 +85,12 @@ impl OAuthResourceConfig {
     /// Validate the deployment's identity and freeze it into the document the
     /// well-known endpoint serves.
     pub fn into_metadata(self) -> Result<ProtectedResourceMetadata, AuthError> {
+        self.metadata_in(Environment::from_env())
+    }
+
+    /// [`into_metadata`](Self::into_metadata) under `environment`, the profile
+    /// that decides whether plain `http` on loopback is accepted.
+    fn metadata_in(self, environment: Environment) -> Result<ProtectedResourceMetadata, AuthError> {
         let resource = self.resource.unwrap_or_default();
         let resource = resource.trim();
         let resource_setting = nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE");
@@ -94,7 +100,7 @@ impl OAuthResourceConfig {
                  (for example https://api.example.com)",
             )));
         }
-        validate_canonical_uri(resource, &resource_setting)?;
+        validate_canonical_uri(resource, &resource_setting, environment)?;
 
         let authorization_servers: Vec<String> = self
             .authorization_servers
@@ -110,7 +116,7 @@ impl OAuthResourceConfig {
             )));
         }
         for (index, issuer) in authorization_servers.iter().enumerate() {
-            validate_canonical_uri(issuer, &entry(index, "AUTHORIZATION_SERVERS"))?;
+            validate_canonical_uri(issuer, &entry(index, "AUTHORIZATION_SERVERS"), environment)?;
         }
 
         // `scope` is space-delimited: a space or a quote would split a scope or
@@ -187,20 +193,21 @@ fn is_scope_token(scope: &str) -> bool {
             .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E))
 }
 
-/// Whether an authority names loopback, the one place a plain-`http` resource
-/// identifier is legitimate. Parsed per RFC 3986 §3.2: `[::1]` holds colons, and
-/// `http://localhost:8080@evil.com`'s host is `evil.com`.
-fn is_loopback_authority(rest: &str) -> bool {
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    // Userinfo is everything before the *last* `@`; the host follows it.
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    let host = match host_port.strip_prefix('[') {
-        // An IP-literal is bracketed, so the port is whatever follows the `]`.
+/// The authority of `rest`, a URI after its `://`: everything up to its path,
+/// query or fragment (RFC 3986 §3.2).
+fn authority_of(rest: &str) -> &str {
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
+}
+
+/// Whether an authority holding no userinfo names loopback. `[::1]` holds
+/// colons, so an IP-literal's port is whatever follows its `]`.
+fn is_loopback_authority(authority: &str) -> bool {
+    let host = match authority.strip_prefix('[') {
         Some(rest) => match rest.split_once(']') {
             Some((inner, _)) => inner,
             None => return false,
         },
-        None => host_port.split(':').next().unwrap_or(host_port),
+        None => authority.split(':').next().unwrap_or(authority),
     };
     if host.eq_ignore_ascii_case("localhost") {
         return true;
@@ -211,10 +218,16 @@ fn is_loopback_authority(rest: &str) -> bool {
     }
 }
 
-/// The MCP authorization spec's canonical-URI rules: absolute, with a scheme, no
-/// fragment; a trailing slash is legal but discouraged, so it only warns. A
-/// refusal names `setting` and never the URI, which may carry userinfo.
-fn validate_canonical_uri(uri: &str, setting: &str) -> Result<(), AuthError> {
+/// The MCP authorization spec's canonical-URI rules: absolute, with a scheme,
+/// no userinfo, no fragment, and `https` but on loopback outside a deployment;
+/// a trailing slash is legal but discouraged, so it only warns. A refusal names
+/// `setting` and never the URI, and a log line shows it through
+/// [`endpoint_shown`](nest_rs_config::endpoint_shown).
+fn validate_canonical_uri(
+    uri: &str,
+    setting: &str,
+    environment: Environment,
+) -> Result<(), AuthError> {
     let refused =
         |why: &str| AuthError::Failed(format!("{setting} is not a canonical resource URI: {why}"));
     let Some((scheme, rest)) = uri.split_once("://") else {
@@ -225,13 +238,22 @@ fn validate_canonical_uri(uri: &str, setting: &str) -> Result<(), AuthError> {
     if scheme.is_empty() || rest.is_empty() {
         return Err(refused("scheme and authority are both required"));
     }
-    // RFC 9728 §1.2: a resource identifier uses the https scheme; loopback is
-    // spared for local development.
-    if !scheme.eq_ignore_ascii_case("https") && !is_loopback_authority(rest) {
+    let authority = authority_of(rest);
+    // The document publishes it, and a credential there would be published too.
+    if authority.contains('@') {
         return Err(refused(
-            "RFC 9728 §1.2 requires the https scheme (http is accepted only on \
-             localhost/127.0.0.1/[::1] for local development)",
+            "it carries userinfo, which RFC 9110 §4.2.4 forbids a sender to generate in an \
+             http or https URI — name the host alone",
         ));
+    }
+    let local = !environment.is_deployed() && is_loopback_authority(authority);
+    if !scheme.eq_ignore_ascii_case("https") && !local {
+        return Err(refused(&format!(
+            "RFC 9728 §1.2 requires the https scheme; plain http is accepted only on localhost, \
+             127.0.0.1 or [::1], in a declared development or test profile ({}, here {})",
+            Environment::var_name(),
+            environment.as_str(),
+        )));
     }
     if uri.contains('#') {
         return Err(refused("a fragment is not allowed"));
@@ -248,7 +270,7 @@ fn validate_canonical_uri(uri: &str, setting: &str) -> Result<(), AuthError> {
     if uri.len() > 1 && uri.ends_with('/') {
         tracing::warn!(
             target: crate::TARGET,
-            uri,
+            uri = nest_rs_config::endpoint_shown(uri).as_str(),
             "resource URI ends in a trailing slash; clients are told to prefer the form without one",
         );
     }
@@ -260,9 +282,27 @@ mod tests {
     use super::*;
 
     fn valid() -> OAuthResourceConfig {
-        OAuthResourceConfig::default()
-            .with_resource("https://api.example.com")
-            .with_authorization_servers(["https://auth.example.com"])
+        OAuthResourceConfig {
+            resource: Some("https://api.example.com".into()),
+            authorization_servers: vec!["https://auth.example.com".into()],
+            ..Default::default()
+        }
+    }
+
+    /// [`valid`] naming `resource`.
+    fn resource(resource: &str) -> OAuthResourceConfig {
+        OAuthResourceConfig {
+            resource: Some(resource.into()),
+            ..valid()
+        }
+    }
+
+    /// [`valid`] trusting `issuers`.
+    fn issuers(issuers: &[&str]) -> OAuthResourceConfig {
+        OAuthResourceConfig {
+            authorization_servers: issuers.iter().map(|&issuer| issuer.into()).collect(),
+            ..valid()
+        }
     }
 
     #[test]
@@ -278,10 +318,12 @@ mod tests {
 
     #[test]
     fn a_missing_resource_names_its_env_var() {
-        let err = OAuthResourceConfig::default()
-            .with_authorization_servers(["https://auth.example.com"])
-            .into_metadata()
-            .expect_err("no resource");
+        let err = OAuthResourceConfig {
+            resource: None,
+            ..valid()
+        }
+        .into_metadata()
+        .expect_err("no resource");
         assert!(
             err.to_string().contains("RESOURCE"),
             "the boot error must be actionable: {err}",
@@ -290,8 +332,7 @@ mod tests {
 
     #[test]
     fn an_empty_authorization_server_list_fails_boot() {
-        let err = OAuthResourceConfig::default()
-            .with_resource("https://api.example.com")
+        let err = issuers(&[])
             .into_metadata()
             .expect_err("no authorization server");
         assert!(
@@ -302,8 +343,7 @@ mod tests {
 
     #[test]
     fn a_scheme_less_resource_is_refused() {
-        let err = valid()
-            .with_resource("api.example.com")
+        let err = resource("api.example.com")
             .into_metadata()
             .expect_err("no scheme");
         assert!(err.to_string().contains("no scheme"), "got: {err}");
@@ -311,8 +351,7 @@ mod tests {
 
     #[test]
     fn a_fragment_in_the_resource_is_refused() {
-        let err = valid()
-            .with_resource("https://api.example.com#mcp")
+        let err = resource("https://api.example.com#mcp")
             .into_metadata()
             .expect_err("fragment");
         assert!(err.to_string().contains("fragment"), "got: {err}");
@@ -320,8 +359,7 @@ mod tests {
 
     #[test]
     fn a_malformed_issuer_is_refused_too() {
-        let err = valid()
-            .with_authorization_servers(["auth.example.com"])
+        let err = issuers(&["auth.example.com"])
             .into_metadata()
             .expect_err("issuer without a scheme");
         assert!(err.to_string().contains("no scheme"), "got: {err}");
@@ -329,10 +367,12 @@ mod tests {
 
     #[test]
     fn a_scope_carrying_a_space_is_refused() {
-        let err = valid()
-            .with_scopes_supported(["posts read"])
-            .into_metadata()
-            .expect_err("scope with a space");
+        let err = OAuthResourceConfig {
+            scopes_supported: vec!["posts read".into()],
+            ..valid()
+        }
+        .into_metadata()
+        .expect_err("scope with a space");
         assert!(err.to_string().contains("RFC 6749 §3.3"), "got: {err}");
     }
 
@@ -341,19 +381,19 @@ mod tests {
     #[test]
     fn a_refused_value_is_named_by_its_setting_and_never_quoted() {
         for (config, setting) in [
+            (resource("http://user:s3cr3t@api.example.com"), "RESOURCE"),
             (
-                valid().with_resource("http://user:s3cr3t@api.example.com"),
-                "RESOURCE",
-            ),
-            (
-                valid().with_authorization_servers([
+                issuers(&[
                     "https://auth.example.com",
                     "http://user:s3cr3t@auth.example.com",
                 ]),
                 "AUTHORIZATION_SERVERS",
             ),
             (
-                valid().with_scopes_supported(["posts:read", "s3cr3t scope"]),
+                OAuthResourceConfig {
+                    scopes_supported: vec!["posts:read".into(), "s3cr3t scope".into()],
+                    ..valid()
+                },
                 "SCOPES_SUPPORTED",
             ),
             (
@@ -376,10 +416,117 @@ mod tests {
         }
     }
 
+    /// RFC 9110 §4.2.4: an `https` URI a sender generates carries no userinfo,
+    /// and these are published. Refused in every profile, by setting and
+    /// place, with neither half of the credential in the refusal or a log line.
+    #[test]
+    fn userinfo_in_a_resource_or_an_issuer_is_refused_and_never_shown() {
+        for environment in [Environment::Development, Environment::Production] {
+            for (config, setting) in [
+                (
+                    resource("https://admin:s3cr3t@api.example.com/"),
+                    "RESOURCE",
+                ),
+                (
+                    issuers(&["https://admin:s3cr3t@auth.example.com/"]),
+                    "AUTHORIZATION_SERVERS",
+                ),
+                (resource("https://s3cr3t@api.example.com/"), "RESOURCE"),
+            ] {
+                let logs = nest_rs_testing::LogCapture::install();
+                let refused = config
+                    .metadata_in(environment)
+                    .expect_err("userinfo is refused")
+                    .to_string();
+                assert!(refused.contains("userinfo"), "{refused}");
+                assert!(
+                    refused.contains(&nest_rs_config::var_name(
+                        OAuthResourceConfig::NAMESPACE,
+                        setting
+                    )),
+                    "{refused}"
+                );
+                for half in ["admin", "s3cr3t"] {
+                    assert!(!refused.contains(half), "{refused}");
+                    for event in logs.events() {
+                        assert!(
+                            !format!("{event:?}").contains(half),
+                            "a log line carries the credential: {event:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// RFC 9728 §1.2's https rule spares loopback in a declared development or
+    /// test profile alone: a deployment speaks https, on loopback too.
+    #[test]
+    fn plain_http_on_loopback_is_accepted_outside_a_deployment_only() {
+        for environment in [
+            Environment::Development,
+            Environment::Test,
+            Environment::Staging,
+            Environment::Production,
+        ] {
+            for uri in [
+                "http://localhost:3003",
+                "http://127.0.0.1",
+                "http://[::1]:8080",
+            ] {
+                for (config, setting) in [
+                    (resource(uri), "RESOURCE"),
+                    (issuers(&[uri]), "AUTHORIZATION_SERVERS"),
+                ] {
+                    let read = config.metadata_in(environment);
+                    match environment.is_deployed() {
+                        false => {
+                            read.expect("loopback http serves local development");
+                        }
+                        true => {
+                            let refused = read.expect_err("a deployment speaks https").to_string();
+                            assert!(
+                                refused.contains(&nest_rs_config::var_name(
+                                    OAuthResourceConfig::NAMESPACE,
+                                    setting
+                                )) && refused.contains("https"),
+                                "{environment:?} {uri}: {refused}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Outside loopback, plain http is refused in every profile.
+    #[test]
+    fn plain_http_elsewhere_is_refused_in_every_profile() {
+        for environment in [Environment::Development, Environment::Production] {
+            for uri in [
+                "http://api.example.com",
+                "http://localhost:8080@evil.example",
+            ] {
+                resource(uri)
+                    .metadata_in(environment)
+                    .expect_err("plain http off loopback");
+            }
+        }
+    }
+
+    /// The process's own `<PREFIX>_ENV` decides, whichever it is.
+    #[test]
+    fn into_metadata_reads_the_profile_the_process_declares() {
+        let loopback = resource("http://localhost:3003");
+        assert_eq!(
+            loopback.into_metadata().is_ok(),
+            !Environment::from_env().is_deployed(),
+        );
+    }
+
     #[test]
     fn a_quote_in_the_resource_cannot_escape_the_challenge_parameter() {
-        let err = valid()
-            .with_resource("https://api.example.com/\"")
+        let err = resource("https://api.example.com/\"")
             .into_metadata()
             .expect_err("quote in the resource");
         assert!(err.to_string().contains("quote"), "got: {err}");
@@ -403,31 +550,40 @@ mod tests {
             "a field the env does not set keeps the pinned value",
         );
     }
-    /// A trailing slash is legal, so it is reported, never refused.
+
+    /// A trailing slash is legal, so it is reported, never refused — the URI
+    /// shown as `endpoint_shown` shows one, its query never.
     #[test]
     fn a_trailing_slash_is_accepted_and_reported() {
-        let logs = nest_rs_testing::LogCapture::install();
-        valid()
-            .with_resource("https://api.example.com/")
-            .into_metadata()
-            .expect("a trailing slash is discouraged, never refused");
+        for (uri, shown) in [
+            ("https://api.example.com/", "https://api.example.com/"),
+            (
+                "https://api.example.com/tenants/?key=s3cr3t/",
+                "https://api.example.com/tenants/",
+            ),
+        ] {
+            let logs = nest_rs_testing::LogCapture::install();
+            resource(uri)
+                .into_metadata()
+                .expect("a trailing slash is discouraged, never refused");
 
-        let event = logs
-            .find(
-                crate::TARGET,
-                "resource URI ends in a trailing slash; clients are told to prefer the \
-                 form without one",
-            )
-            .into_iter()
-            .next()
-            .expect("the discouraged form reports itself");
-        assert_eq!(event.level, "warn");
-        assert_eq!(
-            event.field("uri").as_deref(),
-            Some("https://api.example.com/"),
-            "and it quotes the URI, so an operator running several resources knows \
-             which one to fix: {event:?}",
-        );
+            let event = logs
+                .find(
+                    crate::TARGET,
+                    "resource URI ends in a trailing slash; clients are told to prefer the \
+                     form without one",
+                )
+                .into_iter()
+                .next()
+                .expect("the discouraged form reports itself");
+            assert_eq!(event.level, "warn");
+            assert_eq!(
+                event.field("uri").as_deref(),
+                Some(shown),
+                "it names the URI, so an operator running several resources knows which one \
+                 to fix: {event:?}",
+            );
+        }
     }
 
     #[test]

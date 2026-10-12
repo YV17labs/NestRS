@@ -89,9 +89,10 @@ impl<'a> GraphqlOperationContext<'a> {
     }
 }
 
-/// Run one dispatched GraphQL field as its own unit of work; `#[operations]`
-/// wraps every `#[query]`, `#[mutation]`, `#[entity]` and `#[field_resolver]`
-/// body in this.
+/// Run one dispatched root field as its own unit of work; `#[operations]` wraps
+/// every `#[query]`, `#[mutation]` and `#[entity]` body in this. A
+/// `#[field_resolver]` call is no unit: it runs once per row its parent returns,
+/// so a line per call would file one per row.
 ///
 /// `operation` is the field name **as the client wrote it** (`listUsers`, not
 /// `list_users`), so the line joins against a capture of the request.
@@ -99,7 +100,7 @@ impl<'a> GraphqlOperationContext<'a> {
 /// The line files `ok` or `error` on return, `cancelled` when dropped first, and
 /// `panic` when it unwinds — caught only to be named, then resumed. A sibling
 /// torn down by that unwind files `cancelled`: one panic is one `panic` line.
-pub async fn run_operation<T, F>(
+pub async fn run_field<T, F>(
     role: &'static str,
     operation: &str,
     succeeded: impl FnOnce(&T) -> bool,
@@ -113,15 +114,14 @@ where
         None => nest_rs_core::Correlation::minted(None),
     };
     let span = nest_rs_core::operation_span!(
-        crate::unit::OPERATION,
+        crate::unit::FIELD,
         &correlation,
-        // Not OTel's `graphql.operation.type`: `role` adds `entity` and
-        // `field_resolver` to its enum. `graphql.document` is omitted: it carries
-        // the caller's literals.
+        // Not OTel's `graphql.operation.type`: `role` adds `entity` to its enum.
+        // `graphql.document` is omitted: it carries the caller's literals.
         graphql.operation.role = role,
         graphql.field.name = operation,
     );
-    let line = OperationLine {
+    let line = FieldLine {
         role,
         operation,
         correlation: correlation.clone(),
@@ -153,12 +153,12 @@ where
     .await
 }
 
-/// One field's `graphql.operation` line, filed exactly once, by `Drop` as
+/// One root field's `graphql.field` line, filed exactly once, by `Drop` as
 /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) when dropped first.
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
-struct OperationLine<'a> {
+struct FieldLine<'a> {
     role: &'static str,
     operation: &'a str,
     correlation: nest_rs_core::Correlation,
@@ -167,7 +167,7 @@ struct OperationLine<'a> {
     filed: bool,
 }
 
-impl OperationLine<'_> {
+impl FieldLine<'_> {
     fn file(mut self, outcome: &'static str) {
         self.emit(outcome);
     }
@@ -176,7 +176,7 @@ impl OperationLine<'_> {
         self.filed = true;
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             nest_rs_core::operation_line!(
-                crate::unit::OPERATION,
+                crate::unit::FIELD,
                 span: &self.span,
                 outcome: outcome,
                 started: self.started,
@@ -187,7 +187,7 @@ impl OperationLine<'_> {
     }
 }
 
-impl Drop for OperationLine<'_> {
+impl Drop for FieldLine<'_> {
     fn drop(&mut self) {
         if !self.filed {
             self.emit(nest_rs_core::operation_log::CANCELLED);

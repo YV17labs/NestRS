@@ -1113,7 +1113,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     #entity_attr
                     #gsig {
                         let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(#gctx);
-                        ::nest_rs_graphql::__private::run_operation(
+                        ::nest_rs_graphql::__private::run_field(
                             #role_lit,
                             __operation.name(),
                             #succeeded,
@@ -1324,8 +1324,6 @@ fn field_method(
         field_label,
         ChainSite::Field,
     );
-    let role_lit = LitStr::new(FIELD_ROLE, proc_macro2::Span::call_site());
-    let succeeded = quote!(::core::result::Result::is_ok);
     // By path: method lookup on a value tries a trait method taking `self` first.
     let call = call_as_result(
         sig,
@@ -1344,20 +1342,11 @@ fn field_method(
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>
             #(, #gql_args)*
         ) #output #where_clause {
-            let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(__ctx);
-            ::nest_rs_graphql::__private::run_operation(
-                #role_lit,
-                __operation.name(),
-                #succeeded,
-                async move {
-                    #checks
-                    let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
-                    #(#dep_bindings)*
-                    let __resolver = <#self_ty>::from_container(__container);
-                    #call
-                },
-            )
-            .await
+            #checks
+            let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
+            #(#dep_bindings)*
+            let __resolver = <#self_ty>::from_container(__container);
+            #call
         }
     };
     Ok((parent_ty, method, injected_deps))
@@ -1514,8 +1503,6 @@ impl RootKind {
 }
 
 const ENTITY_ROLE: &str = "entity";
-
-const FIELD_ROLE: &str = "field";
 
 fn root_object(
     obj: &Ident,

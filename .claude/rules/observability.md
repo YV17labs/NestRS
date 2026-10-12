@@ -164,6 +164,11 @@ its name. The span
 (`operation_span!`), the line's `name:` (exported as `event.name` by an OTLP log
 bridge) and its message all read that one constant through `operation_line!`,
 which files the line and records the outcome; a literal does not compile.
+A unit is named for the term its edge's specification gives what one dispatch
+serves — GraphQL's are `graphql.operation` (the document's operation),
+`graphql.field` (a root field) and `graphql.subscription` (the connection) —
+and a field resolved below a root field, whose count grows with the rows its
+parent returns, is no unit.
 
 **A unit that does not settle still files its line**: `outcome = cancelled` for
 one stopped first — by its caller, by the server at the shutdown signal, by the

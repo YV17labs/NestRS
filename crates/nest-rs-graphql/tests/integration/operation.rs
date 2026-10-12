@@ -1,4 +1,5 @@
-//! The unit of work this edge opens per dispatched field, and the line it files.
+//! The unit of work this edge opens per dispatched root field, and the line it
+//! files.
 
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql::{self, Context, Result as GqlResult};
@@ -55,6 +56,15 @@ impl NoteResolver {
         Ok(Note {
             body: "hello".into(),
         })
+    }
+
+    #[query]
+    #[public]
+    async fn notes(&self) -> async_graphql::Result<Vec<Note>> {
+        Ok(["a", "b", "c"]
+            .into_iter()
+            .map(|body| Note { body: body.into() })
+            .collect())
     }
 
     #[query]
@@ -143,12 +153,12 @@ async fn post(app: &TestApp, query: &str) {
 fn lines(logs: &LogCapture) -> Vec<nest_rs_testing::CapturedEvent> {
     logs.find(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_graphql::unit::OPERATION.name(),
+        nest_rs_graphql::unit::FIELD.name(),
     )
 }
 
 #[tokio::test]
-async fn every_dispatched_field_files_one_line_naming_itself() {
+async fn every_dispatched_root_field_files_one_line_naming_itself() {
     let logs = LogCapture::install();
     let app = boot().await;
 
@@ -160,13 +170,10 @@ async fn every_dispatched_field_files_one_line_naming_itself() {
         .iter()
         .map(|line| (line.field("role"), line.field("operation")))
         .collect();
-    assert!(
-        named.contains(&(Some("query".into()), Some("note".into()))),
-        "the root query names itself: {named:?}",
-    );
-    assert!(
-        named.contains(&(Some("field".into()), Some("shout".into()))),
-        "a field resolver is a dispatched unit of work too: {named:?}",
+    assert_eq!(
+        named,
+        [(Some("query".into()), Some("note".into()))],
+        "the root query names itself, and its field resolver files nothing",
     );
     assert!(
         served
@@ -180,6 +187,34 @@ async fn every_dispatched_field_files_one_line_naming_itself() {
             .all(|line| line.field("outcome").as_deref() == Some(nest_rs_core::operation_log::OK)),
         "{served:?}",
     );
+}
+
+/// A client controls how many parents a field resolver runs over, so a unit per
+/// call would let one document file a line per row.
+#[tokio::test]
+async fn a_field_resolver_over_many_parents_files_no_line_of_its_own() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+
+    post(&app, "{ notes { body shout } }").await;
+
+    let served = lines(&logs);
+    assert_eq!(served.len(), 1, "one line, the root field's: {served:#?}");
+    assert_eq!(served[0].field("operation").as_deref(), Some("notes"));
+    assert!(
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_graphql::unit::OPERATION.name(),
+        )
+        .is_empty(),
+        "the document operation is not a root field's name",
+    );
+    let field_spans = logs
+        .spans()
+        .into_iter()
+        .filter(|span| span.name == nest_rs_graphql::unit::FIELD.name())
+        .count();
+    assert_eq!(field_spans, 1, "one span, the root field's");
 }
 
 #[tokio::test]
@@ -219,7 +254,7 @@ async fn a_failing_operation_says_so() {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_graphql::unit::OPERATION.name()
+            span.name == nest_rs_graphql::unit::FIELD.name()
                 && span.field("graphql.field.name").as_deref() == Some("refused")
         })
         .expect("the failing operation's span");
@@ -328,7 +363,7 @@ async fn the_unit_is_a_child_of_the_request_that_carried_the_document() {
         .into_iter()
         .filter(|span| {
             span.target == nest_rs_graphql::TARGET
-                && span.name == nest_rs_graphql::unit::OPERATION.name()
+                && span.name == nest_rs_graphql::unit::FIELD.name()
         })
         .collect();
     assert!(!spans.is_empty(), "the unit opens a span of its own");
@@ -418,7 +453,7 @@ fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
         .spans()
         .into_iter()
         .find(|span| {
-            span.name == nest_rs_graphql::unit::OPERATION.name()
+            span.name == nest_rs_graphql::unit::FIELD.name()
                 && span.field("graphql.field.name").as_deref() == Some(field)
         })
         .unwrap_or_else(|| panic!("the span of `{field}`"));

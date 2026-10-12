@@ -144,9 +144,14 @@ is a separate line, one per unit of work, on the shared target `nest_rs::operati
 | Scheduled tick | `schedule.tick` | provider, method, `replicas`, and the `occurrence` a job firing once claimed |
 | Queue job | `queue.job` | queue, processor, `job_id`, `backend_id`, attempt |
 | MCP operation | `mcp.operation` | the JSON-RPC method |
-| GraphQL operation | `graphql.operation` | role, operation |
+| GraphQL root field | `graphql.field` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
 | Event dispatch | `events.dispatch` | event, listener |
+
+A GraphQL `#[field_resolver]` files no line and opens no span of its own: it
+runs once per row its parent returns, so a line per call would let one document
+fill the log. Its guards still run on every call, and its failure
+reaches the client as a field error.
 
 **The name is `<edge>.<unit>`, and it is the same string the operation's span
 carries.** It is declared once, by the crate that owns the edge, as
@@ -174,7 +179,7 @@ a handler's return, so every edge builds both, and every edge files them:
 |---|---|---|
 | HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — over HTTP/1 its connection goes with it (`a connection task panicked`), over HTTP/2 its stream is reset and the connection keeps serving (`an HTTP/2 stream task panicked`); one `error` on `nest_rs::http` files it beside [the process hook's](#a-panic-is-said-once-without-its-value), and the server keeps accepting |
 | WebSocket | a message or a hook still running when the window closes | a handler (its client gets an error frame), a hook (`#[on_connect]` closes the socket `1011`) |
-| GraphQL | a field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a field (over HTTP, the request unwinds too); a subscription (the socket closes `1011`) |
+| GraphQL | a root field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a root field (over HTTP, the request unwinds too); a subscription (the socket closes `1011`) |
 | MCP | an operation its client cancelled or the window stopped; a `subscriptions/listen` at the signal | a tool or a notification — its client gets an internal error |
 | Queue | an attempt its worker stopped, a drain whose window closed included | an attempt whose handler unwound |
 | Events | a listener dropped with its emitter | a listener, contained; the next one runs |

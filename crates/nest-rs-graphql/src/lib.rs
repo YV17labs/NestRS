@@ -52,7 +52,7 @@ pub mod __private {
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate};
     pub use crate::federation::FederationGate;
     pub use crate::loader::{GraphqlLoaderRegistration, batch_spawner};
-    pub use crate::operation::{IsStreamReturn, answers_a_stream, run_operation};
+    pub use crate::operation::{IsStreamReturn, answers_a_stream, run_field};
     pub use crate::resolver::{
         GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
         GraphqlSubscriptionObject, ResolverDescriptor,

@@ -55,9 +55,7 @@ impl RedisQueueModule {
                 BACKEND_REMEDY,
                 |container| async move {
                     let conn = RedisConnection::of(&container, "RedisQueueModule")?;
-                    let config = container.get::<RedisQueueConfig>().ok_or_else(|| {
-                        anyhow::anyhow!("RedisQueueModule: RedisQueueConfig was not resolved")
-                    })?;
+                    let config = ConfigModule::resolved::<RedisQueueConfig>(&container)?;
                     renewable(config.lease, conn.budget())?;
                     Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
                 },

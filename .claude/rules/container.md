@@ -72,8 +72,9 @@ the module type. A declaration that does not fit makes `x` grow a **field**,
 never the seam a **method**. Held by review: no inherent `impl` on a `*Setup`,
 and no inherent `pub fn` on a module type besides `for_root`.
 `ConfigModule` is the one carve-out — its `for_root` / `for_feature` /
-`provide_feature` / `setup` are the primitives every other seam is built from,
-and `provide_feature` is public for third-party drivers. A seam one framework
+`provide_feature` / `setup` / `resolved` are the primitives every other seam is
+built from, and `provide_feature` and `resolved`, the read a `register` or a
+factory makes of the config, are public for third-party drivers. A seam one framework
 crate needs from another lives in its crate's `__private` (`macros.md`); one
 only its own crate needs stays private.
 

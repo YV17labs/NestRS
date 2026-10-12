@@ -60,26 +60,22 @@ impl DynamicModule for OAuthResourceSetup {
             self.pinned.clone(),
             builder.import::<OAuthResourceHost>(),
         );
-        builder.provide_factory::<ProtectedResourceMetadata, _, _>(|container| async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "provide_feature queued the config's factory in this module's collect"
-            )]
-            let config = container
-                .get::<OAuthResourceConfig>()
-                .expect("OAuthResourceConfig is resolved by ConfigModule::provide_feature");
-            let metadata = (*config)
-                .clone()
-                .into_metadata()
-                .map_err(anyhow::Error::new)?;
-            tracing::debug!(
-                target: crate::TARGET,
-                resource = metadata.resource(),
-                authorization_servers = metadata.authorization_servers().len(),
-                "protected resource metadata resolved",
-            );
-            Ok(metadata)
-        })
+        builder.provide_factory_after::<ProtectedResourceMetadata, (OAuthResourceConfig,), _, _>(
+            |container| async move {
+                let config = ConfigModule::resolved::<OAuthResourceConfig>(&container)?;
+                let metadata = (*config)
+                    .clone()
+                    .into_metadata()
+                    .map_err(anyhow::Error::new)?;
+                tracing::debug!(
+                    target: crate::TARGET,
+                    resource = metadata.resource(),
+                    authorization_servers = metadata.authorization_servers().len(),
+                    "protected resource metadata resolved",
+                );
+                Ok(metadata)
+            },
+        )
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {

@@ -1,13 +1,14 @@
 //! [`ConfigModule`] — the `ConfigModule.for_root` / `for_feature` DI wiring.
 
 use std::any::TypeId;
-
 use std::marker::PhantomData;
+use std::sync::Arc;
 
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering};
+use nest_rs_core::{Collecting, Container, ContainerBuilder, DynamicModule, Module, Registering};
 
 use crate::config::Config;
 use crate::environment::Environment;
+use crate::error::ConfigNotResolvedError;
 
 /// Sole owner of config loading: [`for_feature`](Self::for_feature) declares a
 /// config, [`setup`](Self::setup) backs a module's `for_root`, and
@@ -63,6 +64,59 @@ impl ConfigModule {
                 C::resolve(None).map_err(anyhow::Error::from)
             }),
         }
+    }
+
+    /// The `C` this boot resolved, or the refusal naming it: what a module
+    /// reads the config its `collect` queued with — a `register` files the
+    /// refusal with [`ContainerBuilder::refuse`], a factory naming `C` among
+    /// its inputs returns it.
+    ///
+    /// ```
+    /// # use std::any::TypeId;
+    /// # use nest_rs_config::{Config, ConfigModule, ConfigService, config};
+    /// # use nest_rs_core::{App, Collecting, ContainerBuilder, DynamicModule, module};
+    /// # #[config(namespace = "bucket_guard")]
+    /// # #[derive(Clone, Debug, Default)]
+    /// # pub struct BucketConfig {
+    /// #     pub name: String,
+    /// # }
+    /// # impl Config for BucketConfig {
+    /// #     fn from_env(_: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+    /// #         Ok(base)
+    /// #     }
+    /// # }
+    /// pub struct Bucket(String);
+    ///
+    /// pub struct BucketSetup(Option<BucketConfig>);
+    ///
+    /// impl DynamicModule for BucketSetup {
+    ///     fn module() -> TypeId {
+    ///         TypeId::of::<Self>()
+    ///     }
+    ///
+    ///     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+    ///         ConfigModule::provide_feature(self.0.clone(), builder)
+    ///             .provide_factory_after::<Bucket, (BucketConfig,), _, _>(|container| async move {
+    ///                 let config = ConfigModule::resolved::<BucketConfig>(&container)?;
+    ///                 Ok(Bucket(config.name.clone()))
+    ///             })
+    ///     }
+    /// }
+    /// # #[module(imports = [BucketSetup(Some(BucketConfig { name: "media".into() }))])]
+    /// # struct AppModule;
+    /// # #[nest_rs_core::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// #     let app = App::builder().module::<AppModule>().build().await?;
+    /// #     assert_eq!(app.container().get::<Bucket>().map(|b| b.0.clone()).as_deref(), Some("media"));
+    /// #     Ok(())
+    /// # }
+    /// ```
+    pub fn resolved<C: Config>(
+        container: &Container,
+    ) -> std::result::Result<Arc<C>, ConfigNotResolvedError> {
+        container.get::<C>().ok_or(ConfigNotResolvedError {
+            type_name: std::any::type_name::<C>(),
+        })
     }
 
     /// The whole body of a `for_root` whose module pins a config and does
@@ -343,6 +397,36 @@ mod tests {
                     .map(|c| c.bucket.clone()),
                 Some("pinned".to_owned())
             );
+        }
+
+        #[test]
+        fn a_config_no_factory_resolved_is_refused_naming_it() {
+            let empty = nest_rs_core::Container::builder().build();
+            let Err(refused) = ConfigModule::resolved::<SeamConfig>(&empty) else {
+                panic!("an empty container resolved no config");
+            };
+            assert_eq!(refused.type_name, std::any::type_name::<SeamConfig>());
+            assert_eq!(
+                refused.to_string(),
+                format!(
+                    "`{}` was read before any factory resolved it: the module owning it is not \
+                     imported, or is imported in a `register` alone, or the factory reading it \
+                     does not name it among its inputs",
+                    std::any::type_name::<SeamConfig>()
+                )
+            );
+        }
+
+        #[test]
+        fn a_resolved_config_is_the_one_the_container_holds() {
+            let container = nest_rs_core::Container::builder()
+                .provide(SeamConfig {
+                    bucket: "held".into(),
+                })
+                .build();
+            let resolved = ConfigModule::resolved::<SeamConfig>(&container)
+                .unwrap_or_else(|refused| panic!("{refused}"));
+            assert_eq!(resolved.bucket, "held");
         }
 
         async fn boot<M: Module + 'static>() -> std::sync::Arc<SeamConfig> {

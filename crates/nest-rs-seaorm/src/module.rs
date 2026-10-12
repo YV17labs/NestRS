@@ -48,16 +48,12 @@ impl DynamicModule for SeaOrmSetup {
                 .into_iter()
                 .fold(builder, ContainerBuilder::provide_meta),
         );
-        builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "provide_feature queued the config's factory in this module's collect"
-            )]
-            let config = container
-                .get::<SeaOrmConfig>()
-                .expect("SeaOrmConfig is resolved by ConfigModule::provide_feature");
-            connect(config.app_connect_options()?).await
-        })
+        builder.provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
+            |container| async move {
+                let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
+                connect(config.app_connect_options()?).await
+            },
+        )
     }
 }
 

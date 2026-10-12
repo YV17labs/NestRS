@@ -309,6 +309,12 @@ boot naming both. Every field of the config is settable
 from both the environment (`<PREFIX>_<NAMESPACE>__<KEY>`) and a pinned
 struct — the framework-wide dual-path rule.
 
+A factory names the outputs it reads as its inputs, a tuple — the pool's is
+`(YourConfig,)` — so the boot runs it once they exist, wherever the imports
+fall. It reads the config with `ConfigModule::resolved`, whose refusal names
+the config when nothing resolved it: a factory returns it with `?`, a
+`register` files it with `builder.refuse(..)`.
+
 ```rust title="crates/yourdb/src/module.rs"
 use std::any::TypeId;
 use std::sync::Arc;
@@ -340,8 +346,9 @@ impl DynamicModule for YourDbSetup {
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder
-            .provide_factory::</* YourHandle */, _, _>(|container| async move {
-                // Your code: build your pool / client from container.get::<YourConfig>().
+            .provide_factory_after::</* YourHandle */, (YourConfig,), _, _>(|container| async move {
+                let config = ConfigModule::resolved::<YourConfig>(&container)?;
+                // Your code: build your pool / client from `config`.
             })
             .provide_declared_factory_after::<Arc<dyn JobContext>, (/* YourHandle */,), _, _>(
                 BACKEND_REMEDY,

@@ -125,13 +125,10 @@ impl Module for StaticFilesModule {
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         let snapshot = builder.snapshot();
-        #[expect(
-            clippy::expect_used,
-            reason = "collect queued the config's factory, which resolves before any register"
-        )]
-        let config = snapshot
-            .get::<StaticFilesConfig>()
-            .expect("StaticFilesConfig is resolved by ConfigModule::provide_feature");
+        let config = match ConfigModule::resolved::<StaticFilesConfig>(&snapshot) {
+            Ok(config) => config,
+            Err(refusal) => return builder.refuse(refusal),
+        };
         let files = match snapshot.get::<Embedded>() {
             Some(embedded) => embedded.files(&config),
             None => DiskRoot::files(&config),

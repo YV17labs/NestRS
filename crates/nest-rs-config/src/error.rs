@@ -151,6 +151,21 @@ impl ConfigError {
     }
 }
 
+/// A config read from the container before any factory resolved it, as
+/// [`ConfigModule::resolved`](crate::ConfigModule::resolved) refuses it: a
+/// `register` files it with `ContainerBuilder::refuse`, a factory returns it.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "`{type_name}` was read before any factory resolved it: the module owning it is not \
+     imported, or is imported in a `register` alone, or the factory reading it does not name it \
+     among its inputs"
+)]
+pub struct ConfigNotResolvedError {
+    /// The config type that was read.
+    pub type_name: &'static str,
+}
+
 /// `message` without the values a decoder quoted in it.
 fn redacted(message: &str) -> String {
     let kept: Vec<&str> = message

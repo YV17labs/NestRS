@@ -43,7 +43,7 @@ pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;
 pub use endpoint::endpoint_shown;
 pub use environment::Environment;
-pub use error::{ConfigError, Result};
+pub use error::{ConfigError, ConfigNotResolvedError, Result};
 pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
 pub use service::{ConfigService, spellings, var_name};

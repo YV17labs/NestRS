@@ -20,3 +20,17 @@ factory *and* registers a type twice is refused twice, one boot after the other.
 
 Each refusal is a fact the boot can see at the moment it refuses, with the
 remedy that fact has, as every other wiring check reports its first case.
+
+## 2026-10-12 — the register phase keeps the order
+
+A module first imported in a `register` whose `collect` queued a factory is
+now refused at that import (`LateFactoryError`), as a refusal of its own: a
+later `register` providing the type would otherwise hide it, and a refusal
+the missing output causes afterwards reads after it. A late `collect` can
+also declare a type again. That contest is read ahead of every refusal, a late
+import's included, since it survives the remedy of each and no refusal causes
+one.
+
+**Refused:** passing over the late refusal only when the same `collect`
+contested. An earlier late import's refusal would still have been read
+first.

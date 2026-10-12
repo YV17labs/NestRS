@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
-use nest_rs_core::{ContainerBuilder, Discoverable, Layer, MissingDependencyError};
+use nest_rs_config::ConfigModule;
+use nest_rs_core::{ContainerBuilder, Discoverable, Layer};
 use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
 use nest_rs_interceptors::{Interceptor, InterceptorExt, Next};
 use poem::http::{HeaderName, StatusCode};
@@ -69,12 +70,9 @@ impl Interceptor for ServerTiming {
 // header attaches no wrap, so the transport keeps its fused path.
 impl Discoverable for ServerTiming {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        let Some(config) = builder.snapshot().get::<ServerTimingConfig>() else {
-            return builder.refuse(MissingDependencyError {
-                module: "ServerTimingModule",
-                consumer: "ServerTiming",
-                dependency: "ServerTimingConfig",
-            });
+        let config = match ConfigModule::resolved::<ServerTimingConfig>(&builder.snapshot()) {
+            Ok(config) => config,
+            Err(refusal) => return builder.refuse(refusal),
         };
         if !config.enabled {
             return builder;
@@ -88,6 +86,7 @@ impl Discoverable for ServerTiming {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::ConfigNotResolvedError;
     use nest_rs_core::{App, module};
 
     use super::*;
@@ -100,10 +99,12 @@ mod tests {
         let Err(refusal) = App::builder().module::<WithoutConfig>().build().await else {
             panic!("a header that cannot read its switch must not boot");
         };
-        let message = format!("{refusal:#}");
-        assert!(
-            message.contains("`ServerTiming`") && message.contains("`ServerTimingConfig`"),
-            "the refusal names the provider and what it lacks: {message}",
+        let unresolved = refusal
+            .downcast_ref::<ConfigNotResolvedError>()
+            .unwrap_or_else(|| panic!("not the config refusal: {refusal:#}"));
+        assert_eq!(
+            unresolved.type_name,
+            std::any::type_name::<ServerTimingConfig>()
         );
     }
 }

@@ -127,6 +127,10 @@ pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send
 /// it — since a dependent may wait on either.
 pub(crate) struct QueuedFactory {
     pub(crate) name: &'static str,
+    /// Its place among every factory the builder queued, so the entries one
+    /// `collect` queued are told from the rest wherever a declaration's slot
+    /// put them in the queue.
+    pub(crate) seq: u64,
     /// The import whose phase queued it — `None` at the app root — which its
     /// output's registration is named by.
     pub(crate) queued_by: Option<ImportSite>,
@@ -319,6 +323,10 @@ impl Container {
     }
 
     /// Start an empty [`ContainerBuilder`] to register providers into.
+    ///
+    /// It drains no factory, so a module whose `collect` queues one is refused
+    /// there as [`ContainerBuilder::import`] says;
+    /// [`App::builder`](crate::App::builder) is the boot that drains them.
     pub fn builder() -> ContainerBuilder {
         ContainerBuilder::default()
     }
@@ -435,6 +443,8 @@ pub struct ContainerBuilder {
     /// Builder-only: drained by [`AppBuilder::build`](crate::AppBuilder::build),
     /// never copied into the [`Container`] or a [`snapshot`](Self::snapshot).
     factories: Vec<QueuedFactory>,
+    /// The [`seq`](QueuedFactory::seq) the next factory queued takes.
+    next_factory_seq: u64,
     /// Types queued by [`provide_declared_factory`](Self::provide_declared_factory)
     /// and the trait objects a dyn factory binds, each with the import that
     /// declared it: a declaration supersedes a queued default, and a second
@@ -738,8 +748,16 @@ impl ContainerBuilder {
     /// [`collect`](Module::collect), in the register phase its
     /// [`register`](Module::register) — each once per app, `collect` first. A
     /// module first imported in the register phase is collected too late for a
-    /// factory ([`LateFactoryError`](crate::LateFactoryError)), so a
-    /// hand-written module imports in both of its phases.
+    /// factory, so a hand-written module imports in both of its phases: one
+    /// whose late `collect` queued a factory nothing will drain is refused
+    /// ([`LateFactoryError`](crate::LateFactoryError)) and never registers.
+    ///
+    /// A builder made outside a boot ([`Container::builder`]) is in the
+    /// register phase and drains no factory, so a module whose `collect`
+    /// queues one registers there only over defaults whose types are already
+    /// provided — a bare import's `#[config]`, seeded with
+    /// [`provide`](Self::provide) — and never over a declaration, a pinned
+    /// `for_root` value.
     #[must_use]
     pub fn import<M: Module>(mut self) -> Self {
         let id = TypeId::of::<M>();
@@ -747,8 +765,18 @@ impl ContainerBuilder {
         if self.collected_modules.insert(id) {
             self.collected_order.push((id, std::any::type_name::<M>()));
             let phase = std::mem::replace(&mut self.phase, Phase::Collect);
+            let collected_from = self.next_factory_seq;
             self = M::collect(self, Collecting::new());
             self.phase = phase;
+            if phase == Phase::Register
+                && let Some(type_name) = self.late_factory_queued_from(collected_from)
+            {
+                // Marked registered, so no later import runs a `register`
+                // whose factory never ran; refused here, since a later
+                // `register` providing the type would hide the late factory.
+                self.registered_modules.insert(id);
+                return self.refuse(crate::LateFactoryError { type_name });
+            }
         }
         if self.phase == Phase::Register && self.registered_modules.insert(id) {
             self = M::register(self, Registering::new());
@@ -978,6 +1006,7 @@ impl ContainerBuilder {
         });
         let mut queued = QueuedFactory {
             name,
+            seq: self.next_factory_seq,
             queued_by: self.import_sites.last().copied(),
             provides: vec![id],
             after,
@@ -985,6 +1014,7 @@ impl ContainerBuilder {
             derives: Vec::new(),
             factory: boxed,
         };
+        self.next_factory_seq += 1;
         if let Some(binding) = binds {
             queued.provides.push(binding.id);
             queued.derives.push(binding.derive);
@@ -1087,8 +1117,15 @@ impl ContainerBuilder {
     /// read as the register phase ends. A declaration always counts: the value
     /// present is not the one it chose.
     pub(crate) fn late_factory_name(&self) -> Option<&'static str> {
+        self.late_factory_queued_from(0)
+    }
+
+    /// [`late_factory_name`](Self::late_factory_name) among the factories
+    /// queued from the `seq`-th on — what one late `collect` queued.
+    fn late_factory_queued_from(&self, seq: u64) -> Option<&'static str> {
         self.factories
             .iter()
+            .filter(|queued| queued.seq >= seq)
             .find(|queued| {
                 queued.declared || queued.provides.iter().any(|key| !self.contains(*key))
             })
@@ -1147,6 +1184,12 @@ impl ContainerBuilder {
     }
 
     /// Freeze the accumulated registrations into the immutable [`Container`].
+    ///
+    /// A refusal filed on the builder — [`refuse`](Self::refuse), an
+    /// [`import`](Self::import)'s `LateFactoryError` — is read by the boot
+    /// before this, as [`App::builder`](crate::App::builder) and
+    /// [`App::new`](crate::App::new) do; this freezes what registered without
+    /// the refused module.
     pub fn build(self) -> Container {
         Container {
             id: next_container_id(),
@@ -1542,6 +1585,74 @@ mod tests {
         RAN.lock().expect("ran").clear();
         let _registered = Container::builder().import::<Counted>();
         assert_eq!(*RAN.lock().expect("ran"), ["collect", "register"]);
+    }
+
+    #[test]
+    fn a_module_first_imported_in_a_register_registers_when_its_collect_queues_no_factory() {
+        struct Greets;
+        impl Module for Greets {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                builder.provide(Greeter("hi"))
+            }
+        }
+        let mut builder = Container::builder().import::<Greets>();
+        assert!(builder.take_refusal().is_none());
+        assert_eq!(builder.get::<Greeter>().map(|g| g.0), Some("hi"));
+    }
+
+    #[test]
+    fn a_module_first_imported_in_a_register_never_registers_over_a_factory_nothing_drains() {
+        struct Late;
+        struct ReadsItsFactory;
+        impl Module for ReadsItsFactory {
+            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+                builder.provide_factory(|_| async { Ok(Late) })
+            }
+            fn register(_: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                panic!("a register runs only once the factory its collect queued ran")
+            }
+        }
+        let mut builder = Container::builder()
+            .import::<ReadsItsFactory>()
+            .import::<ReadsItsFactory>();
+        let refused = builder.take_refusal().expect("a refusal");
+        let late = refused
+            .downcast_ref::<crate::LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<Late>());
+    }
+
+    #[test]
+    fn a_module_first_imported_in_a_register_answers_only_for_the_factories_its_collect_queued() {
+        struct Late;
+        struct QueuesLate;
+        impl Module for QueuesLate {
+            fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+                builder.provide_factory(|_| async { Ok(Late) })
+            }
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                builder
+            }
+        }
+        struct Greets;
+        impl Module for Greets {
+            fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+                builder.provide(Greeter("hi"))
+            }
+        }
+        let mut builder = Container::builder()
+            .import::<QueuesLate>()
+            .import::<Greets>();
+        let refused = builder.take_refusal().expect("a refusal");
+        let late = refused
+            .downcast_ref::<crate::LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<Late>());
+        assert_eq!(
+            builder.get::<Greeter>().map(|g| g.0),
+            Some("hi"),
+            "the factory pending is another module's"
+        );
     }
 
     #[test]

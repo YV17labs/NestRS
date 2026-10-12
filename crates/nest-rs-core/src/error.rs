@@ -227,7 +227,8 @@ pub struct InitFailedError;
 /// already present is discarded instead; a declaration is refused all the same.
 ///
 /// The usual cause is a module or [`DynamicModule`](crate::DynamicModule)
-/// importing another in its `register` alone.
+/// importing another in its `register` alone: that module is collected there,
+/// and refused before its `register` runs.
 #[derive(Debug, Error)]
 #[error(
     "`{type_name}` is provided by an async factory queued during the register phase, which no \

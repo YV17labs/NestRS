@@ -123,16 +123,18 @@ fn check_no_queued_factories(builder: &ContainerBuilder) -> Result<()> {
     Ok(())
 }
 
-/// What the register phase leaves the boot to refuse, on either path: a
-/// module's own refusal first, then what an import declared or queued there, a
-/// module no register phase reached, then a type registered twice.
+/// What the register phase leaves the boot to refuse, on either path: what an
+/// import declared there twice first, then a module's own refusal — a late
+/// import's among them —, what a register queued that nothing drains, a module
+/// no register phase reached, then a type registered twice.
 fn check_register_phase(builder: &mut ContainerBuilder) -> Result<()> {
+    // A module or dynamic import first reached in a `register` collects there,
+    // so it may declare there too; the contest survives every refusal's remedy
+    // (`.claude/decisions/boot-refusal-order.md`).
+    check_contested_declarations(builder)?;
     if let Some(refusal) = builder.take_refusal() {
         return Err(refusal);
     }
-    // A dynamic import whose value no collect parked collects in `register`,
-    // so it may declare there too.
-    check_contested_declarations(builder)?;
     if let Some(type_name) = builder.late_factory_name() {
         return Err(LateFactoryError { type_name }.into());
     }
@@ -1671,6 +1673,157 @@ mod tests {
             .await
             .expect("the factory phase already built what the late factory would");
         assert_eq!(app.container().get::<Late>().map(|late| late.0), Some(7));
+    }
+
+    // The shape of every `for_root`: a `register` reading what its own
+    // `collect` queued, here first imported in an importer's `register`.
+    struct ReadsLateModule;
+    impl Module for ReadsLateModule {
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(Late(1)) })
+        }
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            let late = builder
+                .get::<Late>()
+                .expect("a register runs once the factory its collect queued ran");
+            builder.provide(Doubled(late.0 * 2))
+        }
+    }
+    struct ImportsReadsLateInRegister;
+    impl Module for ImportsReadsLateInRegister {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.import::<ReadsLateModule>()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_module_first_imported_in_a_register_is_refused_before_it_registers() {
+        let Err(built) = App::builder()
+            .module::<ImportsReadsLateInRegister>()
+            .build()
+            .await
+        else {
+            panic!("nothing drains the factory its register reads");
+        };
+        let Err(synchronous) = App::new::<ImportsReadsLateInRegister>() else {
+            panic!("nothing drains a factory on the synchronous path");
+        };
+        for refused in [built, synchronous] {
+            let late = refused
+                .downcast_ref::<LateFactoryError>()
+                .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+            assert_eq!(late.type_name, std::any::type_name::<Late>());
+        }
+    }
+
+    struct ProvidesLateModule;
+    impl Module for ProvidesLateModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.provide(Late(2))
+        }
+    }
+    struct ImportsReadsLateThenProvidesIt;
+    impl Module for ImportsReadsLateThenProvidesIt {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder
+                .import::<ReadsLateModule>()
+                .import::<ProvidesLateModule>()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_module_refused_as_late_stays_refused_once_a_later_register_provides_the_type() {
+        let Err(refused) = App::builder()
+            .module::<ImportsReadsLateThenProvidesIt>()
+            .build()
+            .await
+        else {
+            panic!("the module whose register never ran would be dropped in silence");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<Late>());
+    }
+
+    #[tokio::test]
+    async fn a_late_collects_factory_for_a_seeded_type_is_passed_over_and_its_module_registers() {
+        let app = App::builder()
+            .provide(Late(21))
+            .module::<ImportsReadsLateInRegister>()
+            .build()
+            .await
+            .expect("the seed is what the late factory would build");
+        assert_eq!(app.container().get::<Doubled>().map(|d| d.0), Some(42));
+    }
+
+    struct ImportsRegistersFirstInRegister;
+    impl Module for ImportsRegistersFirstInRegister {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.import::<RegistersFirstModule>()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_module_first_imported_in_a_register_registers_while_another_modules_factory_waits() {
+        let app = App::builder()
+            .module::<QueuesInRegisterModule>()
+            .module::<ImportsRegistersFirstInRegister>()
+            .module::<ProvidesLateModule>()
+            .build()
+            .await
+            .unwrap_or_else(|e| {
+                panic!("a later register provides what the factory waits for: {e:#}")
+            });
+        assert_eq!(app.container().get::<First>().map(|f| f.0), Some(1));
+        assert_eq!(app.container().get::<Late>().map(|late| late.0), Some(2));
+    }
+
+    // `PinnedSetup`'s declaration of `Config` made again in a late `collect`,
+    // beside a default nothing drains.
+    struct RepinsConfigBesideALateFactory;
+    impl Module for RepinsConfigBesideALateFactory {
+        fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+            builder
+                .provide_declared_factory("one declaration", |_| async { Ok(Config(8)) })
+                .provide_factory(|_| async { Ok(Late(1)) })
+        }
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder
+        }
+    }
+    struct ImportsRepinInRegister;
+    impl Module for ImportsRepinInRegister {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.import::<RepinsConfigBesideALateFactory>()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declaration_contested_in_a_register_is_named_ahead_of_every_late_factory() {
+        let one_collect = App::builder()
+            .module::<PinnedSetup>()
+            .module::<ImportsRepinInRegister>();
+        let an_earlier_import = App::builder()
+            .module::<PinnedSetup>()
+            .module::<ImportsReadsLateInRegister>()
+            .module::<ImportsRepinInRegister>();
+        for (case, app) in [
+            ("its own collect", one_collect),
+            ("an earlier import", an_earlier_import),
+        ] {
+            let Err(refused) = app.build().await else {
+                panic!("{case}: one declaration would be dropped for the other");
+            };
+            let contested = refused
+                .downcast_ref::<ContestedDeclarationError>()
+                .unwrap_or_else(|| panic!("{case}: not the contest: {refused:#}"));
+            assert_eq!(
+                contested.type_name,
+                std::any::type_name::<Config>(),
+                "{case}"
+            );
+        }
     }
 
     // A pin made in `register`: the value its type already holds is the

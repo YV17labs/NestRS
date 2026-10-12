@@ -40,13 +40,7 @@ impl DynamicModule for HttpSetup {
         builder.provide_meta(TransportContribution {
             name: "HttpTransport",
             build: |c| {
-                #[expect(
-                    clippy::expect_used,
-                    reason = "provide_feature queued the config's factory in this module's collect"
-                )]
-                let cfg = c
-                    .get::<HttpConfig>()
-                    .expect("HttpConfig is resolved by ConfigModule::provide_feature");
+                let cfg = ConfigModule::resolved::<HttpConfig>(c)?;
                 Ok(Box::new(HttpTransport::from_config(&cfg)?))
             },
         })

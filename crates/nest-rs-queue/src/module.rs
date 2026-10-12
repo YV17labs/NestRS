@@ -70,6 +70,7 @@ mod tests {
     #[test]
     fn two_imports_attach_one_worker() {
         let container = Container::builder()
+            .provide(QueueConfig::default())
             .import::<QueueModule>()
             .import::<QueueModule>()
             .build();

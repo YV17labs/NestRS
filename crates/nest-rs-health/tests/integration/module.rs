@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use nest_rs_core::Container;
-use nest_rs_health::{HealthModule, HealthService};
+use nest_rs_health::{HealthConfig, HealthModule, HealthService};
 
 #[test]
 fn registers_health_service() {
-    let container = Container::builder().import::<HealthModule>().build();
+    let container = Container::builder()
+        .provide(HealthConfig::default())
+        .import::<HealthModule>()
+        .build();
     let svc: Option<Arc<HealthService>> = container.get();
     assert!(svc.is_some());
 }

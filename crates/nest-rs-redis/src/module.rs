@@ -42,15 +42,11 @@ impl DynamicModule for RedisSetup {
             self.pinned.clone(),
             builder.provide_meta(RedisConnection::declared_budget()),
         );
-        builder.provide_factory::<RedisConnection, _, _>(|container| async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "provide_feature queued the config's factory in this module's collect"
-            )]
-            let config = container
-                .get::<RedisConfig>()
-                .expect("RedisConfig is resolved by ConfigModule::provide_feature");
-            Ok(RedisConnection::connect(&config).await?)
-        })
+        builder.provide_factory_after::<RedisConnection, (RedisConfig,), _, _>(
+            |container| async move {
+                let config = ConfigModule::resolved::<RedisConfig>(&container)?;
+                Ok(RedisConnection::connect(&config).await?)
+            },
+        )
     }
 }

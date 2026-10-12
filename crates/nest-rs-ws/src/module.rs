@@ -35,7 +35,10 @@ mod tests {
 
     #[test]
     fn provides_the_server_registry() {
-        let container = Container::builder().import::<WsModule>().build();
+        let container = Container::builder()
+            .provide(WsConfig::default())
+            .import::<WsModule>()
+            .build();
         let server: Option<Arc<WsServer>> = container.get();
         assert!(server.is_some());
     }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule};
+use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, MissingDependencyError};
 
 use crate::config::ThrottlerConfig;
 use crate::guard::ThrottlerGuard;
@@ -51,42 +51,33 @@ impl DynamicModule for ThrottlerSetup {
         });
         // A provider of its own, so a guard built by any other path fails the boot
         // naming `Throttle` rather than running 60/minute in silence.
-        let builder = builder.provide_factory::<Throttle, _, _>(|container| async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "provide_feature queued the config's factory in this module's collect"
-            )]
-            let config = container
-                .get::<ThrottlerConfig>()
-                .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-            Ok(resolve(&config))
-        });
-        // After the store, whose vendor factory may wait on a connection of its own.
-        builder.provide_factory_after::<ThrottlerGuard, (Arc<dyn ThrottlerStore>,), _, _>(
+        let builder = builder.provide_factory_after::<Throttle, (ThrottlerConfig,), _, _>(
             |container| async move {
-                #[expect(
-                    clippy::expect_used,
-                    reason = "the policy is queued by this same collect, before the guard"
-                )]
-                let default = container
-                    .get::<Throttle>()
-                    .expect("the policy is queued by this same collect, before the guard");
-                let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "ThrottlerGuard needs a `dyn ThrottlerStore` binding — \
-                         `ThrottlerModule::for_root` binds the in-process default"
-                    )
-                })?;
-                #[expect(
-                    clippy::expect_used,
-                    reason = "provide_feature queued the config's factory in this module's collect"
-                )]
-                let config = container
-                    .get::<ThrottlerConfig>()
-                    .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-                ThrottlerGuard::new(store, *default, config.pseudonym_key.as_deref())
+                let config = ConfigModule::resolved::<ThrottlerConfig>(&container)?;
+                Ok(resolve(&config))
             },
-        )
+        );
+        // After the store, whose vendor factory may wait on a connection of its own.
+        builder.provide_factory_after::<
+            ThrottlerGuard,
+            (Arc<dyn ThrottlerStore>, Throttle, ThrottlerConfig),
+            _,
+            _,
+        >(|container| async move {
+            let default = container.get::<Throttle>().ok_or(MissingDependencyError {
+                module: "ThrottlerModule",
+                consumer: "ThrottlerGuard",
+                dependency: "Throttle",
+            })?;
+            let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ThrottlerGuard needs a `dyn ThrottlerStore` binding — \
+                     `ThrottlerModule::for_root` binds the in-process default"
+                )
+            })?;
+            let config = ConfigModule::resolved::<ThrottlerConfig>(&container)?;
+            ThrottlerGuard::new(store, *default, config.pseudonym_key.as_deref())
+        })
     }
 }
 

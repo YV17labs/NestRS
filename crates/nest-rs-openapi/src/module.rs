@@ -56,15 +56,10 @@ impl DynamicModule for OpenApiSetup {
     }
 
     fn register(self, builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        #[expect(
-            clippy::expect_used,
-            reason = "provide_feature queued the config's factory in this module's collect"
-        )]
-        let config = builder
-            .snapshot()
-            .get::<OpenApiConfig>()
-            .expect("OpenApiConfig is resolved by ConfigModule::provide_feature");
-        register(builder, (*config).clone())
+        match ConfigModule::resolved::<OpenApiConfig>(&builder.snapshot()) {
+            Ok(config) => register(builder, (*config).clone()),
+            Err(refusal) => builder.refuse(refusal),
+        }
     }
 }
 
@@ -150,7 +145,7 @@ fn document_path(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::Discovery;
+    use nest_rs_core::{App, Discovery, LateFactoryError, Module, module};
     use nest_rs_http::HttpConfig;
 
     fn mount_count(enabled: bool) -> usize {
@@ -164,6 +159,29 @@ mod tests {
         Discovery::new(&builder.snapshot())
             .meta::<HttpEndpointMeta>()
             .len()
+    }
+
+    #[module(imports = [OpenApiModule::for_root(None)])]
+    struct ServesDocumentation;
+
+    /// A hand-written importer that imports the module in its register alone.
+    struct RegistersOnly;
+
+    impl Module for RegistersOnly {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.import::<ServesDocumentation>()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_module_imported_in_a_register_alone_fails_the_boot_naming_its_config() {
+        let Err(refused) = App::builder().module::<RegistersOnly>().build().await else {
+            panic!("the documentation would mount over a config nothing resolved");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<OpenApiConfig>());
     }
 
     #[test]

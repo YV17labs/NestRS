@@ -35,14 +35,8 @@ impl DynamicModule for AuthnSetup {
 
     fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder.provide_factory::<JwtService, _, _>(|container| async move {
-            #[expect(
-                clippy::expect_used,
-                reason = "provide_feature queued the config's factory in this module's collect"
-            )]
-            let config = container
-                .get::<AuthnConfig>()
-                .expect("AuthnConfig is resolved by ConfigModule::provide_feature");
+        builder.provide_factory_after::<JwtService, (AuthnConfig,), _, _>(|container| async move {
+            let config = ConfigModule::resolved::<AuthnConfig>(&container)?;
             let options = (*config)
                 .clone()
                 .into_options()

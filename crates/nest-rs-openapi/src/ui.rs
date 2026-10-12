@@ -23,7 +23,8 @@ pub(crate) const DOCS_CONTENT_SECURITY_POLICY: &str = "default-src 'none'; scrip
 
 #[handler]
 pub(crate) fn swagger_index() -> Response {
-    // A deployment's own `Content-Security-Policy`, stamped at the edge, replaces this one.
+    // Kept under a deployment's own policy: the edge's defaults fill only what a
+    // response leaves unset.
     Response::builder()
         .content_type("text/html; charset=utf-8")
         .header("content-security-policy", DOCS_CONTENT_SECURITY_POLICY)

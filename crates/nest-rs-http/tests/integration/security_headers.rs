@@ -1,6 +1,6 @@
 //! Security headers on the wire, through `HttpTransport::security_headers`,
 //! the builder door that skips config validation: an invalid value must not
-//! make a header quietly disappear.
+//! make a header quietly disappear, and a value a route set is its own.
 
 use nest_rs_core::{Module, module};
 use nest_rs_http::{HttpSecurityHeaders, HttpTransport, controller, routes};
@@ -15,6 +15,13 @@ impl PagesController {
     #[get("/")]
     async fn index(&self) -> &'static str {
         "a page worth framing"
+    }
+
+    /// An image other origins embed: it states its own resource policy.
+    #[get("/badge")]
+    #[response_header("cross-origin-resource-policy", "cross-origin")]
+    async fn badge(&self) -> &'static str {
+        "an embeddable badge"
     }
 }
 
@@ -73,4 +80,29 @@ async fn a_header_value_that_cannot_be_built_is_reported_rather_than_dropped() {
          since its whole symptom is an absence: {:?}",
         event.fields,
     );
+}
+
+#[tokio::test]
+async fn a_response_without_the_header_gets_the_default() {
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
+    let resp = client.get("/pages").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_header("cross-origin-resource-policy", "same-origin");
+}
+
+/// The deployment's `same-origin` is the default; a route that is meant to be
+/// embedded says so, and its value is the one sent, alone.
+#[tokio::test]
+async fn a_route_that_sets_corp_keeps_its_value() {
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
+    let resp = client.get("/pages/badge").send().await;
+    resp.assert_status_is_ok();
+    let sent: Vec<_> = resp
+        .0
+        .headers()
+        .get_all("cross-origin-resource-policy")
+        .iter()
+        .collect();
+    assert_eq!(sent, ["cross-origin"]);
+    resp.assert_header("x-frame-options", "DENY");
 }

@@ -346,7 +346,8 @@ impl HttpTransport {
     }
 
     /// Pin the default security-header policy; the default is nosniff,
-    /// `X-Frame-Options: DENY` and HSTS under TLS.
+    /// `X-Frame-Options: DENY` and HSTS under TLS, each on a response that sets
+    /// none.
     pub fn security_headers(mut self, cfg: crate::HttpSecurityHeaders) -> Self {
         self.security_headers = cfg;
         self
@@ -368,7 +369,7 @@ impl HttpTransport {
         self
     }
 
-    /// Emit `Server: <value>` on every response; off by default.
+    /// Emit `Server: <value>` on every response that sets none; off by default.
     pub fn server_header(mut self, value: &'static str) -> Self {
         self.server_header = Some(value);
         self

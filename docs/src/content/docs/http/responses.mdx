@@ -97,6 +97,10 @@ needs. Two checks run at compile time:
 A typo (`Cache-Control` instead of `cache-control`, a stray newline in
 the value) is caught by `cargo build`, never at runtime.
 
+A header the route sets wins over the transport's default for it: a
+[security header](/http/configuration/#default-security-headers) or `Server:`
+is written only on a response that sets none.
+
 ### `#[redirect("url"[, status])]`
 
 Sends a `Location: <url>` response **without calling the handler body**.

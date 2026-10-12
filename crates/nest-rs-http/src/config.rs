@@ -231,8 +231,8 @@ pub struct HttpConfig {
     /// leaves such a request on the unversioned routes. Read from
     /// `<PREFIX>_HTTP__DEFAULT_VERSION`.
     pub default_version: Option<String>,
-    /// `true` ⇒ emit `Server: nestrs/<version>` on every response. Defaults to
-    /// `false`: no framework fingerprint.
+    /// `true` ⇒ emit `Server: nestrs/<version>` on every response that sets
+    /// none. Defaults to `false`: no framework fingerprint.
     pub server_header: bool,
     /// Mount every controller under a shared path prefix (e.g. `/api`). `None`
     /// ⇒ no prefix. Read from `<PREFIX>_HTTP__GLOBAL_PREFIX`, normalized by
@@ -266,9 +266,10 @@ pub struct HttpConfig {
     /// `<PREFIX>_HTTP__FAIL_SECURE_STRICT`.
     pub fail_secure_strict: bool,
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
-    /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS). On by
-    /// default; tune via `<PREFIX>_HTTP__SECURITY_HEADERS` (the master switch)
-    /// and one key per header — see [`HttpSecurityHeaders`].
+    /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS), each on a
+    /// response that sets none. On by default; tune via
+    /// `<PREFIX>_HTTP__SECURITY_HEADERS` (the master switch) and one key per
+    /// header — see [`HttpSecurityHeaders`].
     pub security_headers: HttpSecurityHeaders,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
     /// request's `Accept-Encoding`. Off by default; read from

@@ -488,12 +488,20 @@ to remember them:
   emitted **only when TLS is active** (HSTS over plain HTTP is
   meaningless and a footgun on localhost).
 
+Each one is a default: the edge writes it only on a response that sets none, so
+a route's own value wins. A post's cover image meant to be embedded elsewhere
+carries `#[response_header("cross-origin-resource-policy", "cross-origin")]` on
+its route, and every other response keeps the deployment's `same-origin`. The
+same holds for every header below, and for `Server:`. A route that sets a weaker
+value than the deployment's keeps it: that line is the opening, in the route
+where a reviewer reads it.
+
 Three more are **settable and off by default**, each because a default would
 be the framework guessing about a document it does not serve:
 
 | Header | Field / env | Why it ships off |
 |---|---|---|
-| `Content-Security-Policy` | `content_security_policy` / `__CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks the Swagger UI and every page an app serves; one loose enough to ship safely states nothing. The sources are the app's. |
+| `Content-Security-Policy` | `content_security_policy` / `__CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks every page an app serves, a single-page app included; one loose enough to ship safely states nothing. The sources are the app's. The Swagger UI keeps its own, stricter one under any you set. |
 | `Cross-Origin-Embedder-Policy` | `cross_origin_embedder_policy` / `__CROSS_ORIGIN_EMBEDDER_POLICY` | `require-corp` is how a *page* opts into cross-origin isolation, and it breaks every cross-origin subresource that does not carry CORP. |
 | `Permissions-Policy` | `permissions_policy` / `__PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
 

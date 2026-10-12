@@ -5,7 +5,8 @@ use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::poem::web::Multipart;
 use nest_rs_http::{
-    ApiVersioning, Header, HttpConfig, HttpModule, async_trait, controller, input, routes,
+    ApiVersioning, Header, HttpConfig, HttpModule, HttpSecurityHeaders, async_trait, controller,
+    input, routes,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
@@ -279,6 +280,52 @@ async fn the_swagger_ui_and_its_assets_are_served() {
     ] {
         app.http().get(asset).send().await.assert_status_is_ok();
     }
+}
+
+/// The policy a deployment sets for every response the app serves.
+const DEPLOYMENT_POLICY: &str = "default-src 'self'";
+
+#[module(
+    imports = [
+        openapi(true),
+        HttpModule::for_root(HttpConfig {
+            security_headers: HttpSecurityHeaders {
+                content_security_policy: Some(DEPLOYMENT_POLICY.into()),
+                ..HttpSecurityHeaders::default()
+            },
+            ..HttpConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct StrictPolicyApp;
+
+/// A deployment's global policy is the default: the documentation page keeps
+/// its own, stricter one, and a response stating none gets the deployment's.
+#[tokio::test]
+async fn the_openapi_ui_keeps_its_csp_under_a_global_one() {
+    let app = TestApp::for_module::<StrictPolicyApp>()
+        .await
+        .expect("boots");
+
+    let page = app.http().get("/api").send().await;
+    page.assert_status_is_ok();
+    let stated: Vec<_> = page
+        .0
+        .headers()
+        .get_all("content-security-policy")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    assert_eq!(stated.len(), 1, "one policy, the page's own: {stated:?}");
+    assert!(
+        stated[0].contains("script-src 'self'") && stated[0].contains("frame-ancestors 'none'"),
+        "{stated:?}",
+    );
+
+    let widgets = app.http().get("/widgets").send().await;
+    widgets.assert_status_is_ok();
+    widgets.assert_header("content-security-policy", DEPLOYMENT_POLICY);
 }
 
 #[tokio::test]

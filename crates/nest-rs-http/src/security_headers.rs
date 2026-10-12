@@ -2,6 +2,9 @@
 //! `<PREFIX>_HTTP__*` or the pinned struct. The family is
 //! [OWASP's list](https://owasp.org/www-project-secure-headers/).
 //!
+//! Each is a default: the edge writes it only on a response that sets none, so
+//! a route's own value — a `#[response_header]`, a surface's own policy — wins.
+//!
 //! Emitted by default:
 //!
 //! - `X-Content-Type-Options: nosniff`
@@ -38,8 +41,9 @@ const KEY_COEP: &str = "CROSS_ORIGIN_EMBEDDER_POLICY";
 const KEY_PERMISSIONS_POLICY: &str = "PERMISSIONS_POLICY";
 const KEY_CSP: &str = "CONTENT_SECURITY_POLICY";
 
-/// Default-on security headers. Disable the whole set with `enabled = false`;
-/// drop an individual header with `None` in code, or `off` in the environment.
+/// Default-on security headers, each written only on a response that sets none.
+/// Disable the whole set with `enabled = false`; drop an individual header with
+/// `None` in code, or `off` in the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpSecurityHeaders {
     /// Master switch. `false` ⇒ emit no security headers at all.

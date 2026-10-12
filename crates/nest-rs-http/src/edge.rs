@@ -7,11 +7,12 @@
 //! answered before a byte of its body is taken — and `Expect: 100-continue` is
 //! never answered `100` for it, since hyper writes that on the first read.
 //!
-//! Every answer is stamped with the default headers: a `408`, `413` or `503` the
-//! edge produces, an `Err` escaping the inner tree, which the edge renders as a
-//! problem document first, and the opaque `500` it answers a handler that
-//! unwound. The normalizer for a raw-text error a handler answered with runs on
-//! the edge itself when it is outermost (`normalize`).
+//! Every answer is stamped with the default headers, each where the response
+//! left it unset: a `408`, `413` or `503` the edge produces, an `Err` escaping
+//! the inner tree, which the edge renders as a problem document first, and the
+//! opaque `500` it answers a handler that unwound. The normalizer for a
+//! raw-text error a handler answered with runs on the edge itself when it is
+//! outermost (`normalize`).
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -140,7 +141,8 @@ pub(crate) struct EdgeEndpoint<E> {
     body_limit: Option<usize>,
     /// The gap a body may leave between two frames once something reads it.
     body_read_timeout: Duration,
-    /// Stamped with replace semantics: the framework value wins over a handler's.
+    /// Each fills only what the response left unset: a value a handler, a
+    /// decorator or a surface set is its own.
     headers: Vec<(HeaderName, HeaderValue)>,
     /// The edge is outermost (no CORS or compression) and runs the problem
     /// normalizer itself.
@@ -200,8 +202,9 @@ impl<E> EdgeEndpoint<E> {
     }
 
     fn finish(&self, mut resp: Response) -> Response {
+        let headers = resp.headers_mut();
         for (name, value) in &self.headers {
-            resp.headers_mut().insert(name.clone(), value.clone());
+            headers.entry(name).or_insert_with(|| value.clone());
         }
         resp
     }
@@ -744,11 +747,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn security_header_replaces_a_handler_set_value() {
-        let ep = edge(sets_header, None, None, nosniff());
+    async fn a_value_the_handler_set_is_kept_and_a_default_fills_what_it_left_unset() {
+        let mut headers = nosniff();
+        headers.push((
+            HeaderName::from_static("x-frame-options"),
+            HeaderValue::from_static("DENY"),
+        ));
+        let ep = edge(sets_header, None, None, headers);
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status_is_ok();
-        resp.assert_header("x-content-type-options", "nosniff");
+        let sniffing: Vec<_> = resp
+            .0
+            .headers()
+            .get_all("x-content-type-options")
+            .iter()
+            .collect();
+        assert_eq!(sniffing, ["handler-value"], "kept whole, never appended to");
+        resp.assert_header("x-frame-options", "DENY");
     }
 
     #[tokio::test]

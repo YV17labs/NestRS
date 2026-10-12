@@ -42,8 +42,8 @@ struct RouteHandler {
     named_shaper: Option<Type>,
     /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
-    metas: Vec<Expr>,
-    is_public: bool,
+    /// The route's declaration, read through `Reflector`.
+    handler: TokenStream2,
     no_pipes: bool,
     /// `#[force_guards]` paths on the method.
     force_guards: Vec<Path>,
@@ -123,7 +123,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
-    if let Err(err) = pair::HTTP.reject_host_layers(&item.attrs) {
+    if let Err(err) = pair::HTTP
+        .reject_host_layers(&item.attrs)
+        .and_then(|()| nest_rs_codegen::reject_meta_on_operations(&pair::HTTP, &item.attrs))
+    {
         return err.to_compile_error().into();
     }
     let self_ty = item.self_ty.clone();
@@ -146,6 +149,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
          would never run — give one a distinct path, verb or `#[version]`",
     );
     let mut route_metas: Vec<TokenStream2> = Vec::new();
+    let mut handler_consts: Vec<TokenStream2> = Vec::new();
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
@@ -472,14 +476,27 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         });
 
-        let mut metas: Vec<Expr> = Vec::new();
-        while let Some(m_idx) = method.attrs.iter().position(|a| a.path().is_ident("meta")) {
-            let m_attr = method.attrs.remove(m_idx);
-            match m_attr.parse_args::<Expr>() {
-                Ok(expr) => metas.push(expr),
-                Err(err) => return err.to_compile_error().into(),
-            }
-        }
+        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+            Ok(values) => values,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        handler_consts.push(nest_rs_codegen::handler_const(
+            &nest_rs_codegen::HandlerSite {
+                unit: quote!(::nest_rs_http::unit::REQUEST),
+                self_ty: &self_ty,
+                host_name: &ctrl_name,
+                method: &method_name,
+                address: quote!(#route_path),
+                posture: if is_public {
+                    nest_rs_codegen::SitePosture::Public
+                } else {
+                    nest_rs_codegen::SitePosture::Gated
+                },
+                host_meta: nest_rs_codegen::HostMeta::Struct,
+                method_meta: &metas,
+                cfgs: &cfgs,
+            },
+        ));
 
         // The compiler selects the arming type, so this crate needs no authz
         // dependency and a renamed import still arms.
@@ -501,8 +518,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             probe_types,
             named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
             has_extractors: !inputs.is_empty(),
-            metas,
-            is_public,
+            handler: nest_rs_codegen::handler_ref(&self_ty, &method_name),
             no_pipes,
             force_guards,
             pipes: method_pipes,
@@ -878,6 +894,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     quote! {
         #item
 
+        impl #self_ty {
+            #(#handler_consts)*
+        }
+
         #markers
 
         #capability_bounds
@@ -1151,9 +1171,9 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 }
 
 /// Build one routed handler. Layout, inner → outer: shaper (mask) →
-/// exception filters → filters → interceptors → `RouteShaper` (guards, then
-/// the class gates, then pipes) → metadata. Global filters and interceptors run
-/// at the transport edge.
+/// exception filters → filters → interceptors → `RouteShaper` (the route's
+/// declaration carried, then guards, the class gates, pipes). Global filters
+/// and interceptors run at the transport edge.
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let RouteHandler {
         verb: _,
@@ -1168,8 +1188,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         probe_types,
         named_shaper,
         has_extractors,
-        metas,
-        is_public,
+        handler,
         no_pipes,
         force_guards,
         pipes: method_pipes,
@@ -1231,7 +1250,6 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
         )
     };
 
-    // Inside the metadata wrap, so guards reading `#[meta(...)]` see it.
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
@@ -1252,21 +1270,12 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
             #method_pipe_specs,
             #no_pipes_flag,
             #gate_selection,
+            #handler,
         )
     };
 
-    for m in metas {
-        expr = quote! { ::nest_rs_http::poem::EndpointExt::data(#expr, #m) };
-    }
     if let Some(header) = deprecation_header {
         expr = quote! { ::nest_rs_http::__private::deprecated_route(#expr, #header) };
-    }
-
-    // Guards read the marker via `Reflector::is_public()`.
-    if *is_public {
-        expr = quote! {
-            ::nest_rs_http::poem::EndpointExt::data(#expr, ::nest_rs_http::Public)
-        };
     }
 
     expr

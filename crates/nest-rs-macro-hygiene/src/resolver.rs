@@ -107,13 +107,18 @@ pub struct Parcel {
     pub id: i32,
 }
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 #[resolver]
+#[meta(HygieneLimit(100))]
 pub struct ParcelResolver;
 
 #[operations]
 impl ParcelResolver {
     #[query]
     #[public]
+    #[meta(HygieneLimit(10))]
     fn parcel(&self) -> Parcel {
         Parcel { id: 1 }
     }

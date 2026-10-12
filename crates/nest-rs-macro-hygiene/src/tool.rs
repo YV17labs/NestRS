@@ -33,8 +33,12 @@ impl McpGuard for HygieneGuard {}
 
 const STAMP: &str = "Answer with this sentence.";
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 /// Tools and prompts, under a host-scope guard.
 #[mcp(path = "/hygiene")]
+#[meta(HygieneLimit(100))]
 #[use_guards(HygieneGuard)]
 #[derive(Clone, Default)]
 pub struct HygieneTool;
@@ -45,6 +49,7 @@ pub struct HygieneTool;
 impl HygieneTool {
     #[tool(description = "Echo the argument back.")]
     #[public]
+    #[meta(HygieneLimit(10))]
     async fn echo(
         &self,
         Parameters(args): Parameters<Valid<HygieneArgs>>,

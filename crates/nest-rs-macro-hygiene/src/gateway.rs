@@ -24,14 +24,19 @@ impl Guard for HygieneWsGuard {
 
 impl HttpGuard for HygieneWsGuard {}
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 /// Guarded, so the `#[use_guards]` wrap is emitted.
 #[gateway(path = "/hygiene")]
+#[meta(HygieneLimit(100))]
 #[use_guards(HygieneWsGuard)]
 pub struct HygieneGateway;
 
 #[messages]
 impl HygieneGateway {
     #[subscribe_message("hygiene.ping")]
+    #[meta(HygieneLimit(10))]
     #[public]
     async fn ping(&self) {}
 

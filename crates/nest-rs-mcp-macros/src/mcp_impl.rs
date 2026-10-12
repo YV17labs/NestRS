@@ -119,6 +119,10 @@ struct Operation {
     /// The authored method's `#[cfg]` conditions, which its router group, and so
     /// its wrapper and its route, are compiled under.
     cfgs: Vec<TokenStream2>,
+    /// The name a client calls it by.
+    wire_name: String,
+    /// The method's `#[meta]` values.
+    metas: Vec<syn::Expr>,
 }
 
 impl Operation {
@@ -155,6 +159,7 @@ pub(crate) fn mcp_impl(args: TokenStream, item: ItemImpl) -> TokenStream {
 fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     reject_http_only_layers(&item.attrs, "MCP", "host")?;
     pair::MCP.reject_host_layers(&item.attrs)?;
+    nest_rs_codegen::reject_meta_on_operations(&pair::MCP, &item.attrs)?;
 
     let self_ty = item.self_ty.clone();
     let base = impl_self_ident(&self_ty, "#[tools]")?;
@@ -255,6 +260,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     });
     let layer_keys = &layers.keys;
     let layer_labels = &layers.labels;
+    let handlers = handler_consts(&item, &self_ty, &base, &operations)?;
 
     let (impl_generics, ty_generics, where_clause) = &generics;
     Ok(quote! {
@@ -265,6 +271,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #(#description_checks)*
 
         #markers
+
+        #handlers
 
         impl #impl_generics #self_ty #ty_generics #where_clause {
             #[doc(hidden)]
@@ -631,7 +639,7 @@ fn take_operations(
             role_attr,
         )?;
 
-        let operation = take_operation(method, index, role, base)?;
+        let operation = take_operation(method, index, role, base, wire_name)?;
         match role {
             Role::Tool => operations.tools.push(operation),
             Role::Prompt => operations.prompts.push(operation),
@@ -665,6 +673,7 @@ fn take_operation(
     index: usize,
     role: Role,
     base: &syn::Ident,
+    wire_name: String,
 ) -> syn::Result<Operation> {
     let name = method.sig.ident.clone();
     let (role_attr, description_check) = wrapper_role_attr(method, index, role)?;
@@ -675,6 +684,7 @@ fn take_operation(
     let guards = take_path_list(&mut method.attrs, "use_guards")?;
     let force_guards = take_path_list(&mut method.attrs, "force_guards")?;
     let posture = posture_rules(role).take(method)?;
+    let metas = nest_rs_codegen::take_meta(&mut method.attrs)?;
     if posture.masks() && result_ok_type(&method.sig).is_none() {
         return Err(syn::Error::new_spanned(
             &method.sig.output,
@@ -706,6 +716,50 @@ fn take_operation(
         posture,
         pipes,
         cfgs,
+        wire_name,
+        metas,
+    })
+}
+
+/// The `Handler` each operation declares, `mcp.operation` addressed by the name
+/// a client calls; a generic host has no one type to name, so it declares none.
+fn handler_consts(
+    item: &ItemImpl,
+    self_ty: &Type,
+    base: &syn::Ident,
+    operations: &Operations,
+) -> syn::Result<TokenStream2> {
+    if !item.generics.params.is_empty() {
+        if let Some(op) = operations.all().find(|op| !op.metas.is_empty()) {
+            return Err(syn::Error::new_spanned(
+                op.name(),
+                "a generic `#[tools]` host declares no `#[meta]`: its operations have no one \
+                 host type to declare it on",
+            ));
+        }
+        return Ok(quote!());
+    }
+    let consts = operations.all().map(|op| {
+        let wire_name = &op.wire_name;
+        nest_rs_codegen::handler_const(&nest_rs_codegen::HandlerSite {
+            unit: quote!(::nest_rs_mcp::unit::OPERATION),
+            self_ty,
+            host_name: base,
+            method: op.name(),
+            address: quote!(#wire_name),
+            posture: match op.posture {
+                Posture::Public => nest_rs_codegen::SitePosture::Public,
+                Posture::Authorize { .. } => nest_rs_codegen::SitePosture::Gated,
+            },
+            host_meta: nest_rs_codegen::HostMeta::Struct,
+            method_meta: &op.metas,
+            cfgs: &op.cfgs,
+        })
+    });
+    Ok(quote! {
+        impl #self_ty {
+            #(#consts)*
+        }
     })
 }
 

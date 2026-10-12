@@ -12,8 +12,8 @@ use nest_rs_core::__private::{
     ResolvedLayer, compose_chain, dedup_bucket, refuse_site, resolve_global_layers,
 };
 use nest_rs_core::layer_chain::LayerSite;
-use nest_rs_core::{Container, Layer};
-use nest_rs_http::__private::GateFn;
+use nest_rs_core::{Container, Handler, Layer};
+use nest_rs_http::__private::{GateFn, HandlerRef};
 use nest_rs_http::BodyError;
 use nest_rs_http::poem::error::ReadBodyError;
 use nest_rs_http::poem::{Body, Endpoint, Request, Response, Result};
@@ -21,20 +21,23 @@ use nest_rs_pipes::{GlobalPipe, PipeSpecs};
 use serde_json::Value;
 
 use crate::dispatch::denial_convert::{denial_to_http_response, deny_http};
+use crate::dispatch::route_layers::RouteEndpoint;
 use crate::dispatch::scoped_spec::{
     ScopedGuardSpec, ScopedPipeSpec, report_unresolved, resolve_global_guards, resolve_scoped,
 };
 use crate::dispatch::validate::validate_guard_chain;
 use crate::{Denial, Guard};
 
-/// HTTP per-route shaper: the deduped guard chain, the route's class gates and
-/// the deduped pipe chain, wrapped around the route's inner endpoint.
+/// HTTP per-route shaper: the route's declaration carried on the request, then
+/// the deduped guard chain, the route's class gates and the deduped pipe chain,
+/// wrapped around the route's inner endpoint.
 ///
 /// Built by [`wrap_route_shaper`] at mount, resolving the global + per-route
 /// chain eagerly so a broken chain surfaces at boot; dedups by `TypeId` and
 /// runs every layer in declaration order. No `#[public]` skip: guards read the
-/// [`Public`](nest_rs_http::Public) marker themselves.
+/// route's posture themselves.
 pub struct RouteShaper<E> {
+    handler: &'static Handler,
     guards: Vec<ResolvedLayer<dyn Guard>>,
     gates: Vec<GateFn>,
     pipes: Vec<ResolvedLayer<dyn GlobalPipe>>,
@@ -48,6 +51,9 @@ where
     type Output = Response;
 
     async fn call(&self, mut req: Request) -> Result<Response> {
+        // A pointer, read by every layer inside through `Reflector`: nothing the
+        // route declared is copied per request.
+        req.extensions_mut().insert(HandlerRef(self.handler));
         for entry in &self.guards {
             // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
             // blanket would nest a second boxed future per check.
@@ -75,17 +81,17 @@ where
     }
 }
 
-/// One HTTP route as `#[routes]` mounts it: shaped when the composed guard
-/// chain, its class gates **or** its pipe chain is non-empty, bare (untouched)
-/// when all three are empty, and refused when its chains did not compose.
+/// One HTTP route as `#[routes]` mounts it: shaped when any layer runs at the
+/// route — a guard, a class gate, a pipe, or a route-scoped response layer
+/// reading what the route declared — bare (untouched) when none does, and
+/// refused when its chains did not compose.
 ///
 /// The bare arm is not an access decision: the boot's unguarded-route scan
 /// warns independently.
 pub enum ShapedRoute<E> {
-    /// No guard, gate or pipe — the endpoint passes through untouched.
+    /// No layer at the route — the endpoint passes through untouched.
     Bare(E),
-    /// At least one guard, gate or pipe — the shaper runs before the inner
-    /// endpoint.
+    /// At least one layer — the shaper runs before the inner endpoint.
     Shaped(RouteShaper<E>),
     /// The route's chains did not compose: the boot fails on the refusal it
     /// filed, and a server that never read it answers an opaque `500`.
@@ -114,9 +120,10 @@ pub(crate) fn refused_route() -> Response {
 }
 
 /// Compose the route's guard / pipe chains and wrap `endpoint` in a
-/// [`RouteShaper`] running them around the route's class `gates` — or return
-/// it untouched when all three are empty. Emitted by `#[routes]` for every
-/// handler, `gates` selected by type from what the route declares.
+/// [`RouteShaper`] running them around the route's class `gates`, carrying
+/// `handler` for every layer inside — or return it untouched when no layer runs
+/// at the route. Emitted by `#[routes]` for every handler, `gates` selected by
+/// type from what the route declares.
 ///
 /// A declared layer that does not resolve, or a method scope that orders an
 /// authorization guard before the authentication guard whose principal it
@@ -128,7 +135,7 @@ pub(crate) fn refused_route() -> Response {
 )]
 pub fn wrap_route_shaper<E>(
     container: &Container,
-    endpoint: E,
+    endpoint: RouteEndpoint<E>,
     route_label: &'static str,
     controller_guards: Vec<ScopedGuardSpec>,
     method_guards: Vec<ScopedGuardSpec>,
@@ -137,7 +144,8 @@ pub fn wrap_route_shaper<E>(
     method_pipes: Vec<ScopedPipeSpec>,
     no_pipes: bool,
     gates: Vec<GateFn>,
-) -> ShapedRoute<E>
+    handler: &'static Handler,
+) -> ShapedRoute<RouteEndpoint<E>>
 where
     E: Endpoint<Output = Response> + 'static,
 {
@@ -164,10 +172,12 @@ where
             return ShapedRoute::Refused;
         }
     };
-    if guards.is_empty() && gates.is_empty() && pipes.is_empty() {
+    let layered = matches!(endpoint, RouteEndpoint::Layered(_));
+    if guards.is_empty() && gates.is_empty() && pipes.is_empty() && !layered {
         return ShapedRoute::Bare(endpoint);
     }
     ShapedRoute::Shaped(RouteShaper {
+        handler,
         guards,
         gates,
         pipes,
@@ -345,6 +355,19 @@ mod tests {
     /// A layer no imported module provides: its spec resolves to nothing.
     struct Unprovided;
 
+    struct Routes;
+
+    static ROUTE: Handler =
+        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+            unit: nest_rs_http::unit::REQUEST,
+            host: TypeId::of::<Routes>(),
+            host_name: "Routes",
+            method: "route",
+            address: "/x",
+            posture: nest_rs_core::Posture::Gated,
+            meta: nest_rs_core::__private::MetaLevels::default,
+        });
+
     fn unprovided<L: ?Sized>() -> LayerSpec<L> {
         LayerSpec::new(TypeId::of::<Unprovided>(), "GhostLayer", |_| None)
     }
@@ -381,9 +404,9 @@ mod tests {
 
             let route = wrap_route_shaper(
                 &container,
-                nest_rs_http::poem::endpoint::make_sync(|_| {
+                RouteEndpoint::Plain(nest_rs_http::poem::endpoint::make_sync(|_| {
                     Response::builder().body("the handler ran")
-                }),
+                })),
                 "get /x",
                 controller_guards,
                 method_guards,
@@ -392,6 +415,7 @@ mod tests {
                 method_pipes,
                 false,
                 Vec::new(),
+                &ROUTE,
             );
             assert!(
                 matches!(route, ShapedRoute::Refused),
@@ -512,9 +536,9 @@ mod tests {
         let container = Container::default();
         let route = wrap_route_shaper(
             &container,
-            nest_rs_http::poem::endpoint::make_sync(|_| {
+            RouteEndpoint::Plain(nest_rs_http::poem::endpoint::make_sync(|_| {
                 Response::builder().body("the handler ran")
-            }),
+            })),
             "get /gated",
             Vec::new(),
             Vec::new(),
@@ -523,6 +547,7 @@ mod tests {
             Vec::new(),
             false,
             vec![refuse_unless_admitted as GateFn],
+            &ROUTE,
         );
         assert!(
             matches!(route, ShapedRoute::Shaped(_)),

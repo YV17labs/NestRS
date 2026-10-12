@@ -14,7 +14,9 @@ mod listeners;
 /// [`EventBus`](../nest_rs_events/struct.EventBus.html).
 ///
 /// The struct itself must be a regular `#[injectable]`; its `#[on_event]`
-/// methods share the provider's `#[inject]` dependencies.
+/// methods share the provider's `#[inject]` dependencies. A `#[meta(EXPR)]` on
+/// the impl block is declared for every listener, one on a method for it
+/// alone, read over the block's of the same type.
 ///
 /// Per-method requirements (one `#[on_event]` per method):
 ///

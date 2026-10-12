@@ -22,6 +22,7 @@ mod identity;
 mod inject;
 mod job;
 mod mcp;
+mod meta;
 mod mount;
 pub mod pair;
 mod posture;
@@ -70,6 +71,10 @@ pub use job::{
     unread_job_key,
 };
 pub use mcp::{MCP_GRAMMAR, mcp_answers};
+pub use meta::{
+    HandlerSite, HostMeta, SitePosture, handler_const, handler_ref, host_meta_fn,
+    reject_meta_on_operations, take_meta,
+};
 pub use mount::{MountPath, reject_path};
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{

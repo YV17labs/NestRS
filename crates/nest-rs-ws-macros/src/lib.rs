@@ -21,7 +21,8 @@ mod messages;
 /// self-provided isolated registry. Omitted, uses `Global` from `WsModule`.
 ///
 /// `#[use_guards(...)]` on the struct = connection-level guards, run on the
-/// HTTP upgrade request so a rejected handshake never opens the socket.
+/// HTTP upgrade request so a rejected handshake never opens the socket. A
+/// `#[meta(EXPR)]` on the struct is declared for every message and hook.
 ///
 /// # Expands to
 ///
@@ -44,7 +45,9 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// `#[use_guards(...)]` beside a handler binds per-message guards, deduped
 /// against the global chain. `#[on_connect]` / `#[on_disconnect]` are the
-/// lifecycle hooks — `&self` with an optional `&WsClient`.
+/// lifecycle hooks — `&self` with an optional `&WsClient`. `#[meta(EXPR)]`
+/// (repeatable) on a handler or a hook declares a value for it, read over the
+/// gateway's of the same type.
 ///
 /// # Expands to
 ///

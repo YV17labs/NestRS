@@ -305,9 +305,10 @@ the design rule (guards gate and attach; handlers read).
 
 A route can carry typed metadata a guard reads at decision time —
 the cleanest case is a rate-limit guard reading the route's quota. The
-decorator attaches; the reader picks it up by type.
+decorator declares; the reader picks it up by type.
 
-Attach metadata on the route:
+Declare metadata on the route, or on its `#[controller]` for every route it
+serves:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
@@ -324,7 +325,7 @@ async fn login(&self, body: Valid<Json<LoginDto>>) -> Result<AccessTokenResponse
 ### Advanced: reading `#[meta]` from a guard
 
 Everything below is for the **guard author**, not the handler — a
-handler only attaches metadata; the guard reads it back at decision
+handler only declares metadata; the guard reads it back at decision
 time:
 
 ```rust title="crates/features/src/authn/guard.rs"
@@ -340,29 +341,33 @@ async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
 }
 ```
 
-Two rules pin the contract:
+Three rules pin the contract:
 
-- The value type must be `Clone + Send + Sync + 'static`. The macro
-  attaches it to the request extensions; the reader resolves by
-  `TypeId`. Wrap multiple values of the same underlying shape in
-  distinct newtypes when they need to coexist.
+- The value type must be `Send + Sync + 'static`. The expression is
+  evaluated once, the first time a layer reads the route's metadata, and
+  every request reads that one value through a pointer — never cloned,
+  never shadowed by what a guard inserts into the request. The reader
+  resolves by `TypeId`: wrap values of one underlying shape in distinct
+  newtypes when they need to coexist, and declare each type once per
+  level.
+- The method's value of a type wins over its controller's, and a
+  controller's value of another type still reads through.
 - Scope does not change what a guard reads. The pool executes
-  post-routing at the `RouteShaper`, inside the metadata wrap, so a guard
-  bound with `use_guards_global` reads the route's `#[meta]` exactly as a
-  `#[use_guards]` one does — see
+  post-routing at the `RouteShaper`, which carries the route's
+  declaration, so a guard bound with `use_guards_global` reads the
+  route's `#[meta]` exactly as a `#[use_guards]` one does — see
   [the request lifecycle](/fundamentals/request-lifecycle/).
 
-`Reflector` implements the framework-wide `HandlerMetadata` trait. The
-same guard can read `Reflector` on HTTP, the per-message metadata reader
-on WS, and the per-call reader on MCP — one trait, one shape, three
-transports.
+`#[meta]` is declared the same way on a resolver, a gateway, an MCP host and
+their operations, and on a processor's, scheduled tasks' or listeners' impl
+block and its methods. Each site keeps both levels in its one declaration;
+`Reflector` reads an HTTP route's.
 
 ## `#[public]` — the only universal marker
 
-`#[public]` is shorthand for `#[meta(Public)]` — it attaches the
-framework's only universal route marker. Guards read it through
-`HandlerMetadata::posture()`, which answers `Posture::Public` for it, and
-decide whether to honor it. The framework itself does *not* act on the
+`#[public]` declares the route's posture, the framework's only universal
+route marker. Guards read it through `HandlerMetadata::posture()`, which
+answers `Posture::Public` for it, and decide whether to honor it. The framework itself does *not* act on the
 marker — `AuthnGuard`, for example, still runs the strategy on a `#[public]`
 route, but lets an anonymous request through instead of returning `401`.
 It admits one on `/graphql`, `Posture::InBand`, the same way.

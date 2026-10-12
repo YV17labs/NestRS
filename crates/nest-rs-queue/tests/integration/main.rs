@@ -19,6 +19,7 @@ mod memory;
 mod producer;
 mod queue;
 mod queue_name;
+mod unit;
 mod worker;
 
 use std::any::TypeId;

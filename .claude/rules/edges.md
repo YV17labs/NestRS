@@ -185,8 +185,10 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   global interceptors observe it. **The posture's class gate runs with the
   guards**, after them and before any scoped interceptor or filter, however the
   route spells it: a layer that answers for the handler never answers a caller
-  the posture refuses. A guard may attach context (`Ctx<T>`), and
-  per-handler metadata is `#[meta(EXPR)]` read through `Reflector`.
+  the posture refuses. A guard may attach context (`Ctx<T>`); metadata is
+  `#[meta(EXPR)]`, declared on any host or handler into the site's one
+  `Handler` — the method's value over its host's — and read through
+  `Reflector`, never copied into the request a layer can write.
 - **Boot is fail-secure.** An unresolvable global spec fails the boot naming the
   type, at the kernel's wiring step (`provide_wiring`), in every app whatever it
   serves; so does a global guard pool listed out of phase order.

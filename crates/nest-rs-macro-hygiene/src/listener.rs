@@ -12,9 +12,14 @@ pub struct HygieneEvent {
 #[injectable]
 pub struct HygieneListener;
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 #[listeners]
+#[meta(HygieneLimit(100))]
 impl HygieneListener {
     #[on_event]
+    #[meta(HygieneLimit(10))]
     async fn on_hygiene(&self, event: HygieneEvent) {
         let _ = event.label;
     }

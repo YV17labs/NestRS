@@ -1,14 +1,15 @@
-//! Handler-attached metadata — the seam a Layer reads at decision time, and
+//! Handler-declared metadata — the seam a Layer reads at decision time, and
 //! the marker a mapped error leaves on the response it produced.
 //!
-//! A decorator attaches a typed value to a handler at mount time
-//! (`#[meta(EXPR)]`, `#[public]`); a Layer (Guard / Interceptor / Filter /
-//! Pipe) reads it back at request time through [`HandlerMetadata`], whose one
-//! implementor is [`Reflector`](crate::Reflector).
+//! A decorator declares a typed value on a host or a handler (`#[meta(EXPR)]`)
+//! and its posture (`#[public]`, `#[authorize]`) into the route's one
+//! [`Handler`]; a Layer (Guard / Interceptor / Filter / Pipe) reads it back at
+//! request time through [`HandlerMetadata`], whose one implementor is
+//! [`Reflector`](crate::Reflector).
 
 use std::any::Any;
 
-use nest_rs_core::Posture;
+use nest_rs_core::{Handler, Posture};
 
 /// Typed read access to whatever metadata was attached to the current handler.
 pub trait HandlerMetadata {
@@ -34,8 +35,9 @@ pub trait HandlerMetadata {
     }
 }
 
-/// Marker attached as handler metadata when a handler is `#[public]`. The
-/// framework does **not** act on it — guards read it through
+/// The `#[public]` marker on a request no route declared — one an endpoint or a
+/// test builds by hand; a route's own posture is its [`Handler`]'s. The
+/// framework does **not** act on it — guards read the posture through
 /// [`HandlerMetadata::posture`] and decide whether to honor it. An
 /// authentication guard admits an anonymous caller on `Posture::InBand` too,
 /// the posture of `/graphql`, whose operations each declare their own.
@@ -71,6 +73,12 @@ pub trait HandlerMetadata {
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Public;
+
+/// The route's [`Handler`], carried on each request its route shaper runs, so
+/// a layer reads what the route declared through a pointer: nothing is copied
+/// per request, and nothing a layer inserts shadows it.
+#[derive(Clone, Copy, Debug)]
+pub struct HandlerRef(pub &'static Handler);
 
 /// Marker inserted into a **response**'s extensions when that response was
 /// produced by mapping a handler error — a route-site `Filter` or a matching

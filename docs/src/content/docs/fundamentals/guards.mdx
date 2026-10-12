@@ -269,20 +269,32 @@ the value is large.
 `#[use_guards(AuthnGuard, AuthzGuard)]`, not the reverse.
 
 For per-route policy — required roles, rate-limit quotas — `#[meta(...)]`
-attaches a typed payload; `Reflector` reads it inside the guard:
+declares a typed value; `Reflector` reads it inside the guard. Declare it on
+the method, or on the controller for every route it serves; the method's
+value of a type wins over the controller's:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[get("/admin/audit")]
+#[controller(path = "/admin")]
 #[use_guards(AuthnGuard, RolesGuard)]
-#[meta(Roles(&["admin", "auditor"]))]
-async fn audit(&self) -> &'static str { "ok" }
+#[meta(Roles(&["admin"]))]
+pub struct AdminController;
+
+#[routes]
+impl AdminController {
+    #[get("/audit")]
+    #[meta(Roles(&["admin", "auditor"]))]
+    async fn audit(&self) -> &'static str { "ok" }
+}
 ```
 
-Because the global pool runs post-routing at the `RouteShaper` (above), a
-global guard reads `#[meta(...)]` too — the route data is attached before
-the chain runs, exactly as it is for `#[public]` below.
+The value is built once, the first time a layer reads it, and every request
+reads that one copy — so it is `Send + Sync + 'static`, never cloned, and a
+guard inserting a value of the same type into the request does not shadow
+it. Because the global pool runs post-routing at the `RouteShaper` (above), a
+global guard reads `#[meta(...)]` too — the route's declaration is carried
+before the chain runs, and it holds `#[public]` below as well.
 
-`#[public]` uses the same channel. The framework does **not** act on it —
+`#[public]` is declared the same way. The framework does **not** act on it —
 each guard decides what "public" means (`AuthnGuard` may authenticate when
 a token is present but not reject anonymous callers; `AuthzGuard` may
 still apply visitor rules). Marking a route public does not strip its

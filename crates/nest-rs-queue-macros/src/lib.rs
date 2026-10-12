@@ -9,7 +9,9 @@ mod processor;
 mod queue;
 
 /// Submits each `#[process]` method of a provider's impl block — several, on
-/// different queues, may share one provider.
+/// different queues, may share one provider. A `#[meta(EXPR)]` on the impl
+/// block is declared for every `#[process]` method, one on a method for it
+/// alone, read over the block's of the same type.
 ///
 /// The `queue` is named by its `Queue` **type**, declared with
 /// [`queue`](macro@crate::queue); the macro asserts at compile time that the

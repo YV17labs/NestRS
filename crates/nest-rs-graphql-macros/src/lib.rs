@@ -14,7 +14,8 @@ mod resolver;
 ///
 /// `#[use_guards(...)]` here runs before every operation on the impl;
 /// per-method `#[use_guards(...)]` stacks inside it. A denial short-circuits
-/// as a GraphQL error.
+/// as a GraphQL error. A `#[meta(EXPR)]` here is declared for every root field,
+/// under a field's own value of the same type.
 ///
 /// # Expands to
 ///
@@ -51,6 +52,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// A `#[field_resolver]` takes neither: it inherits the operation's posture
 /// (bind `#[use_guards]` beside it for an extra per-field gate).
+///
+/// `#[meta(EXPR)]` (repeatable) on a root field declares a value for it, read
+/// over the resolver's of the same type; a `#[field_resolver]` declares none.
 ///
 /// **A `#[subscription]` declares the same posture and it is enforced twice**:
 /// the gate once, at subscribe, and the mask on **every item** the stream

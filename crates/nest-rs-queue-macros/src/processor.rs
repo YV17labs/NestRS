@@ -57,7 +57,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
+    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
+        Ok(values) => values,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let mut emissions: Vec<TokenStream2> = Vec::new();
+    let mut handler_consts: Vec<TokenStream2> = Vec::new();
     let mut refusals: Option<syn::Error> = None;
 
     for impl_item in item.items.iter_mut() {
@@ -114,6 +119,24 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Err(err) = check_shape(method) {
             return err.to_compile_error().into();
         }
+        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+            Ok(values) => values,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let QueueId::Type(queue_ty) = &args.queue;
+        handler_consts.push(nest_rs_codegen::handler_const(
+            &nest_rs_codegen::HandlerSite {
+                unit: quote!(::nest_rs_queue::unit::JOB),
+                self_ty: &self_ty,
+                host_name: &provider_ident,
+                method: &method.sig.ident,
+                address: quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME),
+                posture: nest_rs_codegen::SitePosture::System,
+                host_meta: nest_rs_codegen::HostMeta::Values(&host_meta),
+                method_meta: &metas,
+                cfgs: &cfg_attrs(&method.attrs),
+            },
+        ));
 
         match emit_method(&self_ty, &provider_ident, method, args) {
             Ok(emitted) => emissions.push(emitted),
@@ -126,6 +149,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     }
     let out = quote! {
         #item
+
+        impl #self_ty {
+            #(#handler_consts)*
+        }
 
         #host_check
         #(#emissions)*

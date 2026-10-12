@@ -11,6 +11,7 @@ mod error;
 mod module;
 mod occurrence;
 mod scheduler;
+mod unit;
 
 /// A container whose reachable set is seeded empty, so a scheduler configured
 /// against it starts the jobs its test attaches and nothing else: with no gate

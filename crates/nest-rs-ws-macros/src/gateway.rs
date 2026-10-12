@@ -40,6 +40,10 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
+    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
+        Ok(values) => nest_rs_codegen::host_meta_fn(&values),
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let InjectableBody {
         ctor,
@@ -139,6 +143,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             #from_container
+
+            #host_meta
 
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {

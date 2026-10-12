@@ -104,6 +104,10 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
+    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
+        Ok(values) => nest_rs_codegen::host_meta_fn(&values),
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let InjectableBody {
         ctor,
@@ -152,6 +156,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
+
+            #host_meta
 
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
@@ -686,6 +692,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     }
 
     pair::GRAPHQL.reject_host_layers(&item.attrs)?;
+    nest_rs_codegen::reject_meta_on_operations(&pair::GRAPHQL, &item.attrs)?;
     reject_http_only_layers(&item.attrs, "GraphQL", "resolver")?;
 
     let query_obj = format_ident!("__{}Query", base);
@@ -696,6 +703,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
     let mut subscription_methods: Vec<TokenStream2> = Vec::new();
     let mut entity_claims: Vec<TokenStream2> = Vec::new();
+    let mut handler_consts: Vec<TokenStream2> = Vec::new();
     // async-graphql allows one `#[ComplexObject]` per parent type.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
     let mut all_guard_paths: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
@@ -761,9 +769,19 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .map(|guard| (cfgs.clone(), guard.clone())),
         );
         let is_field = verb_attr.path().is_ident("field_resolver");
+        let metas = nest_rs_codegen::take_meta(&mut method.attrs)?;
+        if is_field && !metas.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                "a `#[field_resolver]` runs under the root field that produced its parent, and \
+                 declares no `#[meta]` of its own — declare it on that root field, or on the \
+                 resolver struct",
+            ));
+        }
 
         // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
         let mut deleg_attrs = delegated_attrs(&method.attrs);
+        let mut address = lower_camel(&method.sig.ident.unraw().to_string());
         if !is_entity {
             let field = match graphql_name(&method.attrs)? {
                 Some(name) => name,
@@ -783,6 +801,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 let root = nest_rs_codegen::key_as_written(verb_attr.path());
                 (format!("{root} {field}"), format!("#[{root}] {field}"))
             };
+            address = field;
             declared.declare(
                 Collision::Marker,
                 "field",
@@ -866,6 +885,28 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             } else {
                 RootKind::Subscription
             };
+            handler_consts.push(nest_rs_codegen::handler_const(
+                &nest_rs_codegen::HandlerSite {
+                    unit: match root_kind {
+                        RootKind::Subscription => quote!(::nest_rs_graphql::unit::SUBSCRIPTION),
+                        RootKind::Query | RootKind::Mutation => {
+                            quote!(::nest_rs_graphql::unit::FIELD)
+                        }
+                    },
+                    self_ty: &self_ty,
+                    host_name: &base,
+                    method: &method_name,
+                    address: quote!(#address),
+                    posture: if is_public {
+                        nest_rs_codegen::SitePosture::Public
+                    } else {
+                        nest_rs_codegen::SitePosture::Gated
+                    },
+                    host_meta: nest_rs_codegen::HostMeta::Struct,
+                    method_meta: &metas,
+                    cfgs: &cfgs,
+                },
+            ));
             // async-graphql's subscription derive builds paths out of the return
             // type, and Rust refuses an `impl Trait` inside a path (E0562).
             if root_kind == RootKind::Subscription
@@ -1205,6 +1246,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         #item
+
+        impl #self_ty {
+            #(#handler_consts)*
+        }
 
         #capability_bounds
 

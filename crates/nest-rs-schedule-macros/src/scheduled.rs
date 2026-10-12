@@ -44,8 +44,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let provider_name = provider.unraw().to_string();
+    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
+        Ok(values) => values,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
+    let mut handler_consts: Vec<TokenStream2> = Vec::new();
     let mut refusals: Option<syn::Error> = None;
 
     for impl_item in item.items.iter_mut() {
@@ -105,14 +110,38 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let timeout_tokens = job_timeout(timeout, &quote!(::nest_rs_schedule));
         let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
         let replicas_tokens = replicas.tokens(&quote!(::nest_rs_schedule));
+        let method_ident = method.sig.ident.clone();
+        let method_name = method_ident.unraw().to_string();
+        let cfgs = cfg_attrs(&method.attrs);
+        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+            Ok(values) => values,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        // The job's pinned key, else the provider and method its derived key ends with.
+        let address = match &key {
+            Some(key) => quote!(#key),
+            None => {
+                let derived = format!("{provider_name}::{method_name}");
+                quote!(#derived)
+            }
+        };
+        handler_consts.push(nest_rs_codegen::handler_const(
+            &nest_rs_codegen::HandlerSite {
+                unit: quote!(::nest_rs_schedule::unit::TICK),
+                self_ty: &self_ty,
+                host_name: &provider,
+                method: &method_ident,
+                address,
+                posture: nest_rs_codegen::SitePosture::System,
+                host_meta: nest_rs_codegen::HostMeta::Values(&host_meta),
+                method_meta: &metas,
+                cfgs: &cfgs,
+            },
+        ));
         let key_tokens = match key {
             Some(key) => quote! { ::std::option::Option::Some(#key) },
             None => quote! { ::std::option::Option::None },
         };
-
-        let method_ident = method.sig.ident.clone();
-        let method_name = method_ident.unraw().to_string();
-        let cfgs = cfg_attrs(&method.attrs);
         let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_ident(&__provider)));
 
         submissions.push(quote! {
@@ -148,6 +177,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let host_check = pair::SCHEDULED.provider_host_check(&self_ty);
     let out = quote! {
         #item
+
+        impl #self_ty {
+            #(#handler_consts)*
+        }
+
         #host_check
         #(#submissions)*
     };

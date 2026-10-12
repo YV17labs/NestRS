@@ -17,6 +17,7 @@ mod parameters;
 mod propagate;
 mod registry;
 mod scope;
+mod unit;
 
 use std::net::TcpListener as StdTcpListener;
 use std::time::Duration;

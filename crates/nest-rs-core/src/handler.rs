@@ -174,6 +174,12 @@ pub const fn declare_handler(declared: HandlerDeclaration) -> Handler {
     }
 }
 
+/// One `#[meta]` value as a level holds it: shared by every unit its site
+/// serves, so it is `Send + Sync`, and read by type, so it is `'static`.
+pub fn meta_value<M: Any + Send + Sync>(value: M) -> Box<dyn Any + Send + Sync> {
+    Box::new(value)
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;

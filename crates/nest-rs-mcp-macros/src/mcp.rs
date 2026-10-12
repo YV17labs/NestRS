@@ -49,6 +49,10 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         Ok(paths) => paths,
         Err(err) => return refused_beside(err, item),
     };
+    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
+        Ok(values) => nest_rs_codegen::host_meta_fn(&values),
+        Err(err) => return refused_beside(err, item),
+    };
     let capability_bounds =
         guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::McpGuard));
 
@@ -89,6 +93,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
+
+            #host_meta
 
             /// Host-scope `#[use_guards(...)]`, read by the impl half when it
             /// composes an operation's chain.

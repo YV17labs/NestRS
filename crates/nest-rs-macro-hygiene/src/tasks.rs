@@ -6,7 +6,11 @@ use nest_rs::schedule::{CronExpression, scheduled};
 #[injectable]
 pub struct HygieneTasks;
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 #[scheduled]
+#[meta(HygieneLimit(100))]
 impl HygieneTasks {
     /// Interval form, carrying every shared key.
     #[every(
@@ -22,6 +26,7 @@ impl HygieneTasks {
 
     /// One-shot form.
     #[after("1s", transactional = false)]
+    #[meta(HygieneLimit(10))]
     async fn warmup(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }

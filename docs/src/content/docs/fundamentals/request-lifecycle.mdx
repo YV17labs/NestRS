@@ -87,11 +87,18 @@ controller guard.
 
 ## `#[public]` and `#[meta]`
 
-`#[public]` and `#[meta(EXPR)]` are not layers — they are **route metadata** a
-guard reads after routing. `#[public]` marks a route as anonymous-admissible
-(the guard admits it through); `#[meta]` attaches per-handler data a guard reads
-via `nest_rs::http::Reflector`. A denial is an `Ok(4xx)` response, never an
-`Err` — filters never see it; global interceptors do.
+`#[public]` and `#[meta(EXPR)]` are not layers — they are **declarations** a
+layer reads. `#[public]` marks a route as anonymous-admissible (the guard admits
+it through); `#[meta]` declares typed data on a route or its controller, which a
+guard reads via `nest_rs::http::Reflector`. Each route keeps one declaration for
+the process, its values built on first read; its layers read it through a
+pointer, so nothing is copied per request. A denial is an `Ok(4xx)` response,
+never an `Err` — filters never see it; global interceptors do.
+
+Only an HTTP route's `#[meta]` is read. A resolver, gateway, MCP host,
+processor, scheduled tasks or listeners, and each of their methods, take
+`#[meta]` and keep it with their site, but no guard on those edges reads it: a
+value declared there changes nothing.
 
 ## What fails at boot
 

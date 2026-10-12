@@ -9,7 +9,9 @@ mod scheduled;
 /// Orchestrator on a provider's `impl` block: each method tagged with a trigger
 /// attribute is submitted as a `ScheduledMethod` to the link-time inventory the
 /// [`Scheduler`](../nest_rs_schedule/struct.Scheduler.html) drains at boot. The
-/// struct itself must be a regular `#[injectable]`.
+/// struct itself must be a regular `#[injectable]`. A `#[meta(EXPR)]` on the
+/// impl block is declared for every trigger, one on a method for it alone, read
+/// over the block's of the same type.
 ///
 /// Per-method trigger attributes (exactly one per method):
 ///

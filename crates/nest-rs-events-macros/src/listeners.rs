@@ -44,7 +44,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let provider_name = provider_ident.unraw().to_string();
     let provider_snake = snake_case(&provider_name);
 
+    let host_meta = match nest_rs_codegen::take_meta(&mut item.attrs) {
+        Ok(values) => values,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let mut emissions: Vec<TokenStream2> = Vec::new();
+    let mut handler_consts: Vec<TokenStream2> = Vec::new();
     // `inventory` yields link order; this index restores the written one.
     let mut declaration_index: usize = 0;
 
@@ -105,6 +110,23 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let declaration = proc_macro2::Literal::usize_unsuffixed(declaration_index);
         declaration_index += 1;
         let cfgs = cfg_attrs(&method.attrs);
+        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+            Ok(values) => values,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        handler_consts.push(nest_rs_codegen::handler_const(
+            &nest_rs_codegen::HandlerSite {
+                unit: quote!(::nest_rs_events::unit::DISPATCH),
+                self_ty: &self_ty,
+                host_name: &provider_ident,
+                method: &method_ident,
+                address: quote!(::core::stringify!(#event_ty)),
+                posture: nest_rs_codegen::SitePosture::System,
+                host_meta: nest_rs_codegen::HostMeta::Values(&host_meta),
+                method_meta: &metas,
+                cfgs: &cfgs,
+            },
+        ));
         let call = await_if_async(
             &method.sig,
             quote!(<#self_ty>::#method_ident(&__provider, __event)),
@@ -148,6 +170,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let out = quote! {
         #item
+
+        impl #self_ty {
+            #(#handler_consts)*
+        }
 
         #host_check
         #(#emissions)*

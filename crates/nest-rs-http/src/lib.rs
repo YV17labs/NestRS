@@ -240,6 +240,7 @@ pub mod __private {
     pub use crate::endpoint::{SelfMountGuardWrap, with_data};
     pub use crate::interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
     pub use crate::matched::matched_template;
+    pub use crate::metadata::HandlerRef;
     pub use crate::response::IntoResult;
     pub use crate::route_template::poem_pattern;
     pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};

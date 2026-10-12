@@ -100,7 +100,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
-    if let Err(err) = pair::WS.reject_host_layers(&item.attrs) {
+    if let Err(err) = pair::WS
+        .reject_host_layers(&item.attrs)
+        .and_then(|()| nest_rs_codegen::reject_meta_on_operations(&pair::WS, &item.attrs))
+    {
         return err.to_compile_error().into();
     }
     let self_ty = item.self_ty.clone();
@@ -119,6 +122,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // Every hook override is emitted under its method's `#[cfg]`; two compiled in
     // are two definitions of one trait method, which rustc refuses.
     let mut hooks: Vec<TokenStream2> = Vec::new();
+    let mut handler_consts: Vec<TokenStream2> = Vec::new();
     // A second declaration is refused by the macro without `#[cfg]`, and by
     // rustc through the marker when both are compiled in.
     let mut declared = DispatchKeys::new(
@@ -151,6 +155,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let hook = ["on_connect", "on_disconnect"]
             .into_iter()
             .find(|name| method.attrs[index].path().is_ident(name));
+
         let role_attr = method.attrs[index].clone();
         let role_span = role_attr.path().span();
         let (kind, identity, key) = match hook {
@@ -182,6 +187,25 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
         if let Some(hook) = hook {
+            let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+                Ok(values) => values,
+                Err(err) => return err.to_compile_error().into(),
+            };
+            // A hook runs on a connection the upgrade's guards admitted.
+            handler_consts.push(message_handler(
+                if hook == "on_connect" {
+                    quote!(::nest_rs_ws::unit::CONNECT)
+                } else {
+                    quote!(::nest_rs_ws::unit::DISCONNECT)
+                },
+                &self_ty,
+                &host,
+                method,
+                &identity,
+                nest_rs_codegen::SitePosture::Gated,
+                &metas,
+                &cfgs,
+            ));
             if let Err(err) = take_flag_attr(&mut method.attrs, hook) {
                 return err.to_compile_error().into();
             }
@@ -223,6 +247,23 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
+        let metas = match nest_rs_codegen::take_meta(&mut method.attrs) {
+            Ok(values) => values,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        handler_consts.push(message_handler(
+            quote!(::nest_rs_ws::unit::MESSAGE),
+            &self_ty,
+            &host,
+            method,
+            &identity,
+            match posture {
+                Posture::Public => nest_rs_codegen::SitePosture::Public,
+                Posture::Authorize { .. } => nest_rs_codegen::SitePosture::Gated,
+            },
+            &metas,
+            &cfgs,
+        ));
         all_message_layers.extend(
             guards
                 .iter()
@@ -454,6 +495,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     quote! {
         #item
 
+        impl #self_ty {
+            #(#handler_consts)*
+        }
+
         #capability_bounds
 
         #markers
@@ -575,6 +620,35 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
         return ReturnKind::ResultUnit;
     }
     ReturnKind::Result
+}
+
+/// The `Handler` one `#[messages]` method declares: an event's `ws.message`, a
+/// hook's `ws.connect` or `ws.disconnect`, addressed by the event or the hook.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one fact the site declares; a struct would only rename them"
+)]
+fn message_handler(
+    unit: TokenStream2,
+    self_ty: &Type,
+    host: &syn::Ident,
+    method: &ImplItemFn,
+    address: &str,
+    posture: nest_rs_codegen::SitePosture,
+    metas: &[syn::Expr],
+    cfgs: &[TokenStream2],
+) -> TokenStream2 {
+    nest_rs_codegen::handler_const(&nest_rs_codegen::HandlerSite {
+        unit,
+        self_ty,
+        host_name: host,
+        method: &method.sig.ident,
+        address: quote!(#address),
+        posture,
+        host_meta: nest_rs_codegen::HostMeta::Struct,
+        method_meta: metas,
+        cfgs,
+    })
 }
 
 /// Emit the `Gateway` override for `on_connect` / `on_disconnect` delegating

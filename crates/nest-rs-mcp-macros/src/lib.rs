@@ -20,6 +20,7 @@ mod mcp_impl;
 /// `name` / `title` override `McpOptions::server` per field for that endpoint;
 /// two hosts on one path both declaring fails boot. `version` and
 /// `instructions` are refused: they are declared once on `McpOptions::server`.
+/// A `#[meta(EXPR)]` below it is declared for every operation of the host.
 ///
 /// # Expands to
 ///
@@ -45,7 +46,8 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// (`#[authorize(Action, Entity)]` or `#[public]`), per-argument pipes inside
 /// `Parameters<…>`, and response masking. The advertised capabilities are
 /// **derived** from the roles present, so a host cannot route what it forgot to
-/// declare.
+/// declare. `#[meta(EXPR)]` (repeatable) on an operation declares a value for
+/// it, read over the host's of the same type.
 ///
 /// A host that hand-writes `ServerHandler` (resources, completion) writes rmcp
 /// directly and has no `#[tools]` block at all — `#[tools]` on a trait impl is

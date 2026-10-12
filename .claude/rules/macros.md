@@ -143,6 +143,11 @@ fits on one line (`CLAUDE.md`, *Families*). A value refusal opens with its site
 shows without the source frame. No value is handed to `syn`'s own sentence or to
 `format_ident!`, which names neither the decorator nor the key, or panics.
 
+**`#[meta(EXPR)]` is read alike at every pair**: on the host (the struct, or
+the impl block a provider pair decorates) and on each dispatched method, into
+the site's one `Handler`, built on first read; two values naming one type at one
+level are refused (`nest_rs_codegen::take_meta`).
+
 **The worker-job family answers every key at every member.** `#[process]`,
 `#[every]`, `#[cron]` and `#[after]` are one `nest_rs_codegen::job` table (held
 by its exhaustive `match`): each cell is built, or refused with the fact that

@@ -163,7 +163,7 @@ pub mod __private {
         site_chains, take_site_refusal,
     };
     pub use crate::error_message::__private::find_in_chain;
-    pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler};
+    pub use crate::handler::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
     pub use crate::layer_chain::__private::{
         ResolvedLayer, SiteChains, check_specs_resolvable, compose_chain, dedup_bucket,
         resolve_global_layers,

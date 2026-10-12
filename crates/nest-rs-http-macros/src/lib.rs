@@ -18,7 +18,9 @@ mod routes;
 /// Class-level `#[use_guards(...)]` / `#[use_filters(...)]` /
 /// `#[use_interceptors(...)]` placed *below* `#[controller]` apply to every
 /// route the controller mounts; they stack *outside* any per-route binding
-/// (first listed outermost). An optional `version = "1"` enables URI versioning.
+/// (first listed outermost). A `#[meta(EXPR)]` below it is read by every route,
+/// unless the route declares a value of the same type. An optional
+/// `version = "1"` enables URI versioning.
 /// The `Discoverable` impl is emitted by `#[routes]`.
 ///
 /// # Expands to
@@ -64,7 +66,9 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   innermost of the response families.
 /// - `#[use_interceptors(...)]` — container-resolved interceptors.
 /// - `#[meta(EXPR)]` (repeatable) — typed metadata read back by a guard with
-///   `nest_rs_http::Reflector` (value type: `Clone + Send + Sync + 'static`).
+///   `nest_rs_http::Reflector`, over a value of the same type the controller
+///   declares (value type: `Send + Sync + 'static`; evaluated once per process,
+///   on the first read, so an expression reading runtime state reads it once).
 /// - `#[api(summary, description, tags(...), response, multipart,
 ///   response_content_type, error(...), deprecated)]` — OpenAPI facets;
 ///   `deprecated = "YYYY-MM-DD"` also stamps the `Deprecation` header (RFC 9745)

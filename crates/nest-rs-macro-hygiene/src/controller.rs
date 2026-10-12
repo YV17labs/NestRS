@@ -22,7 +22,11 @@ pub struct HygieneForm {
     pub file: String,
 }
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 #[controller(path = "/hygiene")]
+#[meta(HygieneLimit(100))]
 pub struct HygieneController;
 
 #[routes]
@@ -31,6 +35,7 @@ impl HygieneController {
     /// that reads the request.
     #[post("/echo")]
     #[public]
+    #[meta(HygieneLimit(10))]
     async fn echo(&self, Json(body): Json<HygienePayload>, ip: ClientIp) -> String {
         format!("{} {}", body.name, ip.ip)
     }

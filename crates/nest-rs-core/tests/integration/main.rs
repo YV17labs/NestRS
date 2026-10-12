@@ -15,6 +15,7 @@ mod app;
 mod app_lifecycle;
 mod container;
 mod error_message;
+mod exception_filter;
 mod interceptor;
 mod lifecycle;
 #[cfg(feature = "logging")]

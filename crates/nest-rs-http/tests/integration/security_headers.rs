@@ -97,12 +97,6 @@ async fn a_route_that_sets_corp_keeps_its_value() {
     let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
     let resp = client.get("/pages/badge").send().await;
     resp.assert_status_is_ok();
-    let sent: Vec<_> = resp
-        .0
-        .headers()
-        .get_all("cross-origin-resource-policy")
-        .iter()
-        .collect();
-    assert_eq!(sent, ["cross-origin"]);
+    resp.assert_header_all("cross-origin-resource-policy", ["cross-origin"]);
     resp.assert_header("x-frame-options", "DENY");
 }

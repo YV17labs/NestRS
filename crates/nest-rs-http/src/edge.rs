@@ -756,13 +756,7 @@ mod tests {
         let ep = edge(sets_header, None, None, headers);
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status_is_ok();
-        let sniffing: Vec<_> = resp
-            .0
-            .headers()
-            .get_all("x-content-type-options")
-            .iter()
-            .collect();
-        assert_eq!(sniffing, ["handler-value"], "kept whole, never appended to");
+        resp.assert_header_all("x-content-type-options", ["handler-value"]);
         resp.assert_header("x-frame-options", "DENY");
     }
 

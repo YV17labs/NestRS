@@ -19,6 +19,7 @@
 //! the framing cannot be finished, so HTTP/1 closes its connection and HTTP/2
 //! resets its stream alone — and its line files `outcome = panic`.
 
+use std::any::Any;
 use std::future::{Future, poll_fn};
 use std::io::Error as IoError;
 use std::pin::{Pin, pin};
@@ -191,7 +192,7 @@ impl Carried {
 
     /// End the body at a poll that unwound: the panic said once, inside the
     /// request, and the line filed `panic` with what was written.
-    fn unwound(&mut self, payload: &(dyn std::any::Any + Send)) {
+    fn unwound(&mut self, payload: &(dyn Any + Send)) {
         self.continuation.enter(|| {
             self.span.in_scope(|| {
                 nest_rs_core::contained_panic!(
@@ -240,12 +241,12 @@ impl HttpBody for Carried {
                 ..
             } = &mut *this;
             let _entered = span.enter();
+            // Contained, so the process hook leaves the panic to this body.
             continuation.enter(|| {
-                // Contained, so the process hook leaves the panic to this body.
-                let frame = pin!(nest_rs_core::panic::contain(poll_fn(|cx| {
+                pin!(nest_rs_core::panic::contain(poll_fn(|cx| {
                     Pin::new(&mut *inner).poll_frame(cx)
-                })));
-                frame.poll(cx)
+                })))
+                .poll(cx)
             })
         };
         match polled {

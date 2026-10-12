@@ -79,19 +79,13 @@ impl<F: Future> Future for Contained<F> {
                 Err(payload) => {
                     // The last panic raised with its message is the one that got here.
                     let message = panic_message(payload.as_ref());
-                    if let Some(at) = seen.iter().rposition(|seen| seen.message == message) {
+                    if let Some(at) = seen.iter().rposition(|panic| panic.message == message) {
                         remember(payload.as_ref(), seen.remove(at));
                     }
                     Poll::Ready(Err(payload))
                 }
             };
-            for swallowed in seen {
-                unclaimed(
-                    &swallowed.message,
-                    &swallowed.location,
-                    &swallowed.backtrace,
-                );
-            }
+            seen.iter().for_each(unclaimed);
             polled
         })
     }
@@ -173,7 +167,11 @@ pub(crate) fn hook(info: &PanicHookInfo<'_>) {
                 slot.set(held);
             });
         }
-        Report::Event => unclaimed(&message, &location, &Backtrace::capture()),
+        Report::Event => unclaimed(&Seen {
+            message,
+            location,
+            backtrace: Backtrace::capture(),
+        }),
         Report::Stderr => {
             let line = format!("nestrs: panicked at {location}: {}\n", LineSafe(&message));
             #[expect(
@@ -186,15 +184,15 @@ pub(crate) fn hook(info: &PanicHookInfo<'_>) {
 }
 
 /// The hook's one event, for a panic no unit says.
-fn unclaimed(message: &str, location: &str, backtrace: &Backtrace) {
+fn unclaimed(seen: &Seen) {
     let thread = std::thread::current();
-    let backtrace = (backtrace.status() == BacktraceStatus::Captured)
-        .then(|| tracing::field::display(backtrace));
+    let backtrace = (seen.backtrace.status() == BacktraceStatus::Captured)
+        .then(|| tracing::field::display(&seen.backtrace));
     tracing::error!(
         target: crate::target::APP,
         thread = thread.name().unwrap_or("<unnamed>"),
-        { FIELD } = %message,
-        { LOCATION_FIELD } = %location,
+        { FIELD } = %seen.message,
+        { LOCATION_FIELD } = %seen.location,
         backtrace,
         "panicked where no unit of work contains it",
     );

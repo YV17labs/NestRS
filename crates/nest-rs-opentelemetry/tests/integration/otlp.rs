@@ -122,7 +122,7 @@ impl Collector {
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
-fn from_env(vars: &[(&str, &str)]) -> Result<OpenTelemetryConfig, nest_rs_config::ConfigError> {
+fn from_env(vars: &[(&str, &str)]) -> Result<OpenTelemetryConfig, OpenTelemetryError> {
     let mut read = None;
     figment::Jail::expect_with(|jail| {
         for (key, value) in vars {

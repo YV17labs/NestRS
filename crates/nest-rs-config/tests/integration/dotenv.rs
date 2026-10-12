@@ -230,6 +230,42 @@ mod published_before_main {
             Ok(())
         });
     }
+
+    /// The cascade loads before any subscriber exists, so what it reports
+    /// goes to stderr rather than to nobody — and never quotes the line.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn what_the_cascade_reports_before_any_subscriber_reaches_stderr() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "CASCADE_PROBE=1\nsk_live_no_equals_sign\n")?;
+
+            let child = crate::child(CHILD_TEST)
+                .current_dir(jail.directory())
+                .env_remove("CASCADE_PROBE")
+                .output()
+                .expect("the child runs");
+
+            let stdout = String::from_utf8_lossy(&child.stdout);
+            let stderr = String::from_utf8_lossy(&child.stderr);
+            assert!(child.status.success(), "{stdout}{stderr}");
+            let said: Vec<&str> = stderr
+                .lines()
+                .filter(|line| line.contains("skipped malformed .env lines"))
+                .collect();
+            assert_eq!(said.len(), 1, "one line, on stderr: {stderr}");
+            assert!(said[0].starts_with("nestrs: "), "{}", said[0]);
+            assert!(said[0].contains("skipped=1"), "{}", said[0]);
+            assert!(said[0].contains(".env"), "the file it read: {}", said[0]);
+            assert!(
+                !stderr.contains("sk_live"),
+                "the line is never quoted: {stderr}"
+            );
+            Ok(())
+        });
+    }
 }
 
 /// A process that declares no environment runs as production from its first

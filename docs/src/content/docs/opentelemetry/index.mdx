@@ -106,6 +106,12 @@ pinned `OpenTelemetryConfig`.
 | `<PREFIX>_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
 | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | `tls` | the system's authorities, no client certificate |
 
+The three `<PREFIX>_LOG*` variables are read by the kernel's one parser, as
+the baseline logger reads them: a value that does not parse fails `init` with
+`OpenTelemetryError::LogSettings`, naming the variable and never its value, and
+a filter pinned with `with_log_filter` is checked the same way at `init_with`,
+naming `OpenTelemetryConfig::log_filter`.
+
 The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
 the subscriber stays console-only; the W3C propagator is still installed so
 an inbound `traceparent` is continued behind a trusted proxy and the response
@@ -215,7 +221,8 @@ async fn users_list_returns_a_page() {
 ```
 
 `with_test_telemetry` installs console-only telemetry, honouring
-`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control). It is
+`<PREFIX>_LOG` then `RUST_LOG` (default `warn` for noise control); a setting
+that does not parse fails the test, naming it. It is
 idempotent; the first test to run wins, the rest no-op. It is gated by the
 `opentelemetry` feature on `nest-rs-testing`.
 

@@ -1,18 +1,21 @@
 //! Baseline console logging, installed at boot when no global `tracing`
 //! subscriber is set; an observability stack installed in `main` first is left
-//! in place. Configuration is env-only:
+//! in place. Configuration is env-only, read by [`LogSettings`]:
 //!
 //! - `<PREFIX>_LOG` (falling back to `RUST_LOG`) — `EnvFilter` directives,
-//!   default `info`. Set-but-unparseable aborts boot.
+//!   default `info`.
 //! - `<PREFIX>_LOG_FORMAT` — `text` or `json`; defaults by build profile
-//!   (text in debug, JSON in release), unrecognized values keep the default.
+//!   (text in debug, JSON in release).
 //! - `<PREFIX>_LOG_SOURCE_LOCATION` — append the emitting `file:line` to each
 //!   event; off by default (it leaks source paths).
 //!
-//! The same variables drive the console layer of `nest-rs-opentelemetry`.
-//! Behind the default `logging` cargo feature.
+//! Unset or blank is the default; a value that does not parse aborts the boot,
+//! naming the variable and never quoting the value. The same variables drive
+//! the console layer of `nest-rs-opentelemetry`. Behind the default `logging`
+//! cargo feature.
 
 use std::borrow::Cow;
+use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 
 use anyhow::Result;
@@ -20,6 +23,7 @@ use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::field::VisitOutput;
+use tracing_subscriber::filter::{LevelParseError, ParseError};
 use tracing_subscriber::fmt::format::{DefaultVisitor, JsonFields, Writer};
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
@@ -74,19 +78,149 @@ impl LogFormat {
             Self::Json
         }
     }
+}
 
-    /// [`parse`](Self::parse) falling back to [`by_profile`](Self::by_profile).
-    pub fn resolve(raw: Option<&str>) -> Self {
-        raw.and_then(Self::parse).unwrap_or_else(Self::by_profile)
+/// The filter a process logs under when neither `<PREFIX>_LOG` nor `RUST_LOG`
+/// sets one.
+const DEFAULT_FILTER: &str = "info";
+
+/// The ecosystem's own filter variable, read after `<PREFIX>_LOG`.
+const RUST_LOG: &str = "RUST_LOG";
+
+/// The console settings every subscriber the framework ships reads:
+/// `<PREFIX>_LOG` (else `RUST_LOG`), `<PREFIX>_LOG_FORMAT` and
+/// `<PREFIX>_LOG_SOURCE_LOCATION`.
+///
+/// They are read from the process environment, which `#[nest_rs::main]` fills
+/// with the `.env` cascade before `main` runs. A subscriber builds its filter
+/// with `EnvFilter::new(&settings.filter)`, which cannot lose a directive the
+/// read already checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LogSettings {
+    /// An `EnvFilter` directive, already checked to parse.
+    pub filter: String,
+    /// The console format.
+    pub format: LogFormat,
+    /// Whether each line carries the emitting `file:line`.
+    pub source_location: bool,
+}
+
+impl LogSettings {
+    /// Read and check all three; unset or blank is the default (`info`,
+    /// [`LogFormat::by_profile`], `false`), a value that does not parse is
+    /// refused naming its variable.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the logging bootstrap runs before any config exists"
+    )]
+    pub fn from_env() -> Result<Self, LogSettingsError> {
+        Self::from_lookup(|name| std::env::var_os(name))
+    }
+
+    fn from_lookup(get: impl Fn(&str) -> Option<OsString>) -> Result<Self, LogSettingsError> {
+        // `None` when unset or blank; `Some(None)` when set to a value that is
+        // not UTF-8, which no setting parses.
+        let set = |name: &str| match get(name)?.into_string() {
+            Ok(value) if value.trim().is_empty() => None,
+            Ok(value) => Some(Some(value)),
+            Err(_) => Some(None),
+        };
+
+        let filter = match [EnvPrefix::var(var::FILTER), RUST_LOG.to_owned()]
+            .into_iter()
+            .find_map(|name| set(&name).map(|directive| (name, directive)))
+        {
+            Some((setting, Some(directive))) => {
+                Self::check_filter(&directive, &setting)?;
+                directive
+            }
+            Some((setting, None)) => {
+                return Err(LogSettingsError::Filter {
+                    setting,
+                    reason: "the value is not UTF-8",
+                });
+            }
+            None => DEFAULT_FILTER.to_owned(),
+        };
+
+        let format_var = EnvPrefix::var(var::FORMAT);
+        let format = match set(&format_var) {
+            Some(raw) => raw
+                .as_deref()
+                .and_then(LogFormat::parse)
+                .ok_or(LogSettingsError::Format { var: format_var })?,
+            None => LogFormat::by_profile(),
+        };
+
+        let location_var = EnvPrefix::var(var::SOURCE_LOCATION);
+        let source_location = match set(&location_var) {
+            Some(raw) => raw
+                .as_deref()
+                .and_then(crate::parse_bool)
+                .ok_or(LogSettingsError::SourceLocation { var: location_var })?,
+            None => false,
+        };
+
+        Ok(Self {
+            filter,
+            format,
+            source_location,
+        })
+    }
+
+    /// Check a directive set in code, naming `setting` — the field that
+    /// carries it — in the refusal.
+    pub fn check_filter(directive: &str, setting: &str) -> Result<(), LogSettingsError> {
+        EnvFilter::try_new(directive)
+            .map(drop)
+            .map_err(|error| LogSettingsError::Filter {
+                setting: setting.to_owned(),
+                reason: filter_fault(&error),
+            })
     }
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the logging bootstrap runs before any config exists"
-)]
-fn bool_from_env(name: &str) -> bool {
-    std::env::var(name).ok().and_then(|v| crate::parse_bool(&v)) == Some(true)
+/// What is wrong with a directive, said by its kind: `ParseError`'s own
+/// sentence quotes a level or a field pattern it could not read.
+fn filter_fault(error: &ParseError) -> &'static str {
+    match std::error::Error::source(error) {
+        None => {
+            "a directive is malformed (each is target[span{field=value}]=level, comma-separated)"
+        }
+        Some(cause) if cause.is::<LevelParseError>() => {
+            "a level is not one of off, error, warn, info, debug, trace"
+        }
+        Some(_) => "a field filter does not parse",
+    }
+}
+
+/// A console setting that does not parse; it names the setting, never its
+/// value.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LogSettingsError {
+    /// `<PREFIX>_LOG`, `RUST_LOG` or a filter set in code is not an
+    /// `EnvFilter` directive.
+    #[error("{setting} is not a log filter: {reason}")]
+    Filter {
+        /// The variable or the field carrying the directive.
+        setting: String,
+        /// What is wrong with it, by kind.
+        reason: &'static str,
+    },
+    /// `<PREFIX>_LOG_FORMAT` is neither `text` nor `json`.
+    #[error("{var} must be `text` or `json`")]
+    Format {
+        /// The variable.
+        var: String,
+    },
+    /// `<PREFIX>_LOG_SOURCE_LOCATION` is not a boolean.
+    #[error("{var} must be a boolean: true/false, 1/0, yes/no or on/off")]
+    SourceLocation {
+        /// The variable.
+        var: String,
+    },
 }
 
 /// SGR sequences spelled out: tracing-subscriber's own `Style` is private.
@@ -556,50 +690,25 @@ impl Visit for EventSource {
     fn record_debug(&mut self, _field: &Field, _value: &dyn fmt::Debug) {}
 }
 
-/// Build the filter from `<PREFIX>_LOG` / `RUST_LOG` / `"info"`; a set-but-
-/// unparseable directive is an error, never the default.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the logging bootstrap runs before any config exists"
-)]
-fn filter_from_env() -> Result<EnvFilter> {
-    let log_var = EnvPrefix::var(var::FILTER);
-    let (var, spec) = match std::env::var(&log_var) {
-        Ok(v) => (log_var.as_str(), v),
-        Err(_) => match std::env::var("RUST_LOG") {
-            Ok(v) => ("RUST_LOG", v),
-            Err(_) => ("", "info".to_owned()),
-        },
-    };
-    EnvFilter::try_new(&spec)
-        .map_err(|e| anyhow::anyhow!("invalid log filter {spec:?} (from {var}): {e}"))
-}
-
 /// Install the fallback console subscriber unless one is already set.
 pub(crate) fn init_fallback() -> Result<()> {
-    if tracing::dispatcher::has_been_set() {
+    if crate::process_start::subscriber_set() {
         return Ok(());
     }
-    let filter = filter_from_env()?;
-    let source_location = bool_from_env(&EnvPrefix::var(var::SOURCE_LOCATION));
-    let builder = tracing_subscriber::fmt().with_env_filter(filter);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the logging bootstrap runs before any config exists"
-    )]
-    let format = std::env::var(EnvPrefix::var(var::FORMAT)).ok();
+    let settings = LogSettings::from_env()?;
+    let builder = tracing_subscriber::fmt().with_env_filter(EnvFilter::new(&settings.filter));
     #[expect(
         clippy::let_underscore_must_use,
         reason = "an Err is a subscriber already installed, which the fallback steps aside for"
     )]
-    let _ = match LogFormat::resolve(format.as_deref()) {
+    let _ = match settings.format {
         LogFormat::Text => builder
-            .event_format(TextFormat::new(source_location))
+            .event_format(TextFormat::new(settings.source_location))
             .try_init(),
         // `.json()` sets the field formatter only; the envelope is `JsonFormat`'s.
         LogFormat::Json => builder
             .json()
-            .event_format(JsonFormat::new(source_location))
+            .event_format(JsonFormat::new(settings.source_location))
             .try_init(),
     };
     Ok(())
@@ -1113,32 +1222,151 @@ mod tests {
         assert_eq!(buf, "src/lib.rs:", "{buf:?}");
     }
 
+    /// The settings `set` describes, every other variable unset.
+    fn settings_under(set: &[(String, &str)]) -> Result<LogSettings, LogSettingsError> {
+        LogSettings::from_lookup(|name| {
+            set.iter()
+                .find(|(variable, _)| variable == name)
+                .map(|(_, value)| OsString::from(value))
+        })
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn format_resolves_canonical_names_case_insensitively() {
-        assert_eq!(LogFormat::resolve(Some("json")), LogFormat::Json);
-        assert_eq!(LogFormat::resolve(Some("JSON")), LogFormat::Json);
-        assert_eq!(LogFormat::resolve(Some("  text  ")), LogFormat::Text);
+    fn a_value_that_is_not_utf8_is_refused_naming_its_variable() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        for variable in [
+            EnvPrefix::var(var::FILTER),
+            RUST_LOG.to_owned(),
+            EnvPrefix::var(var::FORMAT),
+            EnvPrefix::var(var::SOURCE_LOCATION),
+        ] {
+            let refused = LogSettings::from_lookup(|name| {
+                (name == variable).then(|| OsString::from_vec(b"info\xff".to_vec()))
+            })
+            .expect_err("a value that is not UTF-8 is set, and parses as nothing");
+            let said = refused.to_string();
+            assert!(said.starts_with(&format!("{variable} ")), "{said}");
+            assert!(!said.contains("info"), "the value is never quoted: {said}");
+        }
     }
 
     #[test]
-    fn format_defaults_by_build_profile_when_absent_or_unrecognized() {
-        let expected = if cfg!(debug_assertions) {
-            LogFormat::Text
-        } else {
-            LogFormat::Json
+    fn every_setting_unset_or_blank_is_its_default() {
+        let defaults = LogSettings {
+            filter: "info".to_owned(),
+            format: LogFormat::by_profile(),
+            source_location: false,
         };
-        assert_eq!(LogFormat::resolve(None), expected);
-        assert_eq!(LogFormat::resolve(Some("yaml")), expected);
+        assert_eq!(settings_under(&[]).expect("the defaults"), defaults);
+        let blank = [
+            (EnvPrefix::var(var::FILTER), " "),
+            (RUST_LOG.to_owned(), ""),
+            (EnvPrefix::var(var::FORMAT), ""),
+            (EnvPrefix::var(var::SOURCE_LOCATION), "  "),
+        ];
+        assert_eq!(settings_under(&blank).expect("the defaults"), defaults);
     }
 
     #[test]
-    fn a_valid_filter_directive_parses() {
-        assert!(EnvFilter::try_new("debug,hyper=warn").is_ok());
+    fn the_format_reads_its_two_names_trimmed_and_in_any_case() {
+        for (raw, format) in [
+            (" JSON ", LogFormat::Json),
+            ("json", LogFormat::Json),
+            ("text", LogFormat::Text),
+            ("Text", LogFormat::Text),
+        ] {
+            let read = settings_under(&[(EnvPrefix::var(var::FORMAT), raw)]).expect(raw);
+            assert_eq!(read.format, format, "{raw:?}");
+        }
     }
 
     #[test]
-    fn an_invalid_filter_directive_is_rejected() {
-        assert!(EnvFilter::try_new("foo=notalevel").is_err());
+    fn a_format_that_does_not_parse_is_refused_naming_the_variable_and_not_the_value() {
+        let variable = EnvPrefix::var(var::FORMAT);
+        let refused = settings_under(&[(variable.clone(), "jsno")]).expect_err("not a format");
+
+        assert!(
+            matches!(&refused, LogSettingsError::Format { var } if *var == variable),
+            "{refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(said.contains(&variable), "{said}");
+        assert!(!said.contains("jsno"), "{said}");
+    }
+
+    #[test]
+    fn a_source_location_that_is_not_a_boolean_is_refused_naming_the_variable() {
+        let variable = EnvPrefix::var(var::SOURCE_LOCATION);
+        let refused = settings_under(&[(variable.clone(), "ture")]).expect_err("not a boolean");
+
+        assert!(
+            matches!(&refused, LogSettingsError::SourceLocation { var } if *var == variable),
+            "{refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(said.contains(&variable) && !said.contains("ture"), "{said}");
+        assert!(
+            settings_under(&[(variable, "on")])
+                .expect("a boolean")
+                .source_location
+        );
+    }
+
+    #[test]
+    fn rust_log_answers_when_the_prefixed_filter_is_unset_and_is_named_when_refused() {
+        let read = settings_under(&[(RUST_LOG.to_owned(), "debug")]).expect("a filter");
+        assert_eq!(read.filter, "debug");
+
+        let first = settings_under(&[
+            (EnvPrefix::var(var::FILTER), "warn"),
+            (RUST_LOG.to_owned(), "debug"),
+        ])
+        .expect("a filter");
+        assert_eq!(first.filter, "warn", "the prefixed variable wins");
+
+        let refused =
+            settings_under(&[(RUST_LOG.to_owned(), "billing=notalevel")]).expect_err("refused");
+        assert!(
+            matches!(&refused, LogSettingsError::Filter { setting, .. } if setting == RUST_LOG),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_wrong_level_is_said_by_its_kind_without_the_directive() {
+        let refused = LogSettings::check_filter("billing=notalevel", "f").expect_err("a level");
+        let said = refused.to_string();
+
+        assert!(said.starts_with("f is not a log filter: "), "{said}");
+        assert!(said.contains("a level is not one of"), "{said}");
+        assert!(!said.contains("billing"), "{said}");
+        assert!(!said.contains("notalevel"), "{said}");
+    }
+
+    #[test]
+    fn a_malformed_directive_is_said_by_its_kind() {
+        let said = LogSettings::check_filter("billing[charge", "f")
+            .expect_err("an unclosed span")
+            .to_string();
+        assert!(said.contains("a directive is malformed"), "{said}");
+        assert!(!said.contains("charge"), "{said}");
+    }
+
+    #[test]
+    fn a_field_pattern_that_does_not_compile_is_said_by_its_kind_without_the_pattern() {
+        let said = LogSettings::check_filter("billing[{card=sk_live(}]=debug", "f")
+            .expect_err("a field pattern")
+            .to_string();
+        assert!(said.contains("a field filter does not parse"), "{said}");
+        assert!(!said.contains("sk_live"), "{said}");
+    }
+
+    #[test]
+    fn a_valid_directive_passes_the_check() {
+        LogSettings::check_filter("debug,hyper=warn,billing[charge{card}]=trace", "f")
+            .expect("valid");
     }
 
     /// `EnvFilter` matches a target by raw `starts_with`, not by `::` segment —

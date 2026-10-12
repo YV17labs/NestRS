@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Floor, endpoint_shown, env_var,
+    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Floor, endpoint_shown,
 };
-use nest_rs_core::EnvPrefix;
-use nest_rs_core::logging::var;
-use nest_rs_core::parse_bool;
+use nest_rs_core::logging::LogSettings;
+
+use crate::error::OpenTelemetryError;
 
 /// The OTel SDK's own metric export period.
 pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
@@ -34,12 +34,12 @@ pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds::secs(
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
 /// The console layer reads the framework-wide logging family (`<PREFIX>_LOG`,
-/// `<PREFIX>_LOG_FORMAT`, `<PREFIX>_LOG_SOURCE_LOCATION`, see
-/// [`logging::var`](nest_rs_core::logging::var)); everything OTel-specific lives
-/// under `<PREFIX>_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,
-/// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,
-/// METRIC_INTERVAL_SECS,TLS_CA_CERT,TLS_CERT,TLS_KEY}` (see [`EnvPrefix`]). The
-/// OTel exporter is wired only when `otlp_endpoint` is set.
+/// `<PREFIX>_LOG_FORMAT`, `<PREFIX>_LOG_SOURCE_LOCATION`) through the kernel's
+/// [`LogSettings`]; everything OTel-specific lives under
+/// `<PREFIX>_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,SERVICE_ENVIRONMENT,
+/// SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,METRIC_INTERVAL_SECS,
+/// TLS_CA_CERT,TLS_CERT,TLS_KEY}` (see [`EnvPrefix`](nest_rs_core::EnvPrefix)).
+/// The OTel exporter is wired only when `otlp_endpoint` is set.
 ///
 /// `Debug` shows the endpoint through [`endpoint_shown`]: its userinfo and
 /// query may carry a collector's credential.
@@ -54,7 +54,8 @@ pub struct OpenTelemetryConfig {
     pub deployment_environment: Option<String>,
     /// `service.instance.id`; defaults to a fresh UUID v7 per process.
     pub service_instance_id: Option<String>,
-    /// `EnvFilter` syntax; applied to console layer and OTel log appender.
+    /// `EnvFilter` syntax; applied to console layer and OTel log appender, and
+    /// checked at [`init_with`](crate::OpenTelemetry::init_with).
     pub log_filter: String,
     /// Console output shape; defaults by build profile (see [`new`](Self::new)).
     /// The OTLP appender is unaffected.
@@ -107,20 +108,6 @@ pub(crate) fn otlp_endpoint(raw: &str, var: &str) -> Result<url::Url, ConfigErro
         .map_err(|error| ConfigError::parse(var, format!("does not parse as a URL: {error}")))
 }
 
-/// Report a set-but-unparseable **logging-family** variable on stderr, keeping
-/// the default as the kernel's own reader does; this crate's own variables are
-/// refused through `from_env`'s `Result` instead.
-#[expect(
-    clippy::print_stderr,
-    reason = "the logging family is read before any subscriber exists"
-)]
-fn warn_unparseable(name: &str, raw: &str) {
-    eprintln!(
-        "nestrs: WARNING — unparseable {name}={raw:?}; keeping the default. \
-         Fix the value, or unset it to make the default explicit."
-    );
-}
-
 /// The kernel's console format, whose grammar this crate's console shares.
 pub use nest_rs_core::logging::LogFormat;
 
@@ -146,11 +133,11 @@ impl OpenTelemetryConfig {
 
     /// `service_name` is the default; `<PREFIX>_OPENTELEMETRY__SERVICE_NAME` overrides.
     ///
-    /// `Err`, naming the variable, when one cannot be read or does not parse, or
-    /// when `METRIC_INTERVAL_SECS` falls outside a second to an hour. Only
-    /// `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION` keep their default with
-    /// a warning, as the kernel's fallback logger reads them.
-    pub fn from_env(service_name: impl Into<String>) -> Result<Self, ConfigError> {
+    /// `Err`, naming the variable and never quoting it, when one cannot be read
+    /// or does not parse — the console's three through the kernel's
+    /// [`LogSettings`], as its fallback subscriber reads them — or when
+    /// `METRIC_INTERVAL_SECS` falls outside a second to an hour.
+    pub fn from_env(service_name: impl Into<String>) -> Result<Self, OpenTelemetryError> {
         let mut cfg = Self::new(service_name);
         // Constructing the reader needs no container, which `from_env` runs before.
         let env = ConfigService::for_namespace(NAMESPACE);
@@ -162,21 +149,10 @@ impl OpenTelemetryConfig {
         cfg.deployment_environment = env.get("SERVICE_ENVIRONMENT")?;
         cfg.service_instance_id = env.get("SERVICE_INSTANCE_ID")?;
 
-        if let Some(v) = env_var(&EnvPrefix::var(var::FILTER)).or_else(|| env_var("RUST_LOG")) {
-            cfg.log_filter = v;
-        }
-        if let Some(raw) = env_var(&EnvPrefix::var(var::FORMAT)) {
-            match LogFormat::parse(&raw) {
-                Some(fmt) => cfg.log_format = fmt,
-                None => warn_unparseable(&EnvPrefix::var(var::FORMAT), &raw),
-            }
-        }
-        if let Some(raw) = env_var(&EnvPrefix::var(var::SOURCE_LOCATION)) {
-            match parse_bool(&raw) {
-                Some(on) => cfg.log_source_location = on,
-                None => warn_unparseable(&EnvPrefix::var(var::SOURCE_LOCATION), &raw),
-            }
-        }
+        let console = LogSettings::from_env()?;
+        cfg.log_filter = console.filter;
+        cfg.log_format = console.format;
+        cfg.log_source_location = console.source_location;
 
         cfg.otlp_endpoint = match env.setting("OTLP_ENDPOINT")? {
             Some(setting) => {
@@ -189,7 +165,7 @@ impl OpenTelemetryConfig {
             let ratio = setting.parse::<f64>()?;
             // `NaN` parses as an `f64` and survives `clamp`.
             if ratio.is_nan() {
-                return Err(setting.refuse("must be a number between 0 and 1"));
+                return Err(setting.refuse("must be a number between 0 and 1").into());
             }
             cfg.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         }
@@ -259,6 +235,8 @@ impl OpenTelemetryConfig {
 mod tests {
     use super::*;
     use nest_rs_config::var_name;
+    use nest_rs_core::EnvPrefix;
+    use nest_rs_core::logging::var;
 
     #[test]
     fn defaults_sample_everything() {
@@ -544,12 +522,36 @@ mod tests {
         });
     }
 
+    /// The console settings are the kernel's, read by its one parser: a value
+    /// that does not parse is refused by name, as the fallback subscriber
+    /// refuses it, and never quoted.
     #[test]
-    fn from_env_keeps_the_default_for_an_unparseable_log_format() {
+    fn from_env_refuses_a_log_setting_that_does_not_parse_naming_it_and_not_its_value() {
+        for (tail, value) in [
+            (var::FORMAT, "console"),
+            (var::SOURCE_LOCATION, "ture"),
+            (var::FILTER, "billing=notalevel"),
+        ] {
+            figment::Jail::expect_with(|jail| {
+                jail.set_env(EnvPrefix::var(tail), value);
+                let refused = OpenTelemetryConfig::from_env("svc")
+                    .expect_err("a setting that does not parse")
+                    .to_string();
+                assert!(refused.contains(&EnvPrefix::var(tail)), "{refused}");
+                assert!(!refused.contains(value), "{refused}");
+                Ok(())
+            });
+        }
+    }
+
+    #[test]
+    fn a_blank_log_setting_is_its_default() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env(EnvPrefix::var(var::FORMAT), "console");
+            jail.set_env(EnvPrefix::var(var::FORMAT), " ");
+            jail.set_env(EnvPrefix::var(var::SOURCE_LOCATION), "");
             let cfg = OpenTelemetryConfig::from_env("svc").expect("readable config");
-            assert_eq!(cfg.log_format, LogFormat::Text);
+            assert_eq!(cfg.log_format, LogFormat::by_profile());
+            assert!(!cfg.log_source_location);
             Ok(())
         });
     }

@@ -20,15 +20,10 @@ pub enum OpenTelemetryError {
     /// spellings set, or a `<KEY>_FILE` naming a file that cannot be read.
     #[error(transparent)]
     Config(#[from] nest_rs_config::ConfigError),
-    /// A set-but-unparseable log filter (`<PREFIX>_LOG`, or a `with_log_filter`
-    /// builder value) aborts boot naming the bad directive.
-    #[error("invalid log filter {value:?}: {source}")]
-    InvalidLogFilter {
-        /// The offending directive string.
-        value: String,
-        /// The underlying `EnvFilter` parse error.
-        source: tracing_subscriber::filter::ParseError,
-    },
+    /// A console setting does not parse — `<PREFIX>_LOG*`, `RUST_LOG`, or a
+    /// filter set with `with_log_filter` — named, never quoted.
+    #[error(transparent)]
+    LogSettings(#[from] nest_rs_core::logging::LogSettingsError),
     /// Building the OTLP exporter pipeline failed (bad endpoint, transport
     /// error). Only present under the `otlp` feature.
     #[cfg(feature = "otlp")]

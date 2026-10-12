@@ -218,9 +218,14 @@ fn report(contained: bool, subscribed: bool) -> Report {
 }
 
 /// Whether an event emitted on this thread now reaches a subscriber: `false`
-/// before one is installed, and inside a scoped one's own dispatch.
+/// before one is installed — the process steps' stderr lines included, which
+/// leave a panic to the hook's own line — and inside a scoped one's own
+/// dispatch.
 pub(crate) fn subscribed() -> bool {
-    !tracing::dispatcher::get_default(|dispatch| dispatch.is::<tracing::subscriber::NoSubscriber>())
+    !tracing::dispatcher::get_default(|dispatch| {
+        dispatch.is::<tracing::subscriber::NoSubscriber>()
+            || dispatch.is::<crate::process_start::StderrLines>()
+    })
 }
 
 /// How many contained panics keep where they happened; one a line never asks
@@ -349,6 +354,12 @@ mod tests {
     #[test]
     fn an_event_reaches_a_subscriber_only_once_one_is_installed() {
         assert!(!subscribed(), "no subscriber yet");
+        tracing::subscriber::with_default(crate::process_start::StderrLines, || {
+            assert!(
+                !subscribed(),
+                "the process steps' stderr lines leave a panic to the hook"
+            );
+        });
         let _capture = nest_rs_testing::LogCapture::install();
         assert!(subscribed());
     }

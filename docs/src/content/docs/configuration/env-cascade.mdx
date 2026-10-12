@@ -186,7 +186,11 @@ RAW='a\nb'   # value is the four characters: a, backslash, n, b
 
 Lines starting with `#` are comments. Empty lines are skipped. An
 `export ` prefix is tolerated for shell compatibility. Empty keys and
-lines without `=` are silently dropped.
+lines without `=` are dropped and counted: the cascade loads before any
+subscriber exists, so one line on stderr names the file and how many it
+skipped, never what they held — `nestrs: skipped malformed .env lines
+path=./.env.local skipped=2`. A file that exists but cannot be read is
+skipped and said the same way.
 
 The double-quoted escape set exists for one reason: PEM keys fit on a
 single line with `\n` instead of literal newlines.

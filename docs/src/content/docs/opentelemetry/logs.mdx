@@ -272,6 +272,9 @@ prod, set:
 NESTRS_LOG_FORMAT=json
 ```
 
+A value that is neither stops the boot, naming the variable: a typo never
+falls back to the profile's default in silence.
+
 Both are the framework's own formatters, and they say the same thing: JSON puts
 `trace_id`, `span_id` and `actor_id` at the **top level** of the record, where a
 backend reads them with no field mapping, rather than nested under a `span`

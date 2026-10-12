@@ -5,7 +5,7 @@ use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::logging::{JsonFormat, TextFormat};
+use nest_rs_core::logging::{JsonFormat, LogSettings, TextFormat};
 
 use crate::config::{LogFormat, OpenTelemetryConfig};
 use crate::error::OpenTelemetryError;
@@ -42,18 +42,19 @@ impl OpenTelemetry {
     }
 
     /// Install the subscriber from an explicit [`OpenTelemetryConfig`]. Returns the
-    /// flush guard that must outlive `main`, or an error that aborts boot on an
-    /// unparseable filter, a metric interval outside its range or a failed exporter
-    /// build.
+    /// flush guard that must outlive `main`, or an error that aborts boot on a
+    /// filter that does not parse, a metric interval outside its range or a failed
+    /// exporter build.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
-        // A config built in code reaches here without `from_env`, so its interval is
-        // held to the variable's range here.
+        // A config built in code reaches here without `from_env`, so its interval and
+        // its filter are held to what the variables accept here.
         crate::config::METRIC_INTERVAL.check(
             crate::config::NAMESPACE,
             "OpenTelemetryConfig::metric_interval",
             config.metric_interval,
         )?;
-        let filter = parse_log_filter(&config.log_filter)?;
+        LogSettings::check_filter(&config.log_filter, "OpenTelemetryConfig::log_filter")?;
+        let filter = EnvFilter::new(&config.log_filter);
         let fmt_layer = console_layer(config.log_format, config.log_source_location);
 
         #[cfg(feature = "otlp")]
@@ -69,7 +70,7 @@ impl OpenTelemetry {
             let appender_layer = match exporters.logger_provider.as_ref() {
                 Some(lp) => Some(
                     opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
-                        .with_filter(parse_log_filter(&config.log_filter)?),
+                        .with_filter(EnvFilter::new(&config.log_filter)),
                 ),
                 None => None,
             };
@@ -132,41 +133,52 @@ impl OpenTelemetry {
     }
 }
 
+/// The filter a test run logs under when neither `<PREFIX>_LOG` nor `RUST_LOG`
+/// sets one: a passing test says little.
+const TEST_FILTER: &str = "warn";
+
 /// Console-only init for tests. Idempotent; first call wins. No flush
-/// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`; an
-/// invalid directive falls through rather than failing a test run.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the logging bootstrap runs before any config exists"
-)]
+/// guard. Log level honours `<PREFIX>_LOG` then `RUST_LOG`, default `warn`; a
+/// setting that does not parse panics with the sentence naming it.
 pub fn init_for_tests() {
     if initialized() {
         return;
     }
-    let filter = std::env::var(nest_rs_core::EnvPrefix::var(
-        nest_rs_core::logging::var::FILTER,
-    ))
-    .ok()
-    .and_then(|spec| EnvFilter::try_new(&spec).ok())
-    .or_else(|| EnvFilter::try_from_default_env().ok())
-    .unwrap_or_else(|| EnvFilter::new("warn"));
+    #[expect(
+        clippy::panic,
+        reason = "a test run with a broken log setting fails loudly, never quietly logs less"
+    )]
+    let settings = LogSettings::from_env().unwrap_or_else(|error| panic!("{error}"));
+    let filter = if filter_is_set() {
+        settings.filter
+    } else {
+        TEST_FILTER.to_owned()
+    };
     #[expect(
         clippy::let_underscore_must_use,
         reason = "an Err is a subscriber already installed, which a test run keeps"
     )]
     let _ = Registry::default()
-        .with(filter)
+        .with(EnvFilter::new(filter))
         .with(console_layer(LogFormat::Text, false))
         .try_init();
     mark_initialized();
 }
 
-/// Parse an `EnvFilter` directive string, mapping a rejection to a named,
-/// boot-aborting error instead of falling back to `info`.
-fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
-    EnvFilter::try_new(spec).map_err(|source| OpenTelemetryError::InvalidLogFilter {
-        value: spec.to_owned(),
-        source,
+/// Whether `<PREFIX>_LOG` or `RUST_LOG` holds a directive, as `LogSettings`
+/// reads them: blank is unset.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the logging bootstrap runs before any config exists"
+)]
+fn filter_is_set() -> bool {
+    [
+        nest_rs_core::EnvPrefix::var(nest_rs_core::logging::var::FILTER),
+        "RUST_LOG".to_owned(),
+    ]
+    .iter()
+    .any(|name| {
+        std::env::var_os(name).is_some_and(|value| !value.to_string_lossy().trim().is_empty())
     })
 }
 
@@ -334,25 +346,23 @@ mod tests {
         assert!(initialized());
     }
 
+    /// A filter pinned in code is checked by the kernel's parser, which names
+    /// the field and never quotes the directive.
     #[test]
-    fn init_with_rejects_a_set_but_unparseable_log_filter() {
-        let config = OpenTelemetryConfig::new("svc").with_log_filter("foo=notalevel");
+    fn init_with_refuses_a_pinned_filter_that_does_not_parse_naming_the_field() {
+        let config = OpenTelemetryConfig::new("svc").with_log_filter("billing=notalevel");
         // `OpenTelemetry` has no `Debug`, so no `expect_err`.
-        match OpenTelemetry::init_with(config) {
-            Err(OpenTelemetryError::InvalidLogFilter { value, .. }) => {
-                assert_eq!(
-                    value, "foo=notalevel",
-                    "the error must name the bad directive"
-                );
-            }
-            Err(other) => panic!("expected InvalidLogFilter, got {other:?}"),
-            Ok(_) => panic!("a set-but-unparseable filter must abort init, not degrade to `info`"),
-        }
-    }
-
-    #[test]
-    fn parse_log_filter_accepts_a_valid_directive() {
-        assert!(parse_log_filter("debug,hyper=warn").is_ok());
+        let Err(refused) = OpenTelemetry::init_with(config) else {
+            panic!("a filter that does not parse aborts init, never degrades to `info`");
+        };
+        assert!(
+            matches!(refused, OpenTelemetryError::LogSettings(_)),
+            "{refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(said.contains("OpenTelemetryConfig::log_filter"), "{said}");
+        assert!(!said.contains("notalevel"), "{said}");
+        assert!(!said.contains("billing"), "{said}");
     }
 
     /// A collector that never answers holds the exit for one bound, the meter's

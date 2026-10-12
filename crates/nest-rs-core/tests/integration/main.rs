@@ -16,6 +16,8 @@ mod app_lifecycle;
 mod container;
 mod error_message;
 mod lifecycle;
+#[cfg(feature = "logging")]
+mod logging;
 mod module;
 mod net;
 mod panic;

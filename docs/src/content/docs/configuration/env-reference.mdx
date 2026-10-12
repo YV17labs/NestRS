@@ -52,13 +52,18 @@ neither the crate nor the type, so a reader could not find the code from it.
 ## Logging — `<PREFIX>_LOG*`
 
 The baseline console logger is part of `nest-rs-core` — no module to
-import, no config struct. It reads two process-level variables:
+import, no config struct. It reads three process-level variables:
 
 | Key | Meaning |
 |---|---|
 | `<PREFIX>_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`); falls back to `RUST_LOG`, default `info` |
 | `<PREFIX>_LOG_FORMAT` | `json` (the release default) or `text` (the dev default) |
 | `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
+
+Unset or blank keeps the default. A value that does not parse stops the
+boot, naming the variable and never its value — a mistyped
+`<PREFIX>_LOG_FORMAT=jsno` is said, never quietly replaced by the profile's
+default.
 
 An app that installs its own subscriber first (e.g. through
 [OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only

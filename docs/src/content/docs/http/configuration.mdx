@@ -266,7 +266,9 @@ everything else.
 request can't tie up a connection indefinitely. It counts from the request's
 arrival, so a body that trickles in a byte at a time counts against it; one
 that stops arriving altogether is answered sooner, `408`, by
-[the body-read deadline](#connection-deadlines). Default
+[the body-read deadline](#connection-deadlines) — while that deadline sits
+under this budget; at or past it the budget answers first, which one `warn`
+says at boot. Default
 `20` seconds — the [shutdown window](#shutdown)'s own, so a request admitted just
 before a stop is answered inside the window rather than cut;
 `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide

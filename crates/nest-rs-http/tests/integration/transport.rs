@@ -727,3 +727,43 @@ fn a_request_timeout_inside_the_shutdown_window_is_not_remarked() {
         logs.expect_none(nest_rs_http::target::HTTP, OUTLASTS);
     }
 }
+
+/// What a deployment whose body-read gap reaches its request budget is told at
+/// boot.
+const GAP_REACHES_THE_BUDGET: &str = "the body-read timeout reaches the request timeout: a body \
+                                      that stops arriving is answered the request timeout's \
+                                      503, never 408";
+
+/// A gap at or past the budget can never fire first; a warning, not a refusal.
+#[test]
+fn a_body_read_gap_reaching_the_request_timeout_is_said_once_at_boot() {
+    for (gap, budget) in [("20", "20"), ("30", "20")] {
+        let logs = LogCapture::install();
+        built_from(&[
+            ("BODY_READ_TIMEOUT_SECS", gap),
+            ("REQUEST_TIMEOUT_SECS", budget),
+        ]);
+        let line = logs.expect_one(nest_rs_http::target::HTTP, GAP_REACHES_THE_BUDGET);
+        assert_eq!(line.level, "warn", "{gap}");
+        assert_eq!(line.field("body_read_timeout_secs").as_deref(), Some(gap));
+        assert_eq!(line.field("request_timeout_secs").as_deref(), Some(budget));
+    }
+}
+
+/// The defaults keep the gap under the budget, and with the budget off the gap
+/// is the one bound on a body.
+#[test]
+fn a_body_read_gap_under_the_request_timeout_or_without_one_is_not_remarked() {
+    for vars in [
+        &[][..],
+        &[("BODY_READ_TIMEOUT_SECS", "19")][..],
+        &[
+            ("BODY_READ_TIMEOUT_SECS", "60"),
+            ("REQUEST_TIMEOUT_SECS", "0"),
+        ][..],
+    ] {
+        let logs = LogCapture::install();
+        built_from(vars);
+        logs.expect_none(nest_rs_http::target::HTTP, GAP_REACHES_THE_BUDGET);
+    }
+}

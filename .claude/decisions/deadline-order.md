@@ -49,3 +49,13 @@ The order every default keeps, from the inside out:
 - **Refusing a request timeout past the window at boot.** A deployment serving
   long uploads with the budget off is a legitimate one; the fact supports a
   `warn`, not a refusal (`container.md`, *Discovery*).
+
+## 2026-10-12 — a body-read gap at or past the request deadline is told at boot
+
+The order above held only the defaults: a deployment that set the body-read gap
+at or past its request deadline was answered the deadline's `503` for every
+stalled body, `408` never, and nothing said why. The boot now files one `warn`
+naming both values, beside the one for a deadline past the window, when the
+transport is built. A warning, not a refusal, for the reason the window's warn
+gives: the request is still bounded, and the fact supports no more. With the
+deadline off the gap is the one bound on a body, and nothing is said.

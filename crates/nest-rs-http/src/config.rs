@@ -362,7 +362,7 @@ pub struct HttpConfig {
     /// [`request_timeout`](Self::request_timeout)'s, the one bound on a body
     /// when that is off. Kept under it, since that budget counts from the
     /// request's arrival: at or past it, a body that stops arriving is answered
-    /// the budget's `503` first.
+    /// the budget's `503` first, which is said once at boot with a `warn`.
     ///
     /// Read from `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS`, whole seconds from 1
     /// to 3600 — refused outside, from the environment and from the pinned
@@ -420,6 +420,22 @@ impl HttpConfig {
         )
     }
 
+    /// [`request_timeout`](Self::request_timeout), held to the range its
+    /// variable is, for a config that never met the environment.
+    pub(crate) fn request_budget(&self) -> Result<Option<Duration>> {
+        let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
+        self.request_timeout
+            .map(|budget| REQUEST_TIMEOUT.check(namespace, REQUEST_TIMEOUT.field(), budget))
+            .transpose()
+    }
+
+    /// [`shutdown_timeout`](Self::shutdown_timeout), held to the range its
+    /// variable is, for a config that never met the environment.
+    pub(crate) fn shutdown_window(&self) -> Result<Duration> {
+        let namespace = <Self as nest_rs_config::Namespaced>::NAMESPACE;
+        SHUTDOWN_TIMEOUT.check(namespace, SHUTDOWN_TIMEOUT.field(), self.shutdown_timeout)
+    }
+
     /// The four connection deadlines, each held to the range its variable is,
     /// for a config that never met the environment.
     pub(crate) fn deadlines(&self) -> Result<crate::server::Deadlines> {
@@ -450,6 +466,27 @@ impl HttpConfig {
             shutdown_timeout_secs = self.shutdown_timeout.as_secs(),
             "the request timeout outlasts the shutdown window: a request admitted just before a \
              stop can be cut unanswered",
+        );
+    }
+
+    /// One boot `warn` when [`body_read_timeout`](Self::body_read_timeout)
+    /// reaches [`request_timeout`](Self::request_timeout): the budget counts
+    /// from the request's arrival, so the gap can never fire first and a body
+    /// that stops arriving is answered the budget's `503`, never `408`. Not a
+    /// refusal — the request is still bounded.
+    pub(crate) fn warn_when_the_body_gap_reaches_the_budget(&self) {
+        let Some(budget) = self.request_timeout else {
+            return;
+        };
+        if self.body_read_timeout < budget {
+            return;
+        }
+        tracing::warn!(
+            target: crate::target::HTTP,
+            body_read_timeout_secs = self.body_read_timeout.as_secs(),
+            request_timeout_secs = budget.as_secs(),
+            "the body-read timeout reaches the request timeout: a body that stops arriving is \
+             answered the request timeout's 503, never 408",
         );
     }
 

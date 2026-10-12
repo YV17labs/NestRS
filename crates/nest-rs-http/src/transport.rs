@@ -296,9 +296,8 @@ fn prefix_remedy(version: Option<&str>) -> String {
 }
 
 impl HttpTransport {
-    /// The transport `cfg` describes, its connection cap and deadlines held to
-    /// the ranges their variables are: a config built in code never met the
-    /// environment.
+    /// The transport `cfg` describes, each bounded field held to the range its
+    /// variable is: a config built in code never met the environment.
     pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
         let transport = Self {
             bind: format!("{}:{}", cfg.host, cfg.port),
@@ -314,8 +313,8 @@ impl HttpTransport {
                 .as_deref()
                 .and_then(normalize_global_prefix),
             max_body_bytes: cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
-            request_timeout: cfg.request_timeout,
-            shutdown_timeout: cfg.shutdown_timeout,
+            request_timeout: cfg.request_budget()?,
+            shutdown_timeout: cfg.shutdown_window()?,
             max_concurrent_connections: cfg.connection_cap()?,
             deadlines: cfg.deadlines()?,
             security_headers: cfg.security_headers.clone(),
@@ -327,6 +326,7 @@ impl HttpTransport {
             endpoint: None,
         };
         cfg.warn_when_requests_outlast_the_window();
+        cfg.warn_when_the_body_gap_reaches_the_budget();
         Ok(transport)
     }
 
@@ -881,6 +881,62 @@ mod tests {
                 "{cap}: {refused}"
             );
         }
+    }
+
+    /// The one constructor holds the window and the budget to the ranges their
+    /// variables are, for a config that never met the environment.
+    #[test]
+    fn a_built_config_holds_its_shutdown_window_and_request_budget_to_their_ranges() {
+        for (config, key, field) in [
+            (
+                crate::HttpConfig {
+                    shutdown_timeout: Duration::MAX,
+                    ..Default::default()
+                },
+                "SHUTDOWN_TIMEOUT_SECS",
+                "HttpConfig::shutdown_timeout",
+            ),
+            (
+                crate::HttpConfig {
+                    shutdown_timeout: Duration::ZERO,
+                    ..Default::default()
+                },
+                "SHUTDOWN_TIMEOUT_SECS",
+                "HttpConfig::shutdown_timeout",
+            ),
+            (
+                crate::HttpConfig {
+                    request_timeout: Some(Duration::ZERO),
+                    ..Default::default()
+                },
+                "REQUEST_TIMEOUT_SECS",
+                "HttpConfig::request_timeout",
+            ),
+            (
+                crate::HttpConfig {
+                    request_timeout: Some(Duration::MAX),
+                    ..Default::default()
+                },
+                "REQUEST_TIMEOUT_SECS",
+                "HttpConfig::request_timeout",
+            ),
+        ] {
+            let refused = HttpTransport::from_config(&config)
+                .err()
+                .expect("a value outside the range never reaches the transport")
+                .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("http", key)),
+                "{field}: {refused}"
+            );
+            assert!(refused.contains(field), "{field}: {refused}");
+        }
+        let off = HttpTransport::from_config(&crate::HttpConfig {
+            request_timeout: None,
+            ..Default::default()
+        })
+        .expect("`None` turns the budget off");
+        assert_eq!(off.request_timeout, None);
     }
 
     #[test]

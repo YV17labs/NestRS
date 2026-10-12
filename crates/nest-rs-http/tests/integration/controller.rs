@@ -244,9 +244,11 @@ struct MembersModule;
 #[tokio::test]
 async fn a_parameter_in_the_controller_path_binds_before_the_route_s_own() {
     let bare = crate::boot::<MembersModule>().await;
-    let prefixed =
-        crate::boot_on::<MembersModule>(nest_rs_http::HttpTransport::new().global_prefix("/api"))
-            .await;
+    let prefixed = crate::boot_on::<MembersModule>(nest_rs_http::HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..Default::default()
+    })
+    .await;
     for (client, path) in [
         (&bare, "/orgs/acme/members/7"),
         (&prefixed, "/api/orgs/acme/members/7"),

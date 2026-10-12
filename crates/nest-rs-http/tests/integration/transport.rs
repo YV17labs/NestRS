@@ -95,7 +95,7 @@ impl ShutdownController {
     }
 }
 
-#[module(providers = [ShutdownController])]
+#[module(providers = [ShutdownController, EchoSocket])]
 struct ShutdownModule;
 
 /// A WebSocket that echoes text until its peer goes, outliving the HTTP
@@ -113,8 +113,24 @@ fn echo(ws: WebSocket) -> impl IntoResponse {
     })
 }
 
-/// A transport serving a module and the echo socket on a local port, built
-/// from an [`HttpConfig`] as `HttpModule` builds it.
+/// The echo socket, self-mounted by hand: it upgrades without declaring the
+/// socket as [`DetachedWork`].
+pub(crate) struct EchoSocket;
+
+impl nest_rs_core::Discoverable for EchoSocket {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<EchoSocket, HttpEndpointMeta>(
+            HttpEndpointMeta::new("/socket", "echo", |_container, route: Route| {
+                route.at("/socket", poem::get(echo))
+            })
+            .owned_by("EchoSocket")
+            .exempt(),
+        )
+    }
+}
+
+/// A transport serving a module on a local port, built from an [`HttpConfig`]
+/// as `HttpModule` builds it.
 pub(crate) struct Serving {
     pub(crate) port: u16,
     pub(crate) cancel: CancellationToken,
@@ -126,7 +142,7 @@ async fn serve() -> Serving {
     serve_module::<ShutdownModule>(HttpConfig::default()).await
 }
 
-/// [`serve`] for any module and config — the same transport, the same echo socket.
+/// [`serve`] for any module and config — the same transport.
 pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: HttpConfig) -> Serving {
     let app = App::builder()
         .module::<M>()
@@ -139,8 +155,7 @@ pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: Http
         port,
         ..config
     })
-    .expect("the config builds a transport")
-    .mount("/socket", |_| poem::get(echo));
+    .expect("the config builds a transport");
     transport
         .configure(app.container())
         .await
@@ -400,10 +415,11 @@ fn assert_span_cancelled(logs: &LogCapture, path: &str) {
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
-/// A socket a hand-mounted endpoint upgraded is neither waited for nor closed:
-/// it outlives the transport, and the closing line says so.
+/// A socket a hand-built self-mount upgraded without declaring it is neither
+/// waited for nor closed: it outlives the transport, and the closing line says
+/// so.
 #[tokio::test]
-async fn a_hand_mounted_websocket_is_left_open_and_said_to_be() {
+async fn an_undeclared_upgraded_socket_is_left_open_and_said_to_be() {
     let logs = LogCapture::install();
     let serving = serve().await;
     drop(connect(serving.port).await);

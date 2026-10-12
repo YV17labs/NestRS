@@ -355,9 +355,7 @@ impl SealedResolver {
 struct ChainModule;
 
 async fn chain_app(global: Option<nest_rs_guards::GuardSpec>) -> TestApp {
-    let builder = TestApp::builder()
-        .module::<ChainModule>()
-        .http(nest_rs_http::HttpTransport::new());
+    let builder = TestApp::builder().module::<ChainModule>();
     match global {
         Some(spec) => builder.use_guards_global([spec]),
         None => builder,

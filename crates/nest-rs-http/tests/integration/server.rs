@@ -17,8 +17,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::transport::{
-    PATIENCE, Serving, after, ask, connect, read_answer, read_head, read_to_end, request,
-    serve_module, small_window, still_open,
+    EchoSocket, PATIENCE, Serving, after, ask, connect, read_answer, read_head, read_to_end,
+    request, serve_module, small_window, still_open,
 };
 
 /// The line the loop files when the cap holds a connection back.
@@ -85,7 +85,7 @@ impl ServerController {
     }
 }
 
-#[module(providers = [ServerController])]
+#[module(providers = [ServerController, EchoSocket])]
 struct ServerModule;
 
 /// [`ServerModule`] and the echo socket at `/socket`, served from `config`.

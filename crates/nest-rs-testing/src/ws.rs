@@ -58,7 +58,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{AppLifecycle, Container};
-use nest_rs_http::HttpTransport;
+use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_ws::WsEnvelope;
 use serde_json::Value;
 use tokio::net::TcpStream;
@@ -92,11 +92,16 @@ fn reserve_addr() -> Result<SocketAddr> {
     Ok(addr)
 }
 
-pub(crate) async fn serve(app: HeadlessApp, transport: HttpTransport) -> Result<WsApp> {
+/// Serve `app` on the transport `config` describes, at a reserved local
+/// address in place of its own.
+pub(crate) async fn serve(app: HeadlessApp, config: HttpConfig) -> Result<WsApp> {
     let addr = reserve_addr()?;
-    let handle = app
-        .spawn_transport(transport.bind(addr.to_string()))
-        .await?;
+    let transport = HttpTransport::from_config(&HttpConfig {
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        ..config
+    })?;
+    let handle = app.spawn_transport(transport).await?;
     app.init().await?;
     Ok(WsApp {
         app,

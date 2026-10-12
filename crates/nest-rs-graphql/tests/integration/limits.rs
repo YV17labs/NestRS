@@ -5,7 +5,6 @@
 use async_graphql::SimpleObject;
 use nest_rs_core::{Module, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[derive(SimpleObject)]
@@ -61,7 +60,6 @@ struct AppGenerousLimits;
 async fn boot<M: Module + 'static>(context: &str) -> TestApp {
     TestApp::builder()
         .module::<M>()
-        .http(HttpTransport::new())
         .build()
         .await
         .unwrap_or_else(|e| panic!("schema boots ({context}): {e:?}"))

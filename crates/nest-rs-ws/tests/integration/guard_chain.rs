@@ -178,7 +178,10 @@ async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_eve
         .provide(WsConfig::default())
         .import::<UnprovidedModule>()
         .build();
-    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::default();
+    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
+        &nest_rs_ws::nest_rs_http::HttpConfig::default(),
+    )
+    .expect("the defaults are in range");
     let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
         panic!("the event would run without the guard it declares");
     };
@@ -216,7 +219,10 @@ async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_ga
         .provide(WsConfig::default())
         .import::<UnprovidedUpgradeModule>()
         .build();
-    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::default();
+    let mut transport = nest_rs_ws::nest_rs_http::HttpTransport::from_config(
+        &nest_rs_ws::nest_rs_http::HttpConfig::default(),
+    )
+    .expect("the defaults are in range");
     let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
         panic!("the upgrade would run without the guard it declares");
     };

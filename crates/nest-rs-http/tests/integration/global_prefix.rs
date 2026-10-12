@@ -3,9 +3,7 @@
 
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::module;
-use nest_rs_http::{
-    HttpConfig, HttpTransport, caller_path, controller, routes, set_created_location,
-};
+use nest_rs_http::{HttpConfig, caller_path, controller, routes, set_created_location};
 use poem::http::StatusCode;
 use poem::test::TestClient;
 
@@ -50,11 +48,11 @@ struct TwoControllersModule;
 async fn boot_with_prefix(
     prefix: Option<&str>,
 ) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let mut transport = HttpTransport::new();
-    if let Some(p) = prefix {
-        transport = transport.global_prefix(p);
-    }
-    crate::boot_on::<TwoControllersModule>(transport).await
+    crate::boot_on::<TwoControllersModule>(HttpConfig {
+        global_prefix: prefix.map(Into::into),
+        ..HttpConfig::default()
+    })
+    .await
 }
 
 #[tokio::test]
@@ -149,11 +147,7 @@ async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'stati
 {
     let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"), Default::default())
         .expect("HttpConfig::from_env succeeds");
-    let mut transport = HttpTransport::new();
-    if let Some(prefix) = cfg.global_prefix {
-        transport = transport.global_prefix(prefix);
-    }
-    crate::boot_on::<TwoControllersModule>(transport).await
+    crate::boot_on::<TwoControllersModule>(cfg).await
 }
 
 #[test]
@@ -192,7 +186,10 @@ async fn a_global_prefix_is_one_literal_address() {
         .build()
         .await
         .expect("the module itself builds — the prefix is a transport concern");
-    let mut transport = HttpTransport::new().global_prefix("/tenants/{tenant}");
+    let mut transport = crate::built(&HttpConfig {
+        global_prefix: Some("/tenants/{tenant}".into()),
+        ..HttpConfig::default()
+    });
     let msg = nest_rs_core::Transport::configure(&mut transport, app.container())
         .await
         .expect_err("a templated prefix must fail boot")

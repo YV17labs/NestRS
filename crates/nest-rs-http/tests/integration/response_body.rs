@@ -6,9 +6,7 @@ use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::futures_util::{StreamExt, stream};
-use nest_rs_http::{
-    HttpConfig, HttpModule, HttpTransport, SseEvent, SseStream, controller, routes,
-};
+use nest_rs_http::{HttpConfig, HttpModule, SseEvent, SseStream, controller, routes};
 use nest_rs_testing::LogCapture;
 use poem::{Body, IntoResponse, Response};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -169,7 +167,11 @@ async fn a_fixed_length_response_still_declares_its_length() {
     let port = listener.local_addr().expect("the bound port").port();
     drop(listener);
 
-    let mut transport = HttpTransport::new().bind(format!("127.0.0.1:{port}"));
+    let mut transport = crate::built(&HttpConfig {
+        host: "127.0.0.1".into(),
+        port,
+        ..HttpConfig::default()
+    });
     transport
         .configure(app.container())
         .await

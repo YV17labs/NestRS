@@ -4,7 +4,6 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_pipes::{GlobalPipe, PipeError, pipe};
 use nest_rs_testing::TestApp;
 use serde_json::Value;
@@ -77,7 +76,6 @@ async fn boot() -> TestApp {
     TestApp::builder()
         .module::<AppWithVarPipe>()
         .use_pipes_global([pipe::<VarPipe>()])
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")
@@ -161,7 +159,6 @@ async fn a_pipe_listed_twice_runs_once() {
     let app = TestApp::builder()
         .module::<AppWithVarPipe>()
         .use_pipes_global([pipe::<BangPipe>(), pipe::<BangPipe>()])
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");

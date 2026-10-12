@@ -19,13 +19,12 @@ use poem::test::TestClient;
 
 use crate::headless::HeadlessApp;
 
-/// The transport the app's own `HttpModule::for_root(cfg)` would run; `None`
-/// when the app imports no `HttpModule`.
-fn http_from_config(container: &Container) -> Result<Option<HttpTransport>> {
-    match container.get::<HttpConfig>() {
-        Some(cfg) => Ok(Some(HttpTransport::from_config(&cfg)?)),
-        None => Ok(None),
-    }
+/// The config the app's own `HttpModule::for_root(cfg)` resolved, or the one a
+/// suite seeded; the defaults when there is neither.
+fn http_config(container: &Container) -> HttpConfig {
+    container
+        .get::<HttpConfig>()
+        .map_or_else(HttpConfig::default, |cfg| (*cfg).clone())
 }
 
 type TestEndpoint = BoxEndpoint<'static, Response>;
@@ -78,7 +77,6 @@ impl TestApp {
 /// cascade.
 pub struct TestAppBuilder {
     inner: AppBuilder,
-    http: Option<HttpTransport>,
 }
 
 impl TestAppBuilder {
@@ -86,7 +84,6 @@ impl TestAppBuilder {
         crate::env::load_project_env();
         Self {
             inner: App::builder(),
-            http: None,
         }
     }
 
@@ -150,16 +147,6 @@ impl TestAppBuilder {
         self
     }
 
-    /// Supply an [`HttpTransport`] instead of the one the app's own
-    /// `HttpModule::for_root(cfg)` contributes.
-    ///
-    /// Only for a transport the app does not declare: to test a non-default
-    /// `HttpConfig`, pin it on the module.
-    pub fn http(mut self, transport: HttpTransport) -> Self {
-        self.http = Some(transport);
-        self
-    }
-
     /// Forwards to [`AppBuilderGuardsExt::use_guards_global`].
     pub fn use_guards_global<I>(mut self, specs: I) -> Self
     where
@@ -212,10 +199,7 @@ impl TestAppBuilder {
         let app = self.inner.build().await?;
         // A default transport would ignore every field the module configured,
         // so the harness boots the one `App::run` resolves.
-        let mut transport = match self.http {
-            Some(explicit) => explicit,
-            None => http_from_config(app.container())?.unwrap_or_default(),
-        };
+        let mut transport = HttpTransport::from_config(&http_config(app.container()))?;
         transport.configure(app.container()).await?;
         // What `App::run` refuses after configuring, a route or gateway whose
         // chain did not compose, the harness refuses too.
@@ -237,11 +221,8 @@ impl TestAppBuilder {
     #[cfg(feature = "ws")]
     pub async fn build_ws(self) -> Result<crate::ws::WsApp> {
         let app = self.inner.build().await?;
-        let transport = match self.http {
-            Some(explicit) => explicit,
-            None => http_from_config(app.container())?.unwrap_or_default(),
-        };
-        crate::ws::serve(HeadlessApp::new(app), transport).await
+        let config = http_config(app.container());
+        crate::ws::serve(HeadlessApp::new(app), config).await
     }
 
     /// Boot without an HTTP surface, for queue workers and schedulers; drive

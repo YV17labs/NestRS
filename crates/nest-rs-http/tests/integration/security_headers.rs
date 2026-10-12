@@ -1,9 +1,9 @@
-//! Security headers on the wire, through `HttpTransport::security_headers`,
-//! the builder door that skips config validation: an invalid value must not
-//! make a header quietly disappear, and a value a route set is its own.
+//! Security headers on the wire, through `HttpConfig.security_headers` built in
+//! code, which no environment read validated: an invalid value must not make a
+//! header quietly disappear, and a value a route set is its own.
 
 use nest_rs_core::{Module, module};
-use nest_rs_http::{HttpSecurityHeaders, HttpTransport, controller, routes};
+use nest_rs_http::{HttpConfig, HttpSecurityHeaders, controller, routes};
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
 
@@ -28,15 +28,19 @@ impl PagesController {
 #[module(providers = [PagesController])]
 struct PagesModule;
 
-/// [`crate::boot`], with a `HttpSecurityHeaders` pinned on the transport
-/// rather than resolved from the environment.
+/// [`crate::boot`], with a `HttpSecurityHeaders` pinned in code rather than
+/// resolved from the environment.
 async fn boot_with<M>(
     headers: HttpSecurityHeaders,
 ) -> TestClient<BoxEndpoint<'static, poem::Response>>
 where
     M: Module + 'static,
 {
-    crate::boot_on::<M>(HttpTransport::new().security_headers(headers)).await
+    crate::boot_on::<M>(HttpConfig {
+        security_headers: headers,
+        ..HttpConfig::default()
+    })
+    .await
 }
 
 #[tokio::test]

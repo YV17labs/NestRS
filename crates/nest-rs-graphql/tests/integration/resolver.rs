@@ -3,7 +3,6 @@
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[resolver]
@@ -35,7 +34,6 @@ struct AppWithoutLoose;
 async fn a_reachable_resolver_appears_in_the_schema() {
     let app = TestApp::builder()
         .module::<AppWithLoose>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");
@@ -63,7 +61,6 @@ async fn a_reachable_resolver_appears_in_the_schema() {
 async fn an_unreachable_resolver_is_filtered_from_the_schema() {
     let app = TestApp::builder()
         .module::<AppWithoutLoose>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("an app composes only the resolvers in its reachable modules");
@@ -442,7 +439,6 @@ async fn a_field_is_served_under_the_name_async_graphql_gives_the_method() {
 
     let app = TestApp::builder()
         .module::<AppWithOracleNames>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");

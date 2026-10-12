@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpTls, HttpTransport, controller, routes};
+use nest_rs_http::{HttpConfig, HttpTls, HttpTransport, controller, routes};
 use nest_rs_testing::{TestAuthority, TestCertificate};
 use poem::Result;
 use rustls::pki_types::ServerName;
@@ -174,9 +174,12 @@ async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> Http
         .build()
         .await
         .expect("module boots");
-    let mut transport = HttpTransport::new()
-        .bind(format!("127.0.0.1:{port}"))
-        .tls(tls);
+    let mut transport = crate::built(&HttpConfig {
+        host: "127.0.0.1".into(),
+        port,
+        tls: Some(tls),
+        ..HttpConfig::default()
+    });
     transport
         .configure(app.container())
         .await

@@ -4,11 +4,10 @@
 
 use nest_rs_core::{App, ContainerBuilder, Discoverable, Transport, module};
 use nest_rs_http::{
-    ApiVersioning, DEFAULT_VERSION_HEADER, HttpEndpointMeta, HttpFallbackMeta, HttpTransport,
-    VersionSelector, controller, routes,
+    ApiVersioning, HttpConfig, HttpEndpointMeta, HttpFallbackMeta, controller, routes,
 };
 use nest_rs_testing::LogCapture;
-use poem::http::{HeaderName, StatusCode};
+use poem::http::StatusCode;
 use poem::test::TestClient;
 use poem::{Request, Route, handler};
 
@@ -175,7 +174,11 @@ async fn a_route_s_own_404_and_an_owned_prefix_never_reach_the_fallback() {
 
 #[tokio::test]
 async fn the_fallback_sits_outside_the_global_prefix() {
-    let client = crate::boot_on::<AppModule>(HttpTransport::new().global_prefix("/api")).await;
+    let client = crate::boot_on::<AppModule>(HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..HttpConfig::default()
+    })
+    .await;
 
     assert_eq!(text(&client, "/api").await, (StatusCode::OK, "home".into()));
     assert_eq!(
@@ -212,13 +215,12 @@ async fn a_version_selector_in_front_still_leaves_the_rest_to_the_fallback() {
     #[module(providers = [ItemsController, RootFallback])]
     struct VersionedModule;
 
-    let selector = VersionSelector::new(
-        ApiVersioning::Header,
-        HeaderName::from_static(DEFAULT_VERSION_HEADER),
-        Some("1".into()),
-    );
-    let client =
-        crate::boot_on::<VersionedModule>(HttpTransport::new().api_versioning(selector)).await;
+    let client = crate::boot_on::<VersionedModule>(HttpConfig {
+        versioning: ApiVersioning::Header,
+        default_version: Some("1".into()),
+        ..HttpConfig::default()
+    })
+    .await;
 
     assert_eq!(
         text(&client, "/items").await,
@@ -242,7 +244,7 @@ async fn configure_error<M: nest_rs_core::Module>() -> String {
         .build()
         .await
         .expect("the module builds — the refusal is the transport's");
-    HttpTransport::new()
+    crate::built(&HttpConfig::default())
         .configure(app.container())
         .await
         .expect_err("the transport must refuse this fallback")
@@ -298,12 +300,14 @@ async fn a_fallback_under_the_global_prefix_fails_the_boot_naming_the_setting() 
         .build()
         .await
         .expect("the module builds");
-    let msg = HttpTransport::new()
-        .global_prefix("/assets")
-        .configure(app.container())
-        .await
-        .expect_err("the global prefix is the API's")
-        .to_string();
+    let msg = crate::built(&HttpConfig {
+        global_prefix: Some("/assets".into()),
+        ..HttpConfig::default()
+    })
+    .configure(app.container())
+    .await
+    .expect_err("the global prefix is the API's")
+    .to_string();
     assert!(
         msg.contains(&nest_rs_config::var_name("http", "GLOBAL_PREFIX")),
         "{msg}"

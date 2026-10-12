@@ -11,7 +11,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_http::{HttpConfig, HttpTransport, RawBody, async_trait, controller, routes};
+use nest_rs_http::{HttpConfig, RawBody, async_trait, controller, routes};
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
 use poem::web::Json;
@@ -71,11 +71,11 @@ async fn boot() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Respons
 async fn boot_with(
     compression: bool,
 ) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    crate::boot_on::<BodyModule>(
-        HttpTransport::new()
-            .max_body_bytes(CAP)
-            .compression(compression),
-    )
+    crate::boot_on::<BodyModule>(HttpConfig {
+        max_body_bytes: Some(CAP),
+        compression,
+        ..HttpConfig::default()
+    })
     .await
 }
 

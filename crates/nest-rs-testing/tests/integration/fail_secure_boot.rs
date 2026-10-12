@@ -253,7 +253,9 @@ async fn a_controller_guard_no_module_provides_fails_the_boot_naming_it_and_the_
     let container = nest_rs_core::Container::builder()
         .import::<GhostGatedModule>()
         .build();
-    let mut transport = nest_rs_http::HttpTransport::default();
+    let mut transport =
+        nest_rs_http::HttpTransport::from_config(&nest_rs_http::HttpConfig::default())
+            .expect("the defaults are in range");
     let Err(err) = nest_rs_core::Transport::configure(&mut transport, &container).await else {
         panic!("the controller would serve without the guard it declares");
     };
@@ -267,8 +269,6 @@ async fn a_controller_guard_no_module_provides_fails_the_boot_naming_it_and_the_
         "…and the remedy: {chain}",
     );
 }
-
-// The imperative-mount cases live in `nest-rs-http/tests/integration/fail_secure.rs`.
 
 /// A controller route with no guard and no `#[public]` marker: an *implicit*
 /// access decision.

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use nest_rs_core::logging::CONSOLE_FLUSH_TIMEOUT;
 use nest_rs_core::{SHUTDOWN_HOOKS_TIMEOUT, Transport};
-use nest_rs_http::HttpTransport;
+use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_opentelemetry::FLUSH_TIMEOUT;
 use nest_rs_queue::QueueWorker;
 use nest_rs_schedule::Scheduler;
@@ -23,7 +23,13 @@ const STATED_WAY_DOWN: Duration = Duration::from_millis(29_500);
 /// Every transport a module can contribute, at its defaults.
 fn transports() -> [(&'static str, Box<dyn Transport>); 3] {
     [
-        ("HttpTransport", Box::new(HttpTransport::default())),
+        (
+            "HttpTransport",
+            Box::new(
+                HttpTransport::from_config(&HttpConfig::default())
+                    .expect("the defaults are in range"),
+            ),
+        ),
         ("QueueWorker", Box::new(QueueWorker::default())),
         ("Scheduler", Box::new(Scheduler::default())),
     ]

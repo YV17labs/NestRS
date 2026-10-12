@@ -2,7 +2,7 @@
 //! naming both owners before poem would panic on the duplicate path.
 
 use nest_rs_core::{App, Container, ContainerBuilder, Transport, module};
-use nest_rs_http::{HttpEndpointMeta, HttpTransport, controller, routes};
+use nest_rs_http::{HttpConfig, HttpEndpointMeta, controller, routes};
 use poem::Route;
 
 #[controller(path = "/users")]
@@ -79,7 +79,7 @@ impl nest_rs_core::Discoverable for ChatSocket {
 struct ControllerVersusEndpointModule;
 
 async fn configure_error(container: &Container) -> String {
-    let mut transport = HttpTransport::new();
+    let mut transport = crate::built(&HttpConfig::default());
     let err = transport
         .configure(container)
         .await
@@ -272,21 +272,5 @@ async fn an_also_mounts_entry_in_the_6x_spelling_fails_boot_naming_its_7_0_spell
     assert!(
         msg.contains("docs endpoint DocsHost") && msg.contains("write `/docs-json/{*rest}`"),
         "names the owner and the 7.0 spelling: {msg}",
-    );
-}
-
-#[tokio::test]
-async fn an_imperative_mount_is_one_literal_address() {
-    let app = App::builder().build().await.expect("an empty app builds");
-    let mut transport =
-        HttpTransport::new().mount("/files/{name}", |_| poem::endpoint::make_sync(|_| "file"));
-    let msg = transport
-        .configure(app.container())
-        .await
-        .expect_err("a templated imperative mount must fail boot")
-        .to_string();
-    assert!(
-        msg.contains("HttpTransport::mount") && msg.contains("one literal address"),
-        "names the mount and why: {msg}",
     );
 }

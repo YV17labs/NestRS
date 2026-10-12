@@ -2,7 +2,6 @@
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[resolver]
@@ -37,11 +36,7 @@ struct ContestedApp;
 
 #[tokio::test]
 async fn two_resolvers_claiming_one_operation_fail_the_boot() {
-    let boot = TestApp::builder()
-        .module::<ContestedApp>()
-        .http(HttpTransport::new())
-        .build()
-        .await;
+    let boot = TestApp::builder().module::<ContestedApp>().build().await;
     let Err(err) = boot else {
         panic!("a contested operation name must not compose in silence");
     };
@@ -96,7 +91,6 @@ async fn a_query_and_a_mutation_may_share_a_name() {
     // Query and Mutation are two root objects, so one name in each is no collision.
     let app = TestApp::builder()
         .module::<OverlappingApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("one name per root is not a duplicate");

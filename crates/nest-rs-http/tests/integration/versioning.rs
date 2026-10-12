@@ -2,12 +2,10 @@
 //! one file, with the same handler name.
 
 use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{
-    ApiVersioning, DEFAULT_VERSION_HEADER, HttpTransport, VersionSelector, controller, routes,
-};
+use nest_rs_http::{ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, controller, routes};
 use poem::Response;
 use poem::endpoint::BoxEndpoint;
-use poem::http::{HeaderName, StatusCode, header};
+use poem::http::{StatusCode, header};
 use poem::test::TestClient;
 
 #[controller(path = "/fund", version = "1")]
@@ -72,7 +70,7 @@ struct VersionedModule;
 
 #[tokio::test]
 async fn one_controller_mounts_under_every_version_it_declares() {
-    let client = boot_with(None, None).await;
+    let client = boot_with(HttpConfig::default(), None).await;
 
     for path in ["/v1/reports", "/v2/reports"] {
         let resp = client.get(path).send().await;
@@ -83,7 +81,7 @@ async fn one_controller_mounts_under_every_version_it_declares() {
 
 #[tokio::test]
 async fn a_route_narrowed_to_one_version_is_absent_from_the_others() {
-    let client = boot_with(None, None).await;
+    let client = boot_with(HttpConfig::default(), None).await;
 
     let resp = client.post("/v2/reports").send().await;
     resp.assert_status_is_ok();
@@ -99,15 +97,7 @@ async fn a_route_narrowed_to_one_version_is_absent_from_the_others() {
 
 #[tokio::test]
 async fn a_narrowed_route_narrows_under_every_selection_strategy() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, None), None).await;
 
     let resp = client
         .post("/reports")
@@ -135,7 +125,7 @@ async fn a_narrowed_route_narrows_under_every_selection_strategy() {
 
 #[tokio::test]
 async fn two_controllers_in_one_file_may_share_a_handler_name() {
-    let client = boot_with(None, None).await;
+    let client = boot_with(HttpConfig::default(), None).await;
 
     for (path, body) in [
         ("/v1/fund/ping", "v1"),
@@ -154,10 +144,20 @@ async fn two_controllers_in_one_file_may_share_a_handler_name() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-/// Boot the same three controllers under a selection strategy (`None` leaves
-/// the default URI one) and, optionally, a global prefix.
+/// A config selecting the version by `strategy`, serving `default` to a caller
+/// that states none.
+fn versioned(strategy: ApiVersioning, default: Option<String>) -> HttpConfig {
+    HttpConfig {
+        versioning: strategy,
+        default_version: default,
+        ..HttpConfig::default()
+    }
+}
+
+/// Boot the same three controllers on `config` and, optionally, a global
+/// prefix.
 async fn boot_with(
-    selector: impl Into<Option<VersionSelector>>,
+    config: HttpConfig,
     prefix: Option<&str>,
 ) -> TestClient<BoxEndpoint<'static, Response>> {
     let app = App::builder()
@@ -165,13 +165,10 @@ async fn boot_with(
         .build()
         .await
         .expect("boots");
-    let mut transport = HttpTransport::new();
-    if let Some(selector) = selector.into() {
-        transport = transport.api_versioning(selector);
-    }
-    if let Some(prefix) = prefix {
-        transport = transport.global_prefix(prefix);
-    }
+    let mut transport = crate::built(&HttpConfig {
+        global_prefix: prefix.map(Into::into),
+        ..config
+    });
     transport
         .configure(app.container())
         .await
@@ -185,15 +182,7 @@ async fn boot_with(
 
 #[tokio::test]
 async fn a_header_selects_the_version_of_the_same_controllers() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, None), None).await;
 
     for (version, body) in [("1", "v1"), ("2", "v2")] {
         let resp = client
@@ -218,15 +207,7 @@ async fn a_header_selects_the_version_of_the_same_controllers() {
 
 #[tokio::test]
 async fn a_media_type_selects_the_version_and_a_default_covers_a_silent_caller() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::MediaType,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            Some("1".into()),
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::MediaType, Some("1".into())), None).await;
 
     let resp = client
         .get("/fund/ping")
@@ -243,15 +224,7 @@ async fn a_media_type_selects_the_version_and_a_default_covers_a_silent_caller()
 
 #[tokio::test]
 async fn an_unknown_version_is_a_404_not_a_fallback() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, None), None).await;
     client
         .get("/fund/ping")
         .header(DEFAULT_VERSION_HEADER, "9")
@@ -264,15 +237,7 @@ async fn an_unknown_version_is_a_404_not_a_fallback() {
 /// no version, so a default version must not rewrite it.
 #[tokio::test]
 async fn a_default_version_does_not_rewrite_paths_that_have_no_version() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            Some("1".into()),
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, Some("1".into())), None).await;
 
     let resp = client.get("/fund/ping").send().await;
     resp.assert_status_is_ok();
@@ -288,15 +253,7 @@ const PREFIX: &str = "/api";
 
 #[tokio::test]
 async fn a_version_resolves_inside_the_global_prefix_and_only_inside_it() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        Some(PREFIX),
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, None), Some(PREFIX)).await;
 
     for (version, body) in [("1", "v1"), ("2", "v2")] {
         let resp = client
@@ -336,7 +293,7 @@ async fn a_version_resolves_inside_the_global_prefix_and_only_inside_it() {
 
 #[tokio::test]
 async fn the_uri_strategy_mounts_its_versions_under_the_global_prefix_too() {
-    let client = boot_with(None, Some(PREFIX)).await;
+    let client = boot_with(HttpConfig::default(), Some(PREFIX)).await;
 
     for (path, body) in [
         ("/api/v1/fund/ping", "v1"),
@@ -363,15 +320,7 @@ async fn the_uri_strategy_mounts_its_versions_under_the_global_prefix_too() {
 #[tokio::test]
 async fn a_stated_version_a_path_does_not_serve_never_falls_through() {
     // `/fund/ping` has versions, so v9 must not be served v1's body.
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, None), None).await;
     client
         .get("/fund/ping")
         .header(DEFAULT_VERSION_HEADER, "9")
@@ -384,15 +333,7 @@ async fn a_stated_version_a_path_does_not_serve_never_falls_through() {
 async fn a_path_with_no_versions_is_served_whatever_version_is_stated() {
     // A client sets the version header globally; `/unversioned/ping` has one
     // shape, so it still answers.
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, None), None).await;
     for stated in ["1", "2", "9"] {
         let resp = client
             .get("/unversioned/ping")
@@ -406,15 +347,7 @@ async fn a_path_with_no_versions_is_served_whatever_version_is_stated() {
 
 #[tokio::test]
 async fn a_default_version_never_reaches_a_path_that_has_none() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Header,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            Some("2".into()),
-        ),
-        None,
-    )
-    .await;
+    let client = boot_with(versioned(ApiVersioning::Header, Some("2".into())), None).await;
     let resp = client.get("/unversioned/ping").send().await;
     resp.assert_status_is_ok();
     resp.assert_text("none").await;
@@ -424,19 +357,11 @@ async fn a_default_version_never_reaches_a_path_that_has_none() {
     resp.assert_text("v2").await;
 }
 
-/// A URI selector handed to the builder must not wrap the routes, whose
-/// rewrite refuses the URI form; `HttpModule` never hands one over.
+/// The URI strategy routes by path and wraps no rewrite around the routes,
+/// which would refuse the URI form.
 #[tokio::test]
-async fn the_uri_strategy_passed_to_the_builder_is_a_no_op() {
-    let client = boot_with(
-        VersionSelector::new(
-            ApiVersioning::Uri,
-            HeaderName::from_static(DEFAULT_VERSION_HEADER),
-            None,
-        ),
-        None,
-    )
-    .await;
+async fn the_uri_strategy_wraps_no_rewrite_around_the_routes() {
+    let client = boot_with(versioned(ApiVersioning::Uri, None), None).await;
 
     for (path, body) in [
         ("/v1/fund/ping", "v1"),
@@ -487,10 +412,8 @@ async fn boot_edge_cases(default: Option<&str>) -> TestClient<BoxEndpoint<'stati
         .build()
         .await
         .expect("boots");
-    let mut transport = HttpTransport::new();
-    transport = transport.api_versioning(VersionSelector::new(
+    let mut transport = crate::built(&versioned(
         ApiVersioning::Header,
-        HeaderName::from_static(DEFAULT_VERSION_HEADER),
         default.map(str::to_owned),
     ));
     transport
@@ -586,7 +509,7 @@ async fn two_controllers_overlapping_on_one_version_are_told_which_version() {
         .build()
         .await
         .expect("boots");
-    let err = HttpTransport::new()
+    let err = crate::built(&HttpConfig::default())
         .configure(app.container())
         .await
         .expect_err("two controllers claiming /v2/overlap is a boot failure")
@@ -664,10 +587,8 @@ async fn boot_route_shapes(default: Option<&str>) -> TestClient<BoxEndpoint<'sta
         .build()
         .await
         .expect("boots");
-    let mut transport = HttpTransport::new();
-    transport = transport.api_versioning(VersionSelector::new(
+    let mut transport = crate::built(&versioned(
         ApiVersioning::Header,
-        HeaderName::from_static(DEFAULT_VERSION_HEADER),
         default.map(str::to_owned),
     ));
     transport
@@ -737,11 +658,7 @@ async fn an_accept_header_that_is_not_text_is_refused_too() {
         .build()
         .await
         .expect("boots");
-    let mut transport = HttpTransport::new().api_versioning(VersionSelector::new(
-        ApiVersioning::MediaType,
-        HeaderName::from_static(DEFAULT_VERSION_HEADER),
-        Some("2".to_owned()),
-    ));
+    let mut transport = crate::built(&versioned(ApiVersioning::MediaType, Some("2".to_owned())));
     transport
         .configure(app.container())
         .await

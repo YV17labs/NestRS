@@ -74,3 +74,9 @@ poem's spelling lives in one translation, `nest_rs_http`'s `route_template.rs`,
 both ways: a template is handed to poem's router in its spelling at mount, and
 the pattern the router matched is read back in the declared one for the span,
 the access line and the throttler's bucket.
+
+**2026-10-12 — the imperative mount is gone.** `HttpTransport::mount` left the
+public API with the transport's builder: the transport is built from
+`HttpConfig` alone, and a surface beyond the route table is a self-mount that
+declares its posture. The literal rule above stands for every path that
+remains on that list.

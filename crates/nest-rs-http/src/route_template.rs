@@ -1,6 +1,6 @@
 //! [`RouteTemplate`] — a route template read with nestrs's route grammar,
-//! OpenAPI path templating, at boot: what `also_mounts`, a path read from
-//! config and [`HttpTransport::mount`](crate::HttpTransport::mount) declare.
+//! OpenAPI path templating, at boot: what `also_mounts`, a self-mount's path
+//! and a path read from config declare.
 //!
 //! `#[routes]` reads its literals with `nest_rs_codegen::RoutePath`, which this
 //! crate cannot depend on (it pulls `syn`), so the grammar is written twice and
@@ -362,8 +362,8 @@ pub fn poem_pattern(template: &str) -> String {
 /// The pattern poem's router matched, in the spelling it was declared in:
 /// `/users/:id` is `/users/{id}`. A pattern with nothing to translate is
 /// handed back as it is. A pattern poem's grammar alone spells (a
-/// regular-expression capture an endpoint handed to `HttpTransport::mount`
-/// routes on) keeps its expression's text.
+/// regular-expression capture a hand-built self-mount routes on) keeps its
+/// expression's text.
 pub(crate) fn declared(pattern: &str) -> Cow<'_, str> {
     if !pattern.contains([':', '*', '{', '}']) {
         return Cow::Borrowed(pattern);

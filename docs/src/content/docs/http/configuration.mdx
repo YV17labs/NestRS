@@ -67,7 +67,6 @@ Real env always wins over the `.env` cascade.
 | `idle_timeout` | `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS` (seconds, `1`–`3600`) | `75 s` | `HttpConfig { idle_timeout: Duration::from_secs(620), ..Default::default() }` |
 | `send_timeout` | `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (seconds, `1`–`3600`) | `60 s` | `HttpConfig { send_timeout: Duration::from_secs(120), ..Default::default() }` |
 | `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
-| `fail_secure_strict` | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
 | `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
 | `compression` | `<PREFIX>_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
@@ -431,8 +430,8 @@ What the window does depends on what the connection is doing:
   each subscription still running and answers what is still answering, then
   closes the same way. A message or a
   subscription still running when the window closes is dropped with its socket,
-  and files its line `cancelled`. A socket a hand-built endpoint upgraded is the
-  developer's own: the transport cannot see inside it, so it neither waits for
+  and files its line `cancelled`. A socket a hand-built self-mount upgraded is
+  the developer's own: the transport cannot see inside it, so it neither waits for
   nor closes one — it ends when its handler ends it, or with the process.
 - **An MCP operation still running** — runs on a task of rmcp's rather than on
   the connection that asked for it, so it gets the window like a request, and
@@ -447,7 +446,7 @@ every mount together, so none of it is still running when the shutdown hooks
 start; what still is then — a unit blocking its thread — is named at `error`.
 When the window closes on open connections, one `warn` on `nest_rs::http`
 counts them: `cut`, the connections it closed, and `upgraded_open`, the sockets
-a hand-built endpoint left open. The shutdown hooks run once every transport has
+a hand-built self-mount left open. The shutdown hooks run once every transport has
 stopped, five seconds between all of them — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
 so keep the grace period above this window plus the half second, theirs and the
 flush's.
@@ -532,37 +531,6 @@ HttpModule::for_root(HttpConfig {
     },
     ..Default::default()
 });
-```
-
-## Fail-secure boot
-
-`fail_secure_strict` is `true` by default: when global guards are
-registered and an endpoint the transport can't shape (an imperative
-`mount(...)`) would bypass the guard pool, the boot **fails** naming the
-offending mount rather than silently serving it unguarded. Setting it to
-`false` downgrades that failure to a `warn` — a deliberate opt-out, not
-the default:
-
-An **imperative mount** is `HttpTransport::mount(path, |container| …)`:
-a raw poem endpoint handed to the transport, which can neither shape it
-(no `#[routes]` to run the guard pool through) nor introspect it (no
-`EdgePosture` to read). Writing an application route is not how you get
-one — `#[controller]` covers that, and a capability contributing its own
-surface (GraphQL, WebSockets, MCP, OpenAPI) self-mounts *with* a posture.
-It is the escape hatch for a hand-built endpoint, answering under its
-`path` whole — one literal address, so a parameter or a brace fails the boot —
-and the check exists because that hatch is the only hole a global guard pool
-cannot reach. The boot error names the path:
-
-```text frame="terminal"
-Error: fail-secure: imperative mount(...) endpoints bypass the global guard
-pool: /raw — route them through a #[controller], guard them explicitly, or
-opt out with HttpTransport::fail_secure_strict(false) /
-NESTRS_HTTP__FAIL_SECURE_STRICT=false
-```
-
-```bash title=".env" frame="terminal"
-NESTRS_HTTP__FAIL_SECURE_STRICT=false
 ```
 
 ## Going further

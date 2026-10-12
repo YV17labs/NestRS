@@ -14,7 +14,6 @@ mod compression;
 mod controller;
 mod edge;
 mod exclusive_paths;
-mod fail_secure;
 mod fallback;
 mod global_prefix;
 mod headers;
@@ -34,7 +33,7 @@ mod transport;
 mod versioning;
 
 use nest_rs_core::{App, Module, Transport};
-use nest_rs_http::HttpTransport;
+use nest_rs_http::{HttpConfig, HttpTransport};
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
 
@@ -44,12 +43,17 @@ pub(crate) async fn boot<M>() -> TestClient<BoxEndpoint<'static, poem::Response>
 where
     M: Module + 'static,
 {
-    boot_on::<M>(HttpTransport::new()).await
+    boot_on::<M>(HttpConfig::default()).await
 }
 
-/// The same boot, on a transport the caller has already configured.
+/// The transport `config` describes, before `configure`.
+pub(crate) fn built(config: &HttpConfig) -> HttpTransport {
+    HttpTransport::from_config(config).expect("the config is in range")
+}
+
+/// The same boot, on the transport `config` describes.
 pub(crate) async fn boot_on<M>(
-    mut transport: HttpTransport,
+    config: HttpConfig,
 ) -> TestClient<BoxEndpoint<'static, poem::Response>>
 where
     M: Module + 'static,
@@ -59,6 +63,7 @@ where
         .build()
         .await
         .expect("module boots");
+    let mut transport = built(&config);
     transport
         .configure(app.container())
         .await

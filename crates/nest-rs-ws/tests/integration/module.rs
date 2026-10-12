@@ -162,8 +162,8 @@ use nest_rs_core::{Layer, Transport, injectable};
 use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_testing::LogCapture;
 use nest_rs_ws::async_trait;
-use nest_rs_ws::nest_rs_http::HttpTransport;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
+use nest_rs_ws::nest_rs_http::{HttpConfig, HttpTransport};
 
 #[injectable]
 #[derive(Default)]
@@ -208,7 +208,8 @@ async fn configure_and_capture<M: nest_rs_core::Module + 'static>() -> Vec<Strin
         .await
         .expect("the module builds");
     let logs = LogCapture::install();
-    let mut transport = HttpTransport::new();
+    let mut transport =
+        HttpTransport::from_config(&HttpConfig::default()).expect("the defaults are in range");
     transport
         .configure(app.container())
         .await

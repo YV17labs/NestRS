@@ -13,7 +13,6 @@ use async_graphql::futures_util::stream as futures_stream;
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_pipes::{Piped, Trim};
 use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::broadcast;
@@ -109,7 +108,6 @@ struct SubscriptionApp;
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<SubscriptionApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("a schema carrying a subscription boots and mounts at /graphql")
@@ -273,7 +271,6 @@ struct PlaygroundApp;
 async fn an_upgrade_on_the_graphql_path_is_not_answered_by_the_playground() {
     let app = TestApp::builder()
         .module::<PlaygroundApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the playground app boots");

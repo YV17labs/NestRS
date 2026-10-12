@@ -1,6 +1,5 @@
 use api::ApiModule;
 use nest_rs::authn::AuthnConfig;
-use nest_rs::http::HttpTransport;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use serde_json::json;
@@ -14,7 +13,6 @@ async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
         .expect("create + migrate a throwaway database");
     let app = TestApp::builder()
         .module::<ApiModule>()
-        .http(HttpTransport::new().compression(true))
         .provide_arc(db.connection())
         .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),

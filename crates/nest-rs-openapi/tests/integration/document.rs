@@ -1,10 +1,8 @@
 //! Covers `src/document.rs` — what the served document says about a version.
 
 use nest_rs_core::module;
-use nest_rs_http::poem::http::HeaderName;
 use nest_rs_http::{
-    ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, HttpTransport, VersionSelector,
-    controller, routes,
+    ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, controller, routes,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
@@ -115,15 +113,6 @@ struct MultiVersionApp;
 #[module(imports = [openapi()], providers = [ProbeController])]
 struct RawIdentApp;
 
-// `TestApp`'s default transport resolves no version per request.
-fn versioned_transport(default_version: Option<&str>) -> HttpTransport {
-    HttpTransport::new().api_versioning(VersionSelector::new(
-        ApiVersioning::Header,
-        HeaderName::from_static(DEFAULT_VERSION_HEADER),
-        default_version.map(str::to_owned),
-    ))
-}
-
 async fn document(app: &TestApp, path: &str) -> Value {
     let resp = app.http().get(path).send().await;
     resp.assert_status_is_ok();
@@ -146,7 +135,6 @@ fn version_parameter<'a>(operation: &'a Value, header: &str) -> Option<&'a Value
 async fn a_header_versioned_document_names_the_paths_a_client_calls() {
     let app = TestApp::builder()
         .module::<HeaderVersionedApp>()
-        .http(versioned_transport(None))
         .build()
         .await
         .expect("boots");
@@ -184,7 +172,6 @@ async fn a_header_versioned_document_names_the_paths_a_client_calls() {
 async fn each_version_gets_a_document_that_describes_only_it() {
     let app = TestApp::builder()
         .module::<HeaderVersionedApp>()
-        .http(versioned_transport(None))
         .build()
         .await
         .expect("boots");
@@ -223,7 +210,6 @@ async fn each_version_gets_a_document_that_describes_only_it() {
 async fn the_documented_address_is_the_one_that_answers() {
     let app = TestApp::builder()
         .module::<HeaderVersionedApp>()
-        .http(versioned_transport(None))
         .build()
         .await
         .expect("boots");
@@ -255,7 +241,6 @@ async fn the_documented_address_is_the_one_that_answers() {
 async fn a_default_version_makes_the_parameter_optional_and_picks_the_document() {
     let app = TestApp::builder()
         .module::<DefaultedApp>()
-        .http(versioned_transport(Some("1")))
         .build()
         .await
         .expect("boots");
@@ -306,7 +291,6 @@ async fn one_handler_under_two_versions_is_two_operations_a_client_can_tell_apar
 async fn the_two_controller_layout_names_its_two_versions_apart_as_well() {
     let app = TestApp::builder()
         .module::<HeaderVersionedApp>()
-        .http(versioned_transport(None))
         .build()
         .await
         .expect("boots");

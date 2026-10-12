@@ -9,7 +9,7 @@ use nest_rs_core::{Container, Discovery, Transport};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderName, HeaderValue, SERVER};
 use poem::middleware::{Compression, Cors};
-use poem::{EndpointExt, IntoEndpoint, Response, Route};
+use poem::{EndpointExt, Response, Route};
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
@@ -24,9 +24,8 @@ use crate::server::Server;
 use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
 
-type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
-/// Imperative mount paired with its path, so the fail-secure check can name it.
-type NamedMount = (String, MountFn);
+/// The `Server` value a transport sends when [`HttpConfig::server_header`](crate::HttpConfig::server_header) is on.
+const SERVER_VALUE: &str = concat!("nestrs/", env!("CARGO_PKG_VERSION"));
 
 /// Join a controller prefix with a route path the way poem's nesting does:
 /// `("/health", "/live") -> "/health/live"`.
@@ -90,24 +89,47 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 }
 
 /// HTTP [`Transport`]: every discovered controller and self-mounted endpoint,
-/// then each [`mount`](Self::mount), under the discovered transport-level
-/// wraps, routed by poem and served by the transport's own accept loop.
+/// under the discovered transport-level wraps, routed by poem and served by the
+/// transport's own accept loop.
+///
+/// [`from_config`](Self::from_config) is its one constructor, the call
+/// [`HttpModule::for_root`](crate::HttpModule::for_root) makes:
+///
+/// ```
+/// use nest_rs_http::{HttpConfig, HttpTransport};
+///
+/// let transport = HttpTransport::from_config(&HttpConfig {
+///     compression: true,
+///     ..Default::default()
+/// })?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+///
+/// Nothing configures it a second way — no `new`:
+///
+/// ```compile_fail
+/// let transport = nest_rs_http::HttpTransport::new();
+/// ```
+///
+/// and no `Default`:
+///
+/// ```compile_fail
+/// let transport = nest_rs_http::HttpTransport::default();
+/// ```
 pub struct HttpTransport {
     bind: String,
-    mounts: Vec<NamedMount>,
     cors: Option<Cors>,
     tls: Option<HttpTls>,
-    server_header: Option<&'static str>,
+    server_header: bool,
     global_prefix: Option<String>,
-    max_body_bytes: Option<usize>,
+    max_body_bytes: usize,
     request_timeout: Option<Duration>,
     shutdown_timeout: Duration,
     max_concurrent_connections: usize,
     deadlines: crate::server::Deadlines,
-    fail_secure_strict: bool,
     security_headers: crate::HttpSecurityHeaders,
     compression: bool,
-    version_selector: Option<crate::VersionSelector>,
+    version_selector: Option<crate::versioning::VersionSelector>,
     /// What each self-mount runs off its connections, by mount path.
     detached: Vec<(String, DetachedWork)>,
     /// Shared with the edge, whose response bodies read it.
@@ -273,182 +295,39 @@ fn prefix_remedy(version: Option<&str>) -> String {
     }
 }
 
-impl Default for HttpTransport {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl HttpTransport {
-    /// A transport with framework defaults: bind `0.0.0.0:3000`, no TLS or CORS,
-    /// fail-secure strict.
-    pub fn new() -> Self {
-        Self {
-            bind: "0.0.0.0:3000".into(),
-            mounts: Vec::new(),
-            cors: None,
-            tls: None,
-            server_header: None,
-            global_prefix: None,
-            max_body_bytes: None,
-            request_timeout: None,
-            shutdown_timeout: crate::config::DEFAULT_SHUTDOWN_TIMEOUT,
-            max_concurrent_connections: crate::config::DEFAULT_MAX_CONCURRENT_CONNECTIONS,
-            deadlines: crate::server::Deadlines::default(),
-            fail_secure_strict: true,
-            security_headers: crate::HttpSecurityHeaders::default(),
-            compression: false,
+    /// The transport `cfg` describes, its connection cap and deadlines held to
+    /// the ranges their variables are: a config built in code never met the
+    /// environment.
+    pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
+        let transport = Self {
+            bind: format!("{}:{}", cfg.host, cfg.port),
+            cors: cfg
+                .cors
+                .clone()
+                .map(crate::HttpCors::into_middleware)
+                .transpose()?,
+            tls: cfg.tls.clone(),
+            server_header: cfg.server_header,
+            global_prefix: cfg
+                .global_prefix
+                .as_deref()
+                .and_then(normalize_global_prefix),
+            max_body_bytes: cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
+            request_timeout: cfg.request_timeout,
+            shutdown_timeout: cfg.shutdown_timeout,
+            max_concurrent_connections: cfg.connection_cap()?,
+            deadlines: cfg.deadlines()?,
+            security_headers: cfg.security_headers.clone(),
+            compression: cfg.compression,
             // `None` is the URI strategy: the version is already in the mount path.
-            version_selector: None,
+            version_selector: cfg.version_selector(),
             detached: Vec::new(),
             drain: Arc::default(),
             endpoint: None,
-        }
-    }
-
-    /// Build the transport an [`HttpConfig`](crate::HttpConfig) describes.
-    pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
-        let mut http = Self::new().bind(format!("{}:{}", cfg.host, cfg.port));
-        if let Some(tls) = cfg.tls.clone() {
-            http = http.tls(tls);
-        }
-        if let Some(cors) = cfg.cors.clone() {
-            http = http.cors(cors.into_middleware()?);
-        }
-        if cfg.server_header {
-            http = http.server_header(concat!("nestrs/", env!("CARGO_PKG_VERSION")));
-        }
-        if let Some(prefix) = cfg.global_prefix.clone() {
-            http = http.global_prefix(prefix);
-        }
-        if let Some(selector) = cfg.version_selector() {
-            http = http.api_versioning(selector);
-        }
-        http = http.max_body_bytes(cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT));
-        if let Some(timeout) = cfg.request_timeout {
-            http = http.request_timeout(timeout);
-        }
-        http = http.shutdown_timeout(cfg.shutdown_timeout);
-        http.max_concurrent_connections = cfg.connection_cap()?;
-        http.deadlines = cfg.deadlines()?;
+        };
         cfg.warn_when_requests_outlast_the_window();
-        http = http.fail_secure_strict(cfg.fail_secure_strict);
-        http = http.security_headers(cfg.security_headers.clone());
-        http = http.compression(cfg.compression);
-        Ok(http)
-    }
-
-    /// Resolve each request's API version through `selector` instead of from
-    /// its path.
-    pub fn api_versioning(mut self, selector: crate::VersionSelector) -> Self {
-        self.version_selector = Some(selector);
-        self
-    }
-
-    /// Pin the default security-header policy; the default is nosniff,
-    /// `X-Frame-Options: DENY` and HSTS under TLS, each on a response that sets
-    /// none.
-    pub fn security_headers(mut self, cfg: crate::HttpSecurityHeaders) -> Self {
-        self.security_headers = cfg;
-        self
-    }
-
-    /// `true` (the default) makes `configure` **fail** when global guards are
-    /// registered and an imperative [`mount`](Self::mount) endpoint would
-    /// bypass the guard pool; `false` downgrades the violation to a `warn`.
-    pub fn fail_secure_strict(mut self, strict: bool) -> Self {
-        self.fail_secure_strict = strict;
-        self
-    }
-
-    /// Mount every controller under a shared prefix (e.g. `/api`). Empty or
-    /// `"/"` is no prefix; a missing leading `/` is added, a trailing one stripped.
-    /// It is one literal address: a template fails the boot.
-    pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.global_prefix = normalize_global_prefix(&prefix.into());
-        self
-    }
-
-    /// Emit `Server: <value>` on every response that sets none; off by default.
-    pub fn server_header(mut self, value: &'static str) -> Self {
-        self.server_header = Some(value);
-        self
-    }
-
-    /// Set the listen address (`host:port`).
-    pub fn bind(mut self, addr: impl Into<String>) -> Self {
-        self.bind = addr.into();
-        self
-    }
-
-    /// Cap each request's raw body to `limit` bytes, which [`RawBody`](crate::RawBody)
-    /// reads through [`current_body_limit`](crate::current_body_limit).
-    pub fn max_body_bytes(mut self, limit: usize) -> Self {
-        self.max_body_bytes = Some(limit);
-        self
-    }
-
-    /// Abort any request still running `timeout` after its arrival, its body's
-    /// reading included, answering `503 Service Unavailable` with a
-    /// `Retry-After`. Without this call no timeout is enforced.
-    pub fn request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = Some(timeout);
-        self
-    }
-
-    /// How long [`serve`](Transport::serve) lets open connections finish once
-    /// shutdown is asked for, 20 seconds by default. A body with no end of its
-    /// own ([`OpenEndedBody`](crate::OpenEndedBody)) ends at the signal; a
-    /// connection still open at the window's close is cut, and one `warn` counts them.
-    pub fn shutdown_timeout(mut self, window: Duration) -> Self {
-        self.shutdown_timeout = window;
-        self
-    }
-
-    /// Enable CORS with a configured poem [`Cors`] middleware, outermost so a
-    /// preflight is answered before any guard or interceptor runs.
-    pub fn cors(mut self, cors: Cors) -> Self {
-        self.cors = Some(cors);
-        self
-    }
-
-    /// Negotiate response compression from each request's `Accept-Encoding`
-    /// (poem's [`Compression`]: gzip, deflate, brotli, zstd); off by default.
-    pub fn compression(mut self, on: bool) -> Self {
-        self.compression = on;
-        self
-    }
-
-    /// Serve HTTPS from [`HttpTls`] — HTTP/2 or HTTP/1.1 by ALPN, on rustls —
-    /// instead of plain HTTP. Without this call the transport stays plaintext.
-    pub fn tls(mut self, tls: HttpTls) -> Self {
-        self.tls = Some(tls);
-        self
-    }
-
-    /// Mount an extra endpoint at `path`, one literal address it answers under
-    /// whole: a parameter, a brace, or a `:`, `*` or `<` fails the boot. The
-    /// builder closure runs at [`Transport::configure`] time with the live
-    /// container, so it can resolve services to construct framework-specific
-    /// endpoints.
-    pub fn mount<F, E>(mut self, path: impl Into<String>, build: F) -> Self
-    where
-        F: Fn(&Container) -> E + Send + Sync + 'static,
-        E: IntoEndpoint,
-        E::Endpoint: 'static,
-        <E::Endpoint as poem::Endpoint>::Output: poem::IntoResponse,
-    {
-        let path = path.into();
-        let mount_path = path.clone();
-        self.mounts.push((
-            path,
-            Box::new(move |container, route| {
-                let endpoint =
-                    crate::matched(build(container).into_endpoint().map_to_response()).boxed();
-                route.nest(mount_path.clone(), endpoint)
-            }),
-        ));
-        self
+        Ok(transport)
     }
 
     /// Take the assembled endpoint for in-process testing (drive with poem's
@@ -674,36 +553,6 @@ impl Transport for HttpTransport {
                 "unguarded self-mount edges detected",
             );
         }
-        // An imperative `mount` is opaque to the transport, so it bypasses the
-        // global guard pool.
-        if !self.mounts.is_empty() && container.get::<GlobalGuardsActive>().is_some() {
-            let paths: Vec<&str> = self.mounts.iter().map(|(p, _)| p.as_str()).collect();
-            if self.fail_secure_strict {
-                anyhow::bail!(
-                    "fail-secure: imperative mount(...) endpoints bypass the global guard pool: \
-                     {} — route them through a #[controller], guard them explicitly, or opt out \
-                     with HttpTransport::fail_secure_strict(false) / {}=false",
-                    paths.join(", "),
-                    nest_rs_config::var_name("http", "FAIL_SECURE_STRICT"),
-                );
-            }
-            tracing::warn!(
-                target: crate::target::HTTP,
-                paths = paths.join(", ").as_str(),
-                hint = "route through a #[controller] or guard explicitly",
-                "imperative mounts bypass the global guard pool",
-            );
-        }
-        for (path, mount) in self.mounts.drain(..) {
-            RouteTemplate::literal(&path)
-                .map_err(|refused| anyhow::anyhow!("HttpTransport::mount {refused}"))?;
-            claims.prefix(
-                &path,
-                format!("the endpoint HttpTransport::mount added at {path:?}"),
-            );
-            route = mount(container, route);
-        }
-
         // Inside the global prefix, so it rewrites the path controllers mount at.
         // `rewrites()`, not `Some`: wrapping the URI strategy would refuse every `/v{n}/…`.
         if let Some(selector) = self.version_selector.take().filter(|s| s.rewrites()) {
@@ -763,14 +612,14 @@ impl Transport for HttpTransport {
                 ),
             }
         }
-        if let Some(value) = self.server_header.take() {
-            edge_headers.push((SERVER, HeaderValue::from_static(value)));
+        if self.server_header {
+            edge_headers.push((SERVER, HeaderValue::from_static(SERVER_VALUE)));
         }
         // The problem normalizer must be outermost: without CORS or compression
         // that is the edge itself, otherwise a wrap outside both.
         let fuse_normalize = !self.compression && self.cors.is_none();
         let timeout = self.request_timeout.take();
-        let body_limit = self.max_body_bytes.take();
+        let body_limit = Some(self.max_body_bytes);
 
         let endpoint: BoxEndpoint<'static, Response> = if metas.is_empty() && fuse_normalize {
             crate::edge::EdgeEndpoint::new(
@@ -982,21 +831,29 @@ mod tests {
         }
     }
 
+    /// The transport a default config describes.
+    fn defaults() -> HttpTransport {
+        HttpTransport::from_config(&crate::HttpConfig::default())
+            .expect("the defaults are in range")
+    }
+
     #[test]
-    fn http_transport_defaults_match_an_empty_new() {
-        let d = HttpTransport::default();
-        let n = HttpTransport::new();
-        assert_eq!(d.bind, n.bind);
+    fn a_default_config_builds_a_plaintext_transport_on_every_interface() {
+        let d = defaults();
         assert_eq!(d.bind, "0.0.0.0:3000");
-        assert!(d.mounts.is_empty());
         assert!(d.cors.is_none());
         assert!(d.tls.is_none());
-        assert!(d.server_header.is_none());
+        assert!(!d.server_header, "no framework fingerprint by default");
+        assert!(d.global_prefix.is_none());
+        assert_eq!(d.max_body_bytes, crate::RawBody::DEFAULT_LIMIT);
+        assert!(
+            d.version_selector.is_none(),
+            "the URI strategy routes by path"
+        );
         assert!(d.endpoint.is_none());
         assert_eq!(
             d.shutdown_timeout,
-            crate::HttpConfig::default().shutdown_timeout,
-            "a transport built by hand gets the window a configured one defaults to",
+            crate::HttpConfig::default().shutdown_timeout
         );
     }
 
@@ -1008,11 +865,6 @@ mod tests {
         })
         .expect("a cap inside the range");
         assert_eq!(capped.max_concurrent_connections, 64);
-        assert_eq!(
-            HttpTransport::new().max_concurrent_connections,
-            crate::HttpConfig::default().max_concurrent_connections,
-            "a transport built by hand gets the cap a configured one defaults to",
-        );
         for cap in [0, 1_048_577] {
             let refused = HttpTransport::from_config(&crate::HttpConfig {
                 max_concurrent_connections: cap,
@@ -1034,7 +886,11 @@ mod tests {
     #[test]
     fn the_stop_bound_is_the_configured_window_then_the_settle() {
         let window = Duration::from_secs(3);
-        let t = HttpTransport::new().shutdown_timeout(window);
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            shutdown_timeout: window,
+            ..Default::default()
+        })
+        .expect("a window in range");
         assert_eq!(
             t.stop_bound(),
             window + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
@@ -1042,26 +898,60 @@ mod tests {
     }
 
     #[test]
-    fn bind_overrides_the_default_address() {
-        let t = HttpTransport::new().bind("127.0.0.1:9000");
+    fn the_listen_address_is_the_configured_host_and_port() {
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            host: "127.0.0.1".into(),
+            port: 9000,
+            ..Default::default()
+        })
+        .expect("in range");
         assert_eq!(t.bind, "127.0.0.1:9000");
     }
 
     #[test]
-    fn tls_pins_the_supplied_config() {
-        let t = HttpTransport::new().tls(HttpTls::new(b"cert".to_vec(), b"key".to_vec()));
+    fn configured_tls_material_is_kept_for_serve_to_check() {
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            tls: Some(HttpTls::new(b"cert".to_vec(), b"key".to_vec())),
+            ..Default::default()
+        })
+        .expect("material is checked when serve binds, not here");
         assert!(t.tls.is_some());
     }
 
     #[test]
-    fn server_header_pins_the_supplied_static_str() {
-        let t = HttpTransport::new().server_header("nestrs/0.1.0");
-        assert_eq!(t.server_header, Some("nestrs/0.1.0"));
+    fn the_server_header_names_this_nestrs_version() {
+        let t = HttpTransport::from_config(&crate::HttpConfig {
+            server_header: true,
+            ..Default::default()
+        })
+        .expect("in range");
+        assert!(t.server_header);
+        assert_eq!(
+            SERVER_VALUE,
+            format!("nestrs/{}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn a_global_prefix_is_kept_in_its_canonical_form() {
+        for (raw, kept) in [
+            ("api", Some("/api")),
+            ("/api/", Some("/api")),
+            ("/", None),
+            ("  ", None),
+        ] {
+            let t = HttpTransport::from_config(&crate::HttpConfig {
+                global_prefix: Some(raw.into()),
+                ..Default::default()
+            })
+            .expect("in range");
+            assert_eq!(t.global_prefix.as_deref(), kept, "{raw:?}");
+        }
     }
 
     #[test]
     fn take_endpoint_returns_none_before_configure_has_run() {
-        let mut t = HttpTransport::new();
+        let mut t = defaults();
         assert!(t.take_endpoint().is_none(), "no endpoint before configure");
     }
 }

@@ -5,7 +5,6 @@
 use async_graphql::InputObject;
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_pipes::{ParseArray, Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_testing::TestApp;
 use validator::Validate;
@@ -78,7 +77,6 @@ struct AppWithPipes;
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<AppWithPipes>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")

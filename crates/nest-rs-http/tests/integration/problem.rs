@@ -4,7 +4,7 @@
 
 use nest_rs_core::{App, Layer, Transport, injectable, module};
 use nest_rs_http::{
-    HttpTransport, Opaque, ProblemDetails, Valid, async_trait, controller, input, routes,
+    HttpConfig, Opaque, ProblemDetails, Valid, async_trait, controller, input, routes,
 };
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use poem::http::StatusCode;
@@ -216,7 +216,7 @@ async fn wrapped() -> Client {
         .build()
         .await
         .expect("module boots");
-    let mut transport = HttpTransport::new();
+    let mut transport = crate::built(&HttpConfig::default());
     transport
         .configure(app.container())
         .await
@@ -233,7 +233,11 @@ async fn wrapped() -> Client {
 async fn clients() -> [Client; 3] {
     [
         crate::boot::<DecodeModule>().await,
-        crate::boot_on::<DecodeModule>(HttpTransport::new().compression(true)).await,
+        crate::boot_on::<DecodeModule>(HttpConfig {
+            compression: true,
+            ..HttpConfig::default()
+        })
+        .await,
         wrapped().await,
     ]
 }

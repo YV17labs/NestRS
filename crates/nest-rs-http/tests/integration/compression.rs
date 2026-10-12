@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use nest_rs_core::module;
-use nest_rs_http::{HttpTransport, controller, routes};
+use nest_rs_http::{HttpConfig, controller, routes};
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
 
@@ -31,18 +31,11 @@ struct EchoModule;
 async fn boot(
     compression: bool,
 ) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    boot_with(compression, None).await
-}
-
-async fn boot_with(
-    compression: bool,
-    request_timeout: Option<Duration>,
-) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let mut transport = HttpTransport::new().compression(compression);
-    if let Some(timeout) = request_timeout {
-        transport = transport.request_timeout(timeout);
-    }
-    crate::boot_on::<EchoModule>(transport).await
+    crate::boot_on::<EchoModule>(HttpConfig {
+        compression,
+        ..HttpConfig::default()
+    })
+    .await
 }
 
 #[tokio::test]
@@ -77,12 +70,17 @@ async fn compression_off_never_encodes_even_when_accepted() {
     resp.assert_header_is_not_exist(header::CONTENT_ENCODING);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
     // Compression runs inside the error boundary: it stamps `gzip` on the
     // timeout's `503` before the boundary rewrites the body uncompressed.
     let logs = nest_rs_testing::LogCapture::install();
-    let client = boot_with(true, Some(Duration::from_millis(50))).await;
+    let client = crate::boot_on::<EchoModule>(HttpConfig {
+        compression: true,
+        request_timeout: Some(Duration::from_secs(1)),
+        ..HttpConfig::default()
+    })
+    .await;
     let resp = client
         .get("/echo/slow")
         .header(header::ACCEPT_ENCODING, "gzip")
@@ -94,7 +92,7 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
     let event = logs.expect_one("nest_rs::http", "request timed out");
     assert_eq!(event.level, "warn");
     assert!(
-        event.field("timeout").is_some_and(|t| t.contains("50")),
+        event.field("timeout").is_some_and(|t| t.contains("1s")),
         "the event names the ceiling that fired, got {:?}",
         event.fields,
     );

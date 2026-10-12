@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use async_graphql::SimpleObject;
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[derive(SimpleObject)]
@@ -112,7 +111,6 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
 
     let _app = TestApp::builder()
         .module::<SnapshotApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the two-resolver schema boots and emits SDL");
@@ -152,7 +150,6 @@ async fn an_sdl_emit_that_cannot_write_warns_and_still_serves() {
 
     let app = TestApp::builder()
         .module::<UnwritableSdlApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("a failed SDL write is a dev-loop annoyance, never a boot failure");
@@ -263,7 +260,6 @@ async fn subgraph_sdl_matches_committed_snapshot() {
     let app = TestApp::builder()
         .module::<SubgraphSnapshotApp>()
         .module::<GadgetModule>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("a subgraph boots and emits its SDL");

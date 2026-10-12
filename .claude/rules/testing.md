@@ -51,9 +51,8 @@ nextest prints each test's time: compare before and after.
   of every `for_root` seam. It boots the transport the app's own
   `HttpModule::for_root(cfg)` describes, through the call the module itself
   makes: pin an `HttpConfig` on the module to test a prefix, a versioning
-  strategy, a body cap or a timeout. `TestAppBuilder::http(t)` is only for a
-  transport the app does not declare — a bare one tests a server the app
-  never runs.
+  strategy, a body cap or a timeout, or seed the whole config (`provide`) for
+  a value the module does not pin — the transport has no builder.
 - **`provide` / `provide_arc`** seed a value, which short-circuits its
   resolving factory; **`override_dyn` / `override_value`** swap a provider for
   a double. Never the database (`CLAUDE.md`, hard "no").

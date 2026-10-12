@@ -2,7 +2,7 @@
 //! before it answered: poem attaches the template to the response alone.
 //!
 //! poem's router offers no hook a nested route runs, so a cut request on an
-//! endpoint handed to `HttpTransport::mount` is named for its mount path.
+//! endpoint a surface nests whole (GraphQL's) is named for its mount path.
 //!
 //! poem records the pattern in its own spelling; every reader here gets it back
 //! in the declared one (`/users/{id}`), which the span, the access line and the

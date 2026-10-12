@@ -1,12 +1,13 @@
 //! The harness boots the transport the **app** configured, not a fresh one,
-//! pinned on the two fields that change the address a request must use.
+//! pinned on the two fields that change the address a request must use, or the
+//! one a suite seeds.
 
 use nest_rs_core::module;
 use nest_rs_http::{
     ApiVersioning, DEFAULT_VERSION_HEADER, HttpConfig, HttpModule, controller, routes,
 };
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
+use poem::http::{StatusCode, header};
 
 #[controller(path = "/widgets", version = "1")]
 struct WidgetsController;
@@ -100,4 +101,31 @@ async fn a_default_version_nothing_declares_fails_the_boot_without_openapi() {
         "the boot failure names the variable to change: {err}",
     );
     assert!(err.contains('1'), "and the versions that do exist: {err}",);
+}
+
+#[module(providers = [WidgetsController])]
+struct UnconfiguredApp;
+
+/// A suite configures the transport by seeding the config it wants, which the
+/// harness boots from; no builder stands beside it.
+#[tokio::test]
+async fn the_harness_boots_the_transport_a_seeded_config_describes() {
+    let app = TestApp::builder()
+        .module::<UnconfiguredApp>()
+        .provide(HttpConfig {
+            compression: true,
+            ..HttpConfig::default()
+        })
+        .build()
+        .await
+        .expect("a seeded HttpConfig is ordinary composition");
+
+    let resp = app
+        .http()
+        .get("/v1/widgets")
+        .header(header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.assert_header(header::CONTENT_ENCODING, "gzip");
 }

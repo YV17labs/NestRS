@@ -142,8 +142,9 @@ bridges*).
   cleanly so `EventSource` reconnects; a gateway's socket closes `1001 Going
   Away`; a graphql-ws socket completes each subscription, answers what is still
   running, then closes `1001`; an MCP `subscriptions/listen` gets its final
-  result. Each files its unit `cancelled`. A hand-built `HttpTransport::mount`
-  endpoint is refused this — the transport cannot see inside it — and counted.
+  result. Each files its unit `cancelled`. A socket a hand-built self-mount
+  upgraded without declaring it is refused this — the transport cannot see
+  inside it — and counted.
 - **Work an endpoint runs off its connections** (rmcp's operation tasks,
   DataLoader batches, an upgraded socket) is declared as a `DetachedWork`: told at
   the signal, given the rest of the window, then stopped and settled once for
@@ -195,12 +196,11 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   **No site runs without a layer it declares**: one composed at boot (a route, a
   gateway's upgrade and messages) fails the boot naming the layer and the site,
   one composed on its first dispatch (a GraphQL or MCP operation) refuses that
-  unit opaquely and files one `error` naming both. A hand-built
-  `HttpTransport::mount` under active global guards fails the boot too unless
-  `fail_secure_strict` is turned off, which warns.
-  A self-mount declares an `EdgePosture`: `Guarded` (default; a WS upgrade) gets
-  the global chain at its edge; `Exempt` gates in band (GraphQL, MCP) or is
-  deliberately public (OpenAPI).
+  unit opaquely and files one `error` naming both. **A surface beyond the
+  route table is a self-mount**, the transport's one other mount (it is built
+  from `HttpConfig` alone, with no builder), and declares an `EdgePosture`:
+  `Guarded` (default; a WS upgrade) gets the global chain at its edge; `Exempt`
+  gates in band (GraphQL, MCP) or is deliberately public (OpenAPI).
 - **The in-band edges also run a per-operation chain**, composed once per site in
   a shared `SiteChainCell` from the app-wide pool, the provider's `#[use_guards]`
   and the operation's own — one `compose`, no per-transport switch over where the

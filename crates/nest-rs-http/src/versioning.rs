@@ -77,7 +77,7 @@ impl FromStr for ApiVersioning {
 /// It rewrites only paths a versioned route serves, so a default version never
 /// sends `/graphql` or `/health` to `/v1/graphql`.
 #[derive(Clone, Debug)]
-pub struct VersionSelector {
+pub(crate) struct VersionSelector {
     strategy: ApiVersioning,
     header: HeaderName,
     default_version: Option<String>,
@@ -101,7 +101,7 @@ impl VersionSelector {
     /// what a request that states none is served, and `None` leaves such a
     /// request on the unversioned routes. The routes are learned when
     /// [`HttpTransport`](crate::HttpTransport) mounts the app's controllers.
-    pub fn new(
+    pub(crate) fn new(
         strategy: ApiVersioning,
         header: HeaderName,
         default_version: Option<String>,

@@ -179,9 +179,20 @@ ride the same client because they self-mount as HTTP endpoints.
 
 It drives **the transport your app's `HttpModule::for_root(cfg)` describes**, not
 a bare one — so a global prefix, a versioning strategy, a body cap or a request
-timeout you pin on the module is what the suite exercises. Pin the `HttpConfig`
-on the module to test one; `TestAppBuilder::http(transport)` is for a transport
-the app does not declare at all.
+timeout you pin on the module is what the suite exercises. A suite that needs
+another value seeds the whole config, which the harness boots from in place of
+the module's:
+
+```rust title="apps/api/tests/e2e/http.rs"
+let app = TestApp::builder()
+    .module::<ApiModule>()
+    .provide(HttpConfig {
+        compression: true,
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
 
 ```rust title="apps/api/tests/e2e/openapi.rs"
 let resp = app.http().get("/api-json").send().await;

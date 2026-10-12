@@ -1,10 +1,9 @@
 //! HTTP transport for nestrs — a [`nest_rs_core::Transport`] routed by poem and
 //! served by its own accept loop on hyper.
 //!
-//! [`HttpTransport`] mounts every `#[routes]` controller, every self-mounting
-//! endpoint another surface declares (a GraphQL schema, an MCP service — each
-//! via [`HttpEndpointMeta`]), and any extra endpoint registered with
-//! [`HttpTransport::mount`].
+//! [`HttpTransport`], built from the app's [`HttpConfig`] alone, mounts every
+//! `#[routes]` controller and every self-mounting endpoint another surface
+//! declares (a GraphQL schema, an MCP service — each via [`HttpEndpointMeta`]).
 //!
 //! Its vocabulary names no server library: the `http` crate's head types,
 //! re-exported here as their one path, and nestrs's own [`Request`],
@@ -226,9 +225,7 @@ pub use transport::{
     HttpTransport, join_path, literal_mount_path, normalize_mount_path, version_path,
     versions_declare,
 };
-pub use versioning::{
-    ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, VersionSelector, declared_versions,
-};
+pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, declared_versions};
 
 #[doc(hidden)]
 pub mod __private {

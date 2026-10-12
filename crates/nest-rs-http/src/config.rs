@@ -236,10 +236,10 @@ pub struct HttpConfig {
     /// none. Defaults to `false`: no framework fingerprint.
     pub server_header: bool,
     /// Mount every controller under a shared path prefix (e.g. `/api`). `None`
-    /// ⇒ no prefix. Read from `<PREFIX>_HTTP__GLOBAL_PREFIX`, normalized by
-    /// [`HttpTransport::global_prefix`](crate::HttpTransport::global_prefix).
-    /// One literal path: a template's `{` `}`, or a `:`, `*` or `<` the router
-    /// reads as a parameter, fails the boot.
+    /// ⇒ no prefix. Read from `<PREFIX>_HTTP__GLOBAL_PREFIX`; a missing leading
+    /// `/` is added and a trailing one stripped, and empty or `"/"` is no
+    /// prefix. One literal path: a template's `{` `}`, or a `:`, `*` or `<` the
+    /// router reads as a parameter, fails the boot.
     pub global_prefix: Option<String>,
     /// Transport-wide cap on the request body size, for every reader — an
     /// extractor, a guard, a global pipe — counted as the body is read, after
@@ -261,11 +261,6 @@ pub struct HttpConfig {
     /// the window, or none, is said once at boot with a `warn`. Off in code is
     /// `None`; a pinned zero is refused.
     pub request_timeout: Option<Duration>,
-    /// `true` (the default) fails boot when global guards are registered and
-    /// an endpoint the transport cannot shape (an imperative `mount(...)`)
-    /// would bypass the guard pool; `false` downgrades to a `warn`. Read from
-    /// `<PREFIX>_HTTP__FAIL_SECURE_STRICT`.
-    pub fail_secure_strict: bool,
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
     /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS), each on a
     /// response that sets none. On by default; tune via
@@ -309,8 +304,8 @@ pub struct HttpConfig {
     /// signal; what is still open then is closed, and one `warn` on
     /// `nest_rs::http` counts it. An `#[sse]` or MCP `GET` stream ends at the
     /// signal; a WebSocket or graphql-ws socket closes `1001 Going Away` after
-    /// what it is answering. A socket a hand-built endpoint upgraded is never
-    /// waited for: it ends with its handler or the process, counted as
+    /// what it is answering. A socket a hand-built self-mount upgraded is
+    /// never waited for: it ends with its handler or the process, counted as
     /// `upgraded_open`.
     ///
     /// Read from `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
@@ -389,7 +384,6 @@ impl Default for HttpConfig {
             global_prefix: None,
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
             request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
-            fail_secure_strict: true,
             security_headers: HttpSecurityHeaders::default(),
             compression: false,
             access_log: true,
@@ -501,7 +495,6 @@ impl Config for HttpConfig {
             global_prefix,
             max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
             request_timeout: optional(REQUEST_TIMEOUT.read_optional(env, base.request_timeout)?),
-            fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
             security_headers: HttpSecurityHeaders::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
             access_log: env.flag("ACCESS_LOG", base.access_log)?,
@@ -826,7 +819,6 @@ mod tests {
                     ("GLOBAL_PREFIX", "/api"),
                     ("MAX_BODY_BYTES", "4096"),
                     ("COMPRESSION", "true"),
-                    ("FAIL_SECURE_STRICT", "false"),
                 ],
             ),
             pinned,
@@ -836,7 +828,6 @@ mod tests {
         assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
         assert_eq!(cfg.max_body_bytes, Some(4096));
         assert!(cfg.compression);
-        assert!(!cfg.fail_secure_strict);
         assert_eq!(cfg.host, "0.0.0.0", "and an untouched field keeps the base");
     }
 
@@ -853,6 +844,29 @@ mod tests {
             Some("/pinned"),
             "nothing in the env ⇒ the pin is the answer",
         );
+    }
+
+    /// The imperative mount it guarded is gone: the variable changes nothing,
+    /// and the boot names it as a key no config reads.
+    #[test]
+    fn the_fail_secure_strict_variable_is_no_longer_read() {
+        let var = nest_rs_config::var_name("http", "FAIL_SECURE_STRICT");
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(&var, "false");
+            let logs = nest_rs_testing::LogCapture::install();
+            let read = HttpConfig::resolve(None).expect("an unread variable is no refusal");
+            assert_eq!(
+                format!("{read:?}"),
+                format!("{:?}", HttpConfig::defaults()),
+                "a set value changes nothing",
+            );
+            let line = logs.expect_one(
+                nest_rs_config::TARGET,
+                nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
+            );
+            assert_eq!(line.field("variable").as_deref(), Some(var.as_str()));
+            Ok(())
+        });
     }
 
     #[test]

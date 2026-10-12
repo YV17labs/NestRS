@@ -3,7 +3,6 @@
 
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 const SECRET: &str = "sk_live_51HsecretTOKEN";
@@ -107,7 +106,6 @@ struct ChargeApp;
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<ChargeApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")

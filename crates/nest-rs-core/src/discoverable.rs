@@ -32,9 +32,18 @@ pub trait Discoverable {
         Vec::new()
     }
 
-    /// `TypeId` of each `#[inject] Option<Arc<…>>` dependency, which a
-    /// [`Net`](crate::Net) around the provider follows.
+    /// `TypeId` of each `#[inject] Option<Arc<…>>` dependency, whatever the
+    /// build timing: checked by the access graph like
+    /// [`injected`](Discoverable::injected) — though one no reached module
+    /// provides is simply absent — and followed by a [`Net`](crate::Net) around
+    /// the provider.
     fn injected_optional() -> Vec<TypeId> {
+        Vec::new()
+    }
+
+    /// Label for each [`injected_optional`](Discoverable::injected_optional)
+    /// entry, in the same order, for boot errors.
+    fn injected_optional_names() -> Vec<&'static str> {
         Vec::new()
     }
 
@@ -460,6 +469,7 @@ mod tests {
                         injects: nothing,
                         inject_names: no_names,
                         injects_optional: nothing,
+                        inject_optional_names: no_names,
                         injects_keyed: no_keyed,
                     }],
                 },
@@ -475,6 +485,7 @@ mod tests {
                         injects: nothing,
                         inject_names: no_names,
                         injects_optional: nothing,
+                        inject_optional_names: no_names,
                         injects_keyed: no_keyed,
                     }],
                 },

@@ -8,8 +8,8 @@ use syn::{ItemStruct, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
-    from_container_method, injected_method, injected_optional_method, optional_dependencies_method,
-    optional_dependency_names_method,
+    from_container_method, injected_method, injected_optional_method,
+    injected_optional_names_method, optional_dependencies_method, optional_dependency_names_method,
 };
 
 const INTERCEPTOR: nest_rs_codegen::Grammar =
@@ -104,6 +104,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
     let optional_dependency_names = optional_dependency_names_method(&opt_names);
     let injected = injected_method(&dep_keys);
     let injected_optional = injected_optional_method(&opt_keys);
+    let injected_optional_names = injected_optional_names_method(&opt_names);
 
     quote! {
         #item
@@ -119,6 +120,7 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
             #optional_dependency_names
             #injected
             #injected_optional
+            #injected_optional_names
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

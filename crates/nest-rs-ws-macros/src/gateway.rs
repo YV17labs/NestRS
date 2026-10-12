@@ -9,8 +9,8 @@ use syn::{LitStr, Path};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
-    injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
-    scoped_specs, take_path_list,
+    injected_keys_with_layers, injected_names_with_layers, injected_optional_fns, layer_deps,
+    reject_http_only_layers, scoped_specs, take_path_list,
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -49,6 +49,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         ctor,
         dep_keys,
         dep_names,
+        opt_keys,
+        opt_names,
         ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -61,6 +63,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     let layers = layer_deps(guards.iter());
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
     let has_edge_guards = !guards.is_empty();
     let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
@@ -159,6 +162,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
                 __names.push(#registry_label);
                 __names
             }
+
+            #injected_optional
 
             #[doc(hidden)]
             pub fn __nestrs_registry(

@@ -9,8 +9,8 @@ use syn::LitStr;
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
-    injected_keys_with_layers, injected_names_with_layers, layer_deps, scoped_specs,
-    take_path_list,
+    injected_keys_with_layers, injected_names_with_layers, injected_optional_fns, layer_deps,
+    scoped_specs, take_path_list,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -57,6 +57,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         ctor,
         dep_keys,
         dep_names,
+        opt_keys,
+        opt_names,
         ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -75,6 +77,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
 
     let interceptor_specs = scoped_specs(
         &interceptors,
@@ -120,6 +123,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             pub fn __nestrs_injected_names() -> ::std::vec::Vec<&'static str> {
                 #injected_names
             }
+
+            #injected_optional
 
             /// Controller-level `#[use_interceptors(...)]`, read by `#[routes]`.
             #[doc(hidden)]

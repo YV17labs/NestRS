@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{
     AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, ReachableProviders,
-    Registering, injectable, module,
+    Registering, ScopeViolationError, injectable, module,
 };
 
 struct AbsentDep;
@@ -470,4 +470,75 @@ fn a_consumer_of_a_dyn_bound_provider_under_its_own_type_imports_its_module() {
         .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
     assert_eq!(refused.consumer, "StrayLedgerReader");
     assert_eq!(refused.owner, "BoundLedgerModule", "{refused}");
+}
+
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerRequestAudit;
+
+#[injectable]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+struct SingletonMaybeAuditing {
+    #[inject]
+    audit: Option<Arc<PerRequestAudit>>,
+}
+
+#[module(providers = [PerRequestAudit, SingletonMaybeAuditing])]
+struct OptionalScopeViolationModule;
+
+#[test]
+fn a_singleton_holding_a_request_scoped_provider_optionally_fails_the_boot_by_name() {
+    let Err(refused) = App::new::<OptionalScopeViolationModule>() else {
+        panic!("a singleton's optional request-scoped dependency would be `None` forever");
+    };
+    let violation = refused
+        .downcast_ref::<ScopeViolationError>()
+        .unwrap_or_else(|| panic!("not the scope violation: {refused:#}"));
+    assert_eq!(violation.consumer, "SingletonMaybeAuditing");
+    assert_eq!(violation.dependency, "PerRequestAudit");
+}
+
+#[injectable]
+#[derive(Default)]
+struct Mailer;
+
+#[module(providers = [Mailer])]
+struct MailerModule;
+
+#[injectable]
+struct Notifier {
+    #[inject]
+    mailer: Option<Arc<Mailer>>,
+}
+
+#[module(providers = [Notifier])]
+struct NotifierModule;
+
+#[module(imports = [MailerModule, NotifierModule])]
+struct OptionalLeakRoot;
+
+#[test]
+fn an_optional_dependency_another_reached_module_provides_needs_its_import() {
+    let Err(refused) = App::new::<OptionalLeakRoot>() else {
+        panic!("the app reaches `Mailer`, so `Notifier` would hold it or not by import order");
+    };
+    let leak = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+    assert_eq!(leak.consumer, "Notifier");
+    assert_eq!(leak.owner, "MailerModule");
+}
+
+#[module(imports = [NotifierModule])]
+struct NoMailerRoot;
+
+#[test]
+fn an_optional_dependency_no_reached_module_provides_is_absent() {
+    let app = App::new::<NoMailerRoot>()
+        .expect("`MailerModule` is linked but another app's: the capability is absent here");
+    let notifier = app.container().get::<Notifier>().expect("built without it");
+    assert!(notifier.mailer.is_none());
 }

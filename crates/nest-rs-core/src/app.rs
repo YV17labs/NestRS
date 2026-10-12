@@ -21,7 +21,8 @@ use crate::container::{Container, ContainerBuilder, Phase, Registrar};
 use crate::discovery::Discovery;
 use crate::error::{
     AccessError, ContestedDeclarationError, FactoryCycleError, FactoryFailedError, InitFailedError,
-    LateFactoryError, UnbuiltProviderError, UnregisteredModuleError, UnresolvedFactoryError,
+    LateFactoryError, LateOptionalDependencyError, UnbuiltProviderError, UnregisteredModuleError,
+    UnresolvedFactoryError,
 };
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
@@ -169,6 +170,25 @@ fn check_unbuilt_providers(
     .into())
 }
 
+/// Fail the boot on the first provider a `#[module]` built without an optional
+/// dependency the boot registered afterwards, naming why it was absent then.
+fn check_late_optionals(builder: &ContainerBuilder, reached: &[&ModuleDescriptor]) -> Result<()> {
+    for built in builder.absent_optionals() {
+        let late = built.absent.iter().find(|(key, _)| builder.contains(*key));
+        if let Some(&(key, dependency)) = late {
+            let (module, module_name) = built.module;
+            return Err(LateOptionalDependencyError {
+                module: module_name,
+                provider: built.provider,
+                dependency,
+                cause: unbuilt_cause(reached, module, &[key]),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
 impl App {
     /// Build the container from the root module synchronously.
     ///
@@ -179,6 +199,8 @@ impl App {
     /// [`DuplicateProviderError`](crate::DuplicateProviderError),
     /// [`ProviderCycleError`](crate::ProviderCycleError),
     /// [`UnbuiltProviderError`] for a provider the register phase never built,
+    /// [`LateOptionalDependencyError`] for one built before an optional
+    /// dependency the boot registered afterwards,
     /// [`UnresolvedFactoryError`] for a module that queued an async factory, a
     /// module's own refusal ([`ContainerBuilder::refuse`]), and
     /// [`WiringFailedError`](crate::WiringFailedError) for a module's wiring that
@@ -710,8 +732,9 @@ impl AppBuilder {
 }
 
 /// The boot's last pass, shared by both paths: the access graph checked over
-/// what registered, then every provider the register phase never built, every
-/// budget against the nets reaching it, and the seeds the transports read.
+/// what registered, then every provider the register phase never built or
+/// built before an optional dependency arrived, every budget against the nets
+/// reaching it, and the seeds the transports read.
 fn seal(
     builder: ContainerBuilder,
     descriptors: &[&ModuleDescriptor],
@@ -733,6 +756,7 @@ fn seal(
     // After the access graph, whose remedy names the owning module
     // (`.claude/decisions/boot-refusal-order.md`).
     check_unbuilt_providers(&builder, &reached)?;
+    check_late_optionals(&builder, &reached)?;
     check_budgets(&builder, &reached, None)?;
     let order = provider_order(descriptors, &ids);
     let reachable = ReachableProviders(reachable_provider_ids(&order, global));

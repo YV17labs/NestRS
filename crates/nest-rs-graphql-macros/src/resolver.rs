@@ -19,8 +19,9 @@ use nest_rs_codegen::{
     await_if_async, build_injectable_body, cfg_attrs, delegated_attrs, force_guard_typeids,
     forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
     impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
-    injected_names_with_layers, layer_deps, normalize_forwarded_args, pipe_wrapper,
-    reject_http_only_layers, scoped_specs, shared_receiver, take_flag_attr, take_path_list,
+    injected_names_with_layers, injected_optional_fns, layer_deps, normalize_forwarded_args,
+    pipe_wrapper, reject_http_only_layers, scoped_specs, shared_receiver, take_flag_attr,
+    take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -113,6 +114,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         ctor,
         dep_keys,
         dep_names,
+        opt_keys,
+        opt_names,
         ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -127,6 +130,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let layers = layer_deps(guards.iter());
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let capability_bounds =
         guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::GraphqlGuard));
@@ -168,6 +172,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             pub fn __nestrs_injected_names() -> ::std::vec::Vec<&'static str> {
                 #injected_names
             }
+
+            #injected_optional
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_guard_specs()

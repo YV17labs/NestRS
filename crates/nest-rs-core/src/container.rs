@@ -477,6 +477,21 @@ pub struct ContainerBuilder {
     /// The providers a `#[module]`'s register step could not build, root
     /// causes first, for the seal to refuse.
     stalls: Vec<Stall>,
+    /// The providers a `#[module]`'s register step built while an optional
+    /// dependency was absent, for the seal to refuse when it arrived later.
+    absent_optionals: Vec<AbsentOptional>,
+}
+
+/// A provider a `#[module]`'s register step built without some of its
+/// optional dependencies.
+pub(crate) struct AbsentOptional {
+    /// The module listing it, by type and by name.
+    pub(crate) module: (TypeId, &'static str),
+    /// The provider, as its module lists it.
+    pub(crate) provider: &'static str,
+    /// The optional dependencies absent when it was built, each with its
+    /// label.
+    pub(crate) absent: Vec<(TypeId, &'static str)>,
 }
 
 /// A provider a `#[module]`'s register step could not build: what it waited
@@ -1163,6 +1178,12 @@ impl ContainerBuilder {
         &self.stalls
     }
 
+    /// The providers a `#[module]` built without some optional dependency —
+    /// [`__private::record_absent_optional`].
+    pub(crate) fn absent_optionals(&self) -> &[AbsentOptional] {
+        &self.absent_optionals
+    }
+
     /// Unkeyed provider keys registered so far — after the factory phase, the
     /// access graph's **global** set.
     pub(crate) fn provider_ids(&self) -> HashSet<TypeId> {
@@ -1247,6 +1268,7 @@ pub(crate) mod __private {
     use std::sync::PoisonError;
 
     use super::{Container, ContainerBuilder, ImportSite};
+    use crate::access::labelled;
     use crate::layer_chain::__private::SiteChains;
     use crate::module::{Collecting, DynamicModule, Registering};
 
@@ -1414,20 +1436,29 @@ pub(crate) mod __private {
         builder
     }
 
-    /// `ids` beside their labels, a missing label read as unnamed.
-    fn labelled<'a>(
-        ids: &'a [TypeId],
-        names: &'a [&'static str],
-    ) -> impl Iterator<Item = (TypeId, &'static str)> + 'a {
-        ids.iter().enumerate().map(|(i, id)| {
-            (
-                *id,
-                names
-                    .get(i)
-                    .copied()
-                    .unwrap_or(crate::access::UNNAMED_DEPENDENCY),
-            )
-        })
+    /// Note which of `provider`'s optional dependencies are absent as
+    /// `module`'s register step builds it, for the seal to refuse one the boot
+    /// registered afterwards. `#[module]` emits it before building a provider.
+    pub fn record_absent_optional(
+        mut builder: ContainerBuilder,
+        module: TypeId,
+        module_name: &'static str,
+        provider: &'static str,
+        optional_dependencies: &[TypeId],
+        optional_dependency_names: &[&'static str],
+    ) -> ContainerBuilder {
+        let absent: Vec<(TypeId, &'static str)> =
+            labelled(optional_dependencies, optional_dependency_names)
+                .filter(|(id, _)| !builder.contains(*id))
+                .collect();
+        if !absent.is_empty() {
+            builder.absent_optionals.push(super::AbsentOptional {
+                module: (module, module_name),
+                provider,
+                absent,
+            });
+        }
+        builder
     }
 
     /// Which of `stalled` wait on each other in a cycle — or on one that does:

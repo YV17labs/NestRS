@@ -87,6 +87,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     injects: <#p as ::nest_rs_core::Discoverable>::injected,
                     inject_names: <#p as ::nest_rs_core::Discoverable>::injected_names,
                     injects_optional: <#p as ::nest_rs_core::Discoverable>::injected_optional,
+                    inject_optional_names:
+                        <#p as ::nest_rs_core::Discoverable>::injected_optional_names,
                     injects_keyed: <#p as ::nest_rs_core::Discoverable>::injected_keyed,
                 }
             }
@@ -108,6 +110,8 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                     injects: <#provider as ::nest_rs_core::Discoverable>::injected,
                     inject_names: <#provider as ::nest_rs_core::Discoverable>::injected_names,
                     injects_optional: <#provider as ::nest_rs_core::Discoverable>::injected_optional,
+                    inject_optional_names:
+                        <#provider as ::nest_rs_core::Discoverable>::injected_optional_names,
                     injects_keyed: <#provider as ::nest_rs_core::Discoverable>::injected_keyed,
                 }
             }
@@ -183,11 +187,20 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                             <#provider as ::nest_rs_core::Discoverable>::dependencies()
                                 .iter()
                                 .all(|__id| builder.contains(*__id));
-                        let __optional_ready =
-                            <#provider as ::nest_rs_core::Discoverable>::optional_dependencies()
-                                .iter()
-                                .all(|__id| builder.contains(*__id) || !__pending_keys.contains(__id));
+                        let __optional =
+                            <#provider as ::nest_rs_core::Discoverable>::optional_dependencies();
+                        let __optional_ready = __optional
+                            .iter()
+                            .all(|__id| builder.contains(*__id) || !__pending_keys.contains(__id));
                         if __required_ready && __optional_ready {
+                            builder = ::nest_rs_core::__private::record_absent_optional(
+                                builder,
+                                ::std::any::TypeId::of::<#name>(),
+                                #name_str,
+                                #name_lit,
+                                &__optional,
+                                &<#provider as ::nest_rs_core::Discoverable>::optional_dependency_names(),
+                            );
                             #register_action
                             __done[#idx] = true;
                             __progressed = true;

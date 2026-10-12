@@ -466,9 +466,31 @@ pub fn injected_names_with_layers(dep_names: &[TokenStream2], layers: &LayerDeps
     injected_keys_expr(&names)
 }
 
+/// The inherent `__nestrs_injected_optional()` and
+/// `__nestrs_injected_optional_names()` an edge's struct half emits beside
+/// `__nestrs_injected()`, read back by its impl half through
+/// [`injected_methods_with_layers`].
+pub fn injected_optional_fns(
+    opt_keys: &[TokenStream2],
+    opt_names: &[TokenStream2],
+) -> TokenStream2 {
+    quote! {
+        #[doc(hidden)]
+        pub fn __nestrs_injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
+            ::std::vec![ #(#opt_keys),* ]
+        }
+
+        #[doc(hidden)]
+        pub fn __nestrs_injected_optional_names() -> ::std::vec::Vec<&'static str> {
+            ::std::vec![ #(#opt_names),* ]
+        }
+    }
+}
+
 /// `Discoverable::injected` **and** `injected_names` for an impl-block macro:
 /// take the struct's `__nestrs_injected()` / `__nestrs_injected_names()` and
-/// extend each with the per-route / per-message layers.
+/// extend each with the per-route / per-message layers; the optional
+/// dependencies come from the struct's [`injected_optional_fns`] as they are.
 ///
 /// One function over one [`LayerDeps`], so a key never goes without its label.
 pub fn injected_methods_with_layers(
@@ -490,6 +512,14 @@ pub fn injected_methods_with_layers(
             let __layers: ::std::vec::Vec<&'static str> = ::std::vec![ #(#labels),* ];
             __names.extend(__layers);
             __names
+        }
+
+        fn injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
+            <#self_ty>::__nestrs_injected_optional()
+        }
+
+        fn injected_optional_names() -> ::std::vec::Vec<&'static str> {
+            <#self_ty>::__nestrs_injected_optional_names()
         }
     }
 }
@@ -522,6 +552,17 @@ pub fn injected_optional_method(opt_keys: &[TokenStream2]) -> TokenStream2 {
     quote! {
         fn injected_optional() -> ::std::vec::Vec<::core::any::TypeId> {
             ::std::vec![ #(#opt_keys),* ]
+        }
+    }
+}
+
+/// `Discoverable::injected_optional_names` — index-aligned with
+/// [`injected_optional_method`], so the access graph can name an optional
+/// dependency it refuses.
+pub fn injected_optional_names_method(opt_names: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        fn injected_optional_names() -> ::std::vec::Vec<&'static str> {
+            ::std::vec![ #(#opt_names),* ]
         }
     }
 }

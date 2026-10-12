@@ -60,10 +60,13 @@ framework half.
   once. `#[module]` records each provider's injected types, and the boot fails
   (`AccessGraphError`) on a provider injecting what its module neither owns,
   imports transitively, nor receives as global infrastructure. It governs
-  `#[inject]` and the `#[use_*]` layer lists; `Container::get` at runtime is an
-  unchecked escape hatch. **A provider a module lists is built, or the boot
+  `#[inject]`, optional or not, and the `#[use_*]` layer lists — an optional
+  dependency no module the app reaches provides is absent, never a leak — and
+  `Container::get` at runtime is an unchecked escape hatch. **A provider a module lists is built, or the boot
   refuses naming why** (`UnbuiltProviderError`, after the access graph): an
-  import cycle is tolerated while no provider waits across it.
+  import cycle is tolerated while no provider waits across it. One built
+  without an optional dependency the boot registers afterwards would run as if
+  it were absent, and is refused too (`LateOptionalDependencyError`).
 
 ## `for_root` — one seam, one value, no chain
 

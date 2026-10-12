@@ -6,8 +6,8 @@ use syn::{Expr, ItemStruct};
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_keyed_method, injected_method,
-    injected_names_method, injected_optional_method, optional_dependencies_method,
-    optional_dependency_names_method, parse_provider_host,
+    injected_names_method, injected_optional_method, injected_optional_names_method,
+    optional_dependencies_method, optional_dependency_names_method, parse_provider_host,
 };
 
 pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -49,6 +49,7 @@ pub(crate) fn provider(
     let injected_names = injected_names_method(&dep_names);
     let injected_keyed = injected_keyed_method(&keyed_dep_keys);
     let injected_optional = injected_optional_method(&opt_keys);
+    let injected_optional_names = injected_optional_names_method(&opt_names);
 
     // Every scope: a missing impl could be written by hand and lie about residency.
     let singleton_marker = nest_rs_codegen::provider_residency(
@@ -123,6 +124,7 @@ pub(crate) fn provider(
             #injected_names
             #injected_keyed
             #injected_optional
+            #injected_optional_names
 
             #register_fn
         }

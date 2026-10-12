@@ -62,8 +62,9 @@ pub use inject::{
     forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
     injected_keyed_method, injected_keys_with_layers, injected_method,
     injected_methods_with_layers, injected_names_method, injected_names_with_layers,
-    injected_optional_method, layer_deps, mixed_site_ident, normalize_forwarded_args,
-    optional_dependencies_method, optional_dependency_names_method,
+    injected_optional_fns, injected_optional_method, injected_optional_names_method, layer_deps,
+    mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
+    optional_dependency_names_method,
 };
 pub use job::{
     JobDecorator, JobKey, TIMEOUT, TRANSACTIONAL, job_argument_needs_a_value, job_key, job_keys,

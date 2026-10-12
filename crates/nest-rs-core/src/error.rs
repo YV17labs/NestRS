@@ -318,6 +318,27 @@ pub enum UnbuiltCause {
     RegisteredLater,
 }
 
+/// A provider built without an optional dependency the same boot registered
+/// afterwards: it would run as if the capability were absent. Raised once the
+/// access graph passes.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+#[error(
+    "module `{module}`: `{provider}` was built without its optional `{dependency}`, registered \
+     only afterwards, so it would run as if the capability were absent; {}",
+    unbuilt_clause(.cause, .module, 1)
+)]
+pub struct LateOptionalDependencyError {
+    /// The module listing the provider.
+    pub module: &'static str,
+    /// The provider built without it.
+    pub provider: &'static str,
+    /// The optional dependency registered after the provider was built.
+    pub dependency: &'static str,
+    /// Why it was absent then.
+    pub cause: UnbuiltCause,
+}
+
 /// What an [`UnbuiltCause`] says of `count` dependencies of a provider in
 /// `module`: the cause, then its edit.
 fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {

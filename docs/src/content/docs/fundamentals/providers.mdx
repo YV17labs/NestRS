@@ -224,6 +224,30 @@ flowchart TB
   PM --> PS
 ```
 
+### Optional dependencies
+
+An `Option<Arc<T>>` field is a dependency the provider runs without when this
+binary lacks the capability:
+
+```rust title="src/posts/service.rs"
+#[injectable]
+pub struct PostsService {
+    #[inject]
+    db: Arc<DatabaseConnection>,
+    #[inject]
+    notifications: Option<Arc<NotificationsService>>,
+}
+```
+
+It is `None` when no module the app imports provides `NotificationsService`.
+Otherwise the same access graph holds it: when the app imports the module
+providing it, `PostsService`'s module imports that module too, or the boot
+fails with the access violation above — so whether the capability is present
+never depends on the order of `imports`. A singleton cannot hold a
+request-scoped or transient provider this way either. And a provider built
+before a hand-written module registers what it optionally injects fails the
+boot (`LateOptionalDependencyError`) rather than run as if it were absent.
+
 ## Hiding the impl — `pub trait` + `as dyn Trait`
 
 When another feature must call into `posts/` without naming the concrete

@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{
-    AccessGraphError, App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError, Module,
-    ProviderCycleError, Registering, UnbuiltCause, UnbuiltProviderError, injectable, module,
+    AccessGraphError, App, Collecting, ContainerBuilder, DynamicModule, LateFactoryError,
+    LateOptionalDependencyError, Module, ProviderCycleError, Registering, UnbuiltCause,
+    UnbuiltProviderError, injectable, module,
 };
 
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
@@ -476,5 +477,121 @@ async fn a_provider_cycle_is_refused_beside_a_provider_waiting_outside_its_modul
             .unwrap_or_else(|| panic!("not the cycle refusal: {refused:#}"));
         assert_eq!(cycle.module, "CycleBesideAStallModule");
         assert_eq!(cycle.type_names, ["Drafts", "Reviews"]);
+    }
+}
+
+/// A type only a hand-written module registers, which a provider reads when
+/// present.
+struct Clock;
+
+struct ClockModule;
+
+impl Module for ClockModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(Clock)
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Scheduler {
+    #[inject]
+    clock: Option<Arc<Clock>>,
+}
+
+#[module(providers = [Scheduler])]
+struct SchedulerModule;
+
+#[module(imports = [SchedulerModule, ClockModule])]
+struct ClockAfterRoot;
+
+#[tokio::test]
+async fn a_provider_built_before_its_optional_dependency_registers_fails_the_boot() {
+    for refused in refused_on_both_paths::<ClockAfterRoot>().await {
+        let late = refused
+            .downcast_ref::<LateOptionalDependencyError>()
+            .unwrap_or_else(|| panic!("not the late optional refusal: {refused:#}"));
+        assert_eq!(late.module, "SchedulerModule");
+        assert_eq!(late.provider, "Scheduler");
+        assert_eq!(late.dependency, "Clock");
+        assert_eq!(late.cause, UnbuiltCause::RegisteredLater, "{late}");
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct Glossary;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct SpellChecker {
+    #[inject]
+    glossary: Option<Arc<Glossary>>,
+}
+
+#[module(imports = [SpellCheckModule], providers = [Glossary])]
+struct GlossaryModule;
+
+#[module(imports = [GlossaryModule], providers = [SpellChecker])]
+struct SpellCheckModule;
+
+#[tokio::test]
+async fn a_provider_built_across_an_import_cycle_without_its_optional_fails_the_boot() {
+    for refused in refused_on_both_paths::<GlossaryModule>().await {
+        let late = refused
+            .downcast_ref::<LateOptionalDependencyError>()
+            .unwrap_or_else(|| panic!("not the late optional refusal: {refused:#}"));
+        assert_eq!(late.provider, "SpellChecker");
+        assert_eq!(late.dependency, "Glossary");
+        let UnbuiltCause::ImportCycle(modules) = &late.cause else {
+            panic!("not an import cycle: {late}");
+        };
+        for module in ["GlossaryModule", "SpellCheckModule"] {
+            assert!(modules.contains(&module), "{late}");
+        }
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct Outbox;
+
+#[injectable]
+struct Dispatcher {
+    #[inject]
+    outbox: Option<Arc<Outbox>>,
+}
+
+#[module(providers = [Outbox])]
+struct OutboxModule;
+
+#[module(imports = [OutboxModule], providers = [Dispatcher])]
+struct DispatcherModule;
+
+#[module(imports = [DispatcherModule, OutboxModule])]
+struct DispatcherFirstRoot;
+
+#[module(imports = [OutboxModule, DispatcherModule])]
+struct OutboxFirstRoot;
+
+#[tokio::test]
+async fn an_optional_dependency_its_module_imports_is_held_whatever_the_roots_order() {
+    for app in [
+        App::new::<DispatcherFirstRoot>().expect("the import registers it first"),
+        App::new::<OutboxFirstRoot>().expect("the import registers it first"),
+        App::builder()
+            .module::<DispatcherFirstRoot>()
+            .build()
+            .await
+            .expect("the import registers it first"),
+    ] {
+        let dispatcher = app.container().get::<Dispatcher>().expect("built");
+        assert!(dispatcher.outbox.is_some());
     }
 }

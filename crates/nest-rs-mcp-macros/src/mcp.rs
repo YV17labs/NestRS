@@ -6,8 +6,9 @@ use syn::{Expr, ItemStruct, LitStr};
 
 use nest_rs_codegen::{
     InjectableBody, VersionedEdge, build_injectable_body, from_container_method,
-    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    reject_http_only_layers, scoped_specs, take_path_list,
+    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers,
+    injected_optional_method, injected_optional_names_method, layer_deps, reject_http_only_layers,
+    scoped_specs, take_path_list,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -60,6 +61,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         ctor,
         dep_keys,
         dep_names,
+        opt_keys,
+        opt_names,
         ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
@@ -75,6 +78,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let layers = layer_deps(guards.iter());
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let injected_optional = injected_optional_method(&opt_keys);
+    let injected_optional_names = injected_optional_names_method(&opt_names);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
 
     // Empty means "none declared": `nest-rs-mcp` owns the default path.
@@ -122,6 +127,10 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                 __names.extend(<Self>::__nestrs_mcp_operation_layers().1);
                 __names
             }
+
+            #injected_optional
+
+            #injected_optional_names
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

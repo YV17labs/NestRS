@@ -43,7 +43,10 @@ remedy is more specific: a dependency outside the module's imports is also
 absent when the provider would have been built, so one fact is seen twice, and
 the access graph names the module to import. A cycle among one module's
 providers is still refused in the register phase that sees it, now also when
-another provider of the module waits on something outside it.
+another provider of the module waits on something outside it. A provider built
+without an optional dependency the boot registered afterwards
+(`LateOptionalDependencyError`) reads after a provider never built: a missing
+provider is the larger hole, and both carry the same causes.
 
 **Refused:** refusing the stall in the register phase, where `#[module]` sees
 it. Its cause — an import cycle, or a registration made later in the boot — is

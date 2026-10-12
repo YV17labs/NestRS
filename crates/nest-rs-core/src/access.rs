@@ -49,9 +49,14 @@ pub(crate) mod __private {
         /// Label for each [`injects`](Self::injects) entry, in the same order; may
         /// be shorter than `injects`, never longer.
         pub inject_names: fn() -> Vec<&'static str>,
-        /// `TypeId` of each `#[inject] Option<Arc<…>>` field: no boot check holds
-        /// it, but a [`Net`](crate::Net) around the provider follows it.
+        /// `TypeId` of each `#[inject] Option<Arc<…>>` field, checked like
+        /// [`injects`](Self::injects) but for one no reached module provides,
+        /// which is simply absent; a [`Net`](crate::Net) around the provider
+        /// follows it too.
         pub injects_optional: fn() -> Vec<TypeId>,
+        /// Label for each [`injects_optional`](Self::injects_optional) entry, in
+        /// the same order; may be shorter, never longer.
+        pub inject_optional_names: fn() -> Vec<&'static str>,
         /// Each **keyed** `#[inject(key = "…")]` field, validated against the
         /// global keyed set.
         pub injects_keyed: fn() -> Vec<KeyedDependency>,
@@ -171,27 +176,24 @@ pub(crate) fn validate_access_graph(
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
 
-    // First listing wins: it only names a module to import, and two imported
-    // modules registering one key already failed the boot (`DuplicateProviderError`).
-    let mut provided_by: HashMap<TypeId, (&'static str, &'static str)> = HashMap::new();
-    for d in descriptors {
-        for p in d.providers {
-            provided_by
-                .entry((p.provides)())
-                .or_insert((p.name, d.name));
-            for (key, label) in (p.also_provides)() {
-                provided_by.entry(key).or_insert((label, d.name));
-            }
-        }
-    }
+    let reached = reachable(roots, &by_id);
+    // An optional dependency's owner is read among the modules this app reaches:
+    // one only another binary's module provides is absent here, not a leak.
+    let provided_by = owners(descriptors.iter().copied());
+    let reached_provided_by = owners(
+        descriptors
+            .iter()
+            .copied()
+            .filter(|d| reached.contains(&(d.module)())),
+    );
 
-    for module_id in reachable(roots, &by_id) {
-        let Some(desc) = by_id.get(&module_id) else {
+    for module_id in &reached {
+        let Some(desc) = by_id.get(module_id) else {
             continue;
         };
 
         let mut closure_keys = HashSet::new();
-        for import_id in reachable(&[module_id], &by_id) {
+        for import_id in reachable(&[*module_id], &by_id) {
             if let Some(imported) = by_id.get(&import_id) {
                 for p in imported.providers {
                     closure_keys.insert((p.provides)());
@@ -201,29 +203,41 @@ pub(crate) fn validate_access_graph(
         }
 
         for p in desc.providers {
-            let deps = (p.injects)();
-            let names = (p.inject_names)();
+            let (injects, names) = ((p.injects)(), (p.inject_names)());
+            let (optionals, optional_names) = ((p.injects_optional)(), (p.inject_optional_names)());
+            let required = labelled(&injects, &names);
+            let optional = labelled(&optionals, &optional_names);
+            let deps: Vec<(TypeId, &'static str, bool)> = required
+                .map(|(dep, name)| (dep, name, false))
+                .chain(optional.map(|(dep, name)| (dep, name, true)))
+                .collect();
             // Without this, the register phase (which gates readiness on the
             // singleton map) silently drops a singleton holding a scoped or
-            // transient dependency, and everything downstream of it.
+            // transient dependency, and everything downstream of it — or, held
+            // optionally, builds it with `None` forever.
             let consumer_is_scoped = scoped_or_transient.contains(&(p.provides)());
-            if !consumer_is_scoped {
-                for (i, dep) in deps.iter().enumerate() {
-                    if scoped_or_transient.contains(dep) {
-                        return Err(ScopeViolationError {
-                            module: desc.name,
-                            consumer: p.name,
-                            dependency: names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY),
-                        }
-                        .into());
-                    }
+            if !consumer_is_scoped
+                && let Some((_, dependency, _)) = deps
+                    .iter()
+                    .find(|(dep, _, _)| scoped_or_transient.contains(dep))
+            {
+                return Err(ScopeViolationError {
+                    module: desc.name,
+                    consumer: p.name,
+                    dependency,
                 }
+                .into());
             }
-            for (i, dep) in deps.iter().enumerate() {
-                if global.contains(dep) || closure_keys.contains(dep) {
+            for (dep, name, optional) in deps {
+                if global.contains(&dep) || closure_keys.contains(&dep) {
                     continue;
                 }
-                if let Some((dependency, owner)) = provided_by.get(dep) {
+                let owners = if optional {
+                    &reached_provided_by
+                } else {
+                    &provided_by
+                };
+                if let Some((dependency, owner)) = owners.get(&dep) {
                     return Err(AccessGraphError {
                         module: desc.name,
                         consumer: p.name,
@@ -233,20 +247,49 @@ pub(crate) fn validate_access_graph(
                     .into());
                 }
                 // A hand-written `impl Module` registers imperatively, invisible
-                // to this graph.
-                if registered.contains(dep) {
+                // to this graph; an optional nothing reached provides is absent.
+                if optional || registered.contains(&dep) {
                     continue;
                 }
                 return Err(MissingDependencyError {
                     module: desc.name,
                     consumer: p.name,
-                    dependency: names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY),
+                    dependency: name,
                 }
                 .into());
             }
         }
     }
     Ok(())
+}
+
+/// The provider and the module of each key `modules` declare. First listing
+/// wins: it only names a module to import, and two imported modules
+/// registering one key already failed the boot (`DuplicateProviderError`).
+fn owners<'a>(
+    modules: impl Iterator<Item = &'a ModuleDescriptor>,
+) -> HashMap<TypeId, (&'static str, &'static str)> {
+    let mut owners = HashMap::new();
+    for d in modules {
+        for p in d.providers {
+            owners.entry((p.provides)()).or_insert((p.name, d.name));
+            for (key, label) in (p.also_provides)() {
+                owners.entry(key).or_insert((label, d.name));
+            }
+        }
+    }
+    owners
+}
+
+/// `ids` beside their labels, in order, a missing label read as unnamed.
+pub(crate) fn labelled<'a>(
+    ids: &'a [TypeId],
+    names: &'a [&'static str],
+) -> impl Iterator<Item = (TypeId, &'static str)> + 'a {
+    ids.iter().enumerate().map(|(i, id)| {
+        let name = names.get(i).copied().unwrap_or(UNNAMED_DEPENDENCY);
+        (*id, name)
+    })
 }
 
 /// Validate the **keyed** access graph: every reachable provider's
@@ -519,6 +562,7 @@ mod tests {
                 injects: users_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -563,6 +607,7 @@ mod tests {
                     injects: no_deps,
                     inject_names: no_names,
                     injects_optional: no_deps,
+                    inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
                     also_provides: provides_only_itself,
                 },
@@ -573,6 +618,7 @@ mod tests {
                     injects: billing_deps,
                     inject_names: no_names,
                     injects_optional: no_deps,
+                    inject_optional_names: no_names,
                     injects_keyed: no_keyed_deps,
                     also_provides: provides_only_itself,
                 },
@@ -602,6 +648,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -636,6 +683,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -680,6 +728,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: billing_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -718,6 +767,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -763,6 +813,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -788,6 +839,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -813,6 +865,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],
@@ -867,6 +920,7 @@ mod tests {
                 injects: no_deps,
                 inject_names: no_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: github_dep,
                 also_provides: provides_only_itself,
             }],
@@ -922,6 +976,7 @@ mod tests {
                 injects: billing_deps,
                 inject_names: billing_names,
                 injects_optional: no_deps,
+                inject_optional_names: no_names,
                 injects_keyed: no_keyed_deps,
                 also_provides: provides_only_itself,
             }],

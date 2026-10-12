@@ -98,6 +98,7 @@ pub mod panic;
 pub mod problem;
 mod process_start;
 pub mod request_scope;
+mod stderr_lines;
 pub mod target;
 pub mod trace_context;
 pub mod transport;

@@ -7,13 +7,13 @@ use std::backtrace::{Backtrace, BacktraceStatus};
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::future::Future;
-use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, PanicHookInfo};
 use std::pin::Pin;
 use std::sync::{Mutex, PoisonError};
 use std::task::{Context, Poll};
 
 use crate::line_safe::LineSafe;
+use crate::stderr_lines::write_stderr_line;
 
 /// The field name a contained panic is logged under.
 pub const FIELD: &str = "panic";
@@ -173,12 +173,10 @@ pub(crate) fn hook(info: &PanicHookInfo<'_>) {
             backtrace: Backtrace::capture(),
         }),
         Report::Stderr => {
-            let line = format!("nestrs: panicked at {location}: {}\n", LineSafe(&message));
-            #[expect(
-                clippy::let_underscore_must_use,
-                reason = "stderr is the last channel: a write it refuses has nowhere left to be said"
-            )]
-            let _ = std::io::stderr().write_all(line.as_bytes());
+            write_stderr_line(format_args!(
+                "nestrs: panicked at {location}: {}",
+                LineSafe(&message)
+            ));
         }
     }
 }
@@ -224,7 +222,7 @@ fn report(contained: bool, subscribed: bool) -> Report {
 pub(crate) fn subscribed() -> bool {
     !tracing::dispatcher::get_default(|dispatch| {
         dispatch.is::<tracing::subscriber::NoSubscriber>()
-            || dispatch.is::<crate::process_start::StderrLines>()
+            || dispatch.is::<crate::stderr_lines::StderrLines>()
     })
 }
 
@@ -354,7 +352,7 @@ mod tests {
     #[test]
     fn an_event_reaches_a_subscriber_only_once_one_is_installed() {
         assert!(!subscribed(), "no subscriber yet");
-        tracing::subscriber::with_default(crate::process_start::StderrLines, || {
+        tracing::subscriber::with_default(crate::stderr_lines::StderrLines, || {
             assert!(
                 !subscribed(),
                 "the process steps' stderr lines leave a panic to the hook"

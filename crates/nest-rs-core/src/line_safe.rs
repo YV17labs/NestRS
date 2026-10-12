@@ -1,5 +1,6 @@
-//! What nestrs writes as a line — a console event, the panic hook's stderr
-//! line — escaped so that no value in it can forge another line or hide one.
+//! What nestrs writes as a line — a console event, a line on stderr while no
+//! subscriber can take one — escaped so that no value in it can forge another
+//! line or hide one.
 
 use std::fmt::{self, Write as _};
 

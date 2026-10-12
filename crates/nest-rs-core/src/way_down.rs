@@ -20,7 +20,6 @@
 //! returns or panics.
 
 use std::future::Future;
-use std::io::Write as _;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -132,9 +131,9 @@ fn exit_at_once(signal: Received) -> ! {
 }
 
 /// The line a signal before any app files: no subscriber may exist yet, so it
-/// goes to stderr when none can take it, as the panic hook's does.
+/// goes to stderr when none can take it, as a process step's does.
 fn before_any_app(signal: &'static str, code: i32) {
-    if crate::panic::subscribed() {
+    let file = || {
         tracing::error!(
             target: crate::target::APP,
             signal,
@@ -142,16 +141,11 @@ fn before_any_app(signal: &'static str, code: i32) {
             step = "main",
             "shutdown signal received before the app started: exiting at once",
         );
+    };
+    if crate::panic::subscribed() {
+        file();
     } else {
-        let line = format!(
-            "nestrs: shutdown signal received before the app started: exiting at once \
-             signal=\"{signal}\" exit_code={code} step=\"main\"\n"
-        );
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "stderr is the last channel: a write it refuses has nowhere left to be said"
-        )]
-        let _ = std::io::stderr().write_all(line.as_bytes());
+        tracing::subscriber::with_default(crate::stderr_lines::StderrLines, file);
     }
 }
 

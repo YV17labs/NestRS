@@ -428,18 +428,20 @@ impl DecodeError {
     /// reports it held it.
     ///
     /// Each decode failure in `error`'s chain is replaced by its report wherever
-    /// `text` spells it; then any sentence still in one of serde's quoting
-    /// shapes (`invalid type:`, `invalid value:`, ``unknown variant ` ``,
+    /// `text` spells it, and each link a [`SafeLink`](crate::SafeLink) claims by
+    /// what its driver says of it; then any sentence still in one of serde's
+    /// quoting shapes (`invalid type:`, `invalid value:`, ``unknown variant ` ``,
     /// ``unknown field ` ``) is rebuilt without its value, from there to the
     /// end of `text`. Each `validator` `Validation error: <code> [<params>]` is
     /// said as `Validation error: <code>`.
     ///
-    /// Borrowed when nothing in `text` was a decode or validation failure's.
+    /// Borrowed when nothing in `text` was a decode, validation or claimed
+    /// failure's.
     pub fn redact<'t>(
         text: &'t str,
         error: Option<&(dyn std::error::Error + 'static)>,
     ) -> Cow<'t, str> {
-        DecodeFailures::of(error).redact(text)
+        Redactions::of(error).redact(text)
     }
 }
 
@@ -471,17 +473,26 @@ impl From<serde::de::value::Error> for DecodeError {
     }
 }
 
-/// The decode failures an error's chain holds, each as the text it displays and
-/// the report it is said as.
-pub(crate) struct DecodeFailures(Vec<(String, String)>);
+/// The links of an error's chain that quote a value, each as the text it
+/// displays and the sentence it is said as: a decode failure as its report, a
+/// link a [`SafeLink`](crate::SafeLink) claims as its driver says it.
+pub(crate) struct Redactions(Vec<(String, String)>);
 
-impl DecodeFailures {
-    /// Every link of `error`'s chain that is a decode failure saying something
-    /// its report does not.
+impl Redactions {
+    /// Every link of `error`'s chain that says something its safe sentence does
+    /// not, down to the first link a driver claims: what is below it is that
+    /// driver's to say.
     pub(crate) fn of(error: Option<&(dyn std::error::Error + 'static)>) -> Self {
         let mut pairs = Vec::new();
         let mut link = error;
         while let Some(current) = link {
+            if let Some(said) = crate::SafeLink::said(current) {
+                let displayed = current.to_string();
+                if !displayed.is_empty() && displayed != said {
+                    pairs.push((displayed, said));
+                }
+                break;
+            }
             if let Some(report) = DecodeError::of(current) {
                 let displayed = current.to_string();
                 if !displayed.is_empty() && displayed != report.sentence {
@@ -493,13 +504,13 @@ impl DecodeFailures {
         Self(pairs)
     }
 
-    /// `text`, with each failure it spells said as its report, and any sentence
-    /// left in serde's quoting shapes rebuilt without its value.
+    /// `text`, with each link it spells said as its safe sentence, and any
+    /// sentence left in serde's quoting shapes rebuilt without its value.
     pub(crate) fn redact<'t>(&self, text: &'t str) -> Cow<'t, str> {
         let mut text = Cow::Borrowed(text);
-        for (displayed, report) in &self.0 {
+        for (displayed, said) in &self.0 {
             if text.contains(displayed.as_str()) {
-                text = Cow::Owned(text.replace(displayed.as_str(), report));
+                text = Cow::Owned(text.replace(displayed.as_str(), said));
             }
         }
         // validator's wording first: a value it lists may spell what serde's

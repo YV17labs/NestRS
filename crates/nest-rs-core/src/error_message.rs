@@ -1,12 +1,13 @@
 //! Rendering an error as the message an operator reads: its own sentence and
-//! every cause beneath it, each said once.
+//! every cause beneath it, each said once, and a driver's error as its driver
+//! says it ([`SafeLink`]).
 
 use std::any::Any;
 use std::error::Error;
 
 use tokio::task::JoinError;
 
-use crate::error::{DecodeError, DecodeFailures};
+use crate::error::{DecodeError, Redactions};
 
 const NO_MESSAGE: &str = "an error with no message";
 
@@ -15,27 +16,18 @@ const NO_MESSAGE: &str = "an error with no message";
 /// saying nothing at all is said to be one.
 ///
 /// **A decode failure anywhere in the chain is said without its value**, as its
-/// [`DecodeError`], and a joined task's panic without its payload; every other
-/// link is passed through [`DecodeError::redact`]. A wrapper wording the value
-/// its own way (`{0:?}`, a `format!` of the field) is not caught.
+/// [`DecodeError`], a joined task's panic without its payload, and **a link a
+/// driver claims through a [`SafeLink`] as the driver says it**, with nothing
+/// below it; every other link is passed through [`DecodeError::redact`], which
+/// also says a claimed link wherever a wrapper spells it whole. A wrapper
+/// wording the value its own way (`{0:?}`, a `format!` of the field, part of a
+/// driver's message) is not caught.
 pub fn error_message(error: &(dyn Error + 'static)) -> String {
-    let failures = DecodeFailures::of(Some(error));
-    let said = |link: &(dyn Error + 'static)| {
-        if let Some(joined) = link.downcast_ref::<JoinError>() {
-            return joined_task(joined);
-        }
-        match DecodeError::of(link) {
-            Some(report) => report.to_string(),
-            None => failures.redact(&link.to_string()).into_owned(),
-        }
-    };
-    let mut sentence = said(error);
-    if sentence.trim().is_empty() {
-        sentence.clear();
-    }
-    let mut source = error.source();
-    while let Some(cause) = source {
-        let text = said(cause);
+    let redactions = Redactions::of(Some(error));
+    let mut sentence = String::new();
+    let mut link = Some(error);
+    while let Some(current) = link {
+        let (text, whole) = said(current, &redactions);
         let inlined = sentence
             .strip_suffix(text.as_str())
             .is_some_and(|before| before.ends_with(": "));
@@ -46,13 +38,84 @@ pub fn error_message(error: &(dyn Error + 'static)) -> String {
             }
             sentence.push_str(&text);
         }
-        source = cause.source();
+        link = if whole { None } else { current.source() };
     }
     if sentence.is_empty() {
         return NO_MESSAGE.to_owned();
     }
     sentence
 }
+
+/// What one link of a chain says, and whether that is the whole of what is
+/// left — a claimed link's driver says its causes too.
+fn said(link: &(dyn Error + 'static), redactions: &Redactions) -> (String, bool) {
+    if let Some(joined) = link.downcast_ref::<JoinError>() {
+        return (joined_task(joined), false);
+    }
+    if let Some(sentence) = SafeLink::said(link) {
+        return (sentence, true);
+    }
+    let text = match DecodeError::of(link) {
+        Some(report) => report.to_string(),
+        None => redactions.redact(&link.to_string()).into_owned(),
+    };
+    (text, false)
+}
+
+/// How a driver says one of its error types without the values it quotes,
+/// submitted once per driver crate with `nest_rs_core::inventory::submit!`.
+///
+/// A database server quotes the input it refused in its message, and a driver's
+/// error repeats that message in its own sentence and in its causes, so no
+/// renderer reading `Display` can keep it out of a log line, a dead letter or a
+/// reply. [`error_message`] and [`DecodeError::redact`] ask every sayer about
+/// each link before its `Display`: `say` answers `Some(sentence)` for a link of
+/// its own — its whole meaning, without a value — and the chain is said no
+/// further below it; `None` for any other, which is said as before.
+/// Identifiers — a code, a constraint, a table, a column — are schema, not
+/// payload, and stay in the sentence: they are what an operator searches for.
+///
+/// ```
+/// use std::error::Error;
+///
+/// use nest_rs_core::{SafeLink, error_message};
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("row refused: {value}")]
+/// struct Refused {
+///     code: &'static str,
+///     value: String,
+/// }
+///
+/// fn say(link: &(dyn Error + 'static)) -> Option<String> {
+///     link.downcast_ref::<Refused>()
+///         .map(|refused| format!("row refused {}", refused.code))
+/// }
+///
+/// nest_rs_core::inventory::submit! { SafeLink::new(say) }
+///
+/// # fn main() {
+/// let refused = Refused { code: "23505", value: "ada@example.com".into() };
+/// assert_eq!(error_message(&refused), "row refused 23505");
+/// # }
+/// ```
+pub struct SafeLink {
+    say: fn(&(dyn Error + 'static)) -> Option<String>,
+}
+
+impl SafeLink {
+    /// The entry whose `say` claims the driver's own error types.
+    pub const fn new(say: fn(&(dyn Error + 'static)) -> Option<String>) -> Self {
+        Self { say }
+    }
+
+    /// What the first sayer claiming `link` says of it.
+    pub(crate) fn said(link: &(dyn Error + 'static)) -> Option<String> {
+        inventory::iter::<Self>().find_map(|entry| (entry.say)(link))
+    }
+}
+
+inventory::collect!(SafeLink);
 
 /// How a joined task ended, as tokio says it of a panic whose payload is no
 /// string: the panic was filed, redacted, where it was raised.
@@ -350,6 +413,85 @@ mod tests {
             error_message(&Token(custom)),
             "could not read the token: a value its type does not accept"
         );
+    }
+
+    /// A driver's error quoting a value in its sentence and again in its cause,
+    /// as a database server's message does.
+    #[derive(Debug, thiserror::Error)]
+    #[error("row rejected: {value}")]
+    struct Rejected {
+        code: &'static str,
+        value: &'static str,
+        #[source]
+        server: Quoted,
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("the server refused {0}")]
+    struct Quoted(&'static str);
+
+    fn rejected() -> Rejected {
+        Rejected {
+            code: "R42",
+            value: "\"secret\"",
+            server: Quoted("\"secret\""),
+        }
+    }
+
+    /// The driver's sayer: a code, never the value.
+    fn say_rejected(link: &(dyn Error + 'static)) -> Option<String> {
+        link.downcast_ref::<Rejected>()
+            .map(|rejected| format!("row rejected {}", rejected.code))
+    }
+
+    inventory::submit! { SafeLink::new(say_rejected) }
+
+    #[test]
+    fn a_link_a_driver_claims_is_said_by_its_sayer_and_nothing_below_it() {
+        let said = error_message(&rejected());
+        assert_eq!(said, "row rejected R42");
+
+        let wrapped = Wrapped {
+            message: "the import failed",
+            cause: Some(Box::new(rejected())),
+        };
+        assert_eq!(
+            error_message(&wrapped),
+            "the import failed: row rejected R42"
+        );
+    }
+
+    #[test]
+    fn a_wrapper_spelling_a_claimed_link_spells_what_its_driver_says() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("could not store the row: {0}")]
+        struct Inlined(#[source] Rejected);
+
+        assert_eq!(
+            error_message(&Inlined(rejected())),
+            "could not store the row: row rejected R42"
+        );
+        assert_eq!(
+            error_message(&Displays(Box::new(rejected()))),
+            "row rejected R42"
+        );
+        let hidden: Box<dyn Error + Send + Sync> = anyhow::Error::from(rejected())
+            .context("the job failed")
+            .into();
+        let said = error_message(&*hidden);
+        assert!(!said.contains("secret"), "{said}");
+        assert!(said.contains("row rejected R42"), "{said}");
+    }
+
+    #[test]
+    fn a_rendered_text_is_redacted_by_the_claimed_links_of_its_chain() {
+        let error = rejected();
+        let text = format!("upstream answered: {error}");
+        assert_eq!(
+            DecodeError::redact(&text, Some(&error)),
+            "upstream answered: row rejected R42"
+        );
+        assert_eq!(DecodeError::redact(&text, None), text, "no chain, no sayer");
     }
 
     /// Displays its cause whole and returns it as its source — the queue's

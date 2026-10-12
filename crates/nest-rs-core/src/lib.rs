@@ -127,7 +127,7 @@ pub use error::{
     ScopeViolationError, UnregisteredModuleError, UnresolvedFactoryError, UnresolvedLayerError,
     WiringFailedError,
 };
-pub use error_message::{boxed_error, error_message};
+pub use error_message::{SafeLink, boxed_error, error_message};
 pub use handler::{Handler, Posture, Reflector};
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};

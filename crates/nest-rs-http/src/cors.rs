@@ -29,11 +29,21 @@ pub struct HttpCors {
 }
 
 /// The wildcard, as the four lists spell it.
-const WILDCARD: &str = "*";
+pub(crate) const WILDCARD: &str = "*";
 
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
 const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
+
+/// The values a list admits one by one: none when it holds the wildcard, which
+/// admits them all.
+fn listed(values: &[String]) -> &[String] {
+    if values.iter().any(|value| value == WILDCARD) {
+        &[]
+    } else {
+        values
+    }
+}
 
 /// A list a `*` may appear in, paired with the response header it renders into.
 type WildcardList<'a> = (&'a str, &'a str, &'a [String]);
@@ -99,20 +109,21 @@ impl HttpCors {
         }))
     }
 
-    /// Translate to poem's middleware. `origins: ["*"]` becomes the
-    /// wildcard; explicit origins map one-to-one.
+    /// Translate to poem's middleware. A `*` in `origins`, `methods` or
+    /// `headers` admits every value, which poem spells as an empty list;
+    /// explicit values map one-to-one.
     pub fn into_middleware(self) -> Result<Cors> {
         self.reject_wildcards_with_credentials()?;
         let mut cors = Cors::new();
-        for origin in &self.origins {
+        for origin in listed(&self.origins) {
             cors = cors.allow_origin(origin);
         }
-        for m in &self.methods {
+        for m in listed(&self.methods) {
             let method = Method::from_bytes(m.as_bytes())
                 .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))?;
             cors = cors.allow_method(method);
         }
-        for h in &self.headers {
+        for h in listed(&self.headers) {
             let header = HeaderName::from_str(h)
                 .with_context(|| format!("invalid header name in CORS allow-list: `{h}`"))?;
             cors = cors.allow_header(header);
@@ -310,6 +321,46 @@ mod tests {
         }
         .into_middleware()
         .expect("a wildcard policy with no credentials is legal");
+    }
+
+    /// `*` is the wildcard each list documents, never a literal origin, method
+    /// or header name the request must spell.
+    #[tokio::test]
+    async fn a_wildcard_opens_every_origin_method_and_header() {
+        use poem::http::{Method, StatusCode};
+        use poem::test::TestClient;
+        use poem::{EndpointExt, Route, handler};
+
+        #[handler]
+        fn page() -> &'static str {
+            "[]"
+        }
+
+        let cors = HttpCors {
+            origins: vec![WILDCARD.into()],
+            methods: vec![WILDCARD.into()],
+            headers: vec![WILDCARD.into()],
+            ..HttpCors::default()
+        }
+        .into_middleware()
+        .expect("builds");
+        let client = TestClient::new(Route::new().at("/", page).with(cors));
+
+        let read = client
+            .get("/")
+            .header("origin", "https://any.example")
+            .send()
+            .await;
+        read.assert_status_is_ok();
+        read.assert_header("access-control-allow-origin", "https://any.example");
+        let preflight = client
+            .request(Method::OPTIONS, "/")
+            .header("origin", "https://any.example")
+            .header("access-control-request-method", "PUT")
+            .header("access-control-request-headers", "x-anything")
+            .send()
+            .await;
+        preflight.assert_status(StatusCode::OK);
     }
 
     #[test]

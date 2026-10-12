@@ -182,8 +182,10 @@ use nest_rs::http::{HttpCors, HttpConfig, HttpModule};
 pub struct ApiModule;
 ```
 
-`origins: vec!["*".into()]` is allowed for fully open APIs (the wildcard
-is passed straight through to poem).
+`origins: vec!["*".into()]` opens a fully public API to every origin, and a
+`*` in `methods` or `headers` admits every method or header. With
+`credentials`, a `*` in any list fails the boot: a browser reads it as a
+literal on a credentialed request, so it would open nothing.
 
 ## Mounting under a shared prefix
 

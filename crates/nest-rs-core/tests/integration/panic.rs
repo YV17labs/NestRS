@@ -211,6 +211,49 @@ fn a_panic_inside_contain_is_filed_once_by_its_unit_saying_where() {
     );
 }
 
+/// A unit whose own code catches a panic and goes on: it never re-raises the
+/// payload, so no line of its own will ever say it.
+#[nest_rs_core::main]
+async fn contain_a_unit_that_catches_its_own_panic() -> bool {
+    contain(async {
+        let caught = std::panic::catch_unwind(unwrap_a_secret).is_err();
+        tokio::task::yield_now().await;
+        caught
+    })
+    .await
+    .expect("the unit returns")
+}
+
+#[test]
+fn a_panic_a_contained_unit_catches_itself_is_filed_once_by_the_hook() {
+    let logs = LogCapture::install();
+
+    let caught = contain_a_unit_that_catches_its_own_panic();
+    crate::rust_panic_hook();
+
+    assert!(caught, "the unit's own catch took the panic");
+    let events = logs.events();
+    assert_eq!(events.len(), 1, "the hook's event alone: {events:#?}");
+    let event = &events[0];
+    assert_eq!(
+        (event.target.as_str(), event.message.as_str()),
+        (nest_rs_core::target::APP, NO_UNIT)
+    );
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field(FIELD).as_deref(),
+        Some(
+            "called `Result::unwrap()` on an `Err` value: Error(\"invalid type: a string, \
+             expected u64\", line: 1, column: 24)"
+        ),
+    );
+    let location = event.field(LOCATION_FIELD).unwrap_or_default();
+    assert!(
+        location.contains("tests/integration/panic.rs:"),
+        "where it panicked: {event:#?}"
+    );
+}
+
 /// A value whose drop panics, as a unit's guard can.
 struct PanicsOnDrop;
 

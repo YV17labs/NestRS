@@ -35,7 +35,8 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
 
 /// Run `fut`, catching its unwind; the process hook stays quiet for a panic
 /// raised while it runs, since the unit that called this reports it. One
-/// raised as it is dropped unfinished is the hook's to file.
+/// raised as it is dropped unfinished is the hook's to file, as is one `fut`
+/// catches itself and does not raise again: no line of the unit's says it.
 ///
 /// ```
 /// # #[nest_rs_core::main]
@@ -70,30 +71,46 @@ impl<F: Future> Future for Contained<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let unit = self.project().unit;
-        CONTAINED.sync_scope(Cell::new(None), || {
-            match std::panic::catch_unwind(AssertUnwindSafe(|| unit.poll(cx))) {
+        CONTAINED.sync_scope(Cell::new(Vec::new()), || {
+            let polled = std::panic::catch_unwind(AssertUnwindSafe(|| unit.poll(cx)));
+            let mut seen = CONTAINED.with(Cell::take);
+            let polled = match polled {
                 Ok(polled) => polled.map(Ok),
                 Err(payload) => {
-                    if let Some(seen) = CONTAINED.with(Cell::take) {
-                        remember(payload.as_ref(), seen);
+                    // The last panic raised with its message is the one that got here.
+                    let message = panic_message(payload.as_ref());
+                    if let Some(at) = seen.iter().rposition(|seen| seen.message == message) {
+                        remember(payload.as_ref(), seen.remove(at));
                     }
                     Poll::Ready(Err(payload))
                 }
+            };
+            for swallowed in seen {
+                unclaimed(
+                    &swallowed.message,
+                    &swallowed.location,
+                    &swallowed.backtrace,
+                );
             }
+            polled
         })
     }
 }
 
 tokio::task_local! {
-    /// Set while a [`contain`]ed unit is polled, holding what the hook saw of a
-    /// panic raised there: a task-local, so a task the unit spawns is outside it.
-    static CONTAINED: Cell<Option<Seen>>;
+    /// Set while a [`contain`]ed unit is polled, holding what the hook saw of
+    /// each panic raised there: a task-local, so a task the unit spawns is
+    /// outside it.
+    static CONTAINED: Cell<Vec<Seen>>;
 }
 
 /// A contained panic, as the hook saw it.
 struct Seen {
     message: String,
     location: String,
+    /// Captured only when `RUST_BACKTRACE` asks, for a panic the unit catches
+    /// itself and the hook therefore files after all.
+    backtrace: Backtrace,
 }
 
 /// Log a contained panic: at `error`, on `target`, with the payload rendered by
@@ -138,30 +155,25 @@ pub(crate) fn hook(info: &PanicHookInfo<'_>) {
     let location = info
         .location()
         .map_or_else(|| "<unknown>".to_owned(), ToString::to_string);
-    let contained = CONTAINED
-        .try_with(|seen| {
-            seen.set(Some(Seen {
-                message: message.clone(),
-                location: location.clone(),
-            }));
-        })
-        .is_ok();
+    let contained = CONTAINED.try_with(|_| ()).is_ok();
     match report(contained, subscribed()) {
-        Report::ByTheUnit => {}
-        Report::Event => {
-            let thread = std::thread::current();
-            let backtrace = Backtrace::capture();
-            let backtrace = (backtrace.status() == BacktraceStatus::Captured)
-                .then(|| tracing::field::display(backtrace));
-            tracing::error!(
-                target: crate::target::APP,
-                thread = thread.name().unwrap_or("<unnamed>"),
-                { FIELD } = %message,
-                { LOCATION_FIELD } = %location,
-                backtrace,
-                "panicked where no unit of work contains it",
-            );
+        Report::ByTheUnit => {
+            let seen = Seen {
+                message,
+                location,
+                backtrace: Backtrace::capture(),
+            };
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "`contained` above is this same lookup, which cannot fail between the two"
+            )]
+            let _ = CONTAINED.try_with(|slot| {
+                let mut held = slot.take();
+                held.push(seen);
+                slot.set(held);
+            });
         }
+        Report::Event => unclaimed(&message, &location, &Backtrace::capture()),
         Report::Stderr => {
             let line = format!("nestrs: panicked at {location}: {}\n", LineSafe(&message));
             #[expect(
@@ -171,6 +183,21 @@ pub(crate) fn hook(info: &PanicHookInfo<'_>) {
             let _ = std::io::stderr().write_all(line.as_bytes());
         }
     }
+}
+
+/// The hook's one event, for a panic no unit says.
+fn unclaimed(message: &str, location: &str, backtrace: &Backtrace) {
+    let thread = std::thread::current();
+    let backtrace = (backtrace.status() == BacktraceStatus::Captured)
+        .then(|| tracing::field::display(backtrace));
+    tracing::error!(
+        target: crate::target::APP,
+        thread = thread.name().unwrap_or("<unnamed>"),
+        { FIELD } = %message,
+        { LOCATION_FIELD } = %location,
+        backtrace,
+        "panicked where no unit of work contains it",
+    );
 }
 
 /// Who says a panic.
@@ -210,7 +237,8 @@ static RECENT: Mutex<VecDeque<Recent>> = Mutex::new(VecDeque::new());
 
 struct Recent {
     payload: usize,
-    seen: Seen,
+    message: String,
+    location: String,
 }
 
 /// The address of `payload`'s box: two live panics never share one, so two
@@ -230,7 +258,11 @@ fn remember(payload: &(dyn Any + Send), seen: Seen) {
     if recent.len() == RECENT_PANICS {
         recent.pop_front();
     }
-    recent.push_back(Recent { payload, seen });
+    recent.push_back(Recent {
+        payload,
+        message: seen.message,
+        location: seen.location,
+    });
 }
 
 /// Where the contained panic `payload` carries happened, forgotten once read.
@@ -239,8 +271,8 @@ fn recall(payload: &(dyn Any + Send), message: &str) -> Option<String> {
     let mut recent = RECENT.lock().unwrap_or_else(PoisonError::into_inner);
     let at = recent
         .iter()
-        .rposition(|panic| panic.payload == payload && panic.seen.message == message)?;
-    recent.remove(at).map(|panic| panic.seen.location)
+        .rposition(|panic| panic.payload == payload && panic.message == message)?;
+    recent.remove(at).map(|panic| panic.location)
 }
 
 pub(crate) mod __private {
@@ -340,6 +372,7 @@ mod tests {
         Seen {
             message: message.to_owned(),
             location: location.to_owned(),
+            backtrace: Backtrace::disabled(),
         }
     }
 

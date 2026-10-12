@@ -191,6 +191,19 @@ its client closed files `ok`, one the protocol refused `error`. A subscription
 whose stream panics closes the socket with `1011 Internal Error` and files
 `panic`.
 
+The socket is bounded in what one client can hold, whatever it is
+authorised for:
+
+| Bound | Variable | Default | Past it |
+|---|---|---|---|
+| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB | the frame is refused before it is buffered, and the socket closes `1011` |
+| The wait for `connection_init` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | 3 s, from 1 to 60 | the socket closes `4408 Connection initialisation timeout` |
+| Operations running at once | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | 100, `0` ⇒ unlimited | the `subscribe` is answered an `error` message for its id, and the socket stays |
+
+A `subscribe` reusing the id of an operation still running closes the socket
+`4409 Subscriber already exists`, as graphql-ws requires, rather than
+replacing the running one. Both `44xx` closes file the socket's line `error`.
+
 Everything else is the GraphQL module's own configuration — see
 [Configuration](/graphql/configuration/).
 

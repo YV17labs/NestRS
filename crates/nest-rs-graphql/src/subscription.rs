@@ -3,8 +3,10 @@
 //!
 //! A subscription goes through the same gate as every operation, decided once at
 //! subscribe, so every item is filtered against the ability captured then
-//! ([`keep_masked_item`]) and the socket carries a lifetime ceiling
-//! ([`GraphqlConfig::max_connection`](crate::GraphqlConfig::max_connection)).
+//! ([`keep_masked_item`]). The socket is bounded as a gateway's is: a browser
+//! origin checked at the upgrade, a lifetime ceiling, a message cap, a wait
+//! for `connection_init` and a count of operations running at once
+//! ([`GraphqlConfig`]).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -19,7 +21,7 @@ use async_graphql_poem::GraphQLProtocol;
 use futures_util::future::Either;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, Stream, StreamExt};
-use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketStream};
+use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig, WebSocketStream};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
@@ -121,6 +123,71 @@ const LIFETIME_REACHED: &str = "connection lifetime reached, re-upgrade to conti
 /// condition that prevented the server from serving the rest of the socket.
 const UNWOUND: &str = "the subscription failed on the server";
 
+/// §7.4.1 **1011 Internal Error**, not 1009: poem hands tungstenite's errors on
+/// as an opaque `io::Error`, so the message cap cannot be told from a framing
+/// fault — the sentence a WebSocket gateway closes with.
+const READ_FAILED: &str = "the connection could not be read";
+
+/// What an operation past the socket's cap is answered with.
+const TOO_MANY_OPERATIONS: &str = "too many operations on this socket";
+
+/// Why the server refused a socket mid-protocol, each with the close the peer
+/// is told it in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refusal {
+    /// No `connection_init` within the wait — graphql-ws `PROTOCOL.md`,
+    /// *ConnectionInit*.
+    InitTimeout,
+    /// A `subscribe` reusing the id of a running operation — *Subscribe*. The
+    /// reason does not echo the id.
+    SubscriberExists,
+    /// The read failed: a frame past the message cap, or broken framing.
+    ReadFailed,
+}
+
+impl Refusal {
+    fn close(self) -> (CloseCode, &'static str) {
+        match self {
+            Self::InitTimeout => (CloseCode::from(4408), "Connection initialisation timeout"),
+            Self::SubscriberExists => (CloseCode::from(4409), "Subscriber already exists"),
+            Self::ReadFailed => (CloseCode::Error, READ_FAILED),
+        }
+    }
+
+    /// How the socket's line files it: a read that failed is most often the
+    /// connection gone, which a peer ends.
+    fn ended(self) -> Ended {
+        match self {
+            Self::InitTimeout | Self::SubscriberExists => Ended::Refused,
+            Self::ReadFailed => Ended::ByPeer,
+        }
+    }
+}
+
+/// What one socket is held to, read once off [`GraphqlConfig`].
+#[derive(Clone, Copy, Debug)]
+struct SocketBounds {
+    /// The lifetime ceiling; `None` ⇒ unlimited.
+    max_connection: Option<Duration>,
+    /// The per-message and per-frame byte cap, at the protocol layer.
+    max_message_bytes: usize,
+    /// The wait for `connection_init`.
+    connection_init_timeout: Duration,
+    /// Operations running at once; `None` ⇒ unlimited.
+    max_operations: Option<usize>,
+}
+
+impl SocketBounds {
+    fn of(config: &GraphqlConfig) -> Self {
+        Self {
+            max_connection: config.max_connection,
+            max_message_bytes: config.max_message_bytes,
+            connection_init_timeout: config.connection_init_timeout,
+            max_operations: config.max_socket_operations.filter(|&max| max > 0),
+        }
+    }
+}
+
 /// The end the socket's server half arms: the shutdown signal, or the lifetime
 /// ceiling (`None` ⇒ none), whichever comes first. The deadline is **absolute**,
 /// not an idle timeout, so traffic never pushes it out.
@@ -158,8 +225,9 @@ async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) ->
 enum Ended {
     /// Its client closed it, or the connection went.
     ByPeer,
-    /// async-graphql closed it for a protocol fault — an unacknowledged
-    /// connection, a malformed message, a repeated `connection_init`.
+    /// It broke the protocol — async-graphql refused an unacknowledged
+    /// connection, a malformed message or a repeated `connection_init`; the
+    /// server, a missing `connection_init` or a reused id.
     Refused,
     /// The server ended it: its subscriptions completed, then 1001 — or it
     /// dropped the socket, whose peer took nothing within the send deadline or
@@ -174,7 +242,7 @@ enum Ended {
 pub(crate) struct SubscriptionEndpoint<E> {
     executor: E,
     bridge: Arc<OperationBridge>,
-    max_connection: Option<Duration>,
+    bounds: SocketBounds,
     /// Every socket this mount serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
@@ -186,14 +254,14 @@ impl<E> SubscriptionEndpoint<E> {
     pub(crate) fn new(
         executor: E,
         bridge: Arc<OperationBridge>,
-        max_connection: Option<Duration>,
+        config: &GraphqlConfig,
         sockets: DetachedWork,
         origins: OriginPolicy,
     ) -> Self {
         Self {
             executor,
             bridge,
-            max_connection,
+            bounds: SocketBounds::of(config),
             sockets,
             origins,
         }
@@ -224,7 +292,8 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let protocol = GraphQLProtocol::from_request(&req, &mut body).await?;
         let data = self.bridge.connection_data(&req);
         let executor = self.executor.clone();
-        let max_connection = self.max_connection;
+        let bounds = self.bounds;
+        let max_connection = bounds.max_connection;
         let socket_executor = socket_executor();
         // `around` wraps the **whole socket**: one upgrade, one principal.
         let guard = self.bridge.op_guard.clone();
@@ -236,6 +305,11 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         let sockets = self.sockets.clone();
 
         Ok(websocket
+            .config(
+                WebSocketConfig::default()
+                    .max_message_size(Some(bounds.max_message_bytes))
+                    .max_frame_size(Some(bounds.max_message_bytes)),
+            )
             .protocols(ALL_WEBSOCKET_PROTOCOLS)
             .on_upgrade(move |stream| async move {
                 // One span per socket: async-graphql's engine hides operation
@@ -246,7 +320,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // A local slot, since the guard scopes a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
-                    let served = serve_socket(stream, executor, protocol.0, data, end);
+                    let served = serve_socket(stream, executor, protocol.0, data, end, bounds);
                     ended = Some(match max_connection {
                         // A peer that stopped reading cannot hold the socket past
                         // the ceiling plus the close grace.
@@ -304,30 +378,39 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
 ///
 /// At `end`, [`Inbound`] hands the engine a `stop` per running subscription,
 /// so the engine writes each `complete` in the negotiated protocol's wording.
+/// A `subscribe` past the operation cap never reaches the engine: this loop
+/// answers it the protocol's `error` for its id.
 async fn serve_socket<E: Executor>(
     stream: WebSocketStream,
     executor: E,
     protocol: WebSocketProtocols,
     data: Data,
     end: impl Future<Output = Ending> + Send + 'static,
+    bounds: SocketBounds,
 ) -> Ended {
     let (mut sink, socket) = stream.split();
-    let started: Started = Arc::default();
-    let ending: Arc<OnceLock<Ending>> = Arc::default();
-    let inbound = Inbound {
-        socket,
-        end: Box::pin(end),
-        started: Arc::clone(&started),
-        ending: Arc::clone(&ending),
-        stopping: None,
-    };
+    let inbound = Inbound::new(socket, end, bounds);
+    let started = Arc::clone(&inbound.started);
+    let ending = Arc::clone(&inbound.ending);
+    let refusal = Arc::clone(&inbound.refusal);
+    let withheld = Arc::clone(&inbound.withheld);
     let mut engine =
         async_graphql::http::WebSocket::from_message_stream(executor, inbound, protocol)
             .connection_data(data);
     loop {
+        if let Some(id) = withheld.take() {
+            if let Err(error) = sink.send(Message::Text(operation_refused(&id))).await {
+                return stopped_writing(&error);
+            }
+            continue;
+        }
         // A subscription's stream is developer code polled here: a panic closes
         // the socket with 1011.
-        let next = match nest_rs_core::panic::contain(engine.next()).await {
+        let next = tokio::select! {
+            () = withheld.ready.notified() => continue,
+            next = nest_rs_core::panic::contain(engine.next()) => next,
+        };
+        let next = match next {
             Ok(next) => next,
             Err(payload) => {
                 close_socket(&mut sink, CloseCode::Error, UNWOUND).await;
@@ -349,6 +432,11 @@ async fn serve_socket<E: Executor>(
             }
             None => break,
         }
+    }
+    if let Some(refusal) = refusal.get() {
+        let (code, reason) = refusal.close();
+        close_socket(&mut sink, code, reason).await;
+        return refusal.ended();
     }
     match ending.get() {
         Some(ending) => {
@@ -442,9 +530,55 @@ fn completed_id(frame: &str) -> Option<String> {
     }
 }
 
+/// The `subscribe` past the operation cap that waits for the socket's loop to
+/// answer it. The peer's half reads nothing more while one waits, so one at
+/// most ever does.
+#[derive(Default)]
+struct Withheld {
+    id: Mutex<Option<String>>,
+    /// Wakes the loop, which the engine never would: it saw no message.
+    ready: tokio::sync::Notify,
+}
+
+impl Withheld {
+    fn hold(&self, id: String) {
+        *self.slot() = Some(id);
+        self.ready.notify_one();
+    }
+
+    fn take(&self) -> Option<String> {
+        self.slot().take()
+    }
+
+    fn waits(&self) -> bool {
+        self.slot().is_some()
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The protocol's `error` message for an operation refused past the cap, which
+/// ends that operation alone; the id is the protocol's correlation key.
+fn operation_refused(id: &str) -> String {
+    serde_json::json!({
+        "type": "error",
+        "id": id,
+        "payload": [{ "message": TOO_MANY_OPERATIONS }],
+    })
+    .to_string()
+}
+
 /// The peer's half of a socket, as the protocol engine reads it, tracking which
 /// operations run; once `end` resolves it yields a `stop` per running
 /// subscription instead, and ends once nothing is left answering.
+///
+/// It also holds the socket to its bounds: it ends the socket with a
+/// [`Refusal`] past the wait for `connection_init`, on a reused id or on a
+/// failed read, and withholds a `subscribe` past the operation cap.
 struct Inbound<S> {
     socket: S,
     end: std::pin::Pin<Box<dyn Future<Output = Ending> + Send>>,
@@ -452,6 +586,39 @@ struct Inbound<S> {
     ending: Arc<OnceLock<Ending>>,
     /// The `stop`s left to hand the engine, once `end` has resolved.
     stopping: Option<std::vec::IntoIter<String>>,
+    /// Armed at the upgrade, cleared by the first `connection_init`.
+    init_deadline: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+    max_operations: Option<usize>,
+    withheld: Arc<Withheld>,
+    refusal: Arc<OnceLock<Refusal>>,
+}
+
+impl<S> Inbound<S> {
+    fn new(
+        socket: S,
+        end: impl Future<Output = Ending> + Send + 'static,
+        bounds: SocketBounds,
+    ) -> Self {
+        Self {
+            socket,
+            end: Box::pin(end),
+            started: Started::default(),
+            ending: Arc::default(),
+            stopping: None,
+            init_deadline: Some(Box::pin(tokio::time::sleep(bounds.connection_init_timeout))),
+            max_operations: bounds.max_operations,
+            withheld: Arc::default(),
+            refusal: Arc::default(),
+        }
+    }
+
+    /// End the peer's half, so the engine ends and the loop closes with
+    /// `refusal`.
+    fn refuse<T>(&self, refusal: Refusal) -> Poll<Option<T>> {
+        #[expect(clippy::let_underscore_must_use, reason = "the first refusal stands")]
+        let _ = self.refusal.set(refusal);
+        Poll::Ready(None)
+    }
 }
 
 impl<S> Stream for Inbound<S>
@@ -490,10 +657,33 @@ where
                 Poll::Pending
             };
         }
+        if let Some(deadline) = this.init_deadline.as_mut()
+            && deadline.as_mut().poll(cx).is_ready()
+        {
+            tracing::debug!(
+                target: crate::TARGET,
+                close_code = 4408,
+                "closing subscription socket: no connection_init within the wait",
+            );
+            return this.refuse(Refusal::InitTimeout);
+        }
+        // The loop answers the withheld `subscribe`, then polls the engine again.
+        if this.withheld.waits() {
+            return Poll::Pending;
+        }
         loop {
             match std::pin::Pin::new(&mut this.socket).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(None | Some(Err(_))) => return Poll::Ready(None),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(Err(error))) => {
+                    tracing::debug!(
+                        target: crate::TARGET,
+                        error = %nest_rs_core::error_message(&error),
+                        close_code = u16::from(CloseCode::Error),
+                        "subscription socket read failed",
+                    );
+                    return this.refuse(Refusal::ReadFailed);
+                }
                 Poll::Ready(Some(Ok(message))) => {
                     if !(message.is_text() || message.is_binary()) {
                         continue;
@@ -501,9 +691,32 @@ where
                     let mut parsed = serde_json::from_slice::<ClientMessage>(&message.into_bytes())
                         .map_err(not_a_message);
                     match &mut parsed {
+                        Ok(ClientMessage::ConnectionInit { .. }) => this.init_deadline = None,
                         Ok(ClientMessage::Start { id, payload }) => {
-                            let operation = Operation::of(payload);
-                            lock(&this.started).insert(id.clone(), operation);
+                            let mut started = lock(&this.started);
+                            if started.contains_key(id.as_str()) {
+                                drop(started);
+                                tracing::debug!(
+                                    target: crate::TARGET,
+                                    close_code = 4409,
+                                    "closing subscription socket: a running operation's id \
+                                     was reused",
+                                );
+                                return this.refuse(Refusal::SubscriberExists);
+                            }
+                            if let Some(max) = this.max_operations
+                                && started.len() >= max
+                            {
+                                drop(started);
+                                tracing::debug!(
+                                    target: crate::TARGET,
+                                    max_socket_operations = max,
+                                    "subscribe refused: the socket runs its maximum of operations",
+                                );
+                                this.withheld.hold(std::mem::take(id));
+                                return Poll::Pending;
+                            }
+                            started.insert(id.clone(), Operation::of(payload));
                         }
                         Ok(ClientMessage::Stop { id }) => {
                             lock(&this.started).remove(id);
@@ -863,6 +1076,10 @@ mod tests {
         }
     }
 
+    fn bounds() -> SocketBounds {
+        SocketBounds::of(&GraphqlConfig::default())
+    }
+
     #[tokio::test]
     #[expect(
         clippy::let_underscore_must_use,
@@ -872,6 +1089,7 @@ mod tests {
         use async_graphql::futures_util::stream;
 
         let frames = stream::iter([
+            Ok(Message::Text(r#"{"type":"connection_init"}"#.into())),
             Ok(Message::Text(
                 r#"{"id":"a","type":"subscribe","payload":{"query":"subscription { x }"}}"#.into(),
             )),
@@ -882,18 +1100,16 @@ mod tests {
         ])
         .chain(stream::pending());
         let (end_now, ended) = tokio::sync::oneshot::channel::<()>();
-        let ending: Arc<OnceLock<Ending>> = Arc::default();
-        let mut inbound = Inbound {
-            socket: Box::pin(frames),
-            end: Box::pin(async move {
+        let mut inbound = Inbound::new(
+            Box::pin(frames),
+            async move {
                 let _ = ended.await;
                 Ending::GoingAway
-            }),
-            started: Started::default(),
-            ending: Arc::clone(&ending),
-            stopping: None,
-        };
-        for _ in 0..3 {
+            },
+            bounds(),
+        );
+        let ending = Arc::clone(&inbound.ending);
+        for _ in 0..4 {
             assert!(matches!(inbound.next().await, Some(Ok(_))));
         }
         end_now.send(()).expect("the end is armed");
@@ -922,6 +1138,7 @@ mod tests {
         use async_graphql::futures_util::stream;
 
         let frames = stream::iter([
+            Ok(Message::Text(r#"{"type":"connection_init"}"#.into())),
             Ok(Message::Text(
                 r#"{"id":"s","type":"subscribe","payload":{"query":"subscription { x }"}}"#.into(),
             )),
@@ -930,19 +1147,17 @@ mod tests {
             )),
         ])
         .chain(stream::pending());
-        let started = Started::default();
         let (end_now, ended) = tokio::sync::oneshot::channel::<()>();
-        let mut inbound = Inbound {
-            socket: Box::pin(frames),
-            end: Box::pin(async move {
+        let mut inbound = Inbound::new(
+            Box::pin(frames),
+            async move {
                 let _ = ended.await;
                 Ending::GoingAway
-            }),
-            started: Arc::clone(&started),
-            ending: Arc::default(),
-            stopping: None,
-        };
-        for _ in 0..2 {
+            },
+            bounds(),
+        );
+        let started = Arc::clone(&inbound.started);
+        for _ in 0..3 {
             assert!(matches!(inbound.next().await, Some(Ok(_))));
         }
         end_now.send(()).expect("the end is armed");

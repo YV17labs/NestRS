@@ -874,3 +874,143 @@ async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
 
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+/// A frame past the socket's message cap is never buffered whole: the protocol
+/// layer refuses it and the socket closes. 1011, not 1009: poem hands the cause
+/// on as an opaque `io::Error`, as the WebSocket gateway's cap meets it.
+#[tokio::test]
+async fn a_frame_past_the_message_cap_closes_the_socket() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+
+    let padding = "x".repeat(128 * 1024);
+    socket
+        .send_text(
+            serde_json::json!({ "type": "connection_init", "payload": { "padding": padding } })
+                .to_string(),
+        )
+        .await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(code, CloseCode::Error, "{reason}");
+    assert!(!reason.is_empty());
+    let read = logs.expect_one(nest_rs_graphql::TARGET, "subscription socket read failed");
+    assert!(
+        read.field("error")
+            .is_some_and(|error| error.contains("Space limit")),
+        "the operator's line names the size that did it: {:?}",
+        read.fields,
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        connection_init_timeout: Duration::from_secs(1),
+        ..GraphqlConfig::default()
+    }),
+    TickModule,
+])]
+struct InitTimeoutApp;
+
+/// graphql-ws `PROTOCOL.md`, *ConnectionInit*: a socket that has not sent
+/// `connection_init` within the wait is closed `4408`.
+#[tokio::test]
+async fn a_socket_that_sends_no_connection_init_is_closed_4408() {
+    let (app, _) = ticks_app::<InitTimeoutApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+
+    // Paused time, while nothing reads: the Close waits buffered.
+    tokio::time::pause();
+    tokio::time::sleep(Duration::from_secs(1) + Duration::from_millis(1)).await;
+    tokio::time::resume();
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(u16::from(code), 4408);
+    assert_eq!(reason, "Connection initialisation timeout");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// graphql-ws `PROTOCOL.md`, *Subscribe*: an id already running closes the
+/// socket `4409`, rather than silently replacing the running operation.
+#[tokio::test]
+async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
+    let (app, state) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    socket
+        .send_text(
+            serde_json::json!({
+                "id": "1",
+                "type": "subscribe",
+                "payload": { "query": "subscription { ticks { seq } }" },
+            })
+            .to_string(),
+        )
+        .await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(u16::from(code), 4409);
+    assert!(!reason.contains('1'), "the id is not echoed: {reason}");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_socket_operations: Some(2),
+        ..GraphqlConfig::default()
+    }),
+    TickModule,
+])]
+struct OperationCapApp;
+
+#[tokio::test]
+async fn an_operation_past_the_socket_cap_is_answered_an_error_and_the_rest_keep_streaming() {
+    let (app, state) = ticks_app::<OperationCapApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    for id in ["1", "2", "3"] {
+        socket
+            .send_text(
+                serde_json::json!({
+                    "id": id,
+                    "type": "subscribe",
+                    "payload": { "query": "subscription { ticks { seq } }" },
+                })
+                .to_string(),
+            )
+            .await;
+    }
+
+    let refused = next_message(&mut socket).await;
+    assert_eq!(refused["type"], "error", "{refused}");
+    assert_eq!(refused["id"], "3", "{refused}");
+    assert_eq!(
+        refused["payload"][0]["message"], "too many operations on this socket",
+        "{refused}"
+    );
+    for _ in 0..250 {
+        if state.tx.receiver_count() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    state
+        .tx
+        .send(Tick { seq: 7 })
+        .expect("two subscribers listen");
+    let mut streamed: Vec<String> = Vec::new();
+    for _ in 0..2 {
+        let item = next_message(&mut socket).await;
+        assert_eq!(item["type"], "next", "{item}");
+        streamed.push(item["id"].as_str().expect("an id").to_owned());
+    }
+    streamed.sort();
+    assert_eq!(streamed, ["1", "2"]);
+    assert_eq!(state.tx.receiver_count(), 2, "the third never ran");
+    app.shutdown().await.expect("the transport stops cleanly");
+}

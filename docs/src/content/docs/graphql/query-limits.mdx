@@ -20,7 +20,9 @@ auth even runs:
 
 nestrs wraps async-graphql's two validation visitors that cover the
 three vectors. Both are on by default; tune the ceilings to your
-traffic.
+traffic. A subscription socket has bounds of its own — its message size,
+its wait for `connection_init` and the operations it runs at once — on
+[Subscriptions](/graphql/subscriptions/#configuration).
 
 ## The two ceilings
 

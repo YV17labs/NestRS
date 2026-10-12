@@ -167,7 +167,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 SubscriptionEndpoint::new(
                     schema,
                     bridge,
-                    options.max_connection,
+                    &options,
                     mounted.clone(),
                     nest_rs_http::__private::OriginPolicy::from_container(container),
                 ),

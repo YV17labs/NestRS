@@ -40,6 +40,12 @@ pub struct GraphqlConfig {
     pub max_batch_size: usize,
     /// Ceiling on a subscription's lifetime. Default 4 hours; `None` unlimited.
     pub max_connection: Option<Duration>,
+    /// Byte cap on one graphql-ws message. Default 64 KiB.
+    pub max_message_bytes: usize,
+    /// The wait for `connection_init`. Default 3 seconds.
+    pub connection_init_timeout: Duration,
+    /// Operations one socket runs at once. Default `100`.
+    pub max_socket_operations: Option<usize>,
     /// Serve as an Apollo subgraph. Default `false`.
     pub federation: bool,
     /// Bound on a federation `_entities` request. Default `100`.
@@ -60,6 +66,9 @@ pub struct GraphqlConfig {
 | `disable_introspection` | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `true` | When `true`, the schema rejects introspection queries (production-safe). |
 | `max_batch_size` | `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
 | `max_connection` | `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |
+| `max_message_bytes` | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | Byte cap on one graphql-ws message, held at the protocol layer: a larger frame is never buffered, and the socket closes. |
+| `connection_init_timeout` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | `3` | How long an upgraded socket may wait for `connection_init` before it closes `4408`. From `1` to `60`, never off. |
+| `max_socket_operations` | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | `100` | Operations one socket runs at once; a `subscribe` past it is answered an `error` message for its id. `0` disables it. |
 | `max_representations` | `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` | `100` | Bound on the `representations` a federation `_entities` call may ask for in one request. `0` disables it. |
 | `strict_resolver_membership` | `<PREFIX>_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP` | `false` | When `true`, a resolver no imported module owns fails the boot instead of warning. |
 | `federation` | `<PREFIX>_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |

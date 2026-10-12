@@ -401,6 +401,8 @@ mod graphql {
 
 #[cfg(feature = "http")]
 mod http {
+    use std::borrow::Cow;
+
     use nest_rs_http::ProblemDetails;
     use poem::error::ResponseError;
     use poem::http::StatusCode;
@@ -439,10 +441,10 @@ mod http {
 
     /// Emit the cause behind an opaque 5xx; a 4xx stays silent.
     fn log_opaque(err: &ServiceError) {
-        let (kind, said) = match err {
-            ServiceError::Db(e) => ("db", nest_rs_core::error_message(e)),
-            ServiceError::Masking(e) => ("masking", e.clone()),
-            ServiceError::Internal(e) => ("internal", e.clone()),
+        let (kind, said): (&str, Cow<'_, str>) = match err {
+            ServiceError::Db(e) => ("db", nest_rs_core::error_message(e).into()),
+            ServiceError::Masking(e) => ("masking", e.into()),
+            ServiceError::Internal(e) => ("internal", e.into()),
             _ => return,
         };
         tracing::error!(
@@ -458,9 +460,8 @@ mod http {
     /// back, `404` for a row gone before the write, else a `500` whose error is
     /// filed at `error`. Called by the `#[crud]` expansion.
     pub fn crud_error(err: sea_orm::DbErr) -> poem::Error {
-        let status = StatusCode::from_u16(super::crud_problem(&err).status())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        poem::Error::from_status(status)
+        let problem = super::crud_problem(&err);
+        poem::Error::from_status(nest_rs_http::ResponseError::status(&problem))
     }
 
     #[cfg(test)]

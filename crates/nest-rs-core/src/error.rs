@@ -486,20 +486,19 @@ impl Redactions {
         let mut pairs = Vec::new();
         let mut link = error;
         while let Some(current) = link {
-            if let Some(said) = crate::SafeLink::said(current) {
+            let claimed = crate::SafeLink::said(current);
+            link = if claimed.is_some() {
+                None
+            } else {
+                current.source()
+            };
+            let safe = claimed.or_else(|| DecodeError::of(current).map(|report| report.sentence));
+            if let Some(said) = safe {
                 let displayed = current.to_string();
                 if !displayed.is_empty() && displayed != said {
                     pairs.push((displayed, said));
                 }
-                break;
             }
-            if let Some(report) = DecodeError::of(current) {
-                let displayed = current.to_string();
-                if !displayed.is_empty() && displayed != report.sentence {
-                    pairs.push((displayed, report.sentence));
-                }
-            }
-            link = current.source();
         }
         Self(pairs)
     }

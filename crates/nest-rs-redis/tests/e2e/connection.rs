@@ -290,9 +290,13 @@ async fn every_holder_answers(
     throttler: &RedisThrottler,
     key: &str,
 ) -> Result<(), &'static str> {
-    // The rate limiter fails closed, so a denial under a limit nothing reaches
-    // is Redis unreachable.
-    if !throttler.hit(key, LIMIT).await.allowed {
+    // A count that failed, or a denial under a limit nothing reaches, is Redis
+    // unreachable.
+    if !throttler
+        .hit(key, LIMIT)
+        .await
+        .is_ok_and(|decision| decision.allowed)
+    {
         return Err("the rate limiter");
     }
     redis::cmd("PING")

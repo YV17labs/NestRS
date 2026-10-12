@@ -71,15 +71,18 @@ from the Redis binding, so each compiles and runs in the framework's suite.
    A backend declaring `Cancellation` implements `remove`, and `remove_unique`
    beside `UniquePush`. The port waits `BACKEND_TIMEOUT` — eighteen seconds — for
    each call, then gives up on it: bound your own round trips well inside that,
-   so an outage reaches the caller as your error, with its cause. Checkpoint: a
-   push answers a receipt naming the job.
+   so an outage reaches the caller as your error, with its cause. A call that
+   panics is given up on the same way — a push or a cancel answers
+   `QueueError::Panicked`, naming the queue and the call, and the port files the
+   panic once at `error` — so answer your client's failure as an error, never an
+   `unwrap`. Checkpoint: a push answers a receipt naming the job.
 
 3. **Hand jobs over under a lease.** Implement `JobConsumer`. The worker asks;
    your storage answers in the backend's own words:
 
    | Call | What it owes |
    |---|---|
-   | `prepare` | Ready the storage for the methods, once, at boot, and say how long a call takes to answer at most. |
+   | `prepare` | Ready the storage for the methods, once, at boot, and say how long a call takes to answer at most — under `BACKEND_TIMEOUT`, or the boot refuses the backend, naming it. |
    | `receive` | At most `ask.max` deliveries, waiting at most `ask.wait` for the first — each **leased in the step that hands it over**, with its delivery count: 1 the first time, one more each time it is handed over again. |
    | `renew` | Extend each lease still yours, **without counting a delivery**; one `LeaseHold` per lease, in order. |
    | `settle` | End one delivery as its `Disposition` says, **in the step that checks the lease is still yours** — and answer `Lost`, writing nothing, when it is not. |

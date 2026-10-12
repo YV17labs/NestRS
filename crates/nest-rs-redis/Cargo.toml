@@ -90,8 +90,11 @@ nest-rs-core = { path = "../nest-rs-core" }
 nest-rs-worker = { path = "../nest-rs-worker" }
 # Per-argument pipe on a `#[process]` job argument (`Piped<P, T>` / `Valid<T>`).
 nest-rs-pipes = { path = "../nest-rs-pipes" }
-# The suite drives the `RedisThrottler` store directly.
+# The suite drives the `RedisThrottler` store directly, and asks the guard to
+# count over a Redis that stopped: `Guard::check_http` and the request it reads.
 nest-rs-throttler = { path = "../nest-rs-throttler" }
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-http = { path = "../nest-rs-http" }
 # The suite declares `#[scheduled]` jobs against `RedisOccurrenceLock`.
 nest-rs-schedule = { path = "../nest-rs-schedule" }
 tokio.workspace = true

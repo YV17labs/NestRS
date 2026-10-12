@@ -1,14 +1,12 @@
 //! Per-route guard that runs a [`Strategy`] and attaches the principal.
 
 use std::any::TypeId;
-use std::future::{Future as _, poll_fn};
-use std::pin::pin;
 use std::sync::Arc;
-use std::task::Poll;
 
 use nest_rs_core::trace_context::field;
 use nest_rs_core::{
-    Container, ContainerBuilder, Discoverable, Layer, Net, Posture, ProviderResidency,
+    Container, ContainerBuilder, Discoverable, Layer, Net, Posture, ProviderResidency, Unanswered,
+    within,
 };
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::HandlerMetadata;
@@ -30,9 +28,9 @@ const TRANSPORT: &str = "http";
 /// still refusing a credential that does not verify.
 ///
 /// It waits for the strategy no longer than [`AUTHENTICATE_TIMEOUT`]: a
-/// strategy silent past it is denied on every route, `#[public]` included. So
-/// the boot refuses every budget the strategy's code can reach at or past it
-/// (`nest_rs_core::BudgetPastNetError`).
+/// strategy silent past it, or one that panics, is denied on every route,
+/// `#[public]` included. So the boot refuses every budget the strategy's code
+/// can reach at or past it (`nest_rs_core::BudgetPastNetError`).
 pub struct AuthnGuard<S: Strategy> {
     strategy: Arc<S>,
 }
@@ -92,25 +90,29 @@ impl<S: Strategy> AuthnGuard<S> {
 
     /// Run the strategy on `req`, waiting no longer than
     /// [`AUTHENTICATE_TIMEOUT`] for its answer. `None` is a strategy that did
-    /// not answer in time, already said here at `warn`.
+    /// not answer in time, or that panicked, already said here — at `warn`, at
+    /// `error`.
     ///
-    ///
-    /// Polled once bare before the bound is armed: the JWT strategy answers on
-    /// that first poll — against a static key, or a JWK Set already held — so
-    /// the common path pays no timer.
+    /// The JWT strategy answers at the first poll — against a static key, or a
+    /// JWK Set already held — so the common path pays no timer.
     async fn authenticate(
         &self,
         strategy: &'static str,
         req: &mut Request,
     ) -> Option<Result<S::Principal, AuthError>> {
-        let mut authenticate = pin!(self.strategy.authenticate(req));
-        if let Poll::Ready(outcome) =
-            poll_fn(|cx| Poll::Ready(authenticate.as_mut().poll(cx))).await
-        {
-            return Some(outcome);
-        }
-        match tokio::time::timeout(AUTHENTICATE_TIMEOUT, authenticate).await {
+        let authenticate = async { self.strategy.authenticate(req).await };
+        match within(AUTHENTICATE_TIMEOUT, authenticate).await {
             Ok(outcome) => Some(outcome),
+            Err(Unanswered::Panicked(payload)) => {
+                nest_rs_core::contained_panic!(
+                    target: crate::TARGET,
+                    payload.as_ref(),
+                    "strategy panicked; denying (fail-closed)",
+                    strategy,
+                    transport = TRANSPORT,
+                );
+                None
+            }
             Err(_) => {
                 tracing::warn!(
                     target: crate::TARGET,
@@ -133,9 +135,10 @@ impl<S: Strategy> Layer for AuthnGuard<S> {}
 /// the principal when a token verifies and otherwise continues anonymously (a
 /// rejected credential logged at `warn`). On `Posture::InBand` it admits a
 /// request carrying no credential, left to each operation's own gate, and
-/// refuses one whose credential does not verify. [`AuthError::Unavailable`] and
-/// a strategy silent past [`AUTHENTICATE_TIMEOUT`] are not absorbed: the
-/// credential was never evaluated, so the request fails closed with a 503.
+/// refuses one whose credential does not verify. [`AuthError::Unavailable`], a
+/// strategy silent past [`AUTHENTICATE_TIMEOUT`] and one that panics are not
+/// absorbed: the credential was never evaluated, so the request fails closed
+/// with a 503.
 #[async_trait]
 impl<S: Strategy> Guard for AuthnGuard<S> {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
@@ -143,7 +146,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         let posture = Reflector::new(req).posture();
         let is_public = posture == Posture::Public;
         // Nothing was decided about the credential: the same 503 as an
-        // unreachable store, on every route. The bound already logged it.
+        // unreachable store, on every route. `authenticate` already said why.
         let Some(outcome) = self.authenticate(strategy, req).await else {
             return Err(Denial::unavailable(None, UNAVAILABLE));
         };

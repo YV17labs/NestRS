@@ -139,7 +139,10 @@ waits at most `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so
 Redis that stopped answering fails the push at that budget, with its own cause,
 well before the net. Eighteen seconds stays under the HTTP edge's request timeout,
 so a push made inside a request fails with an error naming its queue while the
-request can still answer.
+request can still answer. A backend that panics answering a push or a cancel
+fails it the same way, as `QueueError::Panicked` naming the queue and the call —
+the panic itself is filed once at `error` on `nest_rs::queue`, never handed to
+your handler.
 
 `push_many` hands the backend its jobs a hundred at a time (`ENQUEUE_BATCH`),
 each call under the net, so the net holds a push of any size. It is not atomic.

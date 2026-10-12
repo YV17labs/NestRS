@@ -61,6 +61,11 @@ pub enum OccurrenceClaim {
 ///
 /// **A call may be dropped at any `.await`** — at that net, and at shutdown. A
 /// backend keeps no state a dropped call would have had to undo.
+///
+/// **On failure**, the scheduler decides, and it fails closed: an `Err`, a call
+/// still unanswered when the occurrence goes stale and a panic each skip the
+/// occurrence — at `warn`, the panic at `error` — and the next one is claimed as
+/// usual. A backend returns its error rather than logging it.
 #[async_trait]
 pub trait OccurrenceLock: Send + Sync + 'static {
     /// Claim `occurrence` for `occurrence.hold`, **atomically**: of every

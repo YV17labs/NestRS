@@ -273,13 +273,20 @@ which it would otherwise answer for, and inside the shutdown window
 (`decisions/deadline-order.md`); a deployment breaking the second is told at
 boot. **A command whose answer is the only record of what it claimed is
 never cut** — a timeout does not undo it — so it waits on the socket's liveness
-instead (`queue.md`). Past a net every member
+instead (`queue.md`). **Every port method the framework awaits returns a
+`Result`, and the port, never the backend, decides the fail-closed answer**:
+a backend answers its error and logs nothing of its own. **Every such wait
+goes through `nest_rs_core::within`**, which polls the call once bare and
+contains its panic: a panic in a backend's call fails closed exactly as an
+unanswered call does, logged once at `error` by the port
+(`contained_panic!`). Past a net, on an error or a panic, every member
 fails closed in its own terms: an occurrence claim skips the occurrence at
 `warn`; a throttler hit denies the request for the window at `warn` naming the
-store; a push or cancel is an error to its caller and a checkpoint call fails
-the attempt as retryable; `Strategy::authenticate` denies at `warn`; an
-indicator reads down — its deadline is the orchestrator's probe, below every
-budget by design, so it declares no net. **An outbound client the framework
+store, never the key; a push or cancel is an error to its caller, a
+checkpoint call fails the attempt as retryable and the worker retries its own
+calls; `Strategy::authenticate` denies at `warn`; an indicator reads down —
+its deadline is the orchestrator's probe, below every budget by design, so it
+declares no net. **An outbound client the framework
 opens follows one policy**, and is private to the crate whose protocol needs it
 (OAuth's exchange, the JWK Set, the OTLP export, storage) — never an outbound
 HTTP surface (`CLAUDE.md`, hard "no"): its TLS is `ClientTls`; it speaks

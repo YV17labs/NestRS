@@ -2,7 +2,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use nest_rs_core::{Container, ReachableProviders, injectable, inventory};
+use nest_rs_core::{Container, ReachableProviders, Unanswered, injectable, inventory, within};
 
 use crate::config::HealthConfig;
 use crate::indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
@@ -84,8 +84,10 @@ async fn run_indicators(
         .iter()
         .enumerate()
         .map(|(slot, entry)| async move {
-            let outcome =
-                run_with_timeout(entry.name, kind, (entry.run)(container), indicator_timeout).await;
+            // In the bounded call, so an indicator panicking before it hands
+            // back its future is contained too.
+            let check = async { (entry.run)(container).await };
+            let outcome = run_with_timeout(entry.name, kind, check, indicator_timeout).await;
             (slot, outcome)
         })
         .collect();
@@ -202,14 +204,15 @@ fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
 }
 
 /// Run one indicator future under a wall-clock ceiling, mapping success,
-/// failure, and timeout to a `(status, error)` pair with an opaque reason.
+/// failure, a panic and timeout to a `(status, error)` pair with an opaque
+/// reason.
 async fn run_with_timeout(
     name: &'static str,
     kind: ProbeKind,
     fut: impl std::future::Future<Output = anyhow::Result<()>>,
     timeout: Duration,
 ) -> (IndicatorStatus, Option<String>) {
-    match tokio::time::timeout(timeout, fut).await {
+    match within(timeout, fut).await {
         Ok(Ok(())) => (IndicatorStatus::Up, None),
         Ok(Err(err)) => {
             tracing::warn!(
@@ -218,6 +221,16 @@ async fn run_with_timeout(
                 ?kind,
                 error = %nest_rs_core::error_message(&*err),
                 "health indicator failed",
+            );
+            (IndicatorStatus::Down, Some(REASON_FAILED.to_owned()))
+        }
+        Err(Unanswered::Panicked(payload)) => {
+            nest_rs_core::contained_panic!(
+                target: crate::TARGET,
+                payload.as_ref(),
+                "health indicator panicked",
+                indicator = name,
+                kind = ?kind,
             );
             (IndicatorStatus::Down, Some(REASON_FAILED.to_owned()))
         }

@@ -36,6 +36,23 @@ pub enum QueueError {
         /// `JobProducer::enqueue`, `CheckpointStore::save`.
         call: &'static str,
     },
+    /// The backend panicked answering a call, and the port stopped waiting on
+    /// it. The panic is filed once at `error` on `nest_rs::queue`, never carried
+    /// here.
+    ///
+    /// As for [`Unanswered`](Self::Unanswered), the backend may have carried the
+    /// call out before it unwound.
+    #[error(
+        "the queue backend panicked answering `{call}` on queue `{queue}`, and the port stopped \
+         waiting — the backend may have carried the call out before it unwound"
+    )]
+    Panicked {
+        /// The queue the call was made for.
+        queue: QueueName,
+        /// The backend method that panicked, named by its trait —
+        /// `JobProducer::enqueue`, `CheckpointStore::save`.
+        call: &'static str,
+    },
     /// The operation needs a capability its backend does not declare, and was
     /// refused before the backend saw it.
     #[error("{}", unsupported(*capability, backend, None))]
@@ -228,13 +245,16 @@ pub(crate) struct Unimplemented {
 }
 
 /// A call the worker made to its backend that did not answer `Ok`: the
-/// backend's own error, or no answer within the port's net.
+/// backend's own error, no answer within the port's net, or a panic — filed
+/// where it was contained, and treated as no answer.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CallFailed {
     #[error("{}", nest_rs_core::error_message(.0))]
     Erred(QueueError),
     #[error("no answer within the port's net of {0:?}")]
     Unanswered(std::time::Duration),
+    #[error("the backend panicked answering")]
+    Panicked,
 }
 
 /// The failure of a payload that does not decode as the job type of the queue

@@ -29,7 +29,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
-use nest_rs_core::{Container, SHUTDOWN_SETTLE_TIMEOUT, Transport, error_message};
+use nest_rs_core::{
+    Container, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message, within,
+};
 use serde_json::Value;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
@@ -156,7 +158,11 @@ impl Transport for QueueWorker {
         }
         let declared: Vec<&'static ProcessMethod> =
             methods.iter().map(|(method, _)| *method).collect();
-        let prepared = match within(BACKEND_TIMEOUT, consumer.prepare(&declared)).await {
+        let prepared = match answered(None, "JobConsumer::prepare", BACKEND_TIMEOUT, async {
+            consumer.prepare(&declared).await
+        })
+        .await
+        {
             Ok(prepared) => prepared,
             Err(CallFailed::Erred(error)) => {
                 return Err(anyhow::Error::new(error).context(format!(
@@ -169,7 +175,21 @@ impl Transport for QueueWorker {
                      of {BACKEND_TIMEOUT:?}",
                 backend.name()
             ),
+            Err(CallFailed::Panicked) => anyhow::bail!(
+                "the `{}` queue backend panicked preparing its consumer",
+                backend.name()
+            ),
         };
+        // A third-party driver that forgot its budget metadata is held here,
+        // since the boot's budget check never sees it.
+        if prepared.answer_bound >= BACKEND_TIMEOUT {
+            anyhow::bail!(
+                "the queue backend `{}` answers within {:?}, at or past the port's \
+                 {BACKEND_TIMEOUT:?} net: lower the backend's budget",
+                backend.name(),
+                prepared.answer_bound,
+            );
+        }
         self.ready = Some(Ready {
             consumer,
             methods,
@@ -347,14 +367,18 @@ async fn serve<C: JobConsumer>(consumer: Arc<C>, serving: Serving) {
     }
     renewing.cancel();
     renewals.abort_all();
-    match tokio::time::timeout(SHUTDOWN_SETTLE_TIMEOUT, shared.consumer.close()).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::warn!(
+    match answered(None, "JobConsumer::close", SHUTDOWN_SETTLE_TIMEOUT, async {
+        shared.consumer.close().await
+    })
+    .await
+    {
+        Ok(()) | Err(CallFailed::Panicked) => {}
+        Err(CallFailed::Erred(error)) => tracing::warn!(
             target: TARGET,
             error = %error_message(&error),
             "queue backend did not close cleanly",
         ),
-        Err(_) => tracing::warn!(
+        Err(CallFailed::Unanswered(_)) => tracing::warn!(
             target: TARGET,
             settle_ms = millis(SHUTDOWN_SETTLE_TIMEOUT),
             "queue backend did not close within the settle; left as it was",
@@ -456,12 +480,12 @@ impl<C: JobConsumer> MethodRun<C> {
                 .unwrap_or(NonZeroU32::MIN);
             let wait = self.shared.wait;
             let net = wait + BACKEND_TIMEOUT;
-            let answer = within(
-                net,
+            let answer = answered(Some(&self.queue), "JobConsumer::receive", net, async {
                 self.shared
                     .consumer
-                    .receive(self.method, Ask::new(max, wait)),
-            )
+                    .receive(self.method, Ask::new(max, wait))
+                    .await
+            })
             .await;
             match answer {
                 Ok(Received {
@@ -555,25 +579,31 @@ impl<C: JobConsumer> MethodRun<C> {
     async fn maintain(self: Arc<Self>) {
         let mut backoff = Backoff::new();
         loop {
-            let next =
-                match within(BACKEND_TIMEOUT, self.shared.consumer.maintain(self.method)).await {
-                    Ok(None) => return,
-                    Ok(Some(next)) => {
-                        backoff.reset();
-                        next
-                    }
-                    Err(failed) => {
-                        let wait = backoff.wait();
-                        tracing::warn!(
-                            target: TARGET,
-                            queue = %self.queue,
-                            error = %failed,
-                            retry_in_ms = millis(wait),
-                            "queue upkeep failed; retrying",
-                        );
-                        wait
-                    }
-                };
+            let next = match answered(
+                Some(&self.queue),
+                "JobConsumer::maintain",
+                BACKEND_TIMEOUT,
+                async { self.shared.consumer.maintain(self.method).await },
+            )
+            .await
+            {
+                Ok(None) => return,
+                Ok(Some(next)) => {
+                    backoff.reset();
+                    next
+                }
+                Err(failed) => {
+                    let wait = backoff.wait();
+                    tracing::warn!(
+                        target: TARGET,
+                        queue = %self.queue,
+                        error = %failed,
+                        retry_in_ms = millis(wait),
+                        "queue upkeep failed; retrying",
+                    );
+                    wait
+                }
+            };
             tokio::select! {
                 () = self.shared.stop.cancelled() => return,
                 () = tokio::time::sleep(next) => {}
@@ -602,9 +632,11 @@ impl<C: JobConsumer> MethodRun<C> {
             if !held.is_empty() {
                 let leases: Vec<&C::Lease> = held.iter().map(|(_, lease)| &**lease).collect();
                 let asked = Instant::now();
-                let mut renewal = pin!(within(
+                let mut renewal = pin!(answered(
+                    Some(&self.queue),
+                    "JobConsumer::renew",
                     BACKEND_TIMEOUT,
-                    self.shared.consumer.renew(self.method, &leases),
+                    async { self.shared.consumer.renew(self.method, &leases).await },
                 ));
                 // A renewal still waiting on the backend holds no lease past its
                 // end: the backend lets another delivery take it then.
@@ -894,9 +926,16 @@ impl<C: JobConsumer> MethodRun<C> {
         let mut backoff = Backoff::new();
         let mut erred = false;
         loop {
-            match within(
+            match answered(
+                Some(&self.queue),
+                "JobConsumer::settle",
                 BACKEND_TIMEOUT,
-                self.shared.consumer.settle(self.method, lease, disposition),
+                async {
+                    self.shared
+                        .consumer
+                        .settle(self.method, lease, disposition)
+                        .await
+                },
             )
             .await
             {
@@ -1092,13 +1131,27 @@ async fn sleep_until_some(at: Option<Instant>) {
     }
 }
 
-/// `answer`, unless the backend took longer than `net` to give it.
-async fn within<T>(
+/// The backend's `answer` to the worker's `call`, unless it took longer than
+/// `net` to give it, or panicked giving it — that panic filed here, once, and
+/// treated as no answer.
+async fn answered<T>(
+    queue: Option<&QueueName>,
+    call: &'static str,
     net: Duration,
     answer: impl Future<Output = Result<T, QueueError>>,
 ) -> Result<T, CallFailed> {
-    match tokio::time::timeout(net, answer).await {
+    match within(net, answer).await {
         Ok(answered) => answered.map_err(CallFailed::Erred),
+        Err(Unanswered::Panicked(payload)) => {
+            nest_rs_core::contained_panic!(
+                target: TARGET,
+                payload.as_ref(),
+                "queue backend panicked answering the worker; the call counts as unanswered",
+                queue = queue.map(tracing::field::display),
+                call,
+            );
+            Err(CallFailed::Panicked)
+        }
         Err(_) => Err(CallFailed::Unanswered(net)),
     }
 }

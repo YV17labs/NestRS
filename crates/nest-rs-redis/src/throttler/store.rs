@@ -6,15 +6,17 @@
 //! lives in Redis, so N replicas of an app share **one** budget per client,
 //! advanced by one atomic Lua script.
 //!
-//! **Fail-closed.** When Redis is unreachable the store **denies**, logged at
-//! `warn`: a rate limiter that fails open under an outage is an auth bypass.
+//! **Fail-closed, by the port.** When Redis cannot count a hit the store
+//! answers its error and says nothing; the guard denies for the window and
+//! says it once at `warn`, naming this store: a rate limiter that fails open
+//! under an outage is an auth bypass.
 
 use std::time::Duration;
 
 use crate::RedisConnection;
 use crate::script::RedisScript;
 use async_trait::async_trait;
-use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
+use nest_rs_throttler::{Decision, Throttle, ThrottlerStore, ThrottlerStoreError};
 
 /// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
 /// throttled subject, counting its current window. The concern is the tail of
@@ -83,41 +85,27 @@ impl RedisThrottler {
 
 #[async_trait]
 impl ThrottlerStore for RedisThrottler {
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
         // Redis refuses an expiry whose instant overflows its `i64` milliseconds,
         // which `Throttle::new` lets a window reach.
         let window_ms = crate::millis::millis(limit.window());
-        match self.run(key, window_ms).await {
-            Ok((count, ttl_ms)) => {
-                // Denied when the count has passed the limit — identical rule to
-                // the in-memory store (`count > limit.limit()`).
-                let allowed = count <= i64::from(limit.limit());
-                if allowed {
-                    Decision::allowed()
-                } else {
-                    // Prefer the real remaining TTL; fall back to the full
-                    // window if Redis reported no expiry (defensive).
-                    let retry_after = if ttl_ms > 0 {
-                        Duration::from_millis(ttl_ms as u64)
-                    } else {
-                        limit.window()
-                    };
-                    Decision::denied(retry_after)
-                }
-            }
-            // Fail-closed: a Redis outage must not open the rate limit. Deny and
-            // surface the error at `warn` (a security event on the throttler
-            // target), asking the client to retry after the window.
-            Err(error) => {
-                tracing::warn!(
-                    target: nest_rs_throttler::TARGET,
-                    key = %key,
-                    error = %nest_rs_core::error_message(&error),
-                    "redis throttler unavailable; denying (fail-closed)",
-                );
-                Decision::denied(limit.window())
-            }
+        let (count, ttl_ms) = self
+            .run(key, window_ms)
+            .await
+            .map_err(ThrottlerStoreError::new)?;
+        // Denied when the count has passed the limit — identical rule to the
+        // in-memory store (`count > limit.limit()`).
+        if count <= i64::from(limit.limit()) {
+            return Ok(Decision::allowed());
         }
+        // Prefer the real remaining TTL; fall back to the full window if Redis
+        // reported no expiry (defensive).
+        let retry_after = if ttl_ms > 0 {
+            Duration::from_millis(ttl_ms as u64)
+        } else {
+            limit.window()
+        };
+        Ok(Decision::denied(retry_after))
     }
 }
 

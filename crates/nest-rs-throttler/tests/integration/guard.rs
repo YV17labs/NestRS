@@ -3,7 +3,8 @@
 //!
 //! The module default is pinned generously (60/minute), so a `429` on the third
 //! request can only come from the route's own declaration. The stalled stores
-//! run on paused time, so the eighteen seconds cost nothing.
+//! run on paused time, so the eighteen seconds cost nothing; a store that errs
+//! or panics is refused for the window like one that never answers.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,7 +15,7 @@ use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_throttler::{
     BACKEND_REMEDY, Decision, HIT_TIMEOUT, Throttle, ThrottlerConfig, ThrottlerGuard,
-    ThrottlerModule, ThrottlerStore,
+    ThrottlerModule, ThrottlerStore, ThrottlerStoreError,
 };
 use poem::http::StatusCode;
 
@@ -162,7 +163,7 @@ struct StalledStore;
 
 #[async_trait]
 impl ThrottlerStore for StalledStore {
-    async fn hit(&self, _key: &str, _limit: Throttle) -> Decision {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
         std::future::pending().await
     }
 }
@@ -174,9 +175,26 @@ struct SlowStore;
 
 #[async_trait]
 impl ThrottlerStore for SlowStore {
-    async fn hit(&self, _key: &str, _limit: Throttle) -> Decision {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
         tokio::time::sleep(HIT_TIMEOUT - Duration::from_millis(1)).await;
-        Decision::allowed()
+        Ok(Decision::allowed())
+    }
+}
+
+/// What the failing store's backend says, which the guard's line carries.
+const STORE_FAILURE: &str = "the counter's backend refused the connection";
+
+/// A store that cannot count and says why — its backend refusing the
+/// connection.
+#[derive(Default)]
+struct FailingStore;
+
+#[async_trait]
+impl ThrottlerStore for FailingStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        Err(ThrottlerStoreError::new(std::io::Error::other(
+            STORE_FAILURE,
+        )))
     }
 }
 
@@ -197,8 +215,22 @@ impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
     }
 }
 
+/// A store whose `hit` unwinds — a poisoned lock, an `unwrap` on its client's
+/// error.
+#[derive(Default)]
+struct PanickingStore;
+
+#[async_trait]
+impl ThrottlerStore for PanickingStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        panic!("the store's client unwound")
+    }
+}
+
 type StalledStoreModule = StoreModule<StalledStore>;
 type SlowStoreModule = StoreModule<SlowStore>;
+type FailingStoreModule = StoreModule<FailingStore>;
+type PanickingStoreModule = StoreModule<PanickingStore>;
 
 /// The line says what the refusal cannot: that the store never answered, and
 /// which store it was.
@@ -219,6 +251,13 @@ fn assert_the_store_was_waited_out(logs: &LogCapture, transport: &str) {
         cause.field("waited_ms").as_deref(),
         Some(HIT_TIMEOUT.as_millis().to_string().as_str()),
     );
+    assert_no_limit_was_exceeded(logs);
+}
+
+/// A store that could not count exceeded no limit: the cause line is the one
+/// line, never followed by the over-limit one.
+fn assert_no_limit_was_exceeded(logs: &LogCapture) {
+    logs.expect_none(nest_rs_throttler::TARGET, "rate limit exceeded");
 }
 
 /// The window the stalled-store apps pin, and so the `Retry-After` a refusal for
@@ -281,6 +320,113 @@ struct StalledHttpModule;
     providers = [StalledController],
 )]
 struct SlowHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: Some(60),
+            window_secs: Some(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+        }),
+        PanickingStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct PanickingHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: Some(60),
+            window_secs: Some(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.to_owned()),
+        }),
+        FailingStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct FailingHttpModule;
+
+/// The line a store that could not count is filed under: the guard's, at
+/// `warn` — the store itself says nothing.
+const FAILED: &str = "throttler store failed; denying (fail-closed)";
+
+/// The line says which store failed, on which edge, and why, and holds no
+/// part of the bucket's key — the caller's address is in it.
+fn assert_the_store_failure_was_said(logs: &LogCapture, transport: &str) {
+    let said = logs.expect_one(nest_rs_throttler::TARGET, FAILED);
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("transport").as_deref(), Some(transport));
+    assert_eq!(
+        said.field("store").as_deref(),
+        Some(std::any::type_name::<FailingStore>()),
+        "the line names the store behind the trait object, got {:?}",
+        said.fields,
+    );
+    assert!(
+        said.field("error")
+            .is_some_and(|error| error.contains(STORE_FAILURE)),
+        "the line carries the store's own failure, got {:?}",
+        said.fields,
+    );
+    assert!(
+        said.field("key").is_none() && said.fields.values().all(|value| !value.contains('\u{1f}')),
+        "the line holds no bucket key, got {:?}",
+        said.fields,
+    );
+    assert_no_limit_was_exceeded(logs);
+}
+
+/// A store that says it could not count is refused for the window, fail
+/// closed — the one answer the guard gives for a store's failure, whatever
+/// the store would have chosen.
+#[tokio::test]
+async fn a_store_that_fails_is_refused_for_the_window_and_said_once() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FailingHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    let refused = app.http().get("/stalled/ping").send().await;
+
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    refused.assert_header("retry-after", WINDOW_SECS.to_string());
+    assert_the_store_failure_was_said(&logs, "http");
+}
+
+/// The line a store that unwound is filed under: the guard's, at `error`.
+const PANICKED: &str = "throttler store panicked; denying (fail-closed)";
+
+/// A store that unwinds is a store that could not count: the caller is refused
+/// for the window, as past the bound, where it used to be dropped unanswered.
+#[tokio::test]
+async fn a_store_that_panics_is_refused_for_the_window_and_said_once() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<PanickingHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    let refused = app.http().get("/stalled/ping").send().await;
+
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    refused.assert_header("retry-after", WINDOW_SECS.to_string());
+    let said = logs.expect_one(nest_rs_throttler::TARGET, PANICKED);
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("transport").as_deref(), Some("http"));
+    assert_eq!(
+        said.field("store").as_deref(),
+        Some(std::any::type_name::<PanickingStore>()),
+        "the line names the store behind the trait object, got {:?}",
+        said.fields,
+    );
+    assert_eq!(
+        said.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the store's client unwound"),
+    );
+    assert_no_limit_was_exceeded(&logs);
+}
 
 #[tokio::test(start_paused = true)]
 async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
@@ -623,7 +769,8 @@ mod ws {
     use nest_rs_ws::{WsClient, WsModule, gateway, messages};
 
     use super::{
-        StalledStoreModule, assert_the_store_was_waited_out, one_per_minute, within_twice_the_bound,
+        FailingStoreModule, StalledStoreModule, assert_the_store_failure_was_said,
+        assert_the_store_was_waited_out, one_per_minute, within_twice_the_bound,
     };
 
     /// The compile witness for `WsGuard`.
@@ -655,6 +802,16 @@ mod ws {
         providers = [RatedGateway],
     )]
     struct StalledWsModule;
+
+    #[module(
+        imports = [
+            WsModule,
+            ThrottlerModule::for_root(one_per_minute()),
+            FailingStoreModule,
+        ],
+        providers = [RatedGateway],
+    )]
+    struct FailingWsModule;
 
     /// The boot proves the wiring, and the entry is then exercised on the guard
     /// the container built.
@@ -735,5 +892,27 @@ mod ws {
             "refused as a rate limit, the one refusal a store that cannot answer gives",
         );
         assert_the_store_was_waited_out(&logs, "ws");
+    }
+
+    /// A store that says it could not count refuses the message as a rate
+    /// limit, the refusal the edge frames for its client.
+    #[tokio::test]
+    async fn a_store_that_fails_refuses_the_message() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<FailingWsModule>()
+            .await
+            .expect("a #[subscribe_message] over a custom store boots");
+        let guard = app
+            .container()
+            .get::<ThrottlerGuard>()
+            .expect("ThrottlerModule registers the guard as global infrastructure");
+
+        let refused = guard
+            .check_ws_message(&WsClient::for_test(), "tick", &serde_json::Value::Null)
+            .await
+            .expect_err("a store that cannot count refuses the message");
+
+        assert_eq!(refused.http_status(), 429);
+        assert_the_store_failure_was_said(&logs, "ws");
     }
 }

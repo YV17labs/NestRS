@@ -9,7 +9,8 @@
 //! receipts it wrote itself. A cancel takes the same path back.
 //!
 //! **Every call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at
-//! most**, then answers [`QueueError::Unanswered`], naming the queue.
+//! most**, then answers [`QueueError::Unanswered`], naming the queue — or
+//! [`QueueError::Panicked`] for a backend that panicked answering.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -29,6 +30,11 @@ pub const ENQUEUE_BATCH: usize = 100;
 
 /// What a queue backend implements to enqueue jobs. Inject it as
 /// `Arc<dyn JobProducer>` and push through [`JobProducerExt`].
+///
+/// **On failure**, the port answers the caller: a backend's `Err` as it is,
+/// a call silent past [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) as
+/// [`QueueError::Unanswered`], and a panic as [`QueueError::Panicked`], filed
+/// once at `error`. A backend returns its error rather than logging it.
 #[async_trait]
 pub trait JobProducer: Send + Sync + 'static {
     /// Which backend this is, and what it honours beyond the contract every
@@ -119,7 +125,9 @@ pub trait JobProducerExt: JobProducer {
     /// [`QueueError::Serialize`] for a payload that does not serialize,
     /// [`QueueError::UniqueKeyHeld`] for a unique key another job still holds,
     /// [`QueueError::Unanswered`], naming the queue, for a backend silent past
-    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), and with whatever the backend returns otherwise.
+    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), [`QueueError::Panicked`] for
+    /// one that panicked answering, and with whatever the backend returns
+    /// otherwise.
     ///
     /// A backend's failure is a failure to *answer*: the write may have reached
     /// the backend and its reply not come back, in which case the job is enqueued
@@ -211,19 +219,18 @@ pub trait JobProducerExt: JobProducer {
     /// runs to its own outcome — already finished, or is unknown to the backend.
     ///
     /// Fails with [`QueueError::Unsupported`] on a backend without
-    /// [`Capability::Cancellation`], before the backend sees the call, and with
+    /// [`Capability::Cancellation`], before the backend sees the call, with
     /// [`QueueError::Unanswered`] when the backend does not answer within
-    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) — the cancel may then still
-    /// land.
+    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), and with
+    /// [`QueueError::Panicked`] when it panicked answering — the cancel may then
+    /// still land.
     async fn cancel(&self, receipt: &PushReceipt) -> Result<bool, QueueError> {
         let queue = receipt.queue();
         self.backend()
             .check(Capabilities::NONE.with(Capability::Cancellation))?;
-        let removed = bounded(
-            queue,
-            "JobProducer::remove",
-            self.remove(queue, receipt.id()),
-        )
+        let removed = bounded(queue, "JobProducer::remove", async {
+            self.remove(queue, receipt.id()).await
+        })
         .await?;
         if removed {
             tracing::info!(
@@ -245,7 +252,8 @@ pub trait JobProducerExt: JobProducer {
     /// Fails with [`QueueError::InvalidUniqueKey`] for a key no push could file,
     /// and with [`QueueError::Unsupported`] on a backend without unique jobs or
     /// without cancellation, before the backend sees the call — and with
-    /// [`QueueError::Unanswered`] as [`cancel`](Self::cancel) does.
+    /// [`QueueError::Unanswered`] or [`QueueError::Panicked`] as
+    /// [`cancel`](Self::cancel) does.
     async fn cancel_unique<D>(&self, destination: D, key: &str) -> Result<bool, QueueError>
     where
         D: Destination + Send,
@@ -257,11 +265,9 @@ pub trait JobProducerExt: JobProducer {
                 .with(Capability::UniquePush)
                 .with(Capability::Cancellation),
         )?;
-        let removed = bounded(
-            &queue,
-            "JobProducer::remove_unique",
-            self.remove_unique(&queue, key),
-        )
+        let removed = bounded(&queue, "JobProducer::remove_unique", async {
+            self.remove_unique(&queue, key).await
+        })
         .await?;
         if removed {
             tracing::info!(
@@ -344,11 +350,9 @@ async fn enqueue<P: JobProducer + ?Sized>(
     envelopes: Vec<Envelope>,
     options: &PushOptions,
 ) -> Result<(), QueueError> {
-    bounded(
-        queue,
-        "JobProducer::enqueue",
-        producer.enqueue(queue, envelopes, options),
-    )
+    bounded(queue, "JobProducer::enqueue", async {
+        producer.enqueue(queue, envelopes, options).await
+    })
     .await
 }
 

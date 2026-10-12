@@ -466,6 +466,9 @@ replica — the thing the declaration exists to prevent. So:
   the next one is claimed and fired — no restart, nothing to replay. A claim
   Redis ran whose answer was lost costs that occurrence, which nobody fires, and
   nothing more.
+- **A lock that panics skips the occurrence too**, as one that failed: the
+  panic is filed once at `error`, `occurrence skipped: its lock panicked while
+  claiming it`, and the next occurrence is claimed as usual.
 - **The scheduler never waits on a claim past the point it could still act on
   it.** An occurrence goes stale ten seconds before its claim's hold ends — the
   margin two replicas' clocks may disagree by — and a claim not answered by then

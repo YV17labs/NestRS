@@ -271,10 +271,12 @@ The counter is one Lua script — `INCR`, read the TTL with `PTTL`, set it with
 check-then-act race. A window in its last millisecond, whose TTL Redis answers
 `0`, has ended: the script deletes it with `PEXPIRE … 0`, so that hit opens the
 next window, as it would in process. A backend failure
-**denies**: a rate limiter that fails open is not a rate limiter. Each command is
-bounded by the connection's budget (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by
-default), well inside the guard's own bound below — the boot refuses a budget at or
-past it — so an outage reaches the caller as Redis's own error, with its cause.
+**denies**: a rate limiter that fails open is not a rate limiter. The store
+answers Redis's error and the guard refuses the caller, as it does for any store
+that cannot count (below). Each command is bounded by the connection's budget
+(`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default), well inside the guard's
+own bound — the boot refuses a budget at or past it — so an outage reaches the
+guard's line as Redis's own error, with its cause.
 
 The script is sent as `EVALSHA`, with a `SCRIPT LOAD` the first time Redis has not
 cached it, and Redis checks the commands *inside* it against the caller's ACL as
@@ -304,16 +306,25 @@ every binding the server holds — see [Eviction](/queue/topologies/#eviction).
 
 ```rust title="crates/mythrottler/src/throttler/store.rs"
 use async_trait::async_trait;
-use nest_rs::throttler::{Decision, Throttle, ThrottlerStore};
+use nest_rs::throttler::{Decision, Throttle, ThrottlerStore, ThrottlerStoreError};
 
-pub struct MyThrottler { /* your client */ }
+pub struct MyThrottler {
+    client: MyClient,
+}
 
 #[async_trait]
 impl ThrottlerStore for MyThrottler {
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        // Count one hit for `key`; return `allowed` and, when denied, the
-        // `Retry-After` duration.
-        todo!()
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        let (count, left) = self
+            .client
+            .count(key, limit.window())
+            .await
+            .map_err(ThrottlerStoreError::new)?;
+        Ok(if count <= u64::from(limit.limit()) {
+            Decision::allowed()
+        } else {
+            Decision::denied(left)
+        })
     }
 }
 ```
@@ -331,19 +342,29 @@ The trait is **async**, so a networked implementor awaits its round-trip
 directly — no `block_in_place` bridge occupying a runtime worker per check, and
 no panic on a current-thread runtime.
 
-**The guard waits `HIT_TIMEOUT` — 18 seconds — for `hit`, and no longer.** A
-store still silent then is treated as one that cannot answer: the caller is
-refused for the whole window, fail closed, on every edge, and the guard logs
-`throttler store did not answer within the guard's timeout; denying
-(fail-closed)` at `warn` with the `transport`, the `store` (your type's name,
-from `ThrottlerStore::name`) and `waited_ms`. Without it a store that never
-answered held the request, the GraphQL field, the MCP operation or the socket's
-message for as long — and nothing times out a socket's messages. It is a net,
-not your budget: bound each round-trip yourself, as the Redis store does, so an
-outage reaches the caller as your store's own error. The value sits above the
-Redis store's default budget and below the HTTP edge's request timeout (20 s),
-so a hung store reads as the same `429` on HTTP as on the edges no request
-timeout covers.
+**The guard alone decides what a store's failure means, and it fails
+closed.** Return your client's error as `ThrottlerStoreError` rather than
+choosing an answer, and log nothing yourself: a store answering `allowed` on its
+own outage would open the limiter exactly when its backend is in trouble. An
+`Err`, a `hit` still silent after `HIT_TIMEOUT` — 18 seconds — and a `hit` that
+panics each refuse the caller for the whole window, on every edge — `429` with
+`Retry-After`, or the edge's own error frame — and the guard files one line on
+`nest_rs::throttler` with the `transport` and the `store` (your type's name,
+from `ThrottlerStore::name`), never the key, which holds the caller's address:
+
+| The store | The guard's line |
+|---|---|
+| answered `Err` | `throttler store failed; denying (fail-closed)`, `warn`, with the `error` chain |
+| was silent past `HIT_TIMEOUT` | `throttler store did not answer within the guard's timeout; denying (fail-closed)`, `warn`, with `waited_ms` |
+| panicked | `throttler store panicked; denying (fail-closed)`, `error`, with the `panic` |
+
+Without the bound a store that never answered held the request, the GraphQL
+field, the MCP operation or the socket's message for as long — and nothing times
+out a socket's messages. It is a net, not your budget: bound each round-trip
+yourself, as the Redis store does, so an outage reaches the guard's line as your
+store's own error. The value sits above the Redis store's default budget and
+below the HTTP edge's request timeout (20 s), so a hung store reads as the same
+`429` on HTTP as on the edges no request timeout covers.
 
 There is no `trusted_proxies` on the trait, and that is deliberate: a store
 counts hits, while **who** a hit belongs to is the transport's answer
@@ -363,7 +384,8 @@ downstream crate with their own store type.
 ## Reference
 
 - `crates/nest-rs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
-  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`.
+  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`, `ThrottlerStore`,
+  `ThrottlerStoreError`.
 
 ## Going further
 

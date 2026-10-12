@@ -34,6 +34,8 @@ ws = ["dep:nest-rs-ws", "dep:serde_json", "nest-rs-guards/ws"]
 [dependencies]
 # `ThrottlerGuard` is `#[injectable]`; `ThrottlerModule` is a `DynamicModule`.
 nest-rs-core.workspace = true
+# `ThrottlerStoreError`, the error channel of `ThrottlerStore::hit`.
+thiserror.workspace = true
 # `ThrottlerModule` owns its `#[config]` (`ThrottlerConfig`, namespace `throttler`),
 # loaded from `<PREFIX>_THROTTLER__*`.
 nest-rs-config.workspace = true
@@ -51,9 +53,6 @@ parking_lot.workspace = true
 # `ThrottlerModule::for_root` provides the throttler through the factory phase,
 # whose error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
-# The guard's bound on a store's answer (`HIT_TIMEOUT`): a store that never
-# answers is denied at it rather than holding the request for good.
-tokio.workspace = true
 # HMAC-SHA256 of each bucket's subject before a store outside the process sees
 # it — already in every build through rustls.
 aws-lc-rs.workspace = true

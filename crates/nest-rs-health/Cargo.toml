@@ -24,8 +24,9 @@ futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-# `tokio::time::timeout` bounds each health indicator so a dead peer can't hang
-# the public `/health/ready` probe (HEALTH-I7).
+# The probe's deadline over its indicators (`timeout_at`); each indicator's own
+# ceiling is `nest_rs_core::within`, so a dead peer can't hang the public
+# `/health/ready` probe.
 tokio.workspace = true
 tracing.workspace = true
 

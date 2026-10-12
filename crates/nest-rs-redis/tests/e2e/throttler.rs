@@ -24,7 +24,7 @@ async fn a_hit_counts_in_the_bucket_named_for_its_subject() {
     let subject = unique_key("layout");
 
     for _ in 0..2 {
-        assert!(store.hit(&subject, limit).await.allowed);
+        assert!(store.hit(&subject, limit).await.expect("counted").allowed);
     }
 
     let mut reading = conn.clone();
@@ -53,12 +53,12 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     let key = unique_key("cap");
 
     for n in 1..=3 {
-        let decision = store.hit(&key, limit).await;
+        let decision = store.hit(&key, limit).await.expect("counted");
         assert!(decision.allowed, "hit {n} of 3 must be allowed");
         assert_eq!(decision.retry_after, Duration::ZERO);
     }
 
-    let denied = store.hit(&key, limit).await;
+    let denied = store.hit(&key, limit).await.expect("counted");
     assert!(!denied.allowed, "the 4th hit must be denied");
     assert!(
         denied.retry_after > Duration::ZERO && denied.retry_after <= limit.window(),
@@ -87,7 +87,7 @@ async fn a_hit_in_a_windows_last_millisecond_opens_the_next() {
             .expect("a full window ending soon");
         let set = Instant::now();
         loop {
-            let decision = store.hit(&subject, limit).await;
+            let decision = store.hit(&subject, limit).await.expect("counted");
             if decision.allowed {
                 break;
             }
@@ -112,15 +112,15 @@ async fn distinct_keys_have_independent_budgets() {
     let key_b = unique_key("indep-b");
 
     assert!(
-        store.hit(&key_a, limit).await.allowed,
+        store.hit(&key_a, limit).await.expect("counted").allowed,
         "a: first hit allowed"
     );
     assert!(
-        store.hit(&key_b, limit).await.allowed,
+        store.hit(&key_b, limit).await.expect("counted").allowed,
         "b: first hit allowed"
     );
     assert!(
-        !store.hit(&key_a, limit).await.allowed,
+        !store.hit(&key_a, limit).await.expect("counted").allowed,
         "a: second hit denied — b's hit must not have spent a's budget",
     );
 }
@@ -133,15 +133,15 @@ async fn the_budget_is_shared_across_store_instances() {
     let key = unique_key("shared");
 
     assert!(
-        replica_a.hit(&key, limit).await.allowed,
+        replica_a.hit(&key, limit).await.expect("counted").allowed,
         "replica a: count 1"
     );
     assert!(
-        replica_b.hit(&key, limit).await.allowed,
+        replica_b.hit(&key, limit).await.expect("counted").allowed,
         "replica b: count 2"
     );
     assert!(
-        !replica_a.hit(&key, limit).await.allowed,
+        !replica_a.hit(&key, limit).await.expect("counted").allowed,
         "replica a: count 3 must be denied — the two replicas share one budget",
     );
 }
@@ -210,10 +210,16 @@ mod module {
         let second = boot().await;
         let (a, b) = (store_of(&first), store_of(&second));
 
-        assert!(a.hit(&key, limit).await.allowed, "app one, hit 1 of 2");
-        assert!(b.hit(&key, limit).await.allowed, "app two, hit 2 of 2");
         assert!(
-            !a.hit(&key, limit).await.allowed,
+            a.hit(&key, limit).await.expect("counted").allowed,
+            "app one, hit 1 of 2"
+        );
+        assert!(
+            b.hit(&key, limit).await.expect("counted").allowed,
+            "app two, hit 2 of 2"
+        );
+        assert!(
+            !a.hit(&key, limit).await.expect("counted").allowed,
             "the third hit is denied — both apps counted against one budget",
         );
     }
@@ -275,8 +281,10 @@ mod module {
 
 /// The error is a `WRONGTYPE`, not a dead port: `RedisConnection::connect`
 /// refuses an unreachable endpoint up front, so a store always has a connection.
+/// The store answers Redis's error and says nothing: denying is the guard's,
+/// which files the one line (`nest-rs-redis`'s in-process suite boots it).
 #[tokio::test]
-async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_through() {
+async fn a_store_that_cannot_count_answers_its_error_and_says_nothing() {
     let logs = nest_rs_testing::LogCapture::install();
     let limit = Throttle::new(3, Duration::from_secs(30));
     let conn = connect().await;
@@ -302,36 +310,21 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
         .expect("bound the probe key's lifetime");
 
     let store = RedisThrottler::new(conn);
-    let decision = store.hit(&key, limit).await;
+    let refused = store
+        .hit(&key, limit)
+        .await
+        .expect_err("a store that cannot count says so, rather than choosing an answer");
 
     assert!(
-        !decision.allowed,
-        "a store that cannot answer must deny — failing open here is a rate \
-         limit that disappears exactly when the backend is in trouble",
+        nest_rs_core::error_message(&refused).contains("WRONGTYPE"),
+        "the error is Redis's own, with its cause: {refused}",
     );
     assert!(
-        decision.retry_after > Duration::ZERO,
-        "…and tell the caller when to come back, rather than refusing with no \
-         way forward: {:?}",
-        decision.retry_after,
-    );
-
-    let event = logs.expect_one(
-        nest_rs_throttler::TARGET,
-        "redis throttler unavailable; denying (fail-closed)",
-    );
-    assert_eq!(event.level, "warn");
-    assert_eq!(
-        event.field("key").as_deref(),
-        Some(key.as_str()),
-        "the event names the client whose request was refused, which is what \
-         separates an outage from a caller who really is over budget: {:?}",
-        event.fields,
-    );
-    assert!(
-        event.field("error").is_some(),
-        "…and what the store said, got {:?}",
-        event.fields,
+        logs.events()
+            .iter()
+            .all(|event| event.target != nest_rs_throttler::TARGET),
+        "the store files nothing of its own: {:#?}",
+        logs.events(),
     );
 }
 
@@ -357,7 +350,8 @@ async fn a_user_created_as_the_rate_limiting_page_says_counts_and_denies() {
         store.hit(&subject, limit).await,
         store.hit(&subject, limit).await,
         store.hit(&subject, limit).await,
-    ];
+    ]
+    .map(|decision| decision.expect("the page's rule lets the store count"));
     crate::forget_user(&user).await;
 
     let allowed = decisions.each_ref().map(|decision| decision.allowed);

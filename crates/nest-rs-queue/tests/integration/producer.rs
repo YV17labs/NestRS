@@ -745,6 +745,70 @@ async fn a_cancel_the_backend_never_answers_fails_at_the_net_naming_the_queue() 
     );
 }
 
+/// A backend whose every call unwinds — an `unwrap` on its client's answer.
+struct PanickingProducer;
+
+#[async_trait]
+impl JobProducer for PanickingProducer {
+    fn backend(&self) -> &'static QueueBackend {
+        &FULL
+    }
+
+    async fn enqueue(
+        &self,
+        _queue: &QueueName,
+        _envelopes: Vec<Envelope>,
+        _options: &PushOptions,
+    ) -> Result<(), QueueError> {
+        panic!("the backend's client unwound")
+    }
+
+    async fn remove(&self, _queue: &QueueName, _id: &JobId) -> Result<bool, QueueError> {
+        panic!("the backend's client unwound")
+    }
+
+    async fn remove_unique(&self, _queue: &QueueName, _key: &str) -> Result<bool, QueueError> {
+        panic!("the backend's client unwound")
+    }
+}
+
+/// A push to a backend that unwinds is an error to its caller naming the queue
+/// and the call — never the panic, which the port files once — where it used to
+/// unwind into the caller's handler.
+#[tokio::test]
+async fn a_push_the_backend_panics_answering_is_an_error_naming_the_queue() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let refused = PanickingProducer
+        .push(TranscodeQueue, song(), None)
+        .await
+        .expect_err("the backend unwound");
+
+    assert!(
+        matches!(
+            &refused,
+            QueueError::Panicked { queue, call }
+                if queue.as_str() == "transcode" && *call == "JobProducer::enqueue"
+        ),
+        "{refused:?}"
+    );
+    let said = refused.to_string();
+    assert!(
+        said.contains("on queue `transcode`") && !said.contains("the backend's client"),
+        "{said}"
+    );
+    let filed = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "queue backend panicked answering a call; the call is abandoned",
+    );
+    assert_eq!(filed.level, "error");
+    assert_eq!(filed.field("queue").as_deref(), Some("transcode"));
+    assert_eq!(filed.field("call").as_deref(), Some("JobProducer::enqueue"));
+    assert_eq!(
+        filed.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the backend's client unwound"),
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_backend_answering_inside_the_net_is_waited_for() {
     let producer = SilentProducer::answering(1, BACKEND_TIMEOUT - Duration::from_millis(1));

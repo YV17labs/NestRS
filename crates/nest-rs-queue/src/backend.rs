@@ -1,12 +1,12 @@
 //! [`QueueBackend`] — who a queue backend is, and what it supports — and
 //! [`BACKEND_TIMEOUT`], how long the port waits on it.
 
-use std::future::{Future, poll_fn};
-use std::pin::pin;
-use std::task::Poll;
+use std::future::Future;
 use std::time::Duration;
 
-use crate::{Capabilities, QueueError, QueueName};
+use nest_rs_core::{Unanswered, within};
+
+use crate::{Capabilities, QueueError, QueueName, TARGET};
 
 /// The remedy the boot names when two queue backends bind the queue port.
 pub const BACKEND_REMEDY: &str = "Import exactly one queue backend's binding — \
@@ -21,7 +21,10 @@ pub const BACKEND_REMEDY: &str = "Import exactly one queue backend's binding —
 /// [`JobConsumer`](crate::JobConsumer) call. Past it the port stops waiting,
 /// drops the call where it stands, and answers [`QueueError::Unanswered`],
 /// naming the queue and the call: a push or a cancel fails to its caller, and a
-/// checkpoint's read or save fails the attempt, retryably.
+/// checkpoint's read or save fails the attempt, retryably. A backend that
+/// panics answering is treated the same way, as [`QueueError::Panicked`] — the
+/// panic filed once at `error` — and the worker retries its own calls under its
+/// backoff.
 ///
 /// A net, never a backend's budget: it sits above the Redis adapter's
 /// per-command budget (`RedisConfig::connect_timeout`, 10 s by default) and
@@ -74,22 +77,32 @@ impl QueueBackend {
 }
 
 /// A backend's `answer` to `call` on `queue`, awaited for at most
-/// [`BACKEND_TIMEOUT`] — past it the call is dropped where it stands, and the
-/// answer is [`QueueError::Unanswered`].
+/// [`BACKEND_TIMEOUT`] through [`within`] — past it the call is dropped where
+/// it stands, and the answer is [`QueueError::Unanswered`]; a backend that
+/// panics answering is [`QueueError::Panicked`], its payload filed here once.
 ///
-/// Polled once bare before the net is armed: a backend that answers at once
-/// pays no timer, and needs no runtime clock.
+/// A caller passes an `async` block, so a backend panicking before it hands
+/// back its future is contained too.
 pub(crate) async fn bounded<T>(
     queue: &QueueName,
     call: &'static str,
     answer: impl Future<Output = Result<T, QueueError>>,
 ) -> Result<T, QueueError> {
-    let mut answer = pin!(answer);
-    if let Poll::Ready(answered) = poll_fn(|cx| Poll::Ready(answer.as_mut().poll(cx))).await {
-        return answered;
-    }
-    match tokio::time::timeout(BACKEND_TIMEOUT, answer).await {
+    match within(BACKEND_TIMEOUT, answer).await {
         Ok(answered) => answered,
+        Err(Unanswered::Panicked(payload)) => {
+            nest_rs_core::contained_panic!(
+                target: TARGET,
+                payload.as_ref(),
+                "queue backend panicked answering a call; the call is abandoned",
+                queue = %queue,
+                call,
+            );
+            Err(QueueError::Panicked {
+                queue: queue.clone(),
+                call,
+            })
+        }
         Err(_) => Err(QueueError::Unanswered {
             queue: queue.clone(),
             call,

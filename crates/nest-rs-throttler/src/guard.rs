@@ -1,15 +1,12 @@
 //! [`ThrottlerGuard`] — rate-limiting guard.
 
 use std::fmt::{self, Write as _};
-use std::future::{Future as _, poll_fn};
 use std::net::{IpAddr, Ipv6Addr};
-use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::Poll;
 use std::time::Duration;
 
-use nest_rs_core::{Layer, injectable};
+use nest_rs_core::{Layer, Unanswered, injectable, within};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{ClientOrigin, Reflector, async_trait};
@@ -133,31 +130,48 @@ impl ThrottlerGuard {
     }
 
     /// Count one hit for `key` under `limit` on the edge `transport` names,
-    /// waiting on the store no longer than [`HIT_TIMEOUT`].
+    /// waiting on the store no longer than [`HIT_TIMEOUT`]: the store's
+    /// decision, or the refusal of a hit it could not count.
     ///
-    /// A store silent past the bound is denied for the whole window, fail
-    /// closed. The call is polled once bare before the bound is armed, so the
-    /// in-process store pays no timer.
-    async fn count(&self, transport: &'static str, key: &str, limit: Throttle) -> Decision {
+    /// The one place a store's failure is decided, fail closed: an `Err`, a
+    /// store silent past the bound and one that panics are each refused for
+    /// the whole window, and said here once — never with the key, which holds
+    /// the caller's address. The in-process store answers at the first poll,
+    /// so it pays no timer.
+    async fn count(
+        &self,
+        transport: &'static str,
+        key: &str,
+        limit: Throttle,
+    ) -> Result<Decision, Denial> {
         let store = &*self.throttler.0;
-        let mut hit = pin!(store.hit(key, limit));
-        if let Poll::Ready(decision) = poll_fn(|cx| Poll::Ready(hit.as_mut().poll(cx))).await {
-            return decision;
+        let name = ThrottlerStore::name(store);
+        match within(HIT_TIMEOUT, async { store.hit(key, limit).await }).await {
+            Ok(Ok(decision)) => return Ok(decision),
+            Ok(Err(error)) => tracing::warn!(
+                target: crate::TARGET,
+                transport,
+                store = name,
+                error = %nest_rs_core::error_message(&error),
+                "throttler store failed; denying (fail-closed)",
+            ),
+            Err(Unanswered::Panicked(payload)) => nest_rs_core::contained_panic!(
+                target: crate::TARGET,
+                payload.as_ref(),
+                "throttler store panicked; denying (fail-closed)",
+                transport,
+                store = name,
+            ),
+            Err(_) => tracing::warn!(
+                target: crate::TARGET,
+                transport,
+                store = name,
+                waited_ms = u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                "throttler store did not answer within the guard's timeout; denying \
+                 (fail-closed)",
+            ),
         }
-        match tokio::time::timeout(HIT_TIMEOUT, hit).await {
-            Ok(decision) => decision,
-            Err(_) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    transport,
-                    store = ThrottlerStore::name(store),
-                    waited_ms = u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                    "throttler store did not answer within the guard's timeout; denying \
-                     (fail-closed)",
-                );
-                Decision::denied(limit.window())
-            }
-        }
+        Err(rate_limited(limit.window()))
     }
 }
 
@@ -180,7 +194,7 @@ impl Guard for ThrottlerGuard {
             .unwrap_or_else(|| req.uri().path().into());
         let key = bucket_key(&[&transport::HTTP, &route, &ip]);
 
-        let decision = self.count(transport::HTTP, &key, limit).await;
+        let decision = self.count(transport::HTTP, &key, limit).await?;
         if decision.allowed {
             return Ok(());
         }
@@ -217,7 +231,7 @@ impl Guard for ThrottlerGuard {
         );
         let key = bucket_key(&[&transport::GRAPHQL, &field, &caller]);
 
-        let decision = self.count(transport::GRAPHQL, &key, *self.default).await;
+        let decision = self.count(transport::GRAPHQL, &key, *self.default).await?;
         if decision.allowed {
             return Ok(());
         }
@@ -251,7 +265,7 @@ impl Guard for ThrottlerGuard {
         );
         let key = bucket_key(&[&transport::MCP, &kind, &name, &caller]);
 
-        let decision = self.count(transport::MCP, &key, *self.default).await;
+        let decision = self.count(transport::MCP, &key, *self.default).await?;
         if decision.allowed {
             return Ok(());
         }
@@ -279,7 +293,7 @@ impl Guard for ThrottlerGuard {
         let connection = client.id();
         let key = bucket_key(&[&transport::WS, &event, &connection]);
 
-        let decision = self.count(transport::WS, &key, *self.default).await;
+        let decision = self.count(transport::WS, &key, *self.default).await?;
         if decision.allowed {
             return Ok(());
         }
@@ -433,9 +447,13 @@ mod tests {
 
     #[async_trait]
     impl ThrottlerStore for Recording {
-        async fn hit(&self, key: &str, _limit: Throttle) -> Decision {
+        async fn hit(
+            &self,
+            key: &str,
+            _limit: Throttle,
+        ) -> Result<Decision, crate::ThrottlerStoreError> {
             self.0.lock().push(key.to_owned());
-            Decision::allowed()
+            Ok(Decision::allowed())
         }
     }
 

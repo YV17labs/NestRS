@@ -28,6 +28,12 @@ pub const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(18);
 /// **`authenticate` answers within [`AUTHENTICATE_TIMEOUT`], or is denied.** A
 /// strategy calling a backend bounds each call itself, and keeps no state a call
 /// dropped at the bound would have had to undo.
+///
+/// **On failure**, the guard decides, and it fails closed: a strategy still
+/// silent at the bound, or one that panics, decided nothing, so the request is
+/// denied `503` on every route, `#[public]` included, as for
+/// [`AuthError::Unavailable`] — said once by the guard, at `warn`, or at
+/// `error` for the panic.
 #[async_trait]
 pub trait Strategy: Send + Sync + 'static {
     /// The authenticated identity. Its [`PrincipalIdentity`] bound is what

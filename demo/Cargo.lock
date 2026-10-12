@@ -3207,7 +3207,7 @@ dependencies = [
  "parking_lot",
  "poem",
  "serde_json",
- "tokio",
+ "thiserror 2.0.21",
  "tracing",
 ]
 

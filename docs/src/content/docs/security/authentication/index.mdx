@@ -143,7 +143,10 @@ every edge — a route, the GraphQL POST, the MCP POST, the WebSocket upgrade �
 with the 503 an unreachable identity store gets, `#[public]` routes included.
 The guard logs `strategy did not answer within the guard's timeout; denying
 (fail-closed)` at `warn` with the `strategy` (your type's name), the
-`transport` and `waited_ms`.
+`transport` and `waited_ms`. A strategy that panics decided nothing either, and
+is denied the same way, with one line at `error`, `strategy panicked; denying
+(fail-closed)`, carrying the `panic` — so answer your store's failure as
+`AuthError::Unavailable` rather than an `unwrap`.
 
 The call is dropped where it stands when the net fires, so keep no state in a
 strategy that a half-finished call would have had to undo.

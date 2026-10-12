@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 
+use crate::error::ThrottlerStoreError;
 use crate::throttle::Throttle;
 
 /// Cap on distinct throttle keys across the store; each of the [`SHARDS`]
@@ -33,6 +34,7 @@ const SWEEP_INTERVAL: u32 = 128;
 
 /// The outcome of counting one request against a rate limit, built through
 /// [`Decision::allowed`] / [`Decision::denied`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Decision {
     /// Whether the request is permitted.
@@ -80,14 +82,22 @@ pub const HIT_TIMEOUT: Duration = Duration::from_secs(18);
 /// networked store bounds each command it sends. A call is dropped where it
 /// stands at the bound, so a store keeps no state a dropped call would have had
 /// to undo.
+///
+/// **On failure**, the guard alone decides, and it fails closed: an `Err`, a
+/// call still unanswered at [`HIT_TIMEOUT`] and a panic each deny the caller
+/// for the whole window, the first two said at `warn`, the panic at `error`,
+/// naming the store and never the key. A store returns its error and logs
+/// nothing of its own, so the event is said once.
 #[async_trait]
 pub trait ThrottlerStore: Send + Sync + 'static {
-    /// Count one hit for `key` under `limit`. Returns whether the request is
-    /// allowed and, when denied, the `Retry-After` duration.
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision;
+    /// Count one hit for `key` under `limit`. Answers whether the request is
+    /// allowed and, when denied, the `Retry-After` duration — or why it could
+    /// not count.
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError>;
 
-    /// The name the guard reports this store under when it does not answer;
-    /// defaults to the implementor's type name.
+    /// The name the guard reports this store under when it cannot count a hit:
+    /// an error, silence past [`HIT_TIMEOUT`] or a panic; defaults to the
+    /// implementor's type name.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
@@ -234,8 +244,8 @@ impl InMemoryThrottler {
 
 #[async_trait]
 impl ThrottlerStore for InMemoryThrottler {
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        Self::hit(self, key, limit)
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        Ok(Self::hit(self, key, limit))
     }
 
     fn in_process(&self) -> bool {

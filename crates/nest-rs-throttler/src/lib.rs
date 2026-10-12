@@ -13,6 +13,7 @@
 pub const TARGET: &str = "nest_rs::throttler";
 
 mod config;
+mod error;
 mod guard;
 mod module;
 mod pseudonym;
@@ -20,6 +21,7 @@ mod store;
 mod throttle;
 
 pub use config::ThrottlerConfig;
+pub use error::ThrottlerStoreError;
 pub use guard::ThrottlerGuard;
 pub use module::{ThrottlerModule, ThrottlerSetup};
 pub use store::{BACKEND_REMEDY, Decision, HIT_TIMEOUT, InMemoryThrottler, ThrottlerStore};

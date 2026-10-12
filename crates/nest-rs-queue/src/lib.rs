@@ -36,7 +36,8 @@
 //!    answer to every call it makes — these three and a [`CheckpointStore`]'s —
 //!    before dropping it and answering [`QueueError::Unanswered`]: bound your own
 //!    round trips well inside that net, so an outage reaches the caller as your
-//!    failure, with its cause.
+//!    failure, with its cause. A call that panics is dropped the same way, as
+//!    [`QueueError::Panicked`], its panic filed once by the port.
 //!    Bind it as `Arc<dyn JobProducer>` with
 //!    `ContainerBuilder::provide_declared_factory_after`, carrying
 //!    [`BACKEND_REMEDY`]: **two backends imported is a boot error naming both**.

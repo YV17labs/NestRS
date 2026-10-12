@@ -40,9 +40,16 @@ use crate::{
 ///   job's next record before it lets the delivery go may leave that record
 ///   behind on `Lost`: a second delivery, which at least once allows.
 /// - **Every call is bounded by the backend's own budget**, which
-///   [`Prepared::answer_bound`] states; the port's net
-///   ([`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT)) only answers a backend that
-///   stopped bounding itself.
+///   [`Prepared::answer_bound`] states, under the port's net
+///   ([`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT)) — one at or past it fails
+///   the worker's boot. The net only answers a backend that stopped bounding
+///   itself.
+///
+/// **On failure**, the worker decides: an `Err`, a call silent past its net and
+/// a panic — filed once at `error` — each count as a call that did not answer,
+/// made again under the worker's backoff; a settle only while its lease holds,
+/// and `prepare` never — it fails the boot. A backend returns its error rather
+/// than logging it.
 ///
 /// Every call is made on the worker's runtime, so each future is `Send`.
 pub trait JobConsumer: Send + Sync + 'static {

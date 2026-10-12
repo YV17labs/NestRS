@@ -3101,6 +3101,8 @@ dependencies = [
  "futures-util",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
+ "nest-rs-http",
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
@@ -3349,6 +3351,7 @@ dependencies = [
  "parking_lot",
  "poem",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]

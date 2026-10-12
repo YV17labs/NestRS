@@ -40,9 +40,10 @@ pub struct IndicatorReport {
     /// Whether this indicator's check passed.
     pub status: IndicatorStatus,
     /// `Some` only when the check failed — a **fixed, opaque** reason
-    /// (`"check failed"` / `"timed out"` / `"probe deadline exceeded"`), never
-    /// the indicator's own error, which is logged at `warn` on
-    /// `nest_rs::health`: `/health/*` is routinely unauthenticated.
+    /// (`"check failed"`, for an error or a panic / `"timed out"` / `"probe
+    /// deadline exceeded"`), never the indicator's own error, which is logged
+    /// on `nest_rs::health` — at `warn`, a panic at `error`: `/health/*` is
+    /// routinely unauthenticated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

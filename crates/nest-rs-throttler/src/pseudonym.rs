@@ -8,6 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aws_lc_rs::hmac;
 
+use crate::error::ThrottlerStoreError;
 use crate::store::{Decision, ThrottlerStore};
 use crate::throttle::Throttle;
 
@@ -63,7 +64,7 @@ impl PseudonymStore {
 
 #[async_trait]
 impl ThrottlerStore for PseudonymStore {
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
         self.inner.hit(&self.pseudonym(key), limit).await
     }
 

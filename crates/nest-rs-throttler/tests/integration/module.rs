@@ -57,8 +57,12 @@ mod pseudonym_key {
 
     #[async_trait::async_trait]
     impl ThrottlerStore for Elsewhere {
-        async fn hit(&self, _key: &str, _limit: Throttle) -> Decision {
-            Decision::allowed()
+        async fn hit(
+            &self,
+            _key: &str,
+            _limit: Throttle,
+        ) -> Result<Decision, nest_rs_throttler::ThrottlerStoreError> {
+            Ok(Decision::allowed())
         }
     }
 

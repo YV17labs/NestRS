@@ -50,8 +50,8 @@ anyhow.workspace = true
 # `AuthnGuard` logs the authentication outcome — a failure at `warn` so it is
 # visible in production, the audit point every strategy shares.
 tracing.workspace = true
-# The guard's bound on a strategy's answer (`AUTHENTICATE_TIMEOUT`): a strategy
-# that never answers is denied at it rather than holding the request for good.
+# The JWK Set's refresh: the task that fetches the set, the channel callers
+# wait on while that fetch is in flight, and the clock its freshness reads.
 tokio.workspace = true
 
 [dev-dependencies]

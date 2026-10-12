@@ -63,7 +63,7 @@
         "description": "Outcome of a single indicator check, included in a [`ProbeReport`].",
         "properties": {
           "error": {
-            "description": "`Some` only when the check failed — a **fixed, opaque** reason\n(`\"check failed\"` / `\"timed out\"` / `\"probe deadline exceeded\"`), never\nthe indicator's own error, which is logged at `warn` on\n`nest_rs::health`: `/health/*` is routinely unauthenticated.",
+            "description": "`Some` only when the check failed — a **fixed, opaque** reason\n(`\"check failed\"`, for an error or a panic / `\"timed out\"` / `\"probe\ndeadline exceeded\"`), never the indicator's own error, which is logged\non `nest_rs::health` — at `warn`, a panic at `error`: `/health/*` is\nroutinely unauthenticated.",
             "type": [
               "string",
               "null"

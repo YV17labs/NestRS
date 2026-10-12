@@ -256,6 +256,19 @@ impl Strategy for SlowStrategy {
     }
 }
 
+/// A strategy that unwinds — an `unwrap` on its store's answer, a poisoned
+/// lock.
+struct PanickingStrategy;
+
+#[async_trait]
+impl Strategy for PanickingStrategy {
+    type Principal = &'static str;
+
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
+        panic!("the strategy's store unwound")
+    }
+}
+
 /// The guard over the strategy that never answers, as an app aliases its own.
 type StalledAuthn = AuthnGuard<StalledStrategy>;
 
@@ -326,6 +339,40 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
         "no principal is attached",
     );
     assert_the_strategy_was_waited_out(&logs);
+}
+
+/// A strategy that unwound decided nothing: the guard denies as it does past
+/// its bound, on a `#[public]` route too, and files the panic once at `error`.
+#[tokio::test]
+async fn a_strategy_that_panics_is_denied_and_said_once() {
+    let logs = LogCapture::install();
+    let guard = AuthnGuard::new(Arc::new(PanickingStrategy));
+
+    for mut req in [crate::request(&[]), public_request()] {
+        let denial = guard
+            .check_http(&mut req)
+            .await
+            .expect_err("a strategy that unwound decided nothing, so nothing passes");
+        assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
+        assert!(req.extensions().get::<&'static str>().is_none());
+    }
+
+    let said = logs.find(
+        nest_rs_authn::TARGET,
+        "strategy panicked; denying (fail-closed)",
+    );
+    assert_eq!(said.len(), 2, "one line per request: {:#?}", logs.events());
+    assert_eq!(said[0].level, "error");
+    assert_eq!(
+        said[0].field("strategy").as_deref(),
+        Some(std::any::type_name::<PanickingStrategy>()),
+    );
+    assert_eq!(said[0].field("transport").as_deref(), Some("http"));
+    assert_eq!(
+        said[0].field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the strategy's store unwound"),
+    );
+    logs.expect_none(nest_rs_authn::TARGET, "anonymous request on a public route");
 }
 
 /// `#[public]` absorbs a *rejected* credential, never one the strategy never

@@ -209,11 +209,19 @@ mod standalone {
         let throttler = RedisThrottler::new(conn.clone());
         let subject = crate::unique_key("tls");
         assert!(
-            throttler.hit(&subject, limit).await.allowed,
+            throttler
+                .hit(&subject, limit)
+                .await
+                .expect("counted")
+                .allowed,
             "the rate limiter counts over TLS",
         );
         assert!(
-            !throttler.hit(&subject, limit).await.allowed,
+            !throttler
+                .hit(&subject, limit)
+                .await
+                .expect("counted")
+                .allowed,
             "and its count holds: the second hit is the one over the limit",
         );
 

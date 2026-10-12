@@ -23,6 +23,10 @@ use crate::{JobError, QueueError, QueueName};
 ///
 /// The port waits [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for each call's
 /// answer, then drops the call: bound each round trip well inside it.
+///
+/// **On failure**, the attempt fails, retryably: an `Err`, a call silent past
+/// the net ([`QueueError::Unanswered`]) and a panic ([`QueueError::Panicked`],
+/// filed once at `error`) alike.
 #[async_trait]
 pub trait CheckpointStore: Send + Sync + 'static {
     /// The state saved for the job before this delivery started, if any.
@@ -61,17 +65,18 @@ impl CheckpointCell {
         if let Some(latest) = cached {
             return Ok(latest);
         }
-        let loaded = bounded(&self.queue, "CheckpointStore::load", self.store.load()).await?;
+        let loaded = bounded(&self.queue, "CheckpointStore::load", async {
+            self.store.load().await
+        })
+        .await?;
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(loaded.clone());
         Ok(loaded)
     }
 
     async fn save(&self, state: Value) -> Result<(), QueueError> {
-        bounded(
-            &self.queue,
-            "CheckpointStore::save",
-            self.store.save(state.clone()),
-        )
+        bounded(&self.queue, "CheckpointStore::save", async {
+            self.store.save(state.clone()).await
+        })
         .await?;
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(Some(state));
         Ok(())
@@ -137,8 +142,9 @@ where
     /// [`get`](Self::get) returns it, and so does the job's next attempt.
     ///
     /// Fails with [`QueueError::Unanswered`] when the store does not answer
-    /// within [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT); returned with `?`,
-    /// that fails the attempt, retryably, like any error the method returns.
+    /// within [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), and with
+    /// [`QueueError::Panicked`] when it panicked answering; returned with `?`,
+    /// either fails the attempt, retryably, like any error the method returns.
     pub async fn save(&mut self, state: S) -> Result<(), QueueError> {
         let value = serde_json::to_value(&state)?;
         self.cell.save(value).await?;

@@ -9,7 +9,9 @@ use async_trait::async_trait;
 use croner::Cron;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
-use nest_rs_core::{Container, Correlation, Discovery, ReachableProviders, Transport, inventory};
+use nest_rs_core::{
+    Container, Correlation, Discovery, ReachableProviders, Transport, Unanswered, inventory, within,
+};
 use nest_rs_worker::{JobContext, JobTimedOut, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
@@ -947,8 +949,8 @@ enum Bounded<T> {
 }
 
 /// Await `call` — a claim, or a question about a claim — for `budget` and no
-/// longer, and not past `cancel`, containing a panic the way every call into a
-/// lock is contained.
+/// longer, and not past `cancel`, through `nest_rs_core::within`, which
+/// contains a panic the way every call into a lock is contained.
 ///
 /// **Cancellation is checked first**, so no occurrence starts after shutdown
 /// began; the budget alone can be most of a day for a daily cron.
@@ -963,9 +965,11 @@ async fn bounded<T>(
     tokio::select! {
         biased;
         () = cancel.cancelled() => Bounded::Cancelled,
-        answered = tokio::time::timeout(budget, nest_rs_core::panic::contain(call)) => {
-            answered.map_or(Bounded::Stale, Bounded::Answered)
-        }
+        answered = within(budget, call) => match answered {
+            Ok(answer) => Bounded::Answered(Ok(answer)),
+            Err(Unanswered::Panicked(payload)) => Bounded::Answered(Err(payload)),
+            Err(_) => Bounded::Stale,
+        },
     }
 }
 

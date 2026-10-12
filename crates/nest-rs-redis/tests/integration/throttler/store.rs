@@ -11,10 +11,10 @@ use nest_rs_core::{App, module};
 use nest_rs_guards::Guard;
 use nest_rs_redis::{RedisConfig, RedisModule, RedisThrottler, RedisThrottlerModule};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule, ThrottlerSetup};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 
-use crate::harness::connection::command_length;
+use crate::harness::connection::answer_each_command;
 use crate::{HELLO, is_hello};
 
 /// A Redis serving the boot — its `HELLO` as a primary's, `+PONG` to the rest
@@ -58,32 +58,19 @@ impl StoppingRedis {
     }
 }
 
-async fn serve_until_stopped(
-    mut client: impl AsyncRead + AsyncWrite + Unpin,
-    stopped: &AtomicBool,
-) {
-    let mut received = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        while let Some(length) = command_length(&received) {
-            let command = received.drain(..length).collect::<Vec<_>>();
-            if stopped.load(Ordering::SeqCst) {
-                return;
-            }
-            let reply: &[u8] = if is_hello(&command) {
-                HELLO
-            } else {
-                b"+PONG\r\n"
-            };
-            if client.write_all(reply).await.is_err() || client.flush().await.is_err() {
-                return;
-            }
+async fn serve_until_stopped(client: impl AsyncRead + AsyncWrite + Unpin, stopped: &AtomicBool) {
+    answer_each_command(client, |command| {
+        if stopped.load(Ordering::SeqCst) {
+            return None;
         }
-        match client.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(read) => received.extend_from_slice(&chunk[..read]),
-        }
-    }
+        let reply: &[u8] = if is_hello(command) {
+            HELLO
+        } else {
+            b"+PONG\r\n"
+        };
+        Some(reply)
+    })
+    .await;
 }
 
 /// The window the app counts in, and so the wait a refusal carries.

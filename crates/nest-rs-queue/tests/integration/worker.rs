@@ -518,13 +518,28 @@ async fn a_delivery_whose_task_panics_lets_its_lease_lapse() {
     assert_eq!(said.field("queue").as_deref(), Some(queue));
 }
 
-/// A consumer over `memory` whose first settle panics.
-struct SettlePanicsOnce {
+/// A consumer over `memory` that declares `answer_bound` at prepare, and whose
+/// first receive or first settle unwinds when `unwind_receive` or
+/// `unwind_settle` is set — a backend's defect, met by the worker's own loop.
+struct Misbehaving {
     inner: crate::memory::MemoryConsumer,
-    panicked: std::sync::atomic::AtomicBool,
+    answer_bound: Duration,
+    unwind_receive: std::sync::atomic::AtomicBool,
+    unwind_settle: std::sync::atomic::AtomicBool,
 }
 
-impl nest_rs_queue::JobConsumer for SettlePanicsOnce {
+impl Misbehaving {
+    fn over(memory: &Memory) -> Self {
+        Self {
+            inner: memory.consumer(),
+            answer_bound: Duration::from_millis(100),
+            unwind_receive: std::sync::atomic::AtomicBool::new(false),
+            unwind_settle: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl nest_rs_queue::JobConsumer for Misbehaving {
     type Lease = crate::memory::MemoryLease;
 
     fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
@@ -535,7 +550,8 @@ impl nest_rs_queue::JobConsumer for SettlePanicsOnce {
         &self,
         methods: &[&'static nest_rs_queue::ProcessMethod],
     ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
-        self.inner.prepare(methods).await
+        self.inner.prepare(methods).await?;
+        Ok(nest_rs_queue::Prepared::new(self.answer_bound))
     }
 
     async fn receive(
@@ -543,6 +559,12 @@ impl nest_rs_queue::JobConsumer for SettlePanicsOnce {
         method: &'static nest_rs_queue::ProcessMethod,
         ask: nest_rs_queue::Ask,
     ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
+        if self
+            .unwind_receive
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("the backend's client unwound");
+        }
         self.inner.receive(method, ask).await
     }
 
@@ -560,11 +582,12 @@ impl nest_rs_queue::JobConsumer for SettlePanicsOnce {
         lease: &Self::Lease,
         disposition: nest_rs_queue::Disposition<'_>,
     ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
-        assert!(
-            self.panicked
-                .swap(true, std::sync::atomic::Ordering::SeqCst),
-            "the backend's first settle panics",
-        );
+        if self
+            .unwind_settle
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("the backend's client unwound");
+        }
         self.inner.settle(method, lease, disposition).await
     }
 
@@ -586,9 +609,9 @@ async fn a_settle_that_panics_is_retried_and_said_once() {
     let producer: Arc<dyn JobProducer> = Arc::new(memory.clone());
     let app = TestApp::builder()
         .module::<BootModule>()
-        .provide(BoundConsumer::new(SettlePanicsOnce {
-            inner: memory.consumer(),
-            panicked: std::sync::atomic::AtomicBool::new(false),
+        .provide(BoundConsumer::new(Misbehaving {
+            unwind_settle: std::sync::atomic::AtomicBool::new(true),
+            ..Misbehaving::over(&memory)
         }))
         .provide_dyn(Arc::clone(&producer))
         .build_headless()
@@ -791,79 +814,6 @@ async fn an_attempt_past_its_timeout_is_cut_retried_and_dead_lettered_naming_it(
     );
     let reason = &memory.dead(queue)[0].reason;
     assert!(reason.contains("1s timeout"), "{reason}");
-}
-
-/// A consumer over `memory` that declares `answer_bound` at prepare, and whose
-/// first receive unwinds when `unwind_receive` is set — a backend's defect, met
-/// by the worker's own loop.
-struct Misbehaving {
-    inner: crate::memory::MemoryConsumer,
-    answer_bound: Duration,
-    unwind_receive: std::sync::atomic::AtomicBool,
-}
-
-impl Misbehaving {
-    fn over(memory: &Memory) -> Self {
-        Self {
-            inner: memory.consumer(),
-            answer_bound: Duration::from_millis(100),
-            unwind_receive: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-}
-
-impl nest_rs_queue::JobConsumer for Misbehaving {
-    type Lease = crate::memory::MemoryLease;
-
-    fn backend(&self) -> &'static nest_rs_queue::QueueBackend {
-        self.inner.backend()
-    }
-
-    async fn prepare(
-        &self,
-        methods: &[&'static nest_rs_queue::ProcessMethod],
-    ) -> Result<nest_rs_queue::Prepared, nest_rs_queue::QueueError> {
-        self.inner.prepare(methods).await?;
-        Ok(nest_rs_queue::Prepared::new(self.answer_bound))
-    }
-
-    async fn receive(
-        &self,
-        method: &'static nest_rs_queue::ProcessMethod,
-        ask: nest_rs_queue::Ask,
-    ) -> Result<nest_rs_queue::Received<Self::Lease>, nest_rs_queue::QueueError> {
-        if self
-            .unwind_receive
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            panic!("the backend's client unwound");
-        }
-        self.inner.receive(method, ask).await
-    }
-
-    async fn renew(
-        &self,
-        method: &'static nest_rs_queue::ProcessMethod,
-        leases: &[&Self::Lease],
-    ) -> Result<Vec<nest_rs_queue::LeaseHold>, nest_rs_queue::QueueError> {
-        self.inner.renew(method, leases).await
-    }
-
-    async fn settle(
-        &self,
-        method: &'static nest_rs_queue::ProcessMethod,
-        lease: &Self::Lease,
-        disposition: nest_rs_queue::Disposition<'_>,
-    ) -> Result<nest_rs_queue::LeaseHold, nest_rs_queue::QueueError> {
-        self.inner.settle(method, lease, disposition).await
-    }
-
-    async fn maintain(
-        &self,
-        method: &'static nest_rs_queue::ProcessMethod,
-    ) -> Result<Option<Duration>, nest_rs_queue::QueueError> {
-        self.inner.maintain(method).await
-    }
 }
 
 /// A backend whose own budget reaches the port's net never fails before it:

@@ -145,14 +145,26 @@ impl ScriptedRedis {
 }
 
 /// Answer each command `client` sends with the error `line`, until it hangs up.
-async fn answer_every_command(mut client: impl AsyncRead + AsyncWrite + Unpin, line: &'static str) {
+async fn answer_every_command(client: impl AsyncRead + AsyncWrite + Unpin, line: &'static str) {
     let reply = format!("-{line}\r\n");
+    answer_each_command(client, |_| Some(reply.as_bytes())).await;
+}
+
+/// Answer each whole command `client` sends with what `reply` makes of it,
+/// until the client hangs up or `reply` answers `None`.
+pub(crate) async fn answer_each_command<R: AsRef<[u8]>>(
+    mut client: impl AsyncRead + AsyncWrite + Unpin,
+    mut reply: impl FnMut(&[u8]) -> Option<R>,
+) {
     let mut received = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
         while let Some(length) = command_length(&received) {
-            received.drain(..length);
-            if client.write_all(reply.as_bytes()).await.is_err() || client.flush().await.is_err() {
+            let command: Vec<u8> = received.drain(..length).collect();
+            let Some(answer) = reply(&command) else {
+                return;
+            };
+            if client.write_all(answer.as_ref()).await.is_err() || client.flush().await.is_err() {
                 return;
             }
         }
@@ -165,7 +177,7 @@ async fn answer_every_command(mut client: impl AsyncRead + AsyncWrite + Unpin, l
 
 /// The length of the first whole command in `bytes` — an array of bulk
 /// strings, the only form the client sends — or `None` until it has arrived.
-pub(crate) fn command_length(bytes: &[u8]) -> Option<usize> {
+fn command_length(bytes: &[u8]) -> Option<usize> {
     let header = |from: usize, marker: u8| -> Option<(usize, usize)> {
         if bytes.get(from) != Some(&marker) {
             return None;

@@ -145,13 +145,12 @@ impl ThrottlerGuard {
         limit: Throttle,
     ) -> Result<Decision, Denial> {
         let store = &*self.throttler.0;
-        let name = ThrottlerStore::name(store);
         match within(HIT_TIMEOUT, async { store.hit(key, limit).await }).await {
             Ok(Ok(decision)) => return Ok(decision),
             Ok(Err(error)) => tracing::warn!(
                 target: crate::TARGET,
                 transport,
-                store = name,
+                store = ThrottlerStore::name(store),
                 error = %nest_rs_core::error_message(&error),
                 "throttler store failed; denying (fail-closed)",
             ),
@@ -160,12 +159,12 @@ impl ThrottlerGuard {
                 payload.as_ref(),
                 "throttler store panicked; denying (fail-closed)",
                 transport,
-                store = name,
+                store = ThrottlerStore::name(store),
             ),
             Err(_) => tracing::warn!(
                 target: crate::TARGET,
                 transport,
-                store = name,
+                store = ThrottlerStore::name(store),
                 waited_ms = u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
                 "throttler store did not answer within the guard's timeout; denying \
                  (fail-closed)",

@@ -84,8 +84,8 @@ fn fnv1a(from: u64, bytes: &[u8]) -> u64 {
     })
 }
 
-/// One loop's retries: its [`Backoff`], its seed and how many attempts failed
-/// in a row, back to none once a call answers.
+/// One loop's retries: its [`Backoff`], its seed and the number the next
+/// failed attempt takes, back to the first once a call answers.
 ///
 /// ```
 /// use std::time::Duration;
@@ -104,7 +104,7 @@ fn fnv1a(from: u64, bytes: &[u8]) -> u64 {
 pub struct Retries {
     backoff: Backoff,
     seed: u64,
-    failed: u32,
+    attempt: NonZeroU32,
 }
 
 impl Retries {
@@ -113,20 +113,20 @@ impl Retries {
         Self {
             backoff,
             seed,
-            failed: 0,
+            attempt: NonZeroU32::MIN,
         }
     }
 
     /// The wait after one more failed attempt.
     pub fn next_wait(&mut self) -> Duration {
-        self.failed = self.failed.saturating_add(1);
-        let attempt = NonZeroU32::new(self.failed).unwrap_or(NonZeroU32::MIN);
-        self.backoff.wait(attempt, self.seed)
+        let wait = self.backoff.wait(self.attempt, self.seed);
+        self.attempt = self.attempt.saturating_add(1);
+        wait
     }
 
     /// A call answered: the next failure waits as a first one.
     pub const fn reset(&mut self) {
-        self.failed = 0;
+        self.attempt = NonZeroU32::MIN;
     }
 }
 

@@ -239,10 +239,6 @@ mod tests {
         }
     }
 
-    fn said(payload: &(dyn Any + Send)) -> String {
-        crate::panic_message(payload)
-    }
-
     #[test]
     fn an_answer_ready_at_once_needs_no_clock() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -307,7 +303,10 @@ mod tests {
         else {
             panic!("the unwind is the answer");
         };
-        assert_eq!(said(payload.as_ref()), "the backend unwound");
+        assert_eq!(
+            crate::panic_message(payload.as_ref()),
+            "the backend unwound"
+        );
     }
 
     #[tokio::test]
@@ -321,7 +320,7 @@ mod tests {
             panic!("the unwind is the answer");
         };
         assert_eq!(
-            said(payload.as_ref()),
+            crate::panic_message(payload.as_ref()),
             "panicked before handing its future back"
         );
     }
@@ -336,6 +335,6 @@ mod tests {
         else {
             panic!("the unwind is the answer");
         };
-        assert_eq!(said(payload.as_ref()), "unwound mid-call");
+        assert_eq!(crate::panic_message(payload.as_ref()), "unwound mid-call");
     }
 }

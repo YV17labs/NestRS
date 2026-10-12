@@ -10,11 +10,11 @@ use std::time::Duration;
 use nest_rs_queue::{JobProducer, QueueName};
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisQueueProducer};
 use redis::{ErrorKind, ServerErrorKind};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 
 use crate::HELLO;
-use crate::harness::connection::command_length;
+use crate::harness::connection::answer_each_command;
 
 /// A script flushed again right after its reload still runs: the call loads it
 /// once more rather than failing the push or the cancel.
@@ -132,36 +132,21 @@ impl ForgetfulRedis {
 }
 
 /// Answer each command `client` sends as [`ForgetfulRedis`] does.
-async fn forget(
-    mut client: impl AsyncRead + AsyncWrite + Unpin,
-    lost: usize,
-    loads: Arc<AtomicUsize>,
-) {
-    let mut received = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        while let Some(length) = command_length(&received) {
-            let command = received.drain(..length).collect::<Vec<_>>();
-            let reply = match argument(&command, 0).to_ascii_uppercase().as_slice() {
-                b"EVALSHA" if loads.load(Ordering::SeqCst) > lost => b":1\r\n".to_vec(),
-                b"EVALSHA" => b"-NOSCRIPT No matching script. Please use EVAL.\r\n".to_vec(),
-                b"SCRIPT" => {
-                    loads.fetch_add(1, Ordering::SeqCst);
-                    let code = String::from_utf8_lossy(bulk(&command, 2));
-                    format!("$40\r\n{}\r\n", redis::Script::new(&code).get_hash()).into_bytes()
-                }
-                b"HELLO" => HELLO.to_vec(),
-                _ => b"+PONG\r\n".to_vec(),
-            };
-            if client.write_all(&reply).await.is_err() || client.flush().await.is_err() {
-                return;
+async fn forget(client: impl AsyncRead + AsyncWrite + Unpin, lost: usize, loads: Arc<AtomicUsize>) {
+    answer_each_command(client, |command| {
+        Some(match argument(command, 0).to_ascii_uppercase().as_slice() {
+            b"EVALSHA" if loads.load(Ordering::SeqCst) > lost => b":1\r\n".to_vec(),
+            b"EVALSHA" => b"-NOSCRIPT No matching script. Please use EVAL.\r\n".to_vec(),
+            b"SCRIPT" => {
+                loads.fetch_add(1, Ordering::SeqCst);
+                let code = String::from_utf8_lossy(bulk(command, 2));
+                format!("$40\r\n{}\r\n", redis::Script::new(&code).get_hash()).into_bytes()
             }
-        }
-        match client.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(read) => received.extend_from_slice(&chunk[..read]),
-        }
-    }
+            b"HELLO" => HELLO.to_vec(),
+            _ => b"+PONG\r\n".to_vec(),
+        })
+    })
+    .await;
 }
 
 /// Argument `at` of the whole command `bytes` holds, as sent — a script spans

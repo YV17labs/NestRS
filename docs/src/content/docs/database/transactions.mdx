@@ -157,10 +157,10 @@ so an event emitted inside it would not wait for it: emit once
 `initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
 defaults), each sleep scaled by a jitter between 0.8 and 1.2 drawn per call —
 two transactions that conflicted with each other retry apart, not at one
-instant into the same conflict. A non-retryable error returns immediately; a retryable one is
-logged at `warn` and the closure re-runs from scratch — that's what makes
-the retry honest, the body re-opens a fresh transaction against a fresh
-snapshot.
+instant into the same conflict. A non-retryable error returns immediately; a
+retryable one is logged at `warn` and the closure re-runs from scratch —
+that's what makes the retry honest, the body re-opens a fresh transaction
+against a fresh snapshot.
 
 The defaults are conservative on purpose:
 

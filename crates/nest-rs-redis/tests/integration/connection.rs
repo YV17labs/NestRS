@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 
 use crate::harness::connection::{
-    NOT_READY, ScriptedRedis, answer, command_length, config, database_refused_at_once,
+    NOT_READY, ScriptedRedis, answer, answer_each_command, config, database_refused_at_once,
 };
 use crate::{HELLO, is_hello};
 
@@ -194,29 +194,19 @@ impl DemotedRedis {
 /// Answer each command connection `id` sends: its `HELLO` as a primary's,
 /// then `READONLY` once it is below the demotion, `+PONG` otherwise.
 async fn answer_as_its_role(
-    mut client: impl AsyncRead + AsyncWrite + Unpin,
+    client: impl AsyncRead + AsyncWrite + Unpin,
     id: usize,
     demoted_below: &AtomicUsize,
 ) {
-    let mut received = Vec::new();
-    let mut chunk = [0u8; 4096];
-    loop {
-        while let Some(length) = command_length(&received) {
-            let command = received.drain(..length).collect::<Vec<_>>();
-            let reply: &[u8] = if is_hello(&command) {
-                HELLO
-            } else if id < demoted_below.load(Ordering::SeqCst) {
-                b"-READONLY You can't write against a read only replica.\r\n"
-            } else {
-                b"+PONG\r\n"
-            };
-            if client.write_all(reply).await.is_err() || client.flush().await.is_err() {
-                return;
-            }
-        }
-        match client.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(read) => received.extend_from_slice(&chunk[..read]),
-        }
-    }
+    answer_each_command(client, |command| {
+        let reply: &[u8] = if is_hello(command) {
+            HELLO
+        } else if id < demoted_below.load(Ordering::SeqCst) {
+            b"-READONLY You can't write against a read only replica.\r\n"
+        } else {
+            b"+PONG\r\n"
+        };
+        Some(reply)
+    })
+    .await;
 }

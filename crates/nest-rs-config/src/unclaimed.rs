@@ -44,7 +44,7 @@
 //! report of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use nest_rs_core::EnvPrefix;
 
@@ -207,12 +207,8 @@ fn framework_wide() -> [String; 5] {
 static LEDGER: Mutex<Ledger> = Mutex::new(Ledger::new());
 
 /// Record that a framework reader asked for `name`.
-///
-/// A poisoned ledger skips the record rather than failing the read.
 pub(crate) fn witness(name: &str) {
-    let Ok(mut ledger) = LEDGER.lock() else {
-        return;
-    };
+    let mut ledger = LEDGER.lock().unwrap_or_else(PoisonError::into_inner);
     if !ledger.known.contains(name) {
         ledger.known.insert(name.to_owned());
     }
@@ -223,10 +219,10 @@ pub(crate) fn witness(name: &str) {
 /// a partial read knows only part of its keys, so it reports misspelled
 /// namespaces and leaves its keys for a read that finishes.
 pub(crate) fn after_read(namespace: &str, complete: bool) {
-    match LEDGER.lock() {
-        Ok(mut ledger) => ledger.record_read(namespace, complete),
-        Err(_) => return,
-    }
+    LEDGER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .record_read(namespace, complete);
     // Nothing would hear the report: the read stays recorded, and the first
     // read that has a listener files what this one found.
     if !tracing::enabled!(target: crate::TARGET, tracing::Level::WARN) {
@@ -236,10 +232,10 @@ pub(crate) fn after_read(namespace: &str, complete: bool) {
     // names is the one step here that touches the filesystem.
     let names = environment_names();
     let linked = crate::namespace::linked();
-    let reports = match LEDGER.lock() {
-        Ok(mut ledger) => ledger.check(&names, &linked),
-        Err(_) => return,
-    };
+    let reports = LEDGER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .check(&names, &linked);
     // Emitted with the ledger released: a subscriber is foreign code, and one
     // that reads a config would otherwise wait on a lock its own thread holds.
     for found in &reports {
@@ -562,6 +558,20 @@ mod tests {
 
     fn set(names: &[String]) -> BTreeSet<String> {
         names.iter().cloned().collect()
+    }
+
+    #[test]
+    fn a_poisoned_ledger_still_records_what_a_reader_asked_for() {
+        let name = var_name("poisoned_ledger", "KEY");
+        crate::testing::panic_holding(|| LEDGER.lock());
+        assert!(LEDGER.is_poisoned());
+        witness(&name);
+        let known = LEDGER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .known
+            .contains(&name);
+        assert!(known, "a read on a poisoned ledger is still witnessed");
     }
 
     #[test]

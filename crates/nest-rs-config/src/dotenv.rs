@@ -16,7 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::{LazyLock, OnceLock, RwLock};
+use std::sync::{LazyLock, OnceLock, PoisonError, RwLock};
 
 use nest_rs_core::EnvPrefix;
 
@@ -188,7 +188,8 @@ static PUBLISHED: LazyLock<RwLock<HashSet<String>>> = LazyLock::new(|| RwLock::n
 pub(crate) fn published_from_cascade(name: &str) -> bool {
     PUBLISHED
         .read()
-        .is_ok_and(|published| published.contains(name))
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(name)
 }
 
 /// Set-if-absent, the single process-env write.
@@ -197,14 +198,12 @@ pub(crate) fn published_from_cascade(name: &str) -> bool {
     reason = "the cascade is what fills the process environment; it reads it to write set-if-absent"
 )]
 fn publish(values: &HashMap<String, String>) {
-    let mut published = PUBLISHED.write().ok();
+    let mut published = PUBLISHED.write().unwrap_or_else(PoisonError::into_inner);
     for (key, value) in values {
         if std::env::var_os(key).is_some() {
             continue;
         }
-        if let Some(published) = published.as_mut() {
-            published.insert(key.clone());
-        }
+        published.insert(key.clone());
         // SAFETY: `set_var` is unsound only when it races a concurrent `getenv`.
         // Config resolution never reaches here. The process step runs from
         // `#[nest_rs::main]` before the runtime is built, so no other thread
@@ -470,6 +469,25 @@ mod tests {
                 "set-if-absent skipped this key — the deployment still owns it",
             );
             assert!(!published_from_cascade("PUB_NEVER_SEEN"));
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_poisoned_publication_record_still_says_what_the_cascade_supplied() {
+        crate::testing::panic_holding(|| PUBLISHED.write());
+        assert!(PUBLISHED.is_poisoned());
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(".env", "POISONED_PUB_FROM_FILE=file")?;
+            load_cascade(Path::new("."), Environment::Development);
+            assert!(
+                published_from_cascade("POISONED_PUB_FROM_FILE"),
+                "a committed file supplied this value, poisoned record or not",
+            );
             Ok(())
         });
     }

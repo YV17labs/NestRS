@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use nest_rs_core::EnvPrefix;
 
@@ -61,10 +61,7 @@ pub(crate) fn claiming<C: 'static, T>(load: impl FnOnce() -> T) -> (T, Result<()
     let read = READING.with(|cell| cell.take()).unwrap_or_default();
     drop(outer);
 
-    // A poisoned bookkeeping mutex skips the check rather than failing the boot.
-    let Ok(mut claimed) = CLAIMED.lock() else {
-        return (value, Ok(()));
-    };
+    let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);
     for var in read {
         match claimed.get(&var) {
             Some(existing) if existing.id != owner.id => {
@@ -495,6 +492,22 @@ mod tests {
         fn in_deployment(&self, var: &str) -> bool {
             self.deployment.contains_key(var)
         }
+    }
+
+    #[test]
+    fn a_poisoned_claims_ledger_still_refuses_a_contested_variable() {
+        struct First;
+        struct Second;
+        crate::testing::panic_holding(|| CLAIMED.lock());
+        assert!(CLAIMED.is_poisoned());
+        let read = || ConfigService::for_namespace("poisoned_claims").get("TOKEN");
+        let (_, first) = claiming::<First, _>(read);
+        assert!(first.is_ok(), "the first reader claims the variable");
+        let (_, second) = claiming::<Second, _>(read);
+        assert!(
+            matches!(second, Err(ConfigError::ContestedVariable { .. })),
+            "the check runs on a poisoned ledger: {second:?}"
+        );
     }
 
     /// A deployment that blanks a variable unsets it under both spellings: a

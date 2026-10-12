@@ -33,6 +33,8 @@ mod namespace;
 mod service;
 mod setting;
 mod source;
+#[cfg(test)]
+mod testing;
 #[cfg(feature = "tls")]
 mod tls;
 pub mod unclaimed;

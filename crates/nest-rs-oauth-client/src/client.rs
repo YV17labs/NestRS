@@ -2,6 +2,7 @@
 //! profile mapping stays in the app's [`Strategy`](nest_rs_authn::Strategy).
 
 use std::fmt;
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
@@ -183,15 +184,13 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
         Box::pin(async move {
             let request = reqwest::Request::try_from(request).map_err(Box::new)?;
             let response = self.http.execute(request).await.map_err(Box::new)?;
-            if let Ok(mut slot) = self.answered.lock() {
-                *slot = Some(Answered {
-                    status: response.status().as_u16(),
-                    retry_after: response
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .map(|value| value.as_bytes().to_vec()),
-                });
-            }
+            *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(Answered {
+                status: response.status().as_u16(),
+                retry_after: response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .map(|value| value.as_bytes().to_vec()),
+            });
             let mut answer = oauth2::http::Response::builder()
                 .status(response.status())
                 .version(response.version());
@@ -412,8 +411,8 @@ impl OAuthClient {
             let answered = observed
                 .answered
                 .lock()
-                .ok()
-                .and_then(|mut slot| slot.take());
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
             exchange_failed(&endpoint, answered, error)
         })?;
         Ok(TokenSet {

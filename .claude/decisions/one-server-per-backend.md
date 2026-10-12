@@ -91,6 +91,14 @@ migration, and a node running an atomic one refuses every `SETSLOT`, the
 of those tests touches two of the three primaries, so any two can refuse each
 other; a retry around the one refusal seen would have left the others. They
 now take turns on a file lock, since nextest runs each test in a process of
-its own. The other failure recorded above, a job counted twice in CI, is not
-one this race produces — every collision ends in a refusal, never a second
-delivery — and stays as recorded.
+its own. The next run found a second cause, the atomic migration's alone:
+Valkey fails every atomic migration a node runs when any of its databases is
+flushed ("Data was flushed"), and a Cluster client sends `FLUSHDB` to every
+primary, so a test emptying a database of its own beside it left the slot
+with its source. Every flush of the suite now goes through one helper holding
+the same lock shared, for the command alone: flushes overlap one another,
+never a test moving a slot. A retry of the migration, Valkey's own remedy,
+was refused: each later flush would reach it again. The other failure
+recorded above, a job counted twice in CI, is not one this race produces —
+a collision ends in a refusal or a migration that failed whole, never a
+second delivery — and stays as recorded.

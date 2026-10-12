@@ -582,15 +582,6 @@ async fn consumers(admin: &mut RedisConnection, queue: &str) -> Vec<String> {
         .collect()
 }
 
-/// Empty `admin`'s database: what a flush does to a running worker, and what
-/// a test owning the database leaves behind.
-async fn flush(admin: &mut RedisConnection) {
-    redis::cmd("FLUSHDB")
-        .query_async::<()>(admin)
-        .await
-        .expect("FLUSHDB");
-}
-
 /// A stream deleted under a running worker — by hand, or a flush — takes its
 /// group with it; the worker makes it again and runs what is filed next. An
 /// idle worker's read blocks on a connection of its own, so a push answers at
@@ -600,7 +591,9 @@ async fn flush(admin: &mut RedisConnection) {
 async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leaves_it() {
     let queue = <PlainQueue as nest_rs_queue::Queue>::NAME;
     let mut admin = crate::connect_on(crate::DB_BLOCKED_READ).await;
-    flush(&mut admin).await;
+    crate::flush(&mut admin)
+        .await
+        .expect("an empty database to start on");
     assert_eq!(
         crate::blocked_reads_on(crate::DB_BLOCKED_READ).await,
         0,
@@ -638,7 +631,9 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     );
     crate::wait_until(Duration::from_secs(10), || PLAIN.of(run + 1).len() == 1).await;
 
-    flush(&mut admin).await;
+    crate::flush(&mut admin)
+        .await
+        .expect("the stream goes under the running worker");
     replica
         .producer
         .push(PlainQueue, PlainCommand { run: run + 2 }, None)
@@ -656,7 +651,9 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
         consumers(&mut admin, queue).await.is_empty(),
         "a worker that stopped holding nothing leaves the group",
     );
-    flush(&mut admin).await;
+    crate::flush(&mut admin)
+        .await
+        .expect("leave the database empty");
 }
 
 // --- an acknowledgement lost on its way back -----------------------------------------

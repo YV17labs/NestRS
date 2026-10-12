@@ -117,7 +117,7 @@ const BUDGET: Duration = Duration::from_millis(500);
 /// not meet another test's — one per test, all declared here so that no two
 /// collide. Every other test shares database 0, on queue names of its own.
 /// The framework's are 9 to 15: the demo's suites run on the same Redis and
-/// hold 1 to 8, so a `FLUSHDB` here never reaches a job one of theirs filed.
+/// hold 1 to 8, so a [`flush`] here never reaches a job one of theirs filed.
 const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
 const DB_BLOCKED_READ: u8 = 10;
 const DB_CONNECTION_DROP: u8 = 11;
@@ -167,7 +167,7 @@ const _: () = {
 
 /// The dev container Redis's URL on database `db`, for a test whose keys must
 /// not meet another test's — a connection drop aimed at its clients, or a
-/// `FLUSHDB`.
+/// [`flush`].
 fn redis_url_on(db: u8) -> String {
     url_on(&redis_url(), db)
 }
@@ -201,6 +201,42 @@ async fn connect_on(db: u8) -> RedisConnection {
     RedisConnection::connect(&at_default_budget(redis_config_on(db)))
         .await
         .expect("connect to the dev container Redis")
+}
+
+/// Empty the database `conn` is selected on — the suite's one way to send a
+/// `FLUSHDB`, on every topology. Valkey fails every atomic slot migration a
+/// node runs when any of its databases is flushed ("Data was flushed"), and a
+/// Cluster client sends the flush to every primary, so it holds the lock of
+/// [`holding_the_slots`] shared for the command: flushes overlap one another,
+/// never a test moving a slot.
+async fn flush(conn: &mut RedisConnection) -> redis::RedisResult<()> {
+    let _slots = tokio::task::spawn_blocking(|| {
+        let table = slot_table();
+        table.lock_shared().expect("the slot table's shared lock");
+        table
+    })
+    .await
+    .expect("the slot table's shared lock is taken");
+    redis::cmd("FLUSHDB").query_async(conn).await
+}
+
+/// The Cluster's slot table, held by the calling test alone until the file
+/// drops. Valkey refuses an atomic migration on a node holding a slot in a
+/// manual one, and any `SETSLOT` on a node running an atomic one — the
+/// hand-over [`cluster`]'s tests send every primary included — so the tests
+/// moving a slot take turns, and a [`flush`] waits for them; nextest runs each
+/// test in a process of its own, hence a file lock.
+fn holding_the_slots() -> std::fs::File {
+    let table = slot_table();
+    table.lock().expect("the slot table's lock");
+    table
+}
+
+/// The file [`holding_the_slots`] and [`flush`] lock: in the temp dir, since
+/// the Cluster is one per machine, whichever checkout's suite runs on it.
+fn slot_table() -> std::fs::File {
+    std::fs::File::create(std::env::temp_dir().join("nestrs-e2e-cluster-slots.lock"))
+        .expect("the slot table's lock file")
 }
 
 /// `config` at the framework's default budget, for the test's own commands:

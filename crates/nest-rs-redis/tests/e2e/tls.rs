@@ -58,9 +58,7 @@ struct SealedModule;
 async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
     let db = crate::DB_TLS_BLOCKED_READ;
     let mut admin = crate::connect_on(db).await;
-    let flush = || redis::cmd("FLUSHDB");
-    flush()
-        .query_async::<()>(&mut admin)
+    crate::flush(&mut admin)
         .await
         .expect("an empty database to start on");
     let run = crate::this_run();
@@ -73,8 +71,7 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
     crate::wait_until(Duration::from_secs(10), || SEALED.of(run).len() == 1).await;
     let blocked = crate::a_read_blocks_on(db).await;
     replica.worker.shutdown().await.expect("clean shutdown");
-    flush()
-        .query_async::<()>(&mut admin)
+    crate::flush(&mut admin)
         .await
         .expect("leave the database empty");
 
@@ -201,8 +198,7 @@ mod standalone {
         .await
         .expect("connect over TLS");
 
-        redis::cmd("FLUSHDB")
-            .query_async::<()>(&mut conn.clone())
+        crate::flush(&mut conn.clone())
             .await
             .expect("a caller's own command answers over TLS");
         let limit = Throttle::new(1, Duration::from_secs(30));
@@ -225,8 +221,7 @@ mod standalone {
             "and its count holds: the second hit is the one over the limit",
         );
 
-        redis::cmd("FLUSHDB")
-            .query_async::<()>(&mut conn.clone())
+        crate::flush(&mut conn.clone())
             .await
             .expect("leave the isolated database empty");
     }

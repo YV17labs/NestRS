@@ -317,8 +317,7 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     })
     .await
     .expect("connect to the isolated database");
-    redis::cmd("FLUSHDB")
-        .query_async::<()>(&mut conn.clone())
+    crate::flush(&mut conn.clone())
         .await
         .expect("start from an empty database");
     let throttler = RedisThrottler::new(conn.clone());
@@ -371,8 +370,7 @@ async fn the_connection_answers_again_once_redis_drops_it() {
         "every holder answered again, but only {recovered_after:?} after the drop",
     );
 
-    redis::cmd("FLUSHDB")
-        .query_async::<()>(&mut conn.clone())
+    crate::flush(&mut conn.clone())
         .await
         .expect("leave the isolated database empty");
 }

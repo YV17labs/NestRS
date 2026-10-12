@@ -198,10 +198,9 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     let mut admin = RedisConnection::connect(&crate::redis_config_on(DB_CONFINED_TO_THE_PREFIX))
         .await
         .expect("the admin connection");
-    let _: () = redis::cmd("FLUSHDB")
-        .query_async(&mut admin)
+    crate::flush(&mut admin)
         .await
-        .expect("FLUSHDB");
+        .expect("an empty database to start on");
     // The cancel of a job no worker took reads the group, which the first
     // worker makes: made here, so the producer's run is the producer's alone.
     let _: () = redis::cmd("XGROUP")

@@ -66,3 +66,35 @@ earns, and `can` takes a grant's relation to hold on a model read for another
 action. A push to other connections (`WsServer::emit`, `broadcast`) is masked
 for the sender's ability, if at all, never per recipient; a per-recipient mask
 on `WsServer` is deferred.
+
+## 2026-10-14 — `can` grants nothing on a relation, and `Repo::can` decides it
+
+The limit above is closed. `Held` took a grant's relation to hold, which is
+true only of a read scoped to the same action, so `can(Update, &row)` on a row
+read for `Read` granted `Update` to every user a relation-gated grant names
+nowhere. A security check whose answer is wrong for its most natural call is
+not safe by default.
+
+- **`Held` now reads a rule as `Pushed` does**: an undecidable grant grants
+  nothing and an undecidable denial denies; it files no warn, since its caller
+  hears `false`. `can` stays synchronous and allocation-free. `Loaded` (the
+  masks) is unchanged.
+- **`Repo::can(action, &model)` is the instance check SQL decides**: one query
+  on the model's primary key under `condition_for(action)`, on the ambient
+  executor and ability, as every `Repo` read. It lives on `Repo` because it
+  reads the database, which only `Repo` does; it carries `Ability::can`'s name
+  because it answers the same question.
+
+**Refused:**
+
+- **A typed proof of a same-action read that `can` would accept.** `Repo::scoped`
+  returns sea-orm's `Select`, which carries no marker into the rows it yields,
+  and changing that return type would move every custom query. The proof that
+  exists, `Authorized<A, E>` from `CrudService::access`, lives above
+  `nest-rs-authz` and is already the answer: a row bound for `Update` needs no
+  check. So `Repo::can` is the one spelling.
+- **A flag or a second in-memory method restoring the old reading**: it would
+  be the unsafe default under another name.
+
+**The limit kept:** a decorated reply whose rows did not come through `Repo`
+under the same ability keeps the trust a read earns, as stated above.

@@ -193,7 +193,8 @@ traverse the relation without loading the parent, so row visibility
 for a relational rule is decided **in SQL** everywhere — including
 the by-id binding and create paths, which re-check against the same
 lowered condition (see
-[By-id binding](/security/authorization/by-id-binding/)). A pushed
+[By-id binding](/security/authorization/by-id-binding/)). `Ability::can`
+grants nothing on a relation, and `Repo::can` decides it in SQL. A pushed
 value went through no SQL read, so a relational grant admits none of it
 ([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
 

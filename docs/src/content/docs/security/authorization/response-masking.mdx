@@ -212,8 +212,9 @@ pub fn mask_many<'m, E>(
 For a collection read through `Repo` for the same action: drops the
 models the caller cannot see, masks the rest. A rule the row cannot
 decide counts as that read counted it — where `Ability::can`, which
-knows of no read, refuses on such a denial. The `retain_wire_keys` step
-runs per item afterwards.
+knows of no read, grants nothing on such a grant and refuses on such a
+denial, and `Repo::can` asks SQL. The `retain_wire_keys` step runs per
+item afterwards.
 
 A grant with no `.fields` returns `FieldSet::All` — every column is
 permitted. A grant with `.fields([Id, Name])` returns

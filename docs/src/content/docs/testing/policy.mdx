@@ -118,7 +118,9 @@ The second test pins the invariant that makes the layer safe: **no grant
 means zero rows, never every row.** A refactor that flipped the default
 to `TRUE` would turn a missing grant into a full-table leak; this test
 catches it the same day. Pair it with `can::<E>(action, &model)` /
-`can_class(action, TypeId)` for the per-row and per-class decisions.
+`can_class(action, TypeId)` for the per-row and per-class decisions. A
+relational rule is pinned through `condition_for`: `can` sees the model
+alone and grants nothing on a relation.
 
 <Aside type="caution">
 Do not confuse "no *grant*" with "no *ambient* ability". At the ability

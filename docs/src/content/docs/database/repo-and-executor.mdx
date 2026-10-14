@@ -37,12 +37,15 @@ Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
 Repo::<Posts>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
 Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
 Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope
+Repo::<Posts>::can(Action::Update, &model).await?;  // the instance check, in SQL
 Repo::<Posts>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
 ```
 
 A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
 the primary key, so a caller cannot mutate a row outside its scope even
-with a leaked id. The macro-generated `CrudService::access(action, id)`
+with a leaked id. `can` asks the same question without writing: one
+query on the primary key under the action's condition, which decides a
+relational rule the model alone cannot show. The macro-generated `CrudService::access(action, id)`
 loads unscoped so a denied-but-existing row surfaces as `Access::Denied`
 (distinct from `Access::Missing`) — the gateway route-model binding goes
 through.

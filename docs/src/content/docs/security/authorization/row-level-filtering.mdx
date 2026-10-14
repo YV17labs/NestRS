@@ -71,8 +71,9 @@ comparison with `NULL` matches under neither the rule nor its `NOT`. What
 the row cannot show, a relation above all, stays SQL's: the response mask
 trusts the read for it on a reply and refuses it on a push
 ([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)),
-and `can` takes a grant's relation to hold while a denial it cannot decide
-refuses.
+and `can` grants nothing on it while a denial it cannot decide refuses:
+`Repo::can` asks SQL instead
+([Reading the ambient ability](/security/authorization/#reading-the-ambient-ability)).
 
 ## What `Repo` does
 

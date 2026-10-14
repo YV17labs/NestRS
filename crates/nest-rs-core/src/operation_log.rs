@@ -188,8 +188,8 @@ pub(crate) mod __private {
             );
         }
 
-        if dot == KERNEL_WORD.len() && eq_bytes(bytes, 0, KERNEL_WORD.as_bytes(), 0, dot) {
-            if !is_lib_name(owner, KERNEL) || owner.len() != KERNEL.len() {
+        if is_edge_root(KERNEL_WORD, "", name) {
+            if !is_lib_name(owner, KERNEL, KERNEL.len()) {
                 panic!("the `lifecycle` units are the kernel's, declared by `nest-rs-core`");
             }
             if !is_edge_root(target, "nest_rs::", name) {
@@ -234,7 +234,7 @@ pub(crate) mod __private {
             };
         }
 
-        let named_after_owner = is_lib_name(owner, name) && owner.len() == dot;
+        let named_after_owner = is_lib_name(owner, name, dot);
         if framework {
             if named_after_owner {
                 panic!(
@@ -269,16 +269,14 @@ pub(crate) mod __private {
         if unit.edge.is_some() {
             return is_edge_root(krate, "nest-rs-", unit.name);
         }
+        if is_edge_root(KERNEL_WORD, "", unit.name) {
+            return is_lib_name(krate, KERNEL, KERNEL.len());
+        }
         let mut dot = 0;
         while unit.name.as_bytes()[dot] != b'.' {
             dot += 1;
         }
-        if dot == KERNEL_WORD.len()
-            && eq_bytes(unit.name.as_bytes(), 0, KERNEL_WORD.as_bytes(), 0, dot)
-        {
-            return krate.len() == KERNEL.len() && is_lib_name(krate, KERNEL);
-        }
-        krate.len() == dot && is_lib_name(krate, unit.name)
+        is_lib_name(krate, unit.name, dot)
     }
 
     /// Whether `owner`, read as a library name (`-` as `_`), is the
@@ -315,11 +313,11 @@ const fn is_edge_root(whole: &str, prefix: &str, name: &str) -> bool {
         && eq_bytes(whole, prefix.len(), name, 0, edge)
 }
 
-/// Whether `krate`, read as a library name (`-` as `_`), spells the start of
-/// `lib`; the caller checks the length it means.
-const fn is_lib_name(krate: &str, lib: &str) -> bool {
+/// Whether `krate`, read as a library name (`-` as `_`), is `lib[..len]` read
+/// the same way.
+const fn is_lib_name(krate: &str, lib: &str, len: usize) -> bool {
     let (krate, lib) = (krate.as_bytes(), lib.as_bytes());
-    if krate.len() > lib.len() {
+    if krate.len() != len || len > lib.len() {
         return false;
     }
     let mut i = 0;

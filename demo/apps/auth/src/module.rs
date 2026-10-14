@@ -5,7 +5,7 @@ use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::opentelemetry::OpenTelemetryModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
-use nest_rs::social::SocialModule;
+use nest_rs::social::{GithubSocialModule, GoogleSocialModule, SocialModule};
 use nest_rs::throttler::ThrottlerModule;
 
 use features::oauth::OAuthHttpModule;
@@ -22,6 +22,8 @@ use features::oauth::OAuthHttpModule;
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
         SocialModule,
+        GithubSocialModule,
+        GoogleSocialModule,
         OAuthHttpModule,
     ],
 )]

@@ -3,16 +3,17 @@
 //!
 //! Each provider `provider.rs` submits one [`SocialProviderEntry`] to a
 //! link-time `inventory` registry. [`SocialRegistry`] drains it at the boot's
-//! wiring step, before the first lifecycle hook, and asks each entry to build
-//! itself ([`resolve_provider`] is the standard implementation), then validates
+//! wiring step, before the first lifecycle hook, keeps each entry whose module
+//! the app imports, and asks it to build itself ([`resolve_provider`] is the standard implementation), then validates
 //! the result — a duplicate key or a key that disagrees with the provider's own
 //! [`SocialProvider::key`] **fails boot**.
 
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use nest_rs_config::{Config, ConfigError, ConfigService};
-use nest_rs_core::{Container, injectable, inventory};
+use nest_rs_core::{Composition, Container, injectable, inventory};
 
 use crate::provider::SocialProvider;
 
@@ -28,7 +29,8 @@ pub trait SocialProviderConfig: Config {
     fn is_unconfigured(&self) -> bool;
 }
 
-/// One provider submitted to the link-time registry by a provider `provider.rs`.
+/// One provider submitted to the link-time registry by a provider `provider.rs`,
+/// opened by the provider's module.
 pub struct SocialProviderEntry {
     /// The route/config key this provider is registered under.
     pub key: &'static str,
@@ -40,6 +42,9 @@ pub struct SocialProviderEntry {
     /// Build the provider from the deployment's configuration; [`resolve_provider`]
     /// is the standard implementation.
     pub build: fn(&Container) -> anyhow::Result<BuiltProvider>,
+    /// `TypeId` of the provider's module (`GithubSocialModule`): the entry is
+    /// discovered only in an app that imports it.
+    pub module: fn() -> TypeId,
 }
 
 /// The standard [`SocialProviderEntry::build`]: a provider in the container wins,
@@ -94,12 +99,26 @@ pub struct SocialRegistry {
 }
 
 impl SocialRegistry {
-    /// Drain the registry, build each configured provider and store the map; fails
-    /// boot on a partial config, a duplicate key, or a registry/provider key mismatch.
+    /// Drain the registry, build each configured provider whose module the app
+    /// imports and store the map; fails boot on a partial config, a duplicate
+    /// key, or a registry/provider key mismatch.
     pub(crate) fn install(&self, container: &Container) -> anyhow::Result<()> {
         let mut resolved: Vec<(&'static str, &'static str, Arc<dyn SocialProvider>)> = Vec::new();
+        let composition = container.get::<Composition>();
 
         for entry in inventory::iter::<SocialProviderEntry>() {
+            // Fails closed: without the app's composition, no module is imported.
+            if !composition
+                .as_deref()
+                .is_some_and(|composition| composition.reaches((entry.module)()))
+            {
+                tracing::debug!(
+                    target: crate::TARGET,
+                    provider = entry.key,
+                    "linked social provider's module is not imported; skipped",
+                );
+                continue;
+            }
             let built = (entry.build)(container).map_err(|err| {
                 anyhow::anyhow!(
                     "social provider `{}` is linked but misconfigured: {err}",

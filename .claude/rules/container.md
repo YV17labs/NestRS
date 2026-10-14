@@ -198,9 +198,11 @@ enumeration of controllers. Where one provider owns several units sharing its
 so every transport filters its entries against `ReachableProviders`, the access
 graph's set for the running root; linked but unreachable is inert. The gate is
 always the entry's owner: an entry naming a DI provider is gated by that
-provider's reachability; an entry naming none (`SocialProviderEntry`) by the
-module providing its registry — which is why such an entry needs no module of
-its own. **Metadata attached from `Discoverable::register` is gated by
+provider's reachability; an entry naming none (`SocialProviderEntry`) names a
+module of its own, and only an app reaching that module (`Composition::reaches`)
+holds it. Never gate such an entry by its registry's module alone: a crate no
+path names is not linked, so a dependency line opens nothing, and the import
+that names the crate is the one visible opening. **Metadata attached from `Discoverable::register` is gated by
 construction**, since `register` runs only for an imported module's provider;
 never bolt a `ReachableProviders` filter onto it for symmetry. **Being buildable
 is not discovery**: a discovered entry's own config decides its fate — complete
@@ -282,10 +284,11 @@ discovery**, and `nest-rs-social` is the template. `SocialProvider` owns the
 flow: `authorize` / `exchange` default to the shared PKCE/CSRF flow through the
 provider's `OAuthClient`, so a standard provider implements `profile` and a
 non-standard one overrides a step without changing the trait. A social provider
-is not a DI provider — reached only through `SocialRegistry` — so it has no
-module; a third-party provider crate is `config.rs` plus `provider.rs`. A
-duplicate key, or a registry key disagreeing with the provider's `key()`, fails
-the boot. Keyed injection (`#[inject(key)]`) stays the tool for static roles
+is not a DI provider — reached only through `SocialRegistry`, in no `providers`
+list — yet it has a module, `<Vendor>SocialModule`, which an app imports to open
+it; a third-party provider crate is `config.rs`, `module.rs` and `provider.rs`.
+A duplicate key, or a registry key disagreeing with the provider's `key()`,
+fails the boot. Keyed injection (`#[inject(key)]`) stays the tool for static roles
 such as primary and replica pools.
 
 ## Every wait the framework owns is bounded

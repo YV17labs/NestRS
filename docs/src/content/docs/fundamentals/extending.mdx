@@ -89,9 +89,10 @@ pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 The same shape carries `AbilityGuard<F: AbilityFactory>` and the GraphQL and MCP
 bridges. This is the mode NestRS uses most.
 
-**By configuration.** The import only **opens the gate**; configuration decides
-which members are active, from zero to all of them. Registering a provider is
-not activating it — that distinction is the whole mechanism.
+**By configuration.** The import only **opens the gate** — for a social
+provider, the provider's own module beside `SocialModule`; configuration decides
+which opened members are active, from zero to all of them. Registering a
+provider is not activating it — that distinction is the whole mechanism.
 
 | `<PREFIX>_SOCIAL__<KEY>__*` | outcome |
 |---|---|
@@ -211,15 +212,18 @@ reads a `Ctx<T>`, but an authorization decision still belongs in a guard.
 
 `nest-rs-social` ships an open provider contract. You publish an independent
 crate that depends on it, implements `SocialProvider` and `SocialProviderConfig`,
-and submits one `SocialProviderEntry` — the same public seam the first-party
-GitHub and Google providers use, with no crate-private shortcut.
+ships the module that opens your provider, and submits one `SocialProviderEntry`
+naming that module — the same public seam the first-party GitHub and Google
+providers use (`GithubSocialModule`, `GoogleSocialModule`), with no
+crate-private shortcut.
 
 A social provider is not a DI provider: it is never injected by type, only
 reached through `SocialRegistry` as `Arc<dyn SocialProvider>`. So discovery is
-gated by `SocialModule` — an app that never imports it sees no entry at all — and
-within that gate your provider's own `#[config]` decides its fate, per the table
-above. `SocialModule` itself takes no configuration, because it never learns
-which providers exist.
+gated by your module — an app that never imports it never holds your provider —
+and within that gate your provider's own `#[config]` decides its fate, per the
+table above. The module is not ceremony: a crate that no code names is not
+linked at all, so a dependency line alone would leave your registry entry out
+of the binary, and the app's import is what names your crate.
 
 ## Where each contract is written
 

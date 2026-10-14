@@ -162,7 +162,8 @@ one the day another crate must pin your config — four lines with `ConfigSetup`
 The converse keeps the seam from spreading: a module that owns **no** config of
 its own gets no `for_root`. `SocialModule` is the case — each social provider
 carries its own `#[config]`, discovered along with the provider, so the module
-has nothing to be configured about and stays a bare import.
+has nothing to be configured about and stays a bare import, as does each
+provider's own module (`GithubSocialModule`).
 
 You cannot get this wrong quietly. A pinned base supersedes the environment-only
 factory a bare import queues, wherever the two fall in `imports`; and two pinned

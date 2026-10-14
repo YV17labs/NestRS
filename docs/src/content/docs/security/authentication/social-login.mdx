@@ -1,6 +1,6 @@
 ---
 title: Social login
-description: Open provider contract — one module import activates every configured provider, and a third party publishes their own through the same discovery seam.
+description: Open provider contract — each provider is one module import, active once its credentials are configured, and a third party publishes their own through the same seam.
 sidebar:
   order: 6
 ---
@@ -9,10 +9,10 @@ import { Aside } from '@astrojs/starlight/components';
 
 Social login is an open provider contract. The framework ships the
 `SocialProvider` trait, an inventory-based registry, and first-party
-GitHub and Google providers. One import activates the registry; each
-provider turns on when its credentials are configured. A third party
-publishes a new provider as its own crate through the same seam — no
-fork, no framework change.
+GitHub and Google providers. `SocialModule` holds the registry; each
+provider is one more import, and turns on when its credentials are
+configured. A third party publishes a new provider as its own crate
+through the same seam — no fork, no framework change.
 
 ## Install
 
@@ -25,15 +25,17 @@ The `social` feature implies `authn`: the authorization-code machinery
 
 ```rust title="apps/auth/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::social::SocialModule;
+use nest_rs::social::{GithubSocialModule, GoogleSocialModule, SocialModule};
 
-#[module(imports = [SocialModule, OAuthHttpModule])]
+#[module(imports = [SocialModule, GithubSocialModule, GoogleSocialModule, OAuthHttpModule])]
 pub struct AuthModule;
 ```
 
-`SocialModule` owns every registry entry, so it is the module gate — no
-`SocialModule`, no social login. Which providers come up inside that gate
-is a config decision, not a second import.
+`SocialModule` owns the registry, and each provider's module opens that
+provider: a provider whose module the app does not import stays closed,
+whatever its credentials say. So every provider an app can log in with is
+a line in its composition root, and an opening is never a side effect of
+a dependency.
 
 `OAuthHttpModule` is **yours** — the two routes below are app code, for the
 reason [The request flow](#the-request-flow) explains.
@@ -60,7 +62,7 @@ NESTRS_SOCIAL__GOOGLE__REDIRECT_URL=https://auth.example/social/google/callback
 comma-separated list and default to each provider's canonical login set, so
 neither is deployment config until you need more than sign-in.
 
-Three outcomes per provider, and no fourth:
+Three outcomes per imported provider, and no fourth:
 
 | Config for `<PREFIX>_SOCIAL__<PROVIDER>__*` | Outcome |
 |---|---|
@@ -72,15 +74,15 @@ Real credentials are a deployment's explicit intent, so a provider never
 activates by accident; and a half-configured login never starts serving
 silently.
 
-Note what you do **not** write: `SocialModule` takes no configuration. Each
-provider carries its own `#[config]`, and its registry entry names it — so
-discovering a provider is what loads its credentials. The module never learns
-which providers are linked, which is exactly why it has nothing to declare
-about them — the import at the top of this page is the whole wiring, whether
-one provider is linked or five.
+Note what you do **not** write: neither `SocialModule` nor a provider's
+module takes configuration. Each provider carries its own `#[config]`, and its
+registry entry names it — so opening a provider is what loads its credentials.
 
-Adding a provider is adding its crate to `Cargo.toml` and its credentials to
-the environment. No import changes, no list to keep in sync.
+Adding a provider is three lines: its crate in `Cargo.toml`, its module in
+your `imports`, its credentials in the environment. The import is not
+optional. A dependency line alone does not even link a crate no code names —
+the provider's registry entry would never exist, and nothing could tell
+you it is missing — and importing the module is what names it.
 
 A provider's credentials are deployment data — the client id, the secret and the
 redirect URL all differ between your laptop and production — so they have no
@@ -91,9 +93,8 @@ hard pin every other config uses.
 ## The request flow
 
 `nest-rs-social` ships **no routes**. A social provider is not a DI provider —
-it is reached only through `SocialRegistry`, which is what lets a third-party
-provider ship as two files with no module of its own. The flip side is that the
-two HTTP legs are **app code**: the path prefix, the throttle and what "resolve
+it is reached only through `SocialRegistry`, never injected by type. The flip
+side is that the two HTTP legs are **app code**: the path prefix, the throttle and what "resolve
 this profile to a local user" means are all yours. The transaction cookie is
 not: `authorization.set_cookie()` writes it and `OAuthClient::transaction_from`
 reads it back, under the framework's one name.
@@ -177,7 +178,8 @@ lookup answers again.
 ## Write your own provider
 
 A provider is real code — the profile shape, and any provider quirk —
-behind a public trait, discovered at link time. Two files, three steps.
+behind a public trait, discovered at link time and opened by its module.
+Three files, four steps.
 
 **1. Implement the trait.** `authorize` and `exchange` default to the
 shared flow, so a standard provider writes only `profile`:
@@ -249,9 +251,17 @@ impl AcmeSocialConfig {
 }
 ```
 
-**3. Submit the registry entry.** `resolve_provider` is the standard
+**3. Declare the module.** It owns nothing: importing it is what opens the
+provider, and it brings `SocialModule` along.
+
+```rust title="crates/features/src/social/module.rs"
+#[module(imports = [SocialModule])]
+pub struct AcmeSocialModule;
+```
+
+**4. Submit the registry entry.** `resolve_provider` is the standard
 `build`: a provided instance wins, then a provided config, then the
-environment.
+environment. `module` names the module above, the one gate the registry reads.
 
 ```rust title="crates/features/src/social/provider.rs"
 nest_rs::core::inventory::submit! {
@@ -266,14 +276,16 @@ nest_rs::core::inventory::submit! {
                 Ok(AcmeProvider::new(client))
             })
         },
+        module: || std::any::TypeId::of::<AcmeSocialModule>(),
     }
 }
 ```
 
-There is no module to write. A social provider is never `#[inject]`ed by
-type — it is reached through the registry as `Arc<dyn SocialProvider>` —
-so it has nothing for a module of its own to own. Adding the crate to
-`Cargo.toml` and setting `<PREFIX>_SOCIAL__ACME__*` is the whole wiring.
+An app then imports `AcmeSocialModule` beside `SocialModule` and sets
+`<PREFIX>_SOCIAL__ACME__*`. Published as a package of its own, say
+`nestrs-social-acme`, the provider reads its crate's namespace,
+`<PREFIX>_SOCIAL_ACME__*`, and opens the same way: the app's import names
+the crate, so it is linked.
 
 ## Configuration
 

@@ -3,6 +3,7 @@ use nest_rs_oauth_client::{OAuthClient, TokenSet};
 use serde::Deserialize;
 
 use super::config::GithubSocialConfig;
+use super::module::GithubSocialModule;
 use crate::provider::{ProfileFuture, SocialProfile, SocialProvider};
 use crate::registry::{SocialProviderEntry, resolve_provider};
 
@@ -113,6 +114,7 @@ nest_rs_core::inventory::submit! {
                 Ok(GithubSocialProvider::new(client))
             })
         },
+        module: || std::any::TypeId::of::<GithubSocialModule>(),
     }
 }
 

@@ -132,6 +132,8 @@ for the namespace — so moving a service to EdDSA means removing its secret.
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
         SocialModule,
+        GithubSocialModule,
+        GoogleSocialModule,
         OAuthHttpModule,
     ],
 )]

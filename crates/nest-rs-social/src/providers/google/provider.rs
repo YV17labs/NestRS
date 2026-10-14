@@ -3,6 +3,7 @@ use nest_rs_oauth_client::{OAuthClient, TokenSet};
 use serde::Deserialize;
 
 use super::config::GoogleSocialConfig;
+use super::module::GoogleSocialModule;
 use crate::provider::{ProfileFuture, SocialProfile, SocialProvider};
 use crate::registry::{SocialProviderEntry, resolve_provider};
 
@@ -64,6 +65,7 @@ nest_rs_core::inventory::submit! {
                 Ok(GoogleSocialProvider::new(client))
             })
         },
+        module: || std::any::TypeId::of::<GoogleSocialModule>(),
     }
 }
 

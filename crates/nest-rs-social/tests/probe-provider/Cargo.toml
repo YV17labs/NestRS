@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Test fixture for nest-rs-social: a third-party social provider package, complete by default, whose registry entry an app holds only when it links the package."
+description = "Test fixture for nest-rs-social: a third-party social provider package, complete by default, whose registry entry an app holds only when it imports the package's module."
 # A fixture crate, not a suite (the two-suite rule governs `tests/<suite>/`):
 # a dev-dependency of nest-rs-social, so a workspace member by Cargo's rule for
 # path dependencies, and never published.

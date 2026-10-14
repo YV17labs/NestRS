@@ -1,13 +1,25 @@
-//! `src/registry.rs` — which entries the link-time registry holds: a provider
-//! package's, once the binary names the package. The proof that naming is
-//! what links it is `tests/unreferenced_provider/`, which does not.
+//! `src/registry.rs` — which entries the registry keeps: a provider package
+//! is linked once the binary names it, and active only in an app importing
+//! its module. The proof that naming is what links it is
+//! `tests/unreferenced_provider/`, which does not.
 
-use nest_rs_core::App;
+use nest_rs_core::{App, module};
 use nest_rs_social::{SocialModule, SocialProviderEntry, SocialRegistry};
-use nestrs_social_probe as _;
+use nestrs_social_probe::ProbeSocialModule;
 
-#[tokio::test]
-async fn a_provider_package_the_binary_names_is_linked_and_active() {
+#[module(imports = [SocialModule, ProbeSocialModule])]
+struct ProbeLoginModule;
+
+async fn keys_of_an_app_importing<M: nest_rs_core::Module>() -> Vec<&'static str> {
+    let app = App::builder().module::<M>().build().await.expect("boots");
+    app.container()
+        .get::<SocialRegistry>()
+        .expect("SocialModule provides the registry")
+        .keys()
+}
+
+#[test]
+fn a_provider_package_the_binary_names_is_linked() {
     let keys: Vec<&str> = nest_rs_core::inventory::iter::<SocialProviderEntry>()
         .map(|entry| entry.key)
         .collect();
@@ -15,15 +27,19 @@ async fn a_provider_package_the_binary_names_is_linked_and_active() {
         keys.contains(&"probe"),
         "the named package's entry: {keys:?}"
     );
+}
 
-    let app = App::new::<SocialModule>().expect("the module boots");
-    let registry = app
-        .container()
-        .get::<SocialRegistry>()
-        .expect("SocialModule provides the registry");
+#[tokio::test]
+async fn a_linked_provider_package_stays_closed_in_an_app_importing_social_module_alone() {
+    let keys = keys_of_an_app_importing::<SocialModule>().await;
     assert!(
-        registry.keys().contains(&"probe"),
-        "the probe's defaults are complete: {:?}",
-        registry.keys(),
+        !keys.contains(&"probe"),
+        "linking opens no provider, though the probe is complete by default: {keys:?}",
     );
+}
+
+#[tokio::test]
+async fn a_provider_package_whose_module_the_app_imports_is_active() {
+    let keys = keys_of_an_app_importing::<ProbeLoginModule>().await;
+    assert_eq!(keys, ["probe"], "its module opens it, and nothing else");
 }

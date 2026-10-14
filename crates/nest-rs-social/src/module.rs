@@ -1,7 +1,7 @@
-//! [`SocialModule`] — the module that owns the social provider registry, and
-//! the only import a social login needs. It provides [`SocialRegistry`]; the
-//! boot's wiring step, before the first lifecycle hook, activates every linked
-//! provider whose credentials are configured.
+//! [`SocialModule`] — the module that owns the social provider registry. It
+//! provides [`SocialRegistry`]; the boot's wiring step, before the first
+//! lifecycle hook, activates every provider whose module the app imports and
+//! whose credentials are configured.
 //!
 //! It takes no configuration: each provider reads its own namespace, and a
 //! hermetic test seeds that config on the builder.
@@ -10,8 +10,9 @@ use nest_rs_core::{Container, ContainerBuilder, Module, Registering, module};
 
 use crate::registry::SocialRegistry;
 
-/// Provides the [`SocialRegistry`]. Import it once so every linked, configured
-/// social provider is discovered and validated at boot.
+/// Provides the [`SocialRegistry`]. Import it beside each provider's module
+/// (`GithubSocialModule`), so every imported, configured provider is validated
+/// and activated at boot.
 #[module(imports = [SocialWiring], providers = [SocialRegistry])]
 pub struct SocialModule;
 
@@ -37,15 +38,18 @@ mod tests {
     use nest_rs_core::App;
 
     use super::*;
-    use crate::providers::github::GithubSocialConfig;
+    use crate::providers::github::{GithubSocialConfig, GithubSocialModule};
+    use crate::providers::google::GoogleSocialModule;
 
-    /// Importing `SocialModule` discovers both entries: the seeded GitHub
-    /// activates, the unconfigured Google stays inert — by the time the boot
-    /// returns.
+    #[module(imports = [SocialModule, GithubSocialModule, GoogleSocialModule])]
+    struct LoginModule;
+
+    /// Both providers imported: the seeded GitHub activates, the unconfigured
+    /// Google stays inert — by the time the boot returns.
     #[tokio::test]
-    async fn discovery_configures_each_provider_from_its_own_config() {
+    async fn discovery_configures_each_imported_provider_from_its_own_config() {
         let app = App::builder()
-            .module::<SocialModule>()
+            .module::<LoginModule>()
             .provide(GithubSocialConfig {
                 client_id: "seeded-client".into(),
                 client_secret: "seeded-secret".into(),
@@ -54,7 +58,7 @@ mod tests {
             })
             .build()
             .await
-            .expect("a bare SocialModule boots: one entry configured, one inert");
+            .expect("boots: one provider configured, one inert");
 
         let registry = app
             .container()

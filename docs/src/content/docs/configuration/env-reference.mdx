@@ -285,9 +285,10 @@ is refused too.)
 
 ## `social` — `<PREFIX>_SOCIAL__<PROVIDER>__*`
 
-One sub-namespace per provider (`GITHUB`, `GOOGLE`). Credentials decide the
-provider's fate: complete ⇒ active, absent ⇒ inert with a boot `warn`,
-partial ⇒ the boot fails naming the provider.
+One sub-namespace per provider (`GITHUB`, `GOOGLE`), read only when the app
+imports the provider's module (`GithubSocialModule`, `GoogleSocialModule`).
+Credentials then decide the provider's fate: complete ⇒ active, absent ⇒ inert
+with a boot `warn`, partial ⇒ the boot fails naming the provider.
 
 | Key | Meaning |
 |---|---|

@@ -5,6 +5,7 @@ use nest_rs::social::{
 };
 
 use crate::config::ProbeSocialConfig;
+use crate::module::ProbeSocialModule;
 
 /// The probe provider; its profile is a constant subject.
 pub struct ProbeSocialProvider {
@@ -42,5 +43,6 @@ nest_rs::core::inventory::submit! {
                 })
             })
         },
+        module: || std::any::TypeId::of::<ProbeSocialModule>(),
     }
 }

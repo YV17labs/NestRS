@@ -1,11 +1,14 @@
 //! Open social-login provider contract for nestrs.
 //!
 //! It ships the [`SocialProvider`] trait, an inventory-based [`SocialRegistry`],
-//! the [`SocialModule`] that gates discovery, and two providers (GitHub, Google).
-//! A third-party provider is a crate implementing [`SocialProvider`] +
-//! [`SocialProviderConfig`] and submitting one [`SocialProviderEntry`].
+//! the [`SocialModule`] that owns it, and two providers (GitHub, Google), each
+//! opened by its own module: an app imports [`GithubSocialModule`] or
+//! [`GoogleSocialModule`] beside [`SocialModule`], one visible line per
+//! provider. A third-party provider is a crate implementing [`SocialProvider`] +
+//! [`SocialProviderConfig`], shipping its module and submitting one
+//! [`SocialProviderEntry`] that names it ([`SocialProviderEntry::module`]).
 //!
-//! Each provider reads its own `#[config]` ([`SocialProviderEntry::config_namespace`]):
+//! Each imported provider reads its own `#[config]` ([`SocialProviderEntry::config_namespace`]):
 //!
 //! | `<PREFIX>_SOCIAL__<KEY>__*`, over any base the provider's config resolved | Outcome |
 //! |---|---|
@@ -36,5 +39,5 @@ pub use registry::{
     BuiltProvider, SocialProviderConfig, SocialProviderEntry, SocialRegistry, resolve_provider,
 };
 
-pub use providers::github::{GithubSocialConfig, GithubSocialProvider};
-pub use providers::google::{GoogleSocialConfig, GoogleSocialProvider};
+pub use providers::github::{GithubSocialConfig, GithubSocialModule, GithubSocialProvider};
+pub use providers::google::{GoogleSocialConfig, GoogleSocialModule, GoogleSocialProvider};

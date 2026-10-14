@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{App, hooks, injectable, module};
-use nest_rs_social::{GithubSocialConfig, SocialModule, SocialRegistry};
+use nest_rs_social::{GithubSocialConfig, GithubSocialModule, SocialModule, SocialRegistry};
 
 /// The provider keys the hook saw.
 #[injectable]
@@ -29,7 +29,7 @@ impl LoginRoutes {
     }
 }
 
-#[module(imports = [SocialModule], providers = [KeysAtInit, LoginRoutes])]
+#[module(imports = [SocialModule, GithubSocialModule], providers = [KeysAtInit, LoginRoutes])]
 struct LoginModule;
 
 #[tokio::test]
@@ -53,7 +53,7 @@ async fn an_init_hook_reads_the_configured_providers() {
         .expect("KeysAtInit is provided");
     assert_eq!(
         *seen.keys.lock().expect("the hook is done"),
-        ["github", "probe"],
-        "the registry was filled before the first hook: the seeded GitHub, and the probe this binary links",
+        ["github"],
+        "the registry was filled before the first hook",
     );
 }

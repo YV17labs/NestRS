@@ -308,8 +308,9 @@ over — see [Authorization](/security/authorization/).
   with PKCE, and stateless CSRF state.
 - [Split deployment](/security/authentication/split-deployment/) — one
   signer, many verifiers, no RPC across the boundary.
-- [Social login](/security/authentication/social-login/) — one import
-  activates every configured provider, through an open contract.
+- [Social login](/security/authentication/social-login/) — each provider
+  is one module import, active once its credentials are configured, through
+  an open contract.
 - [External identity provider](/security/authentication/external-identity-provider/)
   — accept the tokens better-auth, Keycloak or Auth0 issues, against the JWK
   Set it publishes.

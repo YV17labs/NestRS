@@ -101,8 +101,8 @@ flowchart TD
 the framework reads without injecting — an entity, a `#[config]`, a DTO the
 validator walks — or plain vocabulary: an enum, a type alias, a set of
 constants. Neither needs a module of its own. **Only a type injected by type
-does**, which is why a social provider reached through its registry has no
-module while a service has one.
+does**, which is why a social provider reached through its registry sits in no
+`providers` list while a service does.
 
 **Who calls it?** If the framework calls it *because of what it is*, the role
 word is a dispatch contract and the vocabulary is closed: you pick from the

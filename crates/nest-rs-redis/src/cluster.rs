@@ -6,7 +6,9 @@
 //! Each node is reached through [`ClusterNode`], so a node's connection
 //! announces no client library — `CLIENT SETINFO`, which an ACL user confined to
 //! a binding's commands is refused — and a node refusing a TLS connection is
-//! said once.
+//! said once. **Every connection to a node sends `HELLO` first**, after the
+//! boot as at it: a node refusing the client's certificate refuses it after the
+//! handshake, around the first command, which [`tls::hello`] hears.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -157,7 +159,7 @@ impl ClusterLink {
 
 impl Plan {
     /// A connection of its own to the node at `node`, with the URL's
-    /// credentials, database and TLS.
+    /// credentials, database and TLS, its `HELLO` answered.
     async fn dial(&self, node: &NodeAddr) -> Result<MultiplexedConnection, redis::RedisError> {
         let endpoint = node.to_string();
         let client = node_client(
@@ -173,7 +175,12 @@ impl Plan {
                 nest_rs_core::error_message(&refused),
             ))
         })?;
-        let opened = dial(&client, self.budget).await;
+        let opened = async {
+            let mut connection = dial(&client, self.budget).await?;
+            tls::hello(&client, &mut connection, self.budget).await?;
+            Ok(connection)
+        }
+        .await;
         tls::observe_refusal(&endpoint, &opened);
         opened
     }
@@ -448,7 +455,14 @@ fn primary_of(slots: &Value, slot: Slot) -> Option<NodeAddr> {
     })
 }
 
-/// One Cluster node's connection, opened announcing no client library.
+/// How long a node the cluster connection opens is given to say why it
+/// dropped the connection's `HELLO`: the handshake of its own [`tls::hello`]
+/// sends then. `redis` hands [`ClusterNode`] no connect budget, and every
+/// command over the connection is held to its own besides.
+const NODE_REFUSAL_BOUND: Duration = Duration::from_secs(2);
+
+/// One Cluster node's connection, opened announcing no client library, its
+/// `HELLO` answered.
 ///
 /// `redis` gives a Cluster no setting to skip `CLIENT SETINFO` on its nodes;
 /// its generic connection is the one seam reaching each node's handshake.
@@ -464,9 +478,15 @@ impl Connect for ClusterNode {
             let info = info.into_connection_info()?;
             let endpoint = info.addr().to_string();
             let settings = info.redis_settings().clone().set_skip_set_lib_name();
-            let opened = redis::Client::open(info.set_redis_settings(settings))?
-                .get_multiplexed_async_connection_with_config(&config)
-                .await;
+            let client = redis::Client::open(info.set_redis_settings(settings))?;
+            let opened = async {
+                let mut connection = client
+                    .get_multiplexed_async_connection_with_config(&config)
+                    .await?;
+                tls::hello(&client, &mut connection, NODE_REFUSAL_BOUND).await?;
+                Ok(connection)
+            }
+            .await;
             tls::observe_refusal(&endpoint, &opened);
             opened.map(Self)
         })
@@ -495,6 +515,86 @@ impl ConnectionLike for ClusterNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{dropping_then_refusing_listener, trusting_the_authority};
+
+    const REFUSED: &str = "redis refused a reopened tls connection";
+
+    /// The loopback node `addr` serves, and a plan reaching it over TLS that
+    /// trusts the test authority and presents no certificate.
+    fn plan_reaching(addr: std::net::SocketAddr) -> (NodeAddr, Plan) {
+        let node = NodeAddr {
+            host: "127.0.0.1".to_owned(),
+            port: addr.port(),
+        };
+        let plan = Plan {
+            seeds: vec![node.clone()],
+            listed: node.to_string(),
+            // What a Cluster URL's settings say: no client library announced.
+            settings: RedisConnectionInfo::default().set_skip_set_lib_name(),
+            certificates: tls::material(&trusting_the_authority(), true, &node.to_string())
+                .expect("the authority is usable"),
+            budget: Duration::from_secs(5),
+        };
+        (node, plan)
+    }
+
+    /// Asserts `outcome` is the node's refusal of a client presenting no
+    /// certificate, said once at `warn` with what to change.
+    fn refused_and_said<T>(
+        outcome: Result<T, redis::RedisError>,
+        logs: &nest_rs_testing::LogCapture,
+    ) {
+        let Err(refused) = outcome else {
+            panic!("a node requiring a client certificate must refuse a client presenting none");
+        };
+        assert!(ClientTls::negotiation_failed(&refused), "{refused}");
+        let said = logs.find(crate::TARGET, REFUSED);
+        assert_eq!(said.len(), 1, "{:#?}", logs.events());
+        assert!(
+            said[0].field("reason").is_some_and(|reason| {
+                reason.contains("requires a client certificate")
+                    && reason.contains(&nest_rs_config::var_name("redis", "TLS_CERT"))
+            }),
+            "{:?}",
+            said[0].fields
+        );
+    }
+
+    /// A slot's dedicated link and an `ASK` open after the boot: a node whose
+    /// refusal of the certificate lands before their first command is heard,
+    /// not met as a dropped connection.
+    #[tokio::test]
+    async fn a_node_a_link_dials_after_the_boot_is_heard_refusing_the_certificate() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let (refusing, serving) = dropping_then_refusing_listener().await;
+        let (node, plan) = plan_reaching(refusing);
+
+        let outcome = plan.dial(&node).await;
+        serving.abort();
+        refused_and_said(outcome, &logs);
+    }
+
+    /// A node the cluster connection opens or reopens: the same refusal,
+    /// heard on its first command.
+    #[tokio::test]
+    async fn a_node_the_cluster_connection_opens_is_heard_refusing_the_certificate() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let (refusing, serving) = dropping_then_refusing_listener().await;
+        let (node, plan) = plan_reaching(refusing);
+        let info = node_client(
+            &node,
+            plan.settings.clone(),
+            plan.certificates.as_ref(),
+            plan.budget,
+        )
+        .expect("a client of the node")
+        .get_connection_info()
+        .clone();
+
+        let outcome = ClusterNode::connect_with_config(info, AsyncConnectionConfig::new()).await;
+        serving.abort();
+        refused_and_said(outcome, &logs);
+    }
 
     fn bulk(text: &str) -> Value {
         Value::BulkString(text.as_bytes().to_vec())

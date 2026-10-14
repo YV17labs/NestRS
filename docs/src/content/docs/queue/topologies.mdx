@@ -120,7 +120,10 @@ same way: a sentinel speaks TLS exactly when it reaches the nodes over TLS
 (`tls-replication yes`). A server that requires a client certificate and
 refuses the one presented, or its absence, fails the boot at once on every
 topology — whichever sentinel, primary or seed refuses it — naming
-`<PREFIX>_REDIS__TLS_CERT` and `<PREFIX>_REDIS__TLS_KEY`.
+`<PREFIX>_REDIS__TLS_CERT` and `<PREFIX>_REDIS__TLS_KEY`. After the boot, a
+refusal is said once at `warn` on `nest_rs::redis` with the same remedy,
+wherever the connection opens again: one server's, the primary the sentinels
+name, and every Cluster node, a worker's blocked read and an `ASK` included.
 
 The host a sentinel or a Cluster names is the one dialled, so it is the one the
 certificate names. Have them announce hostnames the certificate carries —

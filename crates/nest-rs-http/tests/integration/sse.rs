@@ -212,7 +212,8 @@ struct FlakyFeedController;
 #[routes]
 impl FlakyFeedController {
     /// One event, then a panic as the stream is polled for the next — after
-    /// one wait, so the event is on the wire first.
+    /// two waits, so the event is on the wire first: on HTTP/2 the transport
+    /// polls a body once past the frame it hands, to tell its end.
     #[sse("/events")]
     #[public]
     async fn events(&self) -> SseStream {
@@ -221,7 +222,7 @@ impl FlakyFeedController {
             polls += 1;
             match polls {
                 1 => std::task::Poll::Ready(Some(SseEvent::message("one"))),
-                2 => {
+                2 | 3 => {
                     cx.waker().wake_by_ref();
                     std::task::Poll::Pending
                 }

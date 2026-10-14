@@ -11,6 +11,7 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+mod accept_encoding;
 mod access_log;
 mod allow;
 mod body;
@@ -42,6 +43,7 @@ mod opaque;
 mod origin;
 mod phase;
 mod pipe;
+mod poem_adapter;
 mod poem_bridge;
 mod problem;
 mod raw_body;
@@ -264,7 +266,7 @@ pub mod __private {
         pub use crate::poem_bridge::{
             body_from_poem, body_to_poem, error_from_poem, error_to_poem, from_poem,
             request_from_poem, request_from_poem_at, request_to_poem, response_from_poem,
-            response_to_poem, to_poem,
+            response_to_poem, to_poem, wrap_poem,
         };
     }
 }

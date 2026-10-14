@@ -10,9 +10,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
-use http_body::{Body, Frame, SizeHint};
-use http_body_util::combinators::BoxBody;
+use http_body::{Frame, SizeHint};
 
+use crate::body::Body;
 use crate::error::BodyError;
 use crate::stall::Stall;
 
@@ -53,7 +53,7 @@ pub(crate) type Verdict = Arc<OnceLock<Overrun>>;
 /// trusted, and failed when no frame arrives within the gap bound once a
 /// reader waits on one.
 pub(crate) struct Capped {
-    inner: BoxBody<Bytes, io::Error>,
+    inner: Body,
     /// `None` where hyper's length decoder already holds the body to a declared
     /// length under the cap.
     limit: Option<usize>,
@@ -66,12 +66,7 @@ pub(crate) struct Capped {
 impl Capped {
     /// `body`, counted against `limit` when one is given, its gaps bounded by
     /// `gap`; where it stops is told to `verdict`.
-    pub(crate) fn new(
-        body: BoxBody<Bytes, io::Error>,
-        limit: Option<usize>,
-        gap: Duration,
-        verdict: Verdict,
-    ) -> Self {
+    pub(crate) fn new(body: Body, limit: Option<usize>, gap: Duration, verdict: Verdict) -> Self {
         Self {
             inner: body,
             limit,
@@ -88,7 +83,7 @@ impl Capped {
     }
 }
 
-impl Body for Capped {
+impl http_body::Body for Capped {
     type Data = Bytes;
     type Error = io::Error;
 
@@ -135,17 +130,16 @@ mod tests {
     use std::collections::VecDeque;
 
     use futures_util::StreamExt;
-    use http_body_util::{BodyExt, Full, StreamBody};
+    use http_body::Body as _;
+    use http_body_util::{BodyExt, StreamBody};
 
     use super::*;
 
     /// A body whose frames are each `Some(bytes)`, or `None` for a poll that
     /// finds nothing and wakes its reader at once.
-    fn scripted(
-        frames: impl IntoIterator<Item = Option<&'static [u8]>>,
-    ) -> BoxBody<Bytes, io::Error> {
+    fn scripted(frames: impl IntoIterator<Item = Option<&'static [u8]>>) -> Body {
         let mut frames: VecDeque<_> = frames.into_iter().collect();
-        BoxBody::new(StreamBody::new(futures_util::stream::poll_fn(
+        Body::new(StreamBody::new(futures_util::stream::poll_fn(
             move |cx| match frames.pop_front() {
                 Some(Some(bytes)) => Poll::Ready(Some(Ok::<_, io::Error>(Frame::data(
                     Bytes::from_static(bytes),
@@ -159,8 +153,8 @@ mod tests {
         )))
     }
 
-    fn full(bytes: &'static [u8]) -> BoxBody<Bytes, io::Error> {
-        BoxBody::new(Full::new(Bytes::from_static(bytes)).map_err(|never| match never {}))
+    fn full(bytes: &'static [u8]) -> Body {
+        Body::from_bytes(Bytes::from_static(bytes))
     }
 
     /// Every frame of `body`, or the error that ended it.
@@ -212,7 +206,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_body_with_no_frame_within_the_gap_fails_its_read_timed_out() {
         let verdict = Verdict::default();
-        let body = BoxBody::new(StreamBody::new(
+        let body = Body::new(StreamBody::new(
             futures_util::stream::iter([Ok::<_, io::Error>(Frame::data(Bytes::from_static(
                 b"part",
             )))])
@@ -232,7 +226,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn each_frame_restarts_the_gap() {
-        let body = BoxBody::new(StreamBody::new(futures_util::stream::iter(0..4).then(
+        let body = Body::new(StreamBody::new(futures_util::stream::iter(0..4).then(
             |_| async {
                 tokio::time::sleep(Duration::from_secs(20)).await;
                 Ok::<_, io::Error>(Frame::data(Bytes::from_static(b"x")))

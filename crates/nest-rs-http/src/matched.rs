@@ -36,6 +36,30 @@ impl MatchedRoute {
     }
 }
 
+/// The template the router matched the request `resp` answers, as it was
+/// declared, when the router stamped one on it.
+pub(crate) fn answered(resp: &crate::Response) -> Option<Cow<'_, str>> {
+    resp.extensions()
+        .get::<PathPattern>()
+        .map(|PathPattern(pattern)| declared(pattern))
+}
+
+/// The router's stamp on a response, kept across a rewrite that builds the
+/// response afresh.
+pub(crate) struct Stamp(PathPattern);
+
+impl Stamp {
+    /// The stamp `resp` carries, if any.
+    pub(crate) fn of(resp: &crate::Response) -> Option<Self> {
+        resp.extensions().get::<PathPattern>().cloned().map(Self)
+    }
+
+    /// Put the stamp back on `resp`.
+    pub(crate) fn onto(self, resp: &mut crate::Response) {
+        resp.extensions_mut().insert(self.0);
+    }
+}
+
 /// The template the router matched `req` on, as it was declared: what a guard
 /// keys a route's state on, so that `/users/1` and `/users/2` share it.
 pub fn matched_template(req: &Request) -> Option<Cow<'_, str>> {

@@ -199,27 +199,80 @@ impl Drop for InFlight {
 ///
 /// `size_hint` and `is_end_stream` count what is held back of a frame: hyper
 /// frames the response from them. On HTTP/2 each piece is handed to the
-/// stream's [`Window`].
-pub(crate) struct PhasedBody<B> {
+/// stream's [`Window`], and the body's last byte is handed on its own: hyper
+/// hands h2 a frame on a byte of the window's capacity, so the stream's task —
+/// and its send deadline — would otherwise end with the tail still waiting on
+/// the window, sent under the idle deadline instead.
+pub(crate) struct PhasedBody<B: Body> {
     inner: B,
     in_flight: InFlight,
-    /// What is left of a frame larger than a piece.
+    /// What is left of a frame larger than a piece, or the last byte.
     rest: Option<Bytes>,
+    /// A frame the inner body yielded past the one handed, polled on HTTP/2 to
+    /// learn whether that one was its last.
+    peeked: Option<Result<Frame<Bytes>, B::Error>>,
+    /// The inner body has ended.
+    drained: bool,
     window: Option<Window>,
 }
 
-impl<B> PhasedBody<B> {
+impl<B: Body> PhasedBody<B> {
     pub(crate) fn new(inner: B, in_flight: InFlight, window: Option<Window>) -> Self {
         Self {
             inner,
             in_flight,
             rest: None,
+            peeked: None,
+            drained: false,
             window,
         }
     }
 }
 
-impl<B: Body<Data = Bytes> + Unpin> Body for PhasedBody<B> {
+impl<B> PhasedBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Unpin,
+{
+    /// The inner body's next frame, the one peeked first.
+    fn next(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, B::Error>>> {
+        if let Some(peeked) = self.peeked.take() {
+            return Poll::Ready(Some(peeked));
+        }
+        if self.drained {
+            return Poll::Ready(None);
+        }
+        let polled = Pin::new(&mut self.inner).poll_frame(cx);
+        self.drained = matches!(polled, Poll::Ready(None));
+        polled
+    }
+
+    /// Whether the inner body has nothing after the frame in hand: it says
+    /// so, or a poll finds its end now. A frame the poll finds is kept for
+    /// the next.
+    fn ends_after(&mut self, cx: &mut Context<'_>) -> bool {
+        if self.drained || self.inner.is_end_stream() {
+            return true;
+        }
+        match Pin::new(&mut self.inner).poll_frame(cx) {
+            Poll::Ready(None) => {
+                self.drained = true;
+                true
+            }
+            Poll::Ready(Some(frame)) => {
+                self.peeked = Some(frame);
+                false
+            }
+            Poll::Pending => false,
+        }
+    }
+}
+
+impl<B> Body for PhasedBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Unpin,
+{
     type Data = Bytes;
     type Error = B::Error;
 
@@ -233,7 +286,7 @@ impl<B: Body<Data = Bytes> + Unpin> Body for PhasedBody<B> {
         }
         let mut data = match this.rest.take() {
             Some(rest) => rest,
-            None => match Pin::new(&mut this.inner).poll_frame(cx) {
+            None => match this.next(cx) {
                 Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
                     Ok(data) => data,
                     Err(frame) => return Poll::Ready(Some(Ok(frame))),
@@ -247,6 +300,8 @@ impl<B: Body<Data = Bytes> + Unpin> Body for PhasedBody<B> {
         };
         if data.len() > PIECE {
             this.rest = Some(data.split_off(PIECE));
+        } else if this.window.is_some() && data.len() > 1 && this.ends_after(cx) {
+            this.rest = Some(data.split_off(data.len() - 1));
         }
         if let Some(window) = &mut this.window {
             window.handed();
@@ -255,12 +310,16 @@ impl<B: Body<Data = Bytes> + Unpin> Body for PhasedBody<B> {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.rest.is_none() && self.inner.is_end_stream()
+        self.rest.is_none() && self.peeked.is_none() && (self.drained || self.inner.is_end_stream())
     }
 
     fn size_hint(&self) -> SizeHint {
         let hint = self.inner.size_hint();
-        let held = self.rest.as_ref().map_or(0, Bytes::len) as u64;
+        let peeked = match &self.peeked {
+            Some(Ok(frame)) => frame.data_ref().map_or(0, Bytes::len),
+            _ => 0,
+        };
+        let held = (self.rest.as_ref().map_or(0, Bytes::len) + peeked) as u64;
         if held == 0 {
             return hint;
         }
@@ -371,6 +430,8 @@ impl<Io: AsyncWrite + Unpin> AsyncWrite for PhasedIo<Io> {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+
     use http_body_util::{BodyExt, Full};
     use tokio::io::AsyncReadExt;
 
@@ -566,11 +627,10 @@ mod tests {
         );
     }
 
-    /// The pieces a body of one frame larger than two pieces is handed in,
-    /// each checked against what the body still counts in its size and end.
-    async fn pieces(window: Option<Window>) -> Vec<usize> {
+    /// The pieces a body of one frame of `size` bytes is handed in, each
+    /// checked against what the body still counts in its size and end.
+    async fn pieces(size: usize, window: Option<Window>) -> Vec<usize> {
         let (phases, _) = accepted();
-        let size = 2 * PIECE + 1;
         let frame = Bytes::from(vec![0_u8; size]);
         let start = frame.as_ptr();
         let mut body = PhasedBody::new(Full::new(frame), phases.request(), window);
@@ -594,13 +654,64 @@ mod tests {
     /// HTTP/1 has no window; an HTTP/2 stream's task has one.
     #[tokio::test]
     async fn a_frame_larger_than_a_piece_is_handed_a_piece_at_a_time_on_either_protocol() {
-        assert_eq!(pieces(None).await, [PIECE, PIECE, 1], "HTTP/1");
-        let http2 = crate::window::within(
-            async { pieces(Some(Window::current().expect("a stream task"))).await },
+        assert_eq!(
+            pieces(2 * PIECE + 1, None).await,
+            [PIECE, PIECE, 1],
+            "HTTP/1"
+        );
+        assert_eq!(
+            on_http2(|window| pieces(2 * PIECE + 1, window)).await,
+            [PIECE, PIECE, 1],
+            "HTTP/2"
+        );
+    }
+
+    /// `body` on an HTTP/2 stream's task, with the stream's window.
+    async fn on_http2<F: Future<Output = Vec<usize>>>(
+        body: impl FnOnce(Option<Window>) -> F,
+    ) -> Vec<usize> {
+        crate::window::within(
+            async { body(Some(Window::current().expect("a stream task"))).await },
             Duration::from_secs(60),
         )
         .await
-        .expect("ends on its own");
-        assert_eq!(http2, [PIECE, PIECE, 1], "HTTP/2");
+        .expect("ends on its own")
+    }
+
+    /// The pieces a body of `chunks`, a stream that tells its end only when
+    /// polled past its last chunk, is handed in on HTTP/2.
+    async fn streamed(chunks: &'static [usize]) -> Vec<usize> {
+        on_http2(|window| async move {
+            let (phases, _) = accepted();
+            let frames = chunks.iter().map(|&len| {
+                Ok::<_, std::convert::Infallible>(Frame::data(Bytes::from(vec![0_u8; len])))
+            });
+            let mut body = PhasedBody::new(
+                http_body_util::StreamBody::new(futures_util::stream::iter(frames)),
+                phases.request(),
+                window,
+            );
+            let mut pieces = Vec::new();
+            while let Some(frame) = body.frame().await {
+                pieces.push(frame.expect("no error").into_data().expect("data").len());
+            }
+            assert!(body.is_end_stream());
+            pieces
+        })
+        .await
+    }
+
+    /// On HTTP/2 the last byte waits on the window for everything before it,
+    /// whether the body says it ended or a poll finds its end.
+    #[tokio::test]
+    async fn on_http2_a_bodys_last_byte_is_handed_on_its_own() {
+        assert_eq!(pieces(10, None).await, [10], "HTTP/1 hands it whole");
+        assert_eq!(on_http2(|window| pieces(10, window)).await, [9, 1]);
+        assert_eq!(
+            on_http2(|window| pieces(2 * PIECE, window)).await,
+            [PIECE, PIECE - 1, 1]
+        );
+        assert_eq!(streamed(&[4, 6]).await, [4, 5, 1]);
+        assert_eq!(streamed(&[1]).await, [1], "a single byte is already alone");
     }
 }

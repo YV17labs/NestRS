@@ -1,13 +1,11 @@
 //! CORS settings for the HTTP transport, read from `<PREFIX>_HTTP__CORS_*` or
-//! pinned as `HttpConfig.cors`, and turned into poem's [`Cors`] at boot.
+//! pinned as `HttpConfig.cors`, and checked at boot by the transport, which
+//! answers the policy around every route.
 
-use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use nest_rs_config::ConfigService;
-use poem::http::{HeaderName, Method};
-use poem::middleware::Cors;
 
 /// Cross-Origin Resource Sharing policy. `origins` empty ⇒ no CORS layer
 /// installed (the default). Lists are comma-separated in env vars.
@@ -35,11 +33,11 @@ pub struct HttpCors {
 }
 
 /// The wildcard, as the four lists spell it.
-const WILDCARD: &str = "*";
+pub(crate) const WILDCARD: &str = "*";
 
 /// The response headers the framework sends on a route's behalf. None is
 /// CORS-safelisted, so a cross-origin client reads them only when exposed.
-const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
+pub(crate) const FRAMEWORK_SENT: [&str; 3] = ["link", "location", "retry-after"];
 
 /// Whether a list holds the wildcard, which admits every value.
 pub(crate) fn holds_wildcard(values: &[String]) -> bool {
@@ -48,7 +46,7 @@ pub(crate) fn holds_wildcard(values: &[String]) -> bool {
 
 /// The values a list admits one by one: none when it holds the wildcard, which
 /// admits them all.
-fn listed(values: &[String]) -> &[String] {
+pub(crate) fn listed(values: &[String]) -> &[String] {
     if holds_wildcard(values) { &[] } else { values }
 }
 
@@ -72,7 +70,8 @@ impl HttpCors {
         ]
     }
 
-    fn reject_wildcards_with_credentials(&self) -> Result<()> {
+    /// Refuse a `*` that credentials turn into a literal no browser honours.
+    pub(crate) fn reject_wildcards_with_credentials(&self) -> Result<()> {
         if !self.credentials {
             return Ok(());
         }
@@ -115,260 +114,11 @@ impl HttpCors {
                 .or(base.max_age),
         }))
     }
-
-    /// Translate to poem's middleware. A `*` in `origins`, `methods` or
-    /// `headers` admits every value, which poem spells as an empty list;
-    /// explicit values map one-to-one.
-    pub fn into_middleware(self) -> Result<Cors> {
-        self.reject_wildcards_with_credentials()?;
-        let mut cors = Cors::new();
-        for origin in listed(&self.origins) {
-            cors = cors.allow_origin(origin);
-        }
-        for m in listed(&self.methods) {
-            let method = Method::from_bytes(m.as_bytes())
-                .with_context(|| format!("invalid HTTP method in CORS config: `{m}`"))?;
-            cors = cors.allow_method(method);
-        }
-        for h in listed(&self.headers) {
-            let header = HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS allow-list: `{h}`"))?;
-            cors = cors.allow_header(header);
-        }
-        for h in &self.exposed_headers {
-            let header = HeaderName::from_str(h)
-                .with_context(|| format!("invalid header name in CORS expose-list: `{h}`"))?;
-            cors = cors.expose_header(header);
-        }
-        for h in FRAMEWORK_SENT {
-            cors = cors.expose_header(HeaderName::from_static(h));
-        }
-        if self.credentials {
-            cors = cors.allow_credentials(true);
-        }
-        if let Some(age) = self.max_age {
-            let secs: i32 = age
-                .as_secs()
-                .try_into()
-                .context("CORS max_age overflows i32 seconds (~68 years); pick a smaller value")?;
-            cors = cors.max_age(secs);
-        }
-        Ok(cors)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn cfg(origins: &[&str]) -> HttpCors {
-        HttpCors {
-            origins: origins.iter().map(|s| (*s).to_owned()).collect(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn into_middleware_accepts_an_empty_config() {
-        cfg(&[]).into_middleware().expect("empty config builds");
-    }
-
-    #[test]
-    fn into_middleware_accepts_a_basic_origin_list() {
-        cfg(&["https://app.example.com"])
-            .into_middleware()
-            .expect("valid config");
-    }
-
-    fn err_string(result: Result<Cors>) -> String {
-        match result {
-            Ok(_) => panic!("expected an error"),
-            Err(err) => err.to_string(),
-        }
-    }
-
-    #[test]
-    fn into_middleware_rejects_an_invalid_method() {
-        // Spaces aren't token characters in RFC 9110 §9 — `Method::from_bytes`
-        // refuses them.
-        let cfg = HttpCors {
-            origins: vec!["*".into()],
-            methods: vec!["BAD METHOD".into()],
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("invalid HTTP method"), "got: {err}");
-    }
-
-    #[test]
-    fn into_middleware_rejects_an_invalid_header_name() {
-        let cfg = HttpCors {
-            origins: vec!["*".into()],
-            headers: vec!["bad header!".into()],
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("invalid header name"), "got: {err}");
-    }
-
-    #[test]
-    fn into_middleware_rejects_a_max_age_that_overflows_i32_seconds() {
-        let cfg = HttpCors {
-            origins: vec!["*".into()],
-            max_age: Some(Duration::from_secs(u64::MAX)),
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("max_age overflows"), "got: {err}");
-    }
-
-    #[test]
-    fn into_middleware_accepts_credentials_and_max_age_and_exposed_headers() {
-        let cfg = HttpCors {
-            origins: vec!["https://app.example.com".into()],
-            methods: vec!["GET".into(), "POST".into()],
-            headers: vec!["content-type".into(), "x-trace-id".into()],
-            exposed_headers: vec!["x-trace-id".into()],
-            credentials: true,
-            max_age: Some(Duration::from_secs(60 * 60)),
-        };
-        cfg.into_middleware()
-            .expect("a fully-specified config builds");
-    }
-
-    #[tokio::test]
-    async fn the_headers_the_framework_sends_are_readable_cross_origin() {
-        use poem::test::TestClient;
-        use poem::{EndpointExt, Route, get, handler};
-
-        #[handler]
-        fn page() -> &'static str {
-            "[]"
-        }
-
-        let cors = HttpCors {
-            origins: vec!["https://app.example.com".into()],
-            exposed_headers: vec!["x-request-cost".into()],
-            ..HttpCors::default()
-        }
-        .into_middleware()
-        .expect("builds");
-        let resp = TestClient::new(Route::new().at("/", get(page)).with(cors))
-            .get("/")
-            .header("origin", "https://app.example.com")
-            .send()
-            .await;
-        let exposed: Vec<String> = resp
-            .0
-            .headers()
-            .get_all("access-control-expose-headers")
-            .iter()
-            .filter_map(|v| v.to_str().ok())
-            .flat_map(|v| v.split(',').map(|h| h.trim().to_ascii_lowercase()))
-            .collect();
-        for header in FRAMEWORK_SENT.into_iter().chain(["x-request-cost"]) {
-            assert!(
-                exposed.iter().any(|h| h == header),
-                "{header} must be exposed: {exposed:?}",
-            );
-        }
-    }
-
-    #[test]
-    fn into_middleware_rejects_an_invalid_exposed_header() {
-        let cfg = HttpCors {
-            origins: vec!["*".into()],
-            exposed_headers: vec!["bad header!".into()],
-            ..Default::default()
-        };
-        let err = err_string(cfg.into_middleware());
-        assert!(err.contains("invalid header name"), "got: {err}");
-        assert!(err.contains("expose-list"), "must name the list: {err}");
-    }
-
-    #[test]
-    fn credentials_refuse_a_wildcard_in_every_list_the_rule_binds() {
-        type Case = (&'static str, &'static str, fn(&mut HttpCors));
-        let cases: [Case; 4] = [
-            ("origins", "Access-Control-Allow-Origin", |c| {
-                c.origins = vec![WILDCARD.into()]
-            }),
-            ("headers", "Access-Control-Allow-Headers", |c| {
-                c.headers = vec![WILDCARD.into()]
-            }),
-            ("methods", "Access-Control-Allow-Methods", |c| {
-                c.methods = vec![WILDCARD.into()]
-            }),
-            ("exposed_headers", "Access-Control-Expose-Headers", |c| {
-                c.exposed_headers = vec![WILDCARD.into()]
-            }),
-        ];
-        for (field, header, wildcard) in cases {
-            let mut cfg = HttpCors {
-                origins: vec!["https://app.example.com".into()],
-                credentials: true,
-                ..Default::default()
-            };
-            wildcard(&mut cfg);
-            let err = err_string(cfg.into_middleware());
-            assert!(err.contains(field), "must name the list: {err}");
-            assert!(err.contains(header), "must name the header: {err}");
-        }
-    }
-
-    #[test]
-    fn a_wildcard_without_credentials_still_builds() {
-        HttpCors {
-            origins: vec![WILDCARD.into()],
-            headers: vec![WILDCARD.into()],
-            methods: vec![WILDCARD.into()],
-            exposed_headers: vec![WILDCARD.into()],
-            credentials: false,
-            ..Default::default()
-        }
-        .into_middleware()
-        .expect("a wildcard policy with no credentials is legal");
-    }
-
-    /// `*` is the wildcard each list documents, never a literal origin, method
-    /// or header name the request must spell.
-    #[tokio::test]
-    async fn a_wildcard_opens_every_origin_method_and_header() {
-        use poem::http::{Method, StatusCode};
-        use poem::test::TestClient;
-        use poem::{EndpointExt, Route, handler};
-
-        #[handler]
-        fn page() -> &'static str {
-            "[]"
-        }
-
-        let cors = HttpCors {
-            origins: vec![WILDCARD.into()],
-            methods: vec![WILDCARD.into()],
-            headers: vec![WILDCARD.into()],
-            ..HttpCors::default()
-        }
-        .into_middleware()
-        .expect("builds");
-        let client = TestClient::new(Route::new().at("/", page).with(cors));
-
-        let read = client
-            .get("/")
-            .header("origin", "https://any.example")
-            .send()
-            .await;
-        read.assert_status_is_ok();
-        read.assert_header("access-control-allow-origin", "https://any.example");
-        let preflight = client
-            .request(Method::OPTIONS, "/")
-            .header("origin", "https://any.example")
-            .header("access-control-request-method", "PUT")
-            .header("access-control-request-headers", "x-anything")
-            .send()
-            .await;
-        preflight.assert_status(StatusCode::OK);
-    }
 
     #[test]
     fn from_env_returns_none_when_origins_unset() {

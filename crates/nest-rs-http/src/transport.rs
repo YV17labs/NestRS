@@ -5,21 +5,23 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use http::header::{HeaderName, HeaderValue, SERVER};
 use nest_rs_core::{Container, Discovery, Transport};
-use poem::endpoint::BoxEndpoint;
-use poem::http::header::{HeaderName, HeaderValue, SERVER};
-use poem::middleware::{Compression, Cors};
-use poem::{EndpointExt, Response, Route};
+use poem::{EndpointExt, Route};
 use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::HttpBootCheck;
 use crate::controller::HttpControllerMeta;
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
-use crate::endpoint::HttpEndpointMeta;
+use crate::edge::EdgeEndpoint;
+use crate::endpoint::{BoxEndpoint, HttpEndpointMeta};
 use crate::fallback::{Claims, Fallback, HttpFallbackMeta, WithFallback, literal_prefix};
 use crate::guard_stage::GuardedEndpoint;
 use crate::interceptor::HttpEndpointWrap;
+use crate::poem_adapter::{CorsPolicy, PoemAdapter};
+use crate::poem_bridge::to_poem;
+use crate::problem::{Normalized, ResolvedErrors};
 use crate::route_template::RouteTemplate;
 use crate::server::Server;
 use crate::tls::HttpTls;
@@ -90,7 +92,7 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 }
 
 /// HTTP [`Transport`]: every discovered controller and self-mounted endpoint,
-/// under the discovered transport-level wraps, routed by poem and served by the
+/// under the discovered transport-level wraps, routed and served by the
 /// transport's own accept loop.
 ///
 /// [`from_config`](Self::from_config) is its one constructor, the call
@@ -119,7 +121,7 @@ const fn const_str_eq(a: &str, b: &str) -> bool {
 /// ```
 pub struct HttpTransport {
     bind: String,
-    cors: Option<Cors>,
+    cors: Option<CorsPolicy>,
     tls: Option<HttpTls>,
     server_header: bool,
     global_prefix: Option<String>,
@@ -135,7 +137,7 @@ pub struct HttpTransport {
     detached: Vec<(String, DetachedWork)>,
     /// Shared with the edge, whose response bodies read it.
     drain: Arc<Drain>,
-    endpoint: Option<BoxEndpoint<'static, Response>>,
+    endpoint: Option<BoxEndpoint>,
 }
 
 fn normalize_global_prefix(raw: &str) -> Option<String> {
@@ -304,8 +306,8 @@ impl HttpTransport {
             bind: format!("{}:{}", cfg.host, cfg.port),
             cors: cfg
                 .cors
-                .clone()
-                .map(crate::HttpCors::into_middleware)
+                .as_ref()
+                .map(PoemAdapter::cors_policy)
                 .transpose()?,
             tls: cfg.tls.clone(),
             server_header: cfg.server_header,
@@ -331,10 +333,10 @@ impl HttpTransport {
         Ok(transport)
     }
 
-    /// Take the assembled endpoint for in-process testing (drive with poem's
-    /// `TestClient`). Returns `None` before `configure` has run, and leaves
-    /// the transport without an endpoint (so it must not also be `serve`d).
-    pub fn take_endpoint(&mut self) -> Option<BoxEndpoint<'static, Response>> {
+    /// Take the assembled endpoint for in-process testing. Returns `None`
+    /// before `configure` has run, and leaves the transport without an endpoint
+    /// (so it must not also be `serve`d).
+    pub fn take_endpoint(&mut self) -> Option<BoxEndpoint> {
         self.endpoint.take()
     }
 }
@@ -530,10 +532,9 @@ impl Transport for HttpTransport {
             }
             if d.meta.guarded_at_the_edge() && !edge_pool.is_empty() {
                 // `nest_no_strip`: the isolated sub-route matches its own full path.
-                let isolated: BoxEndpoint<'static, Response> =
-                    d.meta.mount(container, Route::new()).boxed();
+                let isolated = PoemAdapter::router(d.meta.mount(container, Route::new()));
                 let guarded = GuardedEndpoint::new(d.meta.handler(), edge_pool.clone(), isolated);
-                route = route.nest_no_strip(d.meta.path(), guarded);
+                route = route.nest_no_strip(d.meta.path(), to_poem(guarded));
             } else {
                 // Gated in band (GraphQL, MCP), public by design (OpenAPI), or
                 // no pool to run.
@@ -586,7 +587,7 @@ impl Transport for HttpTransport {
                 second.meta.owner(),
             ),
         };
-        let route = WithFallback::new(route, fallback);
+        let router = PoemAdapter::router(WithFallback::new(route, fallback));
 
         // Ascending priority, whatever the registration order; the stable sort
         // keeps insertion order within a band.
@@ -615,77 +616,46 @@ impl Transport for HttpTransport {
         // that is the edge itself, otherwise a wrap outside both.
         let fuse_normalize = !self.compression && self.cors.is_none();
         let timeout = self.request_timeout.take();
-        let body_limit = Some(self.max_body_bytes);
-
-        let endpoint: BoxEndpoint<'static, Response> = if metas.is_empty() && fuse_normalize {
-            crate::edge::EdgeEndpoint::new(
-                route.map_to_response(),
+        let edge = |inner: BoxEndpoint| {
+            BoxEndpoint::new(EdgeEndpoint::new(
+                inner,
                 container.clone(),
                 timeout,
-                body_limit,
+                self.max_body_bytes,
                 self.deadlines.body_read,
-                edge_headers,
-                true,
-                // No compression outside, so nothing can rewrite the body.
-                false,
+                edge_headers.clone(),
+                fuse_normalize,
+                // Compression replaces the request body but not its `Content-Length`.
+                self.compression,
                 Arc::clone(&self.drain),
-            )
-            .boxed()
+            ))
+        };
+
+        let endpoint = if metas.is_empty() && fuse_normalize {
+            edge(router)
         } else {
             // The router answers 404/405 with an `Err`, which would short-circuit an
             // interceptor's `next.run(req).await?`; rendering at `ERROR_RESOLVE` lets them see it.
             let split = metas
                 .partition_point(|m| m.priority() < crate::interceptor::priority::ERROR_RESOLVE);
             let (below, above) = metas.split_at(split);
-            let mut endpoint: BoxEndpoint<'static, Response> = if below.is_empty() {
-                crate::problem::ResolvedErrors(route).boxed()
-            } else {
-                let mut inner: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
-                for meta in below {
-                    inner = meta.wrap(container, inner);
-                }
-                crate::problem::ResolvedErrors(inner).boxed()
-            };
-            for meta in above {
-                endpoint = meta.wrap(container, endpoint);
-            }
-            let mut endpoint: BoxEndpoint<'static, Response> = crate::edge::EdgeEndpoint::new(
-                endpoint,
-                container.clone(),
-                timeout,
-                body_limit,
-                self.deadlines.body_read,
-                edge_headers,
-                fuse_normalize,
-                // Compression replaces the request body but not its `Content-Length`.
-                self.compression,
-                Arc::clone(&self.drain),
-            )
-            .boxed();
-            if self.compression {
-                endpoint = endpoint.with(Compression::new()).map_to_response().boxed();
-            }
-            // Outside the edge, so a preflight carries no request scope.
-            if let Some(cors) = self.cors.take() {
-                endpoint = endpoint.with(cors).map_to_response().boxed();
-            }
-            if fuse_normalize {
-                endpoint
-            } else {
-                endpoint
-                    .around(|ep, req| async move {
-                        Ok(match ep.call(req).await {
-                            Ok(resp) => crate::problem::normalize_error_response(resp).await,
-                            Err(err) => {
-                                crate::problem::normalize_error_response(
-                                    crate::problem::render_error(err),
-                                )
-                                .await
-                            }
-                        })
-                    })
-                    .map_to_response()
-                    .boxed()
+            let inner = below
+                .iter()
+                .fold(router, |inner, meta| meta.wrap(container, inner));
+            let endpoint = above
+                .iter()
+                .fold(BoxEndpoint::new(ResolvedErrors(inner)), |endpoint, meta| {
+                    meta.wrap(container, endpoint)
+                });
+            let endpoint = edge(endpoint);
+            match fuse_normalize {
+                true => endpoint,
+                // Outside the edge, so a preflight carries no request scope.
+                false => BoxEndpoint::new(Normalized(PoemAdapter::around(
+                    endpoint,
+                    self.cors.take(),
+                    self.compression,
+                ))),
             }
         };
 

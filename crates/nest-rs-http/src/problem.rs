@@ -267,7 +267,7 @@ impl ProblemDetails {
 /// its headers. A `4xx` body becomes `detail`, said without any value it quotes
 /// ([`DecodeError::redact`]); a `5xx` body is dropped so a driver or panic
 /// message never reaches the wire.
-pub async fn normalize_error_response(resp: Response) -> Response {
+pub async fn normalize_error_response(resp: crate::Response) -> crate::Response {
     let status = resp.status();
     if !(status.is_client_error() || status.is_server_error()) {
         return resp;
@@ -276,7 +276,7 @@ pub async fn normalize_error_response(resp: Response) -> Response {
     if resp.extensions().get::<crate::MappedError>().is_some() {
         return resp;
     }
-    if !is_raw_text(&resp) {
+    if !is_raw_text(resp.headers()) {
         return resp;
     }
 
@@ -295,8 +295,8 @@ pub async fn normalize_error_response(resp: Response) -> Response {
 }
 
 /// `problem` as the answer, keeping the headers of the response it replaces.
-fn replacing(problem: ProblemDetails, headers: &http::HeaderMap) -> Response {
-    let mut response = problem.as_response();
+fn replacing(problem: ProblemDetails, headers: &http::HeaderMap) -> crate::Response {
+    let mut response = crate::ResponseError::as_response(&problem);
     // The fresh body is uncompressed: a stale `Content-Encoding` would fail decoding.
     // An original header replaces the envelope's default (a bare `Bearer`), since a
     // client reads the first value; later occurrences append (`Set-Cookie`).
@@ -318,10 +318,11 @@ fn replacing(problem: ProblemDetails, headers: &http::HeaderMap) -> Response {
     response
 }
 
-/// Whether `resp` is poem's default rendering of an error — `text/plain`, or no
-/// body type at all — rather than a problem or a body somebody typed.
-fn is_raw_text(resp: &Response) -> bool {
-    resp.headers()
+/// Whether a response with `headers` is a default rendering of an error —
+/// `text/plain`, or no body type at all — rather than a problem or a body
+/// somebody typed.
+fn is_raw_text(headers: &http::HeaderMap) -> bool {
+    headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_none_or(|ct| ct.starts_with("text/plain"))
@@ -360,24 +361,24 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
     }
     let redacted = (said != sentence).then_some(said);
     let mut resp = err.into_response();
-    if (problem.is_some() || withheld.is_some()) && is_raw_text(&resp) {
+    if (problem.is_some() || withheld.is_some()) && is_raw_text(resp.headers()) {
         let body = resp.take_body();
         if !body.is_empty() {
             let (parts, _) = resp.into_parts();
             if let Some(withheld) = withheld {
                 crate::error::failed(&withheld);
             }
-            let mut answer = match problem {
-                Some(problem) => crate::poem_bridge::response_to_poem(problem_response(&problem)),
+            let mut answer = crate::poem_bridge::response_to_poem(match problem {
+                Some(problem) => problem_response(&problem),
                 None => replacing(ProblemDetails::from_status(parts.status), &parts.headers),
-            };
+            });
             answer.extensions_mut().extend(parts.extensions);
             return answer;
         }
         resp.set_body(body);
     }
     match redacted {
-        Some(said) if is_raw_text(&resp) => {
+        Some(said) if is_raw_text(resp.headers()) => {
             let (parts, _) = resp.into_parts();
             Response::from_parts(parts, poem::Body::from_string(said))
         }
@@ -386,18 +387,30 @@ pub(crate) fn render_error(err: poem::Error) -> Response {
 }
 
 /// The [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) band: the
-/// route tree, with a still-unhandled `Err` rendered by [`render_error`] so every
-/// band above observes a response.
+/// route tree, with a still-unhandled `Err` rendered as the edge answers it, so
+/// every band above observes a response.
 pub(crate) struct ResolvedErrors<E>(pub(crate) E);
 
-impl<E: poem::Endpoint> poem::Endpoint for ResolvedErrors<E> {
-    type Output = Response;
-
-    async fn call(&self, req: poem::Request) -> poem::Result<Response> {
+impl<E: crate::Endpoint> crate::Endpoint for ResolvedErrors<E> {
+    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
         Ok(match self.0.call(req).await {
-            Ok(out) => out.into_response(),
-            Err(err) => render_error(err),
+            Ok(response) => response,
+            Err(error) => error.answer(),
         })
+    }
+}
+
+/// The outermost layer when something wraps the edge: every answer, an `Err`
+/// included, normalized onto the problem document.
+pub(crate) struct Normalized<E>(pub(crate) E);
+
+impl<E: crate::Endpoint> crate::Endpoint for Normalized<E> {
+    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
+        let answer = match self.0.call(req).await {
+            Ok(response) => response,
+            Err(error) => error.answer(),
+        };
+        Ok(normalize_error_response(answer).await)
     }
 }
 
@@ -456,6 +469,11 @@ impl crate::IntoResponse for ProblemDetails {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A response poem rendered, as the normalizer takes it.
+    fn crossed(response: Response) -> crate::Response {
+        crate::poem_bridge::response_from_poem(response)
+    }
 
     #[test]
     fn constructors_set_status_and_title() {
@@ -546,7 +564,7 @@ mod tests {
                 "Bearer resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
             )
             .body("nope");
-        let normalized = normalize_error_response(raw).await;
+        let normalized = normalize_error_response(crossed(raw)).await;
 
         let challenges: Vec<_> = normalized
             .headers()
@@ -605,7 +623,7 @@ mod tests {
     async fn normalize_lifts_a_raw_plain_text_transport_error() {
         let raw = poem::Error::from_string(nest_rs_core::UUID_V7_REQUIRED, StatusCode::BAD_REQUEST)
             .into_response();
-        let resp = normalize_error_response(raw).await;
+        let resp = normalize_error_response(crossed(raw)).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.headers()
@@ -624,7 +642,7 @@ mod tests {
         let existing = ProblemDetails::conflict()
             .with_detail("dup name")
             .as_response();
-        let resp = normalize_error_response(existing).await;
+        let resp = normalize_error_response(crossed(existing)).await;
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
@@ -637,7 +655,7 @@ mod tests {
             .status(StatusCode::BAD_REQUEST)
             .content_type("application/json")
             .body(br#"{"custom":"envelope"}"#.to_vec());
-        let resp = normalize_error_response(typed).await;
+        let resp = normalize_error_response(crossed(typed)).await;
         assert_eq!(
             resp.headers()
                 .get(header::CONTENT_TYPE)
@@ -652,7 +670,7 @@ mod tests {
             .status(StatusCode::IM_A_TEAPOT)
             .body("edge-mapped".as_bytes().to_vec());
         mapped.extensions_mut().insert(crate::MappedError);
-        let resp = normalize_error_response(mapped).await;
+        let resp = normalize_error_response(crossed(mapped)).await;
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         assert_eq!(&bytes[..], b"edge-mapped");
@@ -665,7 +683,7 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
         )
         .into_response();
-        let resp = normalize_error_response(raw).await;
+        let resp = normalize_error_response(crossed(raw)).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let text = std::str::from_utf8(&bytes).expect("utf8");
@@ -685,7 +703,7 @@ mod tests {
             .status(StatusCode::UNAUTHORIZED)
             .header("WWW-Authenticate", "Bearer")
             .finish();
-        let resp = normalize_error_response(raw).await;
+        let resp = normalize_error_response(crossed(raw)).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             resp.headers()
@@ -709,7 +727,7 @@ mod tests {
             .header(header::TRANSFER_ENCODING, "chunked")
             .content_type("text/plain")
             .body("upstream timed out");
-        let resp = normalize_error_response(raw).await;
+        let resp = normalize_error_response(crossed(raw)).await;
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
         assert_eq!(
             resp.headers()

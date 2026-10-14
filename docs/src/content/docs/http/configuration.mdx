@@ -144,9 +144,10 @@ pub struct ApiModule;
 
 ## CORS
 
-CORS uses [poem's `Cors` middleware](https://docs.rs/poem/latest/poem/middleware/struct.Cors.html)
-under the hood. The transport installs it **outermost**, so a preflight
-(`OPTIONS`) is answered before any guard or interceptor runs.
+The transport answers the CORS policy **outermost**, so a preflight
+(`OPTIONS`) is answered before any guard or interceptor runs, and every answer
+under the policy, a refusal included, carries `Vary: Origin`: a shared cache
+keeps one origin's answer from another.
 
 CORS activates only when `cors.origins` is non-empty — the default is no
 CORS layer. Set the origins (and any other knob you need) via either path:
@@ -377,9 +378,8 @@ a WebSocket included — whose peer stops reading. That one runs only while a wr
 waits, from the moment it starts waiting, so a slow reader that keeps taking
 bytes is never cut. Each cut files one `warn`, `the peer took nothing within the
 send deadline; it is cut off`, on its edge's target: `nest_rs::http`,
-`nest_rs::ws` or `nest_rs::graphql`. On HTTP/2 the last 400 KiB or so of a
-response leave its body before the peer has taken them, so they are sent under
-the idle deadline instead.
+`nest_rs::ws` or `nest_rs::graphql`. On HTTP/2 it holds a response to its
+last byte: a stream whose window stays shut is reset whatever is left to send.
 
 Each key takes whole seconds; `0` turns none of them off, and a value outside
 its range fails the boot naming the variable, set in the environment or pinned:

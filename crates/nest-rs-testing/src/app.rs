@@ -13,9 +13,9 @@ use nest_rs_guards::{AppBuilderGuardsExt, GuardSpec};
 use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
 use nest_rs_pipes::{AppBuilderPipesExt, PipeSpec};
-use poem::Response;
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
+use poem::{EndpointExt, Response};
 
 use crate::headless::HeadlessApp;
 
@@ -25,6 +25,8 @@ fn http_config(container: &Container) -> Arc<HttpConfig> {
     container.get::<HttpConfig>().unwrap_or_default()
 }
 
+/// The app's endpoint as poem's client drives it, until the harness has a
+/// client of its own.
 type TestEndpoint = BoxEndpoint<'static, Response>;
 
 /// A booted app plus a `poem` [`TestClient`] over its mounted endpoint, driving
@@ -210,7 +212,9 @@ impl TestAppBuilder {
             .expect("HttpTransport::configure populates the endpoint");
         Ok(TestApp {
             app,
-            client: TestClient::new(endpoint),
+            client: TestClient::new(
+                nest_rs_http::__private::poem_bridge::to_poem(endpoint).boxed(),
+            ),
         })
     }
 

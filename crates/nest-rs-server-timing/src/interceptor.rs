@@ -3,10 +3,11 @@ use std::time::Instant;
 use async_trait::async_trait;
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, Discoverable, Layer};
+use nest_rs_http::__private::poem_bridge::wrap_poem;
 use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
 use nest_rs_interceptors::{Interceptor, InterceptorExt, Next};
 use poem::http::{HeaderName, StatusCode};
-use poem::{EndpointExt, Request, Response, Result};
+use poem::{Request, Response, Result};
 
 use crate::config::ServerTimingConfig;
 use crate::entry::Timings;
@@ -79,7 +80,7 @@ impl Discoverable for ServerTiming {
         }
         builder.attach_meta::<Self, HttpEndpointWrap>(HttpEndpointWrap::with_priority(
             endpoint_wrap_priority::INTERCEPTORS,
-            |_, endpoint| endpoint.interceptor(ServerTiming).boxed(),
+            |_, endpoint| wrap_poem(endpoint, |inner| inner.interceptor(ServerTiming)),
         ))
     }
 }

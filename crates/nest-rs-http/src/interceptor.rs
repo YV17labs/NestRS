@@ -5,14 +5,10 @@
 //! this crate through `nest-rs-graphql`, so naming the trait here is a cycle.
 
 use nest_rs_core::Container;
-use poem::Response;
-use poem::endpoint::BoxEndpoint;
 
-type WrapFn = Box<
-    dyn Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndpoint<'static, Response>
-        + Send
-        + Sync,
->;
+use crate::endpoint::BoxEndpoint;
+
+type WrapFn = Box<dyn Fn(&Container, BoxEndpoint) -> BoxEndpoint + Send + Sync>;
 
 /// Canonical priority bands for transport-edge wraps (outermost → innermost):
 ///
@@ -57,10 +53,7 @@ impl HttpEndpointWrap {
     /// ([`priority::INTERCEPTORS`]).
     pub fn new<F>(wrap: F) -> Self
     where
-        F: Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndpoint<'static, Response>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&Container, BoxEndpoint) -> BoxEndpoint + Send + Sync + 'static,
     {
         Self::with_priority(priority::INTERCEPTORS, wrap)
     }
@@ -68,10 +61,7 @@ impl HttpEndpointWrap {
     /// Construct with an explicit priority band; lower ends up innermost.
     pub fn with_priority<F>(priority: i32, wrap: F) -> Self
     where
-        F: Fn(&Container, BoxEndpoint<'static, Response>) -> BoxEndpoint<'static, Response>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&Container, BoxEndpoint) -> BoxEndpoint + Send + Sync + 'static,
     {
         Self {
             priority,
@@ -85,11 +75,7 @@ impl HttpEndpointWrap {
     }
 
     /// Apply the wrap to `endpoint`.
-    pub fn wrap(
-        &self,
-        container: &Container,
-        endpoint: BoxEndpoint<'static, Response>,
-    ) -> BoxEndpoint<'static, Response> {
+    pub fn wrap(&self, container: &Container, endpoint: BoxEndpoint) -> BoxEndpoint {
         (self.wrap)(container, endpoint)
     }
 }

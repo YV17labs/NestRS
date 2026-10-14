@@ -12,6 +12,7 @@ mod allow;
 mod body_limit;
 mod compression;
 mod controller;
+mod cors;
 mod edge;
 mod exclusive_paths;
 mod fallback;
@@ -95,9 +96,18 @@ where
         .configure(app.container())
         .await
         .expect("transport configures against the live container");
-    TestClient::new(
+    client(
         transport
             .take_endpoint()
             .expect("configure populates the endpoint"),
     )
+}
+
+/// poem's client over the transport's endpoint.
+pub(crate) fn client(
+    endpoint: nest_rs_http::BoxEndpoint,
+) -> TestClient<BoxEndpoint<'static, poem::Response>> {
+    TestClient::new(poem::EndpointExt::boxed(
+        nest_rs_http::__private::poem_bridge::to_poem(endpoint),
+    ))
 }

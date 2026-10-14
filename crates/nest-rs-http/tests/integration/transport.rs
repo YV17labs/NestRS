@@ -6,10 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::{App, ContainerBuilder, Transport, module};
+use nest_rs_core::{App, ContainerBuilder, Layer, Transport, injectable, module};
 use nest_rs_http::{
-    DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, SseStream, controller, routes,
+    DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, SseStream, async_trait, controller,
+    routes,
 };
+use nest_rs_interceptors::{AppBuilderInterceptorsExt, Interceptor, Next, interceptor};
 use nest_rs_testing::LogCapture;
 use poem::web::websocket::{Message as Frame, WebSocket};
 use poem::{Body, IntoResponse, Route, handler};
@@ -146,11 +148,12 @@ async fn serve() -> Serving {
 
 /// [`serve`] for any module and config — the same transport.
 pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: HttpConfig) -> Serving {
-    let app = App::builder()
-        .module::<M>()
-        .build()
-        .await
-        .expect("module boots");
+    serve_app(App::builder().module::<M>(), config).await
+}
+
+/// [`serve_module`] for an app built as `builder` describes.
+async fn serve_app(builder: nest_rs_core::AppBuilder, config: HttpConfig) -> Serving {
+    let app = builder.build().await.expect("module boots");
     let port = free_port();
     let mut transport = crate::built(&HttpConfig {
         host: "127.0.0.1".into(),
@@ -770,5 +773,147 @@ fn a_body_read_gap_under_the_request_timeout_or_without_one_is_not_remarked() {
         let logs = LogCapture::install();
         built_from(vars);
         logs.expect_none(nest_rs_http::target::HTTP, GAP_REACHES_THE_BUDGET);
+    }
+}
+
+/// An interceptor that only forwards: registered, it puts the bands between
+/// the edge and the router.
+#[injectable]
+#[derive(Default)]
+struct Forwarding;
+
+impl Layer for Forwarding {}
+
+#[async_trait]
+impl Interceptor for Forwarding {
+    async fn intercept(&self, req: poem::Request, next: Next<'_>) -> poem::Result<poem::Response> {
+        next.run(req).await
+    }
+}
+
+/// What both upgrading leaves answer: the switch to the `echo` protocol.
+fn switching() -> nest_rs_http::Response {
+    nest_rs_http::Response::builder()
+        .status(nest_rs_http::StatusCode::SWITCHING_PROTOCOLS)
+        .header(
+            nest_rs_http::header::CONNECTION,
+            nest_rs_http::HeaderValue::from_static("upgrade"),
+        )
+        .header(
+            nest_rs_http::header::UPGRADE,
+            nest_rs_http::HeaderValue::from_static("echo"),
+        )
+        .finish()
+}
+
+/// Echo the first four bytes the peer sends on the switched socket.
+async fn echo_four(mut socket: impl AsyncRead + tokio::io::AsyncWrite + Unpin) {
+    let mut bytes = [0_u8; 4];
+    if socket.read_exact(&mut bytes).await.is_ok() {
+        let _ = socket.write_all(&bytes).await;
+    }
+}
+
+/// A poem leaf taking the socket through poem's own upgrade, as a WebSocket
+/// gateway does until it leaves poem.
+#[handler]
+fn poem_side(req: &poem::Request) -> poem::Response {
+    let Ok(upgrade) = req.take_upgrade() else {
+        return poem::Response::builder()
+            .status(poem::http::StatusCode::UPGRADE_REQUIRED)
+            .finish();
+    };
+    tokio::spawn(async move {
+        if let Ok(socket) = upgrade.await {
+            echo_four(socket).await;
+        }
+    });
+    nest_rs_http::__private::poem_bridge::response_to_poem(switching())
+}
+
+/// A leaf on nestrs's vocabulary taking the socket through hyper's upgrade
+/// the request carries.
+async fn nestrs_side(req: nest_rs_http::Request) -> nest_rs_http::Result<nest_rs_http::Response> {
+    let Some(upgrade) = req.extensions().get::<hyper::upgrade::OnUpgrade>().cloned() else {
+        return Ok(nest_rs_http::Response::builder()
+            .status(nest_rs_http::StatusCode::UPGRADE_REQUIRED)
+            .finish());
+    };
+    tokio::spawn(async move {
+        if let Ok(socket) = upgrade.await {
+            echo_four(hyper_util::rt::TokioIo::new(socket)).await;
+        }
+    });
+    Ok(switching())
+}
+
+/// Both upgrading leaves, self-mounted.
+struct Upgrades;
+
+impl nest_rs_core::Discoverable for Upgrades {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<Upgrades, HttpEndpointMeta>(
+            HttpEndpointMeta::new(
+                &crate::PUBLIC_MOUNT,
+                "/upgrade/poem",
+                "upgrade",
+                |_container, route: Route| {
+                    route.at("/upgrade/poem", poem::get(poem_side)).at(
+                        "/upgrade/nestrs",
+                        poem::get(nest_rs_http::__private::poem_bridge::to_poem(
+                            nest_rs_http::endpoint_fn(nestrs_side),
+                        )),
+                    )
+                },
+            )
+            .also_mounts(["/upgrade/nestrs"])
+            .owned_by("Upgrades"),
+        )
+    }
+}
+
+#[module(providers = [Upgrades, Forwarding])]
+struct UpgradeModule;
+
+/// An upgrade request crosses the edge, the bands when one is registered and the
+/// router with its socket still reachable, and a leaf on either side of the
+/// bridge switches it.
+#[tokio::test]
+async fn an_upgrade_request_keeps_its_on_upgrade_through_the_stack() {
+    for banded in [false, true] {
+        let builder = App::builder().module::<UpgradeModule>();
+        let builder = match banded {
+            true => builder.use_interceptors_global([interceptor::<Forwarding>()]),
+            false => builder,
+        };
+        let serving = serve_app(builder, HttpConfig::default()).await;
+        for leaf in ["/upgrade/poem", "/upgrade/nestrs"] {
+            let mut stream = connect(serving.port).await;
+            stream
+                .write_all(
+                    format!(
+                        "GET {leaf} HTTP/1.1\r\nhost: localhost\r\nconnection: upgrade\r\n\
+                         upgrade: echo\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("the upgrade is asked for");
+            let head = tokio::time::timeout(PATIENCE, read_head(&mut stream))
+                .await
+                .expect("answered");
+            assert!(
+                head.starts_with("HTTP/1.1 101"),
+                "{leaf}, banded {banded}: {head}"
+            );
+            stream.write_all(b"ping").await.expect("sent on the socket");
+            let mut echoed = [0_u8; 4];
+            tokio::time::timeout(PATIENCE, stream.read_exact(&mut echoed))
+                .await
+                .expect("echoed in time")
+                .expect("echoed");
+            assert_eq!(&echoed, b"ping", "{leaf}, banded {banded}");
+        }
+        serving.cancel.cancel();
     }
 }

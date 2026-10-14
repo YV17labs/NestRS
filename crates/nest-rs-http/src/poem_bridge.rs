@@ -15,7 +15,7 @@ use hyper::upgrade::OnUpgrade;
 use poem::web::{LocalAddr, RemoteAddr};
 
 use crate::body::Body;
-use crate::endpoint::Endpoint;
+use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::{BoxError, HttpError, Result};
 use crate::problem::render_error;
 use crate::request::{Request, RequestFacts, Routed};
@@ -217,6 +217,16 @@ pub fn from_poem<E: poem::Endpoint + 'static>(endpoint: E) -> impl Endpoint {
 /// A nestrs endpoint answering poem's requests.
 pub fn to_poem<E: Endpoint>(endpoint: E) -> impl poem::Endpoint<Output = poem::Response> {
     ToPoem(endpoint)
+}
+
+/// `endpoint` inside `wrap`, a layer still written on poem: the request crosses
+/// into poem before it and back after it.
+pub fn wrap_poem<W, E>(endpoint: BoxEndpoint, wrap: W) -> BoxEndpoint
+where
+    W: FnOnce(poem::endpoint::BoxEndpoint<'static, poem::Response>) -> E,
+    E: poem::Endpoint + 'static,
+{
+    BoxEndpoint::new(from_poem(wrap(poem::EndpointExt::boxed(to_poem(endpoint)))))
 }
 
 struct FromPoem<E>(E);

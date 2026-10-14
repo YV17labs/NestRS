@@ -15,7 +15,6 @@
 //! outermost (`normalize`).
 
 use std::any::Any;
-use std::borrow::Cow;
 use std::future::{Future, poll_fn};
 use std::net::IpAddr;
 use std::pin::pin;
@@ -24,41 +23,36 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
+use http::uri::{PathAndQuery, Uri};
+use http::{HeaderName, HeaderValue, StatusCode, Version, header};
 use http_body_util::combinators::BoxBody;
 use nest_rs_core::{Container, RequestContinuation, RequestScope};
-use poem::http::uri::{PathAndQuery, Uri};
-use poem::http::{HeaderName, HeaderValue, StatusCode, Version, header};
-use poem::web::headers::{ContentLength, HeaderMapExt};
-use poem::{Body, Endpoint, IntoResponse, PathPattern, Request, Response, Result};
 use tokio::time::Instant;
 
 use tracing::Instrument;
 
 use crate::access_log::{AccessLog, Unanswered};
+use crate::body::Body;
 use crate::capped::{Capped, Overrun, Verdict};
 use crate::client_ip::ClientOrigin;
 use crate::drain::Drain;
-use crate::error::ResponseError;
+use crate::endpoint::Endpoint;
+use crate::error::{HttpError, ResponseError, Result};
 use crate::location::CallerUri;
-use crate::matched::MatchedRoute;
+use crate::matched::{self, MatchedRoute, Stamp};
 use crate::problem::ProblemDetails;
+use crate::request::Request;
+use crate::response::{IntoResponse, Response};
 use crate::{response_body, trace_context};
-
-/// The route template poem's router matched, as it was declared; `None` when
-/// nothing matched.
-fn matched_route(resp: &Response) -> Option<Cow<'_, str>> {
-    resp.data::<PathPattern>()
-        .map(|PathPattern(pattern)| crate::route_template::declared(pattern))
-}
 
 /// `err` as the problem document it answers, keeping the template the router
 /// matched, which rendering would otherwise drop and the span is named for.
-async fn rendered(err: poem::Error) -> Response {
-    let pattern = err.data::<PathPattern>().cloned();
-    let mut resp =
-        crate::problem::normalize_error_response(crate::problem::render_error(err)).await;
-    if let Some(pattern) = pattern {
-        resp.set_data(pattern);
+async fn rendered(err: HttpError) -> Response {
+    let resp = err.answer();
+    let stamp = Stamp::of(&resp);
+    let mut resp = crate::problem::normalize_error_response(resp).await;
+    if let Some(stamp) = stamp {
+        stamp.onto(&mut resp);
     }
     resp
 }
@@ -73,7 +67,7 @@ fn timed_out(timeout: Duration) -> Response {
         .max(1);
     Response::builder()
         .status(StatusCode::SERVICE_UNAVAILABLE)
-        .header(poem::http::header::RETRY_AFTER, seconds)
+        .header(header::RETRY_AFTER, HeaderValue::from(seconds))
         .finish()
 }
 
@@ -82,7 +76,7 @@ fn timed_out(timeout: Duration) -> Response {
 /// §15.5.9 asks — the unread rest leaves it unusable; HTTP/2 ends that stream
 /// alone and forbids the header (RFC 9113 §8.2.2).
 fn refused(overrun: Overrun, version: Version) -> Response {
-    let mut resp = crate::poem_bridge::response_to_poem(overrun.error().as_response());
+    let mut resp = overrun.error().as_response();
     if matches!(overrun, Overrun::Gap(_)) && version < Version::HTTP_2 {
         resp.headers_mut()
             .insert(header::CONNECTION, HeaderValue::from_static("close"));
@@ -136,9 +130,9 @@ pub(crate) struct EdgeEndpoint<E> {
     /// caches nothing, so one shared instance stands in for a fresh one.
     shared_scope: Option<Arc<RequestScope>>,
     timeout: Option<Duration>,
-    /// `None`: body readers fall back to their own default
+    /// The cap a body is held to, and what its readers read
     /// ([`current_body_limit`](crate::current_body_limit)).
-    body_limit: Option<usize>,
+    body_limit: usize,
     /// The gap a body may leave between two frames once something reads it.
     body_read_timeout: Duration,
     /// Each fills only what the response left unset: a value a handler, a
@@ -168,7 +162,7 @@ impl<E> EdgeEndpoint<E> {
         inner: E,
         container: Container,
         timeout: Option<Duration>,
-        body_limit: Option<usize>,
+        body_limit: usize,
         body_read_timeout: Duration,
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
@@ -230,11 +224,7 @@ impl<E> EdgeEndpoint<E> {
     }
 }
 
-impl<E> EdgeEndpoint<E>
-where
-    E: Endpoint,
-    E::Output: IntoResponse,
-{
+impl<E: Endpoint> EdgeEndpoint<E> {
     /// Wrap a body that is not empty in [`Capped`], counted where its declared
     /// length cannot be trusted; the verdict the edge answers from, if it
     /// wrapped one. Nothing is read.
@@ -244,15 +234,10 @@ where
             req.set_body(body);
             return None;
         }
-        let limit = self.body_limit.filter(|_| !declared || self.counts_body);
+        let limit = (!declared || self.counts_body).then_some(self.body_limit);
         let verdict = Verdict::default();
-        let capped = Capped::new(
-            body.into(),
-            limit,
-            self.body_read_timeout,
-            Arc::clone(&verdict),
-        );
-        req.set_body(Body::from(BoxBody::new(capped)));
+        let capped = Capped::new(body, limit, self.body_read_timeout, Arc::clone(&verdict));
+        req.set_body(Body::from_boxed(BoxBody::new(capped)));
         Some(verdict)
     }
 
@@ -277,13 +262,10 @@ where
         // falsify it (`counts_body`).
         let version = req.version();
         let declared = req
-            .headers()
-            .typed_get::<ContentLength>()
-            .map(|ContentLength(declared)| declared);
-        if let Some(limit) = self.body_limit
-            && declared.is_some_and(|declared| declared > limit as u64)
-        {
-            return self.finish(refused(Overrun::Cap(limit), version));
+            .header(header::CONTENT_LENGTH)
+            .and_then(|declared| declared.parse::<u64>().ok());
+        if declared.is_some_and(|declared| declared > self.body_limit as u64) {
+            return self.finish(refused(Overrun::Cap(self.body_limit), version));
         }
         let verdict = self.wrap_body(&mut req, declared.is_some());
 
@@ -315,20 +297,14 @@ where
             return self.finish(refused(overrun, version));
         }
         let resp = match result {
-            Ok(out) => out.into_response(),
+            Ok(resp) => resp,
             Err(err) => rendered(err).await,
         };
         self.finish(resp)
     }
 }
 
-impl<E> Endpoint for EdgeEndpoint<E>
-where
-    E: Endpoint,
-    E::Output: IntoResponse,
-{
-    type Output = Response;
-
+impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
     async fn call(&self, mut req: Request) -> Result<Response> {
         // One instant for the budget and the line: a body that trickles counts
         // against the request it belongs to.
@@ -373,7 +349,7 @@ where
             Ok(resp) => {
                 // Before the normalizer, which builds a fresh response without the
                 // matched template.
-                trace_context::name_route(&span, &method, matched_route(&resp).as_deref());
+                trace_context::name_route(&span, &method, matched::answered(&resp).as_deref());
                 (resp, None)
             }
             Err(payload) => {
@@ -409,13 +385,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use futures_util::StreamExt;
     use nest_rs_core::current_request_scope;
-    use poem::EndpointExt;
     use poem::handler;
     use poem::test::TestClient;
 
     use super::*;
+    use crate::endpoint::BoxEndpoint;
+    use crate::poem_bridge::{from_poem, to_poem};
 
     /// The gap bound the edges below hold a body to.
     const GAP: Duration = Duration::from_secs(30);
@@ -430,7 +408,7 @@ mod tests {
             inner,
             Container::builder().build(),
             timeout,
-            body_limit,
+            body_limit.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
             GAP,
             headers,
             false,
@@ -449,7 +427,7 @@ mod tests {
             inner,
             Container::builder().build(),
             None,
-            body_limit,
+            body_limit.unwrap_or(crate::RawBody::DEFAULT_LIMIT),
             GAP,
             headers,
             true,
@@ -486,8 +464,8 @@ mod tests {
     }
 
     #[handler]
-    fn sets_header() -> Response {
-        Response::builder()
+    fn sets_header() -> poem::Response {
+        poem::Response::builder()
             .header("x-content-type-options", "handler-value")
             .body("ok")
     }
@@ -502,8 +480,8 @@ mod tests {
     #[tokio::test]
     async fn a_handler_panic_answers_500_and_files_its_line_panic() {
         let logs = nest_rs_testing::LogCapture::install();
-        let ep = edge(panics_after_waiting, None, None, nosniff());
-        let resp = TestClient::new(ep).get("/").send().await;
+        let ep = edge(from_poem(panics_after_waiting), None, None, nosniff());
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
         resp.assert_content_type("application/problem+json");
         resp.assert_header("x-content-type-options", "nosniff");
@@ -553,17 +531,17 @@ mod tests {
             })
             .build();
         let ep = EdgeEndpoint::new(
-            panics_after_waiting,
+            from_poem(panics_after_waiting),
             container,
             None,
-            None,
+            crate::RawBody::DEFAULT_LIMIT,
             GAP,
             Vec::new(),
             false,
             false,
             Arc::default(),
         );
-        let resp = TestClient::new(ep).get("/").send().await;
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
         resp.0
             .into_body()
@@ -592,8 +570,13 @@ mod tests {
     #[tokio::test]
     async fn the_logged_payload_is_redacted() {
         let logs = nest_rs_testing::LogCapture::install();
-        let ep = edge(panics_over_a_decode_failure, None, None, Vec::new());
-        let resp = TestClient::new(ep).get("/").send().await;
+        let ep = edge(
+            from_poem(panics_over_a_decode_failure),
+            None,
+            None,
+            Vec::new(),
+        );
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
         let said = logs
@@ -611,8 +594,8 @@ mod tests {
 
     #[tokio::test]
     async fn installs_a_request_scope_and_forwards_the_response() {
-        let ep = edge(observe_scope, None, None, Vec::new());
-        let resp = TestClient::new(ep).get("/").send().await;
+        let ep = edge(from_poem(observe_scope), None, None, Vec::new());
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status_is_ok();
         resp.assert_text("ok").await;
     }
@@ -642,8 +625,8 @@ mod tests {
     async fn declared_length_over_the_cap_is_rejected_with_headers() {
         // TestClient bypasses the wire, so the Content-Length hyper would derive
         // is set by hand.
-        let ep = edge(echo_len, None, Some(8), nosniff());
-        let resp = TestClient::new(ep)
+        let ep = edge(from_poem(echo_len), None, Some(8), nosniff());
+        let resp = TestClient::new(to_poem(ep))
             .post("/")
             .header("content-length", "64")
             .body(vec![0u8; 64])
@@ -655,8 +638,8 @@ mod tests {
 
     #[tokio::test]
     async fn declared_length_within_the_cap_passes_the_body_through() {
-        let ep = edge(echo_len, None, Some(1024), Vec::new());
-        let resp = TestClient::new(ep)
+        let ep = edge(from_poem(echo_len), None, Some(1024), Vec::new());
+        let resp = TestClient::new(to_poem(ep))
             .post("/")
             .header("content-length", "64")
             .body(vec![0u8; 64])
@@ -669,8 +652,8 @@ mod tests {
     #[tokio::test]
     async fn an_undeclared_length_body_is_capped_as_its_reader_takes_it() {
         // No Content-Length: the wrapper counts what arrives.
-        let ep = edge(echo_len, None, Some(8), Vec::new());
-        let resp = TestClient::new(ep)
+        let ep = edge(from_poem(echo_len), None, Some(8), Vec::new());
+        let resp = TestClient::new(to_poem(ep))
             .post("/")
             .body(vec![0u8; 64])
             .send()
@@ -680,17 +663,22 @@ mod tests {
 
     #[tokio::test]
     async fn a_bodyless_request_passes_under_the_cap() {
-        let ep = edge(observe_scope, None, Some(8), Vec::new());
-        let resp = TestClient::new(ep).get("/").send().await;
+        let ep = edge(from_poem(observe_scope), None, Some(8), Vec::new());
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status_is_ok();
     }
 
     #[tokio::test]
     async fn overrunning_handler_answers_503_with_a_retry_after_and_headers() {
-        let ep = edge(slow, Some(Duration::from_millis(20)), None, nosniff());
-        let resp = TestClient::new(ep).get("/").send().await;
+        let ep = edge(
+            from_poem(slow),
+            Some(Duration::from_millis(20)),
+            None,
+            nosniff(),
+        );
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-        resp.assert_header(poem::http::header::RETRY_AFTER, "1");
+        resp.assert_header(header::RETRY_AFTER, "1");
         resp.assert_header("x-content-type-options", "nosniff");
     }
 
@@ -699,7 +687,7 @@ mod tests {
         let value = |secs: u64, nanos: u32| {
             timed_out(Duration::new(secs, nanos))
                 .headers()
-                .get(poem::http::header::RETRY_AFTER)
+                .get(header::RETRY_AFTER)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_owned)
         };
@@ -716,12 +704,12 @@ mod tests {
     async fn synchronous_response_under_a_timeout_is_forwarded() {
         // The lazy timer's fast path: a first poll that resolves never arms it.
         let ep = edge(
-            observe_scope,
+            from_poem(observe_scope),
             Some(Duration::from_secs(30)),
             None,
             Vec::new(),
         );
-        let resp = TestClient::new(ep).get("/").send().await;
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status_is_ok();
         resp.assert_text("ok").await;
     }
@@ -736,12 +724,12 @@ mod tests {
     async fn pending_handler_within_budget_completes_after_arming_the_timer() {
         // The lazy timer's slow path: a first `Pending` arms it.
         let ep = edge(
-            briefly_slow,
+            from_poem(briefly_slow),
             Some(Duration::from_secs(30)),
             None,
             Vec::new(),
         );
-        let resp = TestClient::new(ep).get("/").send().await;
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status_is_ok();
         resp.assert_text("made it").await;
     }
@@ -753,8 +741,8 @@ mod tests {
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
         ));
-        let ep = edge(sets_header, None, None, headers);
-        let resp = TestClient::new(ep).get("/").send().await;
+        let ep = edge(from_poem(sets_header), None, None, headers);
+        let resp = TestClient::new(to_poem(ep)).get("/").send().await;
         resp.assert_status_is_ok();
         resp.assert_header_all("x-content-type-options", ["handler-value"]);
         resp.assert_header("x-frame-options", "DENY");
@@ -762,8 +750,8 @@ mod tests {
 
     #[tokio::test]
     async fn fused_normalize_lifts_a_413_onto_problem_json_with_headers() {
-        let ep = fused_edge(echo_len, Some(8), nosniff());
-        let resp = TestClient::new(ep)
+        let ep = fused_edge(from_poem(echo_len), Some(8), nosniff());
+        let resp = TestClient::new(to_poem(ep))
             .post("/")
             .header("content-length", "64")
             .body(vec![0u8; 64])
@@ -777,7 +765,7 @@ mod tests {
     /// Reads its body to the end and answers `200` whatever the read made of
     /// it: the edge's answer must not depend on how a reader takes a failure.
     #[handler]
-    async fn swallows_read_errors(body: Body) -> &'static str {
+    async fn swallows_read_errors(body: poem::Body) -> &'static str {
         let mut frames = body.into_bytes_stream();
         while frames.next().await.is_some() {}
         "read"
@@ -785,22 +773,21 @@ mod tests {
 
     /// One frame, then nothing for ever.
     fn stalling() -> Body {
-        Body::from_bytes_stream(
-            futures_util::stream::iter([Ok::<_, std::io::Error>(&b"part"[..])])
+        Body::from_stream(
+            futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"part"))])
                 .chain(futures_util::stream::pending()),
         )
     }
 
     fn post(version: Version, body: Body) -> Request {
-        Request::builder()
-            .method(poem::http::Method::POST)
-            .version(version)
-            .body(body)
+        let mut request = Request::builder().method(http::Method::POST).body(body);
+        request.head_mut().version = version;
+        request
     }
 
     #[tokio::test]
     async fn a_body_past_the_cap_answers_413_whatever_its_reader_made_of_it() {
-        let ep = edge(swallows_read_errors, None, Some(8), nosniff());
+        let ep = edge(from_poem(swallows_read_errors), None, Some(8), nosniff());
         let resp = ep
             .call(post(Version::HTTP_11, Body::from(vec![0u8; 64])))
             .await
@@ -811,7 +798,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_stalled_body_answers_408_closing_an_http1_connection() {
-        let ep = edge(swallows_read_errors, None, Some(1024), nosniff());
+        let ep = edge(from_poem(swallows_read_errors), None, Some(1024), nosniff());
         let resp = ep
             .call(post(Version::HTTP_11, stalling()))
             .await
@@ -827,7 +814,12 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_stalled_body_on_http2_answers_408_without_a_connection_header() {
-        let ep = edge(swallows_read_errors, None, Some(1024), Vec::new());
+        let ep = edge(
+            from_poem(swallows_read_errors),
+            None,
+            Some(1024),
+            Vec::new(),
+        );
         let resp = ep
             .call(post(Version::HTTP_2, stalling()))
             .await
@@ -836,19 +828,17 @@ mod tests {
         assert!(resp.headers().get(header::CONNECTION).is_none());
     }
 
-    fn failing() -> impl Endpoint<Output = Response> {
-        poem::endpoint::make(|_| async {
-            Err::<Response, poem::Error>(poem::Error::from_status(StatusCode::BAD_REQUEST))
-        })
+    fn failing() -> impl Endpoint {
+        crate::endpoint_fn(|_| async { Err(HttpError::from_status(StatusCode::BAD_REQUEST)) })
     }
 
     #[tokio::test]
     async fn an_inner_error_is_rendered_inside_the_header_stamp() {
         for ep in [
-            fused_edge(failing(), None, nosniff()).boxed(),
-            edge(failing(), None, None, nosniff()).boxed(),
+            BoxEndpoint::new(fused_edge(failing(), None, nosniff())),
+            BoxEndpoint::new(edge(failing(), None, None, nosniff())),
         ] {
-            let resp = TestClient::new(ep).get("/").send().await;
+            let resp = TestClient::new(to_poem(ep)).get("/").send().await;
             resp.assert_status(StatusCode::BAD_REQUEST);
             resp.assert_content_type("application/problem+json");
             resp.assert_header("x-content-type-options", "nosniff");

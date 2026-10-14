@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, ResolvedLayer, declare_handler};
 use nest_rs_core::{Handler, Layer, LayerSite, Posture, UnitContext};
 use nest_rs_guards::{Denial, Guard};
-use nest_rs_http::__private::GuardedEndpoint;
+use nest_rs_http::__private::{GuardedEndpoint, poem_bridge};
 use nest_rs_http::async_trait;
 use nest_rs_testing::LogCapture;
-use poem::{Endpoint, EndpointExt, IntoResponse, Request, endpoint::make_sync};
+use poem::{Endpoint, IntoResponse, Request, endpoint::make_sync};
 
 struct Mount;
 
@@ -68,12 +68,19 @@ fn entry(guard: DecisionGuard) -> ResolvedLayer<dyn Guard> {
     }
 }
 
-fn guarded<E>(chain: Vec<ResolvedLayer<dyn Guard>>, inner: E) -> GuardedEndpoint
+fn guarded<E>(
+    chain: Vec<ResolvedLayer<dyn Guard>>,
+    inner: E,
+) -> impl Endpoint<Output = poem::Response>
 where
     E: Endpoint + 'static,
     E::Output: IntoResponse,
 {
-    GuardedEndpoint::new(&UPGRADE, chain, inner.map_to_response().boxed())
+    poem_bridge::to_poem(GuardedEndpoint::new(
+        &UPGRADE,
+        chain,
+        nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(inner)),
+    ))
 }
 
 async fn call_guarded(guard: DecisionGuard) -> poem::Response {

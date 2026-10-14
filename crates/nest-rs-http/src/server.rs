@@ -3,8 +3,9 @@
 //! connection served by hyper on a task of its own, a panic contained there and
 //! each of its phases held to a deadline ([`Phases`]).
 //!
-//! poem stays the request engine behind [`BoxEndpoint`]; its `Server` exposes no
-//! hook for the cap, the accept errors or hyper's timer, so the loop is ours
+//! Each request hyper reads is handed to the assembled [`BoxEndpoint`] as a
+//! nestrs [`Request`]; poem's `Server` exposed no hook for the cap, the accept
+//! errors or hyper's timer, so the loop is ours
 //! (`.claude/decisions/http-server.md`).
 
 use std::convert::Infallible;
@@ -17,17 +18,14 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-use bytes::Bytes;
 use futures_util::FutureExt;
+use http::Version;
+use http::uri::Scheme;
+use http_body_util::BodyExt;
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
-use poem::endpoint::BoxEndpoint;
-use poem::http::Version;
-use poem::http::uri::Scheme;
-use poem::web::{LocalAddr, RemoteAddr};
-use poem::{Addr, Endpoint, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -37,8 +35,11 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
+use crate::body::Body;
 use crate::drain::Drain;
+use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::phase::{PhasedBody, PhasedIo, Phases};
+use crate::request::{Request, RequestFacts};
 use crate::tls::ListenerTls;
 use crate::window::{self, Window};
 
@@ -64,9 +65,6 @@ const HTTP2_KEEP_ALIVE: Duration = Duration::from_secs(20);
 /// closes an idle HTTP/1 connection at once, an HTTP/2 peer needs a moment to
 /// read `GOAWAY`, and a head half read is waited on — then it is dropped.
 const PHASE_GRACE: Duration = Duration::from_secs(1);
-
-/// What a response body is once it leaves poem.
-type ResponseBody = BoxBody<Bytes, io::Error>;
 
 /// What each connection's phases and writes are held to: the four
 /// [`HttpConfig`](crate::HttpConfig) deadlines, the body's held by the edge.
@@ -98,7 +96,7 @@ pub(crate) struct Server {
     listener: TcpListener,
     local: SocketAddr,
     tls: Option<ListenerTls>,
-    endpoint: Arc<BoxEndpoint<'static, Response>>,
+    endpoint: BoxEndpoint,
     drain: Arc<Drain>,
     admission: Admission,
     deadlines: Deadlines,
@@ -108,7 +106,7 @@ impl Server {
     /// Serve `endpoint` on `listener`, at most `max_concurrent_connections` at once.
     pub(crate) fn new(
         listener: TcpListener,
-        endpoint: BoxEndpoint<'static, Response>,
+        endpoint: BoxEndpoint,
         drain: Arc<Drain>,
         max_concurrent_connections: usize,
         deadlines: Deadlines,
@@ -118,7 +116,7 @@ impl Server {
             local: listener.local_addr()?,
             listener,
             tls,
-            endpoint: Arc::new(endpoint),
+            endpoint,
             drain,
             admission: Admission::new(max_concurrent_connections),
             deadlines,
@@ -195,7 +193,7 @@ impl Server {
                 local: self.local,
                 accepted,
                 deadlines: self.deadlines,
-                endpoint: Arc::clone(&self.endpoint),
+                endpoint: self.endpoint.clone(),
                 builder: Arc::clone(&builder),
                 shutdown: shutdown.clone(),
             };
@@ -253,7 +251,7 @@ struct Connection {
     local: SocketAddr,
     accepted: Instant,
     deadlines: Deadlines,
-    endpoint: Arc<BoxEndpoint<'static, Response>>,
+    endpoint: BoxEndpoint,
     builder: Arc<auto::Builder<Contained>>,
     shutdown: CancellationToken,
 }
@@ -309,24 +307,24 @@ impl Connection {
             ..
         } = self;
         let requests = Arc::clone(&phases);
-        let service = hyper::service::service_fn(move |request: poem::http::Request<Incoming>| {
+        let service = hyper::service::service_fn(move |request: http::Request<Incoming>| {
             // Taken here, so a handler dropped before it answers ends it too.
             let in_flight = requests.request();
             let http2 = request.version() == Version::HTTP_2;
-            let endpoint = Arc::clone(&endpoint);
-            let request = poem::Request::from((
-                request,
-                LocalAddr(Addr::SocketAddr(local)),
-                RemoteAddr(Addr::SocketAddr(peer)),
-                scheme.clone(),
-            ));
+            let endpoint = endpoint.clone();
+            let request = arrived(request, peer, local, scheme.clone());
             async move {
-                let response = poem::http::Response::<ResponseBody>::from(
-                    endpoint.get_response(request).await,
-                );
+                let response = match endpoint.call(request).await {
+                    Ok(response) => response,
+                    Err(error) => error.into_response(),
+                };
                 // Read on the stream's own task, where hyper polls this future.
                 let window = if http2 { Window::current() } else { None };
-                Ok::<_, Infallible>(response.map(|body| PhasedBody::new(body, in_flight, window)))
+                Ok::<_, Infallible>(
+                    response
+                        .into_http()
+                        .map(|body| PhasedBody::new(body, in_flight, window)),
+                )
             }
         });
         let io = TokioIo::new(PhasedIo::new(io, Arc::clone(&phases)));
@@ -365,6 +363,27 @@ impl Connection {
             ),
         }
     }
+}
+
+/// The request hyper read, as the endpoint takes it: hyper's `OnUpgrade` stays
+/// in its extensions, where a leaf takes the socket, and its body is boxed once,
+/// as `Sync` as hyper's own.
+fn arrived(
+    request: http::Request<Incoming>,
+    peer: SocketAddr,
+    local: SocketAddr,
+    scheme: Scheme,
+) -> Request {
+    let (head, body) = request.into_parts();
+    let facts = RequestFacts {
+        peer: Some(peer),
+        local: Some(local),
+        scheme,
+        original_uri: head.uri.clone(),
+        route: None,
+    };
+    let body = Body::from_boxed(BoxBody::new(body.map_err(io::Error::other)));
+    Request::from_raw(head, body, facts)
 }
 
 /// Whether `error` ended a connection on a write the peer took nothing of.
@@ -570,12 +589,15 @@ mod tests {
     use std::sync::Mutex;
     use std::task::Context;
 
+    use bytes::Bytes;
+    use http::HeaderValue;
     use nest_rs_testing::LogCapture;
-    use poem::EndpointExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadBuf};
 
     use super::*;
+    use crate::endpoint_fn;
     use crate::phase::PIECE;
+    use crate::response::Response;
 
     /// `EMFILE` on Linux and macOS alike.
     const EMFILE: i32 = 24;
@@ -646,9 +668,7 @@ mod tests {
 
     /// One HTTP/1.1 request answered by `endpoint` over a [`Recorded`] socket
     /// under the connection's whole stack: what the peer read, and every write.
-    async fn answered_by(
-        endpoint: impl Endpoint<Output = Response> + 'static,
-    ) -> (Bytes, Vec<Written>) {
+    async fn answered_by(endpoint: impl Endpoint) -> (Bytes, Vec<Written>) {
         let deadlines = Deadlines::default();
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let writes = Arc::new(Mutex::new(Vec::new()));
@@ -667,7 +687,7 @@ mod tests {
             local: SocketAddr::from(([127, 0, 0, 1], 3_000)),
             accepted: Instant::now(),
             deadlines,
-            endpoint: Arc::new(endpoint.boxed()),
+            endpoint: BoxEndpoint::new(endpoint),
             builder: Arc::new(builder(deadlines.send)),
             shutdown: CancellationToken::new(),
         };
@@ -690,10 +710,10 @@ mod tests {
     #[tokio::test]
     async fn an_http1_response_leaves_in_one_write_on_a_socket_that_offers_vectored_ones() {
         const BODY: &[u8] = br#"{"message":"Hello World"}"#;
-        let endpoint = poem::endpoint::make_sync(|_| {
-            Response::builder()
-                .content_type("application/json")
-                .body(BODY.to_vec())
+        let endpoint = endpoint_fn(|_| async {
+            Ok(Response::builder()
+                .content_type(HeaderValue::from_static("application/json"))
+                .body(BODY.to_vec()))
         });
         let (response, writes) = answered_by(endpoint).await;
         assert!(response.ends_with(BODY), "{response:?}");
@@ -707,12 +727,10 @@ mod tests {
     /// An event stream's shape: chunks of unknown total length.
     #[tokio::test]
     async fn a_streamed_http1_response_writes_each_chunk_with_its_framing_as_one_buffer() {
-        let endpoint = poem::endpoint::make_sync(|_| {
+        let endpoint = endpoint_fn(|_| async {
             let events = ["data: one\n\n", "data: two\n\n"]
                 .map(|event| Ok::<_, io::Error>(Bytes::from_static(event.as_bytes())));
-            Response::builder().body(poem::Body::from_bytes_stream(futures_util::stream::iter(
-                events,
-            )))
+            Ok(Response::builder().body(Body::from_stream(futures_util::stream::iter(events))))
         });
         let (response, writes) = answered_by(endpoint).await;
         assert!(
@@ -736,7 +754,10 @@ mod tests {
         let body = Bytes::from(vec![b'x'; 4 * 1024 * 1024]);
         let endpoint = {
             let body = body.clone();
-            poem::endpoint::make_sync(move |_| Response::builder().body(body.clone()))
+            endpoint_fn(move |_| {
+                let body = body.clone();
+                async move { Ok(Response::builder().body(body)) }
+            })
         };
         let (response, writes) = answered_by(endpoint).await;
         assert!(response.ends_with(&body), "the body arrives whole");
@@ -836,24 +857,22 @@ mod tests {
 
     /// What runs outside the edge, where only a framework defect can panic once
     /// the edge contains every handler: `/panic` unwinds, any other path answers.
-    fn unwinding() -> impl Endpoint<Output = Response> {
-        poem::endpoint::make_sync(|req| {
+    fn unwinding() -> impl Endpoint {
+        endpoint_fn(|req: Request| async move {
             assert!(req.uri().path() != "/panic", "the endpoint panicked");
-            Response::builder().body("pong")
+            Ok(Response::builder().body("pong"))
         })
     }
 
     /// `endpoint` under the whole accept loop on a loopback port, until the
     /// token is cancelled.
-    async fn serving(
-        endpoint: impl Endpoint<Output = Response> + 'static,
-    ) -> (SocketAddr, CancellationToken) {
+    async fn serving(endpoint: impl Endpoint) -> (SocketAddr, CancellationToken) {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("a loopback port");
         let server = Server::new(
             listener,
-            endpoint.boxed(),
+            BoxEndpoint::new(endpoint),
             Arc::new(Drain::default()),
             8,
             Deadlines::default(),
@@ -922,7 +941,7 @@ mod tests {
             .expect("the HTTP/2 preface is accepted");
         let connection = tokio::spawn(connection);
         let get = |path: &str| {
-            poem::http::Request::get(format!("http://{local}{path}"))
+            http::Request::get(format!("http://{local}{path}"))
                 .body(())
                 .expect("a request")
         };

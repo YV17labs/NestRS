@@ -21,7 +21,7 @@ use nest_rs_guards::__private::{
     structured_reason,
 };
 use nest_rs_guards::{Denial, Guard, GuardSpec};
-use nest_rs_http::__private::{GuardedEndpoint, refused_route};
+use nest_rs_http::__private::{GuardedEndpoint, poem_bridge, refused_route};
 use poem::endpoint::BoxEndpoint;
 use poem::{EndpointExt, Response};
 
@@ -202,7 +202,12 @@ pub fn guard_ws_upgrade(
     if chain.is_empty() {
         return endpoint;
     }
-    GuardedEndpoint::new(handler, chain, endpoint).boxed()
+    poem_bridge::to_poem(GuardedEndpoint::new(
+        handler,
+        chain,
+        nest_rs_http::BoxEndpoint::new(poem_bridge::from_poem(endpoint)),
+    ))
+    .boxed()
 }
 
 #[cfg(test)]

@@ -6,10 +6,10 @@ sidebar:
 ---
 
 One flag makes the transport compress responses when the client asks for
-it. `HttpConfig.compression` turns on poem's negotiation layer: each
-request's `Accept-Encoding` header picks gzip, deflate, brotli or zstd,
-and the response body is encoded before it leaves the process. Off by
-default — in most deployments a reverse proxy already does this.
+it. With `HttpConfig.compression` on, each request's `Accept-Encoding` picks
+zstd, brotli, gzip or deflate, weighed as RFC 9110 §12.5.3 reads it, and the
+response body is encoded before it leaves the process. Off by default — in
+most deployments a reverse proxy already does this.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)" {3}
 HttpModule::for_root(HttpConfig {
@@ -42,12 +42,27 @@ HTTP/1.1 200 OK
 content-type: application/json
 ```
 
+## What it negotiates
+
+- The coding weighed highest wins, `zstd` first among equals; `gzip;q=0`
+  refuses gzip, and an `identity` weighed above every coding is answered
+  unencoded. A client sending no `Accept-Encoding` gets plain bytes.
+- Every response the layer could have encoded carries
+  `Vary: Accept-Encoding`, so a shared cache keeps the encodings apart.
+- A request body whose `Content-Encoding` names one of the four codings is
+  decoded before the route reads it, still under the transport's body cap.
+
 ## Limits
 
 - The layer sits inside CORS, so a preflight (`OPTIONS`, no body) is never
   compressed, and outside the handler, so what the handler returns is what
   gets encoded.
-- A response already carrying `Content-Encoding` is left untouched.
+- An event stream is never compressed: an encoder would hold each event back
+  until its buffer filled. Neither is a `204`, a `304`, nor a response already
+  carrying `Content-Encoding`.
+- A partial answer — a `206`, or any response carrying `Content-Range` — is
+  sent as written: its range counts bytes before any encoding (RFC 9110 §14.4),
+  so an encoded part would name offsets its body does not have.
 - Turn it off (the default) when a proxy, CDN, or load balancer in front of
   the app compresses — doing it twice only burns CPU.
 

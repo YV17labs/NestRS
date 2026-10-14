@@ -133,13 +133,14 @@ pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream 
                     ::nest_rs_http::__private::HttpEndpointWrap::with_priority(
                         #priority,
                         move |_container, __endpoint| {
-                        ::nest_rs_http::poem::EndpointExt::boxed(::nest_rs_http::poem::EndpointExt::map_to_response(
-                            ::nest_rs_interceptors::InterceptorExt::interceptor(
+                            ::nest_rs_http::__private::poem_bridge::wrap_poem(
                                 __endpoint,
-                                ::std::sync::Arc::clone(&__arc),
-                            ),
-                        ))
-                    },
+                                |__inner| ::nest_rs_interceptors::InterceptorExt::interceptor(
+                                    __inner,
+                                    ::std::sync::Arc::clone(&__arc),
+                                ),
+                            )
+                        },
                     ),
                 )
             }

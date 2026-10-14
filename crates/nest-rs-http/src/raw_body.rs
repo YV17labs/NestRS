@@ -1,8 +1,8 @@
 //! Raw request body extractor with a size guard.
 //!
-//! [`RawBody`] reads the whole body into [`Bytes`], capped at
-//! [`RawBody::DEFAULT_LIMIT`] (2 MiB) unless the transport edge carries a
-//! configured cap ([`current_body_limit`]); past it, `413 Payload Too Large`.
+//! [`RawBody`] reads the whole body into [`Bytes`], capped at the transport's
+//! configured cap ([`current_body_limit`], [`RawBody::DEFAULT_LIMIT`] — 2 MiB —
+//! unless configured); past it, `413 Payload Too Large`.
 //! For code that needs the exact bytes. It reads after routing and the guards,
 //! like every reader: the edge wraps the body and reads none of it, so a guard
 //! verifying a webhook's signature reads it the same way, under the same cap,
@@ -21,27 +21,28 @@ tokio::task_local! {
     static BODY_LIMIT: usize;
 }
 
-/// Run `fut` with the edge's configured cap ambient; `None` installs nothing and
-/// leaves readers on [`RawBody::DEFAULT_LIMIT`].
-pub(crate) async fn with_body_limit<F: std::future::Future>(
-    limit: Option<usize>,
-    fut: F,
-) -> F::Output {
-    match limit {
-        Some(limit) => BODY_LIMIT.scope(limit, fut).await,
-        None => fut.await,
-    }
+/// Run `fut` with the edge's configured cap ambient.
+pub(crate) async fn with_body_limit<F: std::future::Future>(limit: usize, fut: F) -> F::Output {
+    BODY_LIMIT.scope(limit, fut).await
 }
 
-/// The transport's configured whole-body byte cap, when one is installed: what
-/// a reader — an extractor, a guard reading the body — buffers at most. Body
-/// readers fall back to their own default on `None`.
-pub fn current_body_limit() -> Option<usize> {
-    BODY_LIMIT.try_with(|limit| *limit).ok()
+/// The whole-body byte cap a reader — an extractor, a guard reading the body —
+/// buffers at most: the transport's configured cap on a request it serves,
+/// [`RawBody::DEFAULT_LIMIT`] off one.
+///
+/// ```
+/// use nest_rs_http::{RawBody, current_body_limit};
+///
+/// assert_eq!(current_body_limit(), RawBody::DEFAULT_LIMIT);
+/// ```
+pub fn current_body_limit() -> usize {
+    BODY_LIMIT
+        .try_with(|limit| *limit)
+        .unwrap_or(RawBody::DEFAULT_LIMIT)
 }
 
-/// Whole request body as `Bytes`, bounded by [`RawBody::DEFAULT_LIMIT`] (or
-/// by the transport edge's configured cap, when one is installed).
+/// Whole request body as `Bytes`, bounded by the transport's configured cap
+/// ([`current_body_limit`]).
 #[derive(Debug, Clone)]
 pub struct RawBody(pub Bytes);
 
@@ -76,8 +77,7 @@ impl Deref for RawBody {
 
 impl<'a> FromRequest<'a> for RawBody {
     async fn from_request(_req: &'a Request, body: &mut RequestBody) -> Result<Self> {
-        let limit = crate::current_body_limit().unwrap_or(Self::DEFAULT_LIMIT);
-        Self::extract_with_limit(body, limit).await
+        Self::extract_with_limit(body, crate::current_body_limit()).await
     }
 }
 
@@ -141,10 +141,9 @@ mod tests {
     #[tokio::test]
     async fn ambient_limit_overrides_the_default() {
         let (req, mut body) = Request::builder().body(vec![b'x'; 64]).split();
-        let err =
-            crate::raw_body::with_body_limit(Some(32), RawBody::from_request(&req, &mut body))
-                .await
-                .expect_err("over the ambient cap");
+        let err = crate::raw_body::with_body_limit(32, RawBody::from_request(&req, &mut body))
+            .await
+            .expect_err("over the ambient cap");
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
@@ -152,10 +151,9 @@ mod tests {
     #[tokio::test]
     async fn ambient_limit_passes_when_payload_fits() {
         let (req, mut body) = Request::builder().body(vec![b'x'; 32]).split();
-        let raw =
-            crate::raw_body::with_body_limit(Some(32), RawBody::from_request(&req, &mut body))
-                .await
-                .expect("fits");
+        let raw = crate::raw_body::with_body_limit(32, RawBody::from_request(&req, &mut body))
+            .await
+            .expect("fits");
         assert_eq!(raw.0.len(), 32);
     }
 
@@ -175,7 +173,7 @@ mod tests {
         let (req, mut body) = Request::builder().body(vec![b'x'; 64]).split();
 
         let err = crate::raw_body::with_body_limit(
-            Some(32),
+            32,
             nest_rs_core::with_request_scope(
                 Some(scope),
                 nest_rs_core::Correlation::minted(None),

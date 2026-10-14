@@ -12,9 +12,11 @@
 
 use std::fmt::Write;
 
+use http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use nest_rs_core::{Correlation, TraceParent, TraceState};
-use poem::http::{HeaderName, HeaderValue, Method, StatusCode, header};
-use poem::{Request, Response};
+
+use crate::request::Request;
+use crate::response::Response;
 
 use crate::client_ip::ClientOrigin;
 
@@ -211,28 +213,21 @@ mod tests {
         super::resolve(req, ClientOrigin::of_with(req, trusted_proxies))
     }
 
-    /// `from_parts` is the only way to give a `Request` a remote address.
+    /// A request from `peer`, carrying `headers`.
     fn req_from(peer: &str, headers: &[(HeaderName, &str)]) -> Request {
-        use poem::Addr;
-        use poem::web::{LocalAddr, RemoteAddr};
-
         let socket: std::net::SocketAddr = format!("{peer}:40000").parse().expect("test literal");
-        let (mut parts, _) = poem::http::Request::new(()).into_parts();
-        for (name, value) in headers {
-            parts
-                .headers
-                .insert(name, HeaderValue::from_str(value).expect("header value"));
-        }
-        Request::from_parts(
-            (
-                parts,
-                LocalAddr::default(),
-                RemoteAddr(Addr::socket(socket)),
-                poem::http::uri::Scheme::HTTP,
+        headers
+            .iter()
+            .fold(
+                Request::builder().peer_addr(socket),
+                |built, (name, value)| {
+                    built.header(
+                        name.clone(),
+                        HeaderValue::from_str(value).expect("header value"),
+                    )
+                },
             )
-                .into(),
-            poem::Body::empty(),
-        )
+            .finish()
     }
 
     #[test]

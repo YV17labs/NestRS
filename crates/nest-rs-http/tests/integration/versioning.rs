@@ -173,7 +173,7 @@ async fn boot_with(
         .configure(app.container())
         .await
         .expect("transport configures against the live container");
-    TestClient::new(
+    crate::client(
         transport
             .take_endpoint()
             .expect("configure populates the endpoint"),
@@ -420,7 +420,7 @@ async fn boot_edge_cases(default: Option<&str>) -> TestClient<BoxEndpoint<'stati
         .configure(app.container())
         .await
         .expect("configures");
-    TestClient::new(transport.take_endpoint().expect("an endpoint"))
+    crate::client(transport.take_endpoint().expect("an endpoint"))
 }
 
 #[tokio::test]
@@ -595,7 +595,7 @@ async fn boot_route_shapes(default: Option<&str>) -> TestClient<BoxEndpoint<'sta
         .configure(app.container())
         .await
         .expect("configures");
-    TestClient::new(transport.take_endpoint().expect("an endpoint"))
+    crate::client(transport.take_endpoint().expect("an endpoint"))
 }
 
 #[tokio::test]
@@ -663,7 +663,7 @@ async fn an_accept_header_that_is_not_text_is_refused_too() {
         .configure(app.container())
         .await
         .expect("configures");
-    let client = TestClient::new(transport.take_endpoint().expect("an endpoint"));
+    let client = crate::client(transport.take_endpoint().expect("an endpoint"));
 
     let undecodable = poem::http::HeaderValue::from_bytes(b"application/json; version=2\xff")
         .expect("a legal header value");

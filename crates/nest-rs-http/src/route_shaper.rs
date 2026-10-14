@@ -267,7 +267,7 @@ async fn apply_body_pipes(
     if !content_type.contains("json") {
         return Ok(());
     }
-    let limit = crate::current_body_limit().unwrap_or(crate::RawBody::DEFAULT_LIMIT);
+    let limit = crate::current_body_limit();
     let body = req.take_body();
     let bytes = match body.into_bytes_limit(limit).await {
         Ok(b) => b,

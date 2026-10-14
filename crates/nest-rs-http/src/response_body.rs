@@ -8,10 +8,9 @@
 //! ([`continue_body`]): the caller's ability, the pool rather than the
 //! transaction the route settles.
 //!
-//! hyper picks `Content-Length` over chunked from `size_hint().exact()`, and
-//! poem's `Body::from_bytes_stream` reports `(0, None)`: [`Carried`] is a real
-//! `http_body::Body` forwarding `size_hint` and `is_end_stream`, so the framing
-//! is unchanged.
+//! hyper picks `Content-Length` over chunked from `size_hint().exact()`, and a
+//! streamed body reports `(0, None)`: [`Carried`] is a real `http_body::Body`
+//! forwarding `size_hint` and `is_end_stream`, so the framing is unchanged.
 //!
 //! A body marked [`OpenEndedBody`] is ended cleanly at the shutdown signal; any
 //! other gets the window and is cut at its close. Either way its line files
@@ -29,14 +28,15 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use http_body::{Body as HttpBody, Frame, SizeHint};
 use http_body_util::combinators::BoxBody;
-use poem::{Body, Response};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
 use nest_rs_core::operation_log::{CANCELLED, PANIC};
 use nest_rs_core::{Continuation, RequestContinuation};
 
 use crate::access_log::AccessLog;
+use crate::body::Body;
 use crate::drain::Drain;
+use crate::response::Response;
 
 /// Marks a response whose body has no end of its own — an event stream, a
 /// push channel — so the transport ends it at the shutdown signal rather than
@@ -49,7 +49,7 @@ use crate::drain::Drain;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OpenEndedBody;
 
-/// The exact type poem converts a [`Body`] to and from in its public `From`
+/// The exact type poem converts its body to and from in its public `From`
 /// impls.
 type PoemBody = BoxBody<Bytes, IoError>;
 
@@ -61,10 +61,10 @@ struct BodyContinuation(RequestContinuation);
 
 /// Capture, for a body that streams, what the handler's unit carries into it;
 /// a body of known length is written at once and needs none.
-pub(crate) fn continue_body(mut resp: Response) -> Response {
+pub(crate) fn continue_body(mut resp: poem::Response) -> poem::Response {
     let body: PoemBody = resp.take_body().into();
     let streams = !body.is_end_stream() && body.size_hint().exact().is_none();
-    resp.set_body(Body::from(body));
+    resp.set_body(poem::Body::from(body));
     if streams && let Some(carried) = RequestContinuation::capture(Continuation::Body) {
         resp.extensions_mut().insert(BodyContinuation(carried));
     }
@@ -110,7 +110,7 @@ pub(crate) fn carry(
         .get::<OpenEndedBody>()
         .map(|_| Box::pin(drain.going_away()));
     let carried = Carried {
-        inner: body.into(),
+        inner: body,
         counted: 0,
         continuation,
         span,
@@ -121,7 +121,7 @@ pub(crate) fn carry(
         outcome,
         ended: false,
     };
-    Response::from_parts(parts, Body::from(PoemBody::new(carried)))
+    Response::from_parts(parts, Body::from_boxed(BoxBody::new(carried)))
 }
 
 /// A line waiting on the body it will report the size of.
@@ -135,7 +135,7 @@ struct Pending {
 /// `size_hint` and `is_end_stream` are forwarded verbatim: hyper frames the
 /// response from them.
 struct Carried {
-    inner: PoemBody,
+    inner: Body,
     counted: u64,
     /// Re-installed around every poll.
     continuation: RequestContinuation,
@@ -294,11 +294,11 @@ mod tests {
     use super::*;
 
     /// An event stream that never runs dry, as an `#[sse]` route's does.
-    fn open_ended(drain: &Arc<Drain>) -> PoemBody {
+    fn open_ended(drain: &Arc<Drain>) -> Body {
         let events = futures_util::stream::repeat_with(|| {
             Ok::<_, IoError>(Bytes::from_static(b"data: tick\n\n"))
         });
-        let mut response = Response::builder().body(Body::from_bytes_stream(events));
+        let mut response = Response::builder().body(Body::from_stream(events));
         response.extensions_mut().insert(OpenEndedBody);
         let carried = carry(
             RequestContinuation::new(None, Correlation::minted(None)),
@@ -308,7 +308,7 @@ mod tests {
             response,
             drain,
         );
-        carried.into_body().into()
+        carried.into_body()
     }
 
     #[tokio::test]
@@ -334,13 +334,15 @@ mod tests {
             assert!(!std::mem::replace(&mut sent, true), "the stream panicked");
             Poll::Ready(Some(Ok::<_, IoError>(Bytes::from_static(b"data: one\n\n"))))
         });
-        Response::builder().body(Body::from_bytes_stream(events))
+        Response::builder().body(Body::from_stream(events))
     }
 
     #[tokio::test]
     async fn a_body_that_panics_ends_with_an_error_and_files_its_line_panic() {
         let logs = nest_rs_testing::LogCapture::install();
-        let request = poem::Request::builder().uri_str("/feed").finish();
+        let request = crate::Request::builder()
+            .uri(http::Uri::from_static("/feed"))
+            .finish();
         let carried = carry(
             RequestContinuation::new(None, Correlation::minted(None)),
             tracing::Span::none(),
@@ -349,7 +351,7 @@ mod tests {
             panics_after_one_event(),
             &Arc::new(Drain::default()),
         );
-        let mut body: PoemBody = carried.into_body().into();
+        let mut body = carried.into_body();
 
         assert!(
             matches!(body.frame().await, Some(Ok(_))),

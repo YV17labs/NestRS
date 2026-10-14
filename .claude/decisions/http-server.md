@@ -115,3 +115,40 @@ passes large ones through. It would keep a large frame uncopied, at the price
 of a mechanism over every socket to maintain; hyper's switch restores the
 write poem's server made, and the pieces the body already cut for HTTP/2 bound
 its copy.
+
+## 2026-10-14 — the transport above the router on nestrs's types; what the adapter owes on the wire
+
+The accept loop hands each request to the stack as nestrs's `Request` (its peer,
+local address, scheme, original URI and arrival instant inline; hyper's
+`OnUpgrade` left in the extensions, where a leaf on either side of the bridge
+takes it), and the edge, the bands and the response body's carrier speak
+nestrs's types. poem stays behind one crate-private file, `poem_adapter.rs`:
+the router, wrapped once, and the CORS and compression layers, crossed once for
+both. A band still written on poem crosses the bridge around itself.
+
+Moving those layers behind the adapter meant pinning their wire behaviour in
+black-box suites a later adapter passes unchanged, and the pinning found poem
+short of the standards: its CORS layer sends `Vary: Origin` only for a
+wildcard pattern, so a shared cache could hand one listed origin's answer to
+another; its compression reads `;q=` only without whitespace, ignores
+`identity`, takes a coding weighed `q=0`, misspells `zstd`, and compresses an
+event stream, whose encoder then holds every event back. The adapter adds
+`Vary: Origin`, and the transport negotiates `Accept-Encoding` itself (RFC 9110
+§12.5.3), leaves an event stream, a `204`, a `304` and an encoded response as
+written, says `Vary: Accept-Encoding`, and keeps poem's middleware only to
+decode a request body. Standards over the library decided; the conformance
+suites hold it.
+
+**On HTTP/2 a body's last byte is handed on its own.** hyper hands h2 a frame as
+soon as the stream's window has room for one byte of it, so a stream's task —
+and its send deadline — ended with up to one 64 KiB piece still waiting on a
+window the peer withheld, sent under the idle deadline. Held back, the last
+byte waits for capacity until everything before it has left, and the stream is
+reset at the send deadline like any other part of the response. A body that
+says it ended is split as it is handed; a stream that only tells its end when
+polled again is polled once ahead on HTTP/2. The cost is one more `DATA` frame
+per HTTP/2 response with a body; HTTP/1 is untouched. Refused: bounding h2's
+send buffer (`max_send_buf_size`), which the correction proposed — it caps what
+h2 grants as capacity, not the frame hyper hands on one byte of it, so the tail
+stays; and holding back a byte of every streamed chunk, which would double the
+frames of an event stream.

@@ -41,6 +41,10 @@ const HELD_BACK: Duration = Duration::from_millis(300);
 /// The line a cut at the send deadline files, on every member of its family.
 const SEND_CUT: &str = "the peer took nothing within the send deadline; it is cut off";
 
+/// The body `/server/tail` answers: less than one piece, more than the window
+/// the peer grants.
+const TAIL: usize = 48 * 1024;
+
 /// How long `/server/slow` takes to answer.
 const SLOW: Duration = Duration::from_secs(3);
 
@@ -73,6 +77,22 @@ impl ServerController {
     #[public]
     async fn large(&self) -> Body {
         Body::from(vec![b'x'; LARGE])
+    }
+
+    /// A body of [`TAIL`] in one chunk, its length known.
+    #[get("/tail")]
+    #[public]
+    async fn tail(&self) -> Body {
+        Body::from(vec![b'x'; TAIL])
+    }
+
+    /// The same chunk as a stream, which says it ended only once asked again.
+    #[get("/tail-stream")]
+    #[public]
+    async fn tail_stream(&self) -> Body {
+        Body::from_bytes_stream(futures_util::stream::iter([Ok::<_, std::io::Error>(
+            vec![b'x'; TAIL],
+        )]))
     }
 
     /// 16 KiB chunks, for as long as it is read.
@@ -622,12 +642,14 @@ async fn an_h2_stream_whose_window_is_withheld_is_reset_at_the_send_deadline() {
     assert_eq!(cut.field("send_timeout_ms").as_deref(), Some("2000"));
 
     let mut pong = h2_get(&client, port, "/server/ping").await;
-    let body = tokio::time::timeout(PATIENCE, pong.data())
+    let mut body = Vec::new();
+    while let Some(frame) = tokio::time::timeout(PATIENCE, pong.data())
         .await
         .expect("the body comes")
-        .expect("a frame")
-        .expect("data");
-    assert_eq!(body, "pong");
+    {
+        body.extend_from_slice(&frame.expect("data"));
+    }
+    assert_eq!(body, b"pong");
     assert!(!connection.is_finished(), "the connection serves on");
     cancel.cancel();
 }
@@ -681,4 +703,21 @@ async fn an_h2_download_in_one_chunk_read_steadily_outlives_the_idle_deadline() 
         "still served after 6 s of a 3 s idle deadline"
     );
     cancel.cancel();
+}
+
+/// A response whose last bytes wait on a window the peer withholds is reset at
+/// the send deadline like any other part of it: no tail is left in h2's buffer
+/// to go out under the idle deadline once the handler is done.
+#[tokio::test]
+async fn an_h2_response_whose_tail_waits_on_a_withheld_window_is_reset_at_the_send_deadline() {
+    for path in ["/server/tail", "/server/tail-stream"] {
+        let (port, cancel) = serve(deadlines(30, 75, 2)).await;
+        let (client, _connection) = h2_client(port, 16 * 1024).await;
+        let mut parked = h2_get(&client, port, path).await;
+
+        after(Duration::from_secs(3)).await;
+        let error = reset(&mut parked).await;
+        assert_eq!(error.reason(), Some(h2::Reason::CANCEL), "{path}: {error}");
+        cancel.cancel();
+    }
 }

@@ -5,8 +5,8 @@ use nest_rs_core::__private::{
     ResolvedLayer, check_specs_resolvable, compose_chain, resolve_global_layers,
 };
 use nest_rs_core::{AppBuilder, Container};
+use nest_rs_http::__private::poem_bridge::wrap_poem;
 use nest_rs_http::__private::{HttpEndpointWrap, endpoint_wrap_priority};
-use poem::EndpointExt;
 
 use crate::filter::{Filter, FilterChain};
 use crate::registry::{FilterSpec, FilterSpecs};
@@ -50,7 +50,7 @@ impl AppBuilderFiltersExt for AppBuilder {
                     if chain.is_empty() {
                         return endpoint;
                     }
-                    FilterChain::new(endpoint, chain).boxed()
+                    wrap_poem(endpoint, |inner| FilterChain::new(inner, chain))
                 },
             ))
     }

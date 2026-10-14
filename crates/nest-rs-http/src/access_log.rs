@@ -16,11 +16,11 @@
 
 use std::time::Instant;
 
+use http::{Method, Uri};
 use nest_rs_core::RequestContinuation;
-use poem::Request;
-use poem::http::{Method, Uri};
 
 use crate::matched::MatchedRoute;
+use crate::request::Request;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
 /// response body has been written.
@@ -159,7 +159,9 @@ mod tests {
     use super::*;
 
     fn held() -> (AccessLog, RequestContinuation) {
-        let req = Request::builder().uri_str("/reports").finish();
+        let req = Request::builder()
+            .uri(http::Uri::from_static("/reports"))
+            .finish();
         let log = AccessLog::open(&req, Some("curl/8"), Instant::now());
         let continuation = RequestContinuation::new(None, Correlation::minted(None));
         (log, continuation)

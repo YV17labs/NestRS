@@ -21,7 +21,7 @@ use poem::web::{Json, Path, Query};
 use poem::{Body, Error, FromRequest, Request, RequestBody, Result};
 use validator::Validate;
 
-use crate::{Header, ProblemDetails, RawBody};
+use crate::{Header, ProblemDetails};
 
 /// Owned-unwrap for poem extractors, so a pipe can take the value they carry
 /// without cloning.
@@ -87,7 +87,7 @@ async fn cap_body(req: &Request, body: &mut RequestBody) -> Result<()> {
         return Ok(());
     }
     let _ = req;
-    let limit = crate::current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT);
+    let limit = crate::current_body_limit();
     let taken = body.take().map_err(Error::from)?;
     let bytes = match taken.into_bytes_limit(limit).await {
         Ok(bytes) => bytes,
@@ -365,7 +365,7 @@ mod tests {
             .split();
 
         let err = match crate::raw_body::with_body_limit(
-            Some(4),
+            4,
             Valid::<Json<Greeting>>::from_request(&req, &mut body),
         )
         .await
@@ -385,7 +385,7 @@ mod tests {
             .split();
 
         let v: Valid<Json<Greeting>> =
-            crate::raw_body::with_body_limit(Some(4096), Valid::from_request(&req, &mut body))
+            crate::raw_body::with_body_limit(4096, Valid::from_request(&req, &mut body))
                 .await
                 .expect("body fits under the cap");
         assert_eq!(v.into_inner(), payload);

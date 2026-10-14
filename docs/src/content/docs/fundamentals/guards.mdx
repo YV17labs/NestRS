@@ -359,7 +359,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nest_rs::guards::prelude::*;
-use nest_rs::http::{HttpView, RawBody, current_body_limit};
+use nest_rs::http::{HttpView, current_body_limit};
 
 use crate::upstream::UpstreamConfig;
 
@@ -396,7 +396,7 @@ impl Guard for WebhookSignature {
             .filter_map(|s| STANDARD.decode(s).ok())
             .collect();
 
-        let limit = current_body_limit().unwrap_or(RawBody::DEFAULT_LIMIT);
+        let limit = current_body_limit();
         let body = req
             .take_body()
             .into_bytes_limit(limit)

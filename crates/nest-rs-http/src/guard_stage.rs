@@ -17,10 +17,10 @@ use nest_rs_core::__private::{
 use nest_rs_core::{AmbientValue, Handler};
 use nest_rs_guards::__private::failure_chain;
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
-use poem::endpoint::BoxEndpoint;
 use poem::http::{HeaderValue, StatusCode, header};
-use poem::{Endpoint, Error, IntoResponse, Request, Response};
+use poem::{Error, IntoResponse, Request, Response};
 
+use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::poem_bridge::{request_from_poem, request_to_poem};
 use crate::problem::ProblemDetails;
 use crate::view::HttpView;
@@ -41,10 +41,10 @@ struct Attached(Pending);
 async fn run_stage<'g>(
     handler: &'static Handler,
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
-    request: Request,
-) -> (Request, Result<Pending, (&'static str, Denial)>) {
-    let earlier = attached_pending(&request);
-    let mut view = HttpView::new(request_from_poem(request));
+    request: crate::Request,
+) -> (crate::Request, Result<Pending, (&'static str, Denial)>) {
+    let earlier = pending_in(request.extensions());
+    let mut view = HttpView::new(request);
     let checked = install_pending(earlier, async {
         let mut cx = new_unit_context(handler, &mut view, None, None);
         for (name, guard) in guards {
@@ -56,7 +56,17 @@ async fn run_stage<'g>(
         Ok(take_pending(&mut cx))
     })
     .await;
-    (request_to_poem(view.into_request()), checked)
+    (view.into_request(), checked)
+}
+
+/// [`run_stage`] on a request poem hands over, given back as poem's.
+async fn run_poem_stage<'g>(
+    handler: &'static Handler,
+    guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
+    request: Request,
+) -> (Request, Result<Pending, (&'static str, Denial)>) {
+    let (request, checked) = run_stage(handler, guards, request_from_poem(request)).await;
+    (request_to_poem(request), checked)
 }
 
 /// The guards of a composed chain, as the stage runs them: on the erased guard,
@@ -77,7 +87,7 @@ pub async fn check_request<'g>(
     guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
     req: &mut Request,
 ) -> Result<(), Denial> {
-    let (request, checked) = run_stage(handler, guards, std::mem::take(req)).await;
+    let (request, checked) = run_poem_stage(handler, guards, std::mem::take(req)).await;
     *req = request;
     let pending = checked.map_err(|(guard, denial)| {
         file_denial(guard, &denial);
@@ -114,7 +124,12 @@ pub fn install_attached<F: Future>(req: &Request, fut: F) -> impl Future<Output 
 /// after them — later stages, the endpoint, work that leaves the request's task
 /// (an MCP operation).
 pub fn attached_pending(req: &Request) -> Pending {
-    req.extensions()
+    pending_in(req.extensions())
+}
+
+/// What the guard stages recorded in `extensions` attached so far.
+fn pending_in(extensions: &http::Extensions) -> Pending {
+    extensions
         .get::<Attached>()
         .map(|attached| attached.0.clone())
         .unwrap_or_default()
@@ -142,20 +157,25 @@ where
     Fut: Future<Output = poem::Result<Response>>,
 {
     // No guard to run: the request stays poem's, and nothing is attached.
-    let (req, mut pending) = if chain.is_empty() {
+    let (req, pending) = if chain.is_empty() {
         (req, Pending::default())
     } else {
-        match run_stage(handler, erased(chain), req).await {
+        match run_poem_stage(handler, erased(chain), req).await {
             (req, Ok(pending)) => (req, pending),
             (_, Err((guard, denial))) => return Ok(deny_http(guard, denial)),
         }
     };
-    // The marker withholds an ability; with nothing attached here and nothing
-    // carried in, the route reads none anyway, and installs nothing.
+    install_pending(marked(pending, unmasked), rest(req)).await
+}
+
+/// `pending`, marked to withhold the reads a response mask would scope when
+/// `unmasked`: with nothing attached here and nothing carried in, the route
+/// reads none anyway, and nothing is marked.
+fn marked(mut pending: Pending, unmasked: bool) -> Pending {
     if unmasked && (!pending.is_empty() || carries_ambient()) {
         pending.attach(Arc::new(UnmaskedReply));
     }
-    install_pending(pending, rest(req)).await
+    pending
 }
 
 /// An endpoint behind a guard stage — a self-mount's request, a gateway's
@@ -164,7 +184,7 @@ where
 pub struct GuardedEndpoint {
     handler: &'static Handler,
     chain: Vec<ResolvedLayer<dyn Guard>>,
-    inner: BoxEndpoint<'static, Response>,
+    inner: BoxEndpoint,
 }
 
 impl GuardedEndpoint {
@@ -172,7 +192,7 @@ impl GuardedEndpoint {
     pub fn new(
         handler: &'static Handler,
         chain: Vec<ResolvedLayer<dyn Guard>>,
-        inner: BoxEndpoint<'static, Response>,
+        inner: BoxEndpoint,
     ) -> Self {
         Self {
             handler,
@@ -183,17 +203,15 @@ impl GuardedEndpoint {
 }
 
 impl Endpoint for GuardedEndpoint {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Response> {
-        guard_then(
-            self.handler,
-            &self.chain,
-            req,
-            |req| self.inner.call(req),
-            false,
-        )
-        .await
+    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
+        let (req, pending) = match run_stage(self.handler, erased(&self.chain), req).await {
+            (req, Ok(pending)) => (req, pending),
+            (_, Err((guard, denial))) => {
+                file_denial(guard, &denial);
+                return Ok(denial_answer(denial));
+            }
+        };
+        install_pending(marked(pending, false), self.inner.call(req)).await
     }
 }
 
@@ -201,6 +219,11 @@ impl Endpoint for GuardedEndpoint {
 pub fn deny_http(guard: &'static str, denial: Denial) -> Response {
     file_denial(guard, &denial);
     denial_to_http_response(denial)
+}
+
+/// [`denial_to_http_response`] on the vocabulary.
+fn denial_answer(denial: Denial) -> crate::Response {
+    crate::poem_bridge::response_from_poem(denial_to_http_response(denial))
 }
 
 /// The one `warn` that keeps every denial of an HTTP request visible whatever
@@ -555,17 +578,23 @@ mod tests {
         let guarded = GuardedEndpoint::new(
             &ROUTE,
             chain(TenantGuard),
-            poem::EndpointExt::boxed(poem::EndpointExt::map_to_response(inner)),
+            BoxEndpoint::new(crate::poem_bridge::from_poem(inner)),
         );
 
-        let admitted = guarded.call(tenant_request()).await.expect("answers");
+        let admitted = guarded
+            .call(request_from_poem(tenant_request()))
+            .await
+            .expect("answers");
         assert_eq!(
             admitted.into_body().into_string().await.expect("a body"),
             "acme"
         );
 
         let logs = nest_rs_testing::LogCapture::install();
-        let refused = guarded.call(Request::default()).await.expect("answers");
+        let refused = guarded
+            .call(crate::Request::builder().finish())
+            .await
+            .expect("answers");
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
         let event = logs.expect_one("nest_rs::layers", "guard denied the request");
         assert_eq!(event.level, "warn");
@@ -610,10 +639,13 @@ mod tests {
         let guarded = GuardedEndpoint::new(
             &ROUTE,
             chain(StoreDown),
-            poem::EndpointExt::boxed(poem::EndpointExt::map_to_response(inner)),
+            BoxEndpoint::new(crate::poem_bridge::from_poem(inner)),
         );
 
-        let refused = guarded.call(Request::default()).await.expect("answers");
+        let refused = guarded
+            .call(crate::Request::builder().finish())
+            .await
+            .expect("answers");
         assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = refused.into_body().into_string().await.expect("a body");
         assert!(

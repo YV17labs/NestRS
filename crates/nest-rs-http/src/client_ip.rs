@@ -63,15 +63,19 @@ impl ClientOrigin {
     /// [`of`](Self::of) for a request the router hands over as poem's.
     fn of_poem(req: &Request) -> Self {
         let config = configured();
-        Self::of_with(req, trusted_proxies(config.as_deref()))
+        Self::of_head(
+            req.headers(),
+            req.remote_addr().as_socket_addr().map(SocketAddr::ip),
+            trusted_proxies(config.as_deref()),
+        )
     }
 
     /// [`of`](Self::of) against an explicit list, for the transport edge, which
     /// runs before the request scope `of` reads exists.
-    pub(crate) fn of_with(req: &Request, trusted_proxies: &[IpAddr]) -> Self {
+    pub(crate) fn of_with(req: &crate::Request, trusted_proxies: &[IpAddr]) -> Self {
         Self::of_head(
             req.headers(),
-            req.remote_addr().as_socket_addr().map(SocketAddr::ip),
+            req.peer_addr().map(|peer| peer.ip()),
             trusted_proxies,
         )
     }

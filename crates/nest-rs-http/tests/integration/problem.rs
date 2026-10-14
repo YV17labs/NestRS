@@ -221,7 +221,7 @@ async fn wrapped() -> Client {
         .configure(app.container())
         .await
         .expect("transport configures against the live container");
-    TestClient::new(
+    crate::client(
         transport
             .take_endpoint()
             .expect("configure populates the endpoint"),

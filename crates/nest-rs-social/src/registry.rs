@@ -4,9 +4,10 @@
 //! Each provider `provider.rs` submits one [`SocialProviderEntry`] to a
 //! link-time `inventory` registry. [`SocialRegistry`] drains it at the boot's
 //! wiring step, before the first lifecycle hook, keeps each entry whose module
-//! the app imports, and asks it to build itself ([`resolve_provider`] is the standard implementation), then validates
-//! the result — a duplicate key or a key that disagrees with the provider's own
-//! [`SocialProvider::key`] **fails boot**.
+//! the app imports, and asks it to build itself ([`resolve_provider`] is the
+//! standard implementation), then validates the result — a duplicate key or a
+//! key that disagrees with the provider's own [`SocialProvider::key`] **fails
+//! boot**.
 
 use std::any::TypeId;
 use std::collections::HashMap;

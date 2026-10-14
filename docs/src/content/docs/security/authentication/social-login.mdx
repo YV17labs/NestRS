@@ -94,10 +94,10 @@ hard pin every other config uses.
 
 `nest-rs-social` ships **no routes**. A social provider is not a DI provider —
 it is reached only through `SocialRegistry`, never injected by type. The flip
-side is that the two HTTP legs are **app code**: the path prefix, the throttle and what "resolve
-this profile to a local user" means are all yours. The transaction cookie is
-not: `authorization.set_cookie()` writes it and `OAuthClient::transaction_from`
-reads it back, under the framework's one name.
+side is that the two HTTP legs are **app code**: the path prefix, the throttle
+and what "resolve this profile to a local user" means are all yours. The
+transaction cookie is not: `authorization.set_cookie()` writes it and
+`OAuthClient::transaction_from` reads it back, under the framework's one name.
 
 Two legs, both dispatched by a `:provider` path segment:
 

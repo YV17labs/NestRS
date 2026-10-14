@@ -2,11 +2,10 @@
 //! registry entry through the same public seam a third-party crate uses, and
 //! is opened by its own module.
 
-use nest_rs_core::{App, module};
-use nest_rs_social::{
-    GithubSocialConfig, GithubSocialModule, GoogleSocialModule, SocialModule, SocialProviderEntry,
-    SocialRegistry,
-};
+use nest_rs_core::{App, Module, module};
+use nest_rs_social::{GithubSocialModule, GoogleSocialModule, SocialModule};
+
+use crate::{linked_keys, registry_keys, seeded_github_config};
 
 #[module(imports = [SocialModule, GithubSocialModule, GoogleSocialModule])]
 struct BothProvidersModule;
@@ -14,29 +13,13 @@ struct BothProvidersModule;
 #[module(imports = [SocialModule, GithubSocialModule])]
 struct GithubLoginModule;
 
-async fn keys_with_github_seeded<M: nest_rs_core::Module>() -> Vec<&'static str> {
-    let app = App::builder()
-        .module::<M>()
-        .provide(GithubSocialConfig {
-            client_id: "seeded-client".into(),
-            client_secret: "seeded-secret".into(),
-            redirect_url: "https://acme.example.com/auth/github/callback".into(),
-            scopes: Vec::new(),
-        })
-        .build()
-        .await
-        .expect("boots");
-    app.container()
-        .get::<SocialRegistry>()
-        .expect("SocialModule provides the registry")
-        .keys()
+async fn keys_with_github_seeded<M: Module>() -> Vec<&'static str> {
+    registry_keys(App::builder().module::<M>().provide(seeded_github_config())).await
 }
 
 #[test]
 fn both_first_party_providers_submit_a_registry_entry() {
-    let keys: Vec<&str> = nest_rs_core::inventory::iter::<SocialProviderEntry>()
-        .map(|entry| entry.key)
-        .collect();
+    let keys = linked_keys();
     assert!(
         keys.contains(&"github"),
         "github entry must be linked: {keys:?}"

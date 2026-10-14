@@ -4,7 +4,9 @@
 use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{App, hooks, injectable, module};
-use nest_rs_social::{GithubSocialConfig, GithubSocialModule, SocialModule, SocialRegistry};
+use nest_rs_social::{GithubSocialModule, SocialModule, SocialRegistry};
+
+use crate::seeded_github_config;
 
 /// The provider keys the hook saw.
 #[injectable]
@@ -36,12 +38,7 @@ struct LoginModule;
 async fn an_init_hook_reads_the_configured_providers() {
     let app = App::builder()
         .module::<LoginModule>()
-        .provide(GithubSocialConfig {
-            client_id: "seeded-client".into(),
-            client_secret: "seeded-secret".into(),
-            redirect_url: "https://acme.example.com/auth/github/callback".into(),
-            scopes: Vec::new(),
-        })
+        .provide(seeded_github_config())
         .build()
         .await
         .expect("boots");

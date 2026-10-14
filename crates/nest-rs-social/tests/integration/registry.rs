@@ -3,26 +3,22 @@
 //! its module. The proof that naming is what links it is
 //! `tests/unreferenced_provider/`, which does not.
 
-use nest_rs_core::{App, module};
-use nest_rs_social::{SocialModule, SocialProviderEntry, SocialRegistry};
+use nest_rs_core::{App, Module, module};
+use nest_rs_social::SocialModule;
 use nestrs_social_probe::ProbeSocialModule;
+
+use crate::{linked_keys, registry_keys};
 
 #[module(imports = [SocialModule, ProbeSocialModule])]
 struct ProbeLoginModule;
 
-async fn keys_of_an_app_importing<M: nest_rs_core::Module>() -> Vec<&'static str> {
-    let app = App::builder().module::<M>().build().await.expect("boots");
-    app.container()
-        .get::<SocialRegistry>()
-        .expect("SocialModule provides the registry")
-        .keys()
+async fn keys_of_an_app_importing<M: Module>() -> Vec<&'static str> {
+    registry_keys(App::builder().module::<M>()).await
 }
 
 #[test]
 fn a_provider_package_the_binary_names_is_linked() {
-    let keys: Vec<&str> = nest_rs_core::inventory::iter::<SocialProviderEntry>()
-        .map(|entry| entry.key)
-        .collect();
+    let keys = linked_keys();
     assert!(
         keys.contains(&"probe"),
         "the named package's entry: {keys:?}"

@@ -14,23 +14,17 @@ use std::net::{IpAddr, Ipv6Addr};
 
 use http::header::{self, HeaderMap};
 use http::uri::{Authority, Scheme};
-use nest_rs_core::problem::code;
-use nest_rs_core::{Container, Problem};
+use nest_rs_core::Container;
 
 use crate::HttpConfig;
 use crate::client_ip::forwarded_param;
 use crate::cors::holds_wildcard;
-use crate::error::ResponseError;
-use crate::response::Response;
+use crate::error::OriginRefused;
 
 /// The de-facto forwarding headers for the scheme and the host, which the
 /// `http` crate does not name.
 const X_FORWARDED_PROTO: &str = "x-forwarded-proto";
 const X_FORWARDED_HOST: &str = "x-forwarded-host";
-
-/// What a refusal says, to the client and in its error: never the origin sent.
-const REFUSED: &str =
-    "the request's origin is neither this server's own nor one its CORS policy lists";
 
 /// Whether a browser `Origin` may open an upgrade or an MCP exchange: absent ⇒
 /// yes, no browser sent it; present ⇒ it is the request's own origin, or the
@@ -127,12 +121,12 @@ impl OriginPolicy {
         {
             return Ok(());
         }
-        Err(OriginRefused {
-            origin: origin
+        Err(OriginRefused::new(
+            origin
                 .to_str()
                 .map_or_else(|_| "(not visible ASCII)".to_owned(), ToOwned::to_owned),
-            expected: own.map_or_else(|| "none".to_owned(), |own| own.to_string()),
-        })
+            own.map_or_else(|| "none".to_owned(), |own| own.to_string()),
+        ))
     }
 
     fn lists(&self, origin: &Origin) -> bool {
@@ -241,38 +235,6 @@ impl OriginFacts for poem::Request {
     }
 }
 
-/// A browser `Origin` the policy refused: it answers `403` with a problem
-/// document that names no origin, and carries what the edge's `warn` says.
-#[derive(Debug, thiserror::Error)]
-#[error("{}", REFUSED)]
-pub struct OriginRefused {
-    origin: String,
-    expected: String,
-}
-
-impl OriginRefused {
-    /// The `Origin` the browser sent, as the header spelled it.
-    pub fn origin(&self) -> &str {
-        &self.origin
-    }
-
-    /// The origin the server took for its own, or `none` when the request
-    /// named no host — what tells an operator a proxy is not trusted yet.
-    pub fn expected(&self) -> &str {
-        &self.expected
-    }
-}
-
-impl ResponseError for OriginRefused {
-    fn status(&self) -> http::StatusCode {
-        http::StatusCode::FORBIDDEN
-    }
-
-    fn as_response(&self) -> Response {
-        crate::problem::problem_response(&Problem::new(403, code::FORBIDDEN).with_detail(REFUSED))
-    }
-}
-
 /// An origin (RFC 6454 §4), in the form two compare in (§5).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Origin {
@@ -357,6 +319,7 @@ mod tests {
     use http::{HeaderValue, Uri};
 
     use super::*;
+    use crate::error::{ORIGIN_REFUSED, ResponseError};
     use crate::{HttpCors, Request};
 
     const PROXY: &str = "10.0.0.1";
@@ -605,7 +568,7 @@ mod tests {
         let body = body.into_string().await.expect("a JSON body");
         let document: serde_json::Value = serde_json::from_str(&body).expect("a problem document");
         assert_eq!(document["code"], "FORBIDDEN");
-        assert_eq!(document["detail"], REFUSED);
+        assert_eq!(document["detail"], ORIGIN_REFUSED);
         assert!(!body.contains("evil"), "{body}");
     }
 }

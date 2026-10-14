@@ -1,6 +1,7 @@
 //! Every error type of the HTTP edge: the vocabulary's ([`BodyError`],
 //! [`HttpError`], [`ResponseError`]), the route grammar's
-//! ([`RouteTemplateError`]) and the header binding's.
+//! ([`RouteTemplateError`]), the browser-origin check's ([`OriginRefused`])
+//! and the header binding's.
 
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -11,6 +12,7 @@ use std::time::Duration;
 use http::{Extensions, StatusCode};
 
 use nest_rs_core::Problem;
+use nest_rs_core::problem::code;
 
 use crate::headers::one_of;
 use crate::problem::{ProblemDetails, problem_response};
@@ -584,6 +586,48 @@ pub(crate) enum TemplateRefusal {
          `*` or `<`"
     )]
     NotLiteral,
+}
+
+/// What an [`OriginRefused`] says, to the client and in its error: never the
+/// origin sent.
+pub(crate) const ORIGIN_REFUSED: &str =
+    "the request's origin is neither this server's own nor one its CORS policy lists";
+
+/// A browser `Origin` the [`OriginPolicy`](crate::__private::OriginPolicy)
+/// refused: it answers `403` with a problem document that names no origin, and
+/// carries what the edge's `warn` says.
+#[derive(Debug, thiserror::Error)]
+#[error("{}", ORIGIN_REFUSED)]
+pub struct OriginRefused {
+    origin: String,
+    expected: String,
+}
+
+impl OriginRefused {
+    pub(crate) fn new(origin: String, expected: String) -> Self {
+        Self { origin, expected }
+    }
+
+    /// The `Origin` the browser sent, as the header spelled it.
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+
+    /// The origin the server took for its own, or `none` when the request
+    /// named no host — what tells an operator a proxy is not trusted yet.
+    pub fn expected(&self) -> &str {
+        &self.expected
+    }
+}
+
+impl ResponseError for OriginRefused {
+    fn status(&self) -> StatusCode {
+        StatusCode::FORBIDDEN
+    }
+
+    fn as_response(&self) -> Response {
+        problem_response(&Problem::new(403, code::FORBIDDEN).with_detail(ORIGIN_REFUSED))
+    }
 }
 
 /// What a header a type refused in its own words is said not to be.

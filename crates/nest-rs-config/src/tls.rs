@@ -342,6 +342,58 @@ pub fn crypto_provider() -> Arc<CryptoProvider> {
     )
 }
 
+/// What a reqwest client trusts and presents, built from a [`ClientTls`] by
+/// [`reqwest_tls`].
+#[cfg(feature = "reqwest")]
+pub struct ReqwestTls {
+    /// The authorities a peer's certificate must chain to, for
+    /// `tls_certs_only`: they replace reqwest's own roots.
+    pub roots: Vec<reqwest::Certificate>,
+    /// The certificate presented, for `identity`, when one is set.
+    pub identity: Option<reqwest::Identity>,
+}
+
+/// `tls`, once [`ClientTls::check`] passed, as reqwest takes it — the one
+/// conversion every reqwest client the framework opens builds from, async or
+/// blocking — refused naming `env`'s variables, never quoting the PEM.
+#[cfg(feature = "reqwest")]
+pub fn reqwest_tls(tls: &ClientTls, env: &ConfigService) -> Result<ReqwestTls> {
+    tls.check(env)?;
+    let roots = reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
+        let reason = format!(
+            "could not be handed to the HTTP client: {}",
+            nest_rs_core::error_message(&error)
+        );
+        match &tls.authorities {
+            Some(authorities) => ConfigError::parse(named(env, "TLS_CA_CERT", authorities), reason),
+            None => ConfigError::parse(
+                env.var_name("TLS_CA_CERT"),
+                format!("is unset, and the system's authorities {reason}"),
+            ),
+        }
+    })?;
+    let identity = tls
+        .identity
+        .as_ref()
+        .map(|identity| {
+            reqwest::Identity::from_pem(
+                &[&identity.cert.bytes[..], b"\n", &identity.key.bytes].concat(),
+            )
+            .map_err(|error| {
+                ConfigError::parse(
+                    named(env, "TLS_CERT", &identity.cert),
+                    format!(
+                        "and {} could not be presented: {}",
+                        named(env, "TLS_KEY", &identity.key),
+                        nest_rs_core::error_message(&error)
+                    ),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(ReqwestTls { roots, identity })
+}
+
 /// Why a PEM pair cannot be presented, each half judged as rustls judges it.
 #[derive(Debug)]
 pub enum PairRefusal {
@@ -520,6 +572,32 @@ mod tests {
         tls.check(&redis())
             .expect_err("the material is refused")
             .to_string()
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn a_reqwest_client_trusts_what_the_material_names_and_presents_its_certificate() {
+        let trusting = ClientTls::new(Some(inline(AUTHORITY.pem().as_bytes())), None);
+        let converted = reqwest_tls(&trusting, &redis()).expect("the authority converts");
+        assert_eq!(converted.roots.len(), 1, "the named authority alone");
+        assert!(converted.identity.is_none());
+
+        let system = reqwest_tls(&ClientTls::default(), &redis()).expect("the system converts");
+        assert!(!system.roots.is_empty(), "the system's authorities");
+
+        let pair = presenting(CLIENT.cert.as_bytes(), CLIENT.key.as_bytes());
+        assert!(
+            reqwest_tls(&pair, &redis())
+                .expect("the pair converts")
+                .identity
+                .is_some()
+        );
+
+        let mismatched = presenting(CLIENT.cert.as_bytes(), OTHER.key.as_bytes());
+        let Err(refused) = reqwest_tls(&mismatched, &redis()) else {
+            panic!("material the check refuses converts to nothing");
+        };
+        assert!(refused.to_string().contains(&var("TLS_CERT")), "{refused}");
     }
 
     #[test]

@@ -198,25 +198,8 @@ fn exporter_clients(
             .into());
         }
     };
-    tls.check(&names)?;
-    let roots = reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
-        OpenTelemetryError::Otlp(format!(
-            "the authorities the collector's certificate chains to do not read as PEM: {}",
-            nest_rs_core::error_message(&error)
-        ))
-    })?;
-    let identity = tls
-        .identity_pem()
-        .map(|(cert, key)| reqwest::Identity::from_pem(&[cert, b"\n", key].concat()))
-        .transpose()
-        .map_err(|error| {
-            OpenTelemetryError::Otlp(format!(
-                "{} and {} could not be presented: {}",
-                names.spellings("TLS_CERT"),
-                names.spellings("TLS_KEY"),
-                nest_rs_core::error_message(&error)
-            ))
-        })?;
+    let nest_rs_config::__private::ReqwestTls { roots, identity } =
+        nest_rs_config::__private::reqwest_tls(tls, &names)?;
     let [traces, metrics, logs] = [
         OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
         OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,

@@ -17,9 +17,9 @@ categories = ["authentication", "web-programming"]
 nest-rs-core.workspace = true
 # `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth__client`), loaded from
 # `NESTRS_OAUTH__CLIENT__*`; `validator` backs this crate's own `Validate` impls.
-# `tls` is `ClientTls`, what the provider's certificate must chain to and the
-# certificate presented to it.
-nest-rs-config = { workspace = true, features = ["tls"] }
+# `reqwest` is `ClientTls`, what the provider's certificate must chain to and
+# the certificate presented to it, converted for the client calling it.
+nest-rs-config = { workspace = true, features = ["reqwest"] }
 validator.workspace = true
 # `AuthError` is the framework's authentication failure, and the CSRF/PKCE
 # transaction is a `JwtService`-signed cookie — both belong to the crate that

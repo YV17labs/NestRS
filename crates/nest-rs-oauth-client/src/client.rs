@@ -322,25 +322,10 @@ fn backend() -> reqwest::ClientBuilder {
 /// names others — and presenting its certificate when it holds one.
 fn verified(tls: &ClientTls) -> Result<reqwest::Client, AuthError> {
     let names = ConfigService::for_namespace(OAuthClientConfig::NAMESPACE);
-    tls.check(&names)
+    let material = nest_rs_config::__private::reqwest_tls(tls, &names)
         .map_err(|refused| AuthError::Failed(refused.to_string()))?;
-    let roots = reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
-        AuthError::Failed(format!(
-            "the authorities the OAuth provider's certificate chains to do not read as PEM: {}",
-            nest_rs_core::error_message(&error)
-        ))
-    })?;
-    let mut builder = backend().tls_certs_only(roots);
-    if let Some((cert, key)) = tls.identity_pem() {
-        let pem = [cert, b"\n", key].concat();
-        let identity = reqwest::Identity::from_pem(&pem).map_err(|error| {
-            AuthError::Failed(format!(
-                "{} and {} could not be presented: {}",
-                names.spellings("TLS_CERT"),
-                names.spellings("TLS_KEY"),
-                nest_rs_core::error_message(&error)
-            ))
-        })?;
+    let mut builder = backend().tls_certs_only(material.roots);
+    if let Some(identity) = material.identity {
         builder = builder.identity(identity);
     }
     builder.build().map_err(|error| {

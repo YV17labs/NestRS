@@ -83,6 +83,8 @@ pub mod __private {
     pub use crate::namespace::ConfigNamespace;
     #[cfg(feature = "tls")]
     pub use crate::tls::{PairRefusal, certified_key};
+    #[cfg(feature = "reqwest")]
+    pub use crate::tls::{ReqwestTls, reqwest_tls};
 
     pub use nest_rs_core::inventory;
     pub use validator;

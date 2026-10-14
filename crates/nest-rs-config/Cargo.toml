@@ -49,11 +49,16 @@ url.workspace = true
 # `tls` feature: `ClientTls` judges the material a TLS client presents with
 # rustls's own parsers and checks, the ones the libraries it is handed to run.
 rustls = { workspace = true, optional = true }
+# `reqwest` feature: `ClientTls` converted once for every reqwest client the
+# framework opens (the JWK Set, OAuth, OTLP), behind `__private`.
+reqwest = { workspace = true, optional = true }
 
 [features]
 # The shared client-TLS vocabulary (`ClientTls`, `TlsIdentity`,
 # `crypto_provider`), enabled by every crate that opens a TLS client.
 tls = ["dep:rustls"]
+# `ClientTls` as a reqwest client takes it, for the crates dialling through one.
+reqwest = ["tls", "dep:reqwest"]
 
 [target.'cfg(unix)'.dependencies]
 # `O_NONBLOCK` for `read_material`: opening a FIFO a `_FILE` variable names

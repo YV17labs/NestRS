@@ -2638,6 +2638,7 @@ dependencies = [
  "nest-rs-config-macros",
  "nest-rs-core",
  "nest-rs-testing",
+ "reqwest",
  "rustls",
  "rustls-native-certs",
  "serde",

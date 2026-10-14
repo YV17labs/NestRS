@@ -29,7 +29,7 @@ use tokio::time::Instant;
 use nest_rs_config::{ClientTls, ConfigService, Namespaced};
 
 use crate::AuthnConfig;
-use crate::config::{jwks_uri_setting, tls_setting};
+use crate::config::jwks_uri_setting;
 use crate::error::AuthError;
 use crate::jwk_set::{JwkSet, Selection};
 use crate::service::one_of;
@@ -127,32 +127,16 @@ impl Jwks {
                 jwks_uri_setting()
             )));
         }
-        tls.check(&names())
+        let material = nest_rs_config::__private::reqwest_tls(tls, &names())
             .map_err(|refused| AuthError::Failed(refused.to_string()))?;
-        let roots =
-            reqwest::Certificate::from_pem_bundle(tls.authorities_pem()).map_err(|error| {
-                AuthError::Failed(format!(
-                    "the authorities the JWK Set endpoint's certificate chains to do not read as \
-                     PEM: {}",
-                    nest_rs_core::error_message(&error)
-                ))
-            })?;
         let mut builder = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
             .user_agent("nestrs")
             .connect_timeout(JWKS_CONNECT_TIMEOUT)
             .timeout(JWKS_FETCH_TIMEOUT)
-            .tls_certs_only(roots);
-        if let Some((cert, key)) = tls.identity_pem() {
-            let pem = [cert, b"\n", key].concat();
-            let identity = reqwest::Identity::from_pem(&pem).map_err(|error| {
-                AuthError::Failed(format!(
-                    "{} could not be presented: {}",
-                    tls_setting(),
-                    nest_rs_core::error_message(&error)
-                ))
-            })?;
+            .tls_certs_only(material.roots);
+        if let Some(identity) = material.identity {
             builder = builder.identity(identity);
         }
         let client = builder.build().map_err(|error| {

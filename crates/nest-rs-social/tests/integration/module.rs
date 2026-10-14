@@ -53,7 +53,7 @@ async fn an_init_hook_reads_the_configured_providers() {
         .expect("KeysAtInit is provided");
     assert_eq!(
         *seen.keys.lock().expect("the hook is done"),
-        ["github"],
-        "the registry was filled before the first hook",
+        ["github", "probe"],
+        "the registry was filled before the first hook: the seeded GitHub, and the probe this binary links",
     );
 }

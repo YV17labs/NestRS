@@ -11,3 +11,4 @@
 mod module;
 mod provider;
 mod providers;
+mod registry;

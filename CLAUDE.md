@@ -221,10 +221,12 @@ proves (`testing.md`).
 1. A framework crate has at most two suites, never a flat `tests/<x>.rs`:
    `tests/integration/main.rs` runs in process, `tests/e2e/main.rs` against the
    live services, so `just test integration` needs none. Neither is
-   `#[ignore]`d. What both use sits in `tests/harness/`, included by path. The
-   one exception: a fixture that puts a deliberately invalid declaration in the
-   link-time registry (`inventory`) gets its own `tests/<fixture>/main.rs`,
-   since every app booted beside it would read it.
+   `#[ignore]`d. What both use sits in `tests/harness/`, included by path. Two
+   exceptions get their own `tests/<fixture>/main.rs`: a fixture that puts a
+   deliberately invalid declaration in the link-time registry (`inventory`),
+   since every app booted beside it would read it; and a fixture whose subject
+   is what that registry holds, since one reference anywhere in a binary links
+   a crate for every test in it.
 2. Each suite mirrors `src/`; its `main.rs` holds the `mod`s, shared fixtures
    and a `//!`, never a `#[test]`.
 3. Unit tests are `#[cfg(test)] mod tests` in the file under test. nextest runs

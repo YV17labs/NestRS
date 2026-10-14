@@ -3244,6 +3244,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-oauth-client",
  "nest-rs-testing",
+ "nestrs-social-probe",
  "serde",
  "serde_json",
  "tokio",
@@ -3406,6 +3407,13 @@ dependencies = [
 
 [[package]]
 name = "nestrs-hooks-probe"
+version = "7.0.0"
+dependencies = [
+ "nest-rs",
+]
+
+[[package]]
+name = "nestrs-social-probe"
 version = "7.0.0"
 dependencies = [
  "nest-rs",

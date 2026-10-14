@@ -31,6 +31,9 @@ anyhow.workspace = true
 # dialled.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
 tokio = { workspace = true }
+# A third-party provider package: `tests/unreferenced_provider/` never names it,
+# `tests/integration/` does.
+nestrs-social-probe = { path = "tests/probe-provider" }
 
 [lints]
 workspace = true

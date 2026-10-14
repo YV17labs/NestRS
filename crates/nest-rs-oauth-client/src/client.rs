@@ -209,8 +209,12 @@ fn invalid(errors: ValidationErrors) -> AuthError {
     AuthError::Failed(ConfigError::validation(OAuthClientConfig::NAMESPACE, errors).to_string())
 }
 
+/// Every call carries a code, a client secret or a bearer token (RFC 6749 §3.1,
+/// §3.2; RFC 6750 §5.3), so the backend dials `https` alone, whatever URL a
+/// provider builds at run time.
 fn backend() -> reqwest::ClientBuilder {
     reqwest::ClientBuilder::new()
+        .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         // Some provider APIs (GitHub) reject a request without a user-agent.
         .user_agent("nestrs")
@@ -685,6 +689,51 @@ mod tests {
                 "{presented:?}: {err}"
             );
         }
+    }
+
+    /// `fetch` refuses a plaintext URL before `read`; the backend refuses it
+    /// too, for every path that reaches `read` past the validators.
+    #[tokio::test]
+    async fn the_backend_dials_no_plaintext_url_whatever_path_reaches_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&accepted);
+        tokio::spawn(async move {
+            while let Ok(_dropped) = listener.accept().await {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let url = format!("http://{addr}/user/emails");
+
+        let Err(AuthError::Unavailable { detail, .. }) = OAuthClient::new(valid_config())
+            .expect("new accepts a valid config")
+            .read::<serde_json::Value>(
+                &Endpoint {
+                    role: PROVIDER_ENDPOINT,
+                    url: &url,
+                },
+                "never-sent",
+            )
+            .await
+        else {
+            panic!("a plaintext URL is no call the backend makes");
+        };
+
+        tokio::task::yield_now().await;
+        assert_eq!(
+            accepted.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing was dialled: {detail}"
+        );
+        assert!(
+            detail.starts_with(&format!(
+                "the OAuth provider's endpoint (http://{addr}/user/emails) could not be called: "
+            )),
+            "{detail}"
+        );
     }
 
     /// A name lookup that never answers.

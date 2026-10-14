@@ -27,6 +27,29 @@ back on you.
 | [`ThrottlerGuard`](/rate-limiting/) | Brute-force login, naïve enumeration scrapes | DDoS at network or HTTP layer (use a CDN / edge throttler) |
 | [Connection deadlines](/http/configuration/#connection-deadlines) | A client holding connections it does not use: a head sent a byte at a time, a TLS handshake never finished, an idle socket, a peer that stops reading | Many clients each staying inside the deadlines (the connection cap holds them back; a CDN sheds them) |
 
+## What the framework dials
+
+Every URL a framework client dials follows one plaintext rule: plaintext
+where the protocol's own URL declares it, refused where the governing
+standard requires TLS. The rule is held where the client is built, so a
+call site cannot open a door the configuration kept shut.
+
+| Client | Where its URL comes from | Plaintext |
+|--------|--------------------------|-----------|
+| Postgres pool and `EphemeralDatabase` | `<PREFIX>_SEAORM__URL` | only with `sslmode=disable` written in the URL; any other mode short of `verify-full` is refused |
+| Redis, all three topologies | `<PREFIX>_REDIS__URL` | only a `redis://` URL; a `#insecure` fragment is refused |
+| Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP=true`, which the development profile alone turns on |
+| JWK Set | `<PREFIX>_AUTHN__JWKS_URI` | refused when the module is built, and by the client on every fetch |
+| OAuth token and userinfo endpoints | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL`, `USERINFO_URL` | refused when the client is built (RFC 6749 §3.2), and by the client on every call |
+| `OAuthClient::fetch` | a provider's code, at run time | refused before the call (RFC 6750 §5.3), and by the client whatever path reaches it |
+| OAuth authorize and redirect URLs | `<PREFIX>_OAUTH__CLIENT__AUTH_URL`, `REDIRECT_URL`; followed by the browser, never dialled | the authorize URL never (RFC 6749 §3.1); the redirect only on a loopback address (RFC 8252 §7.3) |
+| GitHub and Google sign-in | the providers' own constants | none: every endpoint is `https` |
+| OTLP exporter | `<PREFIX>_OPENTELEMETRY__OTLP_ENDPOINT` | an `http://` endpoint declares it, as OTLP/HTTP allows; TLS material set beside it is refused |
+
+A provider package building a URL at run time inherits the same rule: the
+OAuth client speaks `https` alone, so a URL that slipped past every check
+still never leaves the process in plaintext with a token on it.
+
 ## What the framework does **not** do
 
 These are out of scope on purpose. They matter, they belong in your

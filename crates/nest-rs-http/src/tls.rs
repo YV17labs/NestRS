@@ -5,8 +5,8 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use nest_rs_config::__private::{PairRefusal, certified_key as checked_pair};
-use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting, crypto_provider};
+use nest_rs_config::__private::{PairRefusal, certified_key as checked_pair, crypto_provider};
+use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting};
 use rustls::ServerConfig;
 use rustls::crypto::aws_lc_rs;
 use rustls::server::{ClientHello, ResolvesServerCert};

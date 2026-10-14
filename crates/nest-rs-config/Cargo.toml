@@ -54,8 +54,9 @@ rustls = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
 [features]
-# The shared client-TLS vocabulary (`ClientTls`, `TlsIdentity`,
-# `crypto_provider`), enabled by every crate that opens a TLS client.
+# The shared client-TLS vocabulary (`ClientTls`, `TlsIdentity`, and the
+# process's rustls provider behind `__private`), enabled by every crate that
+# opens a TLS client.
 tls = ["dep:rustls"]
 # `ClientTls` as a reqwest client takes it, for the crates dialling through one.
 reqwest = ["tls", "dep:reqwest"]

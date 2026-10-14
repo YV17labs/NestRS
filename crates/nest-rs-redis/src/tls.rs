@@ -48,7 +48,7 @@ pub(crate) fn material(
             source: None,
         })?;
     // `redis` builds its client from the process's default provider.
-    nest_rs_config::crypto_provider();
+    nest_rs_config::__private::crypto_provider();
     Ok(Some(redis::TlsCertificates {
         client_tls: tls
             .identity_pem()

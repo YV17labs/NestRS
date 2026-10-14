@@ -47,7 +47,7 @@ until it stabilises.
 | argon2 | **Private**: its errors are boxed sources of `PasswordError`, shared behind an `Arc` so the error stays `Clone`. |
 | object_store | **Private**: its errors become boxed sources of `StorageError`. |
 | tracing-subscriber | **Private**: no public error carries one of its errors, since `nest_rs::core::logging::LogSettings` reads the console's settings into nestrs's own. Until its wrap lands, `nest_rs::core::logging::{TextFormat, JsonFormat}` implement its `FormatEvent`, for the OpenTelemetry crate alone, and `ConsoleWriter` its `MakeWriter`, which the CLI's migration template and an app's binaries without an `App` hand to `tracing_subscriber::fmt()`; the three leave tier 1 behind one installer of the console subscriber. The filter syntax `<PREFIX>_LOG` and `RUST_LOG` take is its `EnvFilter`'s, so a major that changes what parses is taken only with that syntax kept, or in a nestrs major. |
-| rustls, outside `nest-rs-testing` | **Private**: `nest_rs::config::crypto_provider`, which hands rustls's `CryptoProvider` to sibling crates, leaves tier 1. |
+| rustls, outside `nest-rs-testing` | **Private**: the process's rustls `CryptoProvider`, which `nest-rs-config` hands to its sibling crates, is reached through its `__private` alone. |
 | croner, jiff, jiff-tzdb | **Private**. The cron grammar and the zone names they read are `#[cron]`'s grammar, so a major of either that changes what parses is taken only with that grammar kept, or in a nestrs major. |
 | reqwest, oauth2, hyper, h2, sqlx, tokio-tungstenite, and every other dependency | **Private** already: no public signature names them. The record says so, so that it stays true. |
 

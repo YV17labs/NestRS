@@ -60,7 +60,7 @@ pub use service::{ConfigService, spellings, var_name};
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 #[cfg(feature = "tls")]
-pub use tls::{ClientTls, TlsIdentity, crypto_provider};
+pub use tls::{ClientTls, TlsIdentity};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,
 /// injectable [`Config`].
@@ -90,7 +90,7 @@ pub mod __private {
 
     pub use crate::namespace::ConfigNamespace;
     #[cfg(feature = "tls")]
-    pub use crate::tls::{PairRefusal, certified_key};
+    pub use crate::tls::{PairRefusal, certified_key, crypto_provider};
     #[cfg(feature = "reqwest")]
     pub use crate::tls::{ReqwestTls, reqwest_tls};
 

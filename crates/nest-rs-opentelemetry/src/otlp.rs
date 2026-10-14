@@ -212,7 +212,7 @@ fn exporter_clients(
     .map(|signal| export_timeout(signal, nest_rs_config::env_var, ignored_timeouts));
     // reqwest builds from the process's provider, which rustls picks on its own
     // only when exactly one is compiled in.
-    nest_rs_config::crypto_provider();
+    nest_rs_config::__private::crypto_provider();
     #[expect(
         clippy::map_err_ignore,
         reason = "a panic's payload may quote anything; the sentence says the build panicked"

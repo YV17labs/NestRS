@@ -247,6 +247,7 @@ async fn a_password_postgres_refuses_fails_the_boot_at_once() {
         !said.contains("n0t-the-password") && !said.contains("password authentication failed"),
         "neither the password nor the server's sentence: {said}"
     );
+    assert!(!said.contains("  "), "one sentence, unpadded: {said}");
     logs.expect_none(
         nest_rs_seaorm::target::ORM,
         "database unreachable — retrying within the connect budget",
@@ -270,4 +271,5 @@ async fn a_database_postgres_does_not_have_fails_the_boot_at_once() {
         "{said}"
     );
     assert!(!said.contains("nestrs_boot_proof_absent"), "{said}");
+    assert!(!said.contains("  "), "one sentence, unpadded: {said}");
 }

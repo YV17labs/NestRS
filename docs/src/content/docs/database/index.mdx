@@ -207,10 +207,12 @@ the variable.
 The boot proves the pool before anything is served. What Postgres refuses on
 every attempt — the user and password, a database it does not have, TLS that
 fails — fails the boot at once, naming `<PREFIX>_SEAORM__URL` and the SQLSTATE.
-Anything else — a host whose name does not resolve yet, a server still starting
-or full — is tried again within `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, each
-attempt said at `warn` on `nest_rs::orm` by host and port, never by the URL,
-which carries the password; past the budget, the boot fails as unreachable.
+Anything else — a server not listening yet, still starting or full, a host
+whose name does not resolve yet — is tried again within
+`<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, each attempt said at `warn` on
+`nest_rs::orm` by host and port, never by the URL, which carries the password;
+past the budget, the boot fails as unreachable, naming what the last attempt
+met.
 
 ## What the data layer hands you for free
 

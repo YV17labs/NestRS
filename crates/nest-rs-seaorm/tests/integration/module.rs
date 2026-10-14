@@ -103,6 +103,10 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
             && rendered.contains(&nest_rs_config::var_name("seaorm", "URL")),
         "the refusal says where the authority is named: {rendered}"
     );
+    assert!(
+        !rendered.contains("  "),
+        "one sentence, unpadded: {rendered}"
+    );
     logs.expect_none(nest_rs_seaorm::target::ORM, RETRYING);
 }
 
@@ -157,5 +161,131 @@ async fn a_host_whose_name_does_not_resolve_is_retried_within_the_budget_then_re
             "{:?}",
             event.fields
         );
+    }
+}
+
+/// A Postgres double answering every startup message with the error a server
+/// starting up (`57P03`) or full (`53300`) sends, on a URL without TLS.
+async fn postgres_answering(code: &'static str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut length = [0_u8; 4];
+                if socket.read_exact(&mut length).await.is_err() {
+                    return;
+                }
+                let rest = usize::try_from(u32::from_be_bytes(length))
+                    .unwrap_or(0)
+                    .saturating_sub(4);
+                let mut startup = vec![0_u8; rest];
+                if socket.read_exact(&mut startup).await.is_err() {
+                    return;
+                }
+                let mut fields = Vec::new();
+                for (kind, value) in [
+                    (b'S', "FATAL"),
+                    (b'V', "FATAL"),
+                    (b'C', code),
+                    (b'M', "the database system cannot accept connections yet"),
+                ] {
+                    fields.push(kind);
+                    fields.extend_from_slice(value.as_bytes());
+                    fields.push(0);
+                }
+                fields.push(0);
+                let length = u32::try_from(fields.len() + 4).expect("a short message");
+                let mut answer = vec![b'E'];
+                answer.extend_from_slice(&length.to_be_bytes());
+                answer.extend_from_slice(&fields);
+                let _ = socket.write_all(&answer).await;
+            });
+        }
+    });
+    format!("postgres://nestrs:s3cret@127.0.0.1:{port}/postgres?sslmode=disable")
+}
+
+/// Boots a pool on `url` with a 1 s connect budget, which must refuse it as
+/// unreachable after retrying, and hands back the refusal as the framework
+/// says it and the `error` field of every retry line.
+async fn unreachable_after_retrying(url: String) -> (String, Vec<String>) {
+    let logs = nest_rs_testing::LogCapture::install();
+    let began = Instant::now();
+    let Err(refused) = App::builder()
+        .provide(SeaOrmConfig {
+            url,
+            connect_timeout_secs: Some(1),
+            ..Default::default()
+        })
+        .module::<PoolModule>()
+        .build()
+        .await
+    else {
+        panic!("a pool opened on a server that let no connection in");
+    };
+    let rendered = nest_rs_core::error_message(&*refused);
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "within the budget: took {:?}",
+        began.elapsed()
+    );
+    assert!(
+        rendered.contains("could not be reached") && !rendered.contains("s3cret"),
+        "{rendered}"
+    );
+    let retried = logs.find(nest_rs_seaorm::target::ORM, RETRYING);
+    assert!(
+        retried.len() > 1,
+        "each attempt said, not one spent in silence: {:#?}",
+        logs.events()
+    );
+    let errors = retried
+        .iter()
+        .map(|event| {
+            assert_eq!(event.level, "warn");
+            event.field("error").unwrap_or_default()
+        })
+        .collect();
+    (rendered, errors)
+}
+
+/// A Postgres not listening yet — the app started before its database — is
+/// dialled again within the budget, each attempt said with what it met, and
+/// the refusal carries the last one's cause.
+#[tokio::test]
+async fn a_refused_connection_is_retried_and_said_per_attempt_then_named_in_the_refusal() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        listener.local_addr().expect("its address").port()
+    };
+    let (rendered, errors) = unreachable_after_retrying(format!(
+        "postgres://nestrs:s3cret@127.0.0.1:{port}/postgres?sslmode=disable"
+    ))
+    .await;
+
+    assert!(
+        rendered.to_lowercase().contains("connection refused"),
+        "the refusal's cause is the refused connection: {rendered}"
+    );
+    for error in errors {
+        assert!(
+            error.to_lowercase().contains("connection refused"),
+            "{error}"
+        );
+    }
+}
+
+/// A server starting up (`57P03`) or full (`53300`) lets the next attempt in
+/// once it clears, so each is retried and said, never refused at once.
+#[tokio::test]
+async fn a_starting_or_full_server_is_retried_and_said_per_attempt() {
+    for code in ["57P03", "53300"] {
+        let (rendered, errors) = unreachable_after_retrying(postgres_answering(code).await).await;
+
+        assert!(rendered.contains(code), "{code}: {rendered}");
+        for error in errors {
+            assert!(error.contains(code), "{code}: {error}");
+        }
     }
 }

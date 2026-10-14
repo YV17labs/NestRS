@@ -1,5 +1,5 @@
 use std::any::TypeId;
-use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_config::{ClientTls, ConfigModule, DurationBounds, Namespaced};
@@ -7,7 +7,8 @@ use nest_rs_core::{
     Attempt, Backoff, Budget, Collecting, ContainerBuilder, DynamicModule, Proving, Unproved,
     process_seed, prove,
 };
-use sea_orm::sqlx::postgres::PgConnectOptions;
+use sea_orm::sqlx::Connection as _;
+use sea_orm::sqlx::postgres::{PgConnectOptions, PgConnection};
 use sea_orm::{
     ConnectOptions, Database, DatabaseConnection, DatabaseConnectionType, DbErr, RuntimeErr,
     SqlxError,
@@ -60,7 +61,7 @@ impl DynamicModule for SeaOrmSetup {
         builder.provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
             |container| async move {
                 let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
-                connect(config.app_connect_options()?).await
+                connect(&config, config.app_connect_options()?).await
             },
         )
     }
@@ -164,24 +165,31 @@ fn acquire_budget(db: &DatabaseConnection) -> Option<Duration> {
 /// container (`migrate`, `seed`).
 pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
     use nest_rs_config::Config;
-    connect(SeaOrmConfig::load()?.connect_options()?).await
+    let config = SeaOrmConfig::load()?;
+    connect(&config, config.connect_options()?).await
 }
 
 /// The wait between two attempts to open the pool: the Redis connection's
 /// curve, so both come back alike after an outage.
 const CONNECT_RETRY: Backoff = Backoff::new(Duration::from_millis(250), Duration::from_secs(2));
 
-/// Open a pool with `options`, which [`SeaOrmConfig::connect_options`] built
-/// and checked, proved within its connect budget through [`prove`]: what every
-/// attempt would meet — credentials or a database Postgres refuses, TLS that
-/// fails — refuses the boot at once; anything else, a name that does not
-/// resolve yet included, is retried. The URL may carry credentials, so it is
-/// never logged: Postgres is named by its host and port.
+/// Open a pool with `options`, which `config` built and checked, proved within
+/// its connect budget through [`prove`]: what every attempt would meet —
+/// credentials or a database Postgres refuses, TLS that fails — refuses the
+/// boot at once; anything else, a refused connection, a server starting up or
+/// full and a name that does not resolve yet included, is retried and said.
+/// The URL may carry credentials, so it is never logged: Postgres is named by
+/// its host and port.
 ///
-/// Each attempt is cut at the budget left, and the pool keeps the budget as
-/// its acquire timeout: an attempt's own would shorten it for the app's life.
-async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> {
-    let endpoint = endpoint(options.get_url());
+/// Each attempt dials one connection before the pool opens: sqlx's pool would
+/// retry a refused, starting or full server in silence until its acquire
+/// timeout, the whole budget, which it keeps for the app's life.
+async fn connect(
+    config: &SeaOrmConfig,
+    options: ConnectOptions,
+) -> anyhow::Result<DatabaseConnection> {
+    let probe = config.probe_options()?;
+    let endpoint = endpoint(&probe);
     let budget = options
         .get_connect_timeout()
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
@@ -197,9 +205,20 @@ async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> 
         process_seed(),
         said(&endpoint, budget),
         |_| {
-            let options = options.clone();
-            let endpoint = &endpoint;
+            let (probe, options, endpoint) = (&probe, options.clone(), &endpoint);
             async move {
+                let met = |error| {
+                    classify(
+                        DbErr::Conn(RuntimeErr::SqlxError(Arc::new(error))),
+                        endpoint,
+                    )
+                };
+                PgConnection::connect_with(probe)
+                    .await
+                    .map_err(met)?
+                    .close()
+                    .await
+                    .map_err(met)?;
                 Database::connect(options)
                     .await
                     .map_err(|error| classify(error, endpoint))
@@ -248,7 +267,8 @@ fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
     let reason = match &**sqlx {
         SqlxError::Database(server) => match server.code().as_deref() {
             Some(code @ ("28P01" | "28000")) => format!(
-                "it does not let in the user {url} names, with the password it gives                  (SQLSTATE {code})"
+                "it does not let in the user {url} names, with the password it gives \
+                 (SQLSTATE {code})"
             ),
             Some("3D000") => {
                 format!("it has no database by the name {url} gives (SQLSTATE 3D000)")
@@ -256,7 +276,9 @@ fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
             _ => return Attempt::Failed(error),
         },
         SqlxError::Tls(_) | SqlxError::Io(_) if is_tls(sqlx) => format!(
-            "TLS failed — name the authority that signed its certificate in {url}'s              `sslrootcert`, and a client certificate in `sslcert` and `sslkey` if Postgres              requires one"
+            "TLS failed — name the authority that signed its certificate in {url}'s \
+             `sslrootcert`, and a client certificate in `sslcert` and `sslkey` if Postgres \
+             requires one"
         ),
         SqlxError::Configuration(_) => {
             format!("sqlx refused the options {url} sets — check its query parameters")
@@ -298,15 +320,12 @@ fn unproved(
     }
 }
 
-/// The host and port `url` dials — or its socket — never the URL, which
+/// The host and port `options` dial — or their socket — never the URL, which
 /// carries the password.
-fn endpoint(url: &str) -> String {
-    match PgConnectOptions::from_str(url) {
-        Ok(options) => match options.get_socket() {
-            Some(socket) => socket.display().to_string(),
-            None => format!("{}:{}", options.get_host(), options.get_port()),
-        },
-        Err(_) => "<a URL sqlx cannot read>".to_owned(),
+fn endpoint(options: &PgConnectOptions) -> String {
+    match options.get_socket() {
+        Some(socket) => socket.display().to_string(),
+        None => format!("{}:{}", options.get_host(), options.get_port()),
     }
 }
 

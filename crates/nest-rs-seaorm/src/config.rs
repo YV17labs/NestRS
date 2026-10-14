@@ -146,6 +146,40 @@ impl SeaOrmConfig {
         Ok(opts)
     }
 
+    /// The options one connection outside the pool opens with — the URL, and
+    /// the TLS every pool connection opens with — for the boot's proof, which
+    /// dials one per attempt where the pool would retry in silence.
+    pub(crate) fn probe_options(&self) -> Result<PgConnectOptions> {
+        let tls = self.tls()?;
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "sqlx's parse error can quote the URL, which carries the password"
+        )]
+        let url = PgConnectOptions::from_str(&self.url)
+            .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
+        Ok(tls(url))
+    }
+
+    /// What every connection this config opens does with TLS: the mode
+    /// [`tls_mode`](Self::tls_mode) allows, and the system's authorities when
+    /// the URL names no `sslrootcert`.
+    fn tls(&self) -> Result<impl Fn(PgConnectOptions) -> PgConnectOptions + Send + Sync + 'static> {
+        let mode = self.tls_mode()?;
+        let system = self.trusts_the_system();
+        Ok(move |options: PgConnectOptions| {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the one call: `mode` is `tls_mode`'s, verified or explicitly off"
+            )]
+            let options = options.ssl_mode(mode);
+            if system {
+                options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
+            } else {
+                options
+            }
+        })
+    }
+
     /// The TLS the pool's connections open with: `verify-full` — the server's
     /// certificate checked against the system's authorities, or `sslrootcert`,
     /// and its name against the host — when the URL names no `sslmode`, and
@@ -221,7 +255,7 @@ impl SeaOrmConfig {
                  deployment's to name",
             ));
         }
-        let mode = self.tls_mode()?;
+        let tls = self.tls()?;
         let budget = match self.connect_timeout_secs {
             Some(secs) => CONNECT_TIMEOUT.check(
                 Self::NAMESPACE,
@@ -231,19 +265,7 @@ impl SeaOrmConfig {
             None => DEFAULT_CONNECT_TIMEOUT,
         };
         let mut opts = ConnectOptions::new(self.url.clone());
-        let system = self.trusts_the_system();
-        opts.map_sqlx_postgres_opts(move |options| {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "the one call: `mode` is `tls_mode`'s, verified or explicitly off"
-            )]
-            let options = options.ssl_mode(mode);
-            if system {
-                options.ssl_root_cert_from_pem(nest_rs_config::system_authorities().to_vec())
-            } else {
-                options
-            }
-        });
+        opts.map_sqlx_postgres_opts(tls);
         if let Some(n) = self.max_connections {
             opts.max_connections(n);
         }

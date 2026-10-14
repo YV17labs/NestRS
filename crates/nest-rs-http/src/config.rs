@@ -222,7 +222,9 @@ pub struct HttpConfig {
     /// `<PREFIX>_HTTP__TLS_CERT[_FILE]` + `<PREFIX>_HTTP__TLS_KEY[_FILE]`.
     pub tls: Option<HttpTls>,
     /// CORS policy. `None` ⇒ no CORS layer. Populated when
-    /// `<PREFIX>_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]).
+    /// `<PREFIX>_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]). Its origins are
+    /// also the browser origins a WebSocket gateway, the graphql-ws upgrade and
+    /// `/mcp` admit; with `None`, those admit the request's own origin alone.
     pub cors: Option<HttpCors>,
     /// How a caller selects an API version: `uri` (the default), `header` or
     /// `media_type`. Read from `<PREFIX>_HTTP__VERSIONING`.
@@ -285,9 +287,12 @@ pub struct HttpConfig {
     /// deployment believes. Empty by default: every caller is identified by its
     /// transport peer.
     ///
-    /// Read from `<PREFIX>_HTTP__TRUSTED_PROXIES` (`10.0.0.1,10.0.0.2`) by both
-    /// [`ClientIp`](crate::ClientIp) and the throttler's rate-limit bucket; an
-    /// unparseable entry aborts the boot. See
+    /// Read from `<PREFIX>_HTTP__TRUSTED_PROXIES` (`10.0.0.1,10.0.0.2`) by
+    /// [`ClientIp`](crate::ClientIp), the throttler's rate-limit bucket and the
+    /// browser-origin check of the WebSocket gateways, the graphql-ws upgrade
+    /// and `/mcp`, where a trusted proxy's `Forwarded` (`proto=`, `host=`) or
+    /// `X-Forwarded-Proto` / `X-Forwarded-Host` set the request's own origin;
+    /// an unparseable entry aborts the boot. See
     /// [`ClientOrigin`](crate::ClientOrigin) for the resolution rule.
     pub trusted_proxies: Vec<IpAddr>,
     /// Maximum lifetime of a single `#[sse]` stream: when it elapses the stream

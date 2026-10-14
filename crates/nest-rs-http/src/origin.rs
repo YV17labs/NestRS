@@ -4,9 +4,10 @@
 //! or sends a request whose effect is the point.
 //!
 //! The policy is the transport's own configuration — its CORS origins and its
-//! trusted proxies — resolved once per mount, so with CORS configured it
-//! repeats the answer the transport's CORS layer already gave, and an entry
-//! point mounted outside the transport is held to it all the same.
+//! trusted proxies — resolved once per mount. With CORS configured, the
+//! transport's CORS layer answers first and admits only what it lists, the
+//! server's own origin included; an entry point mounted outside the transport
+//! is held to this policy all the same.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv6Addr};

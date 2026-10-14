@@ -190,14 +190,22 @@ literal on a credentialed request, so it would open nothing.
 The same origins decide who opens a socket or calls MCP. A browser consults
 CORS neither before a WebSocket upgrade nor before a request simple enough to
 need no preflight, so the WebSocket gateways, the GraphQL subscription socket
-and `/mcp` check `Origin` themselves, CORS on or off: a browser page on the
-server's own origin, or on one `cors.origins` lists, is admitted; any other is
-answered `403`. Behind a proxy that terminates TLS or rewrites `Host`, the
-server sees a scheme or a host the browser did not: list the proxy in
-`trusted_proxies` so its `Forwarded` or `X-Forwarded-Proto` and
-`X-Forwarded-Host` say which origin the browser was on, or list that public
-origin in `cors.origins`. The refusal's `warn` names the origin the server
-took for its own.
+and `/mcp` check `Origin` themselves, CORS on or off; a client that sends no
+`Origin` — anything but a browser — passes.
+
+- **With no `cors`**, a browser page on the server's own origin is admitted
+  and any other is answered `403`, with a `warn` naming the origin sent and
+  the one the server took for its own. Behind a proxy that terminates TLS or
+  rewrites `Host`, the server sees a scheme or a host the browser did not:
+  list the proxy in `trusted_proxies` so its `Forwarded` or
+  `X-Forwarded-Proto` and `X-Forwarded-Host` say which origin the browser was
+  on.
+- **Once `cors.origins` is set**, the CORS layer answers first, on every
+  route, and admits only the origins it lists: a page the server serves
+  itself that opens a socket or calls MCP has its own origin listed too. The
+  CORS layer's `403` files no `warn`. Leaving the server's own origin to the
+  list keeps a DNS-rebinding page, whose `Host` names the attacker's domain,
+  from passing for it.
 
 ## Mounting under a shared prefix
 

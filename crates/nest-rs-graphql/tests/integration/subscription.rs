@@ -857,8 +857,10 @@ async fn an_upgrade_with_no_origin_or_its_own_is_served() {
 ])]
 struct ListedOriginApp;
 
+/// Once CORS is set, its layer answers first and admits what it lists alone.
 #[tokio::test]
-async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
+async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
+    let logs = LogCapture::install();
     let (app, _) = ticks_app::<ListedOriginApp>().await;
 
     let mut socket = graphql_ws(&app).header("origin", LISTED).connect().await;
@@ -871,6 +873,15 @@ async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
             .await,
         poem::http::StatusCode::FORBIDDEN,
     );
+    assert_eq!(
+        graphql_ws(&app)
+            .header("origin", format!("http://{}", app.addr()))
+            .expect_refused()
+            .await,
+        poem::http::StatusCode::FORBIDDEN,
+        "the server's own origin, unlisted",
+    );
+    logs.expect_none(nest_rs_graphql::TARGET, "browser origin refused");
 
     app.shutdown().await.expect("the transport stops cleanly");
 }

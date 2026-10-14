@@ -2316,8 +2316,11 @@ async fn an_upgrade_with_no_origin_or_its_own_is_served() {
 )]
 struct ListedOriginModule;
 
+/// Once CORS is set, its layer answers first and admits what it lists alone:
+/// the server's own origin, read off `Host`, would pass a DNS-rebinding page.
 #[tokio::test]
-async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
+async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
+    let logs = LogCapture::install();
     let app = socket_app::<ListedOriginModule>().await;
 
     let mut socket = app
@@ -2334,6 +2337,15 @@ async fn an_upgrade_from_an_origin_the_cors_policy_lists_is_served() {
             .await,
         StatusCode::FORBIDDEN,
     );
+    assert_eq!(
+        app.socket("/socket")
+            .header("origin", format!("http://{}", app.addr()))
+            .expect_refused()
+            .await,
+        StatusCode::FORBIDDEN,
+        "the server's own origin, unlisted",
+    );
+    logs.expect_none("nest_rs::ws", "browser origin refused");
 
     app.shutdown().await.expect("the transport stops cleanly");
 }

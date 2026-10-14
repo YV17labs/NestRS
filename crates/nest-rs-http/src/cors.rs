@@ -11,9 +11,15 @@ use poem::middleware::Cors;
 
 /// Cross-Origin Resource Sharing policy. `origins` empty ⇒ no CORS layer
 /// installed (the default). Lists are comma-separated in env vars.
+///
+/// The same `origins` decide which browser origins open a WebSocket gateway's
+/// socket or a graphql-ws socket and call `/mcp`, which a browser never asks
+/// CORS about; the CORS layer answers first and admits only what they list,
+/// the server's own origin included.
 #[derive(Clone, Debug, Default)]
 pub struct HttpCors {
-    /// Allowed origins; empty ⇒ no CORS layer installed.
+    /// Allowed origins; empty ⇒ no CORS layer installed. Also the browser
+    /// origins the socket upgrades and `/mcp` admit.
     pub origins: Vec<String>,
     /// Allowed request methods (`Access-Control-Allow-Methods`).
     pub methods: Vec<String>,

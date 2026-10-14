@@ -27,7 +27,10 @@ connection — owed by their own edges, and it holds whatever the credential: a
 strategy reading a cookie or a query parameter on an upgrade is protected by
 it, not by a CSRF layer. It admits the request's own origin and the ones
 `<PREFIX>_HTTP__CORS_ORIGINS` lists, one origin list for both, as Spring's and
-Socket.IO's handshakes use theirs.
+Socket.IO's handshakes use theirs. Once that list is set, the transport's CORS
+layer answers first, on every route, and admits only what it lists: the
+server's own origin is listed too when a page it serves opens a socket or calls
+MCP.
 
 **Refused:**
 
@@ -39,6 +42,11 @@ Socket.IO's handshakes use theirs.
 - **rmcp's `allowed_origins` for MCP alone**: it cannot say "the request's own
   origin", and a second mechanism for one concern breaks one way to do a
   thing: the three entry points share one `OriginPolicy`.
+- **Letting a request on its own origin past the CORS layer** (2026-10-14):
+  Fetch calls a same-origin request no CORS request, but the own origin is
+  read off `Host`, which a DNS-rebinding page sets to the attacker's domain,
+  so on every route the bypass would admit what the list refuses today; a
+  server serving its own pages lists its origin, one visible line.
 - **Checking `Origin` only when CORS is configured**: with CORS off, the
   default, every cross-site page could open a socket: the configured case was
   sound, the unconfigured one was the hole.

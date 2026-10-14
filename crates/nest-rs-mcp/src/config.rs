@@ -4,9 +4,10 @@
 //! the `Host` header against it to stop DNS rebinding, which reaches exactly the
 //! local server that configures nothing — hence the loopback default. The
 //! `Origin` half is checked by the endpoint itself, CORS on or off: a browser
-//! request is admitted from the request's own origin or one
-//! `<PREFIX>_HTTP__CORS_ORIGINS` lists. rmcp's `allowed_origins` stays empty,
-//! since it cannot say "the request's own origin".
+//! request is admitted from the request's own origin while
+//! `<PREFIX>_HTTP__CORS_ORIGINS` is unset, and from what it lists once set.
+//! rmcp's `allowed_origins` stays empty, since it cannot say "the request's own
+//! origin".
 
 use std::time::Duration;
 

@@ -58,11 +58,14 @@ client receives the response, and no socket is ever opened.
 
 A browser sends a page's cookies with any upgrade that page asks for, and
 never consults CORS first, so the upgrade's `Origin` is checked before the
-socket opens (RFC 6455 §10.2): a page on the server's own origin, or on one
-`<PREFIX>_HTTP__CORS_ORIGINS` lists, gets its socket; any other is answered
-`403`, with a `warn` on `nest_rs::ws` naming the origin sent and the one the
-server took for its own. A client that sends no `Origin` — anything but a
-browser — is not concerned.
+socket opens (RFC 6455 §10.2), once the gateway's guards have passed. With no
+CORS policy, a page on the server's own origin gets its socket; any other is
+answered `403`, with a `warn` on `nest_rs::ws` naming the origin sent and the
+one the server took for its own. Once `<PREFIX>_HTTP__CORS_ORIGINS` is set,
+only the origins it lists get one — the server's own included, when it serves
+the page — and the CORS layer's `403` files no `warn`
+([CORS](/http/configuration/#cors)). A client that sends no `Origin` —
+anything but a browser — is not concerned.
 
 Because the `SocketContext` seam runs **after** connection-level
 guards and **captures the post-guard request state**, anything those

@@ -129,10 +129,13 @@ serves the playground when it is enabled; the upgrade header is what
 selects the socket.
 
 A browser never consults CORS before it opens a socket, so the upgrade
-checks the `Origin` header itself (RFC 6455 §10.2): a browser page on the
-server's own origin, or on one `<PREFIX>_HTTP__CORS_ORIGINS` lists, gets its
+checks the `Origin` header itself (RFC 6455 §10.2), before the guard runs.
+With no CORS policy, a browser page on the server's own origin gets its
 socket; any other gets `403`, and a `warn` on `nest_rs::graphql` names the
-origin sent and the one the server took for its own. A client that sends no
+origin sent and the one the server took for its own. Once
+`<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists get one — the
+server's own included, when it serves the page — and the CORS layer's `403`
+files no `warn` ([CORS](/http/configuration/#cors)). A client that sends no
 `Origin` — anything but a browser — is not concerned.
 
 <Aside type="caution">

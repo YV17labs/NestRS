@@ -80,8 +80,8 @@ impl McpMount {
 
     /// Resolve the whole mount from the app's container:
     ///
-    /// * the browser origins the HTTP transport admits — its own, and what its
-    ///   CORS policy lists;
+    /// * the browser origins the HTTP transport admits — its own while no CORS
+    ///   policy is set, what that policy lists once one is;
     /// * the operation guard, per [`resolve_operation_guard`];
     /// * the registered `dyn McpToolContext` (the ORM/authz bridge), if any —
     ///   without one a `Repo`-backed handler still fails **closed**;

@@ -59,6 +59,59 @@ mod tests {
         );
     }
 
+    /// A package's unit, declared under its own crate's name, is exported under
+    /// the ids its operation line carries: the proof runs the whole pipeline,
+    /// from `operation_span!` through the layer to the exporter.
+    #[test]
+    fn a_package_units_exported_span_carries_the_ids_its_operation_line_carries() {
+        use opentelemetry::trace::TracerProvider as _;
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        // As `init_with` does: the linker is what starts the SDK's span while the
+        // ids are pending.
+        crate::linker::install();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_id_generator(AdoptFrameworkIds::default())
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let exporting = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("probe")));
+        let logs = nest_rs_testing::LogCapture::install();
+        let correlation = Correlation::minted(None);
+        let started = std::time::Instant::now();
+
+        // The capture is this thread's default; the span is opened under the
+        // exporting subscriber, which it keeps until it closes.
+        let span =
+            tracing::subscriber::with_default(exporting, || nestrs_unit_probe::open(&correlation));
+        nest_rs_core::RequestContinuation::new(None, correlation.clone())
+            .enter(|| nestrs_unit_probe::settle(&span, started));
+        drop(span);
+
+        let unit = nestrs_unit_probe::WORK;
+        let exported = exporter
+            .get_finished_spans()
+            .expect("the in-memory exporter answers");
+        let [exported] = exported.as_slice() else {
+            panic!("one span exported: {exported:#?}");
+        };
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit.name());
+        assert_eq!(line.name, unit.name());
+        assert_eq!(exported.name, unit.name());
+        assert_eq!(
+            Some(exported.span_context.trace_id().to_string()),
+            line.trace_id,
+            "the exported trace is the one the line names",
+        );
+        assert_eq!(
+            Some(exported.span_context.span_id().to_string()),
+            line.span_id,
+            "and so is the span",
+        );
+    }
+
     #[test]
     fn a_span_the_framework_did_not_open_gets_its_own_ids() {
         let generator = AdoptFrameworkIds::default();

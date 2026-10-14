@@ -25,6 +25,9 @@ pub(crate) fn install() {
 ///
 /// The order is load-bearing: a `ParentBased` sampler reads the parent, so a
 /// verdict read before the link is the verdict for a trace this span is not in.
+/// Reading the verdict starts the SDK's span, which `tracing-opentelemetry`
+/// defers until then; the framework runs this while its ids are pending, so the
+/// span starts under them.
 fn enrich(span: &tracing::Span, correlation: &Correlation) {
     link_remote_parent(span, correlation);
     nest_rs_core::__private::set_sampled(correlation, is_sampled(span));

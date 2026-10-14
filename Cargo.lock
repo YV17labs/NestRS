@@ -3032,6 +3032,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-testing",
+ "nestrs-unit-probe",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
@@ -3403,6 +3404,13 @@ dependencies = [
 
 [[package]]
 name = "nestrs-hooks-probe"
+version = "7.0.0"
+dependencies = [
+ "nest-rs",
+]
+
+[[package]]
+name = "nestrs-unit-probe"
 version = "7.0.0"
 dependencies = [
  "nest-rs",

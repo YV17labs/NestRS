@@ -75,6 +75,12 @@ tokio.workspace = true
 # env; the tests isolate it with `figment::Jail`, matching how `nest-rs-config`
 # tests its env reads.
 figment = { workspace = true, features = ["test"] }
+# The SDK's in-memory span exporter, which the ids test reads what it exported
+# from.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# A package declaring its own unit, whose exported span must carry the ids its
+# operation line carries.
+nestrs-unit-probe = { path = "tests/unit-probe" }
 
 [lints]
 workspace = true

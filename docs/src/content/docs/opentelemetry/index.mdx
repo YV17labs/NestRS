@@ -20,8 +20,10 @@ counterpart through
 Three signal types ship in one crate, behind one import:
 
 - **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
-  opens a span; W3C `traceparent` propagation, sampling, and the per-request
-  HTTP interceptor stitch distributed traces together.
+  opens a span, and so does every unit a package declares, exported under the
+  same trace and span ids its log lines carry; W3C `traceparent` propagation,
+  sampling, and the per-request HTTP interceptor stitch distributed traces
+  together.
 - **[Logs](/opentelemetry/logs/)** — `tracing::info!` and friends flow to the
   console **and** to OTel logs (via
   [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))

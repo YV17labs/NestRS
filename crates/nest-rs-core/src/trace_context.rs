@@ -556,8 +556,9 @@ pub(crate) mod __private {
         static PENDING_IDS: (TraceId, SpanId);
     }
 
-    /// Publish this unit of work's ids for the duration of **creating** its span,
-    /// so an SDK's `IdGenerator` adopts them instead of minting its own.
+    /// Publish this unit of work's ids for the duration of **creating and
+    /// linking** its span, so an SDK's `IdGenerator` adopts them instead of
+    /// minting its own.
     ///
     /// A scope of its own because the generator runs inside `info_span!`, before
     /// the edge installs the request context.
@@ -623,7 +624,8 @@ const fn unhex(byte: u8) -> Option<u8> {
 }
 
 /// Open the framework's **operation span** — one per unit of work, carrying the
-/// canonical field vocabulary so every edge declares it identically.
+/// canonical field vocabulary so every edge, and every package, declares it
+/// identically.
 ///
 /// `tracing` fixes a span's fields at creation, so recording an undeclared one
 /// is a silent no-op; these are always declared:
@@ -640,6 +642,11 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// and a unit another crate declared is a compile error. The [`Correlation`] is
 /// passed rather than read ambiently: an edge opens its span before installing
 /// the context. The worked example is `nest_rs_http::unit`'s.
+///
+/// It is the one way a unit's span carries the ids its log lines carry: an
+/// exporter that adopts the framework's ids reads them while this span is
+/// created, so a package's transport opens its own units here too, never with
+/// a hand-written `info_span!`.
 #[macro_export]
 macro_rules! operation_span {
     ($unit:path, $correlation:expr $(, $($field:tt)*)?) => {{
@@ -648,8 +655,10 @@ macro_rules! operation_span {
             "a unit is opened only by the crate that declares it",
         );
         let __correlation = &$correlation;
+        // The link runs inside the pending ids: an exporter may start its span
+        // only when first asked for it, and must start it under these ids.
         let __span = $crate::__private::with_pending_ids(__correlation, || {
-            $crate::tracing::info_span!(
+            let __span = $crate::tracing::info_span!(
                 target: $unit.target(),
                 $unit.name(),
                 otel.kind = $unit.kind().as_str(),
@@ -660,7 +669,9 @@ macro_rules! operation_span {
                 "error.type" = $crate::tracing::field::Empty,
                 otel.status_code = $crate::tracing::field::Empty,
                 $($($field)*)?
-            )
+            );
+            $crate::__private::link_span(&__span, __correlation);
+            __span
         });
         if let Some(parent_span_id) = __correlation.parent_id() {
             __span.record(
@@ -673,7 +684,6 @@ macro_rules! operation_span {
         if let Some(actor_id) = __correlation.actor_id() {
             __span.record($crate::trace_context::field::ACTOR_ID, actor_id);
         }
-        $crate::__private::link_span(&__span, __correlation);
         __span
     }};
 }

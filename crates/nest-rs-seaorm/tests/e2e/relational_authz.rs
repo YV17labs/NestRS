@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, with_ability};
 use nest_rs_seaorm::{
-    Access, Creatable, CreateModel, CrudService, Deletable, Executor, Updatable, UpdateModel,
+    Access, Creatable, CreateModel, CrudService, Deletable, Executor, Repo, Updatable, UpdateModel,
     with_request_executor,
 };
 use sea_orm::prelude::Uuid;
@@ -228,6 +228,126 @@ async fn access_distinguishes_found_denied_and_missing() {
                     Access::Missing
                 ),
                 "an absent id resolves to Missing",
+            );
+        })
+        .await;
+    })
+    .await;
+}
+
+/// Read on every item, Update only on an item whose container is in `org`: a
+/// row read for `Read` cannot show which.
+fn reads_all_updates_in_org(org: Uuid) -> Arc<Ability> {
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, item::Entity);
+    b.can(Action::Update, item::Entity).when(move |p| {
+        p.related::<container::Entity, _>(item::Relation::Container, move |c| {
+            c.eq(container::Column::OrgId, org)
+        })
+    });
+    Arc::new(b.build().expect("valid test ability"))
+}
+
+#[tokio::test]
+async fn the_instance_check_in_sql_decides_the_relation_a_row_read_for_another_action_hides() {
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
+
+    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
+    seed_item(&conn, item_a, cont_a, "in A").await;
+    seed_item(&conn, item_b, cont_b, "in B").await;
+
+    let ability = reads_all_updates_in_org(org_a);
+    with_request_executor(Executor::Pool(conn.clone()), async {
+        with_ability(ability.clone(), async {
+            let mine = Repo::<item::Entity>::find_by_id(item_a)
+                .await
+                .expect("read a")
+                .expect("item a is readable");
+            let theirs = Repo::<item::Entity>::find_by_id(item_b)
+                .await
+                .expect("read b")
+                .expect("item b is readable");
+
+            assert!(
+                !ability.can::<item::Entity>(Action::Update, &mine),
+                "the model alone cannot show its container's org",
+            );
+            assert!(
+                Repo::<item::Entity>::can(Action::Update, &mine)
+                    .await
+                    .expect("check a"),
+                "the relation holds: the item's container is in the caller's org",
+            );
+            assert!(
+                !Repo::<item::Entity>::can(Action::Update, &theirs)
+                    .await
+                    .expect("check b"),
+                "the relation does not hold: the item's container is in another org",
+            );
+
+            conn.execute_unprepared(&format!("DELETE FROM rel_item WHERE id = '{item_a}'"))
+                .await
+                .expect("remove item a");
+            assert!(
+                !Repo::<item::Entity>::can(Action::Update, &mine)
+                    .await
+                    .expect("check a again"),
+                "a row gone since it was read is not one the caller may update",
+            );
+        })
+        .await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_instance_check_in_sql_refuses_the_row_a_relational_denial_names() {
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
+
+    let (org_a, org_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (cont_a, cont_b) = (Uuid::now_v7(), Uuid::now_v7());
+    let (item_a, item_b) = (Uuid::now_v7(), Uuid::now_v7());
+    seed_container(&conn, cont_a, org_a).await;
+    seed_container(&conn, cont_b, org_b).await;
+    seed_item(&conn, item_a, cont_a, "in A").await;
+    seed_item(&conn, item_b, cont_b, "in B").await;
+
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Manage, item::Entity);
+    b.cannot(Action::Update, item::Entity).when(move |p| {
+        p.related::<container::Entity, _>(item::Relation::Container, move |c| {
+            c.eq(container::Column::OrgId, org_b)
+        })
+    });
+    let ability = Arc::new(b.build().expect("valid test ability"));
+
+    with_request_executor(Executor::Pool(conn.clone()), async {
+        with_ability(ability.clone(), async {
+            let rows = ItemsService.list().await.expect("list succeeds");
+            let pick = |id| rows.iter().find(|r| r.id == id).expect("item is listed");
+            let (mine, theirs) = (pick(item_a), pick(item_b));
+
+            assert!(
+                !ability.can::<item::Entity>(Action::Update, mine),
+                "a denial the model cannot decide denies in memory",
+            );
+            assert!(
+                Repo::<item::Entity>::can(Action::Update, mine)
+                    .await
+                    .expect("check a"),
+                "SQL decides the denial does not name the item",
+            );
+            assert!(
+                !Repo::<item::Entity>::can(Action::Update, theirs)
+                    .await
+                    .expect("check b"),
+                "SQL decides the denial names the item",
             );
         })
         .await;

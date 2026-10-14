@@ -12,7 +12,7 @@ use nest_rs_authz::{Action, ActionMarker};
 
 use crate::executor::Executor;
 use crate::page::Page;
-use crate::repo::{Repo, scope_for};
+use crate::repo::{Repo, pk_condition, scope_for};
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
 /// for each `Create<Name>Input`.
@@ -538,15 +538,4 @@ fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
 /// `Location`; `None` when the entity has none, or one of another type.
 pub fn model_uuid<E: EntityTrait>(model: &E::Model) -> Option<Uuid> {
     <Uuid as sea_orm::sea_query::ValueType>::try_from(model_pk::<E>(model)?).ok()
-}
-
-/// Equality over **all** of a model's primary-key columns, composite included.
-fn pk_condition<E: EntityTrait>(model: &E::Model) -> Condition {
-    use sea_orm::{ColumnTrait, Iterable, ModelTrait, PrimaryKeyToColumn};
-    let mut cond = Condition::all();
-    for pk in E::PrimaryKey::iter() {
-        let col = pk.into_column();
-        cond = cond.add(col.eq(model.get(col)));
-    }
-    cond
 }

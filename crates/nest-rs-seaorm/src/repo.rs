@@ -3,8 +3,9 @@ use std::marker::PhantomData;
 use nest_rs_authz::{Action, current_ability};
 use sea_orm::sea_query::{Condition, Expr};
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DbErr, Delete, DeleteResult,
-    EntityTrait, IntoActiveModel, PrimaryKeyTrait, QueryFilter, Select, Update, Value,
+    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, Delete,
+    DeleteResult, EntityTrait, IntoActiveModel, Iterable, ModelTrait, PrimaryKeyToColumn,
+    PrimaryKeyTrait, QueryFilter, Select, SelectExt, Update, Value,
 };
 
 use crate::executor::{Executor, ExecutorScope, current_executor, current_executor_scope};
@@ -93,6 +94,31 @@ impl<E: EntityTrait> Repo<E> {
     /// query. Chain further constraints and execute against [`Repo::conn`].
     pub fn scoped(action: Action) -> Select<E> {
         E::find().filter(scope_for::<E>(action))
+    }
+
+    /// Whether the caller may `action` this row, decided in SQL: one query on
+    /// its primary key under the action's own condition, which decides a
+    /// relational rule [`Ability::can`](nest_rs_authz::Ability::can) cannot
+    /// see on the model alone.
+    ///
+    /// The instance check for a model read for another action — `Update` on a
+    /// row read for `Read`. A row gone since it was read answers `false`, and
+    /// so does every row when the scope denies all of them
+    /// ([`scope_for`]).
+    pub async fn can(action: Action, model: &E::Model) -> Result<bool, DbErr> {
+        let conn = Self::conn()?;
+        let allowed = Self::scoped(action)
+            .filter(pk_condition::<E>(model))
+            .exists(&conn)
+            .await?;
+        tracing::trace!(
+            target: crate::target::ORM,
+            entity = E::default().table_name(),
+            ?action,
+            allowed,
+            "instance check",
+        );
+        Ok(allowed)
     }
 
     /// A [`Select`] that **bypasses the ambient ability filter**, for the three
@@ -202,6 +228,16 @@ impl<E: EntityTrait> Repo<E> {
         Self::scoped_save(active, Action::Delete).await?;
         Ok(())
     }
+}
+
+/// Equality over **all** of a model's primary-key columns, composite included.
+pub(crate) fn pk_condition<E: EntityTrait>(model: &E::Model) -> Condition {
+    let mut cond = Condition::all();
+    for pk in E::PrimaryKey::iter() {
+        let col = pk.into_column();
+        cond = cond.add(col.eq(model.get(col)));
+    }
+    cond
 }
 
 #[cfg(test)]

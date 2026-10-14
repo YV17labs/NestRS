@@ -777,7 +777,7 @@ async fn handle_text<G: Gateway>(
     let WsEnvelope { event, data } = envelope;
     let event_ref = event.clone();
     let conn_id = client.id();
-    let inner: BoxFuture<'_, WsReply> = Box::pin(async move {
+    let inner = async move {
         // The chain filed the denial while it still held it.
         let (attached, mut data) = match guards.check(client, &event_ref, data).await {
             Ok(admitted) => admitted,
@@ -790,7 +790,7 @@ async fn handle_text<G: Gateway>(
             }
         }
         install_pending(attached, gateway.dispatch(client, &event_ref, data)).await
-    });
+    };
     // Inside the socket context, so what it installs is ambient for the unit.
     let spec = UnitSpec::new(
         crate::unit::MESSAGE,

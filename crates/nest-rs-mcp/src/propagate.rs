@@ -497,8 +497,9 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     );
 
     /// No context and no unit of work: a transaction would pin a pooled
-    /// connection for the subscription's life. At the shutdown signal it answers `Ok(())`, which rmcp
-    /// sends as the schema's final result for a graceful teardown, and files `cancelled`.
+    /// connection for the subscription's life. At the shutdown signal it answers
+    /// `Ok(())`, which rmcp sends as the schema's final result for a graceful
+    /// teardown, and files `cancelled`.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient =
             McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();

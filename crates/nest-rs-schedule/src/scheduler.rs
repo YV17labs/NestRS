@@ -578,8 +578,8 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// What every job's loop fires through: the container its method resolves
-/// from, the binding its tick runs its unit of work through, and the lock a job declared
-/// `replicas = "one"` claims its occurrences with.
+/// from, the binding its tick runs its unit of work through, and the lock a job
+/// declared `replicas = "one"` claims its occurrences with.
 #[derive(Clone)]
 struct Runner {
     container: Container,

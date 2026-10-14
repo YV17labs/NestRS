@@ -117,18 +117,15 @@ impl OpenUnit for InTransaction {
         let transport = lazy.transport();
         Box::pin(async move {
             match lazy.finalize(ok).await {
-                FinalizeOutcome::NoTransaction
-                | FinalizeOutcome::Committed
-                | FinalizeOutcome::RolledBack => Settlement::Settled,
                 // Deterministic: the body spawned a task holding the executor,
                 // and running it again spawns the same one.
-                FinalizeOutcome::Escaped => {
-                    if ok {
-                        Settlement::Unhonoured(Unhonoured::deterministic(ESCAPED))
-                    } else {
-                        Settlement::Settled
-                    }
+                FinalizeOutcome::Escaped if ok => {
+                    Settlement::Unhonoured(Unhonoured::deterministic(ESCAPED))
                 }
+                FinalizeOutcome::NoTransaction
+                | FinalizeOutcome::Committed
+                | FinalizeOutcome::RolledBack
+                | FinalizeOutcome::Escaped => Settlement::Settled,
                 // The body swallowed a failed statement and succeeded: nothing
                 // it wrote could land.
                 FinalizeOutcome::Poisoned { retryable } => {

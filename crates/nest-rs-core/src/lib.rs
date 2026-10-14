@@ -113,6 +113,7 @@ mod outcome;
 pub mod panic;
 pub mod problem;
 mod process_start;
+mod proof;
 pub mod request_scope;
 mod site;
 mod stderr_lines;
@@ -165,6 +166,7 @@ pub use operation_log::Edge;
 pub use outcome::{Failure, Outcome, Settled};
 pub use panic::panic_message;
 pub use problem::{Code, Problem, ToProblem};
+pub use proof::{Attempt, Proving, Unproved, prove};
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
 };

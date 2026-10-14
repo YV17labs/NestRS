@@ -72,6 +72,11 @@ before any request, login or credential crosses.
 | GitHub and Google sign-in | the system's store | none: both serve publicly trusted certificates |
 | OTLP exporter | the system's store, for an `https://` endpoint | `<PREFIX>_OPENTELEMETRY__TLS_CA_CERT` |
 
+A client certificate goes to Postgres through the URL's `sslcert` and
+`sslkey`, which sqlx presents; it is the one no suite yet proves against
+a server requiring it — the development Postgres signs in by password —
+so a deployment relying on it proves it in its own environment first.
+
 A refused certificate fails the call or the boot — never a fallback to
 an unverified connection. Redis, the JWK Set and the client
 `OAuthClientModule` builds say which setting fixes it; a sign-in

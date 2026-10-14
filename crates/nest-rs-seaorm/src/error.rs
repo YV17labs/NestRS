@@ -1075,3 +1075,32 @@ impl std::error::Error for CommitError {
         Some(&self.0)
     }
 }
+
+/// Why the boot could not open the pool. Postgres is named by its host and
+/// port, never by the URL, which carries the password; what the server said
+/// travels as the source, said by its SQLSTATE.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConnectError {
+    /// Postgres refused what every attempt would send again.
+    #[error("Postgres at {endpoint} refused the connection: {reason}")]
+    Refused {
+        endpoint: String,
+        reason: String,
+        #[source]
+        source: DbErr,
+    },
+    /// No attempt opened a connection within the connect budget.
+    #[error(
+        "Postgres at {endpoint} could not be reached within {budget:?}, after {attempts} \
+         attempt(s): check that it runs and that {url} names it, or widen {timeout}"
+    )]
+    Unreachable {
+        endpoint: String,
+        budget: std::time::Duration,
+        attempts: u32,
+        url: String,
+        timeout: String,
+        #[source]
+        source: Option<DbErr>,
+    },
+}

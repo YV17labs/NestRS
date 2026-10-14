@@ -50,7 +50,7 @@ const DEFAULT_STATEMENT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The acquire budget when none is set: under the authentication guard's 18 s
 /// net and the HTTP edge's default 20 s deadline, so a dry pool answers with its
 /// own error.
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
 /// settable via a `<PREFIX>_SEAORM__*` env var (see `from_env`) or pinned through

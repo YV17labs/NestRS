@@ -204,6 +204,14 @@ variable is named for the crate that parses it, exactly as the type is: from
 `<PREFIX>_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
 the variable.
 
+The boot proves the pool before anything is served. What Postgres refuses on
+every attempt — the user and password, a database it does not have, TLS that
+fails — fails the boot at once, naming `<PREFIX>_SEAORM__URL` and the SQLSTATE.
+Anything else — a host whose name does not resolve yet, a server still starting
+or full — is tried again within `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, each
+attempt said at `warn` on `nest_rs::orm` by host and port, never by the URL,
+which carries the password; past the budget, the boot fails as unreachable.
+
 ## What the data layer hands you for free
 
 Importing `SeaOrmDatabaseModule` activates four invariants every handler in the

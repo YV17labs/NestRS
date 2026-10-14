@@ -1,12 +1,21 @@
 use std::any::TypeId;
+use std::str::FromStr;
 use std::time::Duration;
 
-use nest_rs_config::{ConfigModule, DurationBounds, Namespaced};
-use nest_rs_core::{Budget, Collecting, ContainerBuilder, DynamicModule};
-use sea_orm::{ConnectOptions, Database, DatabaseConnection, DatabaseConnectionType};
+use nest_rs_config::{ClientTls, ConfigModule, DurationBounds, Namespaced};
+use nest_rs_core::{
+    Attempt, Backoff, Budget, Collecting, ContainerBuilder, DynamicModule, Proving, Unproved,
+    process_seed, prove,
+};
+use sea_orm::sqlx::postgres::PgConnectOptions;
+use sea_orm::{
+    ConnectOptions, Database, DatabaseConnection, DatabaseConnectionType, DbErr, RuntimeErr,
+    SqlxError,
+};
 
 use crate::SeaOrmConfig;
-use crate::config::{CONNECT_TIMEOUT, STATEMENT_TIMEOUT};
+use crate::config::{CONNECT_TIMEOUT, DEFAULT_CONNECT_TIMEOUT, STATEMENT_TIMEOUT};
+use crate::error::ConnectError;
 
 /// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
 const NAMESPACE: &str = <SeaOrmConfig as Namespaced>::NAMESPACE;
@@ -158,16 +167,147 @@ pub async fn connect_from_env() -> anyhow::Result<DatabaseConnection> {
     connect(SeaOrmConfig::load()?.connect_options()?).await
 }
 
-/// Open a pool with `options`, which
-/// [`SeaOrmConfig::connect_options`] built and checked. The URL may carry
-/// credentials, so it is never logged.
+/// The wait between two attempts to open the pool: the Redis connection's
+/// curve, so both come back alike after an outage.
+const CONNECT_RETRY: Backoff = Backoff::new(Duration::from_millis(250), Duration::from_secs(2));
+
+/// Open a pool with `options`, which [`SeaOrmConfig::connect_options`] built
+/// and checked, proved within its connect budget through [`prove`]: what every
+/// attempt would meet — credentials or a database Postgres refuses, TLS that
+/// fails — refuses the boot at once; anything else, a name that does not
+/// resolve yet included, is retried. The URL may carry credentials, so it is
+/// never logged: Postgres is named by its host and port.
+///
+/// Each attempt is cut at the budget left, and the pool keeps the budget as
+/// its acquire timeout: an attempt's own would shorten it for the app's life.
 async fn connect(options: ConnectOptions) -> anyhow::Result<DatabaseConnection> {
+    let endpoint = endpoint(options.get_url());
+    let budget = options
+        .get_connect_timeout()
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
     tracing::info!(
         target: crate::target::ORM,
+        endpoint = %endpoint,
         max_connections = ?options.get_max_connections(),
         "connecting to database"
     );
-    Ok(Database::connect(options).await?)
+    let opened = prove(
+        budget,
+        CONNECT_RETRY,
+        process_seed(),
+        said(&endpoint, budget),
+        |_| {
+            let options = options.clone();
+            let endpoint = &endpoint;
+            async move {
+                Database::connect(options)
+                    .await
+                    .map_err(|error| classify(error, endpoint))
+            }
+        },
+    )
+    .await;
+    opened.map_err(|ended| unproved(ended, &endpoint, budget).into())
+}
+
+/// What the proof of the pool on `endpoint` reports, said on `nest_rs::orm`.
+fn said(endpoint: &str, budget: Duration) -> impl FnMut(Proving<'_, DbErr>) + '_ {
+    move |proving| match proving {
+        Proving::Retrying { attempt, error } => tracing::warn!(
+            target: crate::target::ORM,
+            endpoint = %endpoint,
+            attempt,
+            error = %nest_rs_core::error_message(error),
+            "database unreachable — retrying within the connect budget",
+        ),
+        Proving::TimedOut { attempt } => tracing::warn!(
+            target: crate::target::ORM,
+            endpoint = %endpoint,
+            attempt,
+            timeout_secs = budget.as_secs_f64(),
+            "database connect timed out",
+        ),
+        Proving::Proved { attempts } if attempts > 1 => tracing::info!(
+            target: crate::target::ORM,
+            endpoint = %endpoint,
+            attempts,
+            "database connected after retrying",
+        ),
+        _ => {}
+    }
+}
+
+/// What one failed attempt met: a refusal every attempt would repeat, or a
+/// failure that may clear — a refused or reset connection, a name that does
+/// not resolve yet, a server starting up (`57P03`) or full (`53300`).
+fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
+    let DbErr::Conn(RuntimeErr::SqlxError(sqlx)) = &error else {
+        return Attempt::Failed(error);
+    };
+    let url = nest_rs_config::var_name(NAMESPACE, "URL");
+    let reason = match &**sqlx {
+        SqlxError::Database(server) => match server.code().as_deref() {
+            Some(code @ ("28P01" | "28000")) => format!(
+                "it does not let in the user {url} names, with the password it gives                  (SQLSTATE {code})"
+            ),
+            Some("3D000") => {
+                format!("it has no database by the name {url} gives (SQLSTATE 3D000)")
+            }
+            _ => return Attempt::Failed(error),
+        },
+        SqlxError::Tls(_) | SqlxError::Io(_) if is_tls(sqlx) => format!(
+            "TLS failed — name the authority that signed its certificate in {url}'s              `sslrootcert`, and a client certificate in `sslcert` and `sslkey` if Postgres              requires one"
+        ),
+        SqlxError::Configuration(_) => {
+            format!("sqlx refused the options {url} sets — check its query parameters")
+        }
+        _ => return Attempt::Failed(error),
+    };
+    Attempt::Refused(ConnectError::Refused {
+        endpoint: endpoint.to_owned(),
+        reason,
+        source: error,
+    })
+}
+
+/// Whether `sqlx` met TLS that every attempt would fail the same way: TLS it
+/// could not set up (`Error::Tls` — an `sslrootcert` it cannot read, a server
+/// without TLS), or a handshake rustls refused, which sqlx hands back as an io
+/// error holding rustls's own.
+fn is_tls(sqlx: &SqlxError) -> bool {
+    matches!(sqlx, SqlxError::Tls(_)) || ClientTls::negotiation_failed(sqlx)
+}
+
+/// The boot error a proof of the pool on `endpoint` that ended without it
+/// ends in.
+fn unproved(
+    ended: Unproved<DbErr, ConnectError>,
+    endpoint: &str,
+    budget: Duration,
+) -> ConnectError {
+    match ended {
+        Unproved::Refused(refusal) => refusal,
+        Unproved::Spent { attempts, last } => ConnectError::Unreachable {
+            endpoint: endpoint.to_owned(),
+            budget,
+            attempts,
+            url: nest_rs_config::var_name(NAMESPACE, "URL"),
+            timeout: nest_rs_config::var_name(NAMESPACE, CONNECT_TIMEOUT.key()),
+            source: last,
+        },
+    }
+}
+
+/// The host and port `url` dials — or its socket — never the URL, which
+/// carries the password.
+fn endpoint(url: &str) -> String {
+    match PgConnectOptions::from_str(url) {
+        Ok(options) => match options.get_socket() {
+            Some(socket) => socket.display().to_string(),
+            None => format!("{}:{}", options.get_host(), options.get_port()),
+        },
+        Err(_) => "<a URL sqlx cannot read>".to_owned(),
+    }
 }
 
 #[cfg(test)]

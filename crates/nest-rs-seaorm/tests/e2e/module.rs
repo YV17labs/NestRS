@@ -1,5 +1,6 @@
 //! Covers `src/module.rs`: the pool declares its budget, so the boot holds it
-//! under the net of a guard whose strategy injects the pool.
+//! under the net of a guard whose strategy injects the pool; and what Postgres
+//! refuses on every attempt refuses the boot at once.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -184,4 +185,89 @@ async fn a_statement_bound_at_the_net_of_a_guard_injecting_the_pool_fails_the_bo
         )),
         "{refused}"
     );
+}
+
+/// `url` with its userinfo's password replaced by `password`.
+fn with_password(url: &str, password: &str) -> String {
+    let (scheme, rest) = url.split_once("://").expect("a URL with a scheme");
+    let (userinfo, host) = rest
+        .split_once('@')
+        .expect("the suite's URL names its user");
+    let user = userinfo.split_once(':').map_or(userinfo, |(user, _)| user);
+    format!("{scheme}://{user}:{password}@{host}")
+}
+
+/// `url` naming the database `name`.
+fn with_database(url: &str, name: &str) -> String {
+    let (base, query) = url
+        .split_once('?')
+        .map_or((url, None), |(base, q)| (base, Some(q)));
+    let (scheme, rest) = base.split_once("://").expect("a URL with a scheme");
+    let host = rest.split_once('/').map_or(rest, |(host, _)| host);
+    let query = query.map(|q| format!("?{q}")).unwrap_or_default();
+    format!("{scheme}://{host}/{name}{query}")
+}
+
+/// Boots a pool on `url` under a budget only a retry could spend, and returns
+/// its refusal with how long it took.
+async fn refused_at(url: String) -> (anyhow::Error, Duration) {
+    let began = std::time::Instant::now();
+    let Err(refused) = App::builder()
+        .provide(SeaOrmConfig {
+            url,
+            connect_timeout_secs: Some(60),
+            ..Default::default()
+        })
+        .module::<PoolModule>()
+        .build()
+        .await
+    else {
+        panic!("a pool Postgres refuses must not boot");
+    };
+    (refused, began.elapsed())
+}
+
+/// Refused credentials fail every attempt the same way: the boot refuses at
+/// once, naming the variable and the SQLSTATE, never the password nor the
+/// server's own sentence, and retries nothing.
+#[tokio::test]
+async fn a_password_postgres_refuses_fails_the_boot_at_once() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let (refused, took) =
+        refused_at(with_password(&crate::harness::url(), "n0t-the-password")).await;
+
+    assert!(took < Duration::from_secs(30), "at once, took {took:?}");
+    let said = nest_rs_core::error_message(&*refused);
+    assert!(
+        said.contains("SQLSTATE 28P01")
+            && said.contains(&nest_rs_config::var_name("seaorm", "URL")),
+        "{said}"
+    );
+    assert!(
+        !said.contains("n0t-the-password") && !said.contains("password authentication failed"),
+        "neither the password nor the server's sentence: {said}"
+    );
+    logs.expect_none(
+        nest_rs_seaorm::target::ORM,
+        "database unreachable — retrying within the connect budget",
+    );
+}
+
+/// A database the server does not have fails every attempt the same way too.
+#[tokio::test]
+async fn a_database_postgres_does_not_have_fails_the_boot_at_once() {
+    let (refused, took) = refused_at(with_database(
+        &crate::harness::url(),
+        "nestrs_boot_proof_absent",
+    ))
+    .await;
+
+    assert!(took < Duration::from_secs(30), "at once, took {took:?}");
+    let said = nest_rs_core::error_message(&*refused);
+    assert!(
+        said.contains("SQLSTATE 3D000")
+            && said.contains(&nest_rs_config::var_name("seaorm", "URL")),
+        "{said}"
+    );
+    assert!(!said.contains("nestrs_boot_proof_absent"), "{said}");
 }

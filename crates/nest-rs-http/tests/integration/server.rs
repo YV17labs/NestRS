@@ -13,6 +13,7 @@ use nest_rs_testing::{LogCapture, wait_until};
 use poem::Body;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -48,6 +49,10 @@ const TAIL: usize = 48 * 1024;
 /// How long `/server/slow` takes to answer.
 const SLOW: Duration = Duration::from_secs(3);
 
+/// Told when `/server/slow` has started: its head is read, so the clock may be
+/// paused without a connection deadline outrunning bytes still in flight.
+static SLOW_RUNS: Notify = Notify::const_new();
+
 #[controller(path = "/server")]
 struct ServerController;
 
@@ -69,6 +74,7 @@ impl ServerController {
     #[get("/slow")]
     #[public]
     async fn slow(&self) -> &'static str {
+        SLOW_RUNS.notify_one();
         tokio::time::sleep(SLOW).await;
         "slow"
     }
@@ -357,6 +363,9 @@ async fn a_slow_head_after_an_idle_period_is_cut_at_the_head_deadline() {
 async fn a_slow_head_after_a_request_outliving_the_first_head_deadline_is_cut_at_its_own() {
     let (port, cancel) = serve(deadlines(2, 60, 60)).await;
     let mut client = request(port, "/server/slow").await;
+    tokio::time::timeout(PATIENCE, SLOW_RUNS.notified())
+        .await
+        .expect("the slow route runs");
     after(SLOW + Duration::from_secs(1)).await;
     assert_eq!(answer(&mut client).await, "slow");
 

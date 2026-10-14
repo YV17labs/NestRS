@@ -835,8 +835,13 @@ mod tests {
         });
     }
 
-    #[tokio::test]
+    /// A pair whose halves keep moving is never installed, torn or not, and
+    /// the pair left once the writes stop is. The clock is paused: the writer
+    /// writes one half at each odd millisecond, the watcher reads at each
+    /// fourth, so every two reads straddle a write whatever the machine's load.
+    #[tokio::test(start_paused = true)]
     async fn a_pair_that_is_still_changing_is_never_installed() {
+        const LAST: usize = 7;
         let dir = scratch_dir("settle");
         let cert_path = dir.join("cert.pem");
         let key_path = dir.join("key.pem");
@@ -848,30 +853,33 @@ mod tests {
             key_path: key_path.clone(),
             cert: b"cert-v1".to_vec(),
             key: b"key-v1".to_vec(),
-            interval: Duration::from_millis(5),
+            interval: Duration::from_millis(4),
         };
 
         let writer = tokio::spawn({
             let cert_path = cert_path.clone();
             let key_path = key_path.clone();
             async move {
-                for step in 2..8 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                for step in 2..=LAST {
                     std::fs::write(&cert_path, format!("cert-v{step}")).expect("write cert");
+                    tokio::time::sleep(Duration::from_millis(2)).await;
                     std::fs::write(&key_path, format!("key-v{step}")).expect("write key");
-                    tokio::time::sleep(Duration::from_millis(6)).await;
+                    tokio::time::sleep(Duration::from_millis(2)).await;
                 }
             }
         });
 
         let installed = watcher.next_settled().await;
+        assert!(writer.is_finished(), "installed while the pair still moved");
         writer.await.expect("writer task");
-
-        let cert = String::from_utf8(installed.0).expect("utf8 cert");
-        let key = String::from_utf8(installed.1).expect("utf8 key");
         assert_eq!(
-            cert.trim_start_matches("cert-"),
-            key.trim_start_matches("key-"),
-            "installed a certificate and a key from different writes: {cert} / {key}",
+            installed,
+            (
+                format!("cert-v{LAST}").into_bytes(),
+                format!("key-v{LAST}").into_bytes()
+            ),
+            "the pair the writes left",
         );
     }
 

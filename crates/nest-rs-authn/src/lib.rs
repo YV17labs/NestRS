@@ -27,6 +27,7 @@
 /// verification, and the guard's authentication outcome.
 pub const TARGET: &str = "nest_rs::authn";
 
+mod algorithm;
 mod config;
 mod credentials;
 mod error;
@@ -41,9 +42,10 @@ mod service;
 mod strategies;
 mod strategy;
 
+pub use algorithm::Algorithm;
 pub use config::AuthnConfig;
 pub use credentials::{basic_credentials, bearer_token};
-pub use error::{AuthError, CredentialError, PasswordError};
+pub use error::{AuthError, CredentialError, PasswordError, UnknownAlgorithmError};
 pub use guard::AuthnGuard;
 pub use jwks::{
     JWKS_CONNECT_TIMEOUT, JWKS_DEFAULT_MAX_AGE, JWKS_FETCH_TIMEOUT, JWKS_MAX_AGE_CEILING,
@@ -55,6 +57,3 @@ pub use principal::PrincipalIdentity;
 pub use service::{JwtKey, JwtOptions, JwtService};
 pub use strategies::JwtStrategy;
 pub use strategy::{AUTHENTICATE_TIMEOUT, Strategy};
-
-/// Re-exported so apps configure [`JwtOptions`] without a direct `jsonwebtoken` dependency.
-pub use jsonwebtoken::Algorithm;

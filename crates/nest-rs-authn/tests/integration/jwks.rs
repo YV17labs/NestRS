@@ -386,7 +386,7 @@ async fn a_key_checks_no_algorithm_but_its_own() {
     }
 
     let narrowed = verifier_with(AuthnConfig {
-        algorithms: Some(vec![Algorithm::EdDSA]),
+        algorithms: Some(vec![nest_rs_authn::Algorithm::EdDSA]),
         ..config(issuer.uri())
     });
     assert!(matches!(
@@ -399,6 +399,31 @@ async fn a_key_checks_no_algorithm_but_its_own() {
         .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
         .await
         .expect("the one accepted algorithm verifies");
+}
+
+/// The algorithms a verifier runs are nestrs's own: narrowing them in code
+/// to RS256 verifies an RS256 token against the set, and refuses another.
+#[tokio::test]
+async fn options_narrowed_in_code_to_rs256_verify_an_rs256_token() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        jwk(&RSA, Algorithm::RS256, "rsa"),
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+    ]))
+    .await;
+    let mut options = config(issuer.uri()).into_options().expect("options");
+    options.algorithms = vec![nest_rs_authn::Algorithm::RS256];
+    let jwt = JwtService::new(options).expect("RS256 fits a JWK Set");
+
+    let claims = jwt
+        .verify::<Claims>(&token(&RSA.key, Algorithm::RS256, Some("rsa")))
+        .await
+        .expect("an RS256 token verifies");
+    assert_eq!(claims.sub, "ada");
+    assert!(matches!(
+        jwt.verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+            .await,
+        Err(AuthError::InvalidAlgorithm)
+    ));
 }
 
 /// The classic confusion — the issuer's public key, read off its own set, as an

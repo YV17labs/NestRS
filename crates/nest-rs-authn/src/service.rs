@@ -3,12 +3,14 @@
 use std::time::Duration;
 
 use jsonwebtoken::{
-    Algorithm, AlgorithmFamily, DecodingKey, EncodingKey, Header, Validation, decode,
-    decode_header, encode, errors::ErrorKind, get_current_timestamp,
+    DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode, errors::ErrorKind,
+    get_current_timestamp,
 };
 use nest_rs_config::{Namespaced, var_name};
 use serde::{Serialize, de::DeserializeOwned};
 
+use crate::Algorithm;
+use crate::algorithm::Family;
 use crate::error::AuthError;
 use crate::jwks::Jwks;
 use nest_rs_config::ClientTls;
@@ -23,9 +25,9 @@ fn prove_one_pair(
     algorithm: Algorithm,
 ) -> Result<(), AuthError> {
     const PROBE: &[u8] = b"nest-rs-authn: are these two keys one pair";
-    let signature = jsonwebtoken::crypto::sign(PROBE, encoding, algorithm)
+    let signature = jsonwebtoken::crypto::sign(PROBE, encoding, algorithm.jwt())
         .map_err(|e| AuthError::Failed(format!("invalid JWT private key: {e}")))?;
-    let paired = jsonwebtoken::crypto::verify(&signature, PROBE, decoding, algorithm)
+    let paired = jsonwebtoken::crypto::verify(&signature, PROBE, decoding, algorithm.jwt())
         .map_err(|e| AuthError::Failed(format!("invalid JWT public key: {e}")))?;
     if paired {
         return Ok(());
@@ -53,26 +55,13 @@ fn min_hmac_secret_bytes(algorithm: Algorithm) -> usize {
     }
 }
 
-/// Every algorithm family this verifier runs, in the order a sentence lists them.
-pub(crate) const FAMILIES: &[AlgorithmFamily] = &[
-    AlgorithmFamily::Hmac,
-    AlgorithmFamily::Rsa,
-    AlgorithmFamily::Ec,
-    AlgorithmFamily::Ed,
-];
-
 /// The families a JWK Set's keys may verify, and a [`JwtKey::Jwks`]'s default:
 /// every asymmetric one, never HMAC — a JWK Set is public, and an HMAC
 /// algorithm would verify with a key anyone reads.
-pub(crate) const JWKS_FAMILIES: &[AlgorithmFamily] = &[
-    AlgorithmFamily::Rsa,
-    AlgorithmFamily::Ec,
-    AlgorithmFamily::Ed,
-];
+pub(crate) const JWKS_FAMILIES: &[Family] = &[Family::Rsa, Family::Ec, Family::Ed];
 
-/// The algorithms of `families`, in their order — derived, since
-/// `AlgorithmFamily::algorithms` is not a `const fn`.
-pub(crate) fn algorithms_of(families: &[AlgorithmFamily]) -> impl Iterator<Item = Algorithm> + '_ {
+/// The algorithms of `families`, in their order.
+pub(crate) fn algorithms_of(families: &[Family]) -> impl Iterator<Item = Algorithm> + '_ {
     families
         .iter()
         .flat_map(|family| family.algorithms().iter().copied())
@@ -80,12 +69,9 @@ pub(crate) fn algorithms_of(families: &[AlgorithmFamily]) -> impl Iterator<Item 
 
 /// `algorithms` as a sentence names them: `HS256, HS384 or HS512`.
 pub(crate) fn one_of(algorithms: impl IntoIterator<Item = Algorithm>) -> String {
-    let names: Vec<String> = algorithms
-        .into_iter()
-        .map(|algorithm| format!("{algorithm:?}"))
-        .collect();
+    let names: Vec<&str> = algorithms.into_iter().map(Algorithm::as_str).collect();
     match names.split_last() {
-        Some((last, [])) => last.clone(),
+        Some((last, [])) => (*last).to_owned(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
         None => String::new(),
     }
@@ -300,9 +286,9 @@ fn accepted(key: &JwtKey, algorithms: &[Algorithm]) -> Result<Vec<Algorithm>, Au
             accepted.push(*algorithm);
         }
     }
-    let (families, key_name): (&[AlgorithmFamily], &str) = match key {
-        JwtKey::Hmac(_) => (&[AlgorithmFamily::Hmac], "an HMAC secret"),
-        JwtKey::Pem { .. } => (&[AlgorithmFamily::Ed], "an EdDSA key"),
+    let (families, key_name): (&[Family], &str) = match key {
+        JwtKey::Hmac(_) => (&[Family::Hmac], "an HMAC secret"),
+        JwtKey::Pem { .. } => (&[Family::Ed], "an EdDSA key"),
         JwtKey::Jwks { .. } => (JWKS_FAMILIES, "a JWK Set, whose keys anyone can read"),
     };
     let fitting = || one_of(algorithms_of(families));
@@ -318,7 +304,7 @@ fn accepted(key: &JwtKey, algorithms: &[Algorithm]) -> Result<Vec<Algorithm>, Au
         .find(|algorithm| !families.contains(&algorithm.family()))
     {
         return Err(AuthError::Failed(format!(
-            "the {misfit:?} algorithm cannot be used with {key_name}: use {}",
+            "the {misfit} algorithm cannot be used with {key_name}: use {}",
             fitting()
         )));
     }
@@ -384,7 +370,7 @@ impl JwtService {
 
         // RFC 9068 §2.1 and §4 (explicit typing, RFC 8725 §3.11): mint `at+jwt`,
         // and `verify` refuses any other `typ`.
-        let mut header = Header::new(signing);
+        let mut header = Header::new(signing.jwt());
         if options.explicit_typing {
             header.typ = Some(AT_JWT.to_owned());
         }
@@ -403,7 +389,7 @@ impl JwtService {
                 let minimum = min_hmac_secret_bytes(signing);
                 if secret.len() < minimum {
                     return Err(AuthError::Failed(format!(
-                        "{}, must be at least {minimum} bytes ({} bits) for {signing:?}; got {}",
+                        "{}, must be at least {minimum} bytes ({} bits) for {signing}; got {}",
                         crate::config::secret_setting(),
                         minimum * 8,
                         secret.len()
@@ -546,13 +532,12 @@ impl JwtService {
                 // The header is unsigned: it only picks among what the verifier
                 // already accepts, and the signature then has to hold.
                 let header = decode_header(token).map_err(map_decode_error)?;
-                let Some((_, validation)) = validations
-                    .iter()
-                    .find(|(algorithm, _)| *algorithm == header.alg)
+                let Some((algorithm, validation)) = Algorithm::from_jwt(header.alg)
+                    .and_then(|named| validations.iter().find(|(accepted, _)| *accepted == named))
                 else {
                     return Err(AuthError::InvalidAlgorithm);
                 };
-                let key = set.key_for(header.kid.as_deref(), header.alg).await?;
+                let key = set.key_for(header.kid.as_deref(), *algorithm).await?;
                 decode::<C>(token, &key, validation).map_err(map_decode_error)?
             }
         };
@@ -646,7 +631,7 @@ impl JwtService {
 
 /// The validation every token meets, for one `algorithm`.
 fn validation(options: &JwtOptions, algorithm: Algorithm) -> Validation {
-    let mut validation = Validation::new(algorithm);
+    let mut validation = Validation::new(algorithm.jwt());
     // Pinned, not left to a library default a future version could flip.
     validation.validate_exp = true;
     validation.validate_nbf = true;
@@ -729,7 +714,7 @@ mod tests {
             options
                 .algorithms
                 .iter()
-                .all(|algorithm| algorithm.family() != AlgorithmFamily::Hmac)
+                .all(|algorithm| algorithm.family() != Family::Hmac)
         );
         JwtService::new(options).expect("the default set fits a JWK Set");
     }
@@ -737,10 +722,10 @@ mod tests {
     #[test]
     fn a_list_of_algorithms_reads_as_a_sentence() {
         assert_eq!(
-            one_of(algorithms_of(&[AlgorithmFamily::Hmac])),
+            one_of(algorithms_of(&[Family::Hmac])),
             "HS256, HS384 or HS512"
         );
-        assert_eq!(one_of(algorithms_of(&[AlgorithmFamily::Ed])), "EdDSA");
+        assert_eq!(one_of(algorithms_of(&[Family::Ed])), "EdDSA");
     }
 
     #[test]

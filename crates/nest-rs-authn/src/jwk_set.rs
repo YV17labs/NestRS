@@ -11,11 +11,13 @@
 
 use std::sync::Arc;
 
+use jsonwebtoken::DecodingKey;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, KeyOperations, PublicKeyUse};
-use jsonwebtoken::{Algorithm, AlgorithmFamily, DecodingKey};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
+use crate::Algorithm;
+use crate::algorithm::Family;
 use crate::error::AuthError;
 
 /// The keys of an issuer's JWK Set this verifier can use.
@@ -146,7 +148,7 @@ fn bind(jwk: &Jwk, accepted: &[Algorithm]) -> Option<BoundKey> {
         return None;
     }
     let of_its_type: &[Algorithm] = match &jwk.algorithm {
-        AlgorithmParameters::RSA(_) => AlgorithmFamily::Rsa.algorithms(),
+        AlgorithmParameters::RSA(_) => Family::Rsa.algorithms(),
         AlgorithmParameters::EllipticCurve(params) => match params.curve {
             EllipticCurve::P256 => &[Algorithm::ES256],
             EllipticCurve::P384 => &[Algorithm::ES384],
@@ -160,11 +162,14 @@ fn bind(jwk: &Jwk, accepted: &[Algorithm]) -> Option<BoundKey> {
     };
     // A key naming an algorithm this verifier does not run (`RSA-OAEP`, a name
     // it does not know) is that algorithm's alone.
-    let named = common
-        .key_algorithm
-        .map(Algorithm::try_from)
-        .transpose()
-        .ok()?;
+    let named = match common.key_algorithm {
+        Some(named) => Some(
+            jsonwebtoken::Algorithm::try_from(named)
+                .ok()
+                .and_then(Algorithm::from_jwt)?,
+        ),
+        None => None,
+    };
     let algorithms: Vec<Algorithm> = of_its_type
         .iter()
         .copied()
@@ -235,7 +240,7 @@ mod tests {
             &all(),
         );
         for (kid, verifies) in [
-            ("r", AlgorithmFamily::Rsa.algorithms()),
+            ("r", Family::Rsa.algorithms()),
             ("p256", &[Algorithm::ES256][..]),
             ("p384", &[Algorithm::ES384][..]),
             ("ed", &[Algorithm::EdDSA][..]),

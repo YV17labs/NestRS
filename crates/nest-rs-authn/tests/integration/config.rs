@@ -417,7 +417,7 @@ fn the_audience_opt_out_reads_its_env_flag() {
 /// long enough for HS256 is refused for HS384 and HS512.
 #[test]
 fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
-    use jsonwebtoken::Algorithm;
+    use nest_rs_authn::Algorithm;
 
     for (algorithm, minimum) in [(Algorithm::HS384, 48), (Algorithm::HS512, 64)] {
         let mut short = nest_rs_authn::JwtOptions::new(STRONG_SECRET);
@@ -624,7 +624,7 @@ fn the_jwk_set_and_its_authority_are_read_from_the_environment() {
 /// is the service's to refuse, like any list that does not fit its key.
 #[test]
 fn algorithms_are_read_by_their_jose_names() {
-    use jsonwebtoken::Algorithm;
+    use nest_rs_authn::Algorithm;
     use nest_rs_config::{Config, ConfigService, Namespaced, var_name};
 
     let read = |value: &str| {
@@ -681,7 +681,7 @@ fn algorithms_are_read_by_their_jose_names() {
 /// What `ALGORITHMS` names is judged against the key it is set beside.
 #[test]
 fn the_algorithms_set_beside_a_key_must_fit_it() {
-    use jsonwebtoken::Algorithm;
+    use nest_rs_authn::Algorithm;
 
     let narrowed = AuthnConfig {
         jwks_uri: Some(JWKS_URI.into()),
@@ -710,7 +710,7 @@ fn the_algorithms_set_beside_a_key_must_fit_it() {
 /// hash's size.
 #[tokio::test]
 async fn a_secret_signs_with_the_hmac_algorithm_named() {
-    use jsonwebtoken::Algorithm;
+    use nest_rs_authn::Algorithm;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -737,7 +737,7 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
         .expect("signs");
     assert_eq!(
         jsonwebtoken::decode_header(&token).expect("a header").alg,
-        Algorithm::HS512
+        jsonwebtoken::Algorithm::HS512
     );
     jwt.verify::<Claims>(&token).await.expect("verifies");
 }

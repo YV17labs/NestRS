@@ -32,6 +32,14 @@ pub enum PasswordError {
     InvalidHash(#[source] argon2::password_hash::Error),
 }
 
+/// A name that is not a JWS `alg` this verifier runs, refused by
+/// [`Algorithm`](crate::Algorithm)'s `FromStr`: `none`, a name in the wrong
+/// case, or an algorithm the verifier does not run. It never repeats the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("not a JWS algorithm this verifier runs")]
+#[non_exhaustive]
+pub struct UnknownAlgorithmError;
+
 /// What a caller is told when its credential could not be evaluated: the
 /// identity store was unreachable ([`AuthError::Unavailable`]), or the strategy
 /// asking it did not answer within

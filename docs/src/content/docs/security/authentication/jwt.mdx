@@ -15,9 +15,10 @@ the claims to the handler. Signing and verifying both run through
 token is minted.
 
 The implementation is a thin wrapper over
-[`jsonwebtoken`](https://docs.rs/jsonwebtoken). The crate's
-`Algorithm` enum is re-exported as `nest_rs::authn::Algorithm` so an app
-configures the algorithm without taking a direct dependency.
+[`jsonwebtoken`](https://docs.rs/jsonwebtoken), which your code never names:
+the algorithms are nestrs's own `Algorithm`, spelled as RFC 7518 spells
+`alg` — `RS256`, `ES256`, `EdDSA` — so a release of the library reaches you
+in a nestrs minor.
 
 ## The three-line setup
 
@@ -184,7 +185,7 @@ passed to `AuthnModule::for_root(config)`.
 | `private_key` | `<PREFIX>_AUTHN__PRIVATE_KEY`, or a path in `<PREFIX>_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
 | `public_key` | `<PREFIX>_AUTHN__PUBLIC_KEY`, or a path in `<PREFIX>_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
 | `jwks_uri` | `<PREFIX>_AUTHN__JWKS_URI` | An external issuer's JWK Set, `https` only — verify-only, see [below](#verifying-another-issuers-tokens) |
-| `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`). Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
+| `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`), each a `nest_rs::authn::Algorithm` — `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384` or `EdDSA`, case and all. Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
 | `tls` | `<PREFIX>_AUTHN__TLS_CA_CERT`, `<PREFIX>_AUTHN__TLS_CERT` and `<PREFIX>_AUTHN__TLS_KEY`, each or a path in its `_FILE` spelling | A `nest_rs::config::ClientTls`: the PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's, and the client certificate presented to an endpoint that requires one. Without `jwks_uri`, fails the boot |
 | `leeway_secs` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30, at most 300 — RFC 7519 §4.1.4's "a few minutes" |
 | `audience` | `<PREFIX>_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |

@@ -2,14 +2,14 @@
 
 use std::time::Duration;
 
-use jsonwebtoken::Algorithm;
 use nest_rs_config::{
     Bound, ClientTls, Config, ConfigService, DurationBounds, Floor, Namespaced, config,
 };
 
+use crate::algorithm::Family;
 use crate::error::AuthError;
-use crate::service::{FAMILIES, algorithms_of, one_of};
-use crate::{JwtKey, JwtOptions};
+use crate::service::{algorithms_of, one_of};
+use crate::{Algorithm, JwtKey, JwtOptions};
 
 /// The token lifetime's range, the variable that sets it, and why.
 pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
@@ -164,7 +164,7 @@ fn algorithms(env: &ConfigService) -> nest_rs_config::Result<Option<Vec<Algorith
     let Some(setting) = env.setting("ALGORITHMS")? else {
         return Ok(None);
     };
-    let known = || one_of(algorithms_of(FAMILIES));
+    let known = || one_of(algorithms_of(Family::ALL));
     setting
         .value
         .split(',')

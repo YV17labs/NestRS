@@ -21,13 +21,14 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use jsonwebtoken::{Algorithm, DecodingKey};
+use jsonwebtoken::DecodingKey;
 use reqwest::header::{ACCEPT, AGE, CACHE_CONTROL, HeaderMap, HeaderName, RETRY_AFTER};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use nest_rs_config::{ClientTls, ConfigService, Namespaced};
 
+use crate::Algorithm;
 use crate::AuthnConfig;
 use crate::config::jwks_uri_setting;
 use crate::error::AuthError;

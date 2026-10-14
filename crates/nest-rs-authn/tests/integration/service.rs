@@ -68,27 +68,27 @@ fn short_hmac_secret_is_rejected_by_the_service_constructor() {
 #[test]
 fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
     let secret = "0123456789abcdef0123456789abcdef";
-    let with = |mut options: JwtOptions, algorithm: Algorithm| {
+    let with = |mut options: JwtOptions, algorithm: nest_rs_authn::Algorithm| {
         options.algorithms = vec![algorithm];
         options
     };
     let cases = [
         (
             "an HMAC secret with RS256",
-            with(JwtOptions::new(secret), Algorithm::RS256),
+            with(JwtOptions::new(secret), nest_rs_authn::Algorithm::RS256),
         ),
         (
             "an EdDSA pair with HS256",
             with(
                 JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY),
-                Algorithm::HS256,
+                nest_rs_authn::Algorithm::HS256,
             ),
         ),
         (
             "a verify-only EdDSA key with ES256",
             with(
                 JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY),
-                Algorithm::ES256,
+                nest_rs_authn::Algorithm::ES256,
             ),
         ),
     ];
@@ -102,8 +102,11 @@ fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
         );
     }
     // RFC 7518 §3.2: HS512 takes a key of at least its 64-byte hash.
-    JwtService::new(with(JwtOptions::new(secret.repeat(2)), Algorithm::HS512))
-        .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
+    JwtService::new(with(
+        JwtOptions::new(secret.repeat(2)),
+        nest_rs_authn::Algorithm::HS512,
+    ))
+    .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
 }
 
 #[tokio::test]

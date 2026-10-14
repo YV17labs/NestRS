@@ -12,13 +12,11 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
-use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-use futures_util::FutureExt;
 use http::Version;
 use http::uri::Scheme;
 use http_body_util::BodyExt;
@@ -33,7 +31,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::AbortOnDropHandle;
+use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 
 use crate::body::Body;
 use crate::drain::Drain;
@@ -136,7 +134,8 @@ impl Server {
             ),
             None => (None, None),
         };
-        let builder = Arc::new(builder(self.deadlines.send));
+        let streams = Streams::default();
+        let builder = Arc::new(builder(self.deadlines.send, streams.clone()));
         let shutdown = CancellationToken::new();
         let mut connections = JoinSet::new();
         let mut backoff = AcceptBackoff::default();
@@ -165,20 +164,14 @@ impl Server {
             };
             let (stream, peer) = match waited {
                 Some(accepted) => accepted,
-                None => {
-                    let mut accepting = pin!(backoff.accept(|| self.listener.accept()));
-                    match futures_util::poll!(accepting.as_mut()) {
-                        Poll::Ready(accepted) => accepted,
-                        Poll::Pending => {
-                            // A place in hand and an empty backlog: nothing waits on the cap.
-                            self.admission.nothing_waits();
-                            tokio::select! {
-                                () = &mut signal => break,
-                                accepted = accepting => accepted,
-                            }
-                        }
-                    }
-                }
+                None => tokio::select! {
+                    () = &mut signal => break,
+                    accepted = accept_holding_a_place(
+                        &mut backoff,
+                        &mut self.admission,
+                        || self.listener.accept(),
+                    ) => accepted,
+                },
             };
             let accepted = Instant::now();
             if let Err(error) = stream.set_nodelay(true) {
@@ -203,28 +196,50 @@ impl Server {
         }
         drop(self.listener);
         shutdown.cancel();
+        streams.tracker.close();
         if let Some(bound) = self.drain.bound()
-            && tokio::time::timeout_at(bound, join_all(&mut connections))
+            && tokio::time::timeout_at(bound, join_all(&mut connections, &streams))
                 .await
                 .is_err()
         {
             // Each socket drops past the bound, so the drain counts it as cut.
             connections.abort_all();
+            streams.cut.cancel();
         }
-        join_all(&mut connections).await;
+        join_all(&mut connections, &streams).await;
     }
 }
 
-async fn join_all(connections: &mut JoinSet<()>) {
+/// The next connection, a place under the cap in hand: once the listener has
+/// none waiting, nothing waits on the cap any more.
+async fn accept_holding_a_place<T, A>(
+    backoff: &mut AcceptBackoff,
+    admission: &mut Admission,
+    accept: impl FnMut() -> A,
+) -> T
+where
+    A: Future<Output = io::Result<T>>,
+{
+    backoff
+        .accept_noting(accept, || admission.nothing_waits())
+        .await
+}
+
+/// Every connection's task, then every HTTP/2 stream's, ended.
+async fn join_all(connections: &mut JoinSet<()>, streams: &Streams) {
     while connections.join_next().await.is_some() {}
+    streams.tracker.wait().await;
 }
 
 /// The settings every connection is served with: hyper's timer, the HTTP/2
 /// limits, the HTTP/1 buffer and its one write per flush, and each HTTP/2
 /// stream held to `send_timeout`. hyper's head deadline is off: [`Phases`]
 /// holds the head, the idle spell and the version sniff before both.
-fn builder(send_timeout: Duration) -> auto::Builder<Contained> {
-    let mut builder = auto::Builder::new(Contained { send_timeout });
+fn builder(send_timeout: Duration, streams: Streams) -> auto::Builder<Contained> {
+    let mut builder = auto::Builder::new(Contained {
+        send_timeout,
+        streams,
+    });
     builder
         .http1()
         .timer(TokioTimer::new())
@@ -405,7 +420,7 @@ fn millis(duration: Duration) -> u64 {
 /// polls it: the connection is dropped, and its failure never reaches the loop
 /// or the runtime.
 async fn contained(future: impl Future<Output = ()>) {
-    if let Err(payload) = AssertUnwindSafe(future).catch_unwind().await {
+    if let Err(payload) = nest_rs_core::panic::contain(future).await {
         nest_rs_core::contained_panic!(
             target: crate::target::HTTP,
             payload.as_ref(),
@@ -414,13 +429,22 @@ async fn contained(future: impl Future<Output = ()>) {
     }
 }
 
+/// The HTTP/2 stream tasks hyper spawns, which the loop waits for at the way
+/// down and cuts at the window's close with the connections.
+#[derive(Clone, Default)]
+struct Streams {
+    tracker: TaskTracker,
+    cut: CancellationToken,
+}
+
 /// hyper's executor for the tasks it spawns — an HTTP/2 connection's streams —
 /// each contained on its own: a panic resets its stream, as does a frame the
 /// peer's window has not taken within the send deadline, and the connection
 /// keeps serving the others.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Contained {
     send_timeout: Duration,
+    streams: Streams,
 }
 
 impl<F> hyper::rt::Executor<F> for Contained
@@ -430,11 +454,15 @@ where
 {
     fn execute(&self, future: F) {
         let send_timeout = self.send_timeout;
-        tokio::spawn(async move {
-            match AssertUnwindSafe(window::within(future, send_timeout))
-                .catch_unwind()
-                .await
-            {
+        let cut = self.streams.cut.clone();
+        self.streams.tracker.spawn(async move {
+            let stream = nest_rs_core::panic::contain(window::within(future, send_timeout));
+            let ended = tokio::select! {
+                biased;
+                () = cut.cancelled() => return,
+                ended = stream => ended,
+            };
+            match ended {
                 Ok(Some(_)) => {}
                 Ok(None) => tracing::warn!(
                     target: crate::target::HTTP,
@@ -527,12 +555,33 @@ impl AcceptBackoff {
     /// The next connection `accept` yields, each failure before it waited out.
     /// Dropped at the signal mid-wait: the listener's accept and the sleep are
     /// both cancel-safe.
-    async fn accept<T, A>(&mut self, mut accept: impl FnMut() -> A) -> T
+    async fn accept<T, A>(&mut self, accept: impl FnMut() -> A) -> T
+    where
+        A: Future<Output = io::Result<T>>,
+    {
+        self.accept_noting(accept, || {}).await
+    }
+
+    /// [`accept`](Self::accept), calling `empty` each time the listener itself
+    /// has no connection waiting — never while a failure is waited out.
+    async fn accept_noting<T, A>(
+        &mut self,
+        mut accept: impl FnMut() -> A,
+        mut empty: impl FnMut(),
+    ) -> T
     where
         A: Future<Output = io::Result<T>>,
     {
         loop {
-            match accept().await {
+            let mut attempt = pin!(accept());
+            let attempted = match futures_util::poll!(attempt.as_mut()) {
+                Poll::Ready(attempted) => attempted,
+                Poll::Pending => {
+                    empty();
+                    attempt.await
+                }
+            };
+            match attempted {
                 Ok(accepted) => {
                     self.succeeded();
                     return accepted;
@@ -689,7 +738,7 @@ mod tests {
             accepted: Instant::now(),
             deadlines,
             endpoint: BoxEndpoint::new(endpoint),
-            builder: Arc::new(builder(deadlines.send)),
+            builder: Arc::new(builder(deadlines.send, Streams::default())),
             shutdown: CancellationToken::new(),
         };
         let served = tokio::spawn(connection.serve(socket, None));
@@ -974,6 +1023,124 @@ mod tests {
         assert!(!connection.is_finished(), "the connection keeps serving");
         logs.expect_none(crate::target::HTTP, "a connection task panicked");
         cancel.cancel();
+    }
+
+    /// Set when the future holding it is dropped.
+    struct SetOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// An HTTP/2 stream still running when the shutdown window closes is cut
+    /// with its connection: its handler is dropped before the loop returns,
+    /// never left to end on a task of its own after it.
+    #[tokio::test]
+    async fn an_http2_stream_outliving_the_window_is_cut_at_its_close() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let endpoint = endpoint_fn({
+            let (started, dropped) = (Arc::clone(&started), Arc::clone(&dropped));
+            move |_| {
+                let (started, dropped) = (Arc::clone(&started), Arc::clone(&dropped));
+                async move {
+                    let _held = SetOnDrop(dropped);
+                    started.notify_one();
+                    std::future::pending::<()>().await;
+                    Ok(Response::default())
+                }
+            }
+        });
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("a loopback port");
+        let drain = Arc::new(Drain::default());
+        let server = Server::new(
+            listener,
+            BoxEndpoint::new(endpoint),
+            Arc::clone(&drain),
+            8,
+            Deadlines::default(),
+            None,
+        )
+        .expect("the listener has an address");
+        let local = server.local;
+        let cancel = CancellationToken::new();
+        let signal = {
+            let (cancel, drain) = (cancel.clone(), Arc::clone(&drain));
+            async move {
+                cancel.cancelled().await;
+                drain.begin(Duration::from_secs(1));
+            }
+        };
+        // Read as the loop returns, before anything else runs: what follows it
+        // in `serve` (the shutdown hooks) must not meet the handler still alive.
+        let running = tokio::spawn({
+            let dropped = Arc::clone(&dropped);
+            async move {
+                server.run(signal).await;
+                dropped.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        });
+        let socket = tokio::net::TcpStream::connect(local)
+            .await
+            .expect("connects");
+        let (client, connection) = h2::client::handshake(socket)
+            .await
+            .expect("the HTTP/2 preface is accepted");
+        tokio::spawn(connection);
+        let request = http::Request::get(format!("http://{local}/"))
+            .body(())
+            .expect("a request");
+        let _answer = client
+            .ready()
+            .await
+            .expect("a stream can open")
+            .send_request(request, true)
+            .expect("sent");
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("the handler runs");
+
+        tokio::time::pause();
+        cancel.cancel();
+        assert!(
+            running.await.expect("the loop returns"),
+            "the stream's handler was dropped by the time the loop returned",
+        );
+    }
+
+    /// The listener found empty with a place in hand ends the cap's episode;
+    /// an accept that failed and is backed off says nothing of the backlog.
+    #[tokio::test(start_paused = true)]
+    async fn nothing_waits_on_the_cap_is_said_only_once_the_listener_waits() {
+        const LEFT: &str = "connection cap no longer reached; accepting again";
+        let logs = LogCapture::install();
+        let mut admission = Admission::new(1);
+        admission.held_back();
+        let mut backoff = AcceptBackoff::default();
+        let mut attempts = 0;
+        let accept = || {
+            attempts += 1;
+            let attempt = attempts;
+            async move {
+                if attempt == 1 {
+                    return Err(io::Error::from_raw_os_error(EMFILE));
+                }
+                std::future::pending::<io::Result<()>>().await
+            }
+        };
+        let mut accepting = pin!(accept_holding_a_place(&mut backoff, &mut admission, accept));
+
+        let backing_off = tokio::time::timeout(AcceptBackoff::FIRST / 2, accepting.as_mut()).await;
+        assert!(backing_off.is_err(), "still backing off");
+        logs.expect_none(crate::target::HTTP, LEFT);
+
+        let waiting = tokio::time::timeout(AcceptBackoff::FIRST, accepting.as_mut()).await;
+        assert!(waiting.is_err(), "the listener has nothing");
+        logs.expect_one(crate::target::HTTP, LEFT);
     }
 
     #[test]
